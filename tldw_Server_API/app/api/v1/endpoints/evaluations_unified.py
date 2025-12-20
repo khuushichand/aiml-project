@@ -47,7 +47,14 @@ from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookManager,
 from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user
 from tldw_Server_API.app.core.Evaluations.metrics_advanced import advanced_metrics
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_roles
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
+    ResolvedByokCredentials,
+    record_byok_missing_credentials,
+    resolve_byok_credentials,
+)
+from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
+from tldw_Server_API.app.core.Chat.provider_config import PROVIDER_REQUIRES_KEY
 
 # Create router
 router = APIRouter(prefix="/evaluations", tags=["evaluations"])
@@ -62,6 +69,7 @@ from .evaluations_auth import (
     check_evaluation_rate_limit,
     _apply_rate_limit_headers,
     enforce_heavy_evaluations_admin,
+    get_eval_request_user,
 )
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
@@ -94,6 +102,40 @@ def get_db_for_user(user_id: int):
     svc = get_unified_evaluation_service_for_user(user_id)
     return getattr(svc, 'db', None)
 
+def _is_eval_test_mode() -> bool:
+    return (
+        os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+        or os.getenv("PYTEST_CURRENT_TEST") is not None
+    )
+
+
+def _normalize_eval_user_id(current_user: User) -> Optional[int]:
+    try:
+        return int(getattr(current_user, "id", None))
+    except Exception:
+        return None
+
+
+async def _resolve_eval_credentials(
+    provider: str,
+    *,
+    current_user: User,
+    request: Optional[Request],
+) -> ResolvedByokCredentials:
+    def _fallback_resolver(name: str) -> Optional[str]:
+        key_val, _ = resolve_provider_api_key(
+            name,
+            prefer_module_keys_in_tests=True,
+        )
+        return key_val
+
+    return await resolve_byok_credentials(
+        provider,
+        user_id=_normalize_eval_user_id(current_user),
+        request=request,
+        fallback_resolver=_fallback_resolver,
+    )
+
 
 # verify_api_key et al. imported from evaluations_auth
 
@@ -104,7 +146,7 @@ def get_db_for_user(user_id: int):
 )
 async def admin_cleanup_idempotency(
     principal: Annotated[AuthPrincipal, Depends(get_auth_principal)],
-    _current_user: Annotated[User, Depends(get_request_user)],  # dependency for side effects
+    _current_user: Annotated[User, Depends(get_eval_request_user)],  # dependency for side effects
     ttl_hours: int = Query(72, ge=1, le=720, description="Delete idempotency keys older than this TTL (hours)"),
     target_user_id: Optional[int] = Query(None, description="If provided, only clean this user's evaluations DB"),
     _user_ctx: str = Depends(verify_api_key),  # dependency for side effects
@@ -250,7 +292,7 @@ async def stream_embeddings_abtest_events(
     test_id: str,
     user_ctx: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     """SSE stream of progress and updates for an A/B test, using SSEStream for heartbeats and metrics."""
     from fastapi.responses import StreamingResponse
@@ -329,7 +371,7 @@ async def delete_embeddings_abtest(
     test_id: str,
     user_ctx: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ):
     """Cancel/cleanup an embeddings A/B test (stub)."""
@@ -364,7 +406,7 @@ async def delete_embeddings_abtest(
 async def export_embeddings_abtest(
     test_id: str,
     principal: Annotated[AuthPrincipal, Depends(get_auth_principal)],
-    current_user: Annotated[User, Depends(get_request_user)],
+    current_user: Annotated[User, Depends(get_eval_request_user)],
     format: str = Query("json", pattern="^(json|csv)$"),
     user_ctx: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
@@ -414,7 +456,7 @@ async def export_embeddings_abtest(
 @router.get("/rate-limits", response_model=RateLimitStatusResponse)
 async def get_rate_limit_status(
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     """Get current rate limit status for the authenticated user"""
     try:
@@ -540,7 +582,8 @@ async def evaluate_geval(
     request: GEvalRequest,
     response: Response,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
+    http_request: Request = None,
 ):
     """
     Evaluate a summary using G-Eval metrics.
@@ -576,6 +619,30 @@ async def evaluate_geval(
         except Exception:
             effective_user_id = user_id
 
+        provider_name = (request.api_name or "openai").strip() or "openai"
+        provider_key = provider_name.lower()
+        explicit_key = (request.api_key or "").strip() if request.api_key else None
+        provider_api_key = explicit_key
+        byok_resolution = None
+
+        if not provider_api_key:
+            byok_resolution = await _resolve_eval_credentials(
+                provider_key,
+                current_user=current_user,
+                request=http_request,
+            )
+            provider_api_key = byok_resolution.api_key
+
+        if PROVIDER_REQUIRES_KEY.get(provider_key, False) and not provider_api_key and not _is_eval_test_mode():
+            record_byok_missing_credentials(provider_key, operation="evaluations")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error_code": "missing_provider_credentials",
+                    "message": f"Provider '{provider_name}' requires an API key.",
+                },
+            )
+
         # Send webhook: evaluation started (await in TEST_MODE)
         import os as _os
         import asyncio as _asyncio
@@ -607,10 +674,12 @@ async def evaluate_geval(
             source_text=request.source_text,
             summary=request.summary,
             metrics=request.metrics,
-            api_name=request.api_name,
-            api_key=request.api_key,
+            api_name=provider_name,
+            api_key=provider_api_key,
             user_id=effective_user_id
         )
+        if byok_resolution and byok_resolution.uses_byok and not explicit_key:
+            await byok_resolution.touch_last_used()
         # If provider returned actual usage, record it
         try:
             usage = result.get("usage") if isinstance(result, dict) else None
@@ -728,7 +797,8 @@ async def evaluate_rag(
     request: RAGEvaluationRequest,
     response: Response,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
+    http_request: Request = None,
 ):
     """
     Evaluate RAG system performance.
@@ -765,6 +835,25 @@ async def evaluate_rag(
         except Exception:
             effective_user_id = user_id
 
+        provider_name = (request.api_name or "openai").strip() or "openai"
+        provider_key = provider_name.lower()
+        byok_resolution = await _resolve_eval_credentials(
+            provider_key,
+            current_user=current_user,
+            request=http_request,
+        )
+        provider_api_key = byok_resolution.api_key
+
+        if PROVIDER_REQUIRES_KEY.get(provider_key, False) and not provider_api_key and not _is_eval_test_mode():
+            record_byok_missing_credentials(provider_key, operation="evaluations")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error_code": "missing_provider_credentials",
+                    "message": f"Provider '{provider_name}' requires an API key.",
+                },
+            )
+
         # Send webhook: evaluation started (await in TEST_MODE)
         import os as _os
         import asyncio as _asyncio
@@ -798,9 +887,12 @@ async def evaluate_rag(
             response=request.generated_response,
             ground_truth=request.ground_truth,
             metrics=request.metrics,
-            api_name=request.api_name,
+            api_name=provider_name,
+            api_key=provider_api_key,
             user_id=effective_user_id
         )
+        if byok_resolution and byok_resolution.uses_byok:
+            await byok_resolution.touch_last_used()
         try:
             usage = result.get("usage") if isinstance(result, dict) else None
             if usage and isinstance(usage, dict):
@@ -871,7 +963,8 @@ async def evaluate_response_quality(
     request: ResponseQualityRequest,
     response: Response,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
+    http_request: Request = None,
 ):
     """
     Evaluate the quality of a generated response.
@@ -907,6 +1000,25 @@ async def evaluate_response_quality(
         except Exception:
             effective_user_id = user_id
 
+        provider_name = (request.api_name or "openai").strip() or "openai"
+        provider_key = provider_name.lower()
+        byok_resolution = await _resolve_eval_credentials(
+            provider_key,
+            current_user=current_user,
+            request=http_request,
+        )
+        provider_api_key = byok_resolution.api_key
+
+        if PROVIDER_REQUIRES_KEY.get(provider_key, False) and not provider_api_key and not _is_eval_test_mode():
+            record_byok_missing_credentials(provider_key, operation="evaluations")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error_code": "missing_provider_credentials",
+                    "message": f"Provider '{provider_name}' requires an API key.",
+                },
+            )
+
         # Send webhook: evaluation started (await in TEST_MODE)
         import os as _os
         import asyncio as _asyncio
@@ -940,9 +1052,12 @@ async def evaluate_response_quality(
             response=request.response,
             expected_format=request.expected_format,
             custom_criteria=request.evaluation_criteria,
-            api_name=request.api_name,
+            api_name=provider_name,
+            api_key=provider_api_key,
             user_id=effective_user_id
         )
+        if byok_resolution and byok_resolution.uses_byok:
+            await byok_resolution.touch_last_used()
         try:
             usage = result.get("usage") if isinstance(result, dict) else None
             if usage and isinstance(usage, dict):
@@ -1030,7 +1145,7 @@ async def evaluate_response_quality(
 async def evaluate_propositions_endpoint(
     request: PropositionEvaluationRequest,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
     response: Response = None,
 ):
     """
@@ -1112,8 +1227,9 @@ async def evaluate_propositions_endpoint(
 async def batch_evaluate(
     request: BatchEvaluationRequest,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
     response: Response = None,
+    http_request: Request = None,
 ):
     """
     Run multiple evaluations in batch.
@@ -1123,6 +1239,20 @@ async def batch_evaluate(
     try:
         start_time = time.time()
         service = get_unified_evaluation_service_for_user(current_user.id)
+        byok_cache: Dict[str, ResolvedByokCredentials] = {}
+
+        async def _resolve_byok(provider_name: str) -> ResolvedByokCredentials:
+            key = (provider_name or "openai").strip().lower()
+            cached = byok_cache.get(key)
+            if cached:
+                return cached
+            resolved = await _resolve_eval_credentials(
+                key,
+                current_user=current_user,
+                request=http_request,
+            )
+            byok_cache[key] = resolved
+            return resolved
 
         # Per-user usage limits (aggregate all items)
         limiter = get_user_rate_limiter_for_user(current_user.id)
@@ -1198,16 +1328,48 @@ async def batch_evaluate(
         if request.parallel_workers > 1:
             # Run evaluations in parallel
             tasks = []
+            task_meta = []
             for eval_request in request.items:
                 eval_type = request.evaluation_type  # Type is at batch level
+
+                provider_name = "openai"
+                explicit_key = None
+                byok_resolution = None
+                if isinstance(eval_request, dict):
+                    provider_name = (eval_request.get("api_name") or "openai").strip() or "openai"
+                    explicit_key = (eval_request.get("api_key") or "").strip() if eval_request.get("api_key") else None
+                provider_key = provider_name.lower()
+                provider_api_key = explicit_key
+
+                if eval_type in {"geval", "rag", "response_quality"} and not provider_api_key:
+                    byok_resolution = await _resolve_byok(provider_key)
+                    provider_api_key = byok_resolution.api_key
+
+                if (
+                    eval_type in {"geval", "rag", "response_quality"}
+                    and PROVIDER_REQUIRES_KEY.get(provider_key, False)
+                    and not provider_api_key
+                    and not _is_eval_test_mode()
+                ):
+                    record_byok_missing_credentials(provider_key, operation="evaluations")
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "error_code": "missing_provider_credentials",
+                            "message": f"Provider '{provider_name}' requires an API key.",
+                        },
+                    )
+
+                if eval_type == "geval" and not provider_api_key and _is_eval_test_mode():
+                    provider_api_key = "test_api_key"
 
                 if eval_type == "geval":
                     task = service.evaluate_geval(
                         source_text=eval_request.get("source_text", ""),
                         summary=eval_request.get("summary", ""),
                         metrics=eval_request.get("metrics", ["coherence"]),
-                        api_name=eval_request.get("api_name", "openai"),
-                        api_key=eval_request.get("api_key", "test_api_key"),
+                        api_name=provider_name,
+                        api_key=provider_api_key,
                         user_id=user_id
                     )
                 elif eval_type == "rag":
@@ -1217,7 +1379,8 @@ async def batch_evaluate(
                         response=eval_request.get("generated_response", ""),
                         ground_truth=eval_request.get("ground_truth"),
                         metrics=eval_request.get("metrics", ["relevance", "faithfulness"]),
-                        api_name=eval_request.get("api_name", "openai"),
+                        api_name=provider_name,
+                        api_key=provider_api_key,
                         user_id=user_id
                     )
                 elif eval_type == "response_quality":
@@ -1226,7 +1389,8 @@ async def batch_evaluate(
                         response=eval_request.get("response", ""),
                         expected_format=eval_request.get("expected_format"),
                         custom_criteria=eval_request.get("evaluation_criteria"),
-                        api_name=eval_request.get("api_name", "openai"),
+                        api_name=provider_name,
+                        api_key=provider_api_key,
                         user_id=user_id
                     )
                 elif eval_type == "ocr":
@@ -1257,6 +1421,7 @@ async def batch_evaluate(
 
                 if 'task' in locals():
                     tasks.append(task)
+                    task_meta.append((byok_resolution, explicit_key))
 
             # Wait for all tasks
             if tasks:
@@ -1271,6 +1436,10 @@ async def batch_evaluate(
                         })
                         failed_count += 1
                     else:
+                        meta = task_meta[i] if i < len(task_meta) else (None, None)
+                        byok_resolution, explicit_key = meta
+                        if byok_resolution and byok_resolution.uses_byok and not explicit_key:
+                            await byok_resolution.touch_last_used()
                         results.append({
                             "evaluation_id": result.get("evaluation_id"),
                             "status": "completed",
@@ -1282,13 +1451,44 @@ async def batch_evaluate(
                 eval_type = request.evaluation_type  # Type is at batch level
 
                 try:
+                    provider_name = "openai"
+                    explicit_key = None
+                    byok_resolution = None
+                    if isinstance(eval_request, dict):
+                        provider_name = (eval_request.get("api_name") or "openai").strip() or "openai"
+                        explicit_key = (eval_request.get("api_key") or "").strip() if eval_request.get("api_key") else None
+                    provider_key = provider_name.lower()
+                    provider_api_key = explicit_key
+
+                    if eval_type in {"geval", "rag", "response_quality"} and not provider_api_key:
+                        byok_resolution = await _resolve_byok(provider_key)
+                        provider_api_key = byok_resolution.api_key
+
+                    if (
+                        eval_type in {"geval", "rag", "response_quality"}
+                        and PROVIDER_REQUIRES_KEY.get(provider_key, False)
+                        and not provider_api_key
+                        and not _is_eval_test_mode()
+                    ):
+                        record_byok_missing_credentials(provider_key, operation="evaluations")
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail={
+                                "error_code": "missing_provider_credentials",
+                                "message": f"Provider '{provider_name}' requires an API key.",
+                            },
+                        )
+
+                    if eval_type == "geval" and not provider_api_key and _is_eval_test_mode():
+                        provider_api_key = "test_api_key"
+
                     if eval_type == "geval":
                         result = await service.evaluate_geval(
                             source_text=eval_request.get("source_text", ""),
                             summary=eval_request.get("summary", ""),
                             metrics=eval_request.get("metrics", ["coherence"]),
-                            api_name=eval_request.get("api_name", "openai"),
-                            api_key=eval_request.get("api_key", "test_api_key"),
+                            api_name=provider_name,
+                            api_key=provider_api_key,
                             user_id=user_id
                         )
                     elif eval_type == "rag":
@@ -1298,7 +1498,8 @@ async def batch_evaluate(
                             response=eval_request.get("generated_response", ""),
                             ground_truth=eval_request.get("ground_truth"),
                             metrics=eval_request.get("metrics", ["relevance", "faithfulness"]),
-                            api_name=eval_request.get("api_name", "openai"),
+                            api_name=provider_name,
+                            api_key=provider_api_key,
                             user_id=user_id
                         )
                     elif eval_type == "response_quality":
@@ -1307,7 +1508,8 @@ async def batch_evaluate(
                             response=eval_request.get("response", ""),
                             expected_format=eval_request.get("expected_format"),
                             custom_criteria=eval_request.get("evaluation_criteria"),
-                            api_name=eval_request.get("api_name", "openai"),
+                            api_name=provider_name,
+                            api_key=provider_api_key,
                             user_id=user_id
                         )
                     elif eval_type == "ocr":
@@ -1335,6 +1537,8 @@ async def batch_evaluate(
                         failed_count += 1
                         continue
 
+                    if byok_resolution and byok_resolution.uses_byok and not explicit_key:
+                        await byok_resolution.touch_last_used()
                     results.append({
                         "evaluation_id": result.get("evaluation_id"),
                         "status": "completed",
@@ -1391,7 +1595,7 @@ async def evaluate_ocr_endpoint(
     request: OCREvaluationRequest,
     response: Response,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     """Evaluate OCR effectiveness on provided items (text-to-text comparison).
 
@@ -1461,7 +1665,7 @@ async def evaluate_ocr_pdf_endpoint(
     ocr_mode: str = Form("fallback", description="OCR mode: 'always' or 'fallback'"),
     ocr_min_page_text_chars: int = Form(40, description="Threshold for per-page OCR fallback"),
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     """Evaluate OCR by running OCR on uploaded PDFs and comparing to provided ground-truths."""
     try:
@@ -1565,7 +1769,7 @@ async def evaluate_ocr_pdf_endpoint(
 async def get_evaluation_history(
     request: EvaluationHistoryRequest,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     """
     Retrieve evaluation history for a user.

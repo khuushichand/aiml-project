@@ -75,7 +75,11 @@ class CSRFTokenManager:
         except Exception:
             uid = None
         suffix = self._bind_suffix(uid)
-        return f"{base}.{suffix}" if suffix else base
+        if suffix:
+            return f"{base}.{suffix}"
+        if get_settings().CSRF_BIND_TO_USER:
+            return f"{base}.unbound"
+        return base
 
     def hash_token(self, token: str) -> str:
         """Create a hash of the token for comparison"""
@@ -100,9 +104,11 @@ class CSRFTokenManager:
             return False
         # If token includes binding suffix, validate it
         parts = cookie_token.split('.')
-        if len(parts) == 2 and get_settings().CSRF_BIND_TO_USER:
+        if get_settings().CSRF_BIND_TO_USER:
+            if len(parts) != 2:
+                return False
             suffix = parts[1]
-            if not suffix or user_id is None:
+            if not suffix or suffix == "unbound" or user_id is None:
                 return False
             expected = self._bind_suffix(user_id)
             return secrets.compare_digest(suffix, expected)

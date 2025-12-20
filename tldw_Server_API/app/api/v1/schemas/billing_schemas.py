@@ -7,7 +7,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, HttpUrl, computed_field
+from pydantic import BaseModel, Field, HttpUrl, computed_field, field_validator
+
+from tldw_Server_API.app.core.Billing.plan_limits import VALID_PLAN_NAMES
 
 
 # =============================================================================
@@ -90,10 +92,17 @@ class RagUsageDebugResponse(BaseModel):
 
 class CheckoutRequest(BaseModel):
     """Request to create a checkout session."""
-    plan_name: str = Field(..., pattern=r"^(pro|enterprise)$", description="Plan to subscribe to (pro or enterprise)")
+    plan_name: str = Field(..., description=f"Plan to subscribe to ({', '.join(VALID_PLAN_NAMES)})")
     billing_cycle: str = Field("monthly", pattern=r"^(monthly|yearly)$", description="Billing frequency")
     success_url: HttpUrl = Field(..., description="URL to redirect to after successful checkout")
     cancel_url: HttpUrl = Field(..., description="URL to redirect to if checkout is cancelled")
+
+    @field_validator("plan_name")
+    @classmethod
+    def validate_plan_name(cls, v: str) -> str:
+        if v not in VALID_PLAN_NAMES:
+            raise ValueError(f"Invalid plan_name: {v}. Must be one of: {', '.join(VALID_PLAN_NAMES)}")
+        return v
 
 
 class CheckoutResponse(BaseModel):

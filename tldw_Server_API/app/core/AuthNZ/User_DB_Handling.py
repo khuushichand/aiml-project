@@ -368,6 +368,36 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         logger.error(f"Unexpected error decoding token: {e}")
         raise credentials_exception
 
+    # Enforce scope checks for scoped tokens to prevent privilege expansion.
+    try:
+        scoped_claims = (
+            "scope",
+            "allowed_endpoints",
+            "allowed_methods",
+            "allowed_paths",
+            "max_calls",
+            "max_runs",
+            "schedule_id",
+        )
+        has_scoped_claim = any(payload.get(claim) is not None for claim in scoped_claims)
+    except Exception:
+        has_scoped_claim = False
+
+    if has_scoped_claim:
+        try:
+            scope_enforced = bool(getattr(request.state, "_token_scope_enforced", False))
+        except Exception:
+            scope_enforced = False
+        if not scope_enforced:
+            if pii_redact_logs:
+                logger.warning("Scoped token used without scope enforcement (details redacted)")
+            else:
+                logger.warning("Scoped token used without scope enforcement for subject %s", raw_subject)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Scoped token requires endpoint scope enforcement",
+            )
+
     if pii_redact_logs:
         logger.debug("Token decoded successfully for authenticated subject (redacted)")
     else:
@@ -661,6 +691,9 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
                 except Exception:
                     logger.debug("Unable to populate AuthContext for single-user API key")
                 return user
+    except HTTPException:
+        # Preserve explicit auth failures (e.g., IP allowlist rejection).
+        raise
     except Exception as single_exc:
         logger.debug(
             "authenticate_api_key_user: single-user API key path failed; falling back to multi-user flow: {}",

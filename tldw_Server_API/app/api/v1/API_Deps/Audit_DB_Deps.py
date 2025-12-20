@@ -363,7 +363,7 @@ async def get_or_create_audit_service_for_user_id(user_id: int) -> UnifiedAuditS
     where you already have a user id (e.g., post-authentication flows).
     """
     if not isinstance(user_id, int):
-        raise ValueError("user_id must be an int")
+        raise TypeError("user_id must be an int")
 
     state = _state_for_loop()
     service_instance: Optional[UnifiedAuditService] = None

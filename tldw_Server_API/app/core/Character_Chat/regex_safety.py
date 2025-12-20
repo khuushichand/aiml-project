@@ -179,12 +179,14 @@ def validate_regex_safety(pattern: str) -> Tuple[bool, str]:
     return True, ""
 
 
-def safe_compile_regex(
+def _safe_compile_regex_impl(
     pattern: str,
     flags: int = 0,
     timeout_ms: int = MAX_REGEX_COMPILE_TIME_MS
 ) -> re.Pattern:
-    """Compile a regex pattern with safety checks to prevent ReDoS.
+    """Internal helper to compile a regex pattern with runtime safety checks.
+
+    This function assumes basic validation has already been performed.
 
     Args:
         pattern: The regex pattern to compile
@@ -232,3 +234,22 @@ def safe_compile_regex(
         )
 
     return compiled
+
+
+def safe_compile_regex(
+    pattern: str,
+    flags: int = 0,
+    timeout_ms: int = MAX_REGEX_COMPILE_TIME_MS,
+) -> re.Pattern:
+    """Compile a user-provided regex pattern with full safety checks to prevent ReDoS.
+
+    This wrapper validates the pattern first and then performs a timed compile
+    with a bounded test match to detect slow expressions.
+
+    Raises:
+        re.error: If the pattern is invalid, dangerous, or too slow.
+    """
+    is_safe, reason = validate_regex_safety(pattern)
+    if not is_safe:
+        raise re.error(f"Regex pattern rejected: {reason}")
+    return _safe_compile_regex_impl(pattern, flags=flags, timeout_ms=timeout_ms)

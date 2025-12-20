@@ -11,9 +11,11 @@ from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import (
     create_error_response,
     sanitize_error_message,
     check_evaluation_rate_limit,
+    get_eval_request_user,
+    require_eval_permissions,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_permissions, require_token_scope
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_token_scope
 from tldw_Server_API.app.core.AuthNZ.permissions import EVALS_MANAGE, EVALS_READ
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
     get_unified_evaluation_service_for_user,
@@ -52,13 +54,13 @@ RBAC_EVALS_CREATE = rbac_rate_limit("evals.create")
     status_code=status.HTTP_201_CREATED,
     dependencies=[
         Depends(RBAC_EVALS_CREATE),
-        Depends(require_permissions(EVALS_MANAGE)),
+        Depends(require_eval_permissions(EVALS_MANAGE)),
     ],
 )
 async def create_evaluation(
     eval_request: CreateEvaluationRequest,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
     response: Response = None,
 ):
@@ -109,14 +111,14 @@ async def create_evaluation(
 @crud_router.get(
     "/",
     response_model=EvaluationListResponse,
-    dependencies=[Depends(require_permissions(EVALS_READ))],
+    dependencies=[Depends(require_eval_permissions(EVALS_READ))],
 )
 async def list_evaluations(
     limit: int = Query(20, ge=1, le=100),
     after: Optional[str] = Query(None),
     eval_type: Optional[str] = Query(None),
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
@@ -147,12 +149,12 @@ async def list_evaluations(
 @crud_router.get(
     "/{eval_id}",
     response_model=EvaluationResponse,
-    dependencies=[Depends(require_permissions(EVALS_READ))],
+    dependencies=[Depends(require_eval_permissions(EVALS_READ))],
 )
 async def get_evaluation(
     eval_id: str,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
@@ -178,13 +180,13 @@ async def get_evaluation(
 @crud_router.patch(
     "/{eval_id}",
     response_model=EvaluationResponse,
-    dependencies=[Depends(require_permissions(EVALS_MANAGE))],
+    dependencies=[Depends(require_eval_permissions(EVALS_MANAGE))],
 )
 async def update_evaluation(
     eval_id: str,
     update_request: UpdateEvaluationRequest,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
@@ -212,12 +214,12 @@ async def update_evaluation(
 @crud_router.delete(
     "/{eval_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_permissions(EVALS_MANAGE))],
+    dependencies=[Depends(require_eval_permissions(EVALS_MANAGE))],
 )
 async def delete_evaluation(
     eval_id: str,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
@@ -245,7 +247,7 @@ async def delete_evaluation(
     response_model=RunResponse,
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[
-        Depends(require_permissions(EVALS_MANAGE)),
+        Depends(require_eval_permissions(EVALS_MANAGE)),
         Depends(check_evaluation_rate_limit),
         Depends(require_token_scope(
             "workflows",
@@ -261,7 +263,7 @@ async def create_run(
     eval_id: str,
     request: CreateRunSimpleRequest,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
     response: Response = None,
 ):
@@ -317,7 +319,7 @@ async def create_run(
 @crud_router.get(
     "/{eval_id}/runs",
     response_model=RunListResponse,
-    dependencies=[Depends(require_permissions(EVALS_READ))],
+    dependencies=[Depends(require_eval_permissions(EVALS_READ))],
 )
 async def list_runs(
     eval_id: str,
@@ -325,7 +327,7 @@ async def list_runs(
     after: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
@@ -345,12 +347,12 @@ async def list_runs(
 @crud_router.get(
     "/runs/{run_id}",
     response_model=RunResponse,
-    dependencies=[Depends(require_permissions(EVALS_READ))],
+    dependencies=[Depends(require_eval_permissions(EVALS_READ))],
 )
 async def get_run(
     run_id: str,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
@@ -375,12 +377,12 @@ async def get_run(
 
 @crud_router.post(
     "/runs/{run_id}/cancel",
-    dependencies=[Depends(require_permissions(EVALS_MANAGE))],
+    dependencies=[Depends(require_eval_permissions(EVALS_MANAGE))],
 )
 async def cancel_run(
     run_id: str,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)

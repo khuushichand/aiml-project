@@ -788,6 +788,7 @@ def require_api_key_scope(
     Creates a FastAPI dependency that verifies the authenticated principal
     has one of the required scopes. This is specifically for API key scope
     enforcement (separate from JWT token scopes or role-based permissions).
+    If no scopes are provided, no additional scope constraint is applied.
 
     Args:
         *scopes: One or more scope strings that satisfy the requirement (OR logic).
@@ -821,6 +822,9 @@ def require_api_key_scope(
         request: Request,
         principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
     ) -> AuthPrincipal:
+        if not required_scopes:
+            return principal
+
         # Admin bypass
         if allow_admin_bypass and principal.is_admin:
             # AUDIT: Log when admin bypasses API key scope check for security visibility
@@ -1489,6 +1493,13 @@ def require_token_scope(
             except Exception:
                 pass
             tok_scope = str(payload.get("scope") or "").strip()
+            if tok_scope:
+                try:
+                    request.state._token_scope_enforced = True
+                    request.state._token_scope_claim = tok_scope
+                    request.state._token_scope_required = str(scope)
+                except Exception:
+                    logger.debug("require_token_scope: failed to attach scope enforcement marker to request.state")
             if tok_scope and require_if_present and tok_scope != str(scope):
                 raise HTTPException(status_code=403, detail="Forbidden: invalid token scope")
 

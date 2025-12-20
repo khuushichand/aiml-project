@@ -659,6 +659,8 @@ else:
         tools_router = None  # type: ignore[assignment]
     # Users Endpoint (NEW)
     from tldw_Server_API.app.api.v1.endpoints.users import router as users_router
+    from tldw_Server_API.app.api.v1.endpoints.user_keys import router as user_keys_router
+    from tldw_Server_API.app.api.v1.endpoints.shared_keys_scoped import router as shared_keys_scoped_router
 
     # Privilege Maps Endpoint
     from tldw_Server_API.app.api.v1.endpoints.privileges import router as privileges_router
@@ -3966,6 +3968,11 @@ elif _MINIMAL_TEST_APP:
         from tldw_Server_API.app.api.v1.endpoints.users import router as users_router
 
         app.include_router(users_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
+        from tldw_Server_API.app.api.v1.endpoints.user_keys import router as user_keys_router
+        from tldw_Server_API.app.api.v1.endpoints.shared_keys_scoped import router as shared_keys_scoped_router
+
+        app.include_router(user_keys_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
+        app.include_router(shared_keys_scoped_router, prefix=f"{API_V1_PREFIX}", tags=["organizations"])
     except Exception as _users_min_err:
         logger.debug(f"Skipping users router in minimal test app: {_users_min_err}")
     # Include Jobs admin endpoints for tests that exercise jobs stats/counters
@@ -4149,6 +4156,7 @@ else:
             "auth-enhanced", auth_enhanced_router, prefix=f"{API_V1_PREFIX}", tags=["authentication-enhanced"]
         )
     _include_if_enabled("users", users_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
+    _include_if_enabled("users", user_keys_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
 
     # Include AuthNZ debug endpoints once via the gated path.
     # Force-enable when _TEST_MODE is true; otherwise respect route policy.
@@ -4175,6 +4183,7 @@ else:
         from tldw_Server_API.app.api.v1.endpoints.orgs import router as orgs_router
 
         _include_if_enabled("orgs", orgs_router, prefix=f"{API_V1_PREFIX}", tags=["organizations"])
+        _include_if_enabled("orgs", shared_keys_scoped_router, prefix=f"{API_V1_PREFIX}", tags=["organizations"])
     except ImportError as _orgs_err:
         logger.warning(f"Skipping orgs router due to import error: {_orgs_err}")
     # Organization invite preview and redemption endpoints

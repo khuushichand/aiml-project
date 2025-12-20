@@ -40,6 +40,7 @@ python -m uvicorn tldw_Server_API.app.main:app --reload
 - Evaluations (Production): Evaluations_Production_Deployment_Guide.md
 - Chunking Templates: Chunking_Templates_User_Guide.md
 - Chatbooks (export/import): Chatbook_User_Guide.md
+- Bring Your Own Keys (BYOK): BYOK_User_Guide.md
 
 ## Organizations & Collaboration
 

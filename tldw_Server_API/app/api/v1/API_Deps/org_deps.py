@@ -44,12 +44,29 @@ ROLE_HIERARCHY = {
     "member": 1,
 }
 
+ACTIVE_MEMBERSHIP_STATUSES = {"active"}
+
 
 def _role_at_least(user_role: str, required_role: str) -> bool:
     """Check if user_role meets or exceeds required_role in hierarchy."""
-    user_level = ROLE_HIERARCHY.get(user_role.lower(), 0)
-    required_level = ROLE_HIERARCHY.get(required_role.lower(), 0)
+    user_level = ROLE_HIERARCHY.get(str(user_role).lower(), 0)
+    required_level = ROLE_HIERARCHY.get(str(required_role).lower(), 0)
     return user_level >= required_level
+
+
+def _is_membership_active(membership: Optional[dict]) -> bool:
+    if not membership:
+        return False
+    status = membership.get("status")
+    if status is None:
+        return True
+    return str(status).strip().lower() in ACTIVE_MEMBERSHIP_STATUSES
+
+
+def _role_allowed(user_role: str, allowed_roles: List[str]) -> bool:
+    if not allowed_roles:
+        return True
+    return any(_role_at_least(user_role, role) for role in allowed_roles)
 
 
 async def _get_user_org_membership(
@@ -88,6 +105,8 @@ def require_org_role(*allowed_roles: str):
         async def get_org(ctx: OrgContext = Depends(require_org_role("owner", "admin"))):
             ...
     """
+    allowed_roles_normalized = [str(r).strip().lower() for r in allowed_roles if str(r).strip()]
+
     async def _checker(
         org_id: int,
         principal: AuthPrincipal = Depends(get_auth_principal),
@@ -109,15 +128,20 @@ def require_org_role(*allowed_roles: str):
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You are not a member of this organization",
             )
+        if not _is_membership_active(membership):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Your organization membership is not active",
+            )
 
         user_role = membership.get("role", "member")
 
         # If specific roles are required, check them
-        if allowed_roles:
-            if user_role.lower() not in [r.lower() for r in allowed_roles]:
+        if allowed_roles_normalized:
+            if not _role_allowed(user_role, allowed_roles_normalized):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Insufficient permissions. Required role: {', '.join(allowed_roles)}",
+                    detail=f"Insufficient permissions. Required role: {', '.join(allowed_roles_normalized)}",
                 )
 
         return OrgContext(
@@ -163,6 +187,8 @@ def require_team_role(*allowed_roles: str):
     Returns:
         Dependency function returning TeamContext.
     """
+    allowed_roles_normalized = [str(r).strip().lower() for r in allowed_roles if str(r).strip()]
+
     async def _checker(
         org_id: int,
         team_id: int,
@@ -185,11 +211,16 @@ def require_team_role(*allowed_roles: str):
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You are not a member of this organization",
             )
+        if not _is_membership_active(org_membership):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Your organization membership is not active",
+            )
 
         org_role = org_membership.get("role", "member")
 
         # Org owners and admins have full team access
-        if org_role.lower() in ("owner", "admin"):
+        if _role_at_least(org_role, "admin"):
             return TeamContext(
                 org_id=org_id,
                 team_id=team_id,
@@ -211,13 +242,20 @@ def require_team_role(*allowed_roles: str):
 
         # Check team membership
         team_membership = await _get_user_team_membership(principal.user_id, team_id)
-        team_role = team_membership.get("role") if team_membership else None
-
-        if allowed_roles:
-            if not team_role or team_role.lower() not in [r.lower() for r in allowed_roles]:
+        team_role = None
+        if team_membership:
+            if not _is_membership_active(team_membership):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Insufficient team permissions. Required role: {', '.join(allowed_roles)}",
+                    detail="Your team membership is not active",
+                )
+            team_role = team_membership.get("role")
+
+        if allowed_roles_normalized:
+            if not team_role or not _role_allowed(team_role, allowed_roles_normalized):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Insufficient team permissions. Required role: {', '.join(allowed_roles_normalized)}",
                 )
 
         return TeamContext(

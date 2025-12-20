@@ -83,8 +83,11 @@ def _validate_file_type(data: bytes, filename: Optional[str]) -> Tuple[bool, str
             '.jpg': 'image/jpeg',
         }
         expected = expected_mimes.get(ext)
-        if expected and detected_mime and detected_mime != expected:
-            return False, f"File content doesn't match extension. Extension: {ext}, detected: {detected_mime}", None
+        if expected:
+            if detected_mime is None:
+                return False, f"File content missing or invalid magic bytes for extension {ext}", None
+            if detected_mime != expected:
+                return False, f"File content doesn't match extension. Extension: {ext}, detected: {detected_mime}", None
 
     # Determine file type for processing
     if detected_mime in ('image/png', 'image/webp', 'image/jpeg'):
@@ -256,10 +259,10 @@ async def import_character_endpoint(
         logger.info(f"API: Importing character from file: {character_file.filename}")
 
         # Use the detected type from validation
-        inferred_type = detected_type
+        file_type_validated = detected_type
 
         success, message, char_id = import_and_save_character_from_file(
-            db, file_content=file_content_bytes, file_type=inferred_type
+            db, file_content=file_content_bytes, file_type=file_type_validated
         )
 
         if not success or not char_id:

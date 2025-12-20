@@ -232,12 +232,13 @@ class TestValidateFileType:
         assert is_valid is False
         assert "doesn't match extension" in error
 
-    def test_jpeg_extension_not_in_allowed_list(self):
-        """JPEG extension (.jpg) is not in ALLOWED_EXTENSIONS."""
+    def test_jpeg_extension_in_allowed_list(self):
+        """JPEG extension (.jpg) is allowed."""
         jpeg_data = b'\xff\xd8\xff\xe0' + b'\x00' * 100
         is_valid, error, file_type = _validate_file_type(jpeg_data, "image.jpg")
-        assert is_valid is False
-        assert "not allowed" in error
+        assert is_valid is True
+        assert error == ""
+        assert file_type == "image"
 
     # --- Invalid Extension Tests ---
     def test_invalid_extension_rejected(self):

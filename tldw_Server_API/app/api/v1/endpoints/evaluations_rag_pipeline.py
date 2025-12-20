@@ -11,8 +11,9 @@ from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import (
     verify_api_key,
     create_error_response,
     sanitize_error_message,
+    get_eval_request_user,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
     get_unified_evaluation_service_for_user,
 )
@@ -37,7 +38,7 @@ pipeline_router = APIRouter()
 async def create_or_update_pipeline_preset(
     preset: PipelinePresetCreate,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
@@ -81,7 +82,7 @@ async def list_pipeline_presets(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
@@ -126,7 +127,7 @@ async def list_pipeline_presets(
 async def get_pipeline_preset(
     name: str,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
@@ -176,7 +177,7 @@ async def get_pipeline_preset(
 async def delete_pipeline_preset(
     name: str,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
@@ -209,7 +210,7 @@ async def delete_pipeline_preset(
 )
 async def cleanup_ephemeral_collections(
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     """Delete expired ephemeral collections according to TTL registry."""
     try:

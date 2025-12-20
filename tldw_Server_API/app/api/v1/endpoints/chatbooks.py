@@ -572,6 +572,11 @@ async def preview_chatbook(
         # Initialize quota manager (DB-backed) for consistent rate limiting
         quota_manager = QuotaManager(str(user.id), getattr(user, 'tier', 'free'), db=service.db)
 
+        # Check quota limit before inspecting file size.
+        allowed, message = await quota_manager.check_file_size(0)
+        if not allowed:
+            raise HTTPException(status_code=413, detail=message)
+
         # Check file size (limit to 100MB for preview)
         file.file.seek(0, 2)
         file_size = file.file.tell()

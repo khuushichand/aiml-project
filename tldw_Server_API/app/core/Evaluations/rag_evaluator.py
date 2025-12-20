@@ -369,7 +369,7 @@ class RAGEvaluator:
                 api_name,  # First param to analyze
                 query,     # input_data
                 prompt,    # custom_prompt_arg
-                None,      # api_key (None to load from config)
+                self.api_key,  # api_key (None to load from config)
                 "You are an evaluation expert. Provide only numeric scores.",  # system_message
                 0.1        # temp
             )
@@ -440,7 +440,7 @@ class RAGEvaluator:
                 api_name,  # First param
                 response,  # input_data
                 prompt,    # custom_prompt_arg
-                None,      # api_key (None to load from config)
+                self.api_key,  # api_key (None to load from config)
                 "You are an evaluation expert. Provide only numeric scores.",  # system_message
                 0.1        # temp
             )
@@ -611,7 +611,7 @@ class RAGEvaluator:
                 api_name,  # api_name - first param
                 response,   # input_data
                 prompt,     # custom_prompt_arg
-                None,       # api_key (None to load from config)
+                self.api_key,  # api_key (None to load from config)
                 "You are an evaluation expert. Provide only numeric scores.",  # system_message
                 0.1         # temp
             )
@@ -653,7 +653,7 @@ class RAGEvaluator:
                     api_name,  # First param
                     context,   # input_data
                     prompt,    # custom_prompt_arg
-                    None,      # api_key (None to load from config)
+                    self.api_key,  # api_key (None to load from config)
                     "You are an evaluation expert. Provide only numeric scores.",  # system_message
                     0.1        # temp
                 )
@@ -700,7 +700,7 @@ class RAGEvaluator:
                     api_name,  # First param
                     context,   # input_data
                     prompt,    # custom_prompt_arg
-                    None,      # api_key (None to load from config)
+                    self.api_key,  # api_key (None to load from config)
                     "You are an evaluation expert. Provide only numeric scores.",  # system_message
                     0.1        # temp
                 )
@@ -759,7 +759,7 @@ class RAGEvaluator:
                 api_name,  # First param
                 combined_context,  # input_data
                 prompt,    # custom_prompt_arg
-                None,      # api_key (None to load from config)
+                self.api_key,  # api_key (None to load from config)
                 "You are an evaluation expert. Provide only numeric scores.",  # system_message
                 0.1        # temp
             )

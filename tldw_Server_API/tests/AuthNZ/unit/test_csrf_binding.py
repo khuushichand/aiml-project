@@ -25,6 +25,17 @@ def test_csrf_binding_user_suffix_ok(monkeypatch):
     assert mgr.validate_token(token, token, user_id=43) is False
 
 
+def test_csrf_binding_unbound_token_rejected(monkeypatch):
+    reset_settings()
+    monkeypatch.setenv("CSRF_BIND_TO_USER", "true")
+    mgr = CSRFTokenManager()
+    req = _dummy_request(None)
+    token = mgr.generate_token(req)
+    assert token.endswith(".unbound")
+    assert mgr.validate_token(token, token, user_id=None) is False
+    assert mgr.validate_token(token, token, user_id=1) is False
+
+
 def test_csrf_no_binding(monkeypatch):
     reset_settings()
     monkeypatch.setenv("CSRF_BIND_TO_USER", "false")

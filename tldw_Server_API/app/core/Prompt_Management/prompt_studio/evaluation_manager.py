@@ -26,7 +26,10 @@ class EvaluationManager:
         test_case_ids: List[int],
         model: str = "gpt-3.5-turbo",
         temperature: float = 0.7,
-        max_tokens: int = 1000
+        max_tokens: int = 1000,
+        provider: str = "openai",
+        api_key: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Run evaluation for a prompt against test cases.
@@ -53,6 +56,7 @@ class EvaluationManager:
             prompt_id=prompt_id,
             project_id=prompt.get("project_id"),
             model_configs={
+                "provider": provider,
                 "model": model,
                 "temperature": temperature,
                 "max_tokens": max_tokens,
@@ -91,14 +95,16 @@ class EvaluationManager:
             try:
                 t_case0 = time.perf_counter()
                 response = chat_api_call(
-                    api_endpoint="openai",
+                    api_endpoint=provider,
                     model=model,
                     messages_payload=[
                         {"role": "user", "content": formatted_user_prompt}
                     ],
                     system_message=prompt.get("system_prompt"),
                     temp=temperature,
-                    max_tokens=max_tokens
+                    max_tokens=max_tokens,
+                    api_key=api_key,
+                    app_config=app_config,
                 )
 
                 actual_output = self._extract_response_text(response)

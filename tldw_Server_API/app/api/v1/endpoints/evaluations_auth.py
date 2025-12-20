@@ -18,7 +18,12 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, verify_jwt_and_fetch_user
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
+    User,
+    verify_jwt_and_fetch_user,
+    get_request_user,
+)
+from tldw_Server_API.app.api.v1.API_Deps.v1_endpoint_deps import oauth2_scheme
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed
 from tldw_Server_API.app.core.exceptions import InactiveUserError
@@ -161,6 +166,7 @@ async def verify_api_key(
             pass
         try:
             jwt_service = get_jwt_service()
+            # Decode early to surface token-specific errors before user lookup.
             jwt_service.decode_access_token(token)
         except TokenExpiredError:
             raise HTTPException(
@@ -231,6 +237,52 @@ async def verify_api_key(
             "code": "invalid_credentials",
         }},
     )
+
+
+async def get_eval_request_user(
+    request: Request,
+    _user_ctx: str = Depends(verify_api_key),
+    api_key: Optional[str] = Header(None, alias="X-API-KEY"),
+    token: Optional[str] = Depends(oauth2_scheme),
+    legacy_token_header: Optional[str] = Header(None, alias="Token"),
+) -> User:
+    """Resolve the authenticated User after evaluations auth validation."""
+    if not api_key and not token and not legacy_token_header:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "error": {
+                    "message": "Missing API key or token",
+                    "type": "authentication_error",
+                    "code": "missing_credentials",
+                }
+            },
+        )
+    return await get_request_user(
+        request=request,
+        api_key=api_key,
+        token=token,
+        legacy_token_header=legacy_token_header,
+    )
+
+
+def require_eval_permissions(*permissions: str):
+    """Evaluation-specific permission gate with consistent auth errors."""
+    perms = [str(p) for p in permissions if str(p).strip()]
+
+    async def _checker(current_user: User = Depends(get_eval_request_user)) -> User:  # noqa: B008
+        if getattr(current_user, "is_admin", False):
+            return current_user
+        user_perms = set(getattr(current_user, "permissions", []) or [])
+        missing = [p for p in perms if p not in user_perms]
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Permission denied: missing {', '.join(missing)}",
+            )
+        return current_user
+
+    return _checker
 
 
 async def check_evaluation_rate_limit(

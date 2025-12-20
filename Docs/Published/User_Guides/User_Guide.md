@@ -68,6 +68,10 @@ Top navigation groups features into tabs. Notable areas include:
 - Chatbooks
   - Chatbooks: export/import content and manage background jobs.
 
+- Bring Your Own Keys (BYOK)
+  - Multi-user only: store per-user provider keys and optional org/team shared keys.
+  - See `User_Guides/BYOK_User_Guide.md` for setup, endpoints, and policies.
+
 ## Tips
 
 - Provider keys can be set in `.env` or `tldw_Server_API/Config_Files/config.txt`.

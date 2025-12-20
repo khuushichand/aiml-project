@@ -34,7 +34,7 @@ router = APIRouter()
         Depends(
             require_token_scope(
                 "any",
-                require_if_present=False,
+                require_if_present=True,
                 endpoint_id="media.ingest",
                 count_as="call",
             )

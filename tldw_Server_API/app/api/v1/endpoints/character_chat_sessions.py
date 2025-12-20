@@ -81,6 +81,7 @@ from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import (
 from tldw_Server_API.app.core.Chat.chat_orchestrator import (
     chat_api_call as perform_chat_api_call
 )
+from tldw_Server_API.app.core.AuthNZ.byok_runtime import resolve_byok_credentials
 
 # Completion schemas centralized in schemas/chat_session_schemas.py
 from tldw_Server_API.app.core.Streaming.streams import SSEStream
@@ -209,6 +210,13 @@ class _BoundedThrottleCache:
         for k in stale_keys:
             self._data.pop(k, None)
             self._last_access.pop(k, None)
+        # If still over limit, evict oldest-accessed entries.
+        if len(self._data) > THROTTLE_CACHE_MAX_KEYS:
+            sorted_by_access = sorted(self._last_access.items(), key=lambda item: item[1])
+            excess = len(self._data) - THROTTLE_CACHE_MAX_KEYS
+            for k, _ in sorted_by_access[:excess]:
+                self._data.pop(k, None)
+                self._last_access.pop(k, None)
 
 _complete_windows = _BoundedThrottleCache()
 
@@ -741,13 +749,27 @@ async def character_chat_completion(
         except Exception:
             logger.debug("Non-fatal: message cap pre-check skipped")
 
-        # Fetch API key dynamically
-        try:
-            from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import get_api_keys
-            api_keys = get_api_keys()
-            api_key = api_keys.get(provider)
-        except Exception:
-            api_key = None
+        # Resolve BYOK credentials (fall back to env/config)
+        def _fallback_resolver(name: str) -> Optional[str]:
+            try:
+                from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import get_api_keys
+                return get_api_keys().get(name)
+            except Exception:
+                return None
+
+        user_id_int = getattr(current_user, "id_int", None)
+        if user_id_int is None:
+            try:
+                user_id_int = int(getattr(current_user, "id", None))
+            except Exception:
+                user_id_int = None
+
+        byok_resolution = await resolve_byok_credentials(
+            provider,
+            user_id=user_id_int,
+            fallback_resolver=_fallback_resolver,
+        )
+        api_key = byok_resolution.api_key
 
         # Attempt provider call; allow offline simulation for local-llm in test/dev.
         # Offline simulation toggle (supports new flags for clarity, backward compatible with ALLOW_LOCAL_LLM_CALLS)
@@ -770,7 +792,8 @@ async def character_chat_completion(
                     tools=body.tools,
                     tool_choice=body.tool_choice,
                     streaming=bool(body.stream),
-                    user_identifier=str(current_user.id)
+                    user_identifier=str(current_user.id),
+                    app_config=byok_resolution.app_config,
                 )
                 # Support async-returning provider hooks (test stubs or adapters)
                 try:
@@ -785,6 +808,7 @@ async def character_chat_completion(
             except Exception as e:
                 logger.error(f"Chat provider call failed: {e}")
                 raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Chat provider error") from e
+            await byok_resolution.touch_last_used()
 
         # Helper: Convert a provider chunk into a single SSE-formatted line
         def _coerce_sse_line(chunk: Any) -> Optional[str]:
@@ -1133,8 +1157,8 @@ async def character_chat_completion(
                     if validated_tool_calls:
                         try:
                             db.add_message_metadata(assistant_msg_id, tool_calls=validated_tool_calls)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug(f"Non-fatal: failed to persist tool_calls metadata: {exc}")
                 # Bump conversation metadata
                 conv_for_update = db.get_conversation_by_id(chat_id)
                 if conv_for_update:

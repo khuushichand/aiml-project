@@ -133,7 +133,7 @@ def test_mcp_modules_health_jwt_principal_and_state_alignment(isolated_test_envi
 
             return _Resp()
 
-    mcp_mod.get_mcp_server = lambda: _DummyServer()  # type: ignore[assignment]
+    monkeypatch.setattr(mcp_mod, "get_mcp_server", lambda: _DummyServer())
 
     # 4. Install the auth capture wrapper and call /api/v1/mcp/modules/health.
     from tldw_Server_API.app.main import app as fastapi_app

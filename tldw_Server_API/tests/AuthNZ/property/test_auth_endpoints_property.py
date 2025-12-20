@@ -59,7 +59,7 @@ class TestAuthEndpointsProperty:
                 json={"username": username, "email": email, "password": password},
             )
 
-        assert response.status_code in [200, 400, 409, 422]
+        assert response.status_code in [200, 400, 403, 409, 422]
 
         if response.status_code == 200:
             data = response.json()

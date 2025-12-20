@@ -8,7 +8,7 @@ import pytest
 from unittest.mock import Mock, MagicMock, patch
 import re
 import random
-from datetime import timedelta
+from datetime import timedelta, timezone
 
 from tldw_Server_API.app.core.Character_Chat.chat_dictionary import ChatDictionaryService
 
@@ -371,7 +371,7 @@ class TestTextProcessing:
         _FakeDatetime._delta = timedelta(seconds=61)
         entry_snapshot = service.get_entry_objects(dict_id, active_only=True)[0]
         assert (
-            cd.datetime.utcnow() - entry_snapshot._loaded_at
+            cd.datetime.now(timezone.utc) - entry_snapshot._loaded_at
         ).total_seconds() >= 60
         second_pass = service.process_text(source_text, dict_id)
         assert "applied" in str(second_pass)

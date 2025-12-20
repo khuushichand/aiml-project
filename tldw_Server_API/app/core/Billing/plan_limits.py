@@ -18,6 +18,9 @@ class PlanTier(str, Enum):
     ENTERPRISE = "enterprise"
 
 
+VALID_PLAN_NAMES = [tier.value for tier in PlanTier if tier != PlanTier.FREE]
+
+
 @dataclass(frozen=True)
 class PlanLimits:
     """Limit definitions for a plan tier."""

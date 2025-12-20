@@ -262,6 +262,10 @@ rate_limit_per_minute = 60
 rate_limit_burst = 10
 access_token_expire_minutes = 30
 refresh_token_expire_days = 7
+byok_enabled = false
+byok_allowed_providers =
+byok_encryption_key =
+byok_secondary_encryption_key =
 
 [Streaming]
 # Unified Streams: standardize SSE handling (heartbeats/idle/errors/metrics)

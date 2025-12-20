@@ -39,6 +39,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     get_api_keys,
     DEFAULT_LLM_PROVIDER,
 )
+from tldw_Server_API.app.core.AuthNZ.byok_runtime import resolve_byok_credentials
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
@@ -495,8 +496,24 @@ async def run_speech_chat_turn(
     messages_payload = list(history_messages)
     messages_payload.append({"role": "user", "content": transcript})
 
-    api_keys = get_api_keys()
-    provider_api_key = api_keys.get(llm_provider)
+    def _fallback_resolver(name: str) -> Optional[str]:
+        try:
+            return get_api_keys().get(name)
+        except Exception:
+            return None
+
+    user_id_int = getattr(current_user, "id_int", None)
+    if user_id_int is None:
+        try:
+            user_id_int = int(getattr(current_user, "id", None))
+        except Exception:
+            user_id_int = None
+    byok_resolution = await resolve_byok_credentials(
+        llm_provider,
+        user_id=user_id_int,
+        fallback_resolver=_fallback_resolver,
+    )
+    provider_api_key = byok_resolution.api_key
 
     llm_start = time.time()
     try:
@@ -514,6 +531,7 @@ async def run_speech_chat_turn(
             streaming=False,
             user_identifier=str(getattr(current_user, "id", client_id)),
             system_message=(character_card or {}).get("system_prompt"),
+            app_config=byok_resolution.app_config,
         )
     except HTTPException:
         raise
@@ -525,6 +543,8 @@ async def run_speech_chat_turn(
         ) from e
 
     llm_ms = (time.time() - llm_start) * 1000.0
+
+    await byok_resolution.touch_last_used()
 
     assistant_text = extract_response_content(llm_response) or ""
     assistant_text = assistant_text.strip()

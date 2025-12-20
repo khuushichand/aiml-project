@@ -725,6 +725,7 @@ class UnifiedEvaluationService:
         ground_truth: Optional[str] = None,
         metrics: Optional[List[str]] = None,
         api_name: str = "openai",
+        api_key: Optional[str] = None,
         user_id: str = "system"
     ) -> Dict[str, Any]:
         """
@@ -746,7 +747,8 @@ class UnifiedEvaluationService:
             start_time = time.time()
 
             # Run evaluation
-            results = await self.get_rag_evaluator().evaluate(
+            evaluator = self.get_rag_evaluator() if not api_key else RAGEvaluator(api_key=api_key)
+            results = await evaluator.evaluate(
                 query=query,
                 contexts=contexts,
                 response=response,
@@ -826,6 +828,7 @@ class UnifiedEvaluationService:
         expected_format: Optional[str] = None,
         custom_criteria: Optional[Dict] = None,
         api_name: str = "openai",
+        api_key: Optional[str] = None,
         user_id: str = "system"
     ) -> Dict[str, Any]:
         """
@@ -851,7 +854,8 @@ class UnifiedEvaluationService:
                 response=response,
                 expected_format=expected_format,
                 custom_criteria=custom_criteria,
-                api_name=api_name
+                api_name=api_name,
+                api_key=api_key,
             )
 
             evaluation_time = time.time() - start_time
@@ -972,6 +976,7 @@ class UnifiedEvaluationService:
         label_mapping: Optional[Dict[str, str]] = None,
         generate_predictions: bool = False,
         api_name: str = "openai",
+        api_key: Optional[str] = None,
         temperature: float = 0.0,
         max_tokens: int = 3,
         user_id: str = "system"
@@ -1028,7 +1033,7 @@ class UnifiedEvaluationService:
         def call_llm(prompt: str) -> str:
             try:
                 # use analyze(api_name, input_data, custom_prompt_arg, api_key, system_message, temp, streaming=False, recursive_summarization=False, chunked_summarization=False)
-                result = sgl.analyze(api_name, prompt, None, None, "You output one token only.", temperature, False, False, False, None)
+                result = sgl.analyze(api_name, prompt, None, api_key, "You output one token only.", temperature, False, False, False, None)
                 if isinstance(result, tuple) and result:
                     return str(result[0])
                 return str(result)

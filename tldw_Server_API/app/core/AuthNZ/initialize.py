@@ -227,6 +227,8 @@ async def setup_database():
             from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import (
                 ensure_authnz_core_tables_pg,
                 ensure_api_keys_tables_pg,
+                ensure_user_provider_secrets_pg,
+                ensure_org_provider_secrets_pg,
                 ensure_usage_tables_pg,
                 ensure_virtual_key_counters_pg,
             )
@@ -245,6 +247,9 @@ async def setup_database():
             ok_api_keys = await ensure_api_keys_tables_pg(pool)
             if not ok_api_keys:
                 raise RuntimeError("Failed to ensure Postgres api_keys tables")
+            # Ensure BYOK secrets tables
+            await ensure_user_provider_secrets_pg(pool)
+            await ensure_org_provider_secrets_pg(pool)
 
             # Ensure usage/LLM usage tables and virtual-key counters for Postgres.
             # The SQLite path is covered by AuthNZ migrations; on Postgres we rely

@@ -1642,6 +1642,120 @@ def migration_035_backfill_storage_mb_limits(conn: sqlite3.Connection) -> None:
     logger.info("Migration 035: Completed storage_mb limit backfill")
 
 
+def migration_036_create_user_provider_secrets(conn: sqlite3.Connection) -> None:
+    """Create the user_provider_secrets table for per-user BYOK credentials."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_provider_secrets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            provider TEXT NOT NULL,
+            encrypted_blob TEXT NOT NULL,
+            key_hint TEXT,
+            metadata TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_used_at TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            UNIQUE (user_id, provider)
+        )
+        """
+    )
+
+    # Harmonize legacy schemas: add missing columns if needed
+    try:
+        cur = conn.execute("PRAGMA table_info(user_provider_secrets)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        def add_col(name: str, decl: str):
+            if name not in cols:
+                conn.execute(f"ALTER TABLE user_provider_secrets ADD COLUMN {decl}")
+                cols.add(name)
+
+        add_col("encrypted_blob", "encrypted_blob TEXT")
+        add_col("key_hint", "key_hint TEXT")
+        add_col("metadata", "metadata TEXT")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("last_used_at", "last_used_at TIMESTAMP")
+    except Exception:
+        pass
+
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_user_provider_secrets_user_id ON user_provider_secrets(user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_user_provider_secrets_provider ON user_provider_secrets(provider)")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_user_provider_secrets_user_provider "
+        "ON user_provider_secrets(user_id, provider)"
+    )
+
+    conn.commit()
+    logger.info("Migration 036: Created user_provider_secrets table")
+
+
+def rollback_036_drop_user_provider_secrets_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 036 by dropping the user_provider_secrets table."""
+    conn.execute("DROP TABLE IF EXISTS user_provider_secrets")
+    conn.commit()
+    logger.info("Rollback 036: Dropped user_provider_secrets table")
+
+
+def migration_037_create_org_provider_secrets(conn: sqlite3.Connection) -> None:
+    """Create the org_provider_secrets table for org/team shared BYOK credentials."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS org_provider_secrets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope_type TEXT NOT NULL,
+            scope_id INTEGER NOT NULL,
+            provider TEXT NOT NULL,
+            encrypted_blob TEXT NOT NULL,
+            key_hint TEXT,
+            metadata TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_used_at TIMESTAMP,
+            UNIQUE (scope_type, scope_id, provider)
+        )
+        """
+    )
+
+    # Harmonize legacy schemas: add missing columns if needed
+    try:
+        cur = conn.execute("PRAGMA table_info(org_provider_secrets)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        def add_col(name: str, decl: str):
+            if name not in cols:
+                conn.execute(f"ALTER TABLE org_provider_secrets ADD COLUMN {decl}")
+                cols.add(name)
+
+        add_col("encrypted_blob", "encrypted_blob TEXT")
+        add_col("key_hint", "key_hint TEXT")
+        add_col("metadata", "metadata TEXT")
+        add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        add_col("last_used_at", "last_used_at TIMESTAMP")
+    except Exception:
+        pass
+
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_provider_secrets_scope ON org_provider_secrets(scope_type, scope_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_provider_secrets_provider ON org_provider_secrets(provider)")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_org_provider_secrets_scope_provider "
+        "ON org_provider_secrets(scope_type, scope_id, provider)"
+    )
+
+    conn.commit()
+    logger.info("Migration 037: Created org_provider_secrets table")
+
+
+def rollback_037_drop_org_provider_secrets_table(conn: sqlite3.Connection) -> None:
+    """Rollback migration 037 by dropping the org_provider_secrets table."""
+    conn.execute("DROP TABLE IF EXISTS org_provider_secrets")
+    conn.commit()
+    logger.info("Rollback 037: Dropped org_provider_secrets table")
+
+
 #######################################################################################################################
 #
 # Migration Registry
@@ -1727,6 +1841,18 @@ def get_authnz_migrations() -> List[Migration]:
             35,
             "Backfill storage_mb limits",
             migration_035_backfill_storage_mb_limits,
+        ),
+        Migration(
+            36,
+            "Create user_provider_secrets table",
+            migration_036_create_user_provider_secrets,
+            rollback_036_drop_user_provider_secrets_table,
+        ),
+        Migration(
+            37,
+            "Create org_provider_secrets table",
+            migration_037_create_org_provider_secrets,
+            rollback_037_drop_org_provider_secrets_table,
         ),
     ]
 

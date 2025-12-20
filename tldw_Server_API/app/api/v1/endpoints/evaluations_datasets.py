@@ -11,8 +11,9 @@ from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import (
     verify_api_key,
     create_error_response,
     sanitize_error_message,
+    get_eval_request_user,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
     get_unified_evaluation_service_for_user,
 )
@@ -59,9 +60,9 @@ def _normalize_dataset_payload(dataset: Dict[str, Any]) -> Dict[str, Any]:
 async def create_dataset(
     dataset_request: CreateDatasetRequest,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
-    response: Response = None,
+    response: Response = ...,
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
@@ -109,7 +110,7 @@ async def list_datasets(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
@@ -129,7 +130,7 @@ async def list_datasets(
 async def get_dataset(
     dataset_id: str,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)
@@ -156,7 +157,7 @@ async def get_dataset(
 async def delete_dataset(
     dataset_id: str,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         svc = get_unified_evaluation_service_for_user(current_user.id)

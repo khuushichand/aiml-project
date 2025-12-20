@@ -498,6 +498,7 @@ class TTSServiceV2:
         request: OpenAISpeechRequest,
         provider: Optional[str] = None,
         fallback: bool = True,
+        provider_overrides: Optional[Dict[str, Any]] = None,
         voice_to_voice_start: Optional[float] = None,
         voice_to_voice_route: str = "audio.speech",
     ) -> AsyncGenerator[bytes, None]:
@@ -547,7 +548,7 @@ class TTSServiceV2:
                 raise
 
         # Get adapter
-        adapter = await self._get_adapter(request.model, provider)
+        adapter = await self._get_adapter(request.model, provider, overrides=provider_overrides)
         if not adapter and fallback:
             # Try to find any available adapter
             adapter = await self._get_fallback_adapter(tts_request)
@@ -993,7 +994,8 @@ class TTSServiceV2:
     async def _get_adapter(
         self,
         model: str,
-        provider: Optional[str] = None
+        provider: Optional[str] = None,
+        overrides: Optional[Dict[str, Any]] = None,
     ) -> Optional[TTSAdapter]:
         """Get appropriate adapter for the request"""
         factory = await self._ensure_factory()
@@ -1001,6 +1003,8 @@ class TTSServiceV2:
             # Specific provider requested
             try:
                 provider_enum = TTSProvider(provider.lower())
+                if overrides:
+                    return await factory.registry.create_adapter_with_overrides(provider_enum, overrides)
                 return await factory.registry.get_adapter(provider_enum)
             except ValueError:
                 logger.warning(f"Unknown provider: {provider}")

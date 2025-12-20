@@ -993,7 +993,7 @@ async def bulk_create_sources(
         try:
             row = db.create_source(
                 name=s.name,
-                url=url_str if ('url_str' in locals()) else str(s.url),
+                url=url_str,
                 source_type=str(s.source_type),
                 active=s.active,
                 settings_json=(json.dumps(s.settings) if s.settings else None),

@@ -51,7 +51,7 @@ async def test_verify_single_user_api_key_accepts_bearer(monkeypatch):
 async def test_authenticate_api_key_user_rejects_disallowed_single_user_ip(monkeypatch):
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key-1234567890")
-    monkeypatch.setenv("SINGLE_USER_ALLOWED_IPS", "203.0.113.10")
+    monkeypatch.setenv("SINGLE_USER_ALLOWED_IPS", "[\"203.0.113.10\"]")
     monkeypatch.setenv("SINGLE_USER_FIXED_ID", "99")
     reset_settings()
 
@@ -72,7 +72,7 @@ async def test_authenticate_api_key_user_rejects_disallowed_single_user_ip(monke
 async def test_authenticate_api_key_user_allows_allowed_single_user_ip(monkeypatch):
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key-1234567890")
-    monkeypatch.setenv("SINGLE_USER_ALLOWED_IPS", "203.0.113.10")
+    monkeypatch.setenv("SINGLE_USER_ALLOWED_IPS", "[\"203.0.113.10\"]")
     monkeypatch.setenv("SINGLE_USER_FIXED_ID", "99")
     reset_settings()
 

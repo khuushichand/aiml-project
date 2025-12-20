@@ -15,6 +15,7 @@ def _build_app_with_overrides(
     principal: Optional[AuthPrincipal],
     *,
     fail_with_401: bool = False,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(mcp_mod.router, prefix="/api/v1")
@@ -53,7 +54,7 @@ def _build_app_with_overrides(
         async def get_metrics(self) -> Dict[str, Any]:
             return {"connections": {}, "modules": {}}
 
-    mcp_mod.get_mcp_server = lambda: _DummyServer()  # type: ignore[assignment]
+    monkeypatch.setattr(mcp_mod, "get_mcp_server", lambda: _DummyServer())
 
     return app
 
@@ -80,8 +81,8 @@ def _make_principal(
 
 
 @pytest.mark.asyncio
-async def test_mcp_modules_health_401_when_principal_unavailable():
-    app = _build_app_with_overrides(principal=None, fail_with_401=True)
+async def test_mcp_modules_health_401_when_principal_unavailable(monkeypatch: pytest.MonkeyPatch):
+    app = _build_app_with_overrides(principal=None, fail_with_401=True, monkeypatch=monkeypatch)
 
     with TestClient(app) as client:
         resp = client.get("/api/v1/mcp/modules/health")
@@ -91,13 +92,13 @@ async def test_mcp_modules_health_401_when_principal_unavailable():
 
 
 @pytest.mark.asyncio
-async def test_mcp_modules_health_403_when_missing_system_logs_permission():
+async def test_mcp_modules_health_403_when_missing_system_logs_permission(monkeypatch: pytest.MonkeyPatch):
     principal = _make_principal(
         is_admin=False,
         roles=["user"],
         permissions=[],
     )
-    app = _build_app_with_overrides(principal=principal)
+    app = _build_app_with_overrides(principal=principal, monkeypatch=monkeypatch)
 
     with TestClient(app) as client:
         resp = client.get("/api/v1/mcp/modules/health")
@@ -108,13 +109,13 @@ async def test_mcp_modules_health_403_when_missing_system_logs_permission():
 
 
 @pytest.mark.asyncio
-async def test_mcp_modules_health_200_for_admin_principal():
+async def test_mcp_modules_health_200_for_admin_principal(monkeypatch: pytest.MonkeyPatch):
     principal = _make_principal(
         is_admin=True,
         roles=["admin"],
         permissions=[],
     )
-    app = _build_app_with_overrides(principal=principal)
+    app = _build_app_with_overrides(principal=principal, monkeypatch=monkeypatch)
 
     with TestClient(app) as client:
         resp = client.get("/api/v1/mcp/modules/health")

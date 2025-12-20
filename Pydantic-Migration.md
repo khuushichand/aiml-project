@@ -39,14 +39,19 @@ Goal: Replace dict-based request bodies with explicit Pydantic models to gain va
 
 Public endpoints still using untyped dict bodies. Current implementation status and acceptance criteria below.
 
-1) Character chat sessions — legacy completion
+1) Character chat sessions — No Change Required (Deferred)
    - Endpoint: tldw_Server_API/app/api/v1/endpoints/character_chat_sessions.py:368
-   - Current: payload: Dict[str, Any] = None (unused)
-   - Plan:
-     - Keep accepting an optional dict payload for now to preserve existing tests that post bodies to this endpoint. The payload is ignored. Revisit later if we deprecate the endpoint entirely.
+   - Current: payload: Dict[str, Any] = None (accepted but ignored)
+   - Status: payload will continue to be accepted for compatibility but ignored; this is not a migration step.
    - Tests: existing rate-limit tests cover behavior.
 
-2) Evaluations CRUD — create run (Completed)
+2) Triage — chat.py helper uses Dict internally (not a public request body)
+   - tldw_Server_API/app/api/v1/endpoints/chat.py:569 (internal helper param)
+   - No change required; not exposed as a request body.
+
+## Phase 3 — Completed (this PR)
+
+1) Evaluations CRUD — create run — Completed (completed in this PR)
    - Endpoint: tldw_Server_API/app/api/v1/endpoints/evaluations_crud.py:203
    - Current: request: Dict[str, Any]
    - Implemented schema: CreateRunSimpleRequest(BaseModel, extra='forbid')
@@ -56,16 +61,12 @@ Public endpoints still using untyped dict bodies. Current implementation status 
    - Update endpoint to use typed model and pass through fields (config is free-form dict). Returns 422 on extra keys. Preserves optional target_model.
    - Tests added: positive (valid payload), negative (extra key 422).
 
-3) Chunking Templates — validate (Completed)
+2) Chunking Templates — validate — Completed (completed in this PR)
    - Endpoint: tldw_Server_API/app/api/v1/endpoints/chunking_templates.py:770
    - Current: template_config: Dict[str, Any] = Body(...)
    - Implemented: keep request body as Dict to preserve 200 return semantics for invalid payloads, but parse using TemplateConfig inside the handler and convert Pydantic ValidationError(s) into a TemplateValidationResponse (status 200). This avoids FastAPI 422 while enforcing schema checks.
      - tldw_Server_API/app/api/v1/schemas/chunking_templates_schemas.py:24 (TemplateConfig)
    - Tests: valid config remains 200; missing required keys remains 200 with errors; added test to ensure classifier schema errors surface as 200 with errors, not 422.
-
-4) Triage — chat.py helper uses Dict internally (not a public request body)
-   - tldw_Server_API/app/api/v1/endpoints/chat.py:569 (internal helper param)
-   - No change required; not exposed as a request body.
 
 ## Error Semantics
 

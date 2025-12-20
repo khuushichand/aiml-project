@@ -397,33 +397,41 @@ async def update_dictionary_entry(
         # Pattern is being updated without explicit type, or type is being set to regex.
         try:
             existing_dict_id = service.get_entry_dictionary_id(entry_id)
-            if existing_dict_id is not None:
-                existing_entries = service.get_entries(dictionary_id=existing_dict_id, active_only=False)
-                existing_entry = next((e for e in existing_entries if e.get("id") == entry_id), None)
-                if existing_entry:
-                    existing_type = existing_entry.get("type")
-                    if not existing_type:
-                        # Fallback for legacy is_regex field
-                        existing_type = "regex" if existing_entry.get("is_regex") else "literal"
-                    if update.pattern is not None and update.type is None:
-                        if existing_type == "regex":
-                            # Validate the new pattern for ReDoS safety
-                            try:
-                                validate_regex_pattern_safety(update.pattern)
-                            except ValueError as e:
-                                raise HTTPException(
-                                    status_code=status.HTTP_400_BAD_REQUEST,
-                                    detail=str(e)
-                                ) from e
-                    elif update.type == "regex":
-                        existing_pattern = existing_entry.get("pattern") or existing_entry.get("key") or ""
-                        try:
-                            validate_regex_pattern_safety(existing_pattern)
-                        except ValueError as e:
-                            raise HTTPException(
-                                status_code=status.HTTP_400_BAD_REQUEST,
-                                detail=str(e)
-                            ) from e
+            if existing_dict_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Entry not found for validation",
+                )
+            existing_entries = service.get_entries(dictionary_id=existing_dict_id, active_only=False)
+            existing_entry = next((e for e in existing_entries if e.get("id") == entry_id), None)
+            if not existing_entry:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Entry not found for validation",
+                )
+            existing_type = existing_entry.get("type")
+            if not existing_type:
+                # Fallback for legacy is_regex field
+                existing_type = "regex" if existing_entry.get("is_regex") else "literal"
+            if update.pattern is not None and update.type is None:
+                if existing_type == "regex":
+                    # Validate the new pattern for ReDoS safety
+                    try:
+                        validate_regex_pattern_safety(update.pattern)
+                    except ValueError as e:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=str(e)
+                        ) from e
+            elif update.type == "regex":
+                existing_pattern = existing_entry.get("pattern") or existing_entry.get("key") or ""
+                try:
+                    validate_regex_pattern_safety(existing_pattern)
+                except ValueError as e:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=str(e)
+                    ) from e
         except HTTPException:
             raise
         except Exception as e:

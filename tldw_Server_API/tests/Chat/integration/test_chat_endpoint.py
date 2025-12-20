@@ -47,6 +47,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGD
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user, DEFAULT_CHARACTER_NAME
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
 
 
 # Helper function to make requests with CSRF token
@@ -536,9 +537,17 @@ def test_missing_api_key_for_required_provider(
     # The endpoint's providers_requiring_keys list includes "openai".
     request_data_openai = default_chat_request_data.model_copy(update={"api_provider": "openai"})
 
+    reg = get_metrics_registry()
+    labels = {"provider": "openai", "operation": "chat"}
+    before = reg.get_metric_stats("byok_missing_credentials_total", labels=labels).get("count", 0)
+
     # Ensure endpoint prefers module-level API_KEYS for this test to avoid env/interference
     # Do NOT enable TEST_MODE here, since TEST_MODE enables auto-mock for some providers and bypasses 503.
     monkeypatch.delenv('TEST_MODE', raising=False)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.byok_runtime.resolve_server_default_key",
+        lambda _provider: None,
+    )
     from unittest.mock import patch as _patch
     with _patch("tldw_Server_API.app.api.v1.endpoints.chat.get_api_keys", return_value={}):
         response = client.post_with_csrf(
@@ -547,9 +556,11 @@ def test_missing_api_key_for_required_provider(
         headers={"token": valid_auth_token}
         )
 
-    assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
-    expected_detail = "Service for 'openai' is not configured (key missing)."  # Or the relevant provider
-    assert response.json()["detail"] == expected_detail
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "missing_provider_credentials"
+    after = reg.get_metric_stats("byok_missing_credentials_total", labels=labels).get("count", 0)
+    assert after >= before + 1
 
     # Clean up only the overrides we added (not the auth override from fixture)
     app.dependency_overrides.pop(get_media_db_for_user, None)

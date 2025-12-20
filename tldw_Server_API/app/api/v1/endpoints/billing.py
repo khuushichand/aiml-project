@@ -16,6 +16,7 @@ from tldw_Server_API.app.api.v1.API_Deps.org_deps import (
     require_org_role,
     require_org_owner,
     get_active_org_id,
+    _get_user_org_membership,
 )
 from tldw_Server_API.app.api.v1.schemas.billing_schemas import (
     PlanListResponse,
@@ -50,8 +51,8 @@ router = APIRouter(
 
 
 async def _require_billing_enabled(
-    principal: Optional[AuthPrincipal] = None,
-    org_id: Optional[int] = None,
+    _principal: Optional[AuthPrincipal] = None,
+    _org_id: Optional[int] = None,
 ):
     """Raise error if billing is not enabled."""
     if not is_billing_enabled():
@@ -227,8 +228,6 @@ async def get_rag_usage_debug(
     org_id = await _resolve_org_id(principal, org_id)
 
     # Verify billing view permissions
-    from tldw_Server_API.app.api.v1.API_Deps.org_deps import _get_user_org_membership
-
     membership = await _get_user_org_membership(principal.user_id, org_id)
     if not membership or membership.get("role") not in ("owner", "admin"):
         raise HTTPException(
@@ -272,7 +271,6 @@ async def create_checkout(
     org_id = await _resolve_org_id(principal, org_id)
 
     # Verify user has billing permissions (owner or admin)
-    from tldw_Server_API.app.api.v1.API_Deps.org_deps import _get_user_org_membership
     membership = await _get_user_org_membership(principal.user_id, org_id)
     if not membership or membership.get("role") not in ("owner", "admin"):
         raise HTTPException(
@@ -326,7 +324,6 @@ async def create_portal(
     org_id = await _resolve_org_id(principal, org_id)
 
     # Verify billing permissions
-    from tldw_Server_API.app.api.v1.API_Deps.org_deps import _get_user_org_membership
     membership = await _get_user_org_membership(principal.user_id, org_id)
     if not membership or membership.get("role") not in ("owner", "admin"):
         raise HTTPException(
@@ -376,7 +373,6 @@ async def cancel_subscription(
     org_id = await _resolve_org_id(principal, org_id)
 
     # Verify owner role
-    from tldw_Server_API.app.api.v1.API_Deps.org_deps import _get_user_org_membership
     membership = await _get_user_org_membership(principal.user_id, org_id)
     if not membership or membership.get("role") != "owner":
         raise HTTPException(
@@ -424,7 +420,6 @@ async def resume_subscription(
     org_id = await _resolve_org_id(principal, org_id)
 
     # Verify owner role
-    from tldw_Server_API.app.api.v1.API_Deps.org_deps import _get_user_org_membership
     membership = await _get_user_org_membership(principal.user_id, org_id)
     if not membership or membership.get("role") != "owner":
         raise HTTPException(
@@ -468,7 +463,6 @@ async def list_invoices(
     await _require_billing_enabled(principal, org_id)
 
     # Verify billing view permissions
-    from tldw_Server_API.app.api.v1.API_Deps.org_deps import _get_user_org_membership
     membership = await _get_user_org_membership(principal.user_id, org_id)
     if not membership or membership.get("role") not in ("owner", "admin"):
         raise HTTPException(

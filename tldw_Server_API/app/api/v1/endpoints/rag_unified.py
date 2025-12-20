@@ -783,7 +783,7 @@ async def list_vlm_backends():
         Depends(check_rate_limit),
         Depends(rbac_rate_limit("rag.search")),
         Depends(require_permissions(MEDIA_READ)),
-        Depends(require_token_scope("any", require_if_present=False, endpoint_id="rag.search", count_as="call")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="rag.search", count_as="call")),
         Depends(require_within_limit(LimitCategory.RAG_QUERIES_DAY, 1)),
     ]
 )
@@ -1069,11 +1069,7 @@ async def unified_search_endpoint(
         response = convert_result_to_response(result)
 
         # Best-effort RAG query usage logging for billing/analytics.
-        try:
-            await _log_rag_queries_for_org(request_raw, current_user, units=1)
-        except Exception:
-            # Guard against accidental propagation; helper already logs internally.
-            pass
+        await _log_rag_queries_for_org(request_raw, current_user, units=1)
 
         # Log performance if monitoring enabled
         if request.enable_monitoring:
@@ -1215,10 +1211,7 @@ async def unified_batch_endpoint(
         total_time = time.time() - start_time
 
         # Each query in the batch counts as one RAG query unit.
-        try:
-            await _log_rag_queries_for_org(request_raw, current_user, units=requested_units)
-        except Exception:
-            pass
+        await _log_rag_queries_for_org(request_raw, current_user, units=requested_units)
 
         return UnifiedBatchResponse(
             results=responses,
@@ -1296,10 +1289,7 @@ async def simple_search_endpoint(
         )
 
         # Best-effort RAG query logging (counts as a single query).
-        try:
-            await _log_rag_queries_for_org(request, current_user, units=1)
-        except Exception:
-            pass
+        await _log_rag_queries_for_org(request, current_user, units=1)
 
         return {
             "query": query,
@@ -1344,10 +1334,7 @@ async def unified_search_stream_endpoint(
         raise HTTPException(status_code=400, detail="enable_generation must be true for streaming.")
 
     # Streaming search counts as a single RAG query.
-    try:
-        await _log_rag_queries_for_org(request_raw, current_user, units=1)
-    except Exception:
-        pass
+    await _log_rag_queries_for_org(request_raw, current_user, units=1)
 
     async def event_stream():
         try:

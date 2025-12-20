@@ -21,11 +21,18 @@ import uuid
 import json
 from datetime import datetime
 import asyncio
+import os
 from loguru import logger
 
 from ....core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 from ....core.Prompt_Management.prompt_studio.test_runner import TestRunner
 from ....core.Prompt_Management.prompt_studio.evaluation_manager import EvaluationManager
+from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
+    record_byok_missing_credentials,
+    resolve_byok_credentials,
+)
+from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
+from tldw_Server_API.app.core.Chat.provider_config import PROVIDER_REQUIRES_KEY
 from ..API_Deps.prompt_studio_deps import get_prompt_studio_db, get_prompt_studio_user
 from ..schemas.prompt_studio_schemas import (
     EvaluationCreate,
@@ -41,6 +48,13 @@ from tldw_Server_API.app.core.Logging.log_context import (
     get_ps_logger,
     log_context,
 )
+
+
+def _is_prompt_studio_test_mode() -> bool:
+    return (
+        os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+        or os.getenv("PYTEST_CURRENT_TEST") is not None
+    )
 
 @router.post(
     "/evaluations",
@@ -169,6 +183,40 @@ async def create_evaluation(
         model_name = first_cfg.get("model_name") or first_cfg.get("model") or "gpt-3.5-turbo"
         temperature = first_cfg.get("temperature", 0.7)
         max_tokens = first_cfg.get("max_tokens", 1000)
+        provider_name = (first_cfg.get("provider") or first_cfg.get("api_name") or "openai").strip() or "openai"
+        provider_key = provider_name.lower()
+
+        def _fallback_resolver(name: str) -> Optional[str]:
+            key_val, _ = resolve_provider_api_key(
+                name,
+                prefer_module_keys_in_tests=True,
+            )
+            return key_val
+
+        user_id_int = None
+        try:
+            user_id_int = int(user_context.get("user_id"))
+        except Exception:
+            user_id_int = None
+
+        byok_resolution = await resolve_byok_credentials(
+            provider_key,
+            user_id=user_id_int,
+            request=request,
+            fallback_resolver=_fallback_resolver,
+        )
+        provider_api_key = byok_resolution.api_key
+        app_config_override = byok_resolution.app_config
+
+        if PROVIDER_REQUIRES_KEY.get(provider_key, False) and not provider_api_key and not _is_prompt_studio_test_mode():
+            record_byok_missing_credentials(provider_key, operation="prompt_studio")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error_code": "missing_provider_credentials",
+                    "message": f"Provider '{provider_name}' requires an API key.",
+                },
+            )
 
         # Use EvaluationManager for sync path; for async we create a record and update later
         eval_manager = EvaluationManager(db)
@@ -250,6 +298,8 @@ async def create_evaluation(
                     run_evaluation_async,
                     eval_id,
                     db,
+                    user_id=user_id_int,
+                    provider=provider_name,
                     request_id=req_id,
                     traceparent=tp,
                 )
@@ -271,7 +321,13 @@ async def create_evaluation(
                 model=model_name,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                provider=provider_name,
+                api_key=provider_api_key,
+                app_config=app_config_override,
             )
+
+            if byok_resolution and byok_resolution.uses_byok:
+                await byok_resolution.touch_last_used()
 
             return EvaluationResponse(
                 id=result["id"],
@@ -583,6 +639,8 @@ async def run_evaluation_async(
     evaluation_id: int,
     db: PromptStudioDatabase,
     *,
+    user_id: Optional[int] = None,
+    provider: str = "openai",
     request_id: str | None = None,
     traceparent: str = "",
 ):
@@ -661,6 +719,31 @@ async def run_evaluation_async(
         model_name = cfg.get("model_name") or cfg.get("model") or "gpt-3.5-turbo"
         temperature = cfg.get("temperature", 0.7)
         max_tokens = cfg.get("max_tokens", 1000)
+        provider_name = (cfg.get("provider") or cfg.get("api_name") or provider or "openai").strip() or "openai"
+        provider_key = provider_name.lower()
+
+        byok_resolution = None
+        provider_api_key = None
+        app_config_override = None
+        if user_id is not None:
+            def _fallback_resolver(name: str) -> Optional[str]:
+                key_val, _ = resolve_provider_api_key(
+                    name,
+                    prefer_module_keys_in_tests=True,
+                )
+                return key_val
+
+            byok_resolution = await resolve_byok_credentials(
+                provider_key,
+                user_id=user_id,
+                request=None,
+                fallback_resolver=_fallback_resolver,
+            )
+            provider_api_key = byok_resolution.api_key
+            app_config_override = byok_resolution.app_config
+
+        if PROVIDER_REQUIRES_KEY.get(provider_key, False) and not provider_api_key and not _is_prompt_studio_test_mode():
+            raise RuntimeError(f"Provider '{provider_name}' requires an API key.")
 
         # Fetch prompt
         cursor.execute(
@@ -721,7 +804,7 @@ async def run_evaluation_async(
                     if _chat_call is None:
                         raise RuntimeError("LLM chat function not available")
                     resp = _chat_call(
-                        api_endpoint="openai",
+                        api_endpoint=provider_name,
                         model=model_name,
                         messages=[
                             {"role": "system", "content": system_prompt},
@@ -729,6 +812,8 @@ async def run_evaluation_async(
                         ],
                         temperature=temperature,
                         max_tokens=max_tokens,
+                        api_key=provider_api_key,
+                        app_config=app_config_override,
                     )
                     if isinstance(resp, list) and resp:
                         actual_output = resp[0]
@@ -777,6 +862,9 @@ async def run_evaluation_async(
             "failed": total - passed,
             "pass_rate": (passed / total) if total else 0.0,
         }
+
+        if byok_resolution and byok_resolution.uses_byok:
+            await byok_resolution.touch_last_used()
 
         # Update evaluation to completed with metrics
         cursor.execute(

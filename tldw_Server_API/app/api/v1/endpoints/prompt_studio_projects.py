@@ -218,8 +218,11 @@ async def create_project(
             if row:
                 project = db._row_to_dict(cursor, row)
                 return StandardResponse(success=True, data=ProjectResponse(**project))
-        except Exception as fallback_err:
+        except DatabaseError as fallback_err:
             logger.error(f"Failed to retrieve existing project after conflict: {fallback_err}")
+        except Exception as fallback_err:
+            logger.exception(f"Unexpected error retrieving existing project after conflict: {fallback_err}")
+            raise
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(e)

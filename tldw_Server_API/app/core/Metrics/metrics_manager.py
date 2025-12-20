@@ -1053,6 +1053,24 @@ class MetricsRegistry:
             )
         )
 
+        # BYOK metrics
+        self.register_metric(
+            MetricDefinition(
+                name="byok_resolution_total",
+                type=MetricType.COUNTER,
+                description="Total number of BYOK credential resolutions by source",
+                labels=["provider", "source", "allowlisted", "byok_enabled"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="byok_missing_credentials_total",
+                type=MetricType.COUNTER,
+                description="Total number of missing provider credential errors",
+                labels=["provider", "operation", "allowlisted", "byok_enabled"],
+            )
+        )
+
         # Storage quota metrics (per user)
         self.register_metric(
             MetricDefinition(

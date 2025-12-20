@@ -60,6 +60,11 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_profile_mode
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE, EMBEDDINGS_ADMIN
+from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
+    ResolvedByokCredentials,
+    record_byok_missing_credentials,
+    resolve_byok_credentials,
+)
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal, is_single_user_principal
 
 # Configuration
@@ -549,6 +554,43 @@ CACHE_CLEANUP_INTERVAL = _cfg_int("EMBEDDINGS_CACHE_CLEANUP_INTERVAL", DEFAULT_C
 CONNECTION_POOL_SIZE = _cfg_int("EMBEDDINGS_CONNECTION_POOL_SIZE", DEFAULT_CONNECTION_POOL_SIZE)
 REQUEST_TIMEOUT = _cfg_int("EMBEDDINGS_REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT)
 MAX_RETRIES = _cfg_int("EMBEDDINGS_MAX_RETRIES", DEFAULT_MAX_RETRIES)
+
+EMBEDDINGS_PROVIDERS_REQUIRE_KEY = {
+    "openai",
+    "cohere",
+    "voyage",
+    "google",
+    "mistral",
+}
+
+
+async def _resolve_embeddings_byok(
+    provider: str,
+    current_user: Optional[User],
+    request: Optional[Request],
+) -> ResolvedByokCredentials:
+    user_id_int = getattr(current_user, "id_int", None) if current_user else None
+    if user_id_int is None and current_user is not None:
+        try:
+            user_id_int = int(getattr(current_user, "id", None))
+        except Exception:
+            user_id_int = None
+    return await resolve_byok_credentials(
+        provider,
+        user_id=user_id_int,
+        request=request,
+    )
+
+
+def _raise_missing_embeddings_key(provider: str) -> None:
+    record_byok_missing_credentials(provider, operation="embeddings")
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={
+            "error_code": "missing_provider_credentials",
+            "message": f"Embeddings provider '{provider}' requires an API key.",
+        },
+    )
 
 # Circuit breaker configuration
 CIRCUIT_BREAKER_FAILURE_THRESHOLD = 5
@@ -1435,6 +1477,8 @@ def build_provider_config(
     dimensions: Optional[int] = None
 ) -> Dict[str, Any]:
     """Build provider-specific configuration"""
+    if not model:
+        raise ValueError(f"model is required for provider {provider.value}")
 
     if provider == EmbeddingProvider.OPENAI:
         if dimensions is not None:
@@ -1970,6 +2014,17 @@ async def create_embedding_endpoint(
             if provider.lower() not in IMPLEMENTED_PROVIDERS:
                 raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=f"Provider '{provider}' not implemented")
 
+        byok_cache: Dict[str, ResolvedByokCredentials] = {}
+
+        async def _resolve_provider_credentials(name: str) -> ResolvedByokCredentials:
+            key = (name or "").strip().lower()
+            cached = byok_cache.get(key)
+            if cached:
+                return cached
+            resolved = await _resolve_embeddings_byok(key, current_user, request)
+            byok_cache[key] = resolved
+            return resolved
+
         # ResourceGovernor tokens enforcement (per-minute + durable tokens/day caps).
         # Requests are enforced at ingress via RGSimpleMiddleware when enabled; token
         # accounting needs endpoint-level units.
@@ -2067,6 +2122,7 @@ async def create_embedding_endpoint(
 
         original_provider = provider
         original_model = model
+        requested_provider = provider
 
         # Optional adapter-backed path (Stage 4 wiring): allow routing to
         # Embeddings adapters when explicitly enabled via env flag. Adapters take
@@ -2083,13 +2139,10 @@ async def create_embedding_endpoint(
                 registry = get_embeddings_registry()
                 adapter = registry.get_adapter(provider)
                 # Prepare adapter request (provider-specific key if available)
-                _api_key: Optional[str] = None
-                if provider == "openai":
-                    _api_key = settings.get("OPENAI_API_KEY")
-                elif provider == "huggingface":
-                    _api_key = settings.get("HUGGINGFACE_API_KEY") or settings.get("HUGGINGFACE_TOKEN")
-                elif provider == "google":
-                    _api_key = settings.get("GOOGLE_API_KEY")
+                byok_resolution = await _resolve_provider_credentials(provider)
+                if provider in EMBEDDINGS_PROVIDERS_REQUIRE_KEY and not byok_resolution.api_key:
+                    _raise_missing_embeddings_key(provider)
+                _api_key: Optional[str] = byok_resolution.api_key
 
                 adapter_request: Dict[str, Any] = {
                     "input": texts_to_embed if len(texts_to_embed) > 1 else texts_to_embed[0],
@@ -2160,11 +2213,17 @@ async def create_embedding_endpoint(
                         fallback_from = provider
                     # Map model id to destination provider if needed
                     target_model_id = map_model_for_provider(original_provider, p, original_model)
+                    credentials = await _resolve_provider_credentials(p)
+                    if p in EMBEDDINGS_PROVIDERS_REQUIRE_KEY and not credentials.api_key:
+                        if p == requested_provider:
+                            _raise_missing_embeddings_key(p)
+                        continue
                     embeddings = await create_embeddings_batch_async(
                         texts=texts_to_embed,
                         provider=p,
                         model_id=target_model_id,
                         dimensions=embedding_request.dimensions,
+                        api_key=credentials.api_key,
                         metadata=user_metadata,
                     )
                     provider = p
@@ -2194,6 +2253,13 @@ async def create_embedding_endpoint(
             if not embeddings:
                 logger.error(f"Embedding creation failed across providers {chain}: {last_error}")
                 raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Embedding providers unavailable")
+
+        try:
+            final_credentials = byok_cache.get(provider.lower())
+            if final_credentials:
+                await final_credentials.touch_last_used()
+        except Exception:
+            pass
 
         # Optional dimension adjustment (post-process)
         dims_policy_used = None
@@ -2416,13 +2482,19 @@ async def create_embeddings_batch_endpoint(
 
     user_metadata = _build_user_metadata(current_user)
 
+    credentials = await _resolve_embeddings_byok(provider, current_user, request)
+    if provider in EMBEDDINGS_PROVIDERS_REQUIRE_KEY and not credentials.api_key:
+        _raise_missing_embeddings_key(provider)
+
     embeddings = await create_embeddings_batch_async(
         texts=texts,
         provider=provider,
         model_id=model,
         dimensions=payload.dimensions,
+        api_key=credentials.api_key,
         metadata=user_metadata,
     )
+    await credentials.touch_last_used()
 
     # Attach quota headers if present (parity with single-item endpoint)
     try:
@@ -2487,6 +2559,7 @@ async def get_embedding_model_info(
     model_id: str,
     provider: Optional[str] = Query(None, description="Provider override"),
     current_user: User = Depends(get_request_user),
+    request: Request = None,
 ):
     model = model_id
     resolved_provider = guess_provider_for_model(model, provider)
@@ -2497,12 +2570,17 @@ async def get_embedding_model_info(
     user_metadata = _build_user_metadata(current_user)
 
     try:
+        credentials = await _resolve_embeddings_byok(resolved_provider, current_user, request)
+        if resolved_provider in EMBEDDINGS_PROVIDERS_REQUIRE_KEY and not credentials.api_key:
+            _raise_missing_embeddings_key(resolved_provider)
         vectors = await create_embeddings_batch_async(
             texts=["model probe"],
             provider=resolved_provider,
             model_id=model,
+            api_key=credentials.api_key,
             metadata=user_metadata,
         )
+        await credentials.touch_last_used()
     except HTTPException:
         raise
     except Exception as exc:

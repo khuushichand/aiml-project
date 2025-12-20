@@ -379,10 +379,17 @@ class ChatDictionaryEntry:
         if created_at_val:
             try:
                 if isinstance(created_at_val, datetime):
-                    entry._loaded_at = created_at_val
+                    entry._loaded_at = (
+                        created_at_val
+                        if created_at_val.tzinfo is not None
+                        else created_at_val.replace(tzinfo=timezone.utc)
+                    )
                 else:
                     iso_source = str(created_at_val).replace(" ", "T")
-                    entry._loaded_at = datetime.fromisoformat(iso_source.replace("Z", "+00:00"))
+                    parsed = datetime.fromisoformat(iso_source.replace("Z", "+00:00"))
+                    entry._loaded_at = (
+                        parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+                    )
             except Exception:
                 entry._loaded_at = datetime.now(timezone.utc)
         return entry

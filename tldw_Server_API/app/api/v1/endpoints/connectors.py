@@ -59,7 +59,11 @@ router = APIRouter(prefix="/connectors", tags=["connectors"])
 
 
 def _resolve_redirect_base(request: Optional[Request], conn) -> str:
-    """Resolve connector redirect base, allowing request to be optional for tests."""
+    """Resolve connector redirect base, allowing request to be optional for tests.
+
+    Priority: CONNECTOR_REDIRECT_BASE_URL env var > request.base_url > connector.redirect_base.
+    Returns empty string only in test scenarios where the OAuth flow is mocked.
+    """
     base = os.getenv("CONNECTOR_REDIRECT_BASE_URL")
     if base:
         return base.rstrip("/")
@@ -68,7 +72,12 @@ def _resolve_redirect_base(request: Optional[Request], conn) -> str:
             return str(request.base_url).rstrip("/")
         except Exception as e:
             logger.debug(f"Failed to resolve base_url from request: {e}")
-    return (getattr(conn, "redirect_base", "") or "").rstrip("/")
+    resolved = (getattr(conn, "redirect_base", "") or "").rstrip("/")
+    if not resolved and request is not None:
+        logger.warning(
+            "Redirect base could not be resolved; OAuth redirect_uri may be invalid (expected only in tests)"
+        )
+    return resolved
 
 
 def _get_user_id(current_user: Dict[str, Any]) -> int:
@@ -99,7 +108,7 @@ async def start_authorize(
     provider: str,
     state: Optional[str] = None,
     scopes: Optional[str] = None,
-    request: Optional[Request] = None,
+    request: Request = None,
     db=Depends(get_db_transaction),
     current_user: Dict[str, Any] = Depends(get_current_active_user),
 ) -> AuthorizeURLResponse:
@@ -120,7 +129,7 @@ async def oauth_callback(
     provider: str,
     code: str,
     state: Optional[str] = None,
-    request: Optional[Request] = None,
+    request: Request = None,
     db=Depends(get_db_transaction),
     current_user: Dict[str, Any] = Depends(get_current_active_user),
     org_policy: Dict[str, Any] = Depends(get_org_policy_from_principal),
@@ -130,7 +139,32 @@ async def oauth_callback(
     user_id = _get_user_id(current_user)
     if not state:
         raise HTTPException(status_code=400, detail="Missing OAuth state")
-    ttl_minutes = int(os.getenv("CONNECTOR_OAUTH_STATE_TTL_MINUTES", "10") or 10)
+    default_ttl_minutes = 10
+    raw_ttl_minutes = os.getenv("CONNECTOR_OAUTH_STATE_TTL_MINUTES")
+    ttl_minutes = default_ttl_minutes
+    if raw_ttl_minutes is not None:
+        raw_ttl_minutes = raw_ttl_minutes.strip()
+        if not raw_ttl_minutes:
+            logger.warning(
+                "CONNECTOR_OAUTH_STATE_TTL_MINUTES is empty; using default {}",
+                default_ttl_minutes,
+            )
+        else:
+            try:
+                ttl_minutes = int(raw_ttl_minutes)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid CONNECTOR_OAUTH_STATE_TTL_MINUTES={!r}; using default {}",
+                    raw_ttl_minutes,
+                    default_ttl_minutes,
+                )
+                ttl_minutes = default_ttl_minutes
+    if ttl_minutes <= 0:
+        logger.warning(
+            "CONNECTOR_OAUTH_STATE_TTL_MINUTES must be positive; using default {}",
+            default_ttl_minutes,
+        )
+        ttl_minutes = default_ttl_minutes
     ok_state = await consume_oauth_state(
         db,
         user_id=user_id,
@@ -376,7 +410,7 @@ async def import_source(
     source_id: int,
     db=Depends(get_db_transaction),
     current_user: Dict[str, Any] = Depends(get_current_active_user),
-    request: Optional[Request] = None,
+    request: Request = None,
     org_policy: Dict[str, Any] = Depends(get_org_policy_from_principal),
     count_jobs_fn: Callable[[int], int] = Depends(get_connectors_job_counter),
 ) -> ImportJob:

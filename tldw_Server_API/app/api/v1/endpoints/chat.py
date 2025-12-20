@@ -130,6 +130,11 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 from tldw_Server_API.app.core.AuthNZ.llm_budget_guard import enforce_llm_budget
 from tldw_Server_API.app.core.AuthNZ.rbac import user_has_permission
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
+from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
+    ResolvedByokCredentials,
+    record_byok_missing_credentials,
+    resolve_byok_credentials,
+)
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
@@ -449,7 +454,7 @@ async def _maybe_rg_shadow_chat_decision(
     tags=["chat"],
     dependencies=[
         Depends(rbac_rate_limit("chat.commands.list")),
-        Depends(require_token_scope("any", require_if_present=False, endpoint_id="chat.commands.list")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.commands.list")),
     ],
 )
 async def list_chat_commands(
@@ -550,7 +555,7 @@ async def list_chat_commands(
     },
     dependencies=[
         Depends(rbac_rate_limit("chat.dictionaries.validate")),
-        Depends(require_token_scope("any", require_if_present=False, endpoint_id="chat.dictionaries.validate")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.dictionaries.validate")),
     ],
 )
 async def validate_chat_dictionary(
@@ -966,7 +971,7 @@ async def _save_message_turn_to_db(
     },
     dependencies=[
         Depends(rbac_rate_limit("chat.create")),
-        Depends(require_token_scope("any", require_if_present=False, endpoint_id="chat.completions", count_as="call")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.completions", count_as="call")),
         Depends(get_auth_principal),  # Establish AuthPrincipal/AuthContext early for guardrails
         Depends(enforce_llm_budget),  # Hard budget stop before handler runs
     ]
@@ -1686,10 +1691,44 @@ async def create_chat_completion(
                     provider = "openai"
 
             target_api_provider = provider  # Already determined (possibly adjusted above)
-            provider_api_key, _api_key_debug = resolve_provider_api_key(
-                target_api_provider,
-                prefer_module_keys_in_tests=True,
-            )
+            byok_cache: Dict[str, ResolvedByokCredentials] = {}
+
+            def _fallback_resolver(name: str) -> Optional[str]:
+                key_val, _ = resolve_provider_api_key(
+                    name,
+                    prefer_module_keys_in_tests=True,
+                )
+                return key_val
+
+            async def _resolve_byok(name: str) -> ResolvedByokCredentials:
+                provider_key = (name or "").strip().lower()
+                cached = byok_cache.get(provider_key)
+                if cached:
+                    return cached
+                user_id_int = getattr(current_user, "id_int", None)
+                if user_id_int is None:
+                    try:
+                        user_id_int = int(getattr(current_user, "id", None))
+                    except Exception:
+                        user_id_int = None
+                resolved = await resolve_byok_credentials(
+                    provider_key,
+                    user_id=user_id_int,
+                    request=request,
+                    fallback_resolver=_fallback_resolver,
+                )
+                byok_cache[provider_key] = resolved
+                return resolved
+
+            async def _touch_byok(name: str) -> None:
+                provider_key = (name or "").strip().lower()
+                resolved = byok_cache.get(provider_key)
+                if resolved:
+                    await resolved.touch_last_used()
+
+            byok_resolution = await _resolve_byok(target_api_provider)
+            provider_api_key = byok_resolution.api_key
+            app_config_override = byok_resolution.app_config
 
             # Centralized provider capabilities
             try:
@@ -1701,7 +1740,14 @@ async def create_chat_completion(
             _auto_mock_family = target_api_provider in {"openai", "groq", "mistral"}
             if PROVIDER_REQUIRES_KEY.get(target_api_provider, False) and not provider_api_key and not (_force_mock or (_test_mode_flag and _auto_mock_family)):
                 logger.error(f"API key for provider '{target_api_provider}' is missing or not configured.")
-                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Service for '{target_api_provider}' is not configured (key missing).")
+                record_byok_missing_credentials(target_api_provider, operation="chat")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error_code": "missing_provider_credentials",
+                        "message": f"Provider '{target_api_provider}' requires an API key.",
+                    },
+                )
             # Additional deterministic behavior for tests: if a clearly invalid key is provided, fail fast with 401.
             # This avoids depending on external network calls in CI and matches integration test expectations.
             if _test_mode_flag and provider_api_key and PROVIDER_REQUIRES_KEY.get(target_api_provider, False):
@@ -1735,6 +1781,7 @@ async def create_chat_completion(
                 provider_api_key=provider_api_key,
                 templated_llm_payload=templated_llm_payload,
                 final_system_message=final_system_message,
+                app_config=app_config_override,
             )
 
             def _get_default_model_for_provider_name(target_provider: str) -> Optional[str]:
@@ -1767,18 +1814,20 @@ async def create_chat_completion(
                         ),
                     )
 
-            def rebuild_call_params_for_provider(target_provider: str) -> Tuple[Dict[str, Any], Optional[str]]:
-                provider_api_key_new, _resolver_debug = resolve_provider_api_key(
-                    target_provider,
-                    prefer_module_keys_in_tests=True,
-                )
+            async def rebuild_call_params_for_provider(target_provider: str) -> Tuple[Dict[str, Any], Optional[str]]:
+                refreshed_resolution = await _resolve_byok(target_provider)
+                provider_api_key_new = refreshed_resolution.api_key
                 if PROVIDER_REQUIRES_KEY.get(target_provider, False) and not provider_api_key_new:
                     logger.error(
                         f"API key for provider '{target_provider}' is missing or not configured (fallback)."
                     )
+                    record_byok_missing_credentials(target_provider, operation="chat")
                     raise HTTPException(
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                        detail=f"Service for '{target_provider}' is not configured (key missing)."
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "error_code": "missing_provider_credentials",
+                            "message": f"Provider '{target_provider}' requires an API key.",
+                        },
                     )
 
                 refreshed_args = build_call_params_from_request(
@@ -1787,6 +1836,7 @@ async def create_chat_completion(
                     provider_api_key=provider_api_key_new,
                     templated_llm_payload=templated_llm_payload,
                     final_system_message=final_system_message,
+                    app_config=refreshed_resolution.app_config,
                 )
                 refreshed_model = refreshed_args.get("model")
                 use_default_model = False
@@ -2053,6 +2103,7 @@ async def create_chat_completion(
                     llm_call_func=llm_call_func,
                     refresh_provider_params=rebuild_call_params_for_provider,
                     moderation_getter=get_moderation_service,
+                    on_success=_touch_byok,
                     rg_commit_cb=(
                         (lambda total: (request.app.state.rg_governor.commit(_rg_handle_id, actuals={"tokens": int(total)}) if getattr(request.app.state, "rg_governor", None) and _rg_handle_id else None))
                         if _rg_handle_id else None
@@ -2088,6 +2139,7 @@ async def create_chat_completion(
                     llm_call_func=llm_call_func,
                     refresh_provider_params=rebuild_call_params_for_provider,
                     moderation_getter=get_moderation_service,
+                    on_success=_touch_byok,
                 )
                 # Track response size and return
                 if isinstance(encoded_payload, dict):
@@ -2126,13 +2178,17 @@ async def create_chat_completion(
             # Log with request context
             if e_http.status_code >= 500:
                 logger.error(
-                    f"HTTPException (Server Error): {e_http.status_code} - {e_http.detail}",
+                    "HTTPException (Server Error): {} - {}",
+                    e_http.status_code,
+                    e_http.detail,
                     extra={"request_id": request_id, "status_code": e_http.status_code},
                     exc_info=True
                 )
             else:
                 logger.warning(
-                    f"HTTPException (Client Error): {e_http.status_code} - {e_http.detail}",
+                    "HTTPException (Client Error): {} - {}",
+                    e_http.status_code,
+                    e_http.detail,
                     extra={"request_id": request_id, "status_code": e_http.status_code}
                 )
             # Allow-list expected HTTP errors raised intentionally by the endpoint
@@ -2424,7 +2480,7 @@ def _estimate_tokens_for_queue(request_json: str) -> int:
     tags=["chat"],
     dependencies=[
         Depends(rbac_rate_limit("chat.knowledge.save")),
-        Depends(require_token_scope("any", require_if_present=False, endpoint_id="chat.knowledge.save")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.knowledge.save")),
     ],
 )
 async def save_chat_knowledge(

@@ -11,6 +11,7 @@ from fastapi import (
     APIRouter,
     Body,
     HTTPException,
+    Request,
     status,
     UploadFile,
     File,
@@ -44,6 +45,7 @@ from tldw_Server_API.app.api.v1.schemas.chunking_schema import ChunkingResponse,
     ChunkingOptionsRequest, ChunkedContentResponse, ChunkingCapabilitiesResponse, MethodSpecificOptions, CodeMethodOptions
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze as general_llm_analyzer
 from tldw_Server_API.app.core.config import load_and_log_configs as load_server_configs
+from tldw_Server_API.app.core.AuthNZ.byok_runtime import resolve_byok_credentials
 # Dependencies for user-specific database access
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import try_get_media_db_for_user
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
@@ -54,6 +56,28 @@ from tldw_Server_API.app.core.Chunking import Chunker
 #######################################################################################################################
 #
 # Functions:
+
+async def _resolve_chunking_byok(
+    provider: str,
+    *,
+    current_user: User,
+    request: Optional[Request],
+    fallback_key: Optional[str],
+):
+    try:
+        user_id_int = int(getattr(current_user, "id", None))
+    except Exception:
+        user_id_int = None
+
+    def _fallback_resolver(_name: str) -> Optional[str]:
+        return fallback_key
+
+    return await resolve_byok_credentials(
+        provider,
+        user_id=user_id_int,
+        request=request,
+        fallback_resolver=_fallback_resolver,
+    )
 
 # --- FastAPI Router ---
 chunking_router = APIRouter()
@@ -73,7 +97,8 @@ chunking_router = APIRouter()
 async def process_text_for_chunking_json(
     request_data: ChunkingTextRequest = Body(...),
     current_user: User = Depends(get_request_user),
-    media_db: Optional[MediaDatabase] = Depends(try_get_media_db_for_user)
+    media_db: Optional[MediaDatabase] = Depends(try_get_media_db_for_user),
+    http_request: Request = None,
 ):
     """
     Accepts text content and chunking options in a JSON body.
@@ -157,6 +182,7 @@ async def process_text_for_chunking_json(
 
                 # If template uses LLM-heavy methods, prepare a configured Chunker
                 configured_chunker = None
+                byok_resolution_tmp = None
                 current_chunking_method_tmp = effective_options.get('method')
                 if current_chunking_method_tmp == 'rolling_summarize':
                     # Reuse the same provider/model selection logic from below
@@ -169,8 +195,15 @@ async def process_text_for_chunking_json(
                     summarization_provider = requested_llm_options.get('provider') or default_summarization_provider
                     provider_specific_config_key = f"{summarization_provider}_api"
                     api_details_from_server_config = server_configs.get(provider_specific_config_key, {})
+                    byok_resolution_tmp = await _resolve_chunking_byok(
+                        summarization_provider,
+                        current_user=current_user,
+                        request=http_request,
+                        fallback_key=api_details_from_server_config.get('api_key'),
+                    )
+                    api_key_value = byok_resolution_tmp.api_key
                     final_model_for_step = api_details_from_server_config.get('model_for_summarization') or api_details_from_server_config.get('model')
-                    if not api_details_from_server_config.get('api_key') or not final_model_for_step:
+                    if not api_key_value or not final_model_for_step:
                         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                                             detail=f"Configuration error: Missing API key or model for {summarization_provider}.")
                     client_suggested_system_prompt = requested_llm_options.get('system_prompt_for_step')
@@ -180,7 +213,7 @@ async def process_text_for_chunking_json(
                     llm_api_config_to_use_tmp = {
                         "api_name": summarization_provider,
                         "model": final_model_for_step,
-                        "api_key": api_details_from_server_config.get('api_key'),
+                        "api_key": api_key_value,
                         "temp": requested_llm_options.get('temperature'),
                         "system_message": final_system_prompt_for_step,
                         "max_tokens": final_max_tokens_for_step,
@@ -215,6 +248,8 @@ async def process_text_for_chunking_json(
                 # Applied options include template_name for clarity
                 applied_opts = dict(effective_options)
                 applied_opts['template_name'] = request_data.options.template_name
+                if byok_resolution_tmp and byok_resolution_tmp.uses_byok:
+                    await byok_resolution_tmp.touch_last_used()
                 return ChunkingResponse(
                     chunks=chunked_responses,
                     original_file_name=request_data.file_name,
@@ -275,6 +310,7 @@ async def process_text_for_chunking_json(
     # --- LLM Configuration for specific chunking methods ---
     llm_call_func_to_use = None
     llm_api_config_to_use = None
+    byok_resolution = None
     # Tokenizer is now part of effective_options, to be read by Chunker init
     tokenizer_for_chunker = effective_options.get("tokenizer_name_or_path", "gpt2") # Default if not set
 
@@ -301,6 +337,13 @@ async def process_text_for_chunking_json(
 
         provider_specific_config_key = f"{summarization_provider}_api" # e.g., "openai_api"
         api_details_from_server_config = server_configs.get(provider_specific_config_key, {})
+        byok_resolution = await _resolve_chunking_byok(
+            summarization_provider,
+            current_user=current_user,
+            request=http_request,
+            fallback_key=api_details_from_server_config.get('api_key'),
+        )
+        api_key_value = byok_resolution.api_key
 
         server_task_specific_model = api_details_from_server_config.get('model_for_summarization')
         logger.debug(f"TEMP DEBUG: server_task_specific_model = {server_task_specific_model}")
@@ -337,7 +380,7 @@ async def process_text_for_chunking_json(
         llm_api_config_to_use = {
             "api_name": summarization_provider,
             "model": final_model_for_step or api_details_from_server_config.get('model'),
-            "api_key": api_details_from_server_config.get('api_key'),
+            "api_key": api_key_value,
             "temp": requested_llm_options.get('temperature'), # If None, general_llm_analyzer will use its own default/config
             "system_message": final_system_prompt_for_step,
             "max_tokens": final_max_tokens_for_step,
@@ -390,6 +433,9 @@ async def process_text_for_chunking_json(
         for chunk in chunk_results
     ]
 
+    if byok_resolution and byok_resolution.uses_byok:
+        await byok_resolution.touch_last_used()
+
     return ChunkingResponse(
         chunks=chunked_responses,
         original_file_name=request_data.file_name,
@@ -429,6 +475,8 @@ async def process_file_for_chunking(
     llm_step_temperature: Optional[float] = Form(None, description="Client suggested temp for internal LLM steps."),
     llm_step_system_prompt: Optional[str] = Form(None, description="Client suggested system prompt for internal LLM steps."),
     llm_step_max_tokens: Optional[int] = Form(None, description="Client suggested max tokens for internal LLM steps."),
+    current_user: User = Depends(get_request_user),
+    http_request: Request = None,
 ):
     logger.info(f"Received file upload for chunking: '{file.filename}'. Method from form: {method}.")
 
@@ -488,6 +536,7 @@ async def process_file_for_chunking(
     # LLM config setup for file endpoint (mirroring the JSON endpoint logic)
     llm_call_func_to_use_file = None
     llm_api_config_to_use_file = None
+    byok_resolution_file = None
     tokenizer_for_chunker_file = effective_processing_options.get("tokenizer_name_or_path", "gpt2")
 
     current_chunking_method_file = effective_processing_options.get('method')
@@ -508,7 +557,13 @@ async def process_file_for_chunking(
 
         if not internal_llm_model_file:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Server config missing model for {internal_llm_provider_file} (file).")
-        api_key_server_file = api_details_server_file.get('api_key')
+        byok_resolution_file = await _resolve_chunking_byok(
+            internal_llm_provider_file,
+            current_user=current_user,
+            request=http_request,
+            fallback_key=api_details_server_file.get('api_key'),
+        )
+        api_key_server_file = byok_resolution_file.api_key
         if not api_key_server_file:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Server config missing API key for {internal_llm_provider_file} (file).")
 
@@ -558,6 +613,9 @@ async def process_file_for_chunking(
         )
         for chunk in chunk_results
     ]
+
+    if byok_resolution_file and byok_resolution_file.uses_byok:
+        await byok_resolution_file.touch_last_used()
 
     return ChunkingResponse(
         chunks=chunked_responses,

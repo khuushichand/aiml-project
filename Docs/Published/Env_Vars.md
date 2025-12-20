@@ -54,6 +54,11 @@ WebUI CSP (Content Security Policy)
 - `ACCESS_TOKEN_EXPIRE_MINUTES`, `REFRESH_TOKEN_EXPIRE_DAYS`.
 - `REDIS_URL`: Optional Redis URL for sessions.
 - `ENABLE_REGISTRATION`, `REQUIRE_REGISTRATION_CODE`.
+- `BYOK_ENABLED`: Enable per-user BYOK keys (ignored in single_user mode).
+- `BYOK_ALLOWED_PROVIDERS`: Optional comma-separated allowlist of providers eligible for BYOK.
+- `BYOK_ENCRYPTION_KEY`: Base64-encoded 32-byte key for BYOK secret encryption (AES-GCM).
+- `BYOK_LAST_USED_THROTTLE_SECONDS`: Throttle runtime updates to BYOK `last_used_at` (seconds, default `300`).
+- `BYOK_SECONDARY_ENCRYPTION_KEY`: Secondary BYOK encryption key for dual-read during rotations.
 - `SHOW_API_KEY_ON_STARTUP`: Avoid in production.
 
 Egress & Outbound Policy (global + Workflows)

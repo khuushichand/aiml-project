@@ -374,7 +374,7 @@ class APIKeyManager:
         user_id: int,
         name: Optional[str] = None,
         description: Optional[str] = None,
-        scope: str = "read",
+        scope: Union[str, List[str]] = "read",
         expires_in_days: Optional[int] = 90,
         rate_limit: Optional[int] = None,
         allowed_ips: Optional[List[str]] = None,
@@ -387,7 +387,7 @@ class APIKeyManager:
             user_id: User ID who owns the key
             name: Optional name for the key
             description: Optional description
-            scope: Permission scope (read, write, admin, service)
+            scope: Permission scope string or list of scopes (read, write, admin, service)
             expires_in_days: Days until expiration (None = no expiration)
             rate_limit: Custom rate limit for this key
             allowed_ips: List of allowed IP addresses
@@ -398,6 +398,11 @@ class APIKeyManager:
         """
         if not self._initialized:
             await self.initialize()
+
+        # Normalize scope for storage (list scopes stored as JSON)
+        if scope is None:
+            scope = "read"
+        stored_scope = json.dumps(scope) if isinstance(scope, (list, tuple)) else scope
 
         # Generate the key
         full_key, key_hash = self.generate_api_key()
@@ -416,7 +421,7 @@ class APIKeyManager:
                 key_prefix=key_prefix,
                 name=name,
                 description=description,
-                scope=scope,
+                scope=stored_scope,
                 expires_at=expires_at,
                 rate_limit=rate_limit,
                 allowed_ips=allowed_ips,

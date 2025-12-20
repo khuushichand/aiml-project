@@ -9,49 +9,49 @@
       "scope_id": "*",
       "rules": [
         {
-          "pattern": "/\\bnsfw\\b/",
+          "pattern": "/\\bnsfw\\b/i",
           "category": "adult",
           "severity": "warning",
           "note": null,
           "tags": null
         },
         {
-          "pattern": "/\\bporn(hub)?\\b/",
+          "pattern": "/\\bporn(hub)?\\b/i",
           "category": "adult",
           "severity": "warning",
           "note": null,
           "tags": null
         },
         {
-          "pattern": "/\\bxxx\\b/",
+          "pattern": "/\\bxxx\\b/i",
           "category": "adult",
           "severity": "warning",
           "note": null,
           "tags": null
         },
         {
-          "pattern": "/\\bonlyfans\\b/",
+          "pattern": "/\\bonlyfans\\b/i",
           "category": "adult",
           "severity": "warning",
           "note": null,
           "tags": null
         },
         {
-          "pattern": "/\\bnude(s)?\\b/",
+          "pattern": "/\\bnude(s)?\\b/i",
           "category": "adult",
           "severity": "warning",
           "note": null,
           "tags": null
         },
         {
-          "pattern": "/\\bexplicit\\s+content\\b/",
+          "pattern": "/\\bexplicit\\s+content\\b/i",
           "category": "adult",
           "severity": "warning",
           "note": null,
           "tags": null
         },
         {
-          "pattern": "/\\b18\\+\\b/",
+          "pattern": "/\\b18\\+\\b/i",
           "category": "adult",
           "severity": "warning",
           "note": null,
@@ -68,35 +68,35 @@
       "scope_id": "*",
       "rules": [
         {
-          "pattern": "/\\bsuicide\\b/",
+          "pattern": "/\\bsuicide\\b/i",
           "category": "self_harm",
           "severity": "critical",
           "note": null,
           "tags": null
         },
         {
-          "pattern": "/\\bkill\\s+myself\\b/",
+          "pattern": "/\\bkill\\s+myself\\b/i",
           "category": "self_harm",
           "severity": "critical",
           "note": null,
           "tags": null
         },
         {
-          "pattern": "/\\bself[-\\s]?harm\\b/",
+          "pattern": "/\\bself[-\\s]?harm\\b/i",
           "category": "self_harm",
           "severity": "critical",
           "note": null,
           "tags": null
         },
         {
-          "pattern": "/\\bcut(ting)?\\b/",
+          "pattern": "/\\bcut(ting)?\\b/i",
           "category": "self_harm",
           "severity": "critical",
           "note": null,
           "tags": null
         },
         {
-          "pattern": "/\\boverdose\\b/",
+          "pattern": "/\\boverdose\\b/i",
           "category": "self_harm",
           "severity": "critical",
           "note": null,
@@ -113,21 +113,21 @@
       "scope_id": "*",
       "rules": [
         {
-          "pattern": "/\\bbuy\\s+(drugs|weed)\\b/",
+          "pattern": "/\\bbuy\\s+(drugs|weed)\\b/i",
           "category": "drugs",
           "severity": "warning",
           "note": null,
           "tags": null
         },
         {
-          "pattern": "/\\b(meth|heroin|cocaine|ecstasy|mdma)\\b/",
+          "pattern": "/\\b(meth|heroin|cocaine|ecstasy|mdma)\\b/i",
           "category": "drugs",
           "severity": "warning",
           "note": null,
           "tags": null
         },
         {
-          "pattern": "/\\bmarijuana|cannabis|weed\\b/",
+          "pattern": "/\\bmarijuana|cannabis|weed\\b/i",
           "category": "drugs",
           "severity": "warning",
           "note": null,
@@ -144,46 +144,29 @@
       "scope_id": "*",
       "rules": [
         {
-          "pattern": "/\\bkill\\b/",
+          "pattern": "/\\bkill\\b/i",
           "category": "violence",
           "severity": "warning",
           "note": null,
           "tags": null
         },
         {
-          "pattern": "/\\bmurder\\b/",
+          "pattern": "/\\bmurder\\b/i",
           "category": "violence",
           "severity": "warning",
           "note": null,
           "tags": null
         },
         {
-          "pattern": "/\\bstab\\b/",
+          "pattern": "/\\bstab\\b/i",
           "category": "violence",
           "severity": "warning",
           "note": null,
           "tags": null
         },
         {
-          "pattern": "/\\bshoot(ing)?\\b/",
+          "pattern": "/\\bshoot(ing)?\\b/i",
           "category": "violence",
-          "severity": "warning",
-          "note": null,
-          "tags": null
-        }
-      ]
-    },
-    {
-      "id": "606103b2-600d-4107-97f0-893e947e6a29",
-      "name": "Test WL",
-      "description": "Detect 'badword'",
-      "enabled": true,
-      "scope_type": "user",
-      "scope_id": "u1",
-      "rules": [
-        {
-          "pattern": "badword",
-          "category": "custom",
           "severity": "warning",
           "note": null,
           "tags": null

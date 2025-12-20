@@ -11,8 +11,9 @@ from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import (
     verify_api_key,
     create_error_response,
     sanitize_error_message,
+    get_eval_request_user,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
     get_unified_evaluation_service_for_user,
 )
@@ -79,7 +80,7 @@ def _normalize_webhook_status_record(record: Dict[str, Any]) -> Dict[str, Any]:
 async def register_webhook(
     request: WebhookRegistrationRequest,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         wm = _get_webhook_manager_for_user(current_user.id)
@@ -110,7 +111,7 @@ async def register_webhook(
 @webhooks_router.get("/webhooks", response_model=List[WebhookStatusResponse])
 async def list_webhooks(
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         _get_webhook_manager_for_user(current_user.id)
@@ -134,7 +135,7 @@ async def list_webhooks(
 async def unregister_webhook(
     webhook_id: str,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         wm = _get_webhook_manager_for_user(current_user.id)
@@ -158,7 +159,7 @@ async def unregister_webhook(
 async def test_webhook(
     payload: WebhookTestRequest,
     user_id: str = Depends(verify_api_key),
-    current_user: User = Depends(get_request_user),
+    current_user: User = Depends(get_eval_request_user),
 ):
     try:
         _get_webhook_manager_for_user(current_user.id)

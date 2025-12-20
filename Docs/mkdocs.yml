@@ -5,7 +5,7 @@ repo_name: rmusser01/tldw_server
 edit_uri: edit/main/
 
 # Only publish the curated set under Docs/Published
-docs_dir: Docs/Published
+docs_dir: Published
 
 theme:
   name: material
@@ -159,6 +159,7 @@ nav:
       - WebUI - Vector Backends: User_Guides/WebUI_Vector_Backends.md
       - Usage Module: User_Guides/Usage_Module.md
       - Authentication Setup: User_Guides/Authentication_Setup.md
+      - BYOK User Guide: User_Guides/BYOK_User_Guide.md
       - Backups using Litestream: User_Guides/Backups_Using_Litestream.md
       - Chatbook User Guide: User_Guides/Chatbook_User_Guide.md
       - Chunking Templates User Guide: User_Guides/Chunking_Templates_User_Guide.md

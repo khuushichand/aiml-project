@@ -9,7 +9,7 @@ keeping the wire behavior identical.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Tuple, List, Callable, AsyncIterator, Iterator
+from typing import Any, Dict, Optional, Tuple, List, Callable, AsyncIterator, Iterator, Awaitable
 from fastapi import HTTPException, status
 from loguru import logger
 import base64
@@ -593,6 +593,7 @@ def build_call_params_from_request(
     provider_api_key: Optional[str],
     templated_llm_payload: List[Dict[str, Any]],
     final_system_message: Optional[str],
+    app_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Construct the cleaned argument dictionary for chat_api_call.
 
@@ -632,6 +633,8 @@ def build_call_params_from_request(
             "streaming": getattr(request_data, "stream", False),
         }
     )
+    if app_config is not None:
+        call_params["app_config"] = app_config
 
     # Filter Nones; keep explicit None for system_message only if provided
     cleaned_args = {k: v for k, v in call_params.items() if v is not None}
@@ -1136,10 +1139,11 @@ async def execute_streaming_call(
     queue_execution_enabled: bool,
     enable_provider_fallback: bool,
     llm_call_func: Callable[[], Any],
-    refresh_provider_params: Callable[[str], Tuple[Dict[str, Any], Optional[str]]],
+    refresh_provider_params: Callable[[str], Any],
     moderation_getter: Optional[Callable[[], Any]] = None,
     rg_commit_cb: Optional[Callable[[int], Any]] = None,
     rg_refund_cb: Optional[Callable[..., Any]] = None,
+    on_success: Optional[Callable[[str], Awaitable[None]]] = None,
 ) -> StreamingResponse:
     """Execute a streaming LLM call with queue, failover, moderation, and persistence.
 
@@ -1338,7 +1342,11 @@ async def execute_streaming_call(
                 if fallback_provider:
                     logger.warning(f"Trying fallback provider {fallback_provider} after {selected_provider} failed")
                     try:
-                        refreshed_args, refreshed_model = refresh_provider_params(fallback_provider)
+                        refreshed = refresh_provider_params(fallback_provider)
+                        if hasattr(refreshed, "__await__"):
+                            refreshed_args, refreshed_model = await refreshed  # type: ignore[misc]
+                        else:
+                            refreshed_args, refreshed_model = refreshed
                         # Validate refreshed params have required fields before proceeding
                         if not isinstance(refreshed_args, dict) or "messages_payload" not in refreshed_args:
                             raise ValueError(f"Invalid refreshed params for {fallback_provider}: missing required fields")
@@ -1596,6 +1604,12 @@ async def execute_streaming_call(
                         "streaming": True,
                     },
                 )
+        except Exception:
+            pass
+        # BYOK usage tracking (best-effort)
+        try:
+            if callable(on_success):
+                await on_success(selected_provider)
         except Exception:
             pass
 
@@ -1864,8 +1878,9 @@ async def execute_non_stream_call(
     queue_execution_enabled: bool,
     enable_provider_fallback: bool,
     llm_call_func: Callable[[], Any],
-    refresh_provider_params: Callable[[str], Tuple[Dict[str, Any], Optional[str]]],
+    refresh_provider_params: Callable[[str], Any],
     moderation_getter: Optional[Callable[[], Any]] = None,
+    on_success: Optional[Callable[[str], Awaitable[None]]] = None,
 ) -> Dict[str, Any]:
     """Execute a non-streaming LLM call with queue, failover, moderation, and persistence.
 
@@ -1998,7 +2013,11 @@ async def execute_non_stream_call(
                 if fallback_provider:
                     logger.warning(f"Trying fallback provider {fallback_provider} after {selected_provider} failed")
                     try:
-                        refreshed_args, refreshed_model = refresh_provider_params(fallback_provider)
+                        refreshed = refresh_provider_params(fallback_provider)
+                        if hasattr(refreshed, "__await__"):
+                            refreshed_args, refreshed_model = await refreshed  # type: ignore[misc]
+                        else:
+                            refreshed_args, refreshed_model = refreshed
                         # Validate refreshed params have required fields before proceeding
                         if not isinstance(refreshed_args, dict) or "messages_payload" not in refreshed_args:
                             raise ValueError(f"Invalid refreshed params for {fallback_provider}: missing required fields")
@@ -2274,5 +2293,12 @@ async def execute_non_stream_call(
             )
         except Exception:
             pass
+
+    # BYOK usage tracking (best-effort)
+    try:
+        if callable(on_success):
+            await on_success(selected_provider)
+    except Exception:
+        pass
 
     return encoded_payload

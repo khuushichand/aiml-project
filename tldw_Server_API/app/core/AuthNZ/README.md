@@ -56,6 +56,7 @@ Note: This README follows the project-wide template to help contributors quickly
   - `PASSWORD_MIN_LENGTH`, Argon2 cost knobs; `REDIS_URL`; `RATE_LIMIT_*`, `MAX_LOGIN_ATTEMPTS`, `LOCKOUT_DURATION_MINUTES`.
   - `ENABLE_REGISTRATION`, `REQUIRE_REGISTRATION_CODE`, `VIRTUAL_KEYS_ENABLED`, `LLM_BUDGET_ENFORCE`, `LLM_BUDGET_ENDPOINTS`.
   - `SESSION_COOKIE_SECURE`, `CSRF_BIND_TO_USER`, `SERVICE_ACCOUNT_RATE_LIMIT`, `SINGLE_USER_API_KEY`.
+  - `BYOK_ENABLED`, `BYOK_ALLOWED_PROVIDERS`, `BYOK_ENCRYPTION_KEY`, `BYOK_SECONDARY_ENCRYPTION_KEY`.
   - Settings merge env, `.env` files, and project config via `load_comprehensive_config`.
 
 ### Session Encryption Key

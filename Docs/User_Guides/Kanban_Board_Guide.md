@@ -93,7 +93,7 @@ curl -X POST "http://localhost:8000/api/v1/kanban/boards/{board_id}/lists" \
 curl -X POST "http://localhost:8000/api/v1/kanban/boards/{board_id}/lists/reorder" \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
-  -d '{"list_ids": [3, 1, 2]}'
+  -d '{"ids": [3, 1, 2]}'
 ```
 
 ### Cards
