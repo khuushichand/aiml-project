@@ -231,11 +231,17 @@ def _safe_compile_regex_impl(
     if elapsed_ms > timeout_ms:
         logger.warning(f"Regex compilation took {elapsed_ms:.2f}ms (threshold: {timeout_ms}ms)")
 
-    # Perform a bounded test match to catch patterns that compile fast but match slow
+    # Perform a bounded test match using the `regex` module with a real timeout
     test_input = "a" * SAFE_TEST_INPUT_SIZE
     match_start = _time_module.perf_counter()
     try:
-        compiled.search(test_input)
+        safe_compiled = regex.compile(pattern, flags)
+        safe_compiled.search(test_input, timeout=MAX_REGEX_VALIDATE_TIME_MS / 1000.0)
+    except regex.TimeoutError:
+        # Explicit timeout: pattern is too slow / vulnerable to ReDoS
+        raise re.error(
+            f"Regex pattern too slow: exceeded {MAX_REGEX_VALIDATE_TIME_MS}ms validation timeout"
+        )
     except Exception as e:
         # Log but don't fail - we primarily care about detecting slow patterns
         logger.debug(f"Exception during regex test match for pattern '{pattern[:50]}...': {e}")
