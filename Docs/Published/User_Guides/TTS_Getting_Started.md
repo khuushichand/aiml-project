@@ -87,7 +87,7 @@ Installer flags:
 | VibeVoice | Local PyTorch | `pip install -e ".[TTS_vibevoice]"` + clone [VibeVoice](https://github.com/microsoft/VibeVoice) | Yes (3–30 s) | [VibeVoice Guide](../STT-TTS/VIBEVOICE_GETTING_STARTED.md) |
 | Higgs Audio V2 | Local PyTorch | `pip install -e ".[TTS_higgs]"` + install `bosonai/higgs-audio` | Yes (3–10 s) | [TTS Setup Guide](../STT-TTS/TTS-SETUP-GUIDE.md#higgs-audio-v2-setup) |
 | Dia | Local PyTorch | `pip install torch transformers accelerate nltk spacy` | Yes (dialogue prompts) | [TTS Setup Guide](../STT-TTS/TTS-SETUP-GUIDE.md#dia-setup) |
-| IndexTTS2 | Local PyTorch | Download checkpoints to `checkpoints/index_tts2/` | Yes (zero-shot, 12 GB+ VRAM) | [TTS README](../../tldw_Server_API/app/core/TTS/TTS-README.md#indextts2-adapter) |
+| IndexTTS2 | Local PyTorch | Download checkpoints to `checkpoints/index_tts2/` | Yes (zero-shot, 12 GB+ VRAM) | [TTS README](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/TTS/TTS-README.md#indextts2-adapter) |
 
 > Tip: Keep cloud providers (`openai`, `elevenlabs`) high in `provider_priority` for instant results, and add local fallbacks underneath.
 
@@ -272,7 +272,7 @@ Each section highlights installation, configuration, and a smoke test.
 - **Usage**: best for dialogue transcripts (`Speaker 1:`, `Speaker 2:`). Supports voice cloning with per-speaker references.
 
 ### IndexTTS2
-- **Install/Assets**: place model checkpoints + configs under `checkpoints/index_tts2/`. Follow the adapter instructions in [TTS-README](../../tldw_Server_API/app/core/TTS/TTS-README.md#indextts2-adapter) for expected filenames.
+- **Install/Assets**: place model checkpoints + configs under `checkpoints/index_tts2/`. Follow the adapter instructions in [TTS-README](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/TTS/TTS-README.md#indextts2-adapter) for expected filenames.
 - **Config**:
   ```yaml
   providers:
@@ -390,7 +390,7 @@ All env vars above are documented in `Env_Vars.md`.
 ## Additional Resources
 - [TTS-SETUP-GUIDE](../STT-TTS/TTS-SETUP-GUIDE.md) — exhaustive installer for every backend.
 - [Getting-Started-STT_and_TTS](../Getting-Started-STT_and_TTS.md) — fast-start for OpenAI + Kokoro + STT.
-- [TTS-VOICE-CLONING](../../tldw_Server_API/app/core/TTS/TTS-VOICE-CLONING.md) — in-depth reference requirements per provider.
-- [TTS-DEPLOYMENT](../../tldw_Server_API/app/core/TTS/TTS-DEPLOYMENT.md) — GPU sizing, smoke tests, and monitoring.
+- [TTS-VOICE-CLONING](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/TTS/TTS-VOICE-CLONING.md) — in-depth reference requirements per provider.
+- [TTS-DEPLOYMENT](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/core/TTS/TTS-DEPLOYMENT.md) — GPU sizing, smoke tests, and monitoring.
 
 Use this guide as the high-level checklist, then jump into the linked runbooks for deeper tuning.
