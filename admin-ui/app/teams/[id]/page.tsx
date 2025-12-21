@@ -74,7 +74,7 @@ export default function TeamDetailPage() {
   }, [teamId]);
 
   useEffect(() => {
-    loadData();
+    void loadData();
   }, [loadData]);
 
   useEffect(() => {
@@ -107,7 +107,7 @@ export default function TeamDetailPage() {
       setShowAddMember(false);
       setNewMemberUserId('');
       setNewMemberRole('member');
-      loadData();
+      void loadData();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err ?? 'Failed to add member');
       console.error('Failed to add member:', err);
@@ -129,7 +129,7 @@ export default function TeamDetailPage() {
       setError('');
       await api.removeTeamMember(teamId, userId);
       setSuccess('Member removed successfully');
-      loadData();
+      void loadData();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to remove member';
       console.error('Failed to remove member:', err);

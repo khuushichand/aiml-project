@@ -1,5 +1,5 @@
 import type { AssetKind, Draft, DraftStatus } from '@/types/content-review';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { Layout } from '@/components/layout/Layout';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -76,17 +76,18 @@ export default function ContentReviewPage() {
 
   const handleKeywordsChange = (nextValue: string) => {
     setKeywordsInput(nextValue);
-    if (!selectedDraft) return;
-    const keywords = nextValue
-      .split(',')
-      .map((keyword) => keyword.trim())
-      .filter(Boolean);
-    updateDraft(selectedDraft.id, { keywords });
+    if (selectedDraft) {
+      setDirty(true);
+    }
   };
 
   const saveDraft = () => {
     if (!selectedDraft) return;
-    updateDraft(selectedDraft.id, { content: editorText });
+    const keywords = keywordsInput
+      .split(',')
+      .map((keyword) => keyword.trim())
+      .filter(Boolean);
+    updateDraft(selectedDraft.id, { content: editorText, keywords });
     setDirty(false);
     show({ title: 'Draft saved', variant: 'success' });
   };
@@ -135,7 +136,11 @@ export default function ContentReviewPage() {
         return;
       }
       try {
-        new URL(reattachUrl.trim());
+        const parsedUrl = new URL(reattachUrl.trim());
+        if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+          setReattachError('URL must use http or https.');
+          return;
+        }
       } catch {
         setReattachError('URL format looks invalid.');
         return;
@@ -149,6 +154,16 @@ export default function ContentReviewPage() {
     }
 
     closeReattachModal();
+  };
+
+  const handleCommit = () => {
+    if (!selectedDraft) return;
+    // TODO: wire commit action to upload/service call when backend is ready.
+    show({
+      title: 'Committed',
+      description: 'Draft has been committed.',
+      variant: 'success',
+    });
   };
 
   const commitDisabled = !selectedDraft || selectedDraft.assetStatus === 'missing' || !isOnline;
@@ -249,7 +264,7 @@ export default function ContentReviewPage() {
                       Mark Reviewed
                     </Button>
                   </span>
-                  <Button variant="primary" disabled={commitDisabled}>
+                  <Button variant="primary" disabled={commitDisabled} onClick={handleCommit}>
                     Commit
                   </Button>
                 </div>
@@ -342,14 +357,86 @@ function ReattachSourceModal({
   onClose,
   onSubmit,
 }: ReattachSourceModalProps) {
+  const titleId = useId();
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const focusable = dialog.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    );
+    const focusTarget = focusable[0] ?? dialog;
+    focusTarget.focus();
+
+    return () => {
+      previouslyFocusedRef.current?.focus();
+    };
+  }, [isOpen]);
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.stopPropagation();
+      onClose();
+      return;
+    }
+
+    if (event.key !== 'Tab') return;
+
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const focusable = Array.from(
+      dialog.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )
+    ).filter((node) => node.offsetParent !== null);
+
+    if (!focusable.length) {
+      event.preventDefault();
+      dialog.focus();
+      return;
+    }
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement as HTMLElement | null;
+
+    if (event.shiftKey) {
+      if (!active || active === first || !dialog.contains(active)) {
+        event.preventDefault();
+        last.focus();
+      }
+      return;
+    }
+
+    if (active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
   if (!isOpen) return null;
+
   const largeFileMb = Math.round(LARGE_FILE_WARNING_BYTES / (1024 * 1024));
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-      <div className="w-full max-w-lg rounded-lg bg-white p-6 shadow-xl">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        onKeyDown={handleKeyDown}
+        className="w-full max-w-lg rounded-lg bg-white p-6 shadow-xl"
+      >
         <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold">Reattach Source</h3>
+          <h3 id={titleId} className="text-lg font-semibold">
+            Reattach Source
+          </h3>
           <Button variant="ghost" onClick={onClose}>
             Close
           </Button>

@@ -12,6 +12,7 @@ interface ErrorBoundaryProps {
   onError?: (error: Error, errorInfo: React.ErrorInfo) => void;
   onGoHome?: () => void;
   onReload?: () => void;
+  maxRetries?: number;
 }
 
 interface ErrorBoundaryState {
@@ -38,7 +39,7 @@ class ErrorBoundaryBase extends Component<ErrorBoundaryProps, ErrorBoundaryState
       errorInfo: null,
       showDetails: false,
       retryCount: 0,
-      maxRetries: 3,
+      maxRetries: props.maxRetries ?? 3,
       retriesExhausted: false,
     };
   }
@@ -215,13 +216,18 @@ function ErrorBoundary(props: ErrorBoundaryProps) {
   );
 }
 
+type ErrorHandlerProps = Pick<
+  ErrorBoundaryProps,
+  'onError' | 'onGoHome' | 'onReload' | 'maxRetries'
+>;
+
 export function withErrorBoundary<P extends object>(
   WrappedComponent: React.ComponentType<P>,
-  fallback?: ReactNode
+  options?: { fallback?: ReactNode } & ErrorHandlerProps
 ) {
   function WithErrorBoundary(props: P) {
     return (
-      <ErrorBoundary fallback={fallback}>
+      <ErrorBoundary {...options}>
         <WrappedComponent {...props} />
       </ErrorBoundary>
     );
@@ -264,6 +270,9 @@ export function CardErrorBoundary({
   return (
     <ErrorBoundary
       onReload={handleReload}
+      onError={(error) => {
+        console.error('Card section error:', error.message);
+      }}
       fallback={
         <Card className="border-destructive/50">
           <CardContent className="py-8 text-center">

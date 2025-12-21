@@ -159,11 +159,20 @@ export default function DashboardPage() {
       });
       setStats(nextStats);
 
-      // Check system health
+      const databaseStatus =
+        usersResult.status === 'fulfilled' && orgsResult.status === 'fulfilled'
+          ? 'healthy'
+          : 'degraded';
+      const llmStatus =
+        providersResult.status === 'fulfilled' && nextStats.enabledProviders > 0
+          ? 'healthy'
+          : 'degraded';
+
+      // Check system health (heuristic; not a live health endpoint)
       setSystemHealth({
         api: 'healthy',
-        database: nextStats.users > 0 ? 'healthy' : 'degraded',
-        llm: nextStats.enabledProviders > 0 ? 'healthy' : 'degraded',
+        database: databaseStatus,
+        llm: llmStatus,
       });
 
     } catch (err: unknown) {
@@ -389,6 +398,9 @@ export default function DashboardPage() {
                     <Activity className="h-5 w-5" />
                     System Health
                   </CardTitle>
+                  <CardDescription className="text-xs text-muted-foreground">
+                    Heuristic based on loaded data/configuration; use monitoring for live health checks.
+                  </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">

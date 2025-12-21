@@ -142,7 +142,12 @@ async def get_team(team_id: int) -> Optional[Dict[str, Any]]:
     """
     Fetch a team by ID.
 
-    Returns the team dict or ``None`` if not found.
+    Parameters:
+        team_id: The unique identifier of the team to retrieve.
+
+    Returns:
+        A dict containing the team's fields (e.g. id, org_id, name, slug,
+        description, is_active, created_at, updated_at), or ``None`` if not found.
     """
     repo = await _get_orgs_teams_repo()
     return await repo.get_team(team_id)

@@ -84,11 +84,7 @@ export default function OrganizationDetailPage() {
   }, [orgId]);
 
   useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      void loadData();
-    }, 0);
-
-    return () => window.clearTimeout(timeoutId);
+    void loadData();
   }, [loadData]);
 
   const handleAddMember = async () => {
@@ -112,7 +108,7 @@ export default function OrganizationDetailPage() {
       setShowAddMember(false);
       setNewMemberUserId('');
       setNewMemberRole('member');
-      loadData();
+      void loadData();
     } catch (err: unknown) {
       console.error('Failed to add member:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to add member');
@@ -133,7 +129,7 @@ export default function OrganizationDetailPage() {
       setError('');
       await api.removeOrgMember(orgId, userId.toString());
       setSuccess('Member removed successfully');
-      loadData();
+      void loadData();
     } catch (err: unknown) {
       console.error('Failed to remove member:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to remove member');
@@ -145,7 +141,7 @@ export default function OrganizationDetailPage() {
       setError('');
       await api.updateOrgMemberRole(orgId, userId.toString(), { role: newRole });
       setSuccess('Member role updated');
-      loadData();
+      void loadData();
     } catch (err: unknown) {
       console.error('Failed to update member role:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to update member role');
@@ -166,6 +162,8 @@ export default function OrganizationDetailPage() {
       });
       setInviteLink(result.invite_url || result.link || 'Invite created - check email');
       setSuccess('Invite created successfully');
+      setInviteEmail('');
+      setInviteRole('member');
     } catch (err: unknown) {
       console.error('Failed to create invite:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to create invite');
@@ -189,7 +187,7 @@ export default function OrganizationDetailPage() {
       setByokProvider('');
       setByokApiKey('');
       setShowByokApiKey(false);
-      loadData();
+      void loadData();
     } catch (err: unknown) {
       console.error('Failed to add BYOK key:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to add provider key');
@@ -210,7 +208,7 @@ export default function OrganizationDetailPage() {
       setError('');
       await api.deleteOrgByokKey(orgId, provider);
       setSuccess('Provider key removed');
-      loadData();
+      void loadData();
     } catch (err: unknown) {
       console.error('Failed to delete BYOK key:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to delete provider key');

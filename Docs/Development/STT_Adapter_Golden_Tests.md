@@ -156,7 +156,7 @@ make stt-golden STT_GOLDEN_AUDIO_DIR=/srv/tldw_stt_golden
 
 ## Helper Script: Generate Goldens from Current Adapters
 
-You can add a small helper script (suggested path):
+Helper script location:
 
 - `Helper_Scripts/Audio/generate_stt_golden.py`
 

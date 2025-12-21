@@ -719,7 +719,6 @@ class RedisResourceGovernor(ResourceGovernor):
 
             # Use ZSET-based sliding-window checks for both real and stub clients.
             # Atomic multi-key reservations are only attempted on real Redis in reserve().
-            force_stub_rate = False
             overall_allowed = True
             retry_after_overall = 0
             per_category: Dict[str, Any] = {}

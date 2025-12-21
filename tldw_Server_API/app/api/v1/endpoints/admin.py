@@ -967,7 +967,7 @@ async def admin_get_team(team_id: int) -> TeamResponse:
         raise
     except Exception as e:
         logger.error(f"Failed to fetch team {team_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch team")
+        raise HTTPException(status_code=500, detail="Failed to fetch team") from e
 
 
 @router.patch("/orgs/{org_id}/watchlists/settings", response_model=OrganizationWatchlistsSettingsResponse)

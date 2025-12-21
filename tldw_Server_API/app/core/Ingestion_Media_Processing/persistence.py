@@ -57,7 +57,18 @@ def _compute_source_hash(file_path: FilePath, *, chunk_size: int = 1024 * 1024) 
                 hasher.update(chunk)
         return hasher.hexdigest()
     except Exception as exc:
-        logger.debug("Source hash compute failed for %s: %s", file_path, exc)
+        try:
+            path = FilePath(file_path)
+            if path.exists():
+                logger.warning(
+                    "Source hash compute failed for existing file %s: %s",
+                    file_path,
+                    exc,
+                )
+            else:
+                logger.debug("Source hash compute failed for %s: %s", file_path, exc)
+        except Exception:
+            logger.debug("Source hash compute failed for %s: %s", file_path, exc)
         return None
 
 
@@ -2417,6 +2428,7 @@ async def persist_doc_item_and_children(
                     "source",
                     "creators",
                     "rights",
+                    "source_hash",
                 }
                 for key, value in (metadata_for_db or {}).items():
                     if key in allowed_keys and isinstance(
@@ -2451,6 +2463,17 @@ async def persist_doc_item_and_children(
                     safe_metadata_json = json.dumps(safe_meta, ensure_ascii=False)
             except Exception:
                 safe_metadata_json = None
+
+            source_hash_for_db = None
+            try:
+                raw_source_hash = metadata_for_db.get("source_hash")
+                if raw_source_hash is None:
+                    raw_source_hash = safe_meta.get("source_hash")
+                if raw_source_hash is not None:
+                    raw_source_hash_str = str(raw_source_hash).strip()
+                    source_hash_for_db = raw_source_hash_str if raw_source_hash_str else None
+            except Exception:
+                source_hash_for_db = None
 
             chunks_for_sql: Optional[List[Dict[str, Any]]] = None
             try:
@@ -2508,6 +2531,7 @@ async def persist_doc_item_and_children(
                 prompt=getattr(form_data, "custom_prompt", None),
                 analysis_content=analysis_for_db,
                 safe_metadata=safe_metadata_json,
+                source_hash=source_hash_for_db,
                 transcription_model=model_used,
                 author=author_for_db,
                 overwrite=getattr(form_data, "overwrite_existing", False),

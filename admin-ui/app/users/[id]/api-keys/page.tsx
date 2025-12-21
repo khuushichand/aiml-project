@@ -139,7 +139,7 @@ export default function UserApiKeysPage() {
       setTimeout(() => setSuccess(''), 2000);
     } catch (err: unknown) {
       console.error('Failed to copy to clipboard:', err);
-      setError('Failed to copy to clipboard');
+      setError('Failed to copy to clipboard. Please copy manually or check browser permissions.');
     }
   };
 

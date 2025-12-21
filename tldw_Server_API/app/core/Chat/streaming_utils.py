@@ -6,6 +6,7 @@ import asyncio
 import json
 import time
 import threading
+import concurrent.futures
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Dict, Iterator, Optional, Union, Tuple, List
 from loguru import logger
@@ -182,7 +183,7 @@ async def _async_iter_sync_stream(
             return
         try:
             fut = asyncio.run_coroutine_threadsafe(queue.put(item), loop)
-        except Exception as exc:
+        except (RuntimeError, asyncio.InvalidStateError) as exc:
             logger.debug(f"Failed to schedule sync stream enqueue: {exc}")
             return
         while True:
@@ -193,10 +194,10 @@ async def _async_iter_sync_stream(
                 if stop_event.is_set() or loop.is_closed():
                     try:
                         fut.cancel()
-                    except Exception as cancel_err:
+                    except (RuntimeError, asyncio.InvalidStateError) as cancel_err:
                         logger.debug(f"Failed to cancel sync stream enqueue: {cancel_err}")
                     return
-            except Exception as exc:
+            except (RuntimeError, concurrent.futures.CancelledError) as exc:
                 logger.debug(f"Failed to enqueue sync stream chunk: {exc}")
                 return
 

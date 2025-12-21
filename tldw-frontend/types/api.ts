@@ -20,7 +20,19 @@ export interface MediaPagination {
 export interface MediaListResponse {
   items: MediaListItem[];
   pagination: MediaPagination;
-  results?: MediaListItem[];
+}
+
+export interface ProcessResult {
+  processed_count?: number;
+  errors_count?: number;
+  errors?: string[];
+  results?: Array<Record<string, unknown>>;
+  confabulation_results?: unknown;
+  [key: string]: unknown;
+}
+
+export interface ChatCompletionResponse {
+  choices?: Array<{ message?: { content?: string } }>;
 }
 
 export interface MediaSourceDetail {

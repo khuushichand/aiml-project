@@ -5062,20 +5062,51 @@ class MediaDatabase:
                             self.update_keywords_for_media(media_id, keywords_norm, conn=conn)
                             _persist_chunks(conn, media_id)
 
-                            # If new chunks were provided, the media's chunking status has changed,
-                            # which justifies a version bump on the parent Media record.
-                            if chunks is not None:
-                                logging.info(f"Chunks provided for identical media; updating media chunk_status and version for ID {media_id}.")
-                                new_ver = current_ver + 1
-                                update_cursor = _exec(
-                                    """UPDATE Media SET chunking_status = 'completed', version = ?, last_modified = ?
-                                       WHERE id = ? AND version = ?""",
-                                    (new_ver, now, media_id, current_ver),
+                            source_hash_update_needed = (
+                                source_hash_norm is not None
+                                and source_hash_norm != existing_source_hash
+                            )
+                            chunk_status_update_needed = chunks is not None
+                            if chunk_status_update_needed or source_hash_update_needed:
+                                logging.info(
+                                    f"Updating media metadata for identical content id={media_id}."
                                 )
+                                new_ver = current_ver + 1
+                                update_fields = []
+                                update_params: List[Any] = []
+                                payload_updates: Dict[str, Any] = {"last_modified": now}
+                                if chunk_status_update_needed:
+                                    update_fields.append("chunking_status = ?")
+                                    update_params.append("completed")
+                                    payload_updates["chunking_status"] = "completed"
+                                if source_hash_update_needed:
+                                    update_fields.append("source_hash = ?")
+                                    update_params.append(source_hash_norm)
+                                    payload_updates["source_hash"] = source_hash_norm
+                                update_fields.append("version = ?")
+                                update_params.append(new_ver)
+                                update_fields.append("last_modified = ?")
+                                update_params.append(now)
+                                update_sql = (
+                                    f"UPDATE Media SET {', '.join(update_fields)} "
+                                    "WHERE id = ? AND version = ?"
+                                )
+                                update_params.extend([media_id, current_ver])
+                                update_cursor = _exec(update_sql, tuple(update_params))
                                 if update_cursor.rowcount == 0:
-                                    raise ConflictError(f"Media (updating chunk status for identical content id={media_id})", media_id)
+                                    raise ConflictError(
+                                        f"Media (updating metadata for identical content id={media_id})",
+                                        media_id,
+                                    )
 
-                                self._log_sync_event(conn, "Media", media_uuid, "update", new_ver, {"chunking_status": "completed", "last_modified": now})
+                                self._log_sync_event(
+                                    conn,
+                                    "Media",
+                                    media_uuid,
+                                    "update",
+                                    new_ver,
+                                    payload_updates,
+                                )
 
                             return media_id, media_uuid, f"Media '{title}' is already up-to-date."
 

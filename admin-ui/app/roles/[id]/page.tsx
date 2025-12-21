@@ -16,6 +16,9 @@ import { api } from '@/lib/api-client';
 import { Role, Permission, User } from '@/types';
 import Link from 'next/link';
 
+const MAX_DESCRIPTION_LENGTH = 500;
+const USER_LIST_LIMIT = 10;
+
 export default function RoleDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -118,13 +121,18 @@ export default function RoleDetailPage() {
       setError('Role name is required');
       return;
     }
+    const trimmedDescription = editDescription.trim();
+    if (trimmedDescription.length > MAX_DESCRIPTION_LENGTH) {
+      setError(`Description must be ${MAX_DESCRIPTION_LENGTH} characters or less`);
+      return;
+    }
 
     try {
       setSaving(true);
       setError('');
       await api.updateRole(roleId, {
         name: editName.trim(),
-        description: editDescription.trim() || undefined,
+        description: trimmedDescription || undefined,
       });
       setSuccess('Role updated successfully');
       setEditMode(false);
@@ -387,7 +395,7 @@ export default function RoleDetailPage() {
                     </div>
                   ) : (
                     <div className="space-y-2">
-                      {roleUsers.slice(0, 10).map((user) => (
+                      {roleUsers.slice(0, USER_LIST_LIMIT).map((user) => (
                         <Link
                           key={user.id}
                           href={`/users/${user.id}`}
@@ -404,9 +412,9 @@ export default function RoleDetailPage() {
                           </div>
                         </Link>
                       ))}
-                      {roleUsers.length > 10 && (
+                      {roleUsers.length > USER_LIST_LIMIT && (
                         <p className="text-sm text-muted-foreground text-center pt-2">
-                          +{roleUsers.length - 10} more users
+                          +{roleUsers.length - USER_LIST_LIMIT} more users
                         </p>
                       )}
                     </div>

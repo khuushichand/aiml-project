@@ -9,22 +9,15 @@ import { useToast } from '@/components/ui/ToastProvider';
 import JsonEditor from '@/components/ui/JsonEditor';
 import { CardSkeleton } from '@/components/ui/Skeleton';
 import HotkeysOverlay from '@/components/ui/HotkeysOverlay';
-import type { MediaDetailResponse, MediaItem, MediaListResponse } from '@/types/api';
+import type {
+  ChatCompletionResponse,
+  MediaDetailResponse,
+  MediaItem,
+  MediaListResponse,
+  ProcessResult,
+} from '@/types/api';
 
 type MediaType = 'video' | 'audio' | 'document' | 'pdf';
-
-interface ProcessResult {
-  processed_count?: number;
-  errors_count?: number;
-  errors?: string[];
-  results?: Array<Record<string, unknown>>;
-  confabulation_results?: unknown;
-  [key: string]: unknown;
-}
-
-interface ChatCompletionResponse {
-  choices?: Array<{ message?: { content?: string } }>;
-}
 
 const resolveMetadataValue = (
   metadata: Record<string, unknown> | undefined,
@@ -146,7 +139,7 @@ export default function MediaPage() {
     setSearchLoading(true);
     try {
       const data = await apiClient.get<MediaListResponse>('/media/search', { params: { query: q, limit: 10 } });
-      setSearchResults(data?.items || data?.results || []);
+      setSearchResults(data?.items || []);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       setSearchResults([]);
@@ -170,7 +163,7 @@ export default function MediaPage() {
         keywords: [],
       }, { params: { page: p, results_per_page: itemsPerPage } });
 
-      setAllItems(data?.items || data?.results || []);
+      setAllItems(data?.items || []);
       setPage(p);
       setTotalItems(data?.pagination?.total_items || 0);
       setTotalPages(data?.pagination?.total_pages || 1);
@@ -204,7 +197,7 @@ export default function MediaPage() {
       description: `${actionLabel} first ${MAX_SNIPPET_CHARS.toLocaleString()} of ${text.length.toLocaleString()} characters.`,
       variant: 'info',
     });
-  }, [MAX_SNIPPET_CHARS, show]);
+  }, [show]);
 
   const summarizeSelected = useCallback(async () => {
     if (!selectedItem) return;
@@ -233,7 +226,7 @@ export default function MediaPage() {
     } finally {
       setAnalyzing(false);
     }
-  }, [analysisModel, analysisPrompt, notifyIfTruncated, selectedItem, show, MAX_SNIPPET_CHARS]);
+  }, [analysisModel, analysisPrompt, notifyIfTruncated, selectedItem, show]);
 
   const sendToChatSelected = async () => {
     if (!selectedItem) return;
