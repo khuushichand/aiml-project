@@ -8,7 +8,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Badge } from '@/components/ui/badge';
 import { Keyboard } from 'lucide-react';
 
 export function KeyboardShortcutsProvider({ children }: { children: React.ReactNode }) {

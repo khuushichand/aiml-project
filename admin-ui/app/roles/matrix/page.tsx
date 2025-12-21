@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { ArrowLeft, Save, RefreshCw, Shield } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Shield } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { Role, Permission } from '@/types';
 
@@ -23,10 +23,7 @@ export default function PermissionMatrixPage() {
   const [permissions, setPermissions] = useState<Permission[]>([]);
   const [rolePermissions, setRolePermissions] = useState<RolePermissionMap>({});
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const [hasChanges, setHasChanges] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -65,53 +62,11 @@ export default function PermissionMatrixPage() {
       );
 
       setRolePermissions(permMap);
-      setHasChanges(false);
     } catch (err: any) {
       console.error('Failed to load data:', err);
       setError(err.message || 'Failed to load roles and permissions');
     } finally {
       setLoading(false);
-    }
-  };
-
-  const togglePermission = (roleId: number, permissionId: number) => {
-    setRolePermissions((prev) => {
-      const newMap = { ...prev };
-      const roleSet = new Set(prev[roleId] || []);
-
-      if (roleSet.has(permissionId)) {
-        roleSet.delete(permissionId);
-      } else {
-        roleSet.add(permissionId);
-      }
-
-      newMap[roleId] = roleSet;
-      return newMap;
-    });
-    setHasChanges(true);
-  };
-
-  const handleSave = async () => {
-    setSaving(true);
-    setError('');
-    setSuccess('');
-
-    try {
-      // Note: This would need an API endpoint to update role permissions
-      // For now, we'll show a message that this feature requires backend support
-      setError('Bulk permission assignment requires backend API support. Please assign permissions individually through the role detail page.');
-
-      // When the API is available, the code would look like:
-      // for (const [roleId, permIds] of Object.entries(rolePermissions)) {
-      //   await api.updateRolePermissions(roleId, Array.from(permIds));
-      // }
-      // setSuccess('Permissions saved successfully');
-      // setHasChanges(false);
-    } catch (err: any) {
-      console.error('Failed to save permissions:', err);
-      setError(err.message || 'Failed to save permissions');
-    } finally {
-      setSaving(false);
     }
   };
 
@@ -141,22 +96,12 @@ export default function PermissionMatrixPage() {
                   <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
                   Refresh
                 </Button>
-                <Button onClick={handleSave} disabled={saving || !hasChanges}>
-                  <Save className="mr-2 h-4 w-4" />
-                  {saving ? 'Saving...' : 'Save Changes'}
-                </Button>
               </div>
             </div>
 
             {error && (
               <Alert variant="destructive" className="mb-6">
                 <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            )}
-
-            {success && (
-              <Alert className="mb-6 bg-green-50 border-green-200">
-                <AlertDescription className="text-green-800">{success}</AlertDescription>
               </Alert>
             )}
 
@@ -168,8 +113,8 @@ export default function PermissionMatrixPage() {
                   <div>
                     <h3 className="font-semibold">Permission Matrix View</h3>
                     <p className="text-sm text-muted-foreground mt-1">
-                      This matrix shows which permissions are assigned to each role.
-                      Check the boxes to grant permissions or uncheck to revoke them.
+                      This matrix shows which permissions are assigned to each role (read-only view).
+                      To modify permissions, use the individual role detail pages.
                       System roles may have restricted editing capabilities.
                     </p>
                   </div>
@@ -183,7 +128,6 @@ export default function PermissionMatrixPage() {
                 <CardTitle>Role-Permission Matrix</CardTitle>
                 <CardDescription>
                   {roles.length} roles x {permissions.length} permissions
-                  {hasChanges && <Badge variant="outline" className="ml-2">Unsaved changes</Badge>}
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -230,8 +174,7 @@ export default function PermissionMatrixPage() {
                               <td key={`${role.id}-${perm.id}`} className="p-3 text-center border-b">
                                 <Checkbox
                                   checked={hasPermission(role.id, perm.id)}
-                                  onCheckedChange={() => togglePermission(role.id, perm.id)}
-                                  disabled={role.is_system}
+                                  disabled
                                   className="mx-auto"
                                 />
                               </td>

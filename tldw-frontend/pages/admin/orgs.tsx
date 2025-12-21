@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Layout } from '@/components/layout/Layout';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -23,6 +23,17 @@ interface OrganizationListResponse {
   has_more: boolean;
 }
 
+const useDebounce = (value: string, delay: number) => {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+
+  useEffect(() => {
+    const handler = setTimeout(() => setDebouncedValue(value), delay);
+    return () => clearTimeout(handler);
+  }, [value, delay]);
+
+  return debouncedValue;
+};
+
 export default function AdminOrgsPage() {
   const { show } = useToast();
   const [orgs, setOrgs] = useState<Organization[]>([]);
@@ -33,12 +44,14 @@ export default function AdminOrgsPage() {
   const [total, setTotal] = useState<number>(0);
   const [hasMore, setHasMore] = useState<boolean>(false);
 
-  const fetchOrgs = async () => {
+  const debouncedFilter = useDebounce(filter, 500);
+
+  const fetchOrgs = useCallback(async () => {
     setLoading(true);
     try {
       const offset = (page - 1) * size;
       const params: Record<string, unknown> = { limit: size, offset };
-      if (filter.trim()) params.q = filter.trim();
+      if (debouncedFilter.trim()) params.q = debouncedFilter.trim();
       const data = await apiClient.get<OrganizationListResponse>('/admin/orgs', { params });
       setOrgs(Array.isArray(data?.items) ? data.items : []);
       setTotal(Number.isFinite(data?.total) ? data.total : 0);
@@ -52,12 +65,11 @@ export default function AdminOrgsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [debouncedFilter, page, show, size]);
 
   useEffect(() => {
     fetchOrgs();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, size]);
+  }, [fetchOrgs]);
 
   const copy = async (text: string) => {
     try {
@@ -145,15 +157,7 @@ export default function AdminOrgsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {orgs
-                  .filter((o) => {
-                    const q = filter.trim().toLowerCase();
-                    if (!q) return true;
-                    const name = (o.name || '').toLowerCase();
-                    const slug = (o.slug || '').toLowerCase();
-                    return name.includes(q) || slug.includes(q) || String(o.id).includes(q);
-                  })
-                  .map((o) => (
+                {orgs.map((o) => (
                   <tr key={o.id} className="bg-white">
                     <td className="px-3 py-2 text-gray-900">{o.id}</td>
                     <td className="px-3 py-2 text-gray-700">{o.name}</td>

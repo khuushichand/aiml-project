@@ -45,6 +45,7 @@ export default function ProvidersPage() {
   const [showAddByok, setShowAddByok] = useState(false);
   const [addByokMode, setAddByokMode] = useState<'user' | 'org'>('user');
   const [newByokProvider, setNewByokProvider] = useState('');
+  const [customProviderName, setCustomProviderName] = useState('');
   const [newByokKey, setNewByokKey] = useState('');
   const [addingByok, setAddingByok] = useState(false);
 
@@ -122,7 +123,10 @@ export default function ProvidersPage() {
   };
 
   const handleAddByok = async () => {
-    if (!newByokProvider.trim() || !newByokKey.trim()) {
+    const providerName = newByokProvider === 'other'
+      ? customProviderName.trim()
+      : newByokProvider.trim();
+    if (!providerName || !newByokKey.trim()) {
       setError('Provider and API key are required');
       return;
     }
@@ -131,7 +135,7 @@ export default function ProvidersPage() {
     setError('');
     try {
       const data = {
-        provider: newByokProvider.trim().toLowerCase(),
+        provider: providerName.trim().toLowerCase(),
         api_key: newByokKey.trim(),
       };
 
@@ -147,6 +151,7 @@ export default function ProvidersPage() {
 
       setShowAddByok(false);
       setNewByokProvider('');
+      setCustomProviderName('');
       setNewByokKey('');
     } catch (err: any) {
       console.error('Failed to add BYOK key:', err);
@@ -205,6 +210,7 @@ export default function ProvidersPage() {
   const openAddByokDialog = (mode: 'user' | 'org') => {
     setAddByokMode(mode);
     setNewByokProvider('');
+    setCustomProviderName('');
     setNewByokKey('');
     setShowAddByok(true);
   };
@@ -747,7 +753,13 @@ export default function ProvidersPage() {
                 <select
                   id="provider"
                   value={newByokProvider}
-                  onChange={(e) => setNewByokProvider(e.target.value)}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setNewByokProvider(value);
+                    if (value !== 'other') {
+                      setCustomProviderName('');
+                    }
+                  }}
                   className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <option value="">Select a provider...</option>
@@ -761,8 +773,8 @@ export default function ProvidersPage() {
                 {newByokProvider === 'other' && (
                   <Input
                     placeholder="Enter provider name..."
-                    value=""
-                    onChange={(e) => setNewByokProvider(e.target.value)}
+                    value={customProviderName}
+                    onChange={(e) => setCustomProviderName(e.target.value)}
                     className="mt-2"
                   />
                 )}
@@ -785,7 +797,15 @@ export default function ProvidersPage() {
               <Button variant="outline" onClick={() => setShowAddByok(false)}>
                 Cancel
               </Button>
-              <Button onClick={handleAddByok} disabled={addingByok || !newByokProvider || !newByokKey}>
+              <Button
+                onClick={handleAddByok}
+                disabled={
+                  addingByok ||
+                  !newByokKey.trim() ||
+                  !newByokProvider ||
+                  (newByokProvider === 'other' && !customProviderName.trim())
+                }
+              >
                 {addingByok ? 'Adding...' : 'Add Key'}
               </Button>
             </DialogFooter>

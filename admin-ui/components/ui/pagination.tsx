@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -196,8 +197,5 @@ export function usePagination(totalItems: number, initialPageSize: number = 20) 
     paginateData,
   };
 }
-
-// Need to import useState for the hook
-import { useState } from 'react';
 
 export default Pagination;

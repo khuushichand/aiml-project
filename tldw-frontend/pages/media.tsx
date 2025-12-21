@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
 import { Layout } from '@/components/layout/Layout';
 import { Button } from '@/components/ui/Button';
@@ -128,7 +128,7 @@ export default function MediaPage() {
     doSearch(searchQuery);
   }, [searchQuery, doSearch]);
 
-  const loadAll = async (p = 1) => {
+  const loadAll = useCallback(async (p = 1) => {
     setSearchLoading(true);
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -150,7 +150,7 @@ export default function MediaPage() {
     } finally {
       setSearchLoading(false);
     }
-  };
+  }, [itemsPerPage, show]);
 
   const loadDetails = async (id: number) => {
     try {
@@ -165,7 +165,7 @@ export default function MediaPage() {
     }
   };
 
-  const summarizeSelected = async () => {
+  const summarizeSelected = useCallback(async () => {
     if (!selectedItem) return;
     setAnalyzing(true);
     setAnalysisResult(null);
@@ -192,7 +192,7 @@ export default function MediaPage() {
     } finally {
       setAnalyzing(false);
     }
-  };
+  }, [analysisModel, analysisPrompt, selectedItem, show]);
 
   const sendToChatSelected = async () => {
     if (!selectedItem) return;
@@ -222,8 +222,7 @@ export default function MediaPage() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [result, summarizeSelected]); // loadAll and show are stable
+  }, [loadAll, result, show, summarizeSelected]);
 
   return (
     <Layout>

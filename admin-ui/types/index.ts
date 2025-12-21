@@ -81,7 +81,7 @@ export interface AuditLog {
   user_id: number;
   action: string;
   resource: string;
-  details?: Record<string, any>;
+  details?: Record<string, unknown>;
 }
 
 export interface ProviderSecret {

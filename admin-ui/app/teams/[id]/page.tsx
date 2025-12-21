@@ -71,8 +71,13 @@ export default function TeamDetailPage() {
 
     try {
       setError('');
+      const userId = parseInt(newMemberUserId, 10);
+      if (Number.isNaN(userId)) {
+        setError('Please enter a valid numeric User ID');
+        return;
+      }
       await api.addTeamMember(teamId, {
-        user_id: parseInt(newMemberUserId),
+        user_id: userId,
         role: newMemberRole,
       });
       setSuccess('Member added successfully');

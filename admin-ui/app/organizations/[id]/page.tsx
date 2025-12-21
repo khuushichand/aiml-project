@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
@@ -50,46 +50,41 @@ export default function OrganizationDetailPage() {
   const [byokProvider, setByokProvider] = useState('');
   const [byokApiKey, setByokApiKey] = useState('');
 
-  useEffect(() => {
-    loadData();
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setError('');
+
+    const [orgData, membersData, teamsData, byokData] = await Promise.allSettled([
+      api.getOrganization(orgId),
+      api.getOrgMembers(orgId),
+      api.getTeams(orgId),
+      api.getOrgByokKeys(orgId),
+    ]);
+
+    if (orgData.status === 'fulfilled') {
+      setOrg(orgData.value);
+    } else {
+      setError('Failed to load organization');
+    }
+
+    if (membersData.status === 'fulfilled') {
+      setMembers(Array.isArray(membersData.value) ? membersData.value : []);
+    }
+
+    if (teamsData.status === 'fulfilled') {
+      setTeams(Array.isArray(teamsData.value) ? teamsData.value : []);
+    }
+
+    if (byokData.status === 'fulfilled') {
+      setByokKeys(Array.isArray(byokData.value) ? byokData.value : []);
+    }
+
+    setLoading(false);
   }, [orgId]);
 
-  const loadData = async () => {
-    try {
-      setLoading(true);
-      setError('');
-
-      const [orgData, membersData, teamsData, byokData] = await Promise.allSettled([
-        api.getOrganization(orgId),
-        api.getOrgMembers(orgId),
-        api.getTeams(orgId),
-        api.getOrgByokKeys(orgId),
-      ]);
-
-      if (orgData.status === 'fulfilled') {
-        setOrg(orgData.value);
-      } else {
-        setError('Failed to load organization');
-      }
-
-      if (membersData.status === 'fulfilled') {
-        setMembers(Array.isArray(membersData.value) ? membersData.value : []);
-      }
-
-      if (teamsData.status === 'fulfilled') {
-        setTeams(Array.isArray(teamsData.value) ? teamsData.value : []);
-      }
-
-      if (byokData.status === 'fulfilled') {
-        setByokKeys(Array.isArray(byokData.value) ? byokData.value : []);
-      }
-    } catch (err: any) {
-      console.error('Failed to load organization data:', err);
-      setError(err.message || 'Failed to load organization data');
-    } finally {
-      setLoading(false);
-    }
-  };
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const handleAddMember = async () => {
     if (!newMemberUserId) {

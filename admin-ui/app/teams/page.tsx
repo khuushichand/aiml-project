@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
+import { useToast } from '@/components/ui/toast';
 import { Plus, Users, Building2 } from 'lucide-react';
 import { Team, Organization } from '@/types';
 import { api } from '@/lib/api-client';
@@ -20,6 +21,7 @@ export default function TeamsPage() {
   const [selectedOrgId, setSelectedOrgId] = useState<string>('');
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [loading, setLoading] = useState(true);
+  const { warning, error: showError } = useToast();
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -67,7 +69,7 @@ export default function TeamsPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedOrgId) {
-      alert('Please select an organization first');
+      warning('Select organization', 'Please select an organization first.');
       return;
     }
     try {
@@ -75,9 +77,10 @@ export default function TeamsPage() {
       setShowCreateForm(false);
       setFormData({ name: '', description: '' });
       loadTeams(selectedOrgId);
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Please try again.';
       console.error('Failed to create team:', error);
-      alert(`Failed to create team: ${error.message}`);
+      showError('Failed to create team', message);
     }
   };
 

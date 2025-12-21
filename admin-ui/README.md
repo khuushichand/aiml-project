@@ -43,7 +43,7 @@ admin-panel/
 │   └── utils.ts                 # Utility functions (cn helper)
 ├── types/                       # TypeScript type definitions
 │   └── index.ts                 # Shared interfaces
-├── .env.local                   # Environment variables
+├── .env.example                 # Environment variables template (copy to .env.local)
 ├── next.config.js               # Next.js configuration
 ├── tailwind.config.ts           # Tailwind CSS configuration
 ├── postcss.config.js            # PostCSS configuration
@@ -56,7 +56,7 @@ admin-panel/
 
 - Node.js 18+ installed
 - npm or yarn package manager
-- SaaS LiteLLM API running on http://localhost:8003
+- SaaS LiteLLM API running on http://localhost:8000
 
 ### Installation
 
@@ -68,11 +68,23 @@ npm install
 
 ### Environment Variables
 
-The `.env.local` file is already configured:
+Copy the example env file and adjust values as needed:
+
+```bash
+cp .env.example .env.local
+```
+
+Then update `.env.local`:
 
 ```env
-NEXT_PUBLIC_API_URL=http://localhost:8003
+NEXT_PUBLIC_API_URL=http://localhost:8000
+# SERVER_X_API_KEY=your-api-key-here
 ```
+
+Keep API keys server-side only. Do not use `NEXT_PUBLIC_` variables for secrets.
+If the browser needs access, use a secure auth flow (JWT/session) or a
+server-side API route that injects the `X-API-KEY` so the key never ships to
+the client.
 
 ### Running Development Server
 
@@ -220,7 +232,7 @@ If you encounter build errors:
 3. Check TypeScript errors: `npm run lint`
 
 ### API Connection Issues
-- Ensure the backend API is running on http://localhost:8003
+- Ensure the backend API is running on http://localhost:8000
 - Check CORS settings on the backend
 - Verify API endpoints match the expected format
 

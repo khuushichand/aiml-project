@@ -6,6 +6,7 @@ import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Select } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -14,6 +15,23 @@ import { ArrowLeft, Key, Save, Building2, Users } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { User } from '@/types';
 import Link from 'next/link';
+
+const roleOptions = [
+  { value: 'member', label: 'Member' },
+  { value: 'admin', label: 'Admin' },
+  { value: 'super_admin', label: 'Super Admin' },
+  { value: 'owner', label: 'Owner' },
+] as const;
+
+type UserRole = (typeof roleOptions)[number]['value'];
+
+type UserFormData = {
+  username: string;
+  email: string;
+  role: UserRole;
+  is_active: boolean;
+  storage_quota_mb: number;
+};
 
 export default function UserDetailPage() {
   const params = useParams();
@@ -26,10 +44,10 @@ export default function UserDetailPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<UserFormData>({
     username: '',
     email: '',
-    role: '',
+    role: 'member',
     is_active: true,
     storage_quota_mb: 0,
   });
@@ -47,7 +65,7 @@ export default function UserDetailPage() {
       setFormData({
         username: data.username || '',
         email: data.email || '',
-        role: data.role || '',
+        role: (data.role || 'member') as UserRole,
         is_active: data.is_active ?? true,
         storage_quota_mb: data.storage_quota_mb || 0,
       });
@@ -202,16 +220,17 @@ export default function UserDetailPage() {
 
                   <div className="space-y-2">
                     <Label htmlFor="role">Role</Label>
-                    <select
+                    <Select
                       id="role"
                       value={formData.role}
-                      onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      onChange={(e) => setFormData({ ...formData, role: e.target.value as UserRole })}
                     >
-                      <option value="member">Member</option>
-                      <option value="admin">Admin</option>
-                      <option value="super_admin">Super Admin</option>
-                    </select>
+                      {roleOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </Select>
                   </div>
 
                   <div className="flex items-center gap-2">

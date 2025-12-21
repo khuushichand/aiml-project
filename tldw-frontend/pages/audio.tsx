@@ -67,8 +67,10 @@ function TTSSection() {
       const json = await resp.json();
       const voices = json?.voices || json || [];
       if (voices.length && voices[0]?.name) setVoice(voices[0].name);
-    } catch {
-      // Ignore voice fetch errors
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      console.warn('Failed to fetch voices:', message);
+      show({ title: 'Voices unavailable', description: message, variant: 'warning' });
     }
   };
   useEffect(() => { fetchVoices(); }, []);
@@ -147,8 +149,7 @@ function StreamingSTTSection() {
   const startTimeRef = useRef<number>(0);
   const debugRef = useRef<string[]>([]);
   const [debugView, setDebugView] = useState<string[]>([]);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const animTimer = useRef<any>(null);
+  const animTimer = useRef<number | null>(null);
   const canvasRef = useRef<HTMLCanvasElement|null>(null);
   const analyserRef = useRef<AnalyserNode|null>(null);
   const [showWave, setShowWave] = useState(true);
@@ -196,7 +197,7 @@ function StreamingSTTSection() {
       }
       ctxRef.current = null;
     }
-    if (animTimer.current) {
+    if (animTimer.current !== null) {
       cancelAnimationFrame(animTimer.current);
       animTimer.current = null;
     }
@@ -253,7 +254,10 @@ function StreamingSTTSection() {
           else if (msg.type === 'error') { show({ title: 'STT error', description: msg.message || 'Error', variant: 'danger' }); addDebug(`Error: ${msg.message}`); }
         } catch { addDebug(`RX: ${String(ev.data).slice(0,100)}`); }
       };
-      ws.onerror = () => { addDebug('WebSocket error'); };
+      ws.onerror = (event) => {
+        const errorMsg = event instanceof ErrorEvent ? event.message : 'Connection error';
+        addDebug(`WebSocket error: ${errorMsg}`);
+      };
       ws.onclose = () => {
         cleanupAudio();
         recordingRef.current = false;

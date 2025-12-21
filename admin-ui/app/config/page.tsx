@@ -33,6 +33,31 @@ interface ConfigField {
   sensitive?: boolean;
 }
 
+const maskConfigValue = (
+  value: unknown,
+  isSensitiveKey: (key: string) => boolean
+): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((item) => maskConfigValue(item, isSensitiveKey));
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, val]) => {
+        if (isSensitiveKey(key)) {
+          if (val === null || val === undefined || val === '') {
+            return [key, val];
+          }
+          return [key, '********'];
+        }
+        return [key, maskConfigValue(val, isSensitiveKey)];
+      })
+    );
+  }
+
+  return value;
+};
+
 export default function ConfigPage() {
   const [status, setStatus] = useState<SetupStatus | null>(null);
   const [config, setConfig] = useState<Record<string, any>>({});
@@ -47,29 +72,33 @@ export default function ConfigPage() {
   }, []);
 
   const loadData = async () => {
-    try {
-      setLoading(true);
-      setError('');
+    setLoading(true);
+    setError('');
 
-      const [statusData, configData] = await Promise.allSettled([
-        api.getSetupStatus(),
-        api.getConfig(),
-      ]);
+    const [statusData, configData] = await Promise.allSettled([
+      api.getSetupStatus(),
+      api.getConfig(),
+    ]);
 
-      if (statusData.status === 'fulfilled') {
-        setStatus(statusData.value);
-      }
-
-      if (configData.status === 'fulfilled' && configData.value) {
-        setConfig(configData.value);
-        setOriginalConfig(configData.value);
-      }
-    } catch (err: any) {
-      console.error('Failed to load configuration:', err);
-      setError(err.message || 'Failed to load configuration');
-    } finally {
-      setLoading(false);
+    if (statusData.status === 'fulfilled') {
+      setStatus(statusData.value);
+    } else {
+      console.error('Failed to load status:', statusData.reason);
     }
+
+    if (configData.status === 'fulfilled' && configData.value) {
+      setConfig(configData.value);
+      setOriginalConfig(configData.value);
+    } else if (configData.status === 'rejected') {
+      console.error('Failed to load configuration:', configData.reason);
+      setError(
+        configData.reason instanceof Error
+          ? configData.reason.message
+          : 'Failed to load configuration'
+      );
+    }
+
+    setLoading(false);
   };
 
   const handleSave = async () => {
@@ -142,6 +171,23 @@ export default function ConfigPage() {
       ],
     },
   ];
+
+  const sensitiveKeySet = new Set(
+    configSections
+      .flatMap((section) => section.fields)
+      .filter((field) => field.sensitive)
+      .map((field) => field.key.toLowerCase())
+  );
+
+  const isSensitiveKey = (key: string) => {
+    const normalized = key.toLowerCase();
+    if (sensitiveKeySet.has(normalized)) return true;
+    if (normalized === 'api_key' || normalized.endsWith('_api_key')) return true;
+    if (normalized.includes('secret') || normalized.includes('password')) return true;
+    return false;
+  };
+
+  const maskedConfig = maskConfigValue(config, isSensitiveKey);
 
   const renderField = (field: ConfigField) => {
     const value = config[field.key];
@@ -298,12 +344,12 @@ export default function ConfigPage() {
                       View all configuration values as JSON
                     </CardDescription>
                   </CardHeader>
-                  <CardContent>
-                    <pre className="bg-muted p-4 rounded-lg overflow-x-auto text-sm">
-                      {JSON.stringify(config, null, 2)}
-                    </pre>
-                  </CardContent>
-                </Card>
+                <CardContent>
+                  <pre className="bg-muted p-4 rounded-lg overflow-x-auto text-sm">
+                      {JSON.stringify(maskedConfig, null, 2)}
+                  </pre>
+                </CardContent>
+              </Card>
               </div>
             )}
 

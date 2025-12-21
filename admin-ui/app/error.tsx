@@ -5,12 +5,15 @@ import { AlertTriangle, RefreshCw, Home } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 
-interface ErrorProps {
-  error: Error & { digest?: string };
+type ErrorWithDigest = globalThis.Error & { digest?: string };
+type ErrorLike = ErrorWithDigest | { message: string; digest?: string };
+
+interface ErrorPageProps {
+  error: ErrorLike;
   reset: () => void;
 }
 
-export default function Error({ error, reset }: ErrorProps) {
+export default function ErrorPage({ error, reset }: ErrorPageProps) {
   useEffect(() => {
     // Log the error to console (could also send to error reporting service)
     console.error('Route error:', error);

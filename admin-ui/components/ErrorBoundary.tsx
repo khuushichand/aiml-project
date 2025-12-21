@@ -155,24 +155,22 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   }
 }
 
-// Functional wrapper for easier use with hooks
-interface ErrorBoundaryWrapperProps {
-  children: ReactNode;
-  fallback?: ReactNode;
-  onError?: (error: Error, errorInfo: React.ErrorInfo) => void;
-}
-
 export function withErrorBoundary<P extends object>(
   WrappedComponent: React.ComponentType<P>,
   fallback?: ReactNode
 ) {
-  return function WithErrorBoundary(props: P) {
+  function WithErrorBoundary(props: P) {
     return (
       <ErrorBoundary fallback={fallback}>
         <WrappedComponent {...props} />
       </ErrorBoundary>
     );
-  };
+  }
+
+  const wrappedName = WrappedComponent.displayName || WrappedComponent.name || 'Component';
+  WithErrorBoundary.displayName = `withErrorBoundary(${wrappedName})`;
+
+  return WithErrorBoundary;
 }
 
 // Page-level error boundary with simpler UI

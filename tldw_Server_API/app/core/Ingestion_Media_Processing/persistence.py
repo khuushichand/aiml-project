@@ -1416,27 +1416,35 @@ async def process_batch_media(
             call_e,
             exc_info=True,
         )
-        failed_items_results = [
-            {
-                "status": "Error",
-                "input_ref": source_to_ref_map.get(item, (item, None))[0],
-                "processing_source": item,
-                "media_type": media_type,
-                "error": f"Failed to call processor: {type(call_e).__name__}",
-                "metadata": None,
-                "content": None,
-                "transcript": None,
-                "segments": None,
-                "chunks": None,
-                "analysis": None,
-                "summary": None,
-                "analysis_details": None,
-                "warnings": None,
-                "db_id": None,
-                "db_message": None,
-            }
-            for item in items_to_process
-        ]
+        failed_items_results = []
+        for item in items_to_process:
+            ref_info = source_to_ref_map.get(item)
+            if isinstance(ref_info, tuple):
+                err_input_ref = ref_info[0]
+            elif isinstance(ref_info, str):
+                err_input_ref = ref_info
+            else:
+                err_input_ref = item
+            failed_items_results.append(
+                {
+                    "status": "Error",
+                    "input_ref": err_input_ref,
+                    "processing_source": item,
+                    "media_type": media_type,
+                    "error": f"Failed to call processor: {type(call_e).__name__}",
+                    "metadata": None,
+                    "content": None,
+                    "transcript": None,
+                    "segments": None,
+                    "chunks": None,
+                    "analysis": None,
+                    "summary": None,
+                    "analysis_details": None,
+                    "warnings": None,
+                    "db_id": None,
+                    "db_message": None,
+                }
+            )
         combined_results.extend(failed_items_results)
         return combined_results
 

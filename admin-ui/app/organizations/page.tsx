@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
@@ -8,8 +8,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Users, Eye } from 'lucide-react';
+import { Plus, Eye } from 'lucide-react';
 import { Organization } from '@/types';
 import { api } from '@/lib/api-client';
 import { TableSkeleton } from '@/components/ui/skeleton';
@@ -19,38 +20,50 @@ export default function OrganizationsPage() {
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [createError, setCreateError] = useState('');
   const [formData, setFormData] = useState({
     name: '',
     slug: '',
   });
 
-  useEffect(() => {
-    loadOrganizations();
-  }, []);
-
-  const loadOrganizations = async () => {
+  const loadOrganizations = useCallback(async () => {
     try {
       setLoading(true);
+      setLoadError('');
       const data = await api.getOrganizations();
       setOrganizations(Array.isArray(data) ? data : []);
-    } catch (error) {
-      console.error('Failed to load organizations:', error);
+    } catch (error: unknown) {
       setOrganizations([]);
+      setLoadError(
+        error instanceof Error && error.message
+          ? error.message
+          : 'Failed to load organizations'
+      );
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    loadOrganizations();
+  }, [loadOrganizations]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setCreateError('');
     try {
       await api.createOrganization(formData);
       setShowCreateForm(false);
       setFormData({ name: '', slug: '' });
       loadOrganizations();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to create organization:', error);
-      alert(`Failed to create organization: ${error.message}`);
+      setCreateError(
+        error instanceof Error && error.message
+          ? error.message
+          : 'Failed to create organization'
+      );
     }
   };
 
@@ -86,6 +99,11 @@ export default function OrganizationsPage() {
                 </CardHeader>
                 <CardContent>
                   <form onSubmit={handleSubmit} className="space-y-4">
+                    {createError && (
+                      <Alert variant="destructive">
+                        <AlertDescription>{createError}</AlertDescription>
+                      </Alert>
+                    )}
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
                         <Label htmlFor="name">Organization Name *</Label>
@@ -124,6 +142,12 @@ export default function OrganizationsPage() {
               </Card>
             )}
 
+            {loadError && (
+              <Alert variant="destructive" className="mb-6">
+                <AlertDescription>{loadError}</AlertDescription>
+              </Alert>
+            )}
+
             <Card>
               <CardHeader>
                 <CardTitle>Organizations List</CardTitle>
@@ -158,7 +182,7 @@ export default function OrganizationsPage() {
                           </TableCell>
                           <TableCell>{new Date(org.created_at).toLocaleDateString()}</TableCell>
                           <TableCell className="text-right">
-                            <Link href={`/organizations/${org.id}`}>
+                            <Link href={`/organizations/${org.id}/analytics`}>
                               <Button variant="outline" size="sm">
                                 <Eye className="mr-2 h-4 w-4" />
                                 Manage

@@ -39,7 +39,7 @@ function jsonPrettify(value: any): string {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function buildCurl(method: string, url: string, headers: Record<string, string>, body?: any): string {
   const parts: string[] = [
-    `curl -X ${method.toUpperCase()} \\\n+  '${url}' \\\n+  -H 'Accept: application/json'`,
+    `curl -X ${method.toUpperCase()} \\\n  '${url}' \\\n  -H 'Accept: application/json'`,
   ];
   Object.entries(headers || {}).forEach(([k, v]) => {
     if (!v) return;
@@ -47,7 +47,7 @@ function buildCurl(method: string, url: string, headers: Record<string, string>,
   });
   if (body !== undefined) {
     const data = typeof body === 'string' ? body : JSON.stringify(body);
-    parts.push(`  -H 'Content-Type: application/json' \\\n+  --data '${data.replace(/'/g, "'\\''")}'`);
+    parts.push(`  -H 'Content-Type: application/json' \\\n  --data '${data.replace(/'/g, "'\\''")}'`);
   }
   return parts.join(' \\\n');
 }
@@ -547,7 +547,15 @@ function QuickFormsSection() {
 
   const copy = async (text: string, label?: string) => { try { await navigator.clipboard.writeText(text); show({ title: label || 'Copied', variant: 'success' }); } catch {} };
 
-  const curl = `curl -X ${preset?.method} \\\n+  '${getApiBaseUrl()}${preset?.path || ''}' \\\n+  -H 'Accept: application/json' \\\n+  -H 'Content-Type: application/json' \\\n+  --data '${(bodyText || '').replace(/'/g, "'\\''")}'`;
+  const curl = useMemo(
+    () => buildCurl(
+      preset?.method || 'GET',
+      `${getApiBaseUrl()}${preset?.path || ''}`,
+      {},
+      tryParseJSON(bodyText).value
+    ),
+    [preset?.method, preset?.path, bodyText]
+  );
 
   return (
     <div className="rounded-md border bg-white p-4">

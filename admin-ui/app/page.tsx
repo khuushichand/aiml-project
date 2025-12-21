@@ -13,25 +13,13 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { AuditLog, User } from '@/types';
+import { buildDashboardUIStats, type DashboardUIStats } from '@/lib/dashboard';
 import Link from 'next/link';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, PieChart, Pie, Cell
 } from 'recharts';
 import { Skeleton, StatsCardSkeleton } from '@/components/ui/skeleton';
-
-interface DashboardStats {
-  users: number;
-  activeUsers: number;
-  organizations: number;
-  teams: number;
-  apiKeys: number;
-  activeApiKeys: number;
-  providers: number;
-  enabledProviders: number;
-  storageUsedMb: number;
-  storageQuotaMb: number;
-}
 
 interface SystemHealth {
   api: 'healthy' | 'degraded' | 'down';
@@ -40,7 +28,7 @@ interface SystemHealth {
 }
 
 export default function DashboardPage() {
-  const [stats, setStats] = useState<DashboardStats>({
+  const [stats, setStats] = useState<DashboardUIStats>({
     users: 0,
     activeUsers: 0,
     organizations: 0,
@@ -138,36 +126,32 @@ export default function DashboardPage() {
       const totalStorage = users.reduce((acc, u) => acc + (u.storage_used_mb || 0), 0);
       const totalQuota = users.reduce((acc, u) => acc + (u.storage_quota_mb || 0), 0);
 
-      // Try dashboard stats first, fall back to calculated
-      if (statsResult.status === 'fulfilled' && statsResult.value) {
-        setStats({
-          ...statsResult.value,
-          activeUsers: statsResult.value.activeUsers || activeUsers,
-        });
-      } else {
-        setStats({
-          users: users.length,
-          activeUsers,
-          organizations: orgs.length,
-          teams: 0,
-          apiKeys: 0,
-          activeApiKeys: 0,
-          providers: providerList.length,
-          enabledProviders: enabledProviders.length,
-          storageUsedMb: totalStorage,
-          storageQuotaMb: totalQuota || 1000,
-        });
-      }
+      const computedStats: DashboardUIStats = {
+        users: users.length,
+        activeUsers,
+        organizations: orgs.length,
+        teams: 0,
+        apiKeys: 0,
+        activeApiKeys: 0,
+        providers: providerList.length,
+        enabledProviders: enabledProviders.length,
+        storageUsedMb: totalStorage,
+        storageQuotaMb: totalQuota || 1000,
+      };
+      const nextStats = buildDashboardUIStats({
+        computedStats,
+        statsResponse: statsResult.status === 'fulfilled' ? statsResult.value : null,
+      });
+      setStats(nextStats);
 
       // Check system health
       setSystemHealth({
         api: 'healthy',
-        database: users.length > 0 ? 'healthy' : 'degraded',
-        llm: enabledProviders.length > 0 ? 'healthy' : 'degraded',
+        database: nextStats.users > 0 ? 'healthy' : 'degraded',
+        llm: nextStats.enabledProviders > 0 ? 'healthy' : 'degraded',
       });
 
-    } catch (err) {
-      console.error('Failed to load dashboard data:', err);
+    } catch {
       setError('Failed to load dashboard statistics');
     } finally {
       setLoading(false);

@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
@@ -16,12 +17,13 @@ import {
   UserCog,
   Keyboard,
 } from 'lucide-react';
-import { logout, getCurrentUser } from '@/lib/auth';
+import { logout, getCurrentUser, type AdminUser } from '@/lib/auth';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { OrgContextSwitcher } from '@/components/OrgContextSwitcher';
 import { usePermissions } from '@/components/PermissionGuard';
+import { useToast } from '@/components/ui/toast';
 
 // Navigation items with required permissions/roles
 const navigation = [
@@ -40,12 +42,23 @@ const navigation = [
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const user = getCurrentUser();
+  const [user, setUser] = useState<AdminUser | null>(null);
   const { hasPermission, hasRole, loading: permLoading } = usePermissions();
+  const { error: showError } = useToast();
+
+  useEffect(() => {
+    setUser(getCurrentUser());
+  }, []);
 
   const handleLogout = async () => {
-    await logout();
-    router.push('/login');
+    try {
+      await logout();
+      setUser(null);
+      router.push('/login');
+    } catch (error) {
+      console.error('Logout failed:', error);
+      showError('Logout failed', 'Please try again.');
+    }
   };
 
   // Filter navigation based on permissions

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { getCurrentUser, isAuthenticated as checkAuth, AdminUser } from '@/lib/auth';
+import { getCurrentUser, isAuthenticated as checkAuth } from '@/lib/auth';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
 interface ProtectedRouteProps {
@@ -10,11 +10,40 @@ interface ProtectedRouteProps {
   requiredRoles?: string[];
 }
 
+// Role hierarchy for UI gating: higher roles inherit access to lower-role routes.
+const ROLE_RANK: Record<string, number> = {
+  owner: 3,
+  super_admin: 2,
+  admin: 1,
+  member: 0,
+  user: 0,
+};
+
+const hasRoleAccess = (currentRole: string, requiredRoles: string[]): boolean => {
+  if (requiredRoles.length === 0) {
+    return true;
+  }
+
+  const currentRank = ROLE_RANK[currentRole];
+
+  return requiredRoles.some((requiredRole) => {
+    if (requiredRole === currentRole) {
+      return true;
+    }
+
+    const requiredRank = ROLE_RANK[requiredRole];
+    if (requiredRank === undefined || currentRank === undefined) {
+      return false;
+    }
+
+    return currentRank >= requiredRank;
+  });
+};
+
 export default function ProtectedRoute({ children, requiredRoles }: ProtectedRouteProps) {
   const router = useRouter();
   const [isAuthed, setIsAuthed] = useState(false);
   const [hasPermission, setHasPermission] = useState(false);
-  const [user, setUser] = useState<AdminUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -30,16 +59,11 @@ export default function ProtectedRoute({ children, requiredRoles }: ProtectedRou
       return;
     }
 
-    setUser(currentUser);
     setIsAuthed(true);
 
     // Check role-based permissions if required
     if (requiredRoles && requiredRoles.length > 0) {
-      // Admin and super_admin roles have access to everything
-      const hasAdminAccess = ['admin', 'super_admin', 'owner'].includes(currentUser.role);
-      const hasRequiredRole = requiredRoles.includes(currentUser.role);
-
-      if (!hasAdminAccess && !hasRequiredRole) {
+      if (!hasRoleAccess(currentUser.role, requiredRoles)) {
         setHasPermission(false);
         setIsLoading(false);
         return;
@@ -50,18 +74,10 @@ export default function ProtectedRoute({ children, requiredRoles }: ProtectedRou
     setIsLoading(false);
   }, [router, requiredRoles]);
 
-  if (isLoading) {
+  if (isLoading || !isAuthed) {
     return (
       <div className="flex h-screen items-center justify-center">
         <div className="text-muted-foreground">Loading...</div>
-      </div>
-    );
-  }
-
-  if (!isAuthed) {
-    return (
-      <div className="flex h-screen items-center justify-center">
-        <div className="text-muted-foreground">Redirecting to login...</div>
       </div>
     );
   }

@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { useFormContext, Controller, FieldPath, FieldValues } from 'react-hook-form';
+import { useFormContext, Controller, FieldPath, FieldValues, get } from 'react-hook-form';
 import { cn } from '@/lib/utils';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
@@ -32,7 +32,7 @@ function FormField<T extends FieldValues>({
   children,
 }: FormFieldProps<T>) {
   const { formState: { errors } } = useFormContext<T>();
-  const error = errors[name];
+  const error = get(errors, name);
 
   return (
     <div className="space-y-2">
@@ -74,7 +74,7 @@ function FormInput<T extends FieldValues>({
   className,
 }: FormInputProps<T>) {
   const { register, formState: { errors } } = useFormContext<T>();
-  const error = errors[name];
+  const error = get(errors, name);
 
   return (
     <FormField<T> name={name} label={label} description={description} required={required}>
@@ -113,7 +113,7 @@ function FormTextarea<T extends FieldValues>({
   className,
 }: FormTextareaProps<T>) {
   const { register, formState: { errors } } = useFormContext<T>();
-  const error = errors[name];
+  const error = get(errors, name);
 
   return (
     <FormField<T> name={name} label={label} description={description} required={required}>
@@ -156,7 +156,7 @@ function FormSelect<T extends FieldValues>({
   className,
 }: FormSelectProps<T>) {
   const { register, formState: { errors } } = useFormContext<T>();
-  const error = errors[name];
+  const error = get(errors, name);
 
   return (
     <FormField<T> name={name} label={label} description={description} required={required}>
@@ -200,7 +200,7 @@ function FormCheckbox<T extends FieldValues>({
   className,
 }: FormCheckboxProps<T>) {
   const { register, formState: { errors } } = useFormContext<T>();
-  const error = errors[name];
+  const error = get(errors, name);
 
   return (
     <div className="space-y-2">
@@ -210,7 +210,7 @@ function FormCheckbox<T extends FieldValues>({
           id={name}
           disabled={disabled}
           className={cn(
-            'h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary',
+            'h-4 w-4 rounded border border-input text-primary focus:ring-primary',
             error && 'border-destructive',
             className
           )}

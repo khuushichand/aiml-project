@@ -6856,6 +6856,184 @@ class MediaDatabase:
             logger.error(f"Unexpected chunk processing error media {media_id}: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected chunk error: {e}") from e
 
+    def clear_unvectorized_chunks(self, media_id: int) -> int:
+        """
+        Delete all unvectorized chunks for the media item.
+
+        Args:
+            media_id (int): The ID of the parent Media item.
+
+        Returns:
+            int: Number of rows deleted.
+
+        Raises:
+            InputError: If the media item is missing or deleted.
+            DatabaseError: For database errors during deletion.
+        """
+        if not isinstance(media_id, int):
+            raise InputError("media_id must be an integer.")
+        if not check_media_exists(self, media_id=media_id):
+            raise InputError(f"Cannot clear chunks: Parent Media {media_id} not found or deleted.")
+        try:
+            with self.transaction() as conn:
+                cursor = self._execute_with_connection(
+                    conn,
+                    "DELETE FROM UnvectorizedMediaChunks WHERE media_id = ?",
+                    (media_id,),
+                )
+                deleted = cursor.rowcount if cursor.rowcount is not None else 0
+            logger.info(
+                "Cleared %s unvectorized chunks for media %s.",
+                deleted,
+                media_id,
+            )
+            return deleted
+        except (DatabaseError, sqlite3.Error) as e:
+            logger.error(f"Error clearing unvectorized chunks for media {media_id}: {e}", exc_info=True)
+            if isinstance(e, DatabaseError):
+                raise
+            raise DatabaseError(f"Failed to clear unvectorized chunks: {e}") from e
+        except Exception as e:
+            logger.error(f"Unexpected error clearing unvectorized chunks for media {media_id}: {e}", exc_info=True)
+            raise DatabaseError(f"Unexpected error clearing unvectorized chunks: {e}") from e
+
+    def update_media_reprocess_state(
+        self,
+        media_id: int,
+        *,
+        chunking_status: Optional[str],
+        reset_vector_processing: bool,
+    ) -> None:
+        """
+        Update media processing state with sync logging.
+
+        Increments the media version, updates last_modified/client_id, and optionally
+        sets chunking_status and resets vector_processing.
+
+        Args:
+            media_id (int): Media item ID.
+            chunking_status (Optional[str]): New chunking status; None leaves unchanged.
+            reset_vector_processing (bool): Whether to reset vector_processing to 0.
+
+        Raises:
+            InputError: If the media item is missing or inactive.
+            ConflictError: If the media row was updated concurrently.
+            DatabaseError: For database errors during the update.
+        """
+        try:
+            with self.transaction() as conn:
+                row = self._fetchone_with_connection(
+                    conn,
+                    "SELECT uuid, version FROM Media WHERE id = ? AND deleted = 0 AND is_trash = 0",
+                    (media_id,),
+                )
+                if not row:
+                    raise InputError(f"Media {media_id} not found or inactive.")
+                media_uuid = row["uuid"]
+                current_version = row["version"]
+                next_version = current_version + 1
+                now = self._get_current_utc_timestamp_str()
+
+                set_parts = ["last_modified = ?", "version = ?", "client_id = ?"]
+                params: List[Any] = [now, next_version, self.client_id]
+                payload: Dict[str, Any] = {"last_modified": now}
+
+                if chunking_status is not None:
+                    set_parts.append("chunking_status = ?")
+                    params.append(chunking_status)
+                    payload["chunking_status"] = chunking_status
+
+                if reset_vector_processing:
+                    set_parts.append("vector_processing = ?")
+                    params.append(0)
+                    payload["vector_processing"] = 0
+
+                update_sql = f"UPDATE Media SET {', '.join(set_parts)} WHERE id = ? AND version = ?"
+                update_params = tuple(params + [media_id, current_version])
+                cursor = conn.cursor()
+                cursor.execute(update_sql, update_params)
+                if cursor.rowcount == 0:
+                    raise ConflictError("Media", media_id)
+
+                self._log_sync_event(conn, "Media", media_uuid, "update", next_version, payload)
+        except (InputError, ConflictError):
+            raise
+        except (DatabaseError, sqlite3.Error) as e:
+            logger.error(f"Error updating reprocess state for media {media_id}: {e}", exc_info=True)
+            if isinstance(e, DatabaseError):
+                raise
+            raise DatabaseError(f"Failed updating reprocess state: {e}") from e
+        except Exception as e:
+            logger.error(f"Unexpected error updating reprocess state for media {media_id}: {e}", exc_info=True)
+            raise DatabaseError(f"Unexpected error updating reprocess state: {e}") from e
+
+    def mark_embeddings_error(self, media_id: int, error_message: str) -> None:
+        """
+        Mark embeddings processing as failed for a media item.
+
+        Args:
+            media_id (int): Media item ID.
+            error_message (str): Error description to store in chunking_status.
+
+        Raises:
+            InputError: If the media item is missing or inactive.
+            ConflictError: If the media row was updated concurrently.
+            DatabaseError: For database errors during the update.
+        """
+        try:
+            with self.transaction() as conn:
+                row = self._fetchone_with_connection(
+                    conn,
+                    "SELECT uuid, version FROM Media WHERE id = ? AND deleted = 0 AND is_trash = 0",
+                    (media_id,),
+                )
+                if not row:
+                    raise InputError(f"Media {media_id} not found or inactive.")
+                media_uuid = row["uuid"]
+                current_version = row["version"]
+                next_version = current_version + 1
+                now = self._get_current_utc_timestamp_str()
+
+                error_status = f"embeddings_error: {error_message}"
+                set_parts = [
+                    "last_modified = ?",
+                    "version = ?",
+                    "client_id = ?",
+                    "vector_processing = ?",
+                    "chunking_status = ?",
+                ]
+                params: List[Any] = [
+                    now,
+                    next_version,
+                    self.client_id,
+                    -1,
+                    error_status,
+                ]
+                payload: Dict[str, Any] = {
+                    "last_modified": now,
+                    "vector_processing": -1,
+                    "chunking_status": error_status,
+                }
+
+                update_sql = f"UPDATE Media SET {', '.join(set_parts)} WHERE id = ? AND version = ?"
+                update_params = tuple(params + [media_id, current_version])
+                cursor = conn.cursor()
+                cursor.execute(update_sql, update_params)
+                if cursor.rowcount == 0:
+                    raise ConflictError("Media", media_id)
+
+                self._log_sync_event(conn, "Media", media_uuid, "update", next_version, payload)
+        except (InputError, ConflictError):
+            raise
+        except (DatabaseError, sqlite3.Error) as e:
+            logger.error(f"Error marking embeddings error for media {media_id}: {e}", exc_info=True)
+            if isinstance(e, DatabaseError):
+                raise
+            raise DatabaseError(f"Failed marking embeddings error: {e}") from e
+        except Exception as e:
+            logger.error(f"Unexpected error marking embeddings error for media {media_id}: {e}", exc_info=True)
+            raise DatabaseError(f"Unexpected error marking embeddings error: {e}") from e
+
     # --- Read Methods (Ensure they filter by deleted=0) ---
     def fetch_all_keywords(self) -> List[str]:
         """

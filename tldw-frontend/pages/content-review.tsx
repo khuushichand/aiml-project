@@ -266,8 +266,12 @@ export default function ContentReviewPage() {
                   {commitDisabled ? 'Commit disabled until source is attached.' : 'Ready to commit.'}
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button variant="danger">Discard</Button>
-                  <Button variant="secondary">Mark Reviewed</Button>
+                  <Button variant="danger" disabled title="Not yet implemented">
+                    Discard
+                  </Button>
+                  <Button variant="secondary" disabled title="Not yet implemented">
+                    Mark Reviewed
+                  </Button>
                   <Button variant="primary" disabled={commitDisabled}>
                     Commit
                   </Button>
@@ -283,7 +287,13 @@ export default function ContentReviewPage() {
           <div className="w-full max-w-lg rounded-lg bg-white p-6 shadow-xl">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-semibold">Reattach Source</h3>
-              <Button variant="ghost" onClick={() => setReattachOpen(false)}>
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setReattachOpen(false);
+                  setReattachError(null);
+                }}
+              >
                 Close
               </Button>
             </div>
@@ -334,7 +344,13 @@ export default function ContentReviewPage() {
             )}
 
             <div className="mt-6 flex justify-end gap-2">
-              <Button variant="secondary" onClick={() => setReattachOpen(false)}>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setReattachOpen(false);
+                  setReattachError(null);
+                }}
+              >
                 Cancel
               </Button>
               <Button variant="primary" onClick={submitReattach}>
