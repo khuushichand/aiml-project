@@ -56,6 +56,17 @@ export interface MediaContentDetail {
   word_count: number;
 }
 
+export interface VersionDetail {
+  uuid?: string;
+  media_id: number;
+  version_number: number;
+  created_at: string;
+  prompt?: string;
+  analysis_content?: string;
+  safe_metadata?: Record<string, unknown>;
+  content?: string;
+}
+
 export interface MediaDetailResponse {
   media_id: number;
   source: MediaSourceDetail;
@@ -63,7 +74,7 @@ export interface MediaDetailResponse {
   content: MediaContentDetail;
   keywords: string[];
   timestamps: string[];
-  versions?: Array<Record<string, unknown>>;
+  versions?: VersionDetail[];
 }
 
 export interface SearchResult {

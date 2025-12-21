@@ -66,6 +66,7 @@ export default function ConfigPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -129,6 +130,7 @@ export default function ConfigPage() {
       ...prev,
       [key]: value,
     }));
+    setSuccess('');
   };
 
   const hasChanges = JSON.stringify(config) !== JSON.stringify(originalConfig);
@@ -224,10 +226,16 @@ export default function ConfigPage() {
             if (field.type === 'number') {
               if (e.target.value === '') {
                 updateConfigValue(field.key, '');
+                setFieldErrors((prev) => ({ ...prev, [field.key]: '' }));
                 return;
               }
               const parsed = parseInt(e.target.value, 10);
-              updateConfigValue(field.key, Number.isNaN(parsed) ? '' : parsed);
+              if (Number.isNaN(parsed)) {
+                setFieldErrors((prev) => ({ ...prev, [field.key]: 'Must be a valid number' }));
+                return;
+              }
+              updateConfigValue(field.key, parsed);
+              setFieldErrors((prev) => ({ ...prev, [field.key]: '' }));
               return;
             }
             updateConfigValue(field.key, e.target.value);
@@ -236,6 +244,9 @@ export default function ConfigPage() {
         />
         {field.description && (
           <p className="text-xs text-muted-foreground">{field.description}</p>
+        )}
+        {fieldErrors[field.key] && (
+          <p className="text-xs text-red-600">{fieldErrors[field.key]}</p>
         )}
       </div>
     );

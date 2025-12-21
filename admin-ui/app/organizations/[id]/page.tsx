@@ -84,7 +84,11 @@ export default function OrganizationDetailPage() {
   }, [orgId]);
 
   useEffect(() => {
-    void loadData();
+    const timeoutId = window.setTimeout(() => {
+      void loadData();
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
   }, [loadData]);
 
   const handleAddMember = async () => {
@@ -151,6 +155,11 @@ export default function OrganizationDetailPage() {
   const handleCreateInvite = async () => {
     if (!inviteEmail) {
       setError('Email is required');
+      return;
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(inviteEmail)) {
+      setError('Please enter a valid email address');
       return;
     }
 
@@ -439,7 +448,21 @@ export default function OrganizationDetailPage() {
                             <TableCell>
                               <select
                                 value={member.role}
-                                onChange={(e) => handleUpdateMemberRole(member.user_id, e.target.value)}
+                                onChange={async (event) => {
+                                  const newRole = event.target.value;
+                                  const displayName = member.user?.username || `User ${member.user_id}`;
+                                  const confirmed = await confirm({
+                                    title: 'Change Role',
+                                    message: `Change role for ${displayName} to ${newRole}?`,
+                                    confirmText: 'Change Role',
+                                    variant: 'default',
+                                  });
+                                  if (confirmed) {
+                                    await handleUpdateMemberRole(member.user_id, newRole);
+                                  } else {
+                                    event.target.value = member.role;
+                                  }
+                                }}
                                 className="h-8 rounded-md border border-input bg-background px-2 text-sm"
                               >
                                 <option value="member">Member</option>

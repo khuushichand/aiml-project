@@ -177,7 +177,7 @@ export default function MediaPage() {
     }
   }, [itemsPerPage, show]);
 
-  const loadDetails = async (id: number) => {
+  const loadDetails = useCallback(async (id: number) => {
     try {
       const data = await apiClient.get<MediaDetailResponse>(`/media/${id}`);
       setSelectedItem(data);
@@ -188,7 +188,7 @@ export default function MediaPage() {
       setSelectedItem(null);
       show({ title: 'Load details failed', description: message, variant: 'warning' });
     }
-  };
+  }, [show]);
 
   const notifyIfTruncated = useCallback((text: string, actionLabel: string) => {
     if (text.length <= MAX_SNIPPET_CHARS) return;
@@ -228,7 +228,7 @@ export default function MediaPage() {
     }
   }, [analysisModel, analysisPrompt, notifyIfTruncated, selectedItem, show]);
 
-  const sendToChatSelected = async () => {
+  const sendToChatSelected = useCallback(async () => {
     if (!selectedItem) return;
     try {
       const text: string = selectedItem?.content?.text || '';
@@ -241,7 +241,7 @@ export default function MediaPage() {
     } catch {
       // no-op
     }
-  };
+  }, [MAX_SNIPPET_CHARS, notifyIfTruncated, router, selectedItem, show]);
 
   // Media hotkeys: Cmd/Ctrl+Shift+L (Load all), Cmd/Ctrl+Shift+S (Summarize), Cmd/Ctrl+Shift+J (Copy result JSON)
   useEffect(() => {

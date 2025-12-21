@@ -172,7 +172,21 @@ async def _async_iter_sync_stream(
     *,
     queue_maxsize: int = STREAMING_SYNC_BRIDGE_MAX_QUEUE,
 ) -> AsyncIterator[Any]:
-    """Bridge a sync iterator onto the event loop without blocking it."""
+    """Bridge a sync iterator onto the event loop without blocking it.
+
+    Spawns a daemon thread to consume the sync iterator, passing chunks
+    through an asyncio.Queue for non-blocking async consumption.
+
+    Args:
+        stream: A synchronous iterator to bridge.
+        queue_maxsize: Maximum queue depth for backpressure (default: 32).
+
+    Yields:
+        Items from the sync iterator, now available asynchronously.
+
+    Raises:
+        Exception: Re-raises any exception that occurred in the sync iterator.
+    """
     loop = asyncio.get_running_loop()
     maxsize = max(int(queue_maxsize or 0), 1)
     queue: asyncio.Queue[Tuple[str, Any]] = asyncio.Queue(maxsize=maxsize)
@@ -189,8 +203,7 @@ async def _async_iter_sync_stream(
         while True:
             try:
                 fut.result(timeout=1.0)
-                return
-            except TimeoutError:
+            except (concurrent.futures.TimeoutError, TimeoutError):
                 if stop_event.is_set() or loop.is_closed():
                     try:
                         fut.cancel()
@@ -199,6 +212,8 @@ async def _async_iter_sync_stream(
                     return
             except (RuntimeError, concurrent.futures.CancelledError) as exc:
                 logger.debug(f"Failed to enqueue sync stream chunk: {exc}")
+                return
+            else:
                 return
 
     def _worker() -> None:
@@ -226,6 +241,8 @@ async def _async_iter_sync_stream(
                 break
     finally:
         stop_event.set()
+        # Give worker thread a brief moment to notice stop_event before closing.
+        thread.join(timeout=0.5)
         try:
             if hasattr(stream, "close") and callable(stream.close):  # type: ignore[attr-defined]
                 stream.close()  # type: ignore[attr-defined]

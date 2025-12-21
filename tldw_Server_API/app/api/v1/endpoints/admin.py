@@ -3855,7 +3855,9 @@ async def get_personalization_status():
         status_fn = getattr(svc, "get_status", None)
         if callable(status_fn):
             return status_fn()
-        raise ValueError("Personalization status unavailable")
+        if status_fn is None:
+            raise ValueError("Personalization service does not implement get_status")
+        raise ValueError("Personalization get_status is not callable")
     except Exception as e:
         logger.warning(f"Admin status fetch failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch status")

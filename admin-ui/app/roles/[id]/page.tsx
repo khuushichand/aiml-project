@@ -39,6 +39,14 @@ export default function RoleDetailPage() {
   const [editName, setEditName] = useState('');
   const [editDescription, setEditDescription] = useState('');
 
+  useEffect(() => {
+    if (!success) {
+      return;
+    }
+    const timer = setTimeout(() => setSuccess(''), 2000);
+    return () => clearTimeout(timer);
+  }, [success]);
+
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
@@ -109,7 +117,6 @@ export default function RoleDetailPage() {
         });
         setSuccess('Permission assigned');
       }
-      setTimeout(() => setSuccess(''), 2000);
     } catch (err: unknown) {
       console.error('Failed to update permission:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to update permission');

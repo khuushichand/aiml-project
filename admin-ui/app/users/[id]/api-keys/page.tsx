@@ -1,12 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select } from '@/components/ui/select';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -29,6 +30,8 @@ export default function UserApiKeysPage() {
   const [success, setSuccess] = useState('');
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newKeyValue, setNewKeyValue] = useState<string | null>(null);
+  const successTimerRef = useRef<number | null>(null);
+  const isMountedRef = useRef(true);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -57,6 +60,16 @@ export default function UserApiKeysPage() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+      if (successTimerRef.current !== null) {
+        window.clearTimeout(successTimerRef.current);
+        successTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -134,11 +147,26 @@ export default function UserApiKeysPage() {
   const copyToClipboard = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
+      if (!isMountedRef.current) {
+        return;
+      }
       setError('');
       setSuccess('Copied to clipboard!');
-      setTimeout(() => setSuccess(''), 2000);
+      if (successTimerRef.current !== null) {
+        window.clearTimeout(successTimerRef.current);
+      }
+      successTimerRef.current = window.setTimeout(() => {
+        if (!isMountedRef.current) {
+          return;
+        }
+        setSuccess('');
+        successTimerRef.current = null;
+      }, 2000);
     } catch (err: unknown) {
       console.error('Failed to copy to clipboard:', err);
+      if (!isMountedRef.current) {
+        return;
+      }
       setError('Failed to copy to clipboard. Please copy manually or check browser permissions.');
     }
   };
@@ -266,16 +294,15 @@ export default function UserApiKeysPage() {
 
                       <div className="space-y-2">
                         <Label htmlFor="scope">Scope</Label>
-                        <select
+                        <Select
                           id="scope"
                           value={formData.scope}
                           onChange={(e) => setFormData({ ...formData, scope: e.target.value })}
-                          className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                         >
                           <option value="read">Read Only</option>
                           <option value="write">Read & Write</option>
                           <option value="admin">Admin</option>
-                        </select>
+                        </Select>
                       </div>
 
                       <div className="space-y-2">
@@ -286,7 +313,7 @@ export default function UserApiKeysPage() {
                           min="1"
                           max="365"
                           value={formData.expires_days}
-                          onChange={(e) => setFormData({ ...formData, expires_days: parseInt(e.target.value) || 90 })}
+                          onChange={(e) => setFormData({ ...formData, expires_days: parseInt(e.target.value, 10) || 90 })}
                         />
                       </div>
                     </div>

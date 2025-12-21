@@ -99,6 +99,10 @@ export default function TeamDetailPage() {
         setError('Please enter a valid numeric User ID');
         return;
       }
+      if (members.some((member) => member.user_id === userId)) {
+        setError('This user is already a member of the team');
+        return;
+      }
       await api.addTeamMember(teamId, {
         user_id: userId,
         role: newMemberRole,
@@ -218,7 +222,15 @@ export default function TeamDetailPage() {
                     </div>
                   </div>
                   <DialogFooter>
-                    <Button variant="outline" onClick={() => setShowAddMember(false)}>Cancel</Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setShowAddMember(false);
+                        setError('');
+                      }}
+                    >
+                      Cancel
+                    </Button>
                     <Button onClick={handleAddMember}>Add Member</Button>
                   </DialogFooter>
                 </DialogContent>

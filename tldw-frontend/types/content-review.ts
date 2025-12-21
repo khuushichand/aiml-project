@@ -1,5 +1,5 @@
 export type DraftStatus = 'pending' | 'in_progress' | 'reviewed';
-export type AssetStatus = 'present' | 'missing';
+export type AssetStatus = 'present' | 'missing' | 'pending';
 export type AssetKind = 'url' | 'file' | 'stream';
 
 export type DraftSource = {
