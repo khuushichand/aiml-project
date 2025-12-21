@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from 'react';
 import { Building2, ChevronDown, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api-client';
@@ -42,7 +42,7 @@ export function OrgContextProvider({ children }: OrgContextProviderProps) {
   // Org-scoped means the user is NOT a super admin but might be an org admin
   const isOrgScoped = !permLoading && !isSuperAdmin() && user !== null;
 
-  const loadOrganizations = async () => {
+  const loadOrganizations = useCallback(async () => {
     try {
       setLoading(true);
       const orgs = await api.getOrganizations();
@@ -50,8 +50,8 @@ export function OrgContextProvider({ children }: OrgContextProviderProps) {
       setOrganizations(orgList);
 
       // If org-scoped and there are orgs, select the first one by default
-      if (isOrgScoped && orgList.length > 0 && !selectedOrg) {
-        setSelectedOrg(orgList[0]);
+      if (isOrgScoped && orgList.length > 0) {
+        setSelectedOrg((current) => current ?? orgList[0]);
       }
     } catch (error) {
       console.error('Failed to load organizations:', error);
@@ -59,13 +59,13 @@ export function OrgContextProvider({ children }: OrgContextProviderProps) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [isOrgScoped]);
 
   useEffect(() => {
     if (!permLoading) {
       loadOrganizations();
     }
-  }, [permLoading, isOrgScoped]);
+  }, [loadOrganizations, permLoading]);
 
   return (
     <OrgContext.Provider
@@ -89,7 +89,7 @@ interface OrgContextSwitcherProps {
 }
 
 export function OrgContextSwitcher({ className = '' }: OrgContextSwitcherProps) {
-  const { organizations, selectedOrg, setSelectedOrg, loading, isOrgScoped } = useOrgContext();
+  const { organizations, selectedOrg, setSelectedOrg, loading } = useOrgContext();
   const { isSuperAdmin } = usePermissions();
   const [isOpen, setIsOpen] = useState(false);
 
@@ -177,7 +177,7 @@ export function OrgContextSwitcher({ className = '' }: OrgContextSwitcherProps) 
 
 // Helper hook to get filtered data based on org context
 export function useOrgFilteredData<T extends { org_id?: number }>(data: T[]): T[] {
-  const { selectedOrg, isOrgScoped } = useOrgContext();
+  const { selectedOrg } = useOrgContext();
 
   if (!selectedOrg) {
     return data;

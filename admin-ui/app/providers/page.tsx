@@ -10,7 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { Cpu, RefreshCw, CheckCircle, XCircle, Key, ExternalLink, Plus, Trash2, Search, Building2, User } from 'lucide-react';
@@ -22,6 +22,12 @@ interface ByokKey {
   provider: string;
   key_hint?: string;
   created_at?: string;
+}
+
+interface ProviderConfig {
+  enabled?: boolean;
+  models?: string[];
+  [key: string]: unknown;
 }
 
 export default function ProvidersPage() {
@@ -69,11 +75,11 @@ export default function ProvidersPage() {
         if (Array.isArray(providersData.value)) {
           providersArray = providersData.value;
         } else if (providersData.value && typeof providersData.value === 'object') {
-          providersArray = Object.entries(providersData.value).map(([name, value]: [string, any]) => ({
+          providersArray = Object.entries(providersData.value as Record<string, ProviderConfig>).map(([name, value]) => ({
+            ...value,
             name,
             enabled: value.enabled ?? true,
             models: value.models || [],
-            ...value,
           }));
         }
         setProviders(providersArray);
@@ -86,9 +92,9 @@ export default function ProvidersPage() {
       if (orgsData.status === 'fulfilled') {
         setOrganizations(Array.isArray(orgsData.value) ? orgsData.value : []);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to load data:', err);
-      setError(err.message || 'Failed to load data');
+      setError(err instanceof Error ? err.message : 'Failed to load data');
     } finally {
       setLoading(false);
     }
@@ -100,7 +106,7 @@ export default function ProvidersPage() {
     try {
       const keys = await api.getUserByokKeys(user.id.toString());
       setUserByokKeys(Array.isArray(keys) ? keys : []);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to load user BYOK keys:', err);
       setUserByokKeys([]);
     } finally {
@@ -114,7 +120,7 @@ export default function ProvidersPage() {
     try {
       const keys = await api.getOrgByokKeys(org.id.toString());
       setOrgByokKeys(Array.isArray(keys) ? keys : []);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to load org BYOK keys:', err);
       setOrgByokKeys([]);
     } finally {
@@ -153,9 +159,9 @@ export default function ProvidersPage() {
       setNewByokProvider('');
       setCustomProviderName('');
       setNewByokKey('');
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to add BYOK key:', err);
-      setError(err.message || 'Failed to add BYOK key');
+      setError(err instanceof Error ? err.message : 'Failed to add BYOK key');
     } finally {
       setAddingByok(false);
     }
@@ -178,9 +184,9 @@ export default function ProvidersPage() {
       await api.deleteUserByokKey(selectedUser.id.toString(), provider);
       await loadUserByokKeys(selectedUser);
       setSuccess(`Deleted ${provider} key for ${selectedUser.email}`);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to delete BYOK key:', err);
-      setError(err.message || 'Failed to delete BYOK key');
+      setError(err instanceof Error ? err.message : 'Failed to delete BYOK key');
     }
   };
 
@@ -201,9 +207,9 @@ export default function ProvidersPage() {
       await api.deleteOrgByokKey(selectedOrg.id.toString(), provider);
       await loadOrgByokKeys(selectedOrg);
       setSuccess(`Deleted ${provider} key for ${selectedOrg.name}`);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to delete BYOK key:', err);
-      setError(err.message || 'Failed to delete BYOK key');
+      setError(err instanceof Error ? err.message : 'Failed to delete BYOK key');
     }
   };
 
@@ -321,7 +327,7 @@ export default function ProvidersPage() {
                         <h3 className="font-semibold">LLM Provider Configuration</h3>
                         <p className="text-sm text-muted-foreground mt-1">
                           tldw_server supports multiple LLM providers including OpenAI, Anthropic, Google, Cohere,
-                          and local inference servers. Provider API keys can be configured in the server's config.txt
+                          and local inference servers. Provider API keys can be configured in the server&apos;s config.txt
                           or .env file.
                         </p>
                       </div>

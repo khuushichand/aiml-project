@@ -50,9 +50,9 @@ function AuditPageContent() {
       const logsArray = Array.isArray(data) ? data : (data.items || []);
       setAllLogs(logsArray);
       setLogs(logsArray);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to load audit logs:', err);
-      setError(err.message || 'Failed to load audit logs');
+      setError(err instanceof Error && err.message ? err.message : 'Failed to load audit logs');
       setAllLogs([]);
       setLogs([]);
     } finally {

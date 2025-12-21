@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
@@ -24,6 +24,7 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import { OrgContextSwitcher } from '@/components/OrgContextSwitcher';
 import { usePermissions } from '@/components/PermissionGuard';
 import { useToast } from '@/components/ui/toast';
+import { openShortcutsHelp } from '@/lib/use-keyboard-shortcuts';
 
 // Navigation items with required permissions/roles
 const navigation = [
@@ -42,13 +43,9 @@ const navigation = [
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const [user, setUser] = useState<AdminUser | null>(null);
+  const [user, setUser] = useState<AdminUser | null>(() => getCurrentUser());
   const { hasPermission, hasRole, loading: permLoading } = usePermissions();
   const { error: showError } = useToast();
-
-  useEffect(() => {
-    setUser(getCurrentUser());
-  }, []);
 
   const handleLogout = async () => {
     try {
@@ -125,11 +122,7 @@ export default function Sidebar() {
         <Button
           variant="ghost"
           className="w-full justify-start gap-3 text-muted-foreground hover:text-foreground"
-          onClick={() => {
-            // Trigger the keyboard shortcut for help
-            const event = new KeyboardEvent('keydown', { key: '?', shiftKey: true });
-            window.dispatchEvent(event);
-          }}
+          onClick={openShortcutsHelp}
         >
           <Keyboard className="h-5 w-5" />
           Shortcuts

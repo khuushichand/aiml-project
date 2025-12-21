@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
@@ -13,9 +13,7 @@ import { ArrowLeft, RefreshCw, Shield } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { Role, Permission } from '@/types';
 
-interface RolePermissionMap {
-  [roleId: string]: Set<number>;
-}
+type RolePermissionMap = Record<number, Set<number>>;
 
 export default function PermissionMatrixPage() {
   const router = useRouter();
@@ -25,11 +23,7 @@ export default function PermissionMatrixPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
@@ -55,20 +49,25 @@ export default function PermissionMatrixPage() {
             permMap[role.id] = new Set(
               (Array.isArray(rolePerms) ? rolePerms : []).map((p: Permission) => p.id)
             );
-          } catch {
+          } catch (err: unknown) {
+            console.warn(`Failed to load permissions for role ${role.id}`, err);
             permMap[role.id] = new Set();
           }
         })
       );
 
       setRolePermissions(permMap);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to load data:', err);
-      setError(err.message || 'Failed to load roles and permissions');
+      setError(err instanceof Error ? err.message : 'Failed to load roles and permissions');
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const hasPermission = (roleId: number, permissionId: number): boolean => {
     return rolePermissions[roleId]?.has(permissionId) || false;

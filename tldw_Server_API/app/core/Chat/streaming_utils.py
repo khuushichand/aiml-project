@@ -5,6 +5,7 @@
 import asyncio
 import json
 import time
+import threading
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Dict, Iterator, Optional, Union, Tuple, List
 from loguru import logger
@@ -59,6 +60,25 @@ MAX_RESPONSE_LIST_LENGTH = int(
     os.getenv('STREAMING_MAX_RESPONSE_LIST_LENGTH') or
     _chat_config.get('streaming_max_response_list_length', 100_000)
 )
+
+# Offload sync iterators to a background thread to avoid blocking the event loop
+try:
+    STREAMING_SYNC_BRIDGE_ENABLED = str(
+        os.getenv('STREAMING_SYNC_BRIDGE_ENABLED') or
+        _chat_config.get('streaming_sync_bridge_enabled', 'true')
+    ).lower() in {"1", "true", "yes", "y", "on"}
+except Exception:
+    STREAMING_SYNC_BRIDGE_ENABLED = True
+
+try:
+    STREAMING_SYNC_BRIDGE_MAX_QUEUE = int(
+        os.getenv('STREAMING_SYNC_BRIDGE_MAX_QUEUE') or
+        _chat_config.get('streaming_sync_bridge_max_queue', 32)
+    )
+except Exception:
+    STREAMING_SYNC_BRIDGE_MAX_QUEUE = 32
+if STREAMING_SYNC_BRIDGE_MAX_QUEUE <= 0:
+    STREAMING_SYNC_BRIDGE_MAX_QUEUE = 32
 
 #######################################################################################################################
 #
@@ -142,6 +162,58 @@ def _extract_text_from_upstream_sse(chunk_str: str) -> Tuple[Optional[str], Opti
 
     # Not an SSE frame; treat as plain text chunk
     return chunk_str, None, False
+
+
+async def _async_iter_sync_stream(
+    stream: Iterator[Any],
+    *,
+    queue_maxsize: int = STREAMING_SYNC_BRIDGE_MAX_QUEUE,
+) -> AsyncIterator[Any]:
+    """Bridge a sync iterator onto the event loop without blocking it."""
+    loop = asyncio.get_running_loop()
+    maxsize = max(int(queue_maxsize or 0), 1)
+    queue: asyncio.Queue[Tuple[str, Any]] = asyncio.Queue(maxsize=maxsize)
+    stop_event = threading.Event()
+
+    def _queue_put(item: Tuple[str, Any]) -> None:
+        if loop.is_closed():
+            return
+        try:
+            fut = asyncio.run_coroutine_threadsafe(queue.put(item), loop)
+            fut.result()
+        except Exception:
+            pass
+
+    def _worker() -> None:
+        try:
+            for chunk in stream:
+                if stop_event.is_set():
+                    break
+                _queue_put(("data", chunk))
+        except Exception as exc:
+            _queue_put(("error", exc))
+        finally:
+            _queue_put(("done", None))
+
+    thread = threading.Thread(target=_worker, name="sync-stream-bridge", daemon=True)
+    thread.start()
+
+    try:
+        while True:
+            kind, payload = await queue.get()
+            if kind == "data":
+                yield payload
+            elif kind == "error":
+                raise payload
+            elif kind == "done":
+                break
+    finally:
+        stop_event.set()
+        try:
+            if hasattr(stream, "close") and callable(getattr(stream, "close")):
+                stream.close()  # type: ignore[attr-defined]
+        except Exception:
+            pass
 
 class StreamingResponseHandler:
     """
@@ -500,9 +572,13 @@ class StreamingResponseHandler:
                 return outputs, False
 
             # Process the stream
-            if hasattr(stream, '__aiter__'):
-                # Async iterator
-                async for chunk in stream:
+            async_stream = stream if hasattr(stream, '__aiter__') else None
+            if async_stream is None and STREAMING_SYNC_BRIDGE_ENABLED:
+                async_stream = _async_iter_sync_stream(stream)
+
+            if async_stream is not None:
+                # Async iterator (native or bridged from sync)
+                async for chunk in async_stream:
                     if self.is_cancelled:
                         logger.info(f"Stream processing cancelled for {self.conversation_id}")
                         break
@@ -530,7 +606,7 @@ class StreamingResponseHandler:
                         yield f"data: {json.dumps({'error': {'message': f'Error processing chunk: {str(e)}'}})}\n\n"
                         break
             else:
-                # Sync iterator
+                # Sync iterator (legacy, blocks event loop)
                 def sync_iterator():
                     try:
                         for chunk in stream:

@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { useFormContext, Controller, FieldPath, FieldValues, get } from 'react-hook-form';
+import { useFormContext, FieldPath, FieldValues, get } from 'react-hook-form';
 import { cn } from '@/lib/utils';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
@@ -8,7 +8,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/components/ui/toast';
 import { Plus, Users, Building2 } from 'lucide-react';
 import { Team, Organization } from '@/types';
@@ -27,33 +26,21 @@ export default function TeamsPage() {
     description: '',
   });
 
-  useEffect(() => {
-    loadOrganizations();
-  }, []);
-
-  useEffect(() => {
-    if (selectedOrgId) {
-      loadTeams(selectedOrgId);
-    } else {
-      setTeams([]);
-    }
-  }, [selectedOrgId]);
-
-  const loadOrganizations = async () => {
+  const loadOrganizations = useCallback(async () => {
     try {
       const data = await api.getOrganizations();
       const orgs = Array.isArray(data) ? data : [];
       setOrganizations(orgs);
-      if (orgs.length > 0 && !selectedOrgId) {
-        setSelectedOrgId(String(orgs[0].id));
+      if (orgs.length > 0) {
+        setSelectedOrgId((current) => current || String(orgs[0].id));
       }
     } catch (error) {
       console.error('Failed to load organizations:', error);
       setOrganizations([]);
     }
-  };
+  }, []);
 
-  const loadTeams = async (orgId: string) => {
+  const loadTeams = useCallback(async (orgId: string) => {
     try {
       setLoading(true);
       const data = await api.getTeams(orgId);
@@ -64,7 +51,19 @@ export default function TeamsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    loadOrganizations();
+  }, [loadOrganizations]);
+
+  useEffect(() => {
+    if (selectedOrgId) {
+      loadTeams(selectedOrgId);
+    } else {
+      setTeams([]);
+    }
+  }, [loadTeams, selectedOrgId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

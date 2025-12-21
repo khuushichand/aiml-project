@@ -44,9 +44,9 @@ export default function ApiKeysPage() {
       setError('');
       const data = await api.getUsers();
       setUsers(Array.isArray(data) ? data : []);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to load users:', err);
-      setError(err.message || 'Failed to load users');
+      setError(err instanceof Error && err.message ? err.message : 'Failed to load users');
       setUsers([]);
     } finally {
       setLoading(false);

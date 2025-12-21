@@ -59,7 +59,7 @@ export default function LoginPage() {
       } else {
         setServerError('Invalid username or password.');
       }
-    } catch (err) {
+    } catch {
       setServerError('Authentication failed. Please try again.');
     } finally {
       setIsLoading(false);
@@ -77,7 +77,7 @@ export default function LoginPage() {
       } else {
         setServerError('Invalid API key.');
       }
-    } catch (err) {
+    } catch {
       setServerError('Authentication failed. Please try again.');
     } finally {
       setIsLoading(false);

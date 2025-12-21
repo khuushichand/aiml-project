@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { AlertTriangle, RefreshCw, Home } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -14,6 +15,8 @@ interface ErrorPageProps {
 }
 
 export default function ErrorPage({ error, reset }: ErrorPageProps) {
+  const router = useRouter();
+
   useEffect(() => {
     // Log the error to console (could also send to error reporting service)
     console.error('Route error:', error);
@@ -52,7 +55,7 @@ export default function ErrorPage({ error, reset }: ErrorPageProps) {
             </Button>
             <Button
               variant="outline"
-              onClick={() => (window.location.href = '/')}
+              onClick={() => router.push('/')}
               className="flex-1"
             >
               <Home className="mr-2 h-4 w-4" />

@@ -1,24 +1,23 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import {
   Activity, RefreshCw, Bell, Eye, AlertTriangle, CheckCircle, Clock, Server,
-  Plus, Trash2, Check, X, Settings
+  Plus, Trash2, Check, X
 } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   AreaChart, Area
 } from 'recharts';
 
@@ -72,7 +71,7 @@ export default function MonitoringPage() {
   });
 
   // Metric history for chart (mock data)
-  const [metricsHistory, setMetricsHistory] = useState([
+  const metricsHistory = [
     { time: '00:00', cpu: 45, memory: 62, requests: 120 },
     { time: '04:00', cpu: 38, memory: 58, requests: 80 },
     { time: '08:00', cpu: 65, memory: 70, requests: 250 },
@@ -80,13 +79,9 @@ export default function MonitoringPage() {
     { time: '16:00', cpu: 72, memory: 72, requests: 320 },
     { time: '20:00', cpu: 55, memory: 65, requests: 180 },
     { time: 'Now', cpu: 48, memory: 60, requests: 150 },
-  ]);
+  ];
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
@@ -125,13 +120,17 @@ export default function MonitoringPage() {
       if (alertsData.status === 'fulfilled') {
         setAlerts(Array.isArray(alertsData.value) ? alertsData.value : []);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to load monitoring data:', err);
-      setError(err.message || 'Failed to load monitoring data');
+      setError(err instanceof Error && err.message ? err.message : 'Failed to load monitoring data');
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const handleCreateWatchlist = async () => {
     if (!newWatchlist.name || !newWatchlist.target) {
@@ -146,9 +145,9 @@ export default function MonitoringPage() {
       setShowCreateWatchlist(false);
       setNewWatchlist({ name: '', description: '', target: '', type: 'resource', threshold: 80 });
       loadData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to create watchlist:', err);
-      setError(err.message || 'Failed to create watchlist');
+      setError(err instanceof Error && err.message ? err.message : 'Failed to create watchlist');
     }
   };
 
@@ -167,9 +166,9 @@ export default function MonitoringPage() {
       await api.deleteWatchlist(watchlist.id);
       setSuccess('Watchlist deleted');
       loadData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to delete watchlist:', err);
-      setError(err.message || 'Failed to delete watchlist');
+      setError(err instanceof Error && err.message ? err.message : 'Failed to delete watchlist');
     }
   };
 
@@ -179,9 +178,9 @@ export default function MonitoringPage() {
       await api.acknowledgeAlert(alert.id);
       setSuccess('Alert acknowledged');
       loadData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to acknowledge alert:', err);
-      setError(err.message || 'Failed to acknowledge alert');
+      setError(err instanceof Error && err.message ? err.message : 'Failed to acknowledge alert');
     }
   };
 
@@ -200,9 +199,9 @@ export default function MonitoringPage() {
       await api.dismissAlert(alert.id);
       setSuccess('Alert dismissed');
       loadData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to dismiss alert:', err);
-      setError(err.message || 'Failed to dismiss alert');
+      setError(err instanceof Error && err.message ? err.message : 'Failed to dismiss alert');
     }
   };
 

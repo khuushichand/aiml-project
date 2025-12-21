@@ -10,9 +10,11 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import type { ButtonProps } from '@/components/ui/button';
 import { AlertTriangle, Trash2, RefreshCw, UserMinus, Key } from 'lucide-react';
 
 type ConfirmVariant = 'danger' | 'warning' | 'default';
+type ButtonVariant = NonNullable<ButtonProps['variant']>;
 
 interface ConfirmOptions {
   title: string;
@@ -85,7 +87,7 @@ export function ConfirmProvider({ children }: ConfirmProviderProps) {
     }
   };
 
-  const getButtonVariant = () => {
+  const getButtonVariant = (): ButtonVariant => {
     switch (options?.variant) {
       case 'danger':
         return 'destructive';
@@ -115,7 +117,7 @@ export function ConfirmProvider({ children }: ConfirmProviderProps) {
             <Button variant="outline" onClick={handleCancel}>
               {options?.cancelText || 'Cancel'}
             </Button>
-            <Button variant={getButtonVariant() as any} onClick={handleConfirm}>
+            <Button variant={getButtonVariant()} onClick={handleConfirm}>
               {options?.confirmText || 'Confirm'}
             </Button>
           </DialogFooter>
@@ -163,7 +165,7 @@ export function ConfirmDialog({
     }
   };
 
-  const getButtonVariant = () => {
+  const getButtonVariant = (): ButtonVariant => {
     switch (variant) {
       case 'danger':
         return 'destructive';
@@ -198,7 +200,7 @@ export function ConfirmDialog({
             {cancelText}
           </Button>
           <Button
-            variant={getButtonVariant() as any}
+            variant={getButtonVariant()}
             onClick={handleConfirm}
             disabled={loading}
           >

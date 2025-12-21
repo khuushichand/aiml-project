@@ -5,6 +5,7 @@ type Case = { name: string; user: AuthUser | null | undefined; expected: boolean
 
 const cases: Case[] = [
   { name: 'null user -> false', user: null, expected: false },
+  { name: 'undefined user -> false', user: undefined, expected: false },
   { name: 'is_admin true', user: { is_admin: true }, expected: true },
   { name: 'isAdmin true', user: { isAdmin: true }, expected: true },
   { name: 'role admin (string)', user: { role: 'admin' }, expected: true },

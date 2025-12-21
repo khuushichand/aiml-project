@@ -171,7 +171,8 @@ from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     OrganizationWatchlistsSettingsUpdate,
     OrganizationWatchlistsSettingsResponse,
 )
-from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, is_single_user_principal
+from tldw_Server_API.app.api.v1.API_Deps.org_deps import ROLE_HIERARCHY
 from tldw_Server_API.app.core.AuthNZ.repos.rbac_repo import AuthnzRbacRepo
 from tldw_Server_API.app.core.Usage.pricing_catalog import reset_pricing_catalog
 from tldw_Server_API.app.core.Chat.chat_service import (
@@ -290,6 +291,65 @@ async def _ensure_sqlite_authnz_ready_if_test_mode() -> None:
     except Exception as _e:
         # Best-effort only; do not interfere with request handling
         logger.debug(f"AuthNZ test ensure skipped/failed: {_e}")
+
+
+def _role_rank(role: Optional[str]) -> int:
+    try:
+        return ROLE_HIERARCHY.get(str(role).strip().lower(), 0)
+    except Exception:
+        return 0
+
+
+async def _enforce_admin_user_scope(
+    principal: AuthPrincipal,
+    target_user_id: int,
+    *,
+    require_hierarchy: bool,
+) -> None:
+    if is_single_user_principal(principal):
+        return
+
+    if principal.user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to manage users",
+        )
+
+    admin_memberships = await list_org_memberships_for_user(principal.user_id)
+    target_memberships = await list_org_memberships_for_user(target_user_id)
+
+    admin_org_roles = {
+        m.get("org_id"): str(m.get("role", "member")).strip().lower()
+        for m in admin_memberships
+        if m.get("org_id") is not None
+    }
+    target_org_roles = {
+        m.get("org_id"): str(m.get("role", "member")).strip().lower()
+        for m in target_memberships
+        if m.get("org_id") is not None
+    }
+
+    shared_orgs = set(admin_org_roles) & set(target_org_roles)
+    if not shared_orgs:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to manage users outside your organization",
+        )
+
+    if not require_hierarchy:
+        return
+
+    required_admin_rank = ROLE_HIERARCHY.get("admin", 3)
+    for org_id in shared_orgs:
+        admin_role = admin_org_roles.get(org_id)
+        target_role = target_org_roles.get(org_id)
+        if _role_rank(admin_role) >= required_admin_rank and _role_rank(admin_role) >= _role_rank(target_role):
+            return
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Not authorized to update this user",
+    )
 
 #######################################################################################################################
 #
@@ -1450,6 +1510,7 @@ async def set_notes_title_settings(payload: NotesTitleSettingsUpdate) -> Dict[st
 @router.get("/users/{user_id}")
 async def get_user_details(
     user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> Dict[str, Any]:
     """
     Get detailed information about a specific user.
@@ -1469,6 +1530,8 @@ async def get_user_details(
         if not user:
             raise UserNotFoundError(f"User {user_id}")
 
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
+
         # Remove sensitive fields; repository normalizes backend-specific types
         user_dict: Dict[str, Any] = dict(user)
         user_dict.pop("password_hash", None)
@@ -1480,6 +1543,8 @@ async def get_user_details(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"User {user_id} not found",
         ) from err
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to get user {user_id}: {e}")
         raise HTTPException(
@@ -1492,6 +1557,7 @@ async def get_user_details(
 async def update_user(
     user_id: int,
     request: UserUpdateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction)
 ) -> Dict[str, str]:
     """
@@ -1505,6 +1571,13 @@ async def update_user(
         Success message
     """
     try:
+        repo = await AuthnzUsersRepo.from_pool()
+        user = await repo.get_user_by_id(user_id)
+        if not user:
+            raise UserNotFoundError(f"User {user_id}")
+
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
+
         is_pg = await is_postgres_backend()
         # Build update query dynamically
         updates = []
@@ -1576,6 +1649,11 @@ async def update_user(
 
         return {"message": f"User {user_id} updated successfully"}
 
+    except UserNotFoundError as err:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User {user_id} not found",
+        ) from err
     except HTTPException:
         raise
     except Exception as e:

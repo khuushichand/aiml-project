@@ -160,6 +160,33 @@ class TestSafeStreamGenerator:
         # Check content was processed
         assert "".join(handler.full_response) == "Sync Stream"
 
+    async def test_sync_stream_offload_keeps_loop_responsive(self):
+        """Sync streams should not block the event loop when offloaded."""
+        handler = StreamingResponseHandler("conv_123", "gpt-4")
+
+        def blocking_stream():
+            yield "Start"
+            time.sleep(0.15)
+            yield "End"
+
+        tick_count = 0
+
+        async def ticker():
+            nonlocal tick_count
+            start = asyncio.get_running_loop().time()
+            while asyncio.get_running_loop().time() - start < 0.12:
+                tick_count += 1
+                await asyncio.sleep(0.01)
+
+        async def consume():
+            async for _ in handler.safe_stream_generator(blocking_stream()):
+                pass
+
+        await asyncio.gather(consume(), ticker())
+
+        assert tick_count > 1
+        assert "".join(handler.full_response) == "StartEnd"
+
     async def test_bytes_stream_processing(self):
         """Test processing of byte stream."""
         handler = StreamingResponseHandler("conv_123", "gpt-4")

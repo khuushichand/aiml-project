@@ -1,19 +1,17 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useConfirm } from '@/components/ui/confirm-dialog';
-import { ArrowLeft, Shield, Lock, Save, Users, Plus, Trash2, Check, X } from 'lucide-react';
+import { ArrowLeft, Shield, Lock, Save, Users, Trash2, Check, X } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { Role, Permission, User } from '@/types';
 import Link from 'next/link';
@@ -27,7 +25,6 @@ export default function RoleDetailPage() {
   const [role, setRole] = useState<Role | null>(null);
   const [allPermissions, setAllPermissions] = useState<Permission[]>([]);
   const [rolePermissions, setRolePermissions] = useState<Set<number>>(new Set());
-  const [originalPermissions, setOriginalPermissions] = useState<Set<number>>(new Set());
   const [roleUsers, setRoleUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -39,11 +36,7 @@ export default function RoleDetailPage() {
   const [editName, setEditName] = useState('');
   const [editDescription, setEditDescription] = useState('');
 
-  useEffect(() => {
-    loadData();
-  }, [roleId]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
@@ -69,19 +62,22 @@ export default function RoleDetailPage() {
         const perms = Array.isArray(rolePermsData.value) ? rolePermsData.value : [];
         const permIds = new Set(perms.map((p: Permission) => p.id));
         setRolePermissions(permIds);
-        setOriginalPermissions(new Set(permIds));
       }
 
       if (usersData.status === 'fulfilled') {
         setRoleUsers(Array.isArray(usersData.value) ? usersData.value : []);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to load role data:', err);
-      setError(err.message || 'Failed to load role data');
+      setError(err instanceof Error && err.message ? err.message : 'Failed to load role data');
     } finally {
       setLoading(false);
     }
-  };
+  }, [roleId]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const handleTogglePermission = async (permissionId: number) => {
     if (role?.is_system) {
@@ -111,9 +107,9 @@ export default function RoleDetailPage() {
         setSuccess('Permission assigned');
       }
       setTimeout(() => setSuccess(''), 2000);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to update permission:', err);
-      setError(err.message || 'Failed to update permission');
+      setError(err instanceof Error && err.message ? err.message : 'Failed to update permission');
     }
   };
 
@@ -133,9 +129,9 @@ export default function RoleDetailPage() {
       setSuccess('Role updated successfully');
       setEditMode(false);
       loadData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to update role:', err);
-      setError(err.message || 'Failed to update role');
+      setError(err instanceof Error && err.message ? err.message : 'Failed to update role');
     } finally {
       setSaving(false);
     }
@@ -146,9 +142,6 @@ export default function RoleDetailPage() {
     setEditDescription(role?.description || '');
     setEditMode(false);
   };
-
-  const hasChanges = rolePermissions.size !== originalPermissions.size ||
-    [...rolePermissions].some((id) => !originalPermissions.has(id));
 
   // Group permissions by category (based on naming convention like "read:users", "write:media")
   const groupedPermissions = allPermissions.reduce((acc, perm) => {
@@ -437,8 +430,8 @@ export default function RoleDetailPage() {
                           try {
                             await api.deleteRole(roleId);
                             router.push('/roles');
-                          } catch (err: any) {
-                            setError(err.message || 'Failed to delete role');
+                          } catch (err: unknown) {
+                            setError(err instanceof Error && err.message ? err.message : 'Failed to delete role');
                           }
                         }
                       }}

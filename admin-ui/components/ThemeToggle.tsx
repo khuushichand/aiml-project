@@ -4,8 +4,18 @@ import { useCallback, useEffect, useState } from 'react';
 import { Moon, Sun } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
+const getInitialTheme = (): 'light' | 'dark' => {
+  if (typeof window === 'undefined') return 'light';
+  const savedTheme = localStorage.getItem('theme');
+  if (savedTheme === 'light' || savedTheme === 'dark') {
+    return savedTheme;
+  }
+
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+};
+
 export function ThemeToggle() {
-  const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  const [theme, setTheme] = useState<'light' | 'dark'>(getInitialTheme);
 
   const syncTheme = useCallback((nextTheme: 'light' | 'dark') => {
     if (nextTheme === 'dark') {
@@ -17,18 +27,8 @@ export function ThemeToggle() {
   }, []);
 
   useEffect(() => {
-    // Check if user has a saved theme preference
-    const savedTheme = localStorage.getItem('theme') as 'light' | 'dark' | null;
-
-    // Check system preference
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-
-    const initialTheme = savedTheme || (prefersDark ? 'dark' : 'light');
-    setTheme(initialTheme);
-
-    // Apply theme to document
-    syncTheme(initialTheme);
-  }, [syncTheme]);
+    syncTheme(theme);
+  }, [syncTheme, theme]);
 
   const toggleTheme = () => {
     const newTheme = theme === 'light' ? 'dark' : 'light';

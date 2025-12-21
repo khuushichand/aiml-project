@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { api } from '@/lib/api-client';
-import { User, Permission } from '@/types';
+import { User } from '@/types';
 
 interface PermissionContextType {
   user: User | null;
@@ -235,7 +235,7 @@ export function withPermission<P extends object>(
         <div className="flex flex-col items-center justify-center min-h-screen">
           <h1 className="text-2xl font-bold mb-4">Access Denied</h1>
           <p className="text-muted-foreground">
-            You don't have permission to access this page.
+            You don&apos;t have permission to access this page.
           </p>
         </div>
       );

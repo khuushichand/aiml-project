@@ -60,8 +60,8 @@ const maskConfigValue = (
 
 export default function ConfigPage() {
   const [status, setStatus] = useState<SetupStatus | null>(null);
-  const [config, setConfig] = useState<Record<string, any>>({});
-  const [originalConfig, setOriginalConfig] = useState<Record<string, any>>({});
+  const [config, setConfig] = useState<Record<string, unknown>>({});
+  const [originalConfig, setOriginalConfig] = useState<Record<string, unknown>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -110,9 +110,9 @@ export default function ConfigPage() {
       await api.updateConfig(config);
       setSuccess('Configuration saved successfully. Some changes may require a server restart.');
       setOriginalConfig(config);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to save configuration:', err);
-      setError(err.message || 'Failed to save configuration');
+      setError(err instanceof Error && err.message ? err.message : 'Failed to save configuration');
     } finally {
       setSaving(false);
     }
@@ -124,7 +124,7 @@ export default function ConfigPage() {
     setSuccess('');
   };
 
-  const updateConfigValue = (key: string, value: any) => {
+  const updateConfigValue = (key: string, value: unknown) => {
     setConfig((prev) => ({
       ...prev,
       [key]: value,
@@ -191,6 +191,12 @@ export default function ConfigPage() {
 
   const renderField = (field: ConfigField) => {
     const value = config[field.key];
+    const inputValue =
+      typeof value === 'string' || typeof value === 'number'
+        ? value
+        : value == null
+          ? ''
+          : String(value);
 
     if (field.type === 'boolean') {
       return (
@@ -213,8 +219,15 @@ export default function ConfigPage() {
         <Input
           id={field.key}
           type={field.type === 'password' ? 'password' : field.type === 'number' ? 'number' : 'text'}
-          value={value ?? ''}
-          onChange={(e) => updateConfigValue(field.key, field.type === 'number' ? parseInt(e.target.value) || 0 : e.target.value)}
+          value={inputValue}
+          onChange={(e) => {
+            if (field.type === 'number') {
+              const parsed = parseInt(e.target.value, 10);
+              updateConfigValue(field.key, Number.isNaN(parsed) ? 0 : parsed);
+              return;
+            }
+            updateConfigValue(field.key, e.target.value);
+          }}
           placeholder={field.sensitive ? '********' : undefined}
         />
         {field.description && (

@@ -83,7 +83,7 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
               </div>
               <CardTitle>Something went wrong</CardTitle>
               <CardDescription>
-                An unexpected error occurred. Don't worry, your data is safe.
+                An unexpected error occurred. Don&apos;t worry, your data is safe.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -177,7 +177,7 @@ export function withErrorBoundary<P extends object>(
 export function PageErrorBoundary({ children }: { children: ReactNode }) {
   return (
     <ErrorBoundary
-      onError={(error, errorInfo) => {
+      onError={(error) => {
         // Could send to error reporting service here
         console.error('Page error:', error.message);
       }}

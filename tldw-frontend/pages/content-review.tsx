@@ -1,3 +1,4 @@
+import type { AssetKind, Draft, DraftStatus } from '@/types/content-review';
 import { useEffect, useMemo, useState } from 'react';
 import { Layout } from '@/components/layout/Layout';
 import { Button } from '@/components/ui/Button';
@@ -5,28 +6,9 @@ import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { useToast } from '@/components/ui/ToastProvider';
 
-type DraftStatus = 'pending' | 'in_progress' | 'reviewed';
-type AssetStatus = 'present' | 'missing';
-type AssetKind = 'url' | 'file' | 'stream';
-
-type DraftSource = {
-  kind: AssetKind;
-  value?: string;
-  filename?: string;
-};
-
-type Draft = {
-  id: string;
-  title: string;
-  status: DraftStatus;
-  mediaType: string;
-  content: string;
-  assetStatus: AssetStatus;
-  source?: DraftSource;
-  assetNote?: string;
-};
-
-const MAX_LOCAL_BYTES = 100 * 1024 * 1024;
+const LARGE_FILE_WARNING_BYTES = 100 * 1024 * 1024;
+const formatStatus = (status: DraftStatus) => status.replace('_', ' ');
+type ReattachTab = Extract<AssetKind, 'file' | 'url'>;
 
 const seedDrafts: Draft[] = [
   {
@@ -56,7 +38,7 @@ export default function ContentReviewPage() {
   const [dirty, setDirty] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
   const [reattachOpen, setReattachOpen] = useState(false);
-  const [reattachTab, setReattachTab] = useState<'file' | 'url'>('file');
+  const [reattachTab, setReattachTab] = useState<ReattachTab>('file');
   const [reattachUrl, setReattachUrl] = useState('');
   const [reattachFile, setReattachFile] = useState<File | null>(null);
   const [reattachError, setReattachError] = useState<string | null>(null);
@@ -102,6 +84,11 @@ export default function ContentReviewPage() {
     setReattachOpen(true);
   };
 
+  const closeReattachModal = () => {
+    setReattachOpen(false);
+    setReattachError(null);
+  };
+
   const submitReattach = () => {
     if (!selectedDraft) return;
     if (!isOnline) {
@@ -114,17 +101,17 @@ export default function ContentReviewPage() {
         setReattachError('Select a file to attach.');
         return;
       }
-      const oversized = reattachFile.size > MAX_LOCAL_BYTES;
+      const oversized = reattachFile.size > LARGE_FILE_WARNING_BYTES;
       updateDraft(selectedDraft.id, {
         assetStatus: 'present',
         source: { kind: 'file', filename: reattachFile.name },
         assetNote: oversized
-          ? 'File exceeds local storage limit. It will upload on commit.'
-          : 'File stored locally.',
+          ? 'Large file selected. It will upload on commit.'
+          : 'File selected. It will upload on commit.',
       });
       show({
-        title: oversized ? 'Source attached for commit' : 'Source attached',
-        description: oversized ? 'Local storage skipped for large file.' : undefined,
+        title: oversized ? 'Large file selected' : 'Source attached',
+        description: 'Upload will happen on commit.',
         variant: oversized ? 'warning' : 'success',
       });
     } else {
@@ -146,8 +133,7 @@ export default function ContentReviewPage() {
       show({ title: 'Source URL attached', variant: 'success' });
     }
 
-    setReattachOpen(false);
-    setReattachError(null);
+    closeReattachModal();
   };
 
   const commitDisabled = !selectedDraft || selectedDraft.assetStatus === 'missing' || !isOnline;
@@ -155,40 +141,7 @@ export default function ContentReviewPage() {
   return (
     <Layout>
       <div className="flex min-h-[calc(100vh-140px)] flex-col gap-6 lg:flex-row">
-        <aside className="w-full lg:w-80">
-          <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Batch</h2>
-              <Badge>{drafts.length} items</Badge>
-            </div>
-            <div className="space-y-2">
-              {drafts.map((draft) => (
-                <button
-                  key={draft.id}
-                  type="button"
-                  onClick={() => setSelectedId(draft.id)}
-                  className={`w-full rounded-md border px-3 py-2 text-left transition ${
-                    draft.id === selectedId
-                      ? 'border-blue-500 bg-blue-50'
-                      : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium">{draft.title}</span>
-                    {draft.assetStatus === 'missing' && (
-                      <Badge variant="danger">Source missing</Badge>
-                    )}
-                  </div>
-                  <div className="mt-1 flex items-center gap-2 text-xs text-gray-500">
-                    <span>{draft.mediaType}</span>
-                    <span>•</span>
-                    <span>{draft.status.replace('_', ' ')}</span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        </aside>
+        <DraftListSidebar drafts={drafts} selectedId={selectedId} onSelect={setSelectedId} />
 
         <section className="flex-1">
           {!selectedDraft ? (
@@ -223,7 +176,7 @@ export default function ContentReviewPage() {
                   <div>
                     <h2 className="text-xl font-semibold">{selectedDraft.title}</h2>
                     <p className="text-sm text-gray-500">
-                      {selectedDraft.mediaType} • {selectedDraft.status.replace('_', ' ')}
+                      {selectedDraft.mediaType} • {formatStatus(selectedDraft.status)}
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
@@ -266,12 +219,16 @@ export default function ContentReviewPage() {
                   {commitDisabled ? 'Commit disabled until source is attached.' : 'Ready to commit.'}
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button variant="danger" disabled title="Not yet implemented">
-                    Discard
-                  </Button>
-                  <Button variant="secondary" disabled title="Not yet implemented">
-                    Mark Reviewed
-                  </Button>
+                  <span title="Not yet implemented" className="inline-flex">
+                    <Button variant="danger" disabled>
+                      Discard
+                    </Button>
+                  </span>
+                  <span title="Not yet implemented" className="inline-flex">
+                    <Button variant="secondary" disabled>
+                      Mark Reviewed
+                    </Button>
+                  </span>
                   <Button variant="primary" disabled={commitDisabled}>
                     Commit
                   </Button>
@@ -282,84 +239,156 @@ export default function ContentReviewPage() {
         </section>
       </div>
 
-      {reattachOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-          <div className="w-full max-w-lg rounded-lg bg-white p-6 shadow-xl">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold">Reattach Source</h3>
-              <Button
-                variant="ghost"
-                onClick={() => {
-                  setReattachOpen(false);
-                  setReattachError(null);
-                }}
-              >
-                Close
-              </Button>
-            </div>
-            <div className="mt-4 flex gap-2">
-              <Button
-                variant={reattachTab === 'file' ? 'primary' : 'secondary'}
-                onClick={() => setReattachTab('file')}
-              >
-                Upload File
-              </Button>
-              <Button
-                variant={reattachTab === 'url' ? 'primary' : 'secondary'}
-                onClick={() => setReattachTab('url')}
-              >
-                Provide URL
-              </Button>
-            </div>
-
-            {reattachTab === 'file' ? (
-              <div className="mt-4 space-y-3">
-                <Input
-                  type="file"
-                  label="Select file"
-                  onChange={(e) => setReattachFile(e.target.files?.[0] || null)}
-                />
-                <p className="text-xs text-gray-500">
-                  Max local storage: 100 MB. Larger files will upload during commit.
-                </p>
-              </div>
-            ) : (
-              <div className="mt-4 space-y-3">
-                <Input
-                  label="Source URL"
-                  placeholder="https://..."
-                  value={reattachUrl}
-                  onChange={(e) => setReattachUrl(e.target.value)}
-                />
-                <p className="text-xs text-gray-500">
-                  Some sources may require cookies or authentication.
-                </p>
-              </div>
-            )}
-
-            {reattachError && (
-              <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                {reattachError}
-              </div>
-            )}
-
-            <div className="mt-6 flex justify-end gap-2">
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setReattachOpen(false);
-                  setReattachError(null);
-                }}
-              >
-                Cancel
-              </Button>
-              <Button variant="primary" onClick={submitReattach}>
-                Attach Source
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ReattachSourceModal
+        isOpen={reattachOpen}
+        tab={reattachTab}
+        url={reattachUrl}
+        error={reattachError}
+        onTabChange={setReattachTab}
+        onUrlChange={setReattachUrl}
+        onFileChange={setReattachFile}
+        onClose={closeReattachModal}
+        onSubmit={submitReattach}
+      />
     </Layout>
+  );
+}
+
+type DraftListSidebarProps = {
+  drafts: Draft[];
+  selectedId: string;
+  onSelect: (id: string) => void;
+};
+
+function DraftListSidebar({ drafts, selectedId, onSelect }: DraftListSidebarProps) {
+  return (
+    <aside className="w-full lg:w-80">
+      <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Batch</h2>
+          <Badge>{drafts.length} items</Badge>
+        </div>
+        <div className="space-y-2">
+          {drafts.map((draft) => (
+            <button
+              key={draft.id}
+              type="button"
+              onClick={() => onSelect(draft.id)}
+              className={`w-full rounded-md border px-3 py-2 text-left transition ${
+                draft.id === selectedId
+                  ? 'border-blue-500 bg-blue-50'
+                  : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-medium">{draft.title}</span>
+                {draft.assetStatus === 'missing' && (
+                  <Badge variant="danger">Source missing</Badge>
+                )}
+              </div>
+              <div className="mt-1 flex items-center gap-2 text-xs text-gray-500">
+                <span>{draft.mediaType}</span>
+                <span>•</span>
+                <span>{formatStatus(draft.status)}</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+type ReattachSourceModalProps = {
+  isOpen: boolean;
+  tab: ReattachTab;
+  url: string;
+  error: string | null;
+  onTabChange: (tab: ReattachTab) => void;
+  onUrlChange: (value: string) => void;
+  onFileChange: (file: File | null) => void;
+  onClose: () => void;
+  onSubmit: () => void;
+};
+
+function ReattachSourceModal({
+  isOpen,
+  tab,
+  url,
+  error,
+  onTabChange,
+  onUrlChange,
+  onFileChange,
+  onClose,
+  onSubmit,
+}: ReattachSourceModalProps) {
+  if (!isOpen) return null;
+  const largeFileMb = Math.round(LARGE_FILE_WARNING_BYTES / (1024 * 1024));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div className="w-full max-w-lg rounded-lg bg-white p-6 shadow-xl">
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-semibold">Reattach Source</h3>
+          <Button variant="ghost" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+        <div className="mt-4 flex gap-2">
+          <Button
+            variant={tab === 'file' ? 'primary' : 'secondary'}
+            onClick={() => onTabChange('file')}
+          >
+            Upload File
+          </Button>
+          <Button
+            variant={tab === 'url' ? 'primary' : 'secondary'}
+            onClick={() => onTabChange('url')}
+          >
+            Provide URL
+          </Button>
+        </div>
+
+        {tab === 'file' ? (
+          <div className="mt-4 space-y-3">
+            <Input
+              type="file"
+              label="Select file"
+              onChange={(e) => onFileChange(e.target.files?.[0] || null)}
+            />
+            <p className="text-xs text-gray-500">
+              Files upload during commit. Large files (over {largeFileMb} MB) may take longer.
+            </p>
+          </div>
+        ) : (
+          <div className="mt-4 space-y-3">
+            <Input
+              label="Source URL"
+              placeholder="https://..."
+              value={url}
+              onChange={(e) => onUrlChange(e.target.value)}
+            />
+            <p className="text-xs text-gray-500">
+              Some sources may require cookies or authentication.
+            </p>
+          </div>
+        )}
+
+        {error && (
+          <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {error}
+          </div>
+        )}
+
+        <div className="mt-6 flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={onSubmit}>
+            Attach Source
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }

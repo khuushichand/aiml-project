@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { ArrowLeft, Users, UserPlus, Trash2, Shield, Building2 } from 'lucide-react';
 import { api } from '@/lib/api-client';
-import { Team, TeamMember, Organization } from '@/types';
+import { Team, TeamMember } from '@/types';
 import Link from 'next/link';
 
 export default function TeamDetailPage() {
@@ -25,7 +25,6 @@ export default function TeamDetailPage() {
   const teamId = params.id as string;
 
   const [team, setTeam] = useState<Team | null>(null);
-  const [org, setOrg] = useState<Organization | null>(null);
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -36,32 +35,38 @@ export default function TeamDetailPage() {
   const [newMemberUserId, setNewMemberUserId] = useState('');
   const [newMemberRole, setNewMemberRole] = useState('member');
 
-  useEffect(() => {
-    loadData();
-  }, [teamId]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
+      setTeam(null);
 
       // First load team members
       const membersData = await api.getTeamMembers(teamId);
-      setMembers(Array.isArray(membersData) ? membersData : []);
-
-      // Try to get team info from the members response or from a teams list
-      // Since we don't have a direct getTeam endpoint, we'll construct basic info
-      // In a real implementation, you'd have a dedicated endpoint
-      if (membersData && membersData.team) {
-        setTeam(membersData.team);
+      if (!Array.isArray(membersData)) {
+        throw new Error('Unexpected team members response');
       }
-    } catch (err: any) {
+      setMembers(membersData);
+    } catch (err: unknown) {
       console.error('Failed to load team data:', err);
-      setError(err.message || 'Failed to load team data');
+      setError(err instanceof Error ? err.message : 'Failed to load team data');
     } finally {
       setLoading(false);
     }
-  };
+  }, [teamId]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  useEffect(() => {
+    if (!success) {
+      return;
+    }
+
+    const timer = setTimeout(() => setSuccess(''), 3000);
+    return () => clearTimeout(timer);
+  }, [success]);
 
   const handleAddMember = async () => {
     if (!newMemberUserId) {
@@ -85,9 +90,10 @@ export default function TeamDetailPage() {
       setNewMemberUserId('');
       setNewMemberRole('member');
       loadData();
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err ?? 'Failed to add member');
       console.error('Failed to add member:', err);
-      setError(err.message || 'Failed to add member');
+      setError(msg);
     }
   };
 
@@ -103,12 +109,19 @@ export default function TeamDetailPage() {
 
     try {
       setError('');
-      await api.removeTeamMember(teamId, userId.toString());
+      await api.removeTeamMember(teamId, userId);
       setSuccess('Member removed successfully');
       loadData();
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const msg =
+        typeof err === 'object' &&
+        err !== null &&
+        'message' in err &&
+        typeof (err as { message?: unknown }).message === 'string'
+          ? (err as { message: string }).message
+          : 'Failed to remove member';
       console.error('Failed to remove member:', err);
-      setError(err.message || 'Failed to remove member');
+      setError(msg);
     }
   };
 
@@ -207,8 +220,8 @@ export default function TeamDetailPage() {
             )}
 
             {success && (
-              <Alert className="mb-6 bg-green-50 border-green-200">
-                <AlertDescription className="text-green-800">{success}</AlertDescription>
+              <Alert variant="success" className="mb-6">
+                <AlertDescription>{success}</AlertDescription>
               </Alert>
             )}
 

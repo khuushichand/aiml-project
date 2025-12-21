@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
@@ -12,7 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { useConfirm } from '@/components/ui/confirm-dialog';
-import { ArrowLeft, Plus, RotateCw, Trash2, Copy, Eye, EyeOff, Clock } from 'lucide-react';
+import { ArrowLeft, Plus, RotateCw, Trash2, Copy } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { ApiKey, User } from '@/types';
 
@@ -28,7 +28,6 @@ export default function UserApiKeysPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [showCreateForm, setShowCreateForm] = useState(false);
-  const [revealedKeys, setRevealedKeys] = useState<Set<string>>(new Set());
   const [newKeyValue, setNewKeyValue] = useState<string | null>(null);
 
   const [formData, setFormData] = useState({
@@ -37,11 +36,7 @@ export default function UserApiKeysPage() {
     expires_days: 90,
   });
 
-  useEffect(() => {
-    loadData();
-  }, [userId]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
@@ -51,13 +46,17 @@ export default function UserApiKeysPage() {
       ]);
       setUser(userData);
       setApiKeys(Array.isArray(keysData) ? keysData : []);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to load data:', err);
-      setError(err.message || 'Failed to load data');
+      setError(err instanceof Error && err.message ? err.message : 'Failed to load data');
     } finally {
       setLoading(false);
     }
-  };
+  }, [userId]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -79,9 +78,9 @@ export default function UserApiKeysPage() {
       setShowCreateForm(false);
       setFormData({ name: '', scope: 'read', expires_days: 90 });
       loadData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to create API key:', err);
-      setError(err.message || 'Failed to create API key');
+      setError(err instanceof Error && err.message ? err.message : 'Failed to create API key');
     }
   };
 
@@ -104,9 +103,9 @@ export default function UserApiKeysPage() {
       }
       setSuccess('API key rotated successfully');
       loadData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to rotate API key:', err);
-      setError(err.message || 'Failed to rotate API key');
+      setError(err instanceof Error && err.message ? err.message : 'Failed to rotate API key');
     }
   };
 
@@ -126,9 +125,9 @@ export default function UserApiKeysPage() {
       await api.revokeApiKey(userId, keyId);
       setSuccess('API key revoked successfully');
       loadData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to revoke API key:', err);
-      setError(err.message || 'Failed to revoke API key');
+      setError(err instanceof Error && err.message ? err.message : 'Failed to revoke API key');
     }
   };
 
@@ -137,21 +136,10 @@ export default function UserApiKeysPage() {
       await navigator.clipboard.writeText(text);
       setSuccess('Copied to clipboard!');
       setTimeout(() => setSuccess(''), 2000);
-    } catch (err) {
+    } catch (err: unknown) {
+      console.error('Failed to copy to clipboard:', err);
       setError('Failed to copy to clipboard');
     }
-  };
-
-  const toggleKeyVisibility = (keyId: string) => {
-    setRevealedKeys((prev) => {
-      const newSet = new Set(prev);
-      if (newSet.has(keyId)) {
-        newSet.delete(keyId);
-      } else {
-        newSet.add(keyId);
-      }
-      return newSet;
-    });
   };
 
   const formatDate = (dateStr?: string) => {
@@ -227,7 +215,7 @@ export default function UserApiKeysPage() {
                 <AlertDescription>
                   <div className="space-y-2">
                     <p className="font-semibold text-yellow-800">
-                      Save this API key now - it won't be shown again!
+                      Save this API key now - it won&apos;t be shown again!
                     </p>
                     <div className="flex items-center gap-2">
                       <code className="flex-1 bg-yellow-100 p-2 rounded font-mono text-sm break-all">

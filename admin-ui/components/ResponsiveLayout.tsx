@@ -217,8 +217,16 @@ export function ResponsiveLayout({ children }: ResponsiveLayoutProps) {
 
   // Close mobile menu on route change
   useEffect(() => {
-    setIsOpen(false);
-  }, [pathname]);
+    if (!isOpen) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setIsOpen(false);
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [isOpen, pathname]);
 
   // Prevent body scroll when mobile menu is open
   useEffect(() => {

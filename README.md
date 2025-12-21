@@ -177,7 +177,7 @@ See the full Feature Status Matrix in `Docs/Published/Overview/Feature_Status.md
 │   │   ├── core/                 # Core logic (AuthNZ, RAG, LLM, DB, TTS, MCP, etc.)
 │   │   ├── services/             # Background services
 │   │   └── main.py               # FastAPI entry point
-│   ├── WebUI/                    # Legacy integrated WebUI served at /webui
+│   ├── WebUI/                    # Legacy integrated WebUI served at /webui (deprecated)
 │   ├── Config_Files/             # config.txt, example YAMLs, migration helpers
 │   ├── Databases/                # Default DBs (runtime data; some are gitignored)
 │   ├── tests/                    # Pytest suite
@@ -185,6 +185,7 @@ See the full Feature Status Matrix in `Docs/Published/Overview/Feature_Status.md
 ├── tldw-frontend/                # Next.js WebUI (current client)
 ├── Docs/                         # Documentation (API, Development, RAG, AuthNZ, TTS, etc.)
 ├── Helper_Scripts/               # Utilities (installers, prompt tools, doc generators)
+├── mock_openai_server/           # Mock OpenAI-compatible API server for tests/dev
 ├── Dockerfiles/                  # Docker images and compose files
 ├── Databases/                    # DBs (AuthNZ defaults here; content DBs per-user under user_databases/)
 ├── models/                       # Optional model assets (if used)
@@ -195,8 +196,9 @@ See the full Feature Status Matrix in `Docs/Published/Overview/Feature_Status.md
 ```
 
 Notes
-- The FastAPI app serves a 'simple' UI at `/webui`; there is also a WIP Next.js client.
+- The FastAPI app serves a legacy UI at `/webui` (deprecated); the Next.js UI in `tldw-frontend/` is the current client.
 - SQLite is default for local dev; PostgreSQL supported for AuthNZ and content DBs.
+- `mock_openai_server/` is handy for local OpenAI-compatible API testing.
 
 
 ## Architecture Diagram
@@ -204,16 +206,17 @@ Notes
 ```mermaid
 flowchart LR
   subgraph CLIENTS [Clients]
-    WebUI[Next.js WebUI]:::client
-    LegacyUI[Legacy WebUI (/webui)]:::client
+    WebUI[Next.js WebUI (current)]:::client
+    LegacyUI[Legacy WebUI (/webui, deprecated)]:::client
+    MCPClients[MCP Clients (IDE/tools)]:::client
     APIClients[CLI/HTTP Clients]:::client
   end
 
   subgraph API_STACK [FastAPI App]
     API[FastAPI App /api/v1]:::api
-    Endpoints[Endpoints]:::module
-    Dependencies[API Deps (Auth, DB, rate limits)]:::module
-    Services[Background Services]:::module
+    Endpoints[Endpoints + Schemas]:::module
+    Dependencies[API Deps (Auth, DB, rate limits, resource governor)]:::module
+    Services[Background Services/Jobs]:::module
   end
 
   subgraph CORE [Core Modules]
@@ -222,27 +225,36 @@ flowchart LR
     LLM[LLM Calls]:::core
     Embeddings[Embeddings]:::core
     Media[Ingestion & Media Processing]:::core
-    TTS[Audio STT/TTS]:::core
-    Chatbooks[Chatbooks]:::core
+    Chunking[Chunking]:::core
+    Chat[Chat/Characters]:::core
+    Audio[Audio STT/TTS]:::core
+    Evaluations[Evaluations]:::core
+    PromptStudio[Prompt Studio]:::core
+    Knowledge[Notes/Prompts/Chatbooks]:::core
     MCP[MCP Unified]:::core
+    Research[Research/Web Search]:::core
   end
 
   subgraph STORAGE [Storage]
     UsersDB[(AuthNZ DB: SQLite/PostgreSQL)]:::db
-    ContentDB[(Content DBs: SQLite/PostgreSQL)]:::db
-    VectorDB[(ChromaDB / pgvector)]:::db
+    ContentDB[(Content DBs: Media/Notes/Chats)]:::db
+    EvalsDB[(Evaluations DB: SQLite/PostgreSQL)]:::db
+    VectorDB[(Vector DB: ChromaDB/pgvector)]:::db
   end
 
   subgraph EXTERNAL [External Providers]
-    OpenAI[OpenAI/Anthropic/etc.]:::ext
-    LocalLLM[Local Providers (vLLM, Ollama, llama.cpp, ...)]:::ext
-    OCR[OCR (Tesseract, dots, POINTS)]:::ext
+    LLMCloud[LLM APIs (OpenAI, Anthropic, etc.)]:::ext
+    LLMOnPrem[Local LLMs (vLLM, Ollama, llama.cpp, ...)]:::ext
+    AudioProv[STT/TTS Providers]:::ext
+    OCRVLM[OCR/VLM (tesseract, dots, points)]:::ext
     MediaDL[yt-dlp / ffmpeg]:::ext
+    WebSearch[Web Search/Scrapers]:::ext
   end
 
   %% Client to API
   WebUI -->|HTTP| API
   LegacyUI -->|HTTP| API
+  MCPClients -->|HTTP/WebSocket| API
   APIClients -->|HTTP/WebSocket| API
 
   %% Inside API stack
@@ -256,23 +268,32 @@ flowchart LR
   Endpoints --> LLM
   Endpoints --> Embeddings
   Endpoints --> Media
-  Endpoints --> TTS
-  Endpoints --> Chatbooks
+  Endpoints --> Chunking
+  Endpoints --> Chat
+  Endpoints --> Audio
+  Endpoints --> Evaluations
+  Endpoints --> PromptStudio
+  Endpoints --> Knowledge
   Endpoints --> MCP
+  Endpoints --> Research
 
   %% Core to storage
   AuthNZ --> UsersDB
   Media --> ContentDB
-  Chatbooks --> ContentDB
+  Knowledge --> ContentDB
+  Chat --> ContentDB
+  Evaluations --> EvalsDB
   RAG --> ContentDB
   RAG --> VectorDB
+  Embeddings --> VectorDB
 
   %% Core to external services
-  LLM --> OpenAI
-  LLM --> LocalLLM
+  LLM --> LLMCloud
+  LLM --> LLMOnPrem
+  Audio --> AudioProv
   Media --> MediaDL
-  TTS --> OpenAI
-  Media --> OCR
+  Media --> OCRVLM
+  Research --> WebSearch
 
   classDef client fill:#e8f3ff,stroke:#5b8def,color:#1f3b6e;
   classDef api fill:#fff4e6,stroke:#ff9800,color:#5d3d00;

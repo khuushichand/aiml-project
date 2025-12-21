@@ -17,7 +17,7 @@ import {
   ArrowLeft, Building2, Users, UserPlus, Mail, Trash2, Key, Shield, Copy, Plus, Eye, EyeOff
 } from 'lucide-react';
 import { api } from '@/lib/api-client';
-import { Organization, OrgMember, Team, User, ProviderSecret } from '@/types';
+import { Organization, OrgMember, Team, ProviderSecret } from '@/types';
 import Link from 'next/link';
 
 export default function OrganizationDetailPage() {
@@ -49,6 +49,7 @@ export default function OrganizationDetailPage() {
   const [showAddByok, setShowAddByok] = useState(false);
   const [byokProvider, setByokProvider] = useState('');
   const [byokApiKey, setByokApiKey] = useState('');
+  const [showByokApiKey, setShowByokApiKey] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -83,7 +84,11 @@ export default function OrganizationDetailPage() {
   }, [orgId]);
 
   useEffect(() => {
-    loadData();
+    const timeoutId = window.setTimeout(() => {
+      void loadData();
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
   }, [loadData]);
 
   const handleAddMember = async () => {
@@ -103,9 +108,9 @@ export default function OrganizationDetailPage() {
       setNewMemberUserId('');
       setNewMemberRole('member');
       loadData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to add member:', err);
-      setError(err.message || 'Failed to add member');
+      setError(err instanceof Error && err.message ? err.message : 'Failed to add member');
     }
   };
 
@@ -124,9 +129,9 @@ export default function OrganizationDetailPage() {
       await api.removeOrgMember(orgId, userId.toString());
       setSuccess('Member removed successfully');
       loadData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to remove member:', err);
-      setError(err.message || 'Failed to remove member');
+      setError(err instanceof Error && err.message ? err.message : 'Failed to remove member');
     }
   };
 
@@ -136,9 +141,9 @@ export default function OrganizationDetailPage() {
       await api.updateOrgMemberRole(orgId, userId.toString(), { role: newRole });
       setSuccess('Member role updated');
       loadData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to update member role:', err);
-      setError(err.message || 'Failed to update member role');
+      setError(err instanceof Error && err.message ? err.message : 'Failed to update member role');
     }
   };
 
@@ -156,9 +161,9 @@ export default function OrganizationDetailPage() {
       });
       setInviteLink(result.invite_url || result.link || 'Invite created - check email');
       setSuccess('Invite created successfully');
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to create invite:', err);
-      setError(err.message || 'Failed to create invite');
+      setError(err instanceof Error && err.message ? err.message : 'Failed to create invite');
     }
   };
 
@@ -178,10 +183,11 @@ export default function OrganizationDetailPage() {
       setShowAddByok(false);
       setByokProvider('');
       setByokApiKey('');
+      setShowByokApiKey(false);
       loadData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to add BYOK key:', err);
-      setError(err.message || 'Failed to add provider key');
+      setError(err instanceof Error && err.message ? err.message : 'Failed to add provider key');
     }
   };
 
@@ -200,9 +206,9 @@ export default function OrganizationDetailPage() {
       await api.deleteOrgByokKey(orgId, provider);
       setSuccess('Provider key removed');
       loadData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to delete BYOK key:', err);
-      setError(err.message || 'Failed to delete provider key');
+      setError(err instanceof Error && err.message ? err.message : 'Failed to delete provider key');
     }
   };
 
@@ -211,7 +217,8 @@ export default function OrganizationDetailPage() {
       await navigator.clipboard.writeText(text);
       setSuccess('Copied to clipboard!');
       setTimeout(() => setSuccess(''), 2000);
-    } catch (err) {
+    } catch (err: unknown) {
+      console.error('Failed to copy to clipboard:', err);
       setError('Failed to copy to clipboard');
     }
   };
@@ -524,7 +531,13 @@ export default function OrganizationDetailPage() {
                       Organization-level API keys for LLM providers. These keys are shared by all members.
                     </CardDescription>
                   </div>
-                  <Dialog open={showAddByok} onOpenChange={setShowAddByok}>
+                  <Dialog
+                    open={showAddByok}
+                    onOpenChange={(nextOpen) => {
+                      setShowAddByok(nextOpen);
+                      if (!nextOpen) setShowByokApiKey(false);
+                    }}
+                  >
                     <DialogTrigger asChild>
                       <Button size="sm">
                         <Plus className="mr-2 h-4 w-4" />
@@ -560,13 +573,27 @@ export default function OrganizationDetailPage() {
                         </div>
                         <div className="space-y-2">
                           <Label htmlFor="byokApiKey">API Key</Label>
-                          <Input
-                            id="byokApiKey"
-                            type="password"
-                            placeholder="sk-..."
-                            value={byokApiKey}
-                            onChange={(e) => setByokApiKey(e.target.value)}
-                          />
+                          <div className="relative">
+                            <Input
+                              id="byokApiKey"
+                              type={showByokApiKey ? 'text' : 'password'}
+                              placeholder="sk-..."
+                              value={byokApiKey}
+                              onChange={(e) => setByokApiKey(e.target.value)}
+                              className="pr-10"
+                            />
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => setShowByokApiKey((prev) => !prev)}
+                              className="absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2"
+                              title={showByokApiKey ? 'Hide API key' : 'Show API key'}
+                              aria-label={showByokApiKey ? 'Hide API key' : 'Show API key'}
+                            >
+                              {showByokApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                            </Button>
+                          </div>
                           <p className="text-xs text-muted-foreground">
                             This key will be encrypted and stored securely.
                           </p>

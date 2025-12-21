@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Layout } from '@/components/layout/Layout';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -19,6 +19,7 @@ import { useToast } from '@/components/ui/ToastProvider';
 import HotkeysOverlay from '@/components/ui/HotkeysOverlay';
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+type BadgeVariant = 'neutral' | 'success' | 'warning' | 'danger' | 'info' | 'primary';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function tryParseJSON(text: string): { ok: boolean; value?: any; error?: string } {
@@ -178,7 +179,12 @@ export default function ConfigPage() {
   const curl = useMemo(() => buildCurl(method, finalUrl, computedHeaders, ['POST','PUT','PATCH','DELETE'].includes(method) ? tryParseJSON(bodyText).value : undefined), [method, finalUrl, computedHeaders, bodyText]);
 
   // Helpers
-  const copy = async (text: string, label?: string) => { try { await navigator.clipboard.writeText(text); show({ title: label || 'Copied', variant: 'success' }); } catch {} };
+  const copy = useCallback(async (text: string, label?: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      show({ title: label || 'Copied', variant: 'success' });
+    } catch {}
+  }, [show]);
 
   // Clipboard hotkeys: Cmd/Ctrl+Shift+C copies cURL, Cmd/Ctrl+Shift+J copies response JSON
   useEffect(() => {
@@ -195,8 +201,7 @@ export default function ConfigPage() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [curl, respBody]); // copy is stable from clipboard hook
+  }, [copy, curl, respBody]);
 
   return (
     <Layout>
@@ -342,7 +347,7 @@ export default function ConfigPage() {
   );
 }
 
-function methodBadgeVariant(m?: string) {
+function methodBadgeVariant(m?: string): BadgeVariant {
   switch ((m || '').toUpperCase()) {
     case 'GET': return 'info';
     case 'POST': return 'primary';
@@ -353,7 +358,7 @@ function methodBadgeVariant(m?: string) {
   }
 }
 
-function statusBadgeVariant(status?: number, ok?: boolean) {
+function statusBadgeVariant(status?: number, ok?: boolean): BadgeVariant {
   if (!status && ok === false) return 'danger';
   if (!status) return 'neutral';
   if (status >= 200 && status < 300) return 'success';
@@ -427,10 +432,8 @@ function RequestHistorySection({ history, replay, reload }: { history: RequestHi
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-2">
                   <span className="font-mono text-xs text-gray-500" title={new Date(h.timestamp).toLocaleString()}>{formatRelativeTime(h.timestamp)}</span>
-                  {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-                  <Badge variant={methodBadgeVariant(h.method) as any}>{h.method}</Badge>
-                  {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-                  <Badge variant={statusBadgeVariant(h.status, h.ok) as any}>{h.status ?? (h.ok === false ? 'Error' : '-')}</Badge>
+                  <Badge variant={methodBadgeVariant(h.method)}>{h.method}</Badge>
+                  <Badge variant={statusBadgeVariant(h.status, h.ok)}>{h.status ?? (h.ok === false ? 'Error' : '-')}</Badge>
                   <span className="text-xs text-gray-600">{h.duration_ms != null ? `${h.duration_ms} ms` : ''}</span>
                 </div>
                 <div className="space-x-2">
@@ -497,7 +500,7 @@ function QuickFormsSection() {
       }
     } catch {
       // keep computed body; surface a non-blocking error note
-      setErrors([...(errors || []), 'Advanced JSON invalid; using form values']);
+      setErrors((prev) => [...(prev || []), 'Advanced JSON invalid; using form values']);
     }
     const errs: string[] = [];
     if (validateOnSend && typeof preset.validate === 'function') {
@@ -547,15 +550,16 @@ function QuickFormsSection() {
 
   const copy = async (text: string, label?: string) => { try { await navigator.clipboard.writeText(text); show({ title: label || 'Copied', variant: 'success' }); } catch {} };
 
-  const curl = useMemo(
-    () => buildCurl(
+  const curl = useMemo(() => {
+    const path = preset?.path || '';
+    const url = path ? `${getApiBaseUrl()}${path.startsWith('/') ? '' : '/'}${path}` : getApiBaseUrl();
+    return buildCurl(
       preset?.method || 'GET',
-      `${getApiBaseUrl()}${preset?.path || ''}`,
-      {},
+      url,
+      buildAuthHeaders(preset?.method || 'GET'),
       tryParseJSON(bodyText).value
-    ),
-    [preset?.method, preset?.path, bodyText]
-  );
+    );
+  }, [preset?.method, preset?.path, bodyText]);
 
   return (
     <div className="rounded-md border bg-white p-4">

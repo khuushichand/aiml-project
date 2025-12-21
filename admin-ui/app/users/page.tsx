@@ -40,9 +40,9 @@ function UsersPageContent() {
       setError('');
       const data = await api.getUsers();
       setUsers(Array.isArray(data) ? data : []);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to load users:', error);
-      setError(error.message || 'Failed to load users');
+      setError(error instanceof Error && error.message ? error.message : 'Failed to load users');
       setUsers([]);
     } finally {
       setLoading(false);

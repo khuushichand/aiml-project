@@ -12,6 +12,51 @@ import HotkeysOverlay from '@/components/ui/HotkeysOverlay';
 
 type MediaType = 'video' | 'audio' | 'document' | 'pdf';
 
+interface MediaSource {
+  title?: string;
+  type?: string;
+  author?: string;
+}
+
+interface MediaContent {
+  text?: string;
+  word_count?: number;
+}
+
+interface MediaItem {
+  id: number;
+  title?: string;
+  media_type?: string;
+  author?: string;
+  created_at?: string;
+  source?: MediaSource;
+  content?: MediaContent;
+  keywords?: string[];
+}
+
+interface SearchPagination {
+  total_items: number;
+  total_pages: number;
+}
+
+interface SearchResponse {
+  items: MediaItem[];
+  pagination?: SearchPagination;
+}
+
+interface ProcessResult {
+  processed_count?: number;
+  errors_count?: number;
+  errors?: string[];
+  results?: Array<Record<string, unknown>>;
+  confabulation_results?: unknown;
+  [key: string]: unknown;
+}
+
+interface ChatCompletionResponse {
+  choices?: Array<{ message?: { content?: string } }>;
+}
+
 export default function MediaPage() {
   const { show } = useToast();
   const router = useRouter();
@@ -19,28 +64,23 @@ export default function MediaPage() {
   const [files, setFiles] = useState<FileList | null>(null);
   const [urls, setUrls] = useState('');
   const [loading, setLoading] = useState(false);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<ProcessResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Search/list state
   const [searchQuery, setSearchQuery] = useState('');
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchResults, setSearchResults] = useState<MediaItem[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [allItems, setAllItems] = useState<any[]>([]);
+  const [allItems, setAllItems] = useState<MediaItem[]>([]);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [totalItems, setTotalItems] = useState(0);
   const itemsPerPage = 10;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [selectedItem, setSelectedItem] = useState<any | null>(null);
+  const [selectedItem, setSelectedItem] = useState<MediaItem | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<string | null>(null);
   const [analysisModel, setAnalysisModel] = useState<string>('gpt-3.5-turbo');
   const [analysisPrompt, setAnalysisPrompt] = useState<string>('Summarize the following content in 5 bullet points.');
-  const [_showAdvanced, _setShowAdvanced] = useState(false);
   const [advancedJson, setAdvancedJson] = useState<string>(JSON.stringify({ perform_analysis: true, perform_chunking: true }, null, 2));
   type ClaimsToggle = 'inherit' | 'enabled' | 'disabled';
   const [claimsExtraction, setClaimsExtraction] = useState<ClaimsToggle>('inherit');
@@ -92,7 +132,7 @@ export default function MediaPage() {
         }
       }
 
-      const res = await apiClient.post(endpoint(mediaType), fd, {
+      const res = await apiClient.post<ProcessResult>(endpoint(mediaType), fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setResult(res);
@@ -114,15 +154,16 @@ export default function MediaPage() {
     }
     setSearchLoading(true);
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const data = await apiClient.get<any>('/media/search', { params: { query: q, limit: 10 } });
+      const data = await apiClient.get<SearchResponse>('/media/search', { params: { query: q, limit: 10 } });
       setSearchResults(data?.items || []);
-    } catch {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
       setSearchResults([]);
+      show({ title: 'Search failed', description: message, variant: 'warning' });
     } finally {
       setSearchLoading(false);
     }
-  }, 300), []);
+  }, 300), [show]);
 
   useEffect(() => {
     doSearch(searchQuery);
@@ -131,8 +172,7 @@ export default function MediaPage() {
   const loadAll = useCallback(async (p = 1) => {
     setSearchLoading(true);
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const data = await apiClient.post<any>('/media/search', {
+      const data = await apiClient.post<SearchResponse>('/media/search', {
         query: '',
         media_types: [],
         tags: [],
@@ -144,9 +184,10 @@ export default function MediaPage() {
       setTotalItems(data?.pagination?.total_items || 0);
       setTotalPages(data?.pagination?.total_pages || 1);
       show({ title: 'Media loaded', description: `Page ${p}`, variant: 'success' });
-    } catch {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
       setAllItems([]);
-      show({ title: 'Load failed', variant: 'warning' });
+      show({ title: 'Load failed', description: message, variant: 'warning' });
     } finally {
       setSearchLoading(false);
     }
@@ -154,14 +195,14 @@ export default function MediaPage() {
 
   const loadDetails = async (id: number) => {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const data = await apiClient.get<any>(`/media/${id}`);
+      const data = await apiClient.get<MediaItem>(`/media/${id}`);
       setSelectedItem(data);
       setAnalysisResult(null);
       show({ title: 'Loaded details', variant: 'info' });
-    } catch {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
       setSelectedItem(null);
-      show({ title: 'Load details failed', variant: 'warning' });
+      show({ title: 'Load details failed', description: message, variant: 'warning' });
     }
   };
 
@@ -180,8 +221,7 @@ export default function MediaPage() {
           { role: 'user', content: `${analysisPrompt}\n\n${snippet}` }
         ],
       };
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const res = await apiClient.post<any>('/chat/completions', payload);
+      const res = await apiClient.post<ChatCompletionResponse>('/chat/completions', payload);
       const textOut = res?.choices?.[0]?.message?.content || '';
       setAnalysisResult(textOut);
       show({ title: 'Summary ready', variant: 'success' });

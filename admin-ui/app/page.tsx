@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -12,12 +12,11 @@ import {
   CheckCircle, AlertTriangle, Clock, TrendingUp, RefreshCw, ArrowRight
 } from 'lucide-react';
 import { api } from '@/lib/api-client';
-import { AuditLog, User } from '@/types';
+import { AuditLog, LLMProvider, Organization, User } from '@/types';
 import { buildDashboardUIStats, type DashboardUIStats } from '@/lib/dashboard';
 import Link from 'next/link';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  BarChart, Bar, PieChart, Pie, Cell
 } from 'recharts';
 import { Skeleton, StatsCardSkeleton } from '@/components/ui/skeleton';
 
@@ -26,6 +25,16 @@ interface SystemHealth {
   database: 'healthy' | 'degraded' | 'down';
   llm: 'healthy' | 'degraded' | 'down';
 }
+
+interface DashboardAlert {
+  id: string | number;
+  message?: string;
+  severity?: 'info' | 'warning' | 'error' | 'critical';
+  acknowledged: boolean;
+  created_at?: string;
+}
+
+type ProviderMap = Record<string, Partial<Omit<LLMProvider, 'name'>>>;
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardUIStats>({
@@ -41,8 +50,7 @@ export default function DashboardPage() {
     storageQuotaMb: 1000,
   });
   const [recentActivity, setRecentActivity] = useState<AuditLog[]>([]);
-  const [recentUsers, setRecentUsers] = useState<User[]>([]);
-  const [alerts, setAlerts] = useState<any[]>([]);
+  const [alerts, setAlerts] = useState<DashboardAlert[]>([]);
   const [systemHealth, setSystemHealth] = useState<SystemHealth>({
     api: 'healthy',
     database: 'healthy',
@@ -51,8 +59,8 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Mock activity data for chart
-  const [activityData, setActivityData] = useState([
+  // Placeholder activity data until metrics endpoint is available.
+  const [activityData] = useState([
     { name: 'Mon', requests: 120, users: 45 },
     { name: 'Tue', requests: 150, users: 52 },
     { name: 'Wed', requests: 180, users: 61 },
@@ -62,11 +70,7 @@ export default function DashboardPage() {
     { name: 'Sun', requests: 60, users: 25 },
   ]);
 
-  useEffect(() => {
-    loadDashboardData();
-  }, []);
-
-  const loadDashboardData = async () => {
+  const loadDashboardData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
@@ -92,22 +96,31 @@ export default function DashboardPage() {
       let users: User[] = [];
       if (usersResult.status === 'fulfilled') {
         users = Array.isArray(usersResult.value) ? usersResult.value : [];
-        setRecentUsers(users.slice(0, 5));
       }
 
       // Process organizations
-      let orgs: any[] = [];
+      let orgs: Organization[] = [];
       if (orgsResult.status === 'fulfilled') {
         orgs = Array.isArray(orgsResult.value) ? orgsResult.value : [];
       }
 
       // Process providers
-      let providers: any = {};
+      let providers: ProviderMap | LLMProvider[] = {};
       if (providersResult.status === 'fulfilled') {
         providers = providersResult.value || {};
       }
-      const providerList = Array.isArray(providers) ? providers : Object.entries(providers).map(([name, value]: [string, any]) => ({ name, ...value }));
-      const enabledProviders = providerList.filter((p: any) => p.enabled !== false);
+      const providerList: LLMProvider[] = Array.isArray(providers)
+        ? providers.map((provider) => ({
+            name: provider.name,
+            enabled: provider.enabled ?? true,
+            models: provider.models,
+          }))
+        : Object.entries(providers).map(([name, value]) => ({
+            name,
+            enabled: value.enabled ?? true,
+            models: value.models,
+          }));
+      const enabledProviders = providerList.filter((p) => p.enabled !== false);
 
       // Process audit logs
       if (auditResult.status === 'fulfilled') {
@@ -117,8 +130,10 @@ export default function DashboardPage() {
 
       // Process alerts
       if (alertsResult.status === 'fulfilled') {
-        const alertsList = Array.isArray(alertsResult.value) ? alertsResult.value : [];
-        setAlerts(alertsList.filter((a: any) => !a.acknowledged).slice(0, 3));
+        const alertsList: DashboardAlert[] = Array.isArray(alertsResult.value)
+          ? alertsResult.value
+          : [];
+        setAlerts(alertsList.filter((a) => !a.acknowledged).slice(0, 3));
       }
 
       // Calculate stats
@@ -156,7 +171,11 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    loadDashboardData();
+  }, [loadDashboardData]);
 
   const getHealthIcon = (status: string) => {
     switch (status) {
@@ -201,13 +220,6 @@ export default function DashboardPage() {
   const storagePercentage = stats.storageQuotaMb > 0
     ? Math.min((stats.storageUsedMb / stats.storageQuotaMb) * 100, 100)
     : 0;
-
-  const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444'];
-
-  const pieData = [
-    { name: 'Active Users', value: stats.activeUsers },
-    { name: 'Inactive', value: stats.users - stats.activeUsers },
-  ];
 
   return (
     <ProtectedRoute>

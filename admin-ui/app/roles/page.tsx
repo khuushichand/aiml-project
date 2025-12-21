@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
@@ -34,11 +34,7 @@ export default function RolesPage() {
   const [newPermName, setNewPermName] = useState('');
   const [newPermDescription, setNewPermDescription] = useState('');
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       setLoading(true);
       const [rolesData, permsData] = await Promise.all([
@@ -47,13 +43,17 @@ export default function RolesPage() {
       ]);
       setRoles(Array.isArray(rolesData) ? rolesData : []);
       setPermissions(Array.isArray(permsData) ? permsData : []);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to load data:', err);
-      showError('Failed to load data', err.message);
+      showError('Failed to load data', err instanceof Error ? err.message : 'Please try again.');
     } finally {
       setLoading(false);
     }
-  };
+  }, [showError]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const handleCreateRole = async () => {
     if (!newRoleName.trim()) {
@@ -71,9 +71,9 @@ export default function RolesPage() {
       setNewRoleName('');
       setNewRoleDescription('');
       loadData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to create role:', err);
-      showError('Failed to create role', err.message);
+      showError('Failed to create role', err instanceof Error ? err.message : 'Please try again.');
     }
   };
 
@@ -96,9 +96,9 @@ export default function RolesPage() {
       await api.deleteRole(role.id.toString());
       success('Role Deleted', `Role "${role.name}" has been deleted`);
       loadData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to delete role:', err);
-      showError('Failed to delete role', err.message);
+      showError('Failed to delete role', err instanceof Error ? err.message : 'Please try again.');
     }
   };
 
@@ -118,9 +118,9 @@ export default function RolesPage() {
       setNewPermName('');
       setNewPermDescription('');
       loadData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to create permission:', err);
-      showError('Failed to create permission', err.message);
+      showError('Failed to create permission', err instanceof Error ? err.message : 'Please try again.');
     }
   };
 
@@ -138,9 +138,9 @@ export default function RolesPage() {
       await api.deletePermission(perm.id.toString());
       success('Permission Deleted', `Permission "${perm.name}" has been deleted`);
       loadData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to delete permission:', err);
-      showError('Failed to delete permission', err.message);
+      showError('Failed to delete permission', err instanceof Error ? err.message : 'Please try again.');
     }
   };
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useKeyboardShortcuts, getShortcutGroups, formatShortcutKey } from '@/lib/use-keyboard-shortcuts';
+import { useKeyboardShortcuts, getShortcutGroups, formatShortcutKey, openShortcutsHelp } from '@/lib/use-keyboard-shortcuts';
 import {
   Dialog,
   DialogContent,
@@ -98,11 +98,9 @@ function ShortcutBadge({ shortcut }: { shortcut: string }) {
 
 // Button to show keyboard shortcuts from UI
 export function KeyboardShortcutsButton() {
-  const { setIsHelpOpen } = useKeyboardShortcuts();
-
   return (
     <button
-      onClick={() => setIsHelpOpen(true)}
+      onClick={openShortcutsHelp}
       className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
       title="Keyboard shortcuts (Shift+?)"
     >

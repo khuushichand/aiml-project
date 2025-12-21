@@ -6872,10 +6872,15 @@ class MediaDatabase:
         """
         if not isinstance(media_id, int):
             raise InputError("media_id must be an integer.")
-        if not check_media_exists(self, media_id=media_id):
-            raise InputError(f"Cannot clear chunks: Parent Media {media_id} not found or deleted.")
         try:
             with self.transaction() as conn:
+                media_row = self._fetchone_with_connection(
+                    conn,
+                    "SELECT id FROM Media WHERE id = ? AND deleted = 0",
+                    (media_id,),
+                )
+                if not media_row:
+                    raise InputError(f"Cannot clear chunks: Parent Media {media_id} not found or deleted.")
                 cursor = self._execute_with_connection(
                     conn,
                     "DELETE FROM UnvectorizedMediaChunks WHERE media_id = ?",
@@ -6888,6 +6893,8 @@ class MediaDatabase:
                 media_id,
             )
             return deleted
+        except InputError:
+            raise
         except (DatabaseError, sqlite3.Error) as e:
             logger.error(f"Error clearing unvectorized chunks for media {media_id}: {e}", exc_info=True)
             if isinstance(e, DatabaseError):
@@ -6949,9 +6956,8 @@ class MediaDatabase:
                     payload["vector_processing"] = 0
 
                 update_sql = f"UPDATE Media SET {', '.join(set_parts)} WHERE id = ? AND version = ?"
-                update_params = tuple(params + [media_id, current_version])
-                cursor = conn.cursor()
-                cursor.execute(update_sql, update_params)
+                update_params = (*params, media_id, current_version)
+                cursor = self._execute_with_connection(conn, update_sql, update_params)
                 if cursor.rowcount == 0:
                     raise ConflictError("Media", media_id)
 
@@ -7017,8 +7023,7 @@ class MediaDatabase:
 
                 update_sql = f"UPDATE Media SET {', '.join(set_parts)} WHERE id = ? AND version = ?"
                 update_params = tuple(params + [media_id, current_version])
-                cursor = conn.cursor()
-                cursor.execute(update_sql, update_params)
+                cursor = self._execute_with_connection(conn, update_sql, update_params)
                 if cursor.rowcount == 0:
                     raise ConflictError("Media", media_id)
 

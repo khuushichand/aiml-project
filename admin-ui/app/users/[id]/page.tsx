@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
@@ -12,7 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { ArrowLeft, Key, Save, Building2, Users } from 'lucide-react';
-import { api } from '@/lib/api-client';
+import { api, ApiError } from '@/lib/api-client';
 import { User } from '@/types';
 import Link from 'next/link';
 
@@ -33,6 +33,32 @@ type UserFormData = {
   storage_quota_mb: number;
 };
 
+const isValidRole = (role: string): role is UserRole => roleOptions.some((option) => option.value === role);
+const roleRank: Record<string, number> = {
+  owner: 4,
+  admin: 3,
+  lead: 2,
+  member: 1,
+};
+
+type OrgMembership = {
+  org_id: number;
+  role: string;
+};
+
+const isForbiddenError = (err: unknown): boolean => {
+  if (err instanceof ApiError) {
+    return err.status === 403;
+  }
+  if (typeof err === 'object' && err !== null && 'status' in err) {
+    return (err as { status?: number }).status === 403;
+  }
+  if (err instanceof Error) {
+    return /not authorized|forbidden|permission/i.test(err.message);
+  }
+  return false;
+};
+
 export default function UserDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -43,6 +69,7 @@ export default function UserDetailPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [isAuthorized, setIsAuthorized] = useState(true);
 
   const [formData, setFormData] = useState<UserFormData>({
     username: '',
@@ -52,32 +79,101 @@ export default function UserDetailPage() {
     storage_quota_mb: 0,
   });
 
-  useEffect(() => {
-    loadUser();
-  }, [userId]);
-
-  const loadUser = async () => {
+  const loadUser = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
+      setIsAuthorized(true);
       const data = await api.getUser(userId);
+      const roleValue = data.role && isValidRole(data.role) ? data.role : 'member';
       setUser(data);
       setFormData({
         username: data.username || '',
         email: data.email || '',
-        role: (data.role || 'member') as UserRole,
+        role: roleValue,
         is_active: data.is_active ?? true,
         storage_quota_mb: data.storage_quota_mb || 0,
       });
-    } catch (err: any) {
-      console.error('Failed to load user:', err);
-      setError(err.message || 'Failed to load user');
+
+      try {
+        const currentUser = await api.getCurrentUser();
+        const [adminMemberships, targetMemberships] = await Promise.all([
+          api.getUserOrgMemberships(currentUser.id.toString()),
+          api.getUserOrgMemberships(userId),
+        ]);
+
+        const adminList = Array.isArray(adminMemberships) ? adminMemberships : [];
+        const targetList = Array.isArray(targetMemberships) ? targetMemberships : [];
+
+        const canEditFromMemberships = (
+          adminRoles: OrgMembership[],
+          targetRoles: OrgMembership[]
+        ): boolean => {
+          if (adminRoles.length === 0 && targetRoles.length === 0) {
+            return true;
+          }
+          if (adminRoles.length === 0 || targetRoles.length === 0) {
+            return false;
+          }
+
+          const adminByOrg = new Map<number, string>(
+            adminRoles.map((membership) => [membership.org_id, membership.role])
+          );
+          const targetByOrg = new Map<number, string>(
+            targetRoles.map((membership) => [membership.org_id, membership.role])
+          );
+
+          const sharedOrgs = [...adminByOrg.keys()].filter((orgId) => targetByOrg.has(orgId));
+          if (sharedOrgs.length === 0) {
+            return false;
+          }
+
+          return sharedOrgs.some((orgId) => {
+            const adminRole = adminByOrg.get(orgId) || '';
+            const targetRole = targetByOrg.get(orgId) || '';
+            const adminRank = roleRank[adminRole] || 0;
+            const targetRank = roleRank[targetRole] || 0;
+            return adminRank >= roleRank.admin && adminRank >= targetRank;
+          });
+        };
+
+        if (!canEditFromMemberships(adminList, targetList)) {
+          setIsAuthorized(false);
+          setError('You are not authorized to edit this user.');
+        }
+      } catch (scopeErr: unknown) {
+        if (isForbiddenError(scopeErr)) {
+          setIsAuthorized(false);
+          setError('You are not authorized to edit this user.');
+        } else {
+          console.error('Failed to verify user scope:', scopeErr);
+        }
+      }
+    } catch (err: unknown) {
+      if (isForbiddenError(err)) {
+        setIsAuthorized(false);
+        setError('You are not authorized to view or edit this user.');
+        setUser(null);
+        return;
+      }
+      const message =
+        err instanceof Error ? err.message : typeof err === 'string' ? err : 'Failed to load user';
+      console.error('Failed to load user:', message);
+      setError(message);
     } finally {
       setLoading(false);
     }
-  };
+  }, [userId]);
+
+  useEffect(() => {
+    loadUser();
+  }, [loadUser]);
 
   const handleSave = async () => {
+    if (!isAuthorized) {
+      setError('You are not authorized to update this user.');
+      return;
+    }
     try {
       setSaving(true);
       setError('');
@@ -85,9 +181,19 @@ export default function UserDetailPage() {
       await api.updateUser(userId, formData);
       setSuccess('User updated successfully');
       loadUser();
-    } catch (err: any) {
-      console.error('Failed to update user:', err);
-      setError(err.message || 'Failed to update user');
+    } catch (err: unknown) {
+      if (isForbiddenError(err)) {
+        setIsAuthorized(false);
+        setError('You are not authorized to update this user.');
+        return;
+      }
+      if (err instanceof Error) {
+        console.error('Failed to update user:', err);
+        setError(err.message);
+      } else {
+        console.error('Failed to update user:', err);
+        setError(String(err));
+      }
     } finally {
       setSaving(false);
     }
@@ -120,6 +226,23 @@ export default function UserDetailPage() {
   }
 
   if (!user) {
+    if (!isAuthorized) {
+      return (
+        <ProtectedRoute>
+          <ResponsiveLayout>
+            <div className="p-4 lg:p-8">
+              <Alert variant="destructive">
+                <AlertDescription>You are not authorized to view this user.</AlertDescription>
+              </Alert>
+              <Button onClick={() => router.push('/users')} className="mt-4">
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                Back to Users
+              </Button>
+            </div>
+          </ResponsiveLayout>
+        </ProtectedRoute>
+      );
+    }
     return (
       <ProtectedRoute>
         <ResponsiveLayout>
@@ -204,6 +327,7 @@ export default function UserDetailPage() {
                     <Input
                       id="username"
                       value={formData.username}
+                      disabled={!isAuthorized}
                       onChange={(e) => setFormData({ ...formData, username: e.target.value })}
                     />
                   </div>
@@ -214,6 +338,7 @@ export default function UserDetailPage() {
                       id="email"
                       type="email"
                       value={formData.email}
+                      disabled={!isAuthorized}
                       onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                     />
                   </div>
@@ -223,7 +348,13 @@ export default function UserDetailPage() {
                     <Select
                       id="role"
                       value={formData.role}
-                      onChange={(e) => setFormData({ ...formData, role: e.target.value as UserRole })}
+                      disabled={!isAuthorized}
+                      onChange={(e) => {
+                        const nextRole = e.target.value;
+                        if (isValidRole(nextRole)) {
+                          setFormData({ ...formData, role: nextRole });
+                        }
+                      }}
                     >
                       {roleOptions.map((option) => (
                         <option key={option.value} value={option.value}>
@@ -238,13 +369,14 @@ export default function UserDetailPage() {
                       type="checkbox"
                       id="is_active"
                       checked={formData.is_active}
+                      disabled={!isAuthorized}
                       onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
                       className="h-4 w-4 rounded border-primary"
                     />
                     <Label htmlFor="is_active">Active</Label>
                   </div>
 
-                  <Button onClick={handleSave} disabled={saving}>
+                  <Button onClick={handleSave} disabled={saving || !isAuthorized}>
                     <Save className="mr-2 h-4 w-4" />
                     {saving ? 'Saving...' : 'Save Changes'}
                   </Button>
@@ -286,8 +418,16 @@ export default function UserDetailPage() {
                       <Input
                         id="storage_quota"
                         type="number"
+                        min="0"
                         value={formData.storage_quota_mb}
-                        onChange={(e) => setFormData({ ...formData, storage_quota_mb: parseInt(e.target.value) || 0 })}
+                        disabled={!isAuthorized}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value, 10);
+                          setFormData({
+                            ...formData,
+                            storage_quota_mb: Number.isNaN(val) ? formData.storage_quota_mb : val,
+                          });
+                        }}
                         className="mt-1"
                       />
                     </div>

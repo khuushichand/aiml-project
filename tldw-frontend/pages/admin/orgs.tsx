@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { useToast } from '@/components/ui/ToastProvider';
 import { apiClient } from '@/lib/api';
+import { useDebounce } from '@/hooks/useDebounce';
 
 interface Organization {
   id: number;
@@ -22,17 +23,6 @@ interface OrganizationListResponse {
   offset: number;
   has_more: boolean;
 }
-
-const useDebounce = (value: string, delay: number) => {
-  const [debouncedValue, setDebouncedValue] = useState(value);
-
-  useEffect(() => {
-    const handler = setTimeout(() => setDebouncedValue(value), delay);
-    return () => clearTimeout(handler);
-  }, [value, delay]);
-
-  return debouncedValue;
-};
 
 export default function AdminOrgsPage() {
   const { show } = useToast();

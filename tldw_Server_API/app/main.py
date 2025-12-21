@@ -1522,6 +1522,22 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start Jobs metrics gauge worker: {e}")
 
+    # Event loop lag watchdog (lightweight)
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.services.loop_lag_watchdog import run_loop_lag_watchdog as _run_loop_lag_watchdog
+
+        _enabled = _os.getenv("EVENT_LOOP_LAG_WATCHDOG_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}
+        if _enabled:
+            loop_lag_stop_event = _asyncio.Event()
+            loop_lag_task = _asyncio.create_task(_run_loop_lag_watchdog(loop_lag_stop_event))
+            logger.info("Event loop lag watchdog started")
+        else:
+            logger.info("Event loop lag watchdog disabled by flag")
+    except Exception as e:
+        logger.warning(f"Failed to start event loop lag watchdog: {e}")
+
     # Jobs metrics reconcile worker (job_counters/gauges amortized refresh)
     try:
         import os as _os
@@ -2125,6 +2141,21 @@ async def lifespan(app: FastAPI):
             except Exception:
                 try:
                     jobs_metrics_task.cancel()
+                except Exception:
+                    pass
+
+        # Event loop lag watchdog shutdown
+        if "loop_lag_task" in locals() and loop_lag_task:
+            try:
+                if "loop_lag_stop_event" in locals() and loop_lag_stop_event:
+                    loop_lag_stop_event.set()
+                    await _asyncio.wait_for(loop_lag_task, timeout=2.0)
+                    logger.info("Event loop lag watchdog stopped via stop_event")
+                else:
+                    loop_lag_task.cancel()
+            except Exception:
+                try:
+                    loop_lag_task.cancel()
                 except Exception:
                     pass
 
