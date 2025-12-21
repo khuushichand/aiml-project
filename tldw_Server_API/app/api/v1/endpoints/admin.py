@@ -25,6 +25,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     RegistrationCodeResponse,
     RegistrationCodeListResponse,
     SystemStatsResponse,
+    ActivitySummaryResponse,
     SecurityAlertStatusResponse,
     SecurityAlertSinkStatus,
     AuditLogResponse,
@@ -63,6 +64,7 @@ from tldw_Server_API.app.api.v1.schemas.api_key_schemas import (
     APIKeyAuditEntry,
     APIKeyAuditListResponse,
 )
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.api.v1.schemas.user_keys import (
     AdminUserKeysResponse,
     AdminUserKeyStatusItem,
@@ -321,12 +323,12 @@ async def _enforce_admin_user_scope(
     target_memberships = await list_org_memberships_for_user(target_user_id)
 
     admin_org_roles = {
-        m.get("org_id"): str(m.get("role", "member")).strip().lower()
+        m.get("org_id"): str(m.get("role") or "member").strip().lower()
         for m in admin_memberships
         if m.get("org_id") is not None
     }
     target_org_roles = {
-        m.get("org_id"): str(m.get("role", "member")).strip().lower()
+        m.get("org_id"): str(m.get("role") or "member").strip().lower()
         for m in target_memberships
         if m.get("org_id") is not None
     }
@@ -909,7 +911,10 @@ async def admin_list_orgs(
         result = await list_organizations(limit=limit, offset=offset, q=q, with_total=wants_wrapper)
         if wants_wrapper:
             if not isinstance(result, tuple) or len(result) != 2:
-                raise ValueError("Unexpected organization list response")
+                raise ValueError(
+                    f"Expected (rows, total) tuple, got {type(result).__name__} with "
+                    f"{len(result) if isinstance(result, tuple) else 'N/A'} elements"
+                )
             rows, total = result
         else:
             rows = result[0] if isinstance(result, tuple) else result
@@ -957,11 +962,21 @@ async def admin_list_teams(org_id: int, limit: int = Query(100, ge=1, le=1000), 
 
 
 @router.get("/teams/{team_id}", response_model=TeamResponse)
-async def admin_get_team(team_id: int) -> TeamResponse:
+async def admin_get_team(
+    team_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> TeamResponse:
     try:
         team = await get_team(team_id)
         if not team:
             raise HTTPException(status_code=404, detail="team_not_found")
+        if not is_single_user_principal(principal):
+            if principal.user_id is None:
+                raise HTTPException(status_code=403, detail="Not authorized to access this team")
+            admin_memberships = await list_org_memberships_for_user(principal.user_id)
+            admin_org_ids = {m.get("org_id") for m in admin_memberships if m.get("org_id") is not None}
+            if team.get("org_id") not in admin_org_ids:
+                raise HTTPException(status_code=404, detail="team_not_found")
         return TeamResponse(**team)
     except HTTPException:
         raise
@@ -1591,11 +1606,6 @@ async def update_user(
     try:
         await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
 
-        repo = await AuthnzUsersRepo.from_pool()
-        user = await repo.get_user_by_id(user_id)
-        if not user:
-            raise UserNotFoundError(f"User {user_id}")
-
         is_pg = await is_postgres_backend()
         # Build update query dynamically
         updates = []
@@ -1658,10 +1668,26 @@ async def update_user(
 
         # Execute update
         if is_pg:
-            await db.execute(query, *params)
+            result = await db.execute(query, *params)
+            affected = 0
+            if isinstance(result, str):
+                parts = result.split()
+                if parts and parts[-1].isdigit():
+                    affected = int(parts[-1])
         else:
-            await db.execute(query, params)
+            cursor = await db.execute(query, params)
+            affected = int(getattr(cursor, "rowcount", 0) or 0)
+            if affected < 0:
+                affected = 0
             await db.commit()
+
+        if affected == 0:
+            if is_pg:
+                raise UserNotFoundError(f"User {user_id}")
+            cursor = await db.execute("SELECT 1 FROM users WHERE id = ?", (user_id,))
+            row = await cursor.fetchone()
+            if not row:
+                raise UserNotFoundError(f"User {user_id}")
 
         logger.info(f"Admin updated user {user_id}")
 
@@ -3417,6 +3443,90 @@ async def get_system_stats(
         )
 
 
+@router.get("/activity", response_model=ActivitySummaryResponse)
+async def get_dashboard_activity(
+    days: int = Query(7, ge=1, le=30),
+    db=Depends(get_db_transaction),
+) -> ActivitySummaryResponse:
+    """Return recent request/user activity for the admin dashboard."""
+    today = datetime.now(timezone.utc).date()
+    start_date = today - timedelta(days=days - 1)
+    date_range = [start_date + timedelta(days=idx) for idx in range(days)]
+    activity_by_date = {
+        day: {
+            "date": day.isoformat(),
+            "requests": 0,
+            "users": 0,
+        }
+        for day in date_range
+    }
+
+    try:
+        registry = get_metrics_registry()
+        request_values = registry.values.get("http_requests_total", [])
+        for metric_value in list(request_values):
+            try:
+                metric_day = datetime.fromtimestamp(
+                    metric_value.timestamp,
+                    timezone.utc,
+                ).date()
+            except Exception:
+                continue
+            if metric_day in activity_by_date:
+                activity_by_date[metric_day]["requests"] += int(metric_value.value or 0)
+    except Exception as exc:
+        logger.debug("Admin activity request metrics unavailable: {}", exc)
+
+    try:
+        start_dt = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
+        is_pg = await is_postgres_backend()
+        if is_pg:
+            rows = await db.fetch(
+                """
+                SELECT DATE(created_at) as day,
+                       COUNT(DISTINCT user_id) as active_users
+                FROM sessions
+                WHERE created_at >= $1
+                GROUP BY day
+                ORDER BY day
+                """,
+                start_dt,
+            )
+        else:
+            cursor = await db.execute(
+                """
+                SELECT date(created_at) as day,
+                       COUNT(DISTINCT user_id) as active_users
+                FROM sessions
+                WHERE datetime(created_at) >= datetime(?)
+                GROUP BY date(created_at)
+                ORDER BY date(created_at)
+                """,
+                (start_dt.isoformat(),),
+            )
+            rows = await cursor.fetchall()
+        for row in rows:
+            if isinstance(row, dict):
+                day_str = row.get("day")
+                active_users = row.get("active_users")
+            else:
+                day_str = row[0] if len(row) > 0 else None
+                active_users = row[1] if len(row) > 1 else None
+            if not day_str:
+                continue
+            try:
+                metric_day = datetime.fromisoformat(str(day_str)).date()
+            except ValueError:
+                continue
+            if metric_day in activity_by_date:
+                activity_by_date[metric_day]["users"] = int(active_users or 0)
+    except Exception as exc:
+        logger.debug("Admin activity user metrics unavailable: {}", exc)
+
+    points = [activity_by_date[day] for day in date_range]
+    return ActivitySummaryResponse(days=days, points=points)
+
+
 @router.get("/audit-log", response_model=AuditLogResponse)
 async def get_audit_log(
     user_id: Optional[int] = None,
@@ -3853,11 +3963,9 @@ async def get_personalization_status():
         from tldw_Server_API.app.services.personalization_consolidation import get_consolidation_service
         svc = get_consolidation_service()
         status_fn = getattr(svc, "get_status", None)
-        if callable(status_fn):
-            return status_fn()
-        if status_fn is None:
-            raise ValueError("Personalization service does not implement get_status")
-        raise ValueError("Personalization get_status is not callable")
+        if not callable(status_fn):
+            raise ValueError("Personalization service does not provide a callable get_status method")
+        return status_fn()
     except Exception as e:
         logger.warning(f"Admin status fetch failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch status")

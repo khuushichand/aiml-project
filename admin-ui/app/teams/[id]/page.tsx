@@ -6,6 +6,7 @@ import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Select } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -209,16 +210,15 @@ export default function TeamDetailPage() {
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="memberRole">Role</Label>
-                      <select
+                      <Select
                         id="memberRole"
                         value={newMemberRole}
                         onChange={(e) => setNewMemberRole(e.target.value)}
-                        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                       >
                         <option value="member">Member</option>
                         <option value="lead">Lead</option>
                         <option value="admin">Admin</option>
-                      </select>
+                      </Select>
                     </div>
                   </div>
                   <DialogFooter>

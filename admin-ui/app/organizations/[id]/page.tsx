@@ -28,6 +28,7 @@ export default function OrganizationDetailPage() {
 
   const [org, setOrg] = useState<Organization | null>(null);
   const [members, setMembers] = useState<OrgMember[]>([]);
+  const [memberRoleSelections, setMemberRoleSelections] = useState<Record<number, string>>({});
   const [teams, setTeams] = useState<Team[]>([]);
   const [byokKeys, setByokKeys] = useState<ProviderSecret[]>([]);
   const [loading, setLoading] = useState(true);
@@ -84,12 +85,18 @@ export default function OrganizationDetailPage() {
   }, [orgId]);
 
   useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      void loadData();
-    }, 0);
-
-    return () => window.clearTimeout(timeoutId);
+    void loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    setMemberRoleSelections(() => {
+      const nextSelections: Record<number, string> = {};
+      members.forEach((member) => {
+        nextSelections[member.user_id] = member.role;
+      });
+      return nextSelections;
+    });
+  }, [members]);
 
   const handleAddMember = async () => {
     if (!newMemberUserId) {
@@ -146,9 +153,11 @@ export default function OrganizationDetailPage() {
       await api.updateOrgMemberRole(orgId, userId.toString(), { role: newRole });
       setSuccess('Member role updated');
       void loadData();
+      return true;
     } catch (err: unknown) {
       console.error('Failed to update member role:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to update member role');
+      return false;
     }
   };
 
@@ -314,7 +323,17 @@ export default function OrganizationDetailPage() {
                     </CardDescription>
                   </div>
                   <div className="flex gap-2">
-                    <Dialog open={showInvite} onOpenChange={setShowInvite}>
+                    <Dialog
+                      open={showInvite}
+                      onOpenChange={(nextOpen) => {
+                        setShowInvite(nextOpen);
+                        if (!nextOpen) {
+                          setInviteEmail('');
+                          setInviteRole('member');
+                          setInviteLink('');
+                        }
+                      }}
+                    >
                       <DialogTrigger asChild>
                         <Button variant="outline" size="sm">
                           <Mail className="mr-2 h-4 w-4" />
@@ -364,7 +383,7 @@ export default function OrganizationDetailPage() {
                           )}
                         </div>
                         <DialogFooter>
-                          <Button variant="outline" onClick={() => { setShowInvite(false); setInviteLink(''); }}>
+                          <Button variant="outline" onClick={() => setShowInvite(false)}>
                             Close
                           </Button>
                           <Button onClick={handleCreateInvite}>Send Invite</Button>
@@ -447,9 +466,14 @@ export default function OrganizationDetailPage() {
                             </TableCell>
                             <TableCell>
                               <select
-                                value={member.role}
+                                value={memberRoleSelections[member.user_id] ?? member.role}
                                 onChange={async (event) => {
                                   const newRole = event.target.value;
+                                  const previousRole = memberRoleSelections[member.user_id] ?? member.role;
+                                  setMemberRoleSelections((prev) => ({
+                                    ...prev,
+                                    [member.user_id]: newRole,
+                                  }));
                                   const displayName = member.user?.username || `User ${member.user_id}`;
                                   const confirmed = await confirm({
                                     title: 'Change Role',
@@ -458,9 +482,18 @@ export default function OrganizationDetailPage() {
                                     variant: 'default',
                                   });
                                   if (confirmed) {
-                                    await handleUpdateMemberRole(member.user_id, newRole);
+                                    const updated = await handleUpdateMemberRole(member.user_id, newRole);
+                                    if (!updated) {
+                                      setMemberRoleSelections((prev) => ({
+                                        ...prev,
+                                        [member.user_id]: previousRole,
+                                      }));
+                                    }
                                   } else {
-                                    event.target.value = member.role;
+                                    setMemberRoleSelections((prev) => ({
+                                      ...prev,
+                                      [member.user_id]: previousRole,
+                                    }));
                                   }
                                 }}
                                 className="h-8 rounded-md border border-input bg-background px-2 text-sm"
@@ -557,13 +590,17 @@ export default function OrganizationDetailPage() {
                       Organization-level API keys for LLM providers. These keys are shared by all members.
                     </CardDescription>
                   </div>
-                  <Dialog
-                    open={showAddByok}
-                    onOpenChange={(nextOpen) => {
-                      setShowAddByok(nextOpen);
-                      if (!nextOpen) setShowByokApiKey(false);
-                    }}
-                  >
+                    <Dialog
+                      open={showAddByok}
+                      onOpenChange={(nextOpen) => {
+                        setShowAddByok(nextOpen);
+                        if (!nextOpen) {
+                          setShowByokApiKey(false);
+                          setByokProvider('');
+                          setByokApiKey('');
+                        }
+                      }}
+                    >
                     <DialogTrigger asChild>
                       <Button size="sm">
                         <Plus className="mr-2 h-4 w-4" />

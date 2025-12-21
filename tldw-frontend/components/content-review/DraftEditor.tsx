@@ -9,7 +9,6 @@ type DraftEditorProps = {
   dirty: boolean;
   editorText: string;
   keywordsInput: string;
-  reattachError: string | null;
   commitDisabled: boolean;
   onOpenReattach: () => void;
   onSaveDraft: () => void;
@@ -24,7 +23,6 @@ export function DraftEditor({
   dirty,
   editorText,
   keywordsInput,
-  reattachError,
   commitDisabled,
   onOpenReattach,
   onSaveDraft,
@@ -51,12 +49,6 @@ export function DraftEditor({
           {draft.assetNote}
         </div>
       )}
-      {reattachError && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {reattachError}
-        </div>
-      )}
-
       <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
@@ -78,6 +70,7 @@ export function DraftEditor({
         </div>
         <div className="mt-4">
           <textarea
+            aria-label="Draft content editor"
             value={editorText}
             onChange={(e) => onEditorChange(e.target.value)}
             className="min-h-[320px] w-full rounded-md border border-gray-200 p-3 font-mono text-sm focus:border-blue-500 focus:ring-blue-500"

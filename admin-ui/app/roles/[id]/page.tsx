@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
@@ -18,6 +18,32 @@ import Link from 'next/link';
 
 const MAX_DESCRIPTION_LENGTH = 500;
 const USER_LIST_LIMIT = 10;
+
+type PermissionItemProps = {
+  perm: Permission;
+  isChecked: boolean;
+  onToggle: () => void;
+  disabled: boolean;
+};
+
+const PermissionItem = ({ perm, isChecked, onToggle, disabled }: PermissionItemProps) => (
+  <div
+    className={`flex items-center justify-between p-3 rounded-lg border ${
+      isChecked ? 'bg-primary/5 border-primary/20' : 'bg-muted/30'
+    }`}
+  >
+    <div className="flex items-center gap-3">
+      <Checkbox checked={isChecked} onCheckedChange={() => onToggle()} disabled={disabled} />
+      <div>
+        <code className="text-sm font-mono">{perm.name}</code>
+        {perm.description && (
+          <p className="text-xs text-muted-foreground">{perm.description}</p>
+        )}
+      </div>
+    </div>
+    {isChecked && <Check className="h-4 w-4 text-green-500" />}
+  </div>
+);
 
 export default function RoleDetailPage() {
   const params = useParams();
@@ -177,13 +203,16 @@ export default function RoleDetailPage() {
   };
 
   // Group permissions by category (based on naming convention like "read:users", "write:media")
-  const groupedPermissions = allPermissions.reduce((acc, perm) => {
-    const parts = perm.name.split(':');
-    const category = parts.length > 1 ? parts[0] : 'general';
-    if (!acc[category]) acc[category] = [];
-    acc[category].push(perm);
-    return acc;
-  }, {} as Record<string, Permission[]>);
+  const groupedPermissions = useMemo(
+    () => allPermissions.reduce((acc, perm) => {
+      const parts = perm.name.split(':');
+      const category = parts.length > 1 ? parts[0] : 'general';
+      if (!acc[category]) acc[category] = [];
+      acc[category].push(perm);
+      return acc;
+    }, {} as Record<string, Permission[]>),
+    [allPermissions]
+  );
 
   if (loading) {
     return (
@@ -246,12 +275,17 @@ export default function RoleDetailPage() {
                     )}
                   </div>
                   {editMode ? (
-                    <Input
-                      value={editDescription}
-                      onChange={(e) => setEditDescription(e.target.value)}
-                      className="mt-2 text-sm"
-                      placeholder="Description (optional)"
-                    />
+                    <>
+                      <Input
+                        value={editDescription}
+                        onChange={(e) => setEditDescription(e.target.value)}
+                        className="mt-2 text-sm"
+                        placeholder="Description (optional)"
+                      />
+                      <div className="text-xs text-muted-foreground mt-1">
+                        {editDescription.length}/{MAX_DESCRIPTION_LENGTH} characters
+                      </div>
+                    </>
                   ) : (
                     <p className="text-muted-foreground mt-1">
                       {role.description || 'No description'}
@@ -322,31 +356,18 @@ export default function RoleDetailPage() {
                             {category}
                           </h4>
                           <div className="grid gap-2">
-                            {perms.map((perm) => (
-                              <div
-                                key={perm.id}
-                                className={`flex items-center justify-between p-3 rounded-lg border ${
-                                  rolePermissions.has(perm.id) ? 'bg-primary/5 border-primary/20' : 'bg-muted/30'
-                                }`}
-                              >
-                                <div className="flex items-center gap-3">
-                                  <Checkbox
-                                    checked={rolePermissions.has(perm.id)}
-                                    onCheckedChange={() => handleTogglePermission(perm.id)}
-                                    disabled={role.is_system}
-                                  />
-                                  <div>
-                                    <code className="text-sm font-mono">{perm.name}</code>
-                                    {perm.description && (
-                                      <p className="text-xs text-muted-foreground">{perm.description}</p>
-                                    )}
-                                  </div>
-                                </div>
-                                {rolePermissions.has(perm.id) && (
-                                  <Check className="h-4 w-4 text-green-500" />
-                                )}
-                              </div>
-                            ))}
+                            {perms.map((perm) => {
+                              const isChecked = rolePermissions.has(perm.id);
+                              return (
+                                <PermissionItem
+                                  key={perm.id}
+                                  perm={perm}
+                                  isChecked={isChecked}
+                                  onToggle={() => handleTogglePermission(perm.id)}
+                                  disabled={role.is_system}
+                                />
+                              );
+                            })}
                           </div>
                         </div>
                       ))}
@@ -354,31 +375,18 @@ export default function RoleDetailPage() {
                   ) : (
                     // Show flat list if only one category
                     <div className="grid gap-2">
-                      {allPermissions.map((perm) => (
-                        <div
-                          key={perm.id}
-                          className={`flex items-center justify-between p-3 rounded-lg border ${
-                            rolePermissions.has(perm.id) ? 'bg-primary/5 border-primary/20' : 'bg-muted/30'
-                          }`}
-                        >
-                          <div className="flex items-center gap-3">
-                            <Checkbox
-                              checked={rolePermissions.has(perm.id)}
-                              onCheckedChange={() => handleTogglePermission(perm.id)}
-                              disabled={role.is_system}
-                            />
-                            <div>
-                              <code className="text-sm font-mono">{perm.name}</code>
-                              {perm.description && (
-                                <p className="text-xs text-muted-foreground">{perm.description}</p>
-                              )}
-                            </div>
-                          </div>
-                          {rolePermissions.has(perm.id) && (
-                            <Check className="h-4 w-4 text-green-500" />
-                          )}
-                        </div>
-                      ))}
+                      {allPermissions.map((perm) => {
+                        const isChecked = rolePermissions.has(perm.id);
+                        return (
+                          <PermissionItem
+                            key={perm.id}
+                            perm={perm}
+                            isChecked={isChecked}
+                            onToggle={() => handleTogglePermission(perm.id)}
+                            disabled={role.is_system}
+                          />
+                        );
+                      })}
                     </div>
                   )}
                 </CardContent>
@@ -437,16 +445,18 @@ export default function RoleDetailPage() {
               </CardHeader>
               <CardContent>
                 <div className="flex flex-wrap gap-4">
-                  <Link href="/roles/matrix">
-                    <Button variant="outline">
-                      View Permission Matrix
-                    </Button>
-                  </Link>
-                  <Link href="/roles">
-                    <Button variant="outline">
-                      Manage All Roles
-                    </Button>
-                  </Link>
+                  <Button
+                    variant="outline"
+                    onClick={() => router.push('/roles/matrix')}
+                  >
+                    View Permission Matrix
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => router.push('/roles')}
+                  >
+                    Manage All Roles
+                  </Button>
                   {!role.is_system && (
                     <Button
                       variant="outline"

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -36,6 +36,37 @@ interface DashboardAlert {
 
 type ProviderMap = Record<string, Partial<Omit<LLMProvider, 'name'>>>;
 
+type ActivityPoint = {
+  date: string;
+  requests: number;
+  users: number;
+};
+
+const ACTIVITY_DAYS = 7;
+
+const buildEmptyActivityPoints = (days: number): ActivityPoint[] => {
+  const today = new Date();
+  const points: ActivityPoint[] = [];
+  for (let offset = days - 1; offset >= 0; offset -= 1) {
+    const date = new Date(Date.UTC(
+      today.getUTCFullYear(),
+      today.getUTCMonth(),
+      today.getUTCDate() - offset,
+    ));
+    points.push({
+      date: date.toISOString().slice(0, 10),
+      requests: 0,
+      users: 0,
+    });
+  }
+  return points;
+};
+
+const formatActivityLabel = (dateStr: string) => {
+  const date = new Date(`${dateStr}T00:00:00Z`);
+  return date.toLocaleDateString(undefined, { weekday: 'short' });
+};
+
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardUIStats>({
     users: 0,
@@ -56,19 +87,11 @@ export default function DashboardPage() {
     database: 'healthy',
     llm: 'healthy',
   });
+  const [activityData, setActivityData] = useState<ActivityPoint[]>(
+    buildEmptyActivityPoints(ACTIVITY_DAYS)
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  // TODO(#metrics-endpoint): Replace placeholder activity data once metrics endpoint is available.
-  const [activityData] = useState([
-    { name: 'Mon', requests: 120, users: 45 },
-    { name: 'Tue', requests: 150, users: 52 },
-    { name: 'Wed', requests: 180, users: 61 },
-    { name: 'Thu', requests: 140, users: 48 },
-    { name: 'Fri', requests: 200, users: 70 },
-    { name: 'Sat', requests: 80, users: 30 },
-    { name: 'Sun', requests: 60, users: 25 },
-  ]);
 
   const loadDashboardData = useCallback(async () => {
     try {
@@ -83,6 +106,7 @@ export default function DashboardPage() {
         providersResult,
         auditResult,
         alertsResult,
+        activityResult,
       ] = await Promise.allSettled([
         api.getDashboardStats(),
         api.getUsers(),
@@ -90,6 +114,7 @@ export default function DashboardPage() {
         api.getLLMProviders(),
         api.getAuditLogs({ limit: '5' }),
         api.getAlerts(),
+        api.getDashboardActivity(ACTIVITY_DAYS),
       ]);
 
       // Process users
@@ -134,6 +159,15 @@ export default function DashboardPage() {
           ? alertsResult.value
           : [];
         setAlerts(alertsList.filter((a) => !a.acknowledged).slice(0, 3));
+      }
+
+      if (activityResult.status === 'fulfilled' && activityResult.value) {
+        const points = Array.isArray(activityResult.value.points)
+          ? activityResult.value.points
+          : [];
+        setActivityData(points.length ? points : buildEmptyActivityPoints(ACTIVITY_DAYS));
+      } else {
+        setActivityData(buildEmptyActivityPoints(ACTIVITY_DAYS));
       }
 
       // Calculate stats
@@ -184,7 +218,7 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    loadDashboardData();
+    void loadDashboardData();
   }, [loadDashboardData]);
 
   const getHealthIcon = (status: string) => {
@@ -226,6 +260,15 @@ export default function DashboardPage() {
     if (minutes > 0) return `${minutes}m ago`;
     return 'Just now';
   };
+
+  const activityChartData = useMemo(
+    () => activityData.map((point) => ({
+      name: formatActivityLabel(point.date),
+      requests: point.requests,
+      users: point.users,
+    })),
+    [activityData]
+  );
 
   const storagePercentage = stats.storageQuotaMb > 0
     ? Math.min((stats.storageUsedMb / stats.storageQuotaMb) * 100, 100)
@@ -356,7 +399,7 @@ export default function DashboardPage() {
                 <CardContent>
                   <div className="h-64">
                     <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={activityData}>
+                      <AreaChart data={activityChartData}>
                         <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
                         <XAxis dataKey="name" className="text-xs" />
                         <YAxis className="text-xs" />

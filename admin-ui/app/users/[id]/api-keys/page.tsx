@@ -82,9 +82,9 @@ export default function UserApiKeysPage() {
         expires_in_days: formData.expires_days,
       });
 
-      // The API might return the full key value only on creation
-      if (result.key || result.api_key) {
-        setNewKeyValue(result.key || result.api_key);
+      // The API returns the full key value only on creation
+      if (result.key) {
+        setNewKeyValue(result.key);
       }
 
       setSuccess('API key created successfully');
@@ -111,8 +111,8 @@ export default function UserApiKeysPage() {
       setError('');
       setSuccess('');
       const result = await api.rotateApiKey(userId, keyId);
-      if (result.key || result.api_key) {
-        setNewKeyValue(result.key || result.api_key);
+      if (result.key) {
+        setNewKeyValue(result.key);
       }
       setSuccess('API key rotated successfully');
       loadData();

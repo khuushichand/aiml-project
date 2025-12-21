@@ -145,6 +145,23 @@ class SystemStatsResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ActivityPoint(BaseModel):
+    """Daily activity point for dashboard charts."""
+    date: str
+    requests: int
+    users: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ActivitySummaryResponse(BaseModel):
+    """Dashboard activity summary response."""
+    days: int
+    points: List[ActivityPoint]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 #######################################################################################################################
 #
 # Security Alert Schemas
