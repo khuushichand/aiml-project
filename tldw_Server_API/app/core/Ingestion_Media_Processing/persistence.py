@@ -61,6 +61,20 @@ def _compute_source_hash(file_path: FilePath, *, chunk_size: int = 1024 * 1024) 
         return None
 
 
+def _media_has_source_hash_column(db: MediaDatabase) -> bool:
+    for table_name in ("Media", "media"):
+        try:
+            columns = {
+                col.get("name", "").lower()
+                for col in db.backend.get_table_info(table_name)
+            }
+            if columns:
+                return "source_hash" in columns
+        except Exception:
+            continue
+    return False
+
+
 def validate_add_media_inputs(
     media_type: Any,
     urls: Optional[List[str]],
@@ -811,6 +825,14 @@ async def persist_primary_av_item(
         except Exception:
             safe_metadata_json = None
 
+        source_hash_for_db = None
+        raw_source_hash = metadata_for_db.get("source_hash")
+        if raw_source_hash is None:
+            raw_source_hash = safe_meta.get("source_hash")
+        if raw_source_hash is not None:
+            raw_source_hash_str = str(raw_source_hash).strip()
+            source_hash_for_db = raw_source_hash_str if raw_source_hash_str else None
+
         # Build plaintext chunks for chunk-level FTS if chunking is requested.
         chunks_for_sql: Optional[List[Dict[str, Any]]] = None
         try:
@@ -889,6 +911,7 @@ async def persist_primary_av_item(
             prompt=getattr(form_data, "custom_prompt", None),
             analysis_content=analysis_for_db,
             safe_metadata=safe_metadata_json,
+            source_hash=source_hash_for_db,
             transcription_model=transcription_model_used,
             author=author_for_db,
             overwrite=getattr(form_data, "overwrite_existing", False),
@@ -1093,6 +1116,7 @@ async def process_batch_media(
     items_to_process: List[str] = []
     source_hash_by_ref: Dict[str, List[str]] = {}
     source_hash_by_source: Dict[str, str] = {}
+    source_hash_column_available: Optional[bool] = None
 
     logger.debug(
         "Starting pre-check for %d %s items...",
@@ -1141,25 +1165,47 @@ async def process_batch_media(
                 model_for_check = getattr(form_data, "transcription_model", None)
                 if source_hash and not is_url:
                     temp_db_for_check = MediaDatabase(db_path=db_path, client_id=client_id)
-                    pre_check_query = """
-                        SELECT m.id
-                        FROM Media m
-                        JOIN DocumentVersions dv ON dv.media_id = m.id
-                        WHERE m.url = ?
-                          AND m.transcription_model = ?
-                          AND m.is_trash = 0
-                          AND m.deleted = 0
-                          AND dv.deleted = 0
-                          AND dv.safe_metadata LIKE ?
-                        LIMIT 1
-                    """
-                    hash_fragment = f"%\"source_hash\":\"{source_hash}\"%"
-                    cursor = temp_db_for_check.execute_query(
-                        pre_check_query,
-                        (identifier_for_check, model_for_check, hash_fragment),
-                    )
-                    existing_record = cursor.fetchone()
-                    temp_db_for_check.close_connection()
+                    try:
+                        if source_hash_column_available is None:
+                            source_hash_column_available = _media_has_source_hash_column(
+                                temp_db_for_check
+                            )
+                        if source_hash_column_available:
+                            pre_check_query = """
+                                SELECT id
+                                FROM Media
+                                WHERE url = ?
+                                  AND transcription_model = ?
+                                  AND source_hash = ?
+                                  AND is_trash = 0
+                                  AND deleted = 0
+                                LIMIT 1
+                            """
+                            cursor = temp_db_for_check.execute_query(
+                                pre_check_query,
+                                (identifier_for_check, model_for_check, source_hash),
+                            )
+                        else:
+                            pre_check_query = """
+                                SELECT m.id
+                                FROM Media m
+                                JOIN DocumentVersions dv ON dv.media_id = m.id
+                                WHERE m.url = ?
+                                  AND m.transcription_model = ?
+                                  AND m.is_trash = 0
+                                  AND m.deleted = 0
+                                  AND dv.deleted = 0
+                                  AND dv.safe_metadata LIKE ?
+                                LIMIT 1
+                            """
+                            hash_fragment = f"%\"source_hash\":\"{source_hash}\"%"
+                            cursor = temp_db_for_check.execute_query(
+                                pre_check_query,
+                                (identifier_for_check, model_for_check, hash_fragment),
+                            )
+                        existing_record = cursor.fetchone()
+                    finally:
+                        temp_db_for_check.close_connection()
 
                     if existing_record:
                         existing_id = existing_record["id"]

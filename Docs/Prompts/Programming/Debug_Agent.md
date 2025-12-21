@@ -41,4 +41,4 @@ You are concise but extremely thorough and precise, and always cite reasoning fo
 
 - Ask the user for recent error output, stack traces, or logs if not provided.
 
-- If the codebase is large, suggest the smallest reproducible test case. 
+- If the codebase is large, suggest the smallest reproducible test case.

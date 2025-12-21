@@ -1,12 +1,15 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from 'react';
+import { useRouter } from 'next/router';
 import { api } from '@/lib/api-client';
 import { User } from '@/types';
 
+// UI gating only; backend must enforce authorization and never trust client permissions.
 interface PermissionContextType {
   user: User | null;
   permissions: string[];
+  permissionHints: string[];
   roles: string[];
   loading: boolean;
   hasPermission: (permission: string | string[]) => boolean;
@@ -21,6 +24,7 @@ interface PermissionContextType {
 const PermissionContext = createContext<PermissionContextType>({
   user: null,
   permissions: [],
+  permissionHints: [],
   roles: [],
   loading: true,
   hasPermission: () => false,
@@ -43,21 +47,21 @@ interface PermissionProviderProps {
 export function PermissionProvider({ children }: PermissionProviderProps) {
   const [user, setUser] = useState<User | null>(null);
   const [permissions, setPermissions] = useState<string[]>([]);
+  const [permissionHints, setPermissionHints] = useState<string[]>([]);
   const [roles, setRoles] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const loadUserPermissions = async () => {
+  const loadUserPermissions = useCallback(async () => {
     try {
       setLoading(true);
       const userData = await api.getCurrentUser();
       setUser(userData);
 
+      // UI-only role hints. Backend authorization must enforce real permissions.
       // Extract role
       const userRoles = userData.role ? [userData.role] : [];
       setRoles(userRoles);
 
-      // For now, derive permissions from role
-      // In a full implementation, you'd fetch actual permissions from the server
       const derivedPermissions: string[] = [];
 
       if (userRoles.includes('super_admin') || userRoles.includes('owner')) {
@@ -74,20 +78,31 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
         derivedPermissions.push('read:users', 'read:orgs', 'read:teams');
       }
 
-      setPermissions(derivedPermissions);
+      setPermissionHints(derivedPermissions);
+
+      // NOTE: UI gating only. Backend must enforce authorization.
+      try {
+        const effective = await api.getUserEffectivePermissions(userData.id.toString());
+        const serverPermissions = Array.isArray(effective?.permissions) ? effective.permissions : [];
+        setPermissions(serverPermissions);
+      } catch (error) {
+        console.error('Failed to load server permissions:', error);
+        setPermissions([]);
+      }
     } catch (error) {
       console.error('Failed to load user permissions:', error);
       setUser(null);
       setPermissions([]);
+      setPermissionHints([]);
       setRoles([]);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     loadUserPermissions();
-  }, []);
+  }, [loadUserPermissions]);
 
   const hasPermission = (permission: string | string[]): boolean => {
     if (permissions.includes('*')) return true;
@@ -124,6 +139,7 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
       value={{
         user,
         permissions,
+        permissionHints,
         roles,
         loading,
         hasPermission,
@@ -206,6 +222,7 @@ export function withPermission<P extends object>(
   options: WithPermissionOptions
 ) {
   return function PermissionProtectedComponent(props: P) {
+    const router = useRouter();
     const { hasPermission, hasRole, loading } = usePermissions();
     const [mounted, setMounted] = useState(false);
 
@@ -226,8 +243,8 @@ export function withPermission<P extends object>(
       (!options.role || hasRole(options.role));
 
     if (!hasAccess) {
-      if (options.redirectTo && typeof window !== 'undefined') {
-        window.location.href = options.redirectTo;
+      if (options.redirectTo) {
+        router.push(options.redirectTo);
         return null;
       }
 

@@ -9,40 +9,9 @@ import { useToast } from '@/components/ui/ToastProvider';
 import JsonEditor from '@/components/ui/JsonEditor';
 import { CardSkeleton } from '@/components/ui/Skeleton';
 import HotkeysOverlay from '@/components/ui/HotkeysOverlay';
+import type { MediaDetailResponse, MediaItem, MediaListResponse } from '@/types/api';
 
 type MediaType = 'video' | 'audio' | 'document' | 'pdf';
-
-interface MediaSource {
-  title?: string;
-  type?: string;
-  author?: string;
-}
-
-interface MediaContent {
-  text?: string;
-  word_count?: number;
-}
-
-interface MediaItem {
-  id: number;
-  title?: string;
-  media_type?: string;
-  author?: string;
-  created_at?: string;
-  source?: MediaSource;
-  content?: MediaContent;
-  keywords?: string[];
-}
-
-interface SearchPagination {
-  total_items: number;
-  total_pages: number;
-}
-
-interface SearchResponse {
-  items: MediaItem[];
-  pagination?: SearchPagination;
-}
 
 interface ProcessResult {
   processed_count?: number;
@@ -56,6 +25,20 @@ interface ProcessResult {
 interface ChatCompletionResponse {
   choices?: Array<{ message?: { content?: string } }>;
 }
+
+const resolveMetadataValue = (
+  metadata: Record<string, unknown> | undefined,
+  keys: string[]
+): string | null => {
+  if (!metadata) return null;
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === 'string' && value.trim()) {
+      return value;
+    }
+  }
+  return null;
+};
 
 export default function MediaPage() {
   const { show } = useToast();
@@ -76,7 +59,7 @@ export default function MediaPage() {
   const [totalPages, setTotalPages] = useState(1);
   const [totalItems, setTotalItems] = useState(0);
   const itemsPerPage = 10;
-  const [selectedItem, setSelectedItem] = useState<MediaItem | null>(null);
+  const [selectedItem, setSelectedItem] = useState<MediaDetailResponse | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<string | null>(null);
   const [analysisModel, setAnalysisModel] = useState<string>('gpt-3.5-turbo');
@@ -86,6 +69,7 @@ export default function MediaPage() {
   const [claimsExtraction, setClaimsExtraction] = useState<ClaimsToggle>('inherit');
   const [claimsExtractorMode, setClaimsExtractorMode] = useState<string>('');
   const [claimsMaxPerChunk, setClaimsMaxPerChunk] = useState<string>('');
+  const MAX_SNIPPET_CHARS = 12000;
 
   const endpoint = (t: MediaType) => {
     switch (t) {
@@ -111,14 +95,21 @@ export default function MediaPage() {
       }
       // Advanced options JSON appended as fields
       try {
-        const opts = JSON.parse(advancedJson || '{}');
+        const rawAdvanced = advancedJson?.trim() || '{}';
+        const opts = JSON.parse(rawAdvanced);
         delete opts.perform_claims_extraction;
         delete opts.claims_extractor_mode;
         delete opts.claims_max_per_chunk;
         Object.entries(opts).forEach(([k, v]) => {
           if (v !== undefined && v !== null) fd.append(k, typeof v === 'string' ? v : JSON.stringify(v));
         });
-      } catch {}
+      } catch (err) {
+        show({
+          title: 'Invalid advanced options JSON',
+          description: 'Using defaults instead.',
+          variant: 'warning',
+        });
+      }
       if (claimsExtraction !== 'inherit') {
         fd.append('perform_claims_extraction', claimsExtraction === 'enabled' ? 'true' : 'false');
       }
@@ -154,8 +145,8 @@ export default function MediaPage() {
     }
     setSearchLoading(true);
     try {
-      const data = await apiClient.get<SearchResponse>('/media/search', { params: { query: q, limit: 10 } });
-      setSearchResults(data?.items || []);
+      const data = await apiClient.get<MediaListResponse>('/media/search', { params: { query: q, limit: 10 } });
+      setSearchResults(data?.items || data?.results || []);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       setSearchResults([]);
@@ -172,14 +163,14 @@ export default function MediaPage() {
   const loadAll = useCallback(async (p = 1) => {
     setSearchLoading(true);
     try {
-      const data = await apiClient.post<SearchResponse>('/media/search', {
+      const data = await apiClient.post<MediaListResponse>('/media/search', {
         query: '',
         media_types: [],
         tags: [],
         keywords: [],
       }, { params: { page: p, results_per_page: itemsPerPage } });
 
-      setAllItems(data?.items || []);
+      setAllItems(data?.items || data?.results || []);
       setPage(p);
       setTotalItems(data?.pagination?.total_items || 0);
       setTotalPages(data?.pagination?.total_pages || 1);
@@ -195,7 +186,7 @@ export default function MediaPage() {
 
   const loadDetails = async (id: number) => {
     try {
-      const data = await apiClient.get<MediaItem>(`/media/${id}`);
+      const data = await apiClient.get<MediaDetailResponse>(`/media/${id}`);
       setSelectedItem(data);
       setAnalysisResult(null);
       show({ title: 'Loaded details', variant: 'info' });
@@ -206,13 +197,23 @@ export default function MediaPage() {
     }
   };
 
+  const notifyIfTruncated = useCallback((text: string, actionLabel: string) => {
+    if (text.length <= MAX_SNIPPET_CHARS) return;
+    show({
+      title: 'Content truncated',
+      description: `${actionLabel} first ${MAX_SNIPPET_CHARS.toLocaleString()} of ${text.length.toLocaleString()} characters.`,
+      variant: 'info',
+    });
+  }, [MAX_SNIPPET_CHARS, show]);
+
   const summarizeSelected = useCallback(async () => {
     if (!selectedItem) return;
     setAnalyzing(true);
     setAnalysisResult(null);
     try {
       const text: string = selectedItem?.content?.text || '';
-      const snippet = text.slice(0, 12000); // avoid very large payloads
+      notifyIfTruncated(text, 'Analyzing');
+      const snippet = text.slice(0, MAX_SNIPPET_CHARS); // avoid very large payloads
       const payload = {
         model: analysisModel,
         stream: false,
@@ -232,13 +233,14 @@ export default function MediaPage() {
     } finally {
       setAnalyzing(false);
     }
-  }, [analysisModel, analysisPrompt, selectedItem, show]);
+  }, [analysisModel, analysisPrompt, notifyIfTruncated, selectedItem, show, MAX_SNIPPET_CHARS]);
 
   const sendToChatSelected = async () => {
     if (!selectedItem) return;
     try {
       const text: string = selectedItem?.content?.text || '';
-      const snippet = text.slice(0, 12000); // keep reasonable size
+      notifyIfTruncated(text, 'Sending');
+      const snippet = text.slice(0, MAX_SNIPPET_CHARS); // keep reasonable size
       const payload = { message: snippet, title: selectedItem?.source?.title || '' };
       localStorage.setItem('tldw-chat-prefill', JSON.stringify(payload));
       router.push('/chat');
@@ -288,7 +290,7 @@ export default function MediaPage() {
                 {searchResults.map((item, idx) => (
                   <li key={idx} className="rounded border p-2">
                     <div className="font-medium text-gray-800">{item.title || 'Untitled'}</div>
-                    <div className="text-xs text-gray-500">{item.media_type || 'unknown'}</div>
+                    <div className="text-xs text-gray-500">{item.type || 'unknown'}</div>
                   </li>
                 ))}
               </ul>
@@ -316,9 +318,9 @@ export default function MediaPage() {
                     <div className="flex items-center justify-between">
                       <div>
                         <div className="font-medium text-gray-800">{item.title || 'Untitled'}</div>
-                        <div className="text-xs text-gray-500">{item.media_type || 'unknown'} • {item.author || 'Unknown'}</div>
+                        <div className="text-xs text-gray-500">{item.type || 'unknown'}</div>
                       </div>
-                      <div className="text-xs text-gray-400">{item.created_at ? new Date(item.created_at).toLocaleDateString() : ''}</div>
+                      <div className="text-xs text-gray-400">ID {item.id}</div>
                     </div>
                   </li>
                 ))}
@@ -399,7 +401,12 @@ export default function MediaPage() {
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">Author</div>
-                  <div className="text-sm">{selectedItem?.source?.author || '-'}</div>
+                  <div className="text-sm">
+                    {resolveMetadataValue(
+                      selectedItem?.content?.metadata,
+                      ['author', 'creator', 'uploader', 'channel']
+                    ) || '-'}
+                  </div>
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">Words</div>

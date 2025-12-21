@@ -59,7 +59,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Placeholder activity data until metrics endpoint is available.
+  // TODO(#metrics-endpoint): Replace placeholder activity data once metrics endpoint is available.
   const [activityData] = useState([
     { name: 'Mon', requests: 120, users: 45 },
     { name: 'Tue', requests: 150, users: 52 },
@@ -166,7 +166,8 @@ export default function DashboardPage() {
         llm: nextStats.enabledProviders > 0 ? 'healthy' : 'degraded',
       });
 
-    } catch {
+    } catch (err: unknown) {
+      console.error('Failed to load dashboard data:', err);
       setError('Failed to load dashboard statistics');
     } finally {
       setLoading(false);

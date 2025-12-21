@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
-    
+
 ## [Unreleased]
 
 ### Added
@@ -134,7 +134,7 @@ and this project adheres to Some kind of Versioning
 
 
 ## [0.1.6] - 2025-11-14
-### Fixed 
+### Fixed
 - HTTP-redirect loop
 - test bugs
 
@@ -143,7 +143,7 @@ and this project adheres to Some kind of Versioning
 
 
 ## [0.1.5] - 2025-11-13
-### Fixed 
+### Fixed
 - Ollama API system_prompt
 - Other stuff
 
@@ -157,7 +157,7 @@ and this project adheres to Some kind of Versioning
 
 
 ## [0.1.4] - 2025-11-9
-### Fixed 
+### Fixed
 - Numpy requirement in base install
 - Default API now respected via config/not just ENV var.
 - Too many issues to count.
@@ -172,17 +172,17 @@ and this project adheres to Some kind of Versioning
 
 
 ## [0.1.3.0] - 2025-X
-### Fixed 
+### Fixed
 - Bugfixes
-- 
+-
 
 ## [0.1.2.0] - 2025-X
-### Fixed 
+### Fixed
 - Bugfixes
 
 
 ## [0.1.1.0] - 2025-X
 ### Features
 - Version 0.1
-### Fixed 
+### Fixed
 - Use of gradio

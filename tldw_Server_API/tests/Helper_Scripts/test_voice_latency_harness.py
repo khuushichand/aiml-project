@@ -58,4 +58,3 @@ def test_parse_prometheus_histograms_and_extract() -> None:
     p = _extract_histogram_percentiles(metrics, "stt_final_latency_seconds")
     assert "p50" in p and "p90" in p
     assert p["p50"] > 0
-

@@ -146,16 +146,16 @@
   - Config loader (`core/config`) for provider settings.
 
 - **Milestones**
-  1. **M1 - Turn Detection/Auto-Commit**: Silero VAD-driven turn detection in unified WS STT; auto-commit finals within target latency on reference audio (fail-open if VAD missing).  
+  1. **M1 - Turn Detection/Auto-Commit**: Silero VAD-driven turn detection in unified WS STT; auto-commit finals within target latency on reference audio (fail-open if VAD missing).
      - **Acceptance**: On the reference fixture, p50 `stt_final_latency_seconds` for unified WS STT ≤ 600ms with VAD enabled; fail-open mode emits a clear metric/log label and does not regress quotas/auth.
      - **Status**: Implemented in unified WS path (fail-open); needs real-world threshold tuning + doc polish.
-  2. **M2 - Phoneme/Lexicon Overrides**: configurable pronunciation maps for Kokoro with safe defaults and precedence rules; demo request shows changed pronunciation.  
+  2. **M2 - Phoneme/Lexicon Overrides**: configurable pronunciation maps for Kokoro with safe defaults and precedence rules; demo request shows changed pronunciation.
      - **Acceptance**: Given a documented test phrase and phoneme map, Kokoro output changes as expected in at least one integration fixture; added latency from applying overrides is ≤ 5% vs baseline on the reference setup.
      - **Status**: Not started.
- 3. **M3 - Optional WS TTS**: `/api/v1/audio/stream/tts` with backpressure/auth/quota parity and PCM streaming; passes slow-reader/disconnect tests. Ownership split with TTS PRD; delivery blocked until TTS team signs off.  
+ 3. **M3 - Optional WS TTS**: `/api/v1/audio/stream/tts` with backpressure/auth/quota parity and PCM streaming; passes slow-reader/disconnect tests. Ownership split with TTS PRD; delivery blocked until TTS team signs off.
      - **Acceptance**: p50 `tts_ttfb_seconds` over WS ≤ 200ms on the reference setup; slow-reader and disconnect tests complete without resource leaks and emit `audio_stream_underruns_total`/error metrics as expected.
      - **Status**: Not started (coordination with TTS PRD required).
- 4. **M4 - Docs & Harness**: refreshed STT/TTS docs plus a lightweight voice-to-voice latency harness consuming existing metrics; documented CLI/outputs.  
+ 4. **M4 - Docs & Harness**: refreshed STT/TTS docs plus a lightweight voice-to-voice latency harness consuming existing metrics; documented CLI/outputs.
      - **Acceptance**: `Helper_Scripts/voice_latency_harness/run.py --out out.json --short` (or equivalent) runs against the reference setup and outputs JSON with at least p50/p90 for `stt_final_latency_seconds`, `tts_ttfb_seconds`, and `voice_to_voice_seconds`; short mode suitable for CI; docs reference the harness and the VAD/metrics knobs.
      - **Status**: Not started (metrics are wired; harness outstanding).
 

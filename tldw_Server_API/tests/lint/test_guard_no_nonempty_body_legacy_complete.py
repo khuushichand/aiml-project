@@ -31,4 +31,3 @@ def test_no_nonempty_body_post_to_legacy_complete():
         "Found tests posting non-empty JSON bodies to legacy /complete endpoint.\n"
         + "\n".join(f"{p}:{ln}: {snip}" for p, ln, snip in offenders)
     )
-

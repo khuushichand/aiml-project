@@ -604,7 +604,7 @@ curl -X POST http://localhost:8000/api/v1/audio/speech \
   -H "Authorization: Bearer your-token" \
   -d @request.json \
   --output cloned.mp3
-  
+
 # Important: check the HTTP status code. On non-2xx, the response body will be
 # a JSON error (not audio), so handle that in scripts by inspecting the status
 # and printing/parsing the body instead of assuming audio.

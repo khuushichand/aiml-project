@@ -62,4 +62,3 @@ def test_visual_documents_insert_list_and_soft_delete():
     docs_all = db.list_visual_documents_for_media(media_id, include_deleted=True)
     assert len(docs_all) == 2
     assert all(d["deleted"] == 1 for d in docs_all)
-

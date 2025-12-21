@@ -77,4 +77,3 @@ async def test_security_summary_does_not_count_started_as_failure(tmp_path):
         assert summary["failure_events"] == 0
     finally:
         await service.stop()
-

@@ -96,11 +96,16 @@ export default function OrganizationDetailPage() {
       setError('User ID is required');
       return;
     }
+    const userId = parseInt(newMemberUserId, 10);
+    if (Number.isNaN(userId) || userId <= 0) {
+      setError('User ID must be a valid positive number');
+      return;
+    }
 
     try {
       setError('');
       await api.addOrgMember(orgId, {
-        user_id: parseInt(newMemberUserId),
+        user_id: userId,
         role: newMemberRole,
       });
       setSuccess('Member added successfully');

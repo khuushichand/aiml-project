@@ -174,4 +174,3 @@ async def remaining_daily_cost_units(
         )
         # Fail-open by returning the full cap so callers treat this as unlimited.
         return int(daily_cap_units)
-

@@ -126,4 +126,3 @@ __all__ = [
     "normalize_urls",
     "normalize_optional_sequence",
 ]
-

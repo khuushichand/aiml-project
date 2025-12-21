@@ -46,4 +46,3 @@ async def test_handle_audio_transcribe_stage_uses_normalized_artifact(monkeypatc
     assert updated_payload["segments"] == fake_segments
     assert updated_payload["text"] == "hello worker"
     assert updated_payload.get("normalized_stt") == fake_artifact
-

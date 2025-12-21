@@ -83,4 +83,3 @@ async def test_prompt_studio_check_rate_limit_bypasses_when_rg_policy_present(mo
         security_config=sec,
     )
     assert ok is True
-

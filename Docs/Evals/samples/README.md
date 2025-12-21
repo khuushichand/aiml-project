@@ -39,4 +39,3 @@ curl -sS -X POST http://127.0.0.1:8000/api/v1/evaluations/datasets \
   -H "X-API-KEY: $SINGLE_USER_API_KEY" \
   --data @Docs/Evals/samples/dataset_quick.json
 ```
-

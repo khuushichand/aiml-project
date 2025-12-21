@@ -716,14 +716,14 @@ class RedisResourceGovernor(ResourceGovernor):
             except Exception:
                 is_stub = True
                 client = None
-    
+
             # Use ZSET-based sliding-window checks for both real and stub clients.
             # Atomic multi-key reservations are only attempted on real Redis in reserve().
             force_stub_rate = False
             overall_allowed = True
             retry_after_overall = 0
             per_category: Dict[str, Any] = {}
-    
+
             smoothing_any = False
             for category, cfg in req.categories.items():
                 units = int(cfg.get("units") or 0)
@@ -768,7 +768,7 @@ class RedisResourceGovernor(ResourceGovernor):
                                                 )
                                             except Exception:
                                                 pass
-    
+
                                             if step < window and now >= float(start_aw) + float(window - step):
                                                 # Allow within final step and mark smoothing applied so subsequent
                                                 # checks do not re-apply early deny paths in this evaluation.
@@ -865,7 +865,7 @@ class RedisResourceGovernor(ResourceGovernor):
                         if not daily_allowed:
                             allowed = False
                         retry_after = max(int(retry_after or 0), int(daily_ra or 0))
-    
+
                     per_category[category] = {
                         "allowed": allowed,
                         "limit": limit,
@@ -1059,11 +1059,11 @@ class RedisResourceGovernor(ResourceGovernor):
                     details_other["allowed"] = allowed
                     details_other["retry_after"] = retry_after
                     per_category[category] = details_other
-    
+
                 if overall_allowed and not per_category[category]["allowed"]:
                     overall_allowed = False
                 retry_after_overall = max(retry_after_overall, int(per_category[category].get("retry_after") or 0))
-    
+
                 # Metrics per category (decision)
                 reg = self._reg()
                 if reg:
@@ -1104,13 +1104,13 @@ class RedisResourceGovernor(ResourceGovernor):
                             pass
                     except Exception:
                         pass
-    
+
             # Record decision metric (summary per-category already emitted via caller ideally)
             details: Dict[str, Any] = {"policy_id": policy_id, "categories": per_category}
             if smoothing_any:
                 details["smoothing_stub"] = True
             return RGDecision(allowed=overall_allowed, retry_after=(retry_after_overall or None), details=details)
-    
+
         except _FallbackToMemory:
             if fallback_allowed and self._stub_delegate is not None:
                 dec = await self._stub_delegate.check(req)
@@ -1909,7 +1909,7 @@ class RedisResourceGovernor(ResourceGovernor):
                         continue
                 except Exception:
                     continue
-                    
+
                 for sc, ev in (("global", "*"), (entity_scope, entity_value)):
                     if sc not in self._scopes(pol) and not (sc == entity_scope and "entity" in self._scopes(pol)):
                         continue

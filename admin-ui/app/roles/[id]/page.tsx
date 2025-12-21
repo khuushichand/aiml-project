@@ -143,6 +143,24 @@ export default function RoleDetailPage() {
     setEditMode(false);
   };
 
+  const handleDeleteRole = async () => {
+    const confirmed = await confirm({
+      title: 'Delete Role',
+      message: `Delete role "${role?.name || 'this role'}"? This cannot be undone.`,
+      confirmText: 'Delete',
+      variant: 'danger',
+      icon: 'delete',
+    });
+    if (!confirmed) return;
+
+    try {
+      await api.deleteRole(roleId);
+      router.push('/roles');
+    } catch (err: unknown) {
+      setError(err instanceof Error && err.message ? err.message : 'Failed to delete role');
+    }
+  };
+
   // Group permissions by category (based on naming convention like "read:users", "write:media")
   const groupedPermissions = allPermissions.reduce((acc, perm) => {
     const parts = perm.name.split(':');
@@ -418,23 +436,7 @@ export default function RoleDetailPage() {
                     <Button
                       variant="outline"
                       className="text-red-500 hover:text-red-600"
-                      onClick={async () => {
-                        const confirmed = await confirm({
-                          title: 'Delete Role',
-                          message: `Delete role "${role.name}"? This cannot be undone.`,
-                          confirmText: 'Delete',
-                          variant: 'danger',
-                          icon: 'delete',
-                        });
-                        if (confirmed) {
-                          try {
-                            await api.deleteRole(roleId);
-                            router.push('/roles');
-                          } catch (err: unknown) {
-                            setError(err instanceof Error && err.message ? err.message : 'Failed to delete role');
-                          }
-                        }
-                      }}
+                      onClick={handleDeleteRole}
                     >
                       <Trash2 className="mr-2 h-4 w-4" />
                       Delete Role

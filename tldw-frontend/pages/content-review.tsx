@@ -17,6 +17,7 @@ const seedDrafts: Draft[] = [
     status: 'in_progress',
     mediaType: 'audio',
     content: '# Interview Highlights\n\n- Speaker A: ...\n- Speaker B: ...',
+    keywords: ['interview', 'audio'],
     assetStatus: 'missing',
   },
   {
@@ -25,6 +26,7 @@ const seedDrafts: Draft[] = [
     status: 'pending',
     mediaType: 'document',
     content: '## Notes\n\nCleaned up summary content goes here.',
+    keywords: ['research', 'notes'],
     assetStatus: 'present',
     source: { kind: 'url', value: 'https://example.com/article' },
   },
@@ -35,6 +37,9 @@ export default function ContentReviewPage() {
   const [drafts, setDrafts] = useState<Draft[]>(seedDrafts);
   const [selectedId, setSelectedId] = useState<string>(seedDrafts[0]?.id || '');
   const [editorText, setEditorText] = useState<string>(seedDrafts[0]?.content || '');
+  const [keywordsInput, setKeywordsInput] = useState<string>(
+    seedDrafts[0]?.keywords?.join(', ') || ''
+  );
   const [dirty, setDirty] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
   const [reattachOpen, setReattachOpen] = useState(false);
@@ -50,8 +55,8 @@ export default function ContentReviewPage() {
 
   useEffect(() => {
     setEditorText(selectedDraft?.content || '');
+    setKeywordsInput(selectedDraft?.keywords?.join(', ') || '');
     setDirty(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDraft?.id]); // Reset editor only when switching drafts, not on content changes
 
   useEffect(() => {
@@ -67,6 +72,16 @@ export default function ContentReviewPage() {
 
   const updateDraft = (id: string, patch: Partial<Draft>) => {
     setDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
+  };
+
+  const handleKeywordsChange = (nextValue: string) => {
+    setKeywordsInput(nextValue);
+    if (!selectedDraft) return;
+    const keywords = nextValue
+      .split(',')
+      .map((keyword) => keyword.trim())
+      .filter(Boolean);
+    updateDraft(selectedDraft.id, { keywords });
   };
 
   const saveDraft = () => {
@@ -210,7 +225,12 @@ export default function ContentReviewPage() {
                 <h3 className="text-sm font-semibold text-gray-700">Metadata</h3>
                 <div className="mt-3 grid gap-3 md:grid-cols-2">
                   <Input label="Title" value={selectedDraft.title} readOnly />
-                  <Input label="Keywords" placeholder="comma-separated" />
+                  <Input
+                    label="Keywords"
+                    placeholder="comma-separated"
+                    value={keywordsInput}
+                    onChange={(event) => handleKeywordsChange(event.target.value)}
+                  />
                 </div>
               </div>
 

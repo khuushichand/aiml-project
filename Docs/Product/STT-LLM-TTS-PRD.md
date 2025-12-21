@@ -1,6 +1,6 @@
 # Speech-to-Speech Chat Pipeline PRD
 
-Owner: Core Voice & Chat Team  
+Owner: Core Voice & Chat Team
 Status: Draft (v0.1)
 
 ## 1. Summary

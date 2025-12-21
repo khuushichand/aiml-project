@@ -25,4 +25,3 @@ class LlamaCppInferenceRequest(BaseModel):
 
     def to_kwargs(self) -> Dict[str, Any]:
         return self.model_dump(exclude_none=True)
-

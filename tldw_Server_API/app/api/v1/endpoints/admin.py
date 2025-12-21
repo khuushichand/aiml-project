@@ -124,6 +124,7 @@ from tldw_Server_API.app.core.AuthNZ.alerting import get_security_alert_dispatch
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
     create_organization,
     list_organizations,
+    get_team,
     create_team,
     add_team_member,
     list_team_members,
@@ -294,10 +295,10 @@ async def _ensure_sqlite_authnz_ready_if_test_mode() -> None:
 
 
 def _role_rank(role: Optional[str]) -> int:
-    try:
-        return ROLE_HIERARCHY.get(str(role).strip().lower(), 0)
-    except Exception:
+    """Map a role string to its numeric rank using ROLE_HIERARCHY."""
+    if role is None:
         return 0
+    return ROLE_HIERARCHY.get(str(role).strip().lower(), 0)
 
 
 async def _enforce_admin_user_scope(
@@ -306,6 +307,7 @@ async def _enforce_admin_user_scope(
     *,
     require_hierarchy: bool,
 ) -> None:
+    """Enforce shared-org membership and optional role hierarchy for admin actions."""
     if is_single_user_principal(principal):
         return
 
@@ -904,11 +906,13 @@ async def admin_list_orgs(
         wants_wrapper = any(k in qp for k in ("limit", "offset", "q"))
 
         # Ask service for rows and optionally total
-        result = await list_organizations(limit=limit, offset=offset, q=q, with_total=wants_wrapper)  # type: ignore[assignment]
+        result = await list_organizations(limit=limit, offset=offset, q=q, with_total=wants_wrapper)
         if wants_wrapper:
-            rows, total = result  # type: ignore[misc]
+            if not isinstance(result, tuple) or len(result) != 2:
+                raise ValueError("Unexpected organization list response")
+            rows, total = result
         else:
-            rows = result  # type: ignore[assignment]
+            rows = result[0] if isinstance(result, tuple) else result
             total = 0
         items = [OrganizationResponse(**r).model_dump() for r in rows]
 
@@ -950,6 +954,20 @@ async def admin_list_teams(org_id: int, limit: int = Query(100, ge=1, le=1000), 
     except Exception as e:
         logger.error(f"Failed to list teams: {e}")
         raise HTTPException(status_code=500, detail="Failed to list teams")
+
+
+@router.get("/teams/{team_id}", response_model=TeamResponse)
+async def admin_get_team(team_id: int) -> TeamResponse:
+    try:
+        team = await get_team(team_id)
+        if not team:
+            raise HTTPException(status_code=404, detail="team_not_found")
+        return TeamResponse(**team)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch team {team_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch team")
 
 
 @router.patch("/orgs/{org_id}/watchlists/settings", response_model=OrganizationWatchlistsSettingsResponse)
@@ -1525,12 +1543,12 @@ async def get_user_details(
         User details excluding sensitive fields (e.g., password_hash)
     """
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
+
         repo = await AuthnzUsersRepo.from_pool()
         user = await repo.get_user_by_id(user_id)
         if not user:
             raise UserNotFoundError(f"User {user_id}")
-
-        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
 
         # Remove sensitive fields; repository normalizes backend-specific types
         user_dict: Dict[str, Any] = dict(user)
@@ -1571,12 +1589,12 @@ async def update_user(
         Success message
     """
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
+
         repo = await AuthnzUsersRepo.from_pool()
         user = await repo.get_user_by_id(user_id)
         if not user:
             raise UserNotFoundError(f"User {user_id}")
-
-        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
 
         is_pg = await is_postgres_backend()
         # Build update query dynamically
@@ -3834,7 +3852,10 @@ async def get_personalization_status():
     try:
         from tldw_Server_API.app.services.personalization_consolidation import get_consolidation_service
         svc = get_consolidation_service()
-        return svc.get_status()  # type: ignore[attr-defined]
+        status_fn = getattr(svc, "get_status", None)
+        if callable(status_fn):
+            return status_fn()
+        raise ValueError("Personalization status unavailable")
     except Exception as e:
         logger.warning(f"Admin status fetch failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch status")

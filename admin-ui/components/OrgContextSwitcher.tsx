@@ -3,6 +3,13 @@
 import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from 'react';
 import { Building2, ChevronDown, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { api } from '@/lib/api-client';
 import { Organization } from '@/types';
 import { usePermissions } from '@/components/PermissionGuard';
@@ -25,6 +32,8 @@ const OrgContext = createContext<OrgContextType>({
   refresh: async () => {},
 });
 
+const ORG_SELECTION_STORAGE_KEY = 'selectedOrgId';
+
 export function useOrgContext() {
   return useContext(OrgContext);
 }
@@ -42,24 +51,74 @@ export function OrgContextProvider({ children }: OrgContextProviderProps) {
   // Org-scoped means the user is NOT a super admin but might be an org admin
   const isOrgScoped = !permLoading && !isSuperAdmin() && user !== null;
 
+  const handleSetSelectedOrg = useCallback((org: Organization | null) => {
+    setSelectedOrg(org);
+    if (typeof window === 'undefined') {
+      return;
+    }
+    try {
+      if (org) {
+        localStorage.setItem(ORG_SELECTION_STORAGE_KEY, String(org.id));
+      } else {
+        localStorage.removeItem(ORG_SELECTION_STORAGE_KEY);
+      }
+    } catch (error) {
+      console.warn('Failed to persist org selection:', error);
+    }
+  }, []);
+
   const loadOrganizations = useCallback(async () => {
     try {
       setLoading(true);
       const orgs = await api.getOrganizations();
       const orgList = Array.isArray(orgs) ? orgs : [];
       setOrganizations(orgList);
-
-      // If org-scoped and there are orgs, select the first one by default
-      if (isOrgScoped && orgList.length > 0) {
-        setSelectedOrg((current) => current ?? orgList[0]);
-      }
     } catch (error) {
       console.error('Failed to load organizations:', error);
       setOrganizations([]);
     } finally {
       setLoading(false);
     }
-  }, [isOrgScoped]);
+  }, []);
+
+  useEffect(() => {
+    if (organizations.length === 0 || selectedOrg) {
+      return;
+    }
+    let storedId: number | null = null;
+    if (typeof window !== 'undefined') {
+      try {
+        const stored = localStorage.getItem(ORG_SELECTION_STORAGE_KEY);
+        if (stored) {
+          const parsed = Number.parseInt(stored, 10);
+          if (!Number.isNaN(parsed)) {
+            storedId = parsed;
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to load persisted org selection:', error);
+      }
+    }
+
+    if (storedId !== null) {
+      const storedOrg = organizations.find((org) => org.id === storedId);
+      if (storedOrg) {
+        handleSetSelectedOrg(storedOrg);
+        return;
+      }
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.removeItem(ORG_SELECTION_STORAGE_KEY);
+        } catch (error) {
+          console.warn('Failed to clear invalid org selection:', error);
+        }
+      }
+    }
+
+    if (isOrgScoped) {
+      handleSetSelectedOrg(organizations[0]);
+    }
+  }, [handleSetSelectedOrg, isOrgScoped, organizations, selectedOrg]);
 
   useEffect(() => {
     if (!permLoading) {
@@ -72,7 +131,7 @@ export function OrgContextProvider({ children }: OrgContextProviderProps) {
       value={{
         organizations,
         selectedOrg,
-        setSelectedOrg,
+        setSelectedOrg: handleSetSelectedOrg,
         loading,
         isOrgScoped,
         refresh: loadOrganizations,
@@ -91,7 +150,6 @@ interface OrgContextSwitcherProps {
 export function OrgContextSwitcher({ className = '' }: OrgContextSwitcherProps) {
   const { organizations, selectedOrg, setSelectedOrg, loading } = useOrgContext();
   const { isSuperAdmin } = usePermissions();
-  const [isOpen, setIsOpen] = useState(false);
 
   // Super admins see all orgs but can choose to scope; org admins must select from their orgs
   if (loading) {
@@ -108,69 +166,46 @@ export function OrgContextSwitcher({ className = '' }: OrgContextSwitcherProps) 
   }
 
   return (
-    <div className={`relative ${className}`}>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="w-full justify-between"
-        onClick={() => setIsOpen(!isOpen)}
-      >
-        <div className="flex items-center gap-2">
-          <Building2 className="h-4 w-4" />
-          <span className="truncate max-w-[120px]">
-            {selectedOrg ? selectedOrg.name : 'All Organizations'}
-          </span>
-        </div>
-        <ChevronDown className={`h-4 w-4 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
-      </Button>
+    <div className={className}>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="sm" className="group w-full justify-between">
+            <div className="flex items-center gap-2">
+              <Building2 className="h-4 w-4" />
+              <span className="truncate max-w-[120px]">
+                {selectedOrg ? selectedOrg.name : 'All Organizations'}
+              </span>
+            </div>
+            <ChevronDown className="h-4 w-4 transition-transform group-data-[state=open]:rotate-180" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="min-w-[200px]">
+          {isSuperAdmin() && (
+            <DropdownMenuItem
+              className="flex items-center gap-2"
+              onSelect={() => setSelectedOrg(null)}
+            >
+              <Building2 className="h-4 w-4" />
+              <span className="flex-1">All Organizations</span>
+              {!selectedOrg && <Check className="h-4 w-4 text-primary" />}
+            </DropdownMenuItem>
+          )}
 
-      {isOpen && (
-        <>
-          {/* Backdrop */}
-          <div
-            className="fixed inset-0 z-40"
-            onClick={() => setIsOpen(false)}
-          />
-          {/* Dropdown */}
-          <div className="absolute top-full left-0 mt-1 w-full min-w-[180px] bg-popover border rounded-md shadow-lg z-50 py-1">
-            {/* All orgs option (only for super admins) */}
-            {isSuperAdmin() && (
-              <button
-                className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted text-left"
-                onClick={() => {
-                  setSelectedOrg(null);
-                  setIsOpen(false);
-                }}
-              >
-                <Building2 className="h-4 w-4" />
-                <span className="flex-1">All Organizations</span>
-                {!selectedOrg && <Check className="h-4 w-4 text-primary" />}
-              </button>
-            )}
+          {isSuperAdmin() && organizations.length > 0 && <DropdownMenuSeparator />}
 
-            {/* Divider */}
-            {isSuperAdmin() && organizations.length > 0 && (
-              <div className="border-t my-1" />
-            )}
-
-            {/* Organization list */}
-            {organizations.map((org) => (
-              <button
-                key={org.id}
-                className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted text-left"
-                onClick={() => {
-                  setSelectedOrg(org);
-                  setIsOpen(false);
-                }}
-              >
-                <Building2 className="h-4 w-4" />
-                <span className="flex-1 truncate">{org.name}</span>
-                {selectedOrg?.id === org.id && <Check className="h-4 w-4 text-primary" />}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
+          {organizations.map((org) => (
+            <DropdownMenuItem
+              key={org.id}
+              className="flex items-center gap-2"
+              onSelect={() => setSelectedOrg(org)}
+            >
+              <Building2 className="h-4 w-4" />
+              <span className="flex-1 truncate">{org.name}</span>
+              {selectedOrg?.id === org.id && <Check className="h-4 w-4 text-primary" />}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }

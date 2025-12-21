@@ -138,6 +138,16 @@ async def list_team_members(team_id: int) -> List[Dict[str, Any]]:
     return await repo.list_team_members(team_id)
 
 
+async def get_team(team_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Fetch a team by ID.
+
+    Returns the team dict or ``None`` if not found.
+    """
+    repo = await _get_orgs_teams_repo()
+    return await repo.get_team(team_id)
+
+
 async def list_memberships_for_user(user_id: int) -> List[Dict[str, Any]]:
     """List team memberships (and org_id) for a given user.
 

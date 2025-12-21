@@ -14,4 +14,3 @@ except Exception:
     # If shared plugin import fails, tests that need these fixtures
     # will error explicitly; do not fail collection here.
     pass
-

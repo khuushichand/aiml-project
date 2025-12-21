@@ -44,4 +44,3 @@ def test_ellipsis_stripping_unicode_and_three_dots():
     t2 = generate_note_title_heuristic(content_three, max_len=250)
     assert t1 == "My title"
     assert t2 == "My title"
-

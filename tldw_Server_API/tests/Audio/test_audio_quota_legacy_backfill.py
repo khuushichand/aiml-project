@@ -63,4 +63,3 @@ async def test_legacy_audio_usage_daily_backfilled_into_resource_daily_ledger(tm
         assert 145 <= total_units <= 155, f"Expected ~150 seconds from backfill, got {total_units}"
     finally:
         await pool.close()
-

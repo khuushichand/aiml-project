@@ -55,4 +55,3 @@ async def test_ensure_api_keys_tables_pg_reports_missing_tables() -> None:
     pool = _StubPostgresPool(tables_exist=False)
     ok = await ensure_api_keys_tables_pg(pool)
     assert ok is False
-

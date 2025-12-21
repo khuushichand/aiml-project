@@ -146,4 +146,3 @@ async def test_workflows_control_run_allowed_with_control_permission():
     assert resp.status_code == 200
     body = resp.json()
     assert body.get("ok") is True
-

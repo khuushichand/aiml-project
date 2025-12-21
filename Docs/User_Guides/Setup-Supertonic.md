@@ -48,16 +48,16 @@ python -m uvicorn tldw_Server_API.app.main:app --reload
 ## 4) Smoke tests
 Include your auth header (examples use `X-API-KEY`):
 
-- Provider inventory (capabilities):  
+- Provider inventory (capabilities):
   `curl -s http://127.0.0.1:8000/api/v1/audio/providers -H "X-API-KEY: <key>" | jq .providers.supertonic`
 
-- Voice catalog:  
+- Voice catalog:
   `curl -s http://127.0.0.1:8000/api/v1/audio/voices/catalog -H "X-API-KEY: <key>" | jq .supertonic`
 
-- Non-streaming MP3:  
+- Non-streaming MP3:
   `curl -o supertonic.mp3 -X POST http://127.0.0.1:8000/api/v1/audio/speech -H "X-API-KEY: <key>" -H "Content-Type: application/json" -d '{"model":"tts-supertonic-1","input":"Hello from Supertonic","voice":"supertonic_m1","response_format":"mp3","stream":false}'`
 
-- Streaming WAV (chunked):  
+- Streaming WAV (chunked):
   `curl --no-buffer -X POST http://127.0.0.1:8000/api/v1/audio/speech -H "X-API-KEY: <key>" -H "Content-Type: application/json" -d '{"model":"tts-supertonic-1","input":"Streaming from Supertonic","voice":"supertonic_m1","response_format":"wav","stream":true}' > supertonic_stream.wav`
 
 If you see HTTP 500s, check logs for missing model/style files or mismatched paths.

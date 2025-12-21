@@ -12,4 +12,3 @@ def parse_boolean(val: Optional[str], default: bool = False) -> bool:
     if val is None:
         return default
     return str(val).strip().lower() in {"1", "true", "yes", "on"}
-

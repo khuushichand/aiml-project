@@ -52,4 +52,3 @@ def test_max_output_cap_truncates():
     out = render("{{ big }}", ctx, opts)
     assert len(out) == 2000
     assert out == "x" * 2000
-

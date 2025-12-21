@@ -71,15 +71,15 @@ EOF
 ```
 You can also keep large provider configs in `tldw_Server_API/Config_Files/config.txt`.
 
-> Important: Replace `CHANGE_ME_TO_SECURE_API_KEY` with a strong random value before continuing.  
-> - **Option A (simple)**: run `python -c "import secrets; print(secrets.token_urlsafe(32))"` and paste the result into `SINGLE_USER_API_KEY`.  
+> Important: Replace `CHANGE_ME_TO_SECURE_API_KEY` with a strong random value before continuing.
+> - **Option A (simple)**: run `python -c "import secrets; print(secrets.token_urlsafe(32))"` and paste the result into `SINGLE_USER_API_KEY`.
 > - **Option B (rotate later)**: once you have a working `.env`, you can re-run the initializer (below), answer `y` to the “Generate new secure keys?” prompt to print fresh values, then paste them into `.env` and re-run the initializer.
 
 ### 3.3 Initialize AuthNZ and databases
 ```bash
 python -m tldw_Server_API.app.core.AuthNZ.initialize
 ```
-This validates the environment and seeds the AuthNZ DB.  
+This validates the environment and seeds the AuthNZ DB.
 The command is **interactive**: run it in a terminal and answer the prompts (you can safely answer `N` to optional steps like starting background services). If it reports configuration issues (e.g., placeholder API keys), edit `.env` and run it again.
 
 ### 3.4 Run the API

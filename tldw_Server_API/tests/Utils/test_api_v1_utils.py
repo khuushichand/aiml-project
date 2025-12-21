@@ -156,4 +156,3 @@ def test_http_error_mapping_for_db_exceptions():
     exc = DatabaseError("db")
     http_exc = http_errors.map_db_error_to_http(exc)
     assert http_exc.status_code == 500
-

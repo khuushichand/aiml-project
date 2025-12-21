@@ -36,4 +36,3 @@ def ensure_gitignore(path: Path, entries: Iterable[str]) -> None:
             changed = True
     if changed:
         atomic_write(path, "\n".join(existing) + "\n")
-

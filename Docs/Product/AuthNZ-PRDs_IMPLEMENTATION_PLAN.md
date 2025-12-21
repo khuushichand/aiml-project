@@ -5,4 +5,3 @@ The canonical implementation plan was moved to:
 
 Post‑v0.1 follow-ups are tracked in:
 - `Docs/Product/AuthNZ-PRDs_POST_V0_1_TRACKER.md`
-

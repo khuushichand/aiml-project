@@ -14,6 +14,7 @@ export type Draft = {
   status: DraftStatus;
   mediaType: string;
   content: string;
+  keywords: string[];
   assetStatus: AssetStatus;
   source?: DraftSource;
   assetNote?: string;

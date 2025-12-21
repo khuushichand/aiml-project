@@ -222,8 +222,12 @@ export default function ConfigPage() {
           value={inputValue}
           onChange={(e) => {
             if (field.type === 'number') {
+              if (e.target.value === '') {
+                updateConfigValue(field.key, '');
+                return;
+              }
               const parsed = parseInt(e.target.value, 10);
-              updateConfigValue(field.key, Number.isNaN(parsed) ? 0 : parsed);
+              updateConfigValue(field.key, Number.isNaN(parsed) ? '' : parsed);
               return;
             }
             updateConfigValue(field.key, e.target.value);

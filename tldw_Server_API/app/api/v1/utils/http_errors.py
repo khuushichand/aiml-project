@@ -74,4 +74,3 @@ def map_db_error_to_http(
 
 
 __all__ = ["map_db_error_to_http"]
-

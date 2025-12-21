@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
@@ -92,7 +92,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   // Filter navigation based on permissions
   const visibleNavigation = navigation.filter((item) => {
     if (!item.permission && !item.role) return true;
-    if (permLoading) return true;
+    if (permLoading) return false;
     if (item.permission && hasPermission(item.permission)) return true;
     if (item.role && hasRole(item.role)) return true;
     return false;
@@ -214,16 +214,24 @@ interface ResponsiveLayoutProps {
 export function ResponsiveLayout({ children }: ResponsiveLayoutProps) {
   const [isOpen, setIsOpen] = useState(false);
   const pathname = usePathname();
+  const prevPathnameRef = useRef(pathname);
 
   // Close mobile menu on route change
   useEffect(() => {
     if (!isOpen) {
+      prevPathnameRef.current = pathname;
+      return undefined;
+    }
+
+    if (prevPathnameRef.current === pathname) {
       return undefined;
     }
 
     const timeoutId = window.setTimeout(() => {
       setIsOpen(false);
     }, 0);
+
+    prevPathnameRef.current = pathname;
 
     return () => window.clearTimeout(timeoutId);
   }, [isOpen, pathname]);

@@ -38,4 +38,3 @@ def test_regex_templating_with_group():
     new_text, count = apply_replacement_once(text, entry)
     assert count >= 1
     assert "WIDGET is priced" in new_text
-

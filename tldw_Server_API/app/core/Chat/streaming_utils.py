@@ -67,7 +67,8 @@ try:
         os.getenv('STREAMING_SYNC_BRIDGE_ENABLED') or
         _chat_config.get('streaming_sync_bridge_enabled', 'true')
     ).lower() in {"1", "true", "yes", "y", "on"}
-except Exception:
+except (ValueError, TypeError) as exc:
+    logger.debug(f"Failed to parse STREAMING_SYNC_BRIDGE_ENABLED, using default: {exc}")
     STREAMING_SYNC_BRIDGE_ENABLED = True
 
 try:
@@ -75,7 +76,8 @@ try:
         os.getenv('STREAMING_SYNC_BRIDGE_MAX_QUEUE') or
         _chat_config.get('streaming_sync_bridge_max_queue', 32)
     )
-except Exception:
+except (ValueError, TypeError) as exc:
+    logger.debug(f"Failed to parse STREAMING_SYNC_BRIDGE_MAX_QUEUE, using default: {exc}")
     STREAMING_SYNC_BRIDGE_MAX_QUEUE = 32
 if STREAMING_SYNC_BRIDGE_MAX_QUEUE <= 0:
     STREAMING_SYNC_BRIDGE_MAX_QUEUE = 32
@@ -180,9 +182,23 @@ async def _async_iter_sync_stream(
             return
         try:
             fut = asyncio.run_coroutine_threadsafe(queue.put(item), loop)
-            fut.result()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(f"Failed to schedule sync stream enqueue: {exc}")
+            return
+        while True:
+            try:
+                fut.result(timeout=1.0)
+                return
+            except TimeoutError:
+                if stop_event.is_set() or loop.is_closed():
+                    try:
+                        fut.cancel()
+                    except Exception as cancel_err:
+                        logger.debug(f"Failed to cancel sync stream enqueue: {cancel_err}")
+                    return
+            except Exception as exc:
+                logger.debug(f"Failed to enqueue sync stream chunk: {exc}")
+                return
 
     def _worker() -> None:
         try:
@@ -210,10 +226,12 @@ async def _async_iter_sync_stream(
     finally:
         stop_event.set()
         try:
-            if hasattr(stream, "close") and callable(getattr(stream, "close")):
+            if hasattr(stream, "close") and callable(stream.close):  # type: ignore[attr-defined]
                 stream.close()  # type: ignore[attr-defined]
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(
+                f"Exception while closing bridged sync stream ({type(stream).__name__}): {exc}"
+            )
 
 class StreamingResponseHandler:
     """
@@ -606,7 +624,11 @@ class StreamingResponseHandler:
                         yield f"data: {json.dumps({'error': {'message': f'Error processing chunk: {str(e)}'}})}\n\n"
                         break
             else:
-                # Sync iterator (legacy, blocks event loop)
+                # Sync iterator (legacy, blocks event loop) - deprecated path
+                logger.warning(
+                    f"Using blocking sync iterator for {self.conversation_id}. "
+                    "Set STREAMING_SYNC_BRIDGE_ENABLED=true for non-blocking behavior."
+                )
                 def sync_iterator():
                     try:
                         for chunk in stream:

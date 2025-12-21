@@ -134,6 +134,7 @@ export default function UserApiKeysPage() {
   const copyToClipboard = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
+      setError('');
       setSuccess('Copied to clipboard!');
       setTimeout(() => setSuccess(''), 2000);
     } catch (err: unknown) {

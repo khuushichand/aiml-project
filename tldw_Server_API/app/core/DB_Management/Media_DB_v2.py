@@ -256,6 +256,7 @@ class MediaDatabase:
         chunking_status TEXT DEFAULT 'pending' NOT NULL,
         vector_processing INTEGER DEFAULT 0 NOT NULL,
         content_hash TEXT NOT NULL,
+        source_hash TEXT,
         uuid TEXT UNIQUE NOT NULL,
         last_modified DATETIME NOT NULL,
         version INTEGER NOT NULL DEFAULT 1,
@@ -478,6 +479,7 @@ class MediaDatabase:
     CREATE INDEX IF NOT EXISTS idx_media_vector_processing ON Media(vector_processing);
     CREATE INDEX IF NOT EXISTS idx_media_is_trash ON Media(is_trash);
     CREATE INDEX IF NOT EXISTS idx_media_content_hash ON Media(content_hash);
+    CREATE INDEX IF NOT EXISTS idx_media_source_hash ON Media(source_hash);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_media_uuid ON Media(uuid);
     CREATE INDEX IF NOT EXISTS idx_media_last_modified ON Media(last_modified);
     CREATE INDEX IF NOT EXISTS idx_media_deleted ON Media(deleted);
@@ -1727,7 +1729,34 @@ class MediaDatabase:
                     cursor = conn.execute("PRAGMA table_info(Media)")
                     columns = {row['name'] for row in cursor.fetchall()}
                     # Update this set to match ALL columns defined in _TABLES_SQL_V1.Media
-                    expected_cols = {'id', 'url', 'title', 'type', 'content', 'author', 'ingestion_date', 'transcription_model', 'is_trash', 'trash_date', 'vector_embedding', 'chunking_status', 'vector_processing', 'content_hash', 'uuid', 'last_modified', 'version', 'client_id', 'deleted', 'prev_version', 'merge_parent_uuid'}
+                    expected_cols = {
+                        'id',
+                        'url',
+                        'title',
+                        'type',
+                        'content',
+                        'author',
+                        'ingestion_date',
+                        'transcription_model',
+                        'is_trash',
+                        'trash_date',
+                        'vector_embedding',
+                        'chunking_status',
+                        'vector_processing',
+                        'content_hash',
+                        'source_hash',
+                        'uuid',
+                        'last_modified',
+                        'version',
+                        'org_id',
+                        'team_id',
+                        'visibility',
+                        'owner_user_id',
+                        'client_id',
+                        'deleted',
+                        'prev_version',
+                        'merge_parent_uuid',
+                    }
                     if not expected_cols.issubset(columns):
                         missing_cols = expected_cols - columns
                         raise SchemaError(f"Validation Error: Media table is missing columns after creation: {missing_cols}")
@@ -1957,6 +1986,7 @@ class MediaDatabase:
 	                    )
                     # Ensure visibility/owner columns and indexes exist on upgraded DBs
                     self._ensure_sqlite_visibility_columns(conn)
+                    self._ensure_sqlite_source_hash_column(conn)
                     logging.debug("Verified FTS tables and visibility columns exist.")
                 except (sqlite3.Error, DatabaseError) as fts_err:
                     logging.warning(f"Could not verify/create FTS tables on already correct schema version: {fts_err}")
@@ -2063,6 +2093,7 @@ class MediaDatabase:
                             )
                             # Ensure visibility/owner columns and indexes exist on upgraded DBs
                             self._ensure_sqlite_visibility_columns(conn)
+                            self._ensure_sqlite_source_hash_column(conn)
                         else:
                             raise SchemaError(f"Migration failed: {result}")
 
@@ -2114,6 +2145,7 @@ class MediaDatabase:
                     backend.execute("CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id)", connection=conn)
                 except Exception:
                     pass
+                self._ensure_postgres_source_hash_column(conn)
                 self._sync_postgres_sequences(conn)
                 self._ensure_postgres_rls(conn)
                 return
@@ -2167,6 +2199,7 @@ class MediaDatabase:
                     backend.execute("CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id)", connection=conn)
                 except Exception:
                     pass
+                self._ensure_postgres_source_hash_column(conn)
                 self._sync_postgres_sequences(conn)
                 self._ensure_postgres_rls(conn)
                 return
@@ -2200,6 +2233,7 @@ class MediaDatabase:
                 backend.execute("CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id)", connection=conn)
             except Exception:
                 pass
+            self._ensure_postgres_source_hash_column(conn)
             self._sync_postgres_sequences(conn)
             self._ensure_postgres_rls(conn)
 
@@ -2576,6 +2610,43 @@ class MediaDatabase:
         except sqlite3.Error as exc:
             logger.warning(f"Could not ensure visibility columns/indexes on Media: {exc}")
 
+    def _ensure_sqlite_source_hash_column(self, conn: sqlite3.Connection) -> None:
+        """
+        Ensure Media.source_hash column and index exist on SQLite.
+
+        This guards against older databases where the base schema predates source_hash.
+        """
+        try:
+            cursor = conn.execute("PRAGMA table_info(Media)")
+            columns = {row[1] for row in cursor.fetchall()}
+        except sqlite3.Error as exc:
+            logging.warning(f"Could not introspect Media table for source_hash column: {exc}")
+            return
+
+        try:
+            index_cursor = conn.execute("PRAGMA index_list(Media)")
+            indexes = {row[1] for row in index_cursor.fetchall()}
+        except sqlite3.Error:
+            indexes = set()
+
+        statements: list[str] = []
+
+        if "source_hash" not in columns:
+            statements.append("ALTER TABLE Media ADD COLUMN source_hash TEXT;")
+
+        if not indexes or "idx_media_source_hash" not in indexes:
+            statements.append(
+                "CREATE INDEX IF NOT EXISTS idx_media_source_hash ON Media(source_hash);"
+            )
+
+        if not statements:
+            return
+
+        try:
+            conn.executescript("\n".join(statements))
+        except sqlite3.Error as exc:
+            logger.warning(f"Could not ensure source_hash column/index on Media: {exc}")
+
     def _ensure_postgres_fts(self, conn) -> None:
         backend = self.backend
         backend.create_fts_table(
@@ -2606,6 +2677,22 @@ class MediaDatabase:
             )
         except BackendDatabaseError as exc:
             logger.warning(f"Failed to ensure Postgres chunk-level FTS: {exc}")
+
+    def _ensure_postgres_source_hash_column(self, conn) -> None:
+        """Ensure Media.source_hash column and index exist on PostgreSQL."""
+        backend = self.backend
+        ident = backend.escape_identifier
+        try:
+            backend.execute(
+                f"ALTER TABLE {ident('media')} ADD COLUMN IF NOT EXISTS {ident('source_hash')} TEXT",
+                connection=conn,
+            )
+            backend.execute(
+                f"CREATE INDEX IF NOT EXISTS {ident('idx_media_source_hash')} ON {ident('media')} ({ident('source_hash')})",
+                connection=conn,
+            )
+        except BackendDatabaseError as exc:
+            logger.warning(f"Could not ensure source_hash column/index on media: {exc}")
 
     def _postgres_policy_exists(self, conn, table: str, policy: str) -> bool:
         """Check whether a named RLS policy exists for the given table."""
@@ -4769,6 +4856,7 @@ class MediaDatabase:
             prompt: Optional[str] = None,
             analysis_content: Optional[str] = None,
             safe_metadata: Optional[str] = None,
+            source_hash: Optional[str] = None,
             transcription_model: Optional[str] = None,
             author: Optional[str] = None,
             ingestion_date: Optional[str] = None,
@@ -4816,6 +4904,10 @@ class MediaDatabase:
                 derived_owner_user_id = None
 
         content_hash = hashlib.sha256(content.encode()).hexdigest()
+        source_hash_norm = None
+        if source_hash is not None:
+            source_hash_str = str(source_hash).strip()
+            source_hash_norm = source_hash_str if source_hash_str else None
         url = url or f"local://{media_type}/{content_hash}"
 
         # Determine the final chunk status before any DB operation
@@ -4844,6 +4936,7 @@ class MediaDatabase:
             version_: int,
             *,
             chunk_status: str,
+            source_hash: Optional[str],
             org_id: Optional[int],
             team_id: Optional[int],
             visibility: str,
@@ -4860,6 +4953,7 @@ class MediaDatabase:
                 "ingestion_date": ingestion_date,
                 "transcription_model": transcription_model,
                 "content_hash": content_hash,
+                "source_hash": source_hash,
                 "is_trash": bool_false,
                 "trash_date": None,
                 "chunking_status": chunk_status,
@@ -4933,14 +5027,14 @@ class MediaDatabase:
 
                 # Find existing record by URL or content_hash
                 row = _fetchone(
-                    "SELECT id, uuid, version, url, content_hash, visibility, owner_user_id, org_id, team_id "
+                    "SELECT id, uuid, version, url, content_hash, source_hash, visibility, owner_user_id, org_id, team_id "
                     "FROM Media WHERE url = ? AND deleted = 0 LIMIT 1",
                     (url,),
                 )
 
                 if not row:
                     row = _fetchone(
-                        "SELECT id, uuid, version, url, content_hash, visibility, owner_user_id, org_id, team_id "
+                        "SELECT id, uuid, version, url, content_hash, source_hash, visibility, owner_user_id, org_id, team_id "
                         "FROM Media WHERE content_hash = ? AND deleted = 0 LIMIT 1",
                         (content_hash,),
                     )
@@ -4952,6 +5046,7 @@ class MediaDatabase:
                     current_ver = row["version"]
                     existing_url = row["url"]
                     existing_hash = row["content_hash"]
+                    existing_source_hash = row.get("source_hash")
                     existing_visibility = row.get("visibility") or "personal"
                     existing_owner_user_id = row.get("owner_user_id")
                     existing_org_id = row.get("org_id")
@@ -4992,10 +5087,16 @@ class MediaDatabase:
                         effective_owner_user_id = (
                             owner_user_id if owner_user_id is not None else existing_owner_user_id
                         )
+                        effective_source_hash = (
+                            source_hash_norm
+                            if source_hash_norm is not None
+                            else existing_source_hash
+                        )
                         payload = _media_payload(
                             media_uuid,
                             new_ver,
                             chunk_status=final_chunk_status,
+                            source_hash=effective_source_hash,
                             org_id=existing_org_id,
                             team_id=existing_team_id,
                             visibility=effective_visibility,
@@ -5005,7 +5106,7 @@ class MediaDatabase:
                             UPDATE Media
                                SET url = ?, title = ?, type = ?, content = ?, author = ?,
                                    ingestion_date = ?, transcription_model = ?,
-                                   content_hash = ?, is_trash = ?, trash_date = ?,
+                                   content_hash = ?, source_hash = ?, is_trash = ?, trash_date = ?,
                                    chunking_status = ?, vector_processing = ?,
                                    last_modified = ?, version = ?, org_id = ?, team_id = ?,
                                    visibility = ?, owner_user_id = ?, client_id = ?, deleted = ?
@@ -5020,6 +5121,7 @@ class MediaDatabase:
                             payload['ingestion_date'],
                             payload['transcription_model'],
                             payload['content_hash'],
+                            payload['source_hash'],
                             payload['is_trash'],
                             payload['trash_date'],
                             payload['chunking_status'],
@@ -5126,6 +5228,7 @@ class MediaDatabase:
                             media_uuid,
                             1,
                             chunk_status=final_chunk_status,
+                            source_hash=source_hash_norm,
                             org_id=scope_org_id,
                             team_id=scope_team_id,
                             visibility=requested_visibility or "personal",
@@ -5133,11 +5236,11 @@ class MediaDatabase:
                         )
                         insert_sql = """
                             INSERT INTO Media (url, title, type, content, author, ingestion_date,
-                                               transcription_model, content_hash, is_trash, trash_date,
+                                               transcription_model, content_hash, source_hash, is_trash, trash_date,
                                                chunking_status, vector_processing, uuid, last_modified,
                                                version, org_id, team_id, visibility, owner_user_id,
                                                client_id, deleted)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """
                         insert_params = (
                             payload['url'],
@@ -5148,6 +5251,7 @@ class MediaDatabase:
                             payload['ingestion_date'],
                             payload['transcription_model'],
                             payload['content_hash'],
+                            payload['source_hash'],
                             payload['is_trash'],
                             payload['trash_date'],
                             payload['chunking_status'],
@@ -6860,6 +6964,9 @@ class MediaDatabase:
         """
         Delete all unvectorized chunks for the media item.
 
+        Note: This is a hard delete with no sync-log events because these
+        chunks are derived artifacts recreated during reprocessing.
+
         Args:
             media_id (int): The ID of the parent Media item.
 
@@ -7000,7 +7107,13 @@ class MediaDatabase:
                 next_version = current_version + 1
                 now = self._get_current_utc_timestamp_str()
 
-                error_status = f"embeddings_error: {error_message}"
+                safe_message = str(error_message).replace("\r", " ").replace("\n", " ").strip()
+                if not safe_message:
+                    safe_message = "unknown error"
+                max_error_len = 500
+                if len(safe_message) > max_error_len:
+                    safe_message = f"{safe_message[: max_error_len - 3]}..."
+                error_status = f"embeddings_error: {safe_message}"
                 set_parts = [
                     "last_modified = ?",
                     "version = ?",
@@ -7022,7 +7135,7 @@ class MediaDatabase:
                 }
 
                 update_sql = f"UPDATE Media SET {', '.join(set_parts)} WHERE id = ? AND version = ?"
-                update_params = tuple(params + [media_id, current_version])
+                update_params = (*params, media_id, current_version)
                 cursor = self._execute_with_connection(conn, update_sql, update_params)
                 if cursor.rowcount == 0:
                     raise ConflictError("Media", media_id)

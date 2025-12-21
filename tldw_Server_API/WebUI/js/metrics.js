@@ -267,4 +267,3 @@
   window.startAutoRefresh = startAutoRefresh;
   window.stopAutoRefresh = stopAutoRefresh;
 })();
-

@@ -174,4 +174,3 @@ async def record_workflow_run(
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug(f"Workflows: ledger.add failed for run_id={run_id}: {exc}")
         return False
-

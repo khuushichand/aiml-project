@@ -60,4 +60,3 @@ async def apply_precomputed_spans(
         # Logging is best-effort only.
         pass
     return None
-

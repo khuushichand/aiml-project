@@ -59,4 +59,3 @@ async def test_policy_admin_put_optimistic_concurrency_conflict(monkeypatch, iso
     assert payload.get("status") == "conflict"
     assert payload.get("error") == "version_conflict"
     assert payload.get("policy_id") == policy_id
-

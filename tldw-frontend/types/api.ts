@@ -1,28 +1,57 @@
 // API Response Types
 
-export interface MediaItem {
+export interface MediaListItem {
   id: number;
   title: string;
-  author?: string;
-  content?: string;
-  description?: string;
-  url?: string;
-  type: 'video' | 'audio' | 'document' | 'article' | 'podcast';
-  transcription?: string;
-  summary?: string;
-  created_at: string;
-  updated_at: string;
-  tags?: string[];
-  metadata?: Record<string, unknown>;
+  url: string;
+  type: string;
+  keywords?: string[];
+}
+
+export type MediaItem = MediaListItem;
+
+export interface MediaPagination {
+  page: number;
+  results_per_page: number;
+  total_pages: number;
+  total_items: number;
 }
 
 export interface MediaListResponse {
-  items: MediaItem[];
-  total: number;
-  page: number;
-  page_size: number;
-  has_next: boolean;
-  has_prev: boolean;
+  items: MediaListItem[];
+  pagination: MediaPagination;
+  results?: MediaListItem[];
+}
+
+export interface MediaSourceDetail {
+  url?: string;
+  title: string;
+  duration?: number | string;
+  type: string;
+}
+
+export interface MediaProcessingDetail {
+  prompt?: string;
+  analysis?: string;
+  safe_metadata?: Record<string, unknown>;
+  model?: string;
+  timestamp_option?: boolean;
+}
+
+export interface MediaContentDetail {
+  metadata: Record<string, unknown>;
+  text: string;
+  word_count: number;
+}
+
+export interface MediaDetailResponse {
+  media_id: number;
+  source: MediaSourceDetail;
+  processing: MediaProcessingDetail;
+  content: MediaContentDetail;
+  keywords: string[];
+  timestamps: string[];
+  versions?: Array<Record<string, unknown>>;
 }
 
 export interface SearchResult {

@@ -28,11 +28,13 @@ export default function RolesPage() {
   const [showCreateRole, setShowCreateRole] = useState(false);
   const [newRoleName, setNewRoleName] = useState('');
   const [newRoleDescription, setNewRoleDescription] = useState('');
+  const [creatingRole, setCreatingRole] = useState(false);
 
   // Create permission dialog
   const [showCreatePermission, setShowCreatePermission] = useState(false);
   const [newPermName, setNewPermName] = useState('');
   const [newPermDescription, setNewPermDescription] = useState('');
+  const [creatingPermission, setCreatingPermission] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
@@ -62,6 +64,7 @@ export default function RolesPage() {
     }
 
     try {
+      setCreatingRole(true);
       await api.createRole({
         name: newRoleName.trim(),
         description: newRoleDescription.trim() || undefined,
@@ -74,6 +77,8 @@ export default function RolesPage() {
     } catch (err: unknown) {
       console.error('Failed to create role:', err);
       showError('Failed to create role', err instanceof Error ? err.message : 'Please try again.');
+    } finally {
+      setCreatingRole(false);
     }
   };
 
@@ -109,6 +114,7 @@ export default function RolesPage() {
     }
 
     try {
+      setCreatingPermission(true);
       await api.createPermission({
         name: newPermName.trim(),
         description: newPermDescription.trim() || undefined,
@@ -121,6 +127,8 @@ export default function RolesPage() {
     } catch (err: unknown) {
       console.error('Failed to create permission:', err);
       showError('Failed to create permission', err instanceof Error ? err.message : 'Please try again.');
+    } finally {
+      setCreatingPermission(false);
     }
   };
 
@@ -217,7 +225,9 @@ export default function RolesPage() {
                       </div>
                       <DialogFooter>
                         <Button variant="outline" onClick={() => setShowCreateRole(false)}>Cancel</Button>
-                        <Button onClick={handleCreateRole}>Create Role</Button>
+                        <Button onClick={handleCreateRole} disabled={creatingRole}>
+                          {creatingRole ? 'Creating...' : 'Create Role'}
+                        </Button>
                       </DialogFooter>
                     </DialogContent>
                   </Dialog>
@@ -335,7 +345,9 @@ export default function RolesPage() {
                       </div>
                       <DialogFooter>
                         <Button variant="outline" onClick={() => setShowCreatePermission(false)}>Cancel</Button>
-                        <Button onClick={handleCreatePermission}>Create Permission</Button>
+                        <Button onClick={handleCreatePermission} disabled={creatingPermission}>
+                          {creatingPermission ? 'Creating...' : 'Create Permission'}
+                        </Button>
                       </DialogFooter>
                     </DialogContent>
                   </Dialog>

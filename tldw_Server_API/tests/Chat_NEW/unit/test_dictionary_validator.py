@@ -49,4 +49,3 @@ def test_duplicate_pattern_detected():
     ])
     res = validate_dictionary(payload)
     assert any(e.get("code") == "duplicate_pattern" for e in res.errors)
-

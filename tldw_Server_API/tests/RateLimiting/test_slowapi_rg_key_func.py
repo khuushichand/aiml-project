@@ -44,4 +44,3 @@ async def test_slowapi_key_func_defers_to_rg_simple_middleware(monkeypatch):
         # With RGSimpleMiddleware present, key must be None so SlowAPI
         # does not maintain its own IP-based counters.
         assert key is None
-

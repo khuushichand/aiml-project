@@ -29,19 +29,22 @@
 
 - [Overview](#overview)
 - [Current Status](#current-status)
-  - [Roadmap](#roadmap)
 - [What's New](#whats-new)
-  - [Privacy](#privacy)
+- [Privacy & Security](#privacy--security)
 - [Highlights](#highlights)
 - [Feature Status](#feature-status)
-- [Networking & Limits](#networking--limits)
-- [Architecture & Repo Layout](#architecture--repo-layout)
-- [Architecture Diagram](#architecture-diagram)
 - [Quickstart](#quickstart)
+  - [Run the API](#run-the-api)
+  - [Run the Web UI (WIP)](#run-the-web-ui-wip)
+  - [Docker Compose](#docker-compose)
+  - [Supporting Services via Docker](#supporting-services-via-docker)
 - [Usage Examples](#usage-examples)
 - [Key Endpoints](#key-endpoints)
-- [CI Status & Smoke Tests](#ci-status--smoke-tests)
+- [Architecture & Repo Layout](#architecture--repo-layout)
+- [Architecture Diagram](#architecture-diagram)
+- [Networking & Limits](#networking--limits)
 - [Running Tests](#running-tests)
+- [CI Status & Smoke Tests](#ci-status--smoke-tests)
 - [Documentation & Resources](#documentation--resources)
   - [Resource Governor Config](#resource-governor-config)
   - [OpenAI-Compatible Strict Mode (Local Providers)](#openai-compatible-strict-mode-local-providers)
@@ -53,8 +56,8 @@
 - [Contributing & Support](#contributing--support)
 - [Developer Guides](#developer-guides)
   - [Ingestion & Media Processing Docs](#ingestion--media-processing-docs)
-  - [More Detailed Explanation & Background](#more-detailed-explanation--background)
-  - [Local Models I recommend](#local-models-i-recommend)
+- [More Detailed Explanation & Background](#more-detailed-explanation--background)
+- [Local Models I recommend](#local-models-i-recommend)
 - [License](#license)
 - [Credits](#credits)
 - [About](#about)
@@ -64,66 +67,32 @@
 </details>
 
 ## Overview
-- **tldw_server** is an open-source research multi-tool / backend for ingesting, transcribing, analyzing, and retrieving knowledge from video, audio, documents, websites, and more. 
-- It consists of a FastAPI API-first server architecture backed by SQLite or Postgres depending on user choice, with OpenAI-compatible Chat and Audio APIs, a unified RAG pipeline, knowledge management, and integrations with local or hosted LLM providers (with cost/usage tracking).
-- The long-term vision is a personal research assistant inspired by The Young Lady’s Illustrated Primer-helping people learn, reason about, and retain what they watch or read.
+**tldw_server** is an open-source research assistant and media analysis backend for ingesting, transcribing, analyzing, and retrieving knowledge from video, audio, documents, websites, and more.
+It runs a FastAPI server with OpenAI-compatible Chat, Audio, Embeddings, and Evals APIs, plus a unified RAG pipeline, knowledge tools, and integrations with local or hosted LLM providers.
+The long-term vision is a personal research assistant inspired by "The Young Lady's Illustrated Primer" that helps people learn, reason about, and retain what they watch or read.
+
+Great for:
+- Turning videos, podcasts, and documents into searchable, citable knowledge.
+- Running local or hosted LLMs behind a consistent OpenAI-compatible API.
+- Building research workflows with RAG, evaluation, and prompt tooling.
+
+New here? Start with the Quickstart section below.
 
 
 ## Current Status
 
+Version 0.1.8 (beta). Expect bugs and rough edges; please report issues.
+
 <details>
-<summary> Current Project Status/Latest Release Details Here  - Click-Here</summary>
+<summary>Current focus and migration notes</summary>
 
-### Status: Version 0.1.8 published - tldw_server is now in beta
-- Expect bugs, and random issues.
-- Please report any found/encountered.
-- CI/CD reporting green/bug squashing is current Top priority next to getting the webui working properly.
-
-#### Active Work-In-Progres (not in order)
-Active Work-in-Progress/Current focus Tracker (not-in-order)
-- Workflows, 
-- browser extension (tldw_Assistant),
+### Active Work-in-Progress (not in order)
+- Workflows
+- Browser extension (tldw_Assistant)
 - Unified Admin Dashboard
-- Watchlists,
-- Collections(Read-it-later)
-- Documentation 
-
-
-## What's New
-
-- FastAPI-first backend with OpenAI-compatible Chat and Audio APIs (including streaming STT and TTS)
-- Unified RAG and Evaluations modules (hybrid BM25 + vector with re-ranking; unified metrics)
-- MCP Unified module with JWT/RBAC, tool execution APIs, and WebSockets
-- New WebUI (Current is a WIP placeholder, expect it to be wonky/broken)
-- Strict OpenAI compatibility mode for local/self-hosted providers
-- PostgreSQL content mode + backup/restore helpers; Prometheus metrics and monitoring improvements
-
-See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
-
-
-### Privacy
-Privacy & Security
-- Self-hosted by design; no telemetry or data collection
-- Users own and control their data; see hardening guide for production
-- Metrics & Grafana <FIXME/UPDATE>
-  - Emitted metrics (core):
-    - `rg_decisions_total{category,scope,backend,result,policy_id}` — allow/deny decisions per category/scope/backend
-    - `rg_denials_total{category,scope,reason,policy_id}` — denial events by reason (e.g., `insufficient_capacity`)
-    - `rg_refunds_total{category,scope,reason,policy_id}` — refund events from commit/refund paths
-    - `rg_concurrency_active{category,scope,policy_id}` — active stream/job leases (gauge)
-  - Cardinality guard:
-    - By default, metrics DO NOT include `entity` labels to avoid high-cardinality pitfalls. If you truly need per-entity sampling, gate it behind `RG_METRICS_ENTITY_LABEL=true` and ensure hashing/masking is applied upstream.
-  - Quick Grafana panel examples:
-    - Allow vs Deny over time (per category):
-      - Query: `sum by (category, result) (rate(rg_decisions_total[5m]))`
-    - Denials by scope (top N):
-      - Query: `topk(5, sum by (scope) (rate(rg_denials_total[5m])))`
-    - Refund activity (tokens):
-      - Query: `sum by (policy_id) (rate(rg_refunds_total{category="tokens"}[5m]))`
-    - Active streams (per scope):
-      - Query: `avg by (scope) (rg_concurrency_active{category="streams"})`
-  - 
----
+- Watchlists
+- Collections (read-it-later)
+- Documentation
 
 ### Migrating From Gradio Version (pre-0.1.0)
 - Backup:
@@ -141,9 +110,25 @@ Privacy & Security
 - Frontend:
     - Legacy: /webui
     - Or integrate directly against the API;
----
-
 </details>
+
+## What's New
+
+- FastAPI-first backend with OpenAI-compatible Chat and Audio APIs (including streaming STT and TTS)
+- Unified RAG and Evaluations modules (hybrid BM25 + vector with re-ranking; unified metrics)
+- MCP Unified module with JWT/RBAC, tool execution APIs, and WebSockets
+- New WebUI (current Next.js UI is WIP and may be unstable or rough)
+- Strict OpenAI compatibility mode for local/self-hosted providers
+- PostgreSQL content mode + backup/restore helpers; Prometheus metrics and monitoring improvements
+
+See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
+
+## Privacy & Security
+
+- Self-hosted by design; no telemetry or data collection.
+- Users own and control their data; see hardening guidance for production.
+- Auth modes: single-user API key or multi-user JWT.
+- Security reporting and hardening docs: `SECURITY.md`, `Docs/Published/User_Guides/Production_Hardening_Checklist.md`.
 
 ## Highlights
 
@@ -161,10 +146,326 @@ Privacy & Security
 
 See the full Feature Status Matrix in `Docs/Published/Overview/Feature_Status.md`.
 
+## Quickstart
+
+### Run the API
+
+Prerequisites
+- Python 3.11+ (3.12/3.13 supported)
+- ffmpeg (for audio/video pipelines)
+
+1) Create environment and install dependencies (via pyproject.toml)
+```bash
+python3 -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+# Core server
+pip install -e .
+
+# Optional extras (choose as needed)
+# pip install -e ".[multiplayer]"   # multi-user/PostgreSQL features
+# pip install -e ".[dev]"           # tests, linters, tooling
+# pip install -e ".[otel]"          # OpenTelemetry metrics/tracing exporters
+
+# Install pyaudio - needed for audio processing
+# Linux
+sudo apt install python3-pyaudio
+
+# macOS
+brew install portaudio
+pip install pyaudio
+```
+2) Configure authentication and providers
+```bash
+# Create .env with at least:
+cat > .env << 'EOF'
+AUTH_MODE=single_user
+SINGLE_USER_API_KEY=CHANGE_ME_TO_SECURE_API_KEY
+DATABASE_URL=sqlite:///./Databases/users.db
+EOF
+
+# First-time initialization (validates config, sets up DBs)
+python -m tldw_Server_API.app.core.AuthNZ.initialize
+# Add provider API keys in .env or tldw_Server_API/Config_Files/config.txt
+```
+3) Run the API
+```bash
+python -m uvicorn tldw_Server_API.app.main:app --reload
+```
+- API docs: http://127.0.0.1:8000/docs
+- Legacy WebUI: http://127.0.0.1:8000/webui/ (deprecated)
+
+### Run the Web UI (WIP)
+
+The current Next.js UI is a work in progress and may be unstable, buggy, or rough around the edges.
+Make sure the API from the section above is running.
+Requires Node.js and npm (or yarn/pnpm).
+
+1) From the repo root:
+```bash
+cd tldw-frontend
+cp .env.local.example .env.local
+```
+2) Set your API URL (defaults shown):
+```bash
+# .env.local
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
+NEXT_PUBLIC_API_VERSION=v1
+# Optional for single-user mode:
+# NEXT_PUBLIC_X_API_KEY=your_api_key
+```
+3) Install and run the dev server (use port 8080 to match default CORS):
+```bash
+npm install
+npm run dev -- -p 8080
+```
+Open http://localhost:8080
+
+Tip: `./start-webui.sh` launches the API and opens the legacy `/webui/` client.
+
+### Docker Compose
+
+Optional path for running the API + services with Docker.
+```bash
+# Run from repo root
+
+# Option A) Single-user (SQLite users DB)
+docker compose -f Dockerfiles/docker-compose.yml up -d --build
+
+# Option B) Multi-user (Postgres users DB)
+export AUTH_MODE=multi_user
+export DATABASE_URL=postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users
+# Optional: route Jobs module to Postgres as well
+export JOBS_DB_URL=postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users
+docker compose -f Dockerfiles/docker-compose.postgres.yml up -d
+
+# Option C) Dev overlay — enable unified streaming (non-prod)
+# This turns on the SSE/WS unified streams (STREAMS_UNIFIED=1) for pilot endpoints.
+# Keep disabled in production until validated in your environment.
+docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.dev.yml up -d --build
+
+# Check status
+docker compose -f Dockerfiles/docker-compose.yml ps
+docker compose -f Dockerfiles/docker-compose.yml logs -f app
+
+# First-time AuthNZ initialization (inside the running app container)
+docker compose -f Dockerfiles/docker-compose.yml exec app \
+  python -m tldw_Server_API.app.core.AuthNZ.initialize
+
+# Optional: proxy overlays
+#   - Dockerfiles/docker-compose.proxy.yml
+#   - Dockerfiles/docker-compose.proxy-nginx.yml
+
+# Optional: use pgvector + pgbouncer for Postgres
+docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.pg.yml up -d --build
+```
+
+Notes
+- Run compose commands from the repository root. The base compose file at `Dockerfiles/docker-compose.yml` builds with context at the repo root and includes Postgres and Redis services.
+- The legacy WebUI is served at `/webui`; the primary UI is the Next.js client in `tldw-frontend/`.
+  - For unified streaming validation in non-prod, prefer the dev overlay above. You can also export `STREAMS_UNIFIED=1` directly in your environment.
+
+### Supporting Services via Docker
+
+<details>
+<summary>Supporting services (Postgres, Redis, Prometheus, Grafana)</summary>
+
+Run only infrastructure services without the app.
+
+Postgres + Redis (base compose)
+```bash
+docker compose -f Dockerfiles/docker-compose.yml up -d postgres redis
+```
+
+Prometheus + Grafana (embeddings compose, monitoring profile)
+```bash
+docker compose -f Dockerfiles/docker-compose.embeddings.yml --profile monitoring up -d prometheus grafana
+```
+
+All four together
+```bash
+docker compose -f Dockerfiles/docker-compose.yml up -d postgres redis
+docker compose -f Dockerfiles/docker-compose.embeddings.yml --profile monitoring up -d prometheus grafana
+```
+
+Manage and verify
+```bash
+# Status
+docker compose -f Dockerfiles/docker-compose.yml ps
+docker compose -f Dockerfiles/docker-compose.embeddings.yml ps
+
+# Logs
+docker compose -f Dockerfiles/docker-compose.yml logs -f postgres redis
+docker compose -f Dockerfiles/docker-compose.embeddings.yml logs -f prometheus grafana
+
+# Stop
+docker compose -f Dockerfiles/docker-compose.yml stop postgres redis
+docker compose -f Dockerfiles/docker-compose.embeddings.yml stop prometheus grafana
+
+# Remove
+docker compose -f Dockerfiles/docker-compose.yml down
+docker compose -f Dockerfiles/docker-compose.embeddings.yml down
+```
+
+Ports
+- Postgres: 5432
+- Redis: 6379
+- Prometheus: 9091 (container listens on 9090)
+- Grafana: 3000
+
+Prometheus config
+- Create `Config_Files/prometheus.yml` to define scrape targets. Minimal self-scrape example:
+```yaml
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+```
+See Docs/Operations/monitoring/README.md for examples that scrape the API and worker orchestrator.
+
+Tip: See multi-user setup and production hardening in Docs/User_Guides/Authentication_Setup.md and Docs/Published/Deployment/First_Time_Production_Setup.md.
+
+</details>
+
+## Usage Examples
+
+<details>
+<summary>Usage Examples</summary>
+
+Use the single-user API key with the `X-API-KEY` header.
+
+Chat (OpenAI-compatible)
+```bash
+curl -s http://127.0.0.1:8000/api/v1/chat/completions \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4",
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "stream": false
+  }'
+```
+
+Embeddings (OpenAI-compatible)
+```bash
+curl -s http://127.0.0.1:8000/api/v1/embeddings \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "text-embedding-3-small",
+    "input": "hello world"
+  }'
+```
+
+Media Ingest (URL)
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/media/add \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -F "media_type=document" \
+  -F "title=Example Article" \
+  -F "keywords=demo,quickstart" \
+  -F "urls=https://www.example.com/some-article"
+```
+
+Media Search
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/media/search \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "keyword"
+  }'
+```
+
+Audio Transcription (file)
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
+  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
+  -F "file=@sample.wav" -F "model=whisper-1"
+```
+</details>
+
+## Key Endpoints
+<details>
+<summary>Key Endpoints</summary>
+
+- Media: `POST /api/v1/media/add` - ingest/process media (URLs/files) with DB persistence
+- Media Search: `POST /api/v1/media/search` - search ingested content
+- Chat: `POST /api/v1/chat/completions` - OpenAI-compatible chat
+- Chat Commands: `GET /api/v1/chat/commands` - list available slash commands
+- Chat Dictionary Validate: `POST /api/v1/chat/dictionaries/validate` - validate a chat dictionary
+- Embeddings: `POST /api/v1/embeddings` - OpenAI-compatible embeddings
+- RAG: `POST /api/v1/rag/search` - unified RAG search
+- Audio STT: `POST /api/v1/audio/transcriptions` - file-based transcription
+- Audio STT (WS): `WS /api/v1/audio/stream/transcribe` - real-time transcription
+- Audio TTS: `POST /api/v1/audio/speech` - text-to-speech (streaming and non-streaming)
+- TTS Voices: `GET /api/v1/audio/voices/catalog` - voice catalog across providers
+- Vector Stores: `POST /api/v1/vector_stores` - create; `POST /api/v1/vector_stores/{id}/query` - query
+- OCR Backends: `GET /api/v1/ocr/backends` - available OCR providers
+- VLM Backends: `GET /api/v1/vlm/backends` - available VLM providers
+- Connectors: `GET /api/v1/connectors/providers` - Drive/Notion providers
+- Outputs: `POST /api/v1/outputs` - generate output artifact (md/html/mp3)
+- Metrics: `GET /api/v1/metrics/text` - Prometheus metrics (text format)
+- Providers: `GET /api/v1/llm/providers` - provider/models list
+- MCP: `GET /api/v1/mcp/status` - MCP server status
+
+Admin maintenance
+- Chat model aliases cache reload: `POST /api/v1/admin/chat/model-aliases/reload`
+  - Single-user (API key)
+    ```bash
+    curl -s -X POST http://127.0.0.1:8000/api/v1/admin/chat/model-aliases/reload \
+      -H "X-API-KEY: $SINGLE_USER_API_KEY"
+    ```
+  - Multi-user (JWT)
+    ```bash
+    curl -s -X POST http://127.0.0.1:8000/api/v1/admin/chat/model-aliases/reload \
+      -H "Authorization: Bearer $JWT"
+    ```
+
+Examples
+- GET `/api/v1/chat/commands` response
+  ```json
+  {
+    "commands": [
+      {"name": "time", "description": "Show the current time (optional TZ).", "required_permission": "chat.commands.time"},
+      {"name": "weather", "description": "Show current weather for a location.", "required_permission": "chat.commands.weather"}
+    ]
+  }
+  ```
+- POST `/api/v1/chat/dictionaries/validate` request
+  ```json
+  {
+    "data": {
+      "name": "Example",
+      "entries": [
+        {"type": "literal", "pattern": "today", "replacement": "It is {{ now('%B %d') }}."},
+        {"type": "regex", "pattern": "User:(\\w+)", "replacement": "Hello, {{ match.group(1) }}!"}
+      ]
+    },
+    "schema_version": 1,
+    "strict": false
+  }
+  ```
+  Minimal success response
+  ```json
+  {
+    "ok": true,
+    "schema_version": 1,
+    "errors": [],
+    "warnings": [],
+    "entry_stats": {"total": 2, "regex": 1, "literal": 1},
+    "suggested_fixes": []
+  }
+  ```
+
+</details>
+
 ## Architecture & Repo Layout
 
 <details>
-<summary> Architecture & Repo Layout Here - Click-Here</summary>
+<summary>Architecture & Repo Layout</summary>
 
 ```text
 <repo_root>/
@@ -200,6 +501,7 @@ Notes
 - SQLite is default for local dev; PostgreSQL supported for AuthNZ and content DBs.
 - `mock_openai_server/` is handy for local OpenAI-compatible API testing.
 
+</details>
 
 ## Architecture Diagram
 
@@ -331,312 +633,22 @@ flowchart LR
 
 All limits are designed to be conservative by default and can be tuned using the various `*_RATE_LIMIT_*`, `MAX_*`, and RG policy settings in `Config_Files/` and environment variables.
 
-
-</details>
-
-
-## Quickstart
-
-<details>
-<summary>Project Quickstart/Get started in less than 5 minutes(maybe) - Click-Here</summary>
-
-Prerequisites
-- Python 3.11+ (3.12/3.13 supported)
-- ffmpeg (for audio/video pipelines)
-
-Virtualenv
-1) Create environment and install dependencies (via pyproject.toml)
-```bash
-python3 -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-# Core server
-pip install -e .
-
-# Optional extras (choose as needed)
-# pip install -e ".[multiplayer]"   # multi-user/PostgreSQL features
-# pip install -e ".[dev]"           # tests, linters, tooling
-# pip install -e ".[otel]"          # OpenTelemetry metrics/tracing exporters
-
-# Install pyaudio - needed for audio processing
-# Linux
-sudo apt install python3-pyaudio
-
-#MacOS
-brew install portaudio
-pip install pyaudio
-```
-2) Configure authentication and providers
-```bash
-# Create .env with at least:
-cat > .env << 'EOF'
-AUTH_MODE=single_user
-SINGLE_USER_API_KEY=CHANGE_ME_TO_SECURE_API_KEY
-DATABASE_URL=sqlite:///./Databases/users.db
-EOF
-
-# First-time initialization (validates config, sets up DBs)
-python -m tldw_Server_API.app.core.AuthNZ.initialize
-# Add provider API keys in .env or tldw_Server_API/Config_Files/config.txt
-```
-3) Run the API
-```bash
-python -m uvicorn tldw_Server_API.app.main:app --reload
-```
-- API docs: http://127.0.0.1:8000/docs
-- Legacy WebUI: http://127.0.0.1:8000/webui/
-
-Docker Compose
-```bash
-# Run from repo root
-
-# Option A) Single-user (SQLite users DB)
-docker compose -f Dockerfiles/docker-compose.yml up -d --build
-
-# Option B) Multi-user (Postgres users DB)
-export AUTH_MODE=multi_user
-export DATABASE_URL=postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users
-# Optional: route Jobs module to Postgres as well
-export JOBS_DB_URL=postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users
-docker compose -f Dockerfiles/docker-compose.postgres.yml up -d
-
-# Option C) Dev overlay — enable unified streaming (non-prod)
-# This turns on the SSE/WS unified streams (STREAMS_UNIFIED=1) for pilot endpoints.
-# Keep disabled in production until validated in your environment.
-docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.dev.yml up -d --build
-
-# Check status
-docker compose -f Dockerfiles/docker-compose.yml ps
-docker compose -f Dockerfiles/docker-compose.yml logs -f app
-
-# First-time AuthNZ initialization (inside the running app container)
-docker compose -f Dockerfiles/docker-compose.yml exec app \
-  python -m tldw_Server_API.app.core.AuthNZ.initialize
-
-# Optional: proxy overlays
-#   - Dockerfiles/docker-compose.proxy.yml
-#   - Dockerfiles/docker-compose.proxy-nginx.yml
-
-# Optional: use pgvector + pgbouncer for Postgres
-docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/docker-compose.pg.yml up -d --build
-```
-
-Notes
-- Run compose commands from the repository root. The base compose file at `Dockerfiles/docker-compose.yml` builds with context at the repo root and includes Postgres and Redis services.
-- The legacy WebUI is served at `/webui`; the primary UI is the Next.js client in `tldw-frontend/`.
-  - For unified streaming validation in non-prod, prefer the dev overlay above. You can also export `STREAMS_UNIFIED=1` directly in your environment.
-
-</details>
-
-### Supporting Services via Docker
-
-<details>
-<summary> Current Project Status/Latest Release Details Here - Click-Here</summary>
-
-Run only infrastructure services without the app.
-
-Postgres + Redis (base compose)
-```bash
-docker compose -f Dockerfiles/docker-compose.yml up -d postgres redis
-```
-
-Prometheus + Grafana (embeddings compose, monitoring profile)
-```bash
-docker compose -f Dockerfiles/docker-compose.embeddings.yml --profile monitoring up -d prometheus grafana
-```
-
-All four together
-```bash
-docker compose -f Dockerfiles/docker-compose.yml up -d postgres redis
-docker compose -f Dockerfiles/docker-compose.embeddings.yml --profile monitoring up -d prometheus grafana
-```
-
-Manage and verify
-```bash
-# Status
-docker compose -f Dockerfiles/docker-compose.yml ps
-docker compose -f Dockerfiles/docker-compose.embeddings.yml ps
-
-# Logs
-docker compose -f Dockerfiles/docker-compose.yml logs -f postgres redis
-docker compose -f Dockerfiles/docker-compose.embeddings.yml logs -f prometheus grafana
-
-# Stop
-docker compose -f Dockerfiles/docker-compose.yml stop postgres redis
-docker compose -f Dockerfiles/docker-compose.embeddings.yml stop prometheus grafana
-
-# Remove
-docker compose -f Dockerfiles/docker-compose.yml down
-docker compose -f Dockerfiles/docker-compose.embeddings.yml down
-```
-
-Ports
-- Postgres: 5432
-- Redis: 6379
-- Prometheus: 9091 (container listens on 9090)
-- Grafana: 3000
-
-Prometheus config
-- Create `Config_Files/prometheus.yml` to define scrape targets. Minimal self-scrape example:
-```yaml
-global:
-  scrape_interval: 15s
-
-scrape_configs:
-  - job_name: 'prometheus'
-    static_configs:
-      - targets: ['localhost:9090']
-```
-See Docs/Operations/monitoring/README.md for examples that scrape the API and worker orchestrator.
-
-Tip: See multi-user setup and production hardening in Docs/User_Guides/Authentication_Setup.md and Docs/Published/Deployment/First_Time_Production_Setup.md.
-
-</details>
-
-
-## Usage Examples
-
-<details>
-<summary>Usage Examples - Click-Here</summary>
-
-Use the single-user API key with the `X-API-KEY` header.
-
-Chat (OpenAI-compatible)
-```bash
-curl -s http://127.0.0.1:8000/api/v1/chat/completions \
-  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-4",
-    "messages": [{"role": "user", "content": "Hello!"}],
-    "stream": false
-  }'
-```
-
-Embeddings (OpenAI-compatible)
-```bash
-curl -s http://127.0.0.1:8000/api/v1/embeddings \
-  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "text-embedding-3-small",
-    "input": "hello world"
-  }'
-```
-
-Media Ingest (URL)
-```bash
-curl -s -X POST http://127.0.0.1:8000/api/v1/media/add \
-  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
-  -F "media_type=document" \
-  -F "title=Example Article" \
-  -F "keywords=demo,quickstart" \
-  -F "urls=https://www.example.com/some-article"
-```
-
-Media Search
-```bash
-curl -s -X POST http://127.0.0.1:8000/api/v1/media/search \
-  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "keyword"
-  }'
-```
-
-Audio Transcription (file)
-```bash
-curl -s -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
-  -H "X-API-KEY: $SINGLE_USER_API_KEY" \
-  -F "file=@sample.wav" -F "model=whisper-1"
-```
-</details>
-
-## Key Endpoints
-<details>
-<summary>Key Endpoints - Click-Here</summary>
-
-- Media: `POST /api/v1/media/add` - ingest/process media (URLs/files) with DB persistence
-- Media Search: `POST /api/v1/media/search` - search ingested content
-- Chat: `POST /api/v1/chat/completions` - OpenAI-compatible chat
-- Chat Commands: `GET /api/v1/chat/commands` - list available slash commands
-- Chat Dictionary Validate: `POST /api/v1/chat/dictionaries/validate` - validate a chat dictionary
-- Embeddings: `POST /api/v1/embeddings` - OpenAI-compatible embeddings
-- RAG: `POST /api/v1/rag/search` - unified RAG search
-- Audio STT: `POST /api/v1/audio/transcriptions` - file-based transcription
-- Audio STT (WS): `WS /api/v1/audio/stream/transcribe` - real-time transcription
-- Audio TTS: `POST /api/v1/audio/speech` - text-to-speech (streaming and non-streaming)
-- TTS Voices: `GET /api/v1/audio/voices/catalog` - voice catalog across providers
-- Vector Stores: `POST /api/v1/vector_stores` - create; `POST /api/v1/vector_stores/{id}/query` - query
-- OCR Backends: `GET /api/v1/ocr/backends` - available OCR providers
-- VLM Backends: `GET /api/v1/vlm/backends` - available VLM providers
-- Connectors: `GET /api/v1/connectors/providers` - Drive/Notion providers
-- Outputs: `POST /api/v1/outputs` - generate output artifact (md/html/mp3)
-- Metrics: `GET /api/v1/metrics/text` - Prometheus metrics (text format)
-- Providers: `GET /api/v1/llm/providers` - provider/models list
-- MCP: `GET /api/v1/mcp/status` - MCP server status
-
-Admin maintenance
-- Chat model aliases cache reload: `POST /api/v1/admin/chat/model-aliases/reload`
-  - Single-user (API key)
-    ```bash
-    curl -s -X POST http://127.0.0.1:8000/api/v1/admin/chat/model-aliases/reload \
-      -H "X-API-KEY: $SINGLE_USER_API_KEY"
-    ```
-  - Multi-user (JWT)
-    ```bash
-    curl -s -X POST http://127.0.0.1:8000/api/v1/admin/chat/model-aliases/reload \
-      -H "Authorization: Bearer $JWT"
-    ```
-
-Examples
-- GET `/api/v1/chat/commands` response
-  ```json
-  {
-    "commands": [
-      {"name": "time", "description": "Show the current time (optional TZ).", "required_permission": "chat.commands.time"},
-      {"name": "weather", "description": "Show current weather for a location.", "required_permission": "chat.commands.weather"}
-    ]
-  }
-  ```
-- POST `/api/v1/chat/dictionaries/validate` request
-  ```json
-  {
-    "data": {
-      "name": "Example",
-      "entries": [
-        {"type": "literal", "pattern": "today", "replacement": "It is {{ now('%B %d') }}."},
-        {"type": "regex", "pattern": "User:(\\w+)", "replacement": "Hello, {{ match.group(1) }}!"}
-      ]
-    },
-    "schema_version": 1,
-    "strict": false
-  }
-  ```
-  Minimal success response
-  ```json
-  {
-    "ok": true,
-    "schema_version": 1,
-    "errors": [],
-    "warnings": [],
-    "entry_stats": {"total": 2, "regex": 1, "literal": 1},
-    "suggested_fixes": []
-  }
-  ```
-
-</details>
-
 ## Running Tests
 
 <details>
-<summary>Running Tests - Click-Here</summary>
+<summary>Running tests locally</summary>
 
 - `python -m pytest -v` - full test suite (skips heavy optional suites by default).
 - `python -m pytest --cov=tldw_Server_API --cov-report=term-missing` - coverage report.
 - Use markers (`unit`, `integration`, `e2e`, `external_api`, `performance`) to focus specific areas.
 - Enable optional suites with environment flags such as `RUN_MCP_TESTS=1`, `TLDW_TEST_POSTGRES_REQUIRED=1`, or `RUN_MOCK_OPENAI=1`.
 
+</details>
+
 ## CI Status & Smoke Tests
+
+<details>
+<summary>CI status and smoke tests</summary>
 
 | Workflow | Status |
 | --- | --- |
@@ -658,10 +670,12 @@ Run locally
 
 ## Documentation & Resources
 
-<details> 
+<details>
+<summary>Documentation and resources</summary>
 
 - `Docs/Documentation.md` - documentation index and developer guide links
 - `Docs/About.md` - project background and philosophy
+- `New-User-Guide.md` - guided walkthrough for first-time setup and usage
 - Module deep dives: `Docs/Development/AuthNZ-Developer-Guide.md`, `Docs/Development/RAG-Developer-Guide.md`, `Docs/MCP/Unified/Developer_Guide.md`
 - API references: `Docs/API-related/RAG-API-Guide.md`, `Docs/API-related/OCR_API_Documentation.md`, `Docs/API-related/Prompt_Studio_API.md`
 - Deployment/Monitoring: `Docs/Published/Deployment/First_Time_Production_Setup.md`, `Docs/Published/Deployment/Reverse_Proxy_Examples.md`, `Docs/Deployment/Monitoring/`
@@ -694,13 +708,18 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 ## Deployment
 
 <details>
+<summary>Deployment resources</summary>
 - Dockerfiles and compose templates live under `Dockerfiles/` (see `Dockerfiles/README.md`).
 - Reverse proxy samples: `Helper_Scripts/Samples/Nginx/`, `Helper_Scripts/Samples/Caddy/`.
 - Monitoring: `Docs/Deployment/Monitoring/` and `Helper_Scripts/Samples/Grafana/`.
 - Prometheus metrics exposed at `/metrics` and `/api/v1/metrics`.
 - Production hardening: `Docs/Published/User_Guides/Production_Hardening_Checklist.md`.
+</details>
 
 ## Monitoring
+
+<details>
+<summary>Monitoring resources</summary>
 
 - Monitoring docs and setup: `Docs/Deployment/Monitoring/README.md`
 - Grafana dashboards and samples: `Helper_Scripts/Samples/Grafana/README.md`
@@ -731,7 +750,8 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 
 ## Developer Guides
 
-<details><sumamry>Developer Guides + Links</sumamry>
+<details>
+<summary>Developer Guides + Links</summary>
 
 - Documentation index: `Docs/Documentation.md` (see the "Developer Guides" section)
 - Core module guides:
@@ -756,7 +776,9 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 
 ### More Detailed Explanation & Background
 <details>
-<summary>More Detailed Explanation & Background - Click-Here</summary>
+<summary>More Detailed Explanation & Background</summary>
+
+Optional background reading for deeper context; not required to use the project.
 
 - See `Docs/About.md` for the extended project background, vision, and notes.
 - https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5049562
@@ -828,7 +850,9 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 ### Local Models I recommend
 
 <details>
-<summary>Local Models I Can Recommend - Click-Here</summary>
+<summary>Local Models I Can Recommend</summary>
+
+Personal recommendations; optional reading.
 
 - These are just the 'standard smaller' models I recommend, there are many more out there, and you can use any of them with this project.
   - One should also be aware that people create 'fine-tunes' and 'merges' of existing models, to create new models that are more suited to their needs.
@@ -836,10 +860,10 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 - Mistral Nemo Instruct 2407 - https://huggingface.co/QuantFactory/Mistral-Nemo-Instruct-2407-GGUF
 - Magistral Small: https://huggingface.co/mistralai/Magistral-Small-2509-GGUF
 - Qwen 3/VL Series
-  - Qwen/Qwen3-VL-4B-Instruct (Qwen3 4B+Vision): https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF 
+  - Qwen/Qwen3-VL-4B-Instruct (Qwen3 4B+Vision): https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF
   - Qwen3-30B-A3B-Instruct-2507: https://huggingface.co/unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF
 
-For commercial API usage for use with this project: GPT-5.1, Anthropic's models(The Temu of AI services/models), Kimi k2, DeepSeek 
+For commercial API usage for use with this project: GPT-5.1, Anthropic's models(The Temu of AI services/models), Kimi k2, DeepSeek
 Originally written: Flipside I would say none, honestly. The (largest players) will gaslight you and charge you money for it. Fun.  That being said they obviously can provide help/be useful(helped me make this app), but it's important to remember that they're not your friend, and they're not there to help you. They are there to make money not off you, but off large institutions and your data.  You are just a stepping stone to their goals.
 2025 Nov: I would say service quality has improved enough to the point where it can make sense to use a 'premium' subscription/usage of API services without expecting to be screwed 7-8/10 times.
 2025 Dec: I spoke too soon. I have the opinion of GPT-5.1 High > Sonnet/Opus. The Anthropic models are just too 'independent/lazy'. I personally have never had gpt5 fill out a PRD with completely hallucinated bullshit, or gaslight me repeatedly across multiple different sessions. Sonnet/Opus 4.0-4.5? Complete opposite.
@@ -848,15 +872,15 @@ Originally written: Flipside I would say none, honestly. The (largest players) w
 From @nrose 05/08/2024 on Threads:
 ```
 No, it’s a design. First they train it, then they optimize it. Optimize it for what- better answers?
-  No. For efficiency. 
-Per watt. Because they need all the compute they can get to train the next model.So it’s a sawtooth. 
-The model declines over time, then the optimization makes it somewhat better, then in a sort of 
-  reverse asymptote, they dedicate all their “good compute” to the next bigger model.Which they then 
+  No. For efficiency.
+Per watt. Because they need all the compute they can get to train the next model.So it’s a sawtooth.
+The model declines over time, then the optimization makes it somewhat better, then in a sort of
+  reverse asymptote, they dedicate all their “good compute” to the next bigger model.Which they then
   trim down over time, so they can train the next big model… etc etc.
-None of these companies exist to provide AI services in 2024. They’re only doing it to finance the 
+None of these companies exist to provide AI services in 2024. They’re only doing it to finance the
  things they want to build in 2025 and 2026 and so on, and the goal is to obsolete computing in general
-  and become a hidden monopoly like the oil and electric companies. 
-2024 service quality is not a metric they want to optimize, they’re forced to, only to maintain some 
+  and become a hidden monopoly like the oil and electric companies.
+2024 service quality is not a metric they want to optimize, they’re forced to, only to maintain some
   directional income
 ```
 

@@ -73,7 +73,7 @@ Navigation:
 - Prompt Studio backend (optional)
   - Enable with `CHATBOOKS_JOBS_BACKEND=prompt_studio` (deprecated: `TLDW_USE_PROMPT_STUDIO_QUEUE=true`).
   - Adapter: `ChatbooksPSJobAdapter` mirrors status to PS; an external PS worker is expected to process jobs.
-  
+
   Cancellation semantics: the core worker checks for cancellation before starting a job (pre-flight) and applies best-effort in-flight cancellation via job lease/cancel flags.
 
 **Data Model (Selected)**

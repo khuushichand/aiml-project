@@ -267,6 +267,49 @@ class TestDatabaseCRUDAndSync:
         assert payload['uuid'] == media_uuid
         assert payload['title'] == title
 
+    def test_add_media_with_source_hash(self, db_instance):
+        title = "Test Media Source Hash"
+        content = "Content for source hash test."
+        source_hash = "source-hash-one"
+
+        media_id, media_uuid, msg = db_instance.add_media_with_keywords(
+            title=title,
+            media_type="text",
+            content=content,
+            keywords=None,
+            source_hash=source_hash,
+        )
+
+        assert media_id is not None
+        assert media_uuid is not None
+        assert msg == f"Media '{title}' added."
+
+        cursor = db_instance.execute_query(
+            "SELECT url, source_hash FROM Media WHERE id = ?",
+            (media_id,),
+        )
+        media_row = cursor.fetchone()
+        assert media_row['source_hash'] == source_hash
+
+        updated_source_hash = "source-hash-two"
+        updated_content = "Updated content for source hash test."
+        db_instance.add_media_with_keywords(
+            title=title,
+            media_type="text",
+            content=updated_content,
+            keywords=None,
+            overwrite=True,
+            url=media_row['url'],
+            source_hash=updated_source_hash,
+        )
+
+        cursor = db_instance.execute_query(
+            "SELECT source_hash FROM Media WHERE id = ?",
+            (media_id,),
+        )
+        updated_row = cursor.fetchone()
+        assert updated_row['source_hash'] == updated_source_hash
+
 
     def test_add_media_with_keywords_update(self, db_instance):
         title = "Test Media Update"

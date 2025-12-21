@@ -115,4 +115,3 @@
   - When a theme is scheduled, update:
     - `STT_Module_PRD.md` with a short, high-level requirement.
     - The relevant design doc with detailed schema/protocol changes and migration plans.
-

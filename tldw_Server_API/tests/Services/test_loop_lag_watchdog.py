@@ -25,3 +25,7 @@ async def test_loop_lag_watchdog_logs_on_block(monkeypatch):
         await asyncio.wait_for(task, timeout=1.0)
 
         assert mock_logger.warning.called
+        warning_calls = [str(call) for call in mock_logger.warning.call_args_list]
+        assert any(
+            "Event loop lag detected" in call for call in warning_calls
+        ), "Expected lag detection warning was not logged"

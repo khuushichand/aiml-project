@@ -112,4 +112,3 @@
   // Expose initializer
   window.initializePersonalizationTab = initializePersonalizationTab;
 })();
-

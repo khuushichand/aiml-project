@@ -66,4 +66,3 @@ async def test_authnz_usage_repo_insert_usage_log_fallback_bytes_in_sqlite(tmp_p
     assert row.get("bytes_in") in (None, 0)
     assert '"ip": "127.0.0.1"' in (row.get("meta") or "")
     assert row["request_id"] == "req-sqlite-fallback"
-

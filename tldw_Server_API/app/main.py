@@ -2156,8 +2156,8 @@ async def lifespan(app: FastAPI):
             except Exception:
                 try:
                     loop_lag_task.cancel()
-                except Exception:
-                    pass
+                except Exception as _lag_cancel_err:
+                    logger.debug(f"Event loop lag watchdog cancel failed: {_lag_cancel_err}")
 
         # Personalization consolidation service shutdown
         try:

@@ -14,5 +14,3 @@ https://ii.inc/web/blog/post/ii-search
 https://ii.inc/web/blog/post/ii-researcher
 https://github.com/Intelligent-Internet/ii-researcher
 https://mburaksayici.com/blog/2025/10/12/information-retrieval-1.html
-
-

@@ -65,4 +65,3 @@ async def test_expire_keys_before_returns_zero_for_update_zero_status():
         active_status="active",
     )
     assert count == 0
-

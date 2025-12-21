@@ -51,11 +51,94 @@ interface SystemAlert {
   acknowledged_by?: string;
 }
 
+interface MetricsHistoryPoint {
+  time: string;
+  cpu: number;
+  memory: number;
+}
+
+type SystemHealthStatus = 'healthy' | 'warning' | 'critical' | 'unknown';
+type SystemStatusKey = 'api' | 'database' | 'llm' | 'rag';
+
+interface ApiHealthResponse {
+  status?: string;
+  checks?: {
+    database?: { status?: string };
+  };
+}
+
+interface ServiceHealthResponse {
+  status?: string;
+}
+
+interface HealthMetricsResponse {
+  cpu?: { percent?: number };
+  memory?: { percent?: number };
+}
+
+interface SystemStatusItem {
+  key: SystemStatusKey;
+  label: string;
+  status: SystemHealthStatus;
+  detail: string;
+}
+
+const METRICS_HISTORY_MAX_POINTS = 288;
+const METRICS_HISTORY_POLL_MS = 5 * 60 * 1000;
+const DEFAULT_SYSTEM_STATUS: SystemStatusItem[] = [
+  { key: 'api', label: 'API Server', status: 'unknown', detail: 'Checking...' },
+  { key: 'database', label: 'Database', status: 'unknown', detail: 'Checking...' },
+  { key: 'llm', label: 'LLM Services', status: 'unknown', detail: 'Checking...' },
+  { key: 'rag', label: 'RAG Service', status: 'unknown', detail: 'Checking...' },
+];
+const SYSTEM_STATUS_DETAILS: Record<SystemStatusKey, Record<SystemHealthStatus, string>> = {
+  api: {
+    healthy: 'Operational',
+    warning: 'Degraded',
+    critical: 'Unhealthy',
+    unknown: 'Unknown',
+  },
+  database: {
+    healthy: 'Connected',
+    warning: 'Degraded',
+    critical: 'Unreachable',
+    unknown: 'Unknown',
+  },
+  llm: {
+    healthy: 'Available',
+    warning: 'Degraded',
+    critical: 'Unavailable',
+    unknown: 'Unknown',
+  },
+  rag: {
+    healthy: 'Available',
+    warning: 'Degraded',
+    critical: 'Unavailable',
+    unknown: 'Unknown',
+  },
+};
+
+const normalizeHealthStatus = (status?: string): SystemHealthStatus => {
+  const value = (status || '').toLowerCase();
+  if (['ok', 'healthy', 'ready', 'alive'].includes(value)) {
+    return 'healthy';
+  }
+  if (['degraded', 'warning'].includes(value)) {
+    return 'warning';
+  }
+  if (['unhealthy', 'error', 'critical', 'not_ready'].includes(value)) {
+    return 'critical';
+  }
+  return 'unknown';
+};
+
 export default function MonitoringPage() {
   const confirm = useConfirm();
   const [metrics, setMetrics] = useState<Metric[]>([]);
   const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
   const [alerts, setAlerts] = useState<SystemAlert[]>([]);
+  const [metricsHistory, setMetricsHistory] = useState<MetricsHistoryPoint[]>([]);
+  const [systemStatus, setSystemStatus] = useState<SystemStatusItem[]>(DEFAULT_SYSTEM_STATUS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -70,27 +153,61 @@ export default function MonitoringPage() {
     threshold: 80,
   });
 
-  // Metric history for chart (mock data)
-  const metricsHistory = [
-    { time: '00:00', cpu: 45, memory: 62, requests: 120 },
-    { time: '04:00', cpu: 38, memory: 58, requests: 80 },
-    { time: '08:00', cpu: 65, memory: 70, requests: 250 },
-    { time: '12:00', cpu: 78, memory: 75, requests: 380 },
-    { time: '16:00', cpu: 72, memory: 72, requests: 320 },
-    { time: '20:00', cpu: 55, memory: 65, requests: 180 },
-    { time: 'Now', cpu: 48, memory: 60, requests: 150 },
-  ];
+  const appendMetricsHistory = useCallback((cpu: number, memory: number) => {
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    setMetricsHistory((prev) => {
+      const next = [...prev, { time, cpu, memory }];
+      if (next.length <= METRICS_HISTORY_MAX_POINTS) {
+        return next;
+      }
+      return next.slice(-METRICS_HISTORY_MAX_POINTS);
+    });
+  }, []);
+
+  const loadMetricsHistorySample = useCallback(async () => {
+    try {
+      const health = (await api.getHealthMetrics()) as HealthMetricsResponse;
+      const cpu = Number(health?.cpu?.percent ?? 0);
+      const memory = Number(health?.memory?.percent ?? 0);
+      appendMetricsHistory(cpu, memory);
+    } catch (err: unknown) {
+      console.warn('Failed to load health metrics history:', err);
+    }
+  }, [appendMetricsHistory]);
 
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
 
-      const [metricsData, watchlistsData, alertsData] = await Promise.allSettled([
+      const [
+        metricsData,
+        watchlistsData,
+        alertsData,
+        healthData,
+        llmHealthData,
+        ragHealthData,
+      ] = await Promise.allSettled([
         api.getMetrics(),
         api.getWatchlists(),
         api.getAlerts(),
+        api.getHealth(),
+        api.getLlmHealth(),
+        api.getRagHealth(),
       ]);
+
+      [
+        { name: 'metrics', result: metricsData },
+        { name: 'watchlists', result: watchlistsData },
+        { name: 'alerts', result: alertsData },
+        { name: 'health', result: healthData },
+        { name: 'llmHealth', result: llmHealthData },
+        { name: 'ragHealth', result: ragHealthData },
+      ].forEach(({ name, result }) => {
+        if (result.status === 'rejected') {
+          console.warn(`Failed to load ${name}:`, result.reason);
+        }
+      });
 
       // Process metrics
       if (metricsData.status === 'fulfilled' && metricsData.value) {
@@ -120,17 +237,80 @@ export default function MonitoringPage() {
       if (alertsData.status === 'fulfilled') {
         setAlerts(Array.isArray(alertsData.value) ? alertsData.value : []);
       }
+
+      const healthAvailable = healthData.status === 'fulfilled';
+      const llmAvailable = llmHealthData.status === 'fulfilled';
+      const ragAvailable = ragHealthData.status === 'fulfilled';
+      const healthPayload = healthAvailable ? (healthData.value as ApiHealthResponse) : undefined;
+      const llmPayload = llmAvailable ? (llmHealthData.value as ServiceHealthResponse) : undefined;
+      const ragPayload = ragAvailable ? (ragHealthData.value as ServiceHealthResponse) : undefined;
+      const apiStatus = healthAvailable
+        ? normalizeHealthStatus(healthPayload?.status)
+        : 'unknown';
+      const dbStatus = healthAvailable
+        ? normalizeHealthStatus(healthPayload?.checks?.database?.status)
+        : 'unknown';
+      const llmStatus = llmAvailable
+        ? normalizeHealthStatus(llmPayload?.status)
+        : 'unknown';
+      const ragStatus = ragAvailable
+        ? normalizeHealthStatus(ragPayload?.status)
+        : 'unknown';
+      const statusDetail = (
+        key: SystemStatusKey,
+        status: SystemHealthStatus,
+        available: boolean
+      ) => {
+        if (!available) {
+          return 'Unavailable';
+        }
+        return SYSTEM_STATUS_DETAILS[key][status];
+      };
+      setSystemStatus([
+        {
+          key: 'api',
+          label: 'API Server',
+          status: apiStatus,
+          detail: statusDetail('api', apiStatus, healthAvailable),
+        },
+        {
+          key: 'database',
+          label: 'Database',
+          status: dbStatus,
+          detail: statusDetail('database', dbStatus, healthAvailable),
+        },
+        {
+          key: 'llm',
+          label: 'LLM Services',
+          status: llmStatus,
+          detail: statusDetail('llm', llmStatus, llmAvailable),
+        },
+        {
+          key: 'rag',
+          label: 'RAG Service',
+          status: ragStatus,
+          detail: statusDetail('rag', ragStatus, ragAvailable),
+        },
+      ]);
+
+      void loadMetricsHistorySample();
     } catch (err: unknown) {
       console.error('Failed to load monitoring data:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to load monitoring data');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loadMetricsHistorySample]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    loadMetricsHistorySample();
+    const intervalId = window.setInterval(loadMetricsHistorySample, METRICS_HISTORY_POLL_MS);
+    return () => window.clearInterval(intervalId);
+  }, [loadMetricsHistorySample]);
 
   const handleCreateWatchlist = async () => {
     if (!newWatchlist.name || !newWatchlist.target) {
@@ -230,6 +410,19 @@ export default function MonitoringPage() {
         return <Badge className="bg-yellow-500">Warning</Badge>;
       default:
         return <Badge variant="secondary">Info</Badge>;
+    }
+  };
+
+  const getSystemStatusIcon = (status: SystemHealthStatus) => {
+    switch (status) {
+      case 'healthy':
+        return <CheckCircle className="h-8 w-8 text-green-500" />;
+      case 'warning':
+        return <AlertTriangle className="h-8 w-8 text-yellow-500" />;
+      case 'critical':
+        return <AlertTriangle className="h-8 w-8 text-red-500" />;
+      default:
+        return <Clock className="h-8 w-8 text-muted-foreground" />;
     }
   };
 
@@ -498,7 +691,7 @@ export default function MonitoringPage() {
                               min="0"
                               max="100"
                               value={newWatchlist.threshold}
-                              onChange={(e) => setNewWatchlist({ ...newWatchlist, threshold: parseInt(e.target.value) || 80 })}
+                              onChange={(e) => setNewWatchlist({ ...newWatchlist, threshold: parseInt(e.target.value, 10) || 80 })}
                             />
                           </div>
                         </div>
@@ -567,34 +760,18 @@ export default function MonitoringPage() {
               </CardHeader>
               <CardContent>
                 <div className="grid gap-4 md:grid-cols-4">
-                  <div className="flex items-center gap-3 p-4 rounded-lg bg-muted/50">
-                    <CheckCircle className="h-8 w-8 text-green-500" />
-                    <div>
-                      <div className="font-semibold">API Server</div>
-                      <div className="text-sm text-muted-foreground">Operational</div>
+                  {systemStatus.map((item) => (
+                    <div
+                      key={item.key}
+                      className="flex items-center gap-3 p-4 rounded-lg bg-muted/50"
+                    >
+                      {getSystemStatusIcon(item.status)}
+                      <div>
+                        <div className="font-semibold">{item.label}</div>
+                        <div className="text-sm text-muted-foreground">{item.detail}</div>
+                      </div>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-3 p-4 rounded-lg bg-muted/50">
-                    <CheckCircle className="h-8 w-8 text-green-500" />
-                    <div>
-                      <div className="font-semibold">Database</div>
-                      <div className="text-sm text-muted-foreground">Connected</div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3 p-4 rounded-lg bg-muted/50">
-                    <CheckCircle className="h-8 w-8 text-green-500" />
-                    <div>
-                      <div className="font-semibold">LLM Services</div>
-                      <div className="text-sm text-muted-foreground">Available</div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3 p-4 rounded-lg bg-muted/50">
-                    <CheckCircle className="h-8 w-8 text-green-500" />
-                    <div>
-                      <div className="font-semibold">Background Jobs</div>
-                      <div className="text-sm text-muted-foreground">Running</div>
-                    </div>
-                  </div>
+                  ))}
                 </div>
               </CardContent>
             </Card>

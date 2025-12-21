@@ -36,8 +36,8 @@ type UserFormData = {
 const isValidRole = (role: string): role is UserRole => roleOptions.some((option) => option.value === role);
 const roleRank: Record<string, number> = {
   owner: 4,
+  super_admin: 5,
   admin: 3,
-  lead: 2,
   member: 1,
 };
 

@@ -35,17 +35,35 @@ export default function TeamDetailPage() {
   const [newMemberUserId, setNewMemberUserId] = useState('');
   const [newMemberRole, setNewMemberRole] = useState('member');
 
+  const isTeamResponse = (value: unknown): value is Team => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return false;
+    }
+    const teamValue = value as Record<string, unknown>;
+    return typeof teamValue.id === 'number'
+      && typeof teamValue.org_id === 'number'
+      && typeof teamValue.name === 'string';
+  };
+
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
       setTeam(null);
 
-      // First load team members
-      const membersData = await api.getTeamMembers(teamId);
+      const [teamData, membersData] = await Promise.all([
+        api.getTeam(teamId),
+        api.getTeamMembers(teamId),
+      ]);
+
+      if (!isTeamResponse(teamData)) {
+        throw new Error('Unexpected team response');
+      }
+
       if (!Array.isArray(membersData)) {
         throw new Error('Unexpected team members response');
       }
+      setTeam(teamData);
       setMembers(membersData);
     } catch (err: unknown) {
       console.error('Failed to load team data:', err);
@@ -113,13 +131,7 @@ export default function TeamDetailPage() {
       setSuccess('Member removed successfully');
       loadData();
     } catch (err: unknown) {
-      const msg =
-        typeof err === 'object' &&
-        err !== null &&
-        'message' in err &&
-        typeof (err as { message?: unknown }).message === 'string'
-          ? (err as { message: string }).message
-          : 'Failed to remove member';
+      const msg = err instanceof Error ? err.message : 'Failed to remove member';
       console.error('Failed to remove member:', err);
       setError(msg);
     }

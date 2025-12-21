@@ -26,4 +26,3 @@ def test_suggest_title_mvp(client_user_only: TestClient):
     assert r.status_code == 200, r.text
     data = r.json()
     assert data["title"] and len(data["title"]) <= 64
-

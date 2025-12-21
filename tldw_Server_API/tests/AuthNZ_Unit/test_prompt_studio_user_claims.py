@@ -78,4 +78,3 @@ def test_prompt_studio_user_claims_non_admin(monkeypatch):
     assert data.get("user_id") == "2"
     assert data.get("is_admin") is False
     assert data.get("permissions") == ["prompt_studio.read"]
-

@@ -32,4 +32,3 @@
 
   window.SafeDOM = { setHTML };
 })();
-

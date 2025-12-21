@@ -2,4 +2,3 @@
 
 Stage 1 provides a safe, minimal renderer with a curated helper set.
 """
-

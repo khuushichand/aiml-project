@@ -35,4 +35,3 @@ def ensure_env(path: Path, defaults: Dict[str, Optional[str]] | None = None) -> 
         return
     # For now, keep existing .env untouched; full implementation will merge.
     logger.debug(f".env exists at {path}; skipping write in scaffold")
-
