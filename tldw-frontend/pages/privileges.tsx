@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Layout } from '@/components/layout/Layout';
 import { Tabs } from '@/components/ui/Tabs';
 import { Button } from '@/components/ui/Button';
@@ -32,7 +32,7 @@ type PrivilegeBucketRow = {
   users: number;
   scopes: number;
   endpoints?: number;
-  metadata?: Record<string, any> | null;
+  metadata?: Record<string, unknown> | null;
 };
 
 type PrivilegeDetailRow = {
@@ -97,7 +97,8 @@ export default function PrivilegesPage() {
     if (activeTab === 'snapshots' && snapshots.length === 0 && !snapshotsLoading) {
       loadSnapshots();
     }
-  }, [activeTab]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]); // Only trigger on tab change, conditions checked inside
 
   const loadSelfMap = async () => {
     setSelfLoading(true);
@@ -108,8 +109,9 @@ export default function PrivilegesPage() {
         items: data.items || [],
       });
       show({ title: 'Self map refreshed', variant: 'success' });
-    } catch (err: any) {
-      show({ title: 'Failed to load self map', description: err?.message, variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to load self map', description: message, variant: 'danger' });
     } finally {
       setSelfLoading(false);
     }
@@ -123,8 +125,9 @@ export default function PrivilegesPage() {
         generated_at: data.generated_at,
         buckets: data.buckets || [],
       });
-    } catch (err: any) {
-      show({ title: 'Failed to load org summary', description: err?.message, variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to load org summary', description: message, variant: 'danger' });
     } finally {
       setOrgLoading(false);
     }
@@ -141,8 +144,9 @@ export default function PrivilegesPage() {
         items: data.items || [],
         total_items: data.total_items || 0,
       });
-    } catch (err: any) {
-      show({ title: 'Failed to load org detail', description: err?.message, variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to load org detail', description: message, variant: 'danger' });
     } finally {
       setOrgLoading(false);
     }
@@ -159,8 +163,9 @@ export default function PrivilegesPage() {
         params: { group_by: 'member' },
       });
       setTeamSummary({ generated_at: data.generated_at, buckets: data.buckets || [] });
-    } catch (err: any) {
-      show({ title: 'Failed to load team summary', description: err?.message, variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to load team summary', description: message, variant: 'danger' });
     } finally {
       setTeamLoading(false);
     }
@@ -181,8 +186,9 @@ export default function PrivilegesPage() {
         items: data.items || [],
         total_items: data.total_items || 0,
       });
-    } catch (err: any) {
-      show({ title: 'Failed to load team detail', description: err?.message, variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to load team detail', description: message, variant: 'danger' });
     } finally {
       setTeamLoading(false);
     }
@@ -192,7 +198,8 @@ export default function PrivilegesPage() {
     setSnapshotsLoading(true);
     try {
       const data = await apiClient.get('/privileges/snapshots', { params: { include_counts: true, page_size: 100 } });
-      const rows: SnapshotRow[] = (data.items || []).map((item: any) => ({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const rows: SnapshotRow[] = (data.items || []).map((item: Record<string, any>) => ({
         snapshotId: item.snapshot_id,
         generatedAt: item.generated_at,
         targetScope: item.target_scope,
@@ -204,20 +211,21 @@ export default function PrivilegesPage() {
         summaryScopes: item.summary?.scopes,
       }));
       setSnapshots(rows);
-    } catch (err: any) {
-      show({ title: 'Failed to load snapshots', description: err?.message, variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to load snapshots', description: message, variant: 'danger' });
     } finally {
       setSnapshotsLoading(false);
     }
   };
 
-  const handleRequestAccess = (item: PrivilegeSelfItem) => {
+  const handleRequestAccess = useCallback((item: PrivilegeSelfItem) => {
     show({
       title: 'Request submitted',
       description: `We will notify admins to review scope ${item.privilege_scope_id}.`,
       variant: 'info',
     });
-  };
+  }, [show]);
 
   const handleSnapshotExport = async (snapshotId: string, format: 'csv' | 'json') => {
     setExportingSnapshot(`${snapshotId}:${format}`);
@@ -240,8 +248,9 @@ export default function PrivilegesPage() {
       document.body.removeChild(link);
       window.URL.revokeObjectURL(objectUrl);
       show({ title: `Snapshot exported (${format.toUpperCase()})`, variant: 'success' });
-    } catch (err: any) {
-      show({ title: 'Export failed', description: err?.message, variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Export failed', description: message, variant: 'danger' });
     } finally {
       setExportingSnapshot(null);
     }
@@ -548,7 +557,7 @@ export default function PrivilegesPage() {
   );
 
   return (
-    <Layout title="Privilege Maps">
+    <Layout>
       <div className="mx-auto max-w-6xl py-8">
         <div className="flex flex-col gap-2">
           <h1 className="text-2xl font-bold text-gray-900">Privilege Maps</h1>

@@ -10,12 +10,11 @@ export default function Browse() {
   const accountIdInit = Number(url.searchParams.get('account_id') || '0')
   const [provider, setProvider] = useState<'drive' | 'notion'>(providerInit)
   const [accountId, setAccountId] = useState<number>(accountIdInit)
-  const [cursor, setCursor] = useState<string | null>(null)
+  const [_cursor, setCursor] = useState<string | null>(null)
   const [items, setItems] = useState<Item[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [parentId, setParentId] = useState<string | null>(null)
-  const [notEnabled, _setNotEnabled] = useState(false)
 
   const canBrowse = useMemo(() => accountId > 0 && ['drive','notion'].includes(provider), [accountId, provider])
 
@@ -23,14 +22,17 @@ export default function Browse() {
     if (!canBrowse) return
     setBusy(true); setError(null)
     try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const params: any = { account_id: accountId }
       if (parentId) params.parent_remote_id = parentId
       if (!reset && cursorArg) params.cursor = cursorArg
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const j = await apiClient.get<any>(`/connectors/providers/${provider}/sources/browse`, { params })
       setItems(j?.items || [])
       setCursor(j?.next_cursor || null)
-    } catch (e: any) {
-      setError(e?.message || 'Browse failed')
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Browse failed';
+      setError(message);
     } finally { setBusy(false) }
   }, [canBrowse, accountId, parentId, provider])
 
@@ -47,6 +49,7 @@ export default function Browse() {
       path: item.name || item.id,
       options: { recursive: true }
     }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const s = await apiClient.post<any>('/connectors/sources', payload)
     window.location.href = `/connectors/sources?sid=${s?.id}`
   }
@@ -62,7 +65,7 @@ export default function Browse() {
       {!notEnabled && error && <div className="text-red-600 text-sm">{error}</div>}
       <div className="flex gap-2 items-center">
         <label className="text-sm">Provider</label>
-        <select value={provider} onChange={e => setProvider(e.target.value as any)} className="border rounded px-2 py-1">
+        <select value={provider} onChange={e => setProvider(e.target.value as typeof provider)} className="border rounded px-2 py-1">
           <option value="drive">drive</option>
           <option value="notion">notion</option>
         </select>

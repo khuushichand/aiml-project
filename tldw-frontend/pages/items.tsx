@@ -57,7 +57,7 @@ export default function ItemsPage() {
   const loadItems = useCallback(async () => {
     setLoading(true);
     try {
-      const params: Record<string, any> = { page, size: PAGE_SIZE };
+      const params: Record<string, unknown> = { page, size: PAGE_SIZE };
       if (query.trim()) params.q = query.trim();
       if (origin !== 'all') params.origin = origin;
       if (status !== 'all') params.status_filter = [status];
@@ -66,10 +66,11 @@ export default function ItemsPage() {
       const data = await apiClient.get<ItemsResponse>('/items', { params });
       setItems(data.items || []);
       setTotal(data.total || 0);
-    } catch (error: any) {
+    } catch (error: unknown) {
       setItems([]);
       setTotal(0);
-      show({ title: 'Failed to load items', description: error?.message, variant: 'danger' });
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to load items', description: message, variant: 'danger' });
     } finally {
       setLoading(false);
     }

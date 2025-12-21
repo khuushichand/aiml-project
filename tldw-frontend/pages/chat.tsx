@@ -6,8 +6,8 @@ import { streamSSE } from '@/lib/sse';
 import { useToast } from '@/components/ui/ToastProvider';
 import JsonEditor from '@/components/ui/JsonEditor';
 import HotkeysOverlay from '@/components/ui/HotkeysOverlay';
-import '@chatui/core/dist/index.css';
-import { Composer, Message, MessageList, type MessageProps } from "@chatui/core";
+import { ChatComposer } from '@/components/ui/ChatComposer';
+import { ChatMessageList, type ChatMessage } from '@/components/ui/ChatMessageList';
 
 interface LLMProvider {
   name: string;
@@ -68,7 +68,7 @@ export default function ChatPage() {
     try {
       const s = localStorage.getItem('tldw-slash-mode');
       const v = (s || '').toLowerCase();
-      return (v === 'preface' || v === 'replace') ? (v as any) : 'system';
+      return (v === 'preface' || v === 'replace') ? v : 'system';
     } catch {
       return 'system';
     }
@@ -110,7 +110,7 @@ export default function ChatPage() {
     return `${webAssetBase}/webui/img/providers/${p}.svg`;
   }, [webAssetBase]);
 
-  const persistSessions = (list: any[]) => {
+  const persistSessions = (list: SessionItem[]) => {
     try { localStorage.setItem('tldw-chat-sessions', JSON.stringify(list)); } catch {}
   };
   const loadSessions = () => {
@@ -152,7 +152,9 @@ export default function ChatPage() {
       format_for_completions: 'true',
       include_character_context: 'true',
     });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const data = await apiClient.get<any>(`/chats/${cid}/messages?${qs.toString()}`);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const msgs: any[] = Array.isArray(data?.messages) ? data.messages : [];
     // Map to UiMessage[]
     const mapped: UiMessage[] = msgs.map((m) => {
@@ -199,6 +201,7 @@ export default function ChatPage() {
         setSending(true);
 
     try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let payload: any = {
         model,
         stream,
@@ -206,9 +209,10 @@ export default function ChatPage() {
         messages: newUi
           .filter((m) => m.role !== 'system' && !m.error)
           .map((m) => {
-            const content = (m as any)?.tool?.content ?? m.text ?? '';
+            const content = m.tool?.content ?? m.text ?? '';
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const out: any = { role: m.role, content };
-            const toolCallId = (m as any).tool_call_id ?? (m as any)?.tool?.id;
+            const toolCallId = m.tool?.id;
             if (toolCallId) out.tool_call_id = toolCallId;
             return out;
           }),
@@ -253,6 +257,7 @@ export default function ChatPage() {
           const dTools = json?.choices?.[0]?.delta?.tool_calls;
           if (Array.isArray(dTools) && dTools.length) {
             // Reflect tool call names inline as a small card
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const tcNames = dTools.map((tc: any) => tc?.function?.name).filter(Boolean);
             if (tcNames.length) {
               setUiMessages((prev) => [...prev, { role: 'tool', tool: { name: tcNames.join(', '), content: '' } }]);
@@ -260,6 +265,7 @@ export default function ChatPage() {
           }
           const dResults = json?.tool_results || json?.tldw_tool_results;
           if (Array.isArray(dResults) && dResults.length) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             dResults.forEach((r: any) => {
               const name = r?.name || r?.tool || 'tool';
               const content = typeof r?.content === 'string' ? r.content : JSON.stringify(r?.content ?? r);
@@ -284,6 +290,7 @@ export default function ChatPage() {
         show({ title: 'Response complete', variant: 'success' });
       } else {
         // Non-streaming
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const res = await apiClient.post<any>('/chat/completions', JSON.parse(body));
         const text = res?.choices?.[0]?.message?.content || '';
         if (res?.tldw_conversation_id && !conversationId) {
@@ -307,12 +314,13 @@ export default function ChatPage() {
         }
         show({ title: 'Response ready', variant: 'success' });
       }
-    } catch (e: any) {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
       setUiMessages((prev) => [
         ...prev,
-        { role: 'assistant', text: `Error: ${e.message || e}`, error: true } as UiMessage,
+        { role: 'assistant', text: `Error: ${message}`, error: true } as UiMessage,
       ]);
-      show({ title: 'Chat error', description: e?.message || 'Failed', variant: 'danger' });
+      show({ title: 'Chat error', description: message, variant: 'danger' });
     } finally {
       setSending(false);
       abortRef.current = null;
@@ -335,7 +343,7 @@ export default function ChatPage() {
           setModel(full);
           pushRecentModel(full);
         }
-      } catch (e) {
+      } catch {
         // keep current model
       } finally {
         setLoadingProviders(false);
@@ -375,7 +383,8 @@ export default function ChatPage() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [uiMessages, sendMessage]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uiMessages, sendMessage]); // show is stable from toast hook
 
   // Persist current chat model for use across pages (e.g., Media Analyze)
   useEffect(() => {
@@ -410,7 +419,9 @@ export default function ChatPage() {
   useEffect(() => {
     const fetchSessions = async () => {
       try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const data = await apiClient.get<any>('/chats?limit=30&offset=0');
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const list: any[] = Array.isArray(data?.chats) ? data.chats : [];
         const mapped: SessionItem[] = list.map((c) => ({
           id: c.id,
@@ -452,7 +463,7 @@ export default function ChatPage() {
     setTimeout(() => { suppressAutoScrollRef.current = false; }, 0);
   };
 
-  const chatuiMessages: MessageProps[] = useMemo(() => {
+  const chatuiMessages: ChatMessage[] = useMemo(() => {
     const providerFromModel = (() => {
       try { return (model || '').split('/')[0] || undefined; } catch { return undefined; }
     })();
@@ -467,6 +478,7 @@ export default function ChatPage() {
             position: 'left',
             content: { name: m.tool.name || 'tool', text: m.tool.content || '' },
             user: { name: 'Tool' },
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
           } as any;
         }
         const isUser = m.role === 'user';
@@ -475,7 +487,7 @@ export default function ChatPage() {
           position: isUser ? 'right' : 'left',
           content: { text: m.text || '' },
           user: isUser ? { name: 'You' } : (avatarUrl ? { name: 'Assistant', avatar: avatarUrl } : { name: 'Assistant' }),
-        } as MessageProps;
+        } as ChatMessage;
       });
   }, [uiMessages, model, currentProvider, providerIconUrl]);
 
@@ -509,10 +521,10 @@ export default function ChatPage() {
     setShowJump(false);
   };
 
-  const onComposerSend = async (data: { text: string }) => {
-    if (!data?.text) return;
+  const onComposerSend = async (_type: string, content: string) => {
+    if (!content) return;
     setComposerText('');
-    await sendMessage(data.text);
+    await sendMessage(content);
   };
 
   return (
@@ -598,7 +610,7 @@ export default function ChatPage() {
             <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
               <div>
                 <label className="mb-1 block text-sm font-medium text-gray-700">Preset</label>
-                <select className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value={preset} onChange={(e)=>applyPreset(e.target.value as any)}>
+                <select className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value={preset} onChange={(e)=>applyPreset(e.target.value as typeof preset)}>
                   <option value="creative">Creative</option>
                   <option value="balanced">Balanced</option>
                   <option value="precise">Precise</option>
@@ -610,7 +622,7 @@ export default function ChatPage() {
                 <select
                   className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
                   value={slashMode}
-                  onChange={(e) => setSlashMode(e.target.value as any)}
+                  onChange={(e) => setSlashMode(e.target.value as typeof slashMode)}
                 >
                   <option value="system">System (separate)</option>
                   <option value="preface">Preface user</option>
@@ -643,12 +655,13 @@ export default function ChatPage() {
                   Jump to latest
                 </button>
               )}
-              <MessageList
+              <ChatMessageList
                 messages={chatuiMessages}
-                renderMessageContent={(msg: any) => {
+                renderMessageContent={(msg: ChatMessage) => {
                   if (msg.type === 'tool') {
-                    const name = msg.content?.name || 'tool';
-                    const text = msg.content?.text || '';
+                    const contentObj = typeof msg.content === 'object' ? msg.content : null;
+                    const name = contentObj?.name || 'tool';
+                    const text = contentObj?.text || '';
                     return (
                       <div className="rounded border bg-gray-50 p-2 text-xs">
                         <div className="mb-1 font-semibold text-gray-700">Tool: {name}</div>
@@ -671,7 +684,7 @@ export default function ChatPage() {
                     );
                   }
                   // Use default renderer for non-tool messages
-                  return undefined as any;
+                  return undefined;
                 }}
               />
             </div>
@@ -683,13 +696,12 @@ export default function ChatPage() {
                 </label>
                 {/* Stop moved into Composer right actions */}
               </div>
-              <Composer
+              <ChatComposer
                 placeholder="Type your message…"
                 onSend={onComposerSend}
                 text={composerText}
-                onChange={(val: any) => setComposerText(typeof val === 'string' ? val : (val?.text ?? ''))}
+                onChange={(val: string) => setComposerText(val)}
                 rows={2}
-                showSend={false}
                 disabled={sending}
                 rightActions={
                   sending && stream
@@ -699,7 +711,7 @@ export default function ChatPage() {
                         </Button>,
                       ]
                     : [
-                        <Button key="send" onClick={() => onComposerSend({ text: composerText })} disabled={sending}>
+                        <Button key="send" onClick={() => onComposerSend('text', composerText)} disabled={sending}>
                           Send
                         </Button>,
                       ]

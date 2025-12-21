@@ -59,7 +59,7 @@ export default function ReadingPage() {
   const loadItems = useCallback(async () => {
     setLoading(true);
     try {
-      const params: Record<string, any> = { page, size: PAGE_SIZE };
+      const params: Record<string, unknown> = { page, size: PAGE_SIZE };
       if (statusFilter !== 'all') params.status = [statusFilter];
       if (search.trim()) params.q = search.trim();
       if (favoriteOnly) params.favorite = true;
@@ -67,10 +67,11 @@ export default function ReadingPage() {
       const data = await apiClient.get<ReadingListResponse>('/reading/items', { params });
       setItems(data.items || []);
       setTotal(data.total || 0);
-    } catch (error: any) {
+    } catch (error: unknown) {
       setItems([]);
       setTotal(0);
-      show({ title: 'Failed to load reading items', description: error?.message, variant: 'danger' });
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to load reading items', description: message, variant: 'danger' });
     } finally {
       setLoading(false);
     }
@@ -107,8 +108,9 @@ export default function ReadingPage() {
       setFormStatus('saved');
       setPage(1);
       loadItems();
-    } catch (error: any) {
-      show({ title: 'Save failed', description: error?.message, variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Save failed', description: message, variant: 'danger' });
     } finally {
       setSaving(false);
     }
@@ -118,8 +120,9 @@ export default function ReadingPage() {
     try {
       await apiClient.patch(`/reading/items/${itemId}`, patch);
       loadItems();
-    } catch (error: any) {
-      show({ title: 'Update failed', description: error?.message, variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Update failed', description: message, variant: 'danger' });
     }
   };
 

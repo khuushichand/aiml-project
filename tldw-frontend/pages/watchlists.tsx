@@ -11,10 +11,12 @@ interface WatchlistJob {
   id: number;
   name: string;
   description?: string | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   scope?: Record<string, any>;
   schedule_expr?: string | null;
   timezone?: string | null;
   active: boolean;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   output_prefs?: Record<string, any> | null;
   job_filters?: { filters: WatchlistFilter[]; require_include?: boolean } | null;
   last_run_at?: string | null;
@@ -35,6 +37,7 @@ interface WatchlistSource {
   source_type: SourceType;
   active: boolean;
   tags: string[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   settings?: Record<string, any> | null;
   status?: string | null;
   last_scraped_at?: string | null;
@@ -64,7 +67,7 @@ type FilterAction = 'include' | 'exclude' | 'flag';
 interface WatchlistFilter {
   type: FilterType;
   action: FilterAction;
-  value: Record<string, any>;
+  value: Record<string, unknown>;
   priority?: number;
   is_active?: boolean;
 }
@@ -124,6 +127,9 @@ interface JobFormState {
   newFilterValueText: string; // overloaded for keywords/authors/pattern
   newFilterRegexFlags: string;
   newFilterMaxAgeDays: string;
+  // Preview state
+  previewItems?: unknown[];
+  showPreview?: boolean;
 }
 
 const parseRecipients = (value: string): string[] =>
@@ -224,10 +230,12 @@ export default function WatchlistsPage() {
   const [newSource, setNewSource] = useState<SourceFormState>(defaultSourceState());
   const [showScrapeAdvanced, setShowScrapeAdvanced] = useState(false);
   const [opmlFile, setOpmlFile] = useState<File | null>(null);
-  const [opmlResult, setOpmlResult] = useState<any | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [opmlResult, setOpmlResult] = useState<Record<string, any> | null>(null);
   const [showOpmlModal, setShowOpmlModal] = useState(false);
   const [bulkJsonText, setBulkJsonText] = useState<string>('');
-  const [bulkResult, setBulkResult] = useState<any | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [bulkResult, setBulkResult] = useState<Record<string, any> | null>(null);
   const [showBulkModal, setShowBulkModal] = useState(false);
 
   const templateOptions = useMemo(() => templates.map((tpl) => ({ value: tpl.name, label: `${tpl.name} (${tpl.format})` })), [templates]);
@@ -255,11 +263,11 @@ export default function WatchlistsPage() {
   const normalizeFormState = useCallback(
     (job: WatchlistJob): JobFormState => {
       const prefs = job.output_prefs || {};
-      const templateCfg = (prefs.template as Record<string, any>) || {};
-      const retentionCfg = (prefs.retention as Record<string, any>) || {};
-      const deliveriesCfg = (prefs.deliveries as Record<string, any>) || {};
-      const emailCfg = (deliveriesCfg.email as Record<string, any>) || {};
-      const chatbookCfg = (deliveriesCfg.chatbook as Record<string, any>) || {};
+      const templateCfg = (prefs.template as Record<string, unknown>) || {};
+      const retentionCfg = (prefs.retention as Record<string, unknown>) || {};
+      const deliveriesCfg = (prefs.deliveries as Record<string, unknown>) || {};
+      const emailCfg = (deliveriesCfg.email as Record<string, unknown>) || {};
+      const chatbookCfg = (deliveriesCfg.chatbook as Record<string, unknown>) || {};
 
       return {
         templateName: String(templateCfg.default_name || ''),
@@ -267,11 +275,11 @@ export default function WatchlistsPage() {
         temporaryRetention: retentionCfg.temporary_seconds != null ? String(retentionCfg.temporary_seconds) : '',
         emailEnabled: emailCfg.enabled !== false,
         emailRecipients: (Array.isArray(emailCfg.recipients) ? emailCfg.recipients : []).join(', '),
-        emailSubject: emailCfg.subject || '',
+        emailSubject: String(emailCfg.subject || ''),
         emailAttach: emailCfg.attach_file !== false,
         chatbookEnabled: chatbookCfg.enabled !== false,
         filters: (job.job_filters?.filters as WatchlistFilter[]) || [],
-        requireInclude: Boolean((job.job_filters as any)?.require_include || false),
+        requireInclude: Boolean(job.job_filters?.require_include || false),
         showAdvancedFilters: false,
         advancedFiltersJson: '',
         newFilterType: 'keyword',
@@ -289,8 +297,9 @@ export default function WatchlistsPage() {
     try {
       const data = await apiClient.get<WatchlistSettings>('/watchlists/settings');
       setSettings(data || {});
-    } catch (error: any) {
-      show({ title: 'Failed to load watchlist settings', description: error?.message, variant: 'warning' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to load watchlist settings', description: message, variant: 'warning' });
     }
   }, [show]);
 
@@ -298,8 +307,9 @@ export default function WatchlistsPage() {
     try {
       const data = await apiClient.get<{ items: TemplateSummary[] }>('/watchlists/templates');
       setTemplates(data.items || []);
-    } catch (error: any) {
-      show({ title: 'Failed to load templates', description: error?.message, variant: 'warning' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to load templates', description: message, variant: 'warning' });
     }
   }, [show]);
 
@@ -308,9 +318,10 @@ export default function WatchlistsPage() {
     try {
       const data = await apiClient.get<SourcesListResponse>('/watchlists/sources', { params: { page: 1, size: 100 } });
       setSources(data.items || []);
-    } catch (error: any) {
+    } catch (error: unknown) {
       setSources([]);
-      show({ title: 'Failed to load watchlist sources', description: error?.message, variant: 'danger' });
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to load watchlist sources', description: message, variant: 'danger' });
     } finally {
       setLoadingSources(false);
     }
@@ -321,9 +332,10 @@ export default function WatchlistsPage() {
     try {
       const data = await apiClient.get<JobsListResponse>('/watchlists/jobs', { params: { page: 1, size: 100 } });
       setJobs(data.items || []);
-    } catch (error: any) {
+    } catch (error: unknown) {
       setJobs([]);
-      show({ title: 'Failed to load watchlist jobs', description: error?.message, variant: 'danger' });
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to load watchlist jobs', description: message, variant: 'danger' });
     } finally {
       setLoadingJobs(false);
     }
@@ -355,7 +367,7 @@ export default function WatchlistsPage() {
   };
 
   const buildOutputPrefsPayload = (state: JobFormState, original: WatchlistJob) => {
-    const outputPrefs: Record<string, any> = {};
+    const outputPrefs: Record<string, unknown> = {};
 
     if (state.templateName) {
       outputPrefs.template = {
@@ -363,7 +375,7 @@ export default function WatchlistsPage() {
       };
     }
 
-    const retention: Record<string, any> = {};
+    const retention: Record<string, unknown> = {};
     if (state.defaultRetention.trim()) {
       const val = parseInt(state.defaultRetention, 10);
       if (!Number.isNaN(val) && val > 0) retention.default_seconds = val;
@@ -376,6 +388,7 @@ export default function WatchlistsPage() {
       outputPrefs.retention = retention;
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const deliveries: Record<string, any> = {};
     deliveries.email = {
       enabled: state.emailEnabled,
@@ -391,7 +404,7 @@ export default function WatchlistsPage() {
     outputPrefs.deliveries = deliveries;
 
     // Preserve any untouched keys from original output_prefs to avoid unintended loss
-    const existing = (original.output_prefs || {}) as Record<string, any>;
+    const existing = (original.output_prefs || {}) as Record<string, unknown>;
     return {
       ...existing,
       ...outputPrefs,
@@ -411,8 +424,9 @@ export default function WatchlistsPage() {
       show({ title: 'OPML import completed', description: `Created ${data.created}, errors ${data.errors}`, variant: data.errors ? 'warning' : 'success' });
       setOpmlFile(null);
       fetchSources();
-    } catch (error: any) {
-      show({ title: 'Import failed', description: error?.message, variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Import failed', description: message, variant: 'danger' });
     }
   };
 
@@ -428,8 +442,9 @@ export default function WatchlistsPage() {
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-    } catch (error: any) {
-      show({ title: 'Export failed', description: error?.message, variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Export failed', description: message, variant: 'danger' });
     }
   };
 
@@ -445,8 +460,9 @@ export default function WatchlistsPage() {
       setShowBulkModal(true);
       show({ title: 'Bulk create completed', description: `Created ${data.created}, errors ${data.errors}`, variant: data.errors ? 'warning' : 'success' });
       fetchSources();
-    } catch (error: any) {
-      show({ title: 'Bulk create failed', description: error?.message, variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Bulk create failed', description: message, variant: 'danger' });
     }
   };
 
@@ -465,8 +481,9 @@ export default function WatchlistsPage() {
     try {
       await apiClient.patch(`/admin/orgs/${idNum}/watchlists/settings`, { require_include_default: orgRequireInclude });
       show({ title: 'Org defaults saved', description: `Org ${idNum}: require_include_default=${orgRequireInclude}`, variant: 'success' });
-    } catch (error: any) {
-      show({ title: 'Failed to save org defaults', description: error?.message, variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to save org defaults', description: message, variant: 'danger' });
     } finally {
       setOrgSaving(false);
     }
@@ -487,8 +504,9 @@ export default function WatchlistsPage() {
       const data = await apiClient.get<{ org_id: number; require_include_default?: boolean }>(`/admin/orgs/${idNum}/watchlists/settings`);
       setOrgRequireInclude(Boolean(data?.require_include_default || false));
       show({ title: 'Loaded org defaults', description: `Org ${idNum}: require_include_default=${Boolean(data?.require_include_default || false)}`, variant: 'success' });
-    } catch (error: any) {
-      show({ title: 'Failed to load org defaults', description: error?.message, variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to load org defaults', description: message, variant: 'danger' });
     }
   };
 
@@ -496,20 +514,21 @@ export default function WatchlistsPage() {
     setLoadingOrgsList(true);
     try {
       const offset = (orgsPage - 1) * orgsSize;
-      const params: any = { limit: orgsSize, offset };
+      const params: Record<string, unknown> = { limit: orgsSize, offset };
       if (orgsFilter.trim()) params.q = orgsFilter.trim();
       const data = await apiClient.get<{ items: { id: number; name: string; slug?: string | null }[]; total: number; has_more: boolean }>(
         '/admin/orgs',
         { params }
       );
-      setOrgsList(Array.isArray((data as any)?.items) ? data.items : []);
-      setOrgsTotal(Number.isFinite((data as any)?.total) ? data.total : 0);
-      setOrgsHasMore(Boolean((data as any)?.has_more));
-    } catch (error: any) {
+      setOrgsList(Array.isArray(data?.items) ? data.items : []);
+      setOrgsTotal(Number.isFinite(data?.total) ? data.total : 0);
+      setOrgsHasMore(Boolean(data?.has_more));
+    } catch (error: unknown) {
       setOrgsList([]);
       setOrgsTotal(0);
       setOrgsHasMore(false);
-      show({ title: 'Failed to load organizations', description: error?.message, variant: 'danger' });
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to load organizations', description: message, variant: 'danger' });
     } finally {
       setLoadingOrgsList(false);
     }
@@ -559,10 +578,10 @@ export default function WatchlistsPage() {
     try {
       const state = forms[jobId];
       if (state.showAdvancedFilters) {
-        let payload: any = null;
+        let payload: unknown = null;
         try {
           payload = JSON.parse(state.advancedFiltersJson || '{}');
-        } catch (e: any) {
+        } catch {
           throw new Error('Invalid JSON in advanced filters editor');
         }
         if (!payload || typeof payload !== 'object') {
@@ -574,8 +593,9 @@ export default function WatchlistsPage() {
         await apiClient.patch(`/watchlists/jobs/${jobId}/filters`, { require_include: state.requireInclude, filters });
       }
       show({ title: 'Filters saved', variant: 'success' });
-    } catch (error: any) {
-      show({ title: 'Failed to save filters', description: error?.message, variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to save filters', description: message, variant: 'danger' });
     }
   };
 
@@ -588,6 +608,7 @@ export default function WatchlistsPage() {
       return;
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const payload: Record<string, any> = {
       name,
       url,
@@ -614,12 +635,12 @@ export default function WatchlistsPage() {
       payload.tags = tags;
     }
 
-    const settings: Record<string, any> = {};
+    const settings: Record<string, unknown> = {};
     if (newSource.sourceType === 'rss') {
       const limit = toOptionalNumber(newSource.rssLimit);
       if (limit !== undefined) settings.limit = limit;
       // History config
-      const hist: Record<string, any> = {};
+      const hist: Record<string, unknown> = {};
       const strat = nonEmpty(newSource.historyStrategy);
       if (strat) hist.strategy = strat;
       const maxPages = toOptionalNumber(newSource.historyMaxPages);
@@ -630,7 +651,7 @@ export default function WatchlistsPage() {
       if (newSource.historyStopOnSeen) hist.stop_on_seen = true;
       if (Object.keys(hist).length > 0) settings.history = hist;
       // RSS content preferences
-      const rssCfg: Record<string, any> = {};
+      const rssCfg: Record<string, unknown> = {};
       if (newSource.rssUseFeedContent) rssCfg.use_feed_content_if_available = true;
       const minChars = toOptionalNumber(newSource.rssFeedMinChars, { allowZero: false });
       if (minChars !== undefined) rssCfg.feed_content_min_chars = minChars;
@@ -643,7 +664,7 @@ export default function WatchlistsPage() {
       const discoverMethod = nonEmpty(newSource.siteDiscoverMethod);
       if (discoverMethod) settings.discover_method = discoverMethod;
 
-      const rules: Record<string, any> = {};
+      const rules: Record<string, unknown> = {};
       const listUrl = nonEmpty(newSource.listUrl) || url;
       if (listUrl) rules.list_url = listUrl;
 
@@ -684,7 +705,7 @@ export default function WatchlistsPage() {
         rules.skip_article_fetch = true;
       }
 
-      const pagination: Record<string, any> = {};
+      const pagination: Record<string, unknown> = {};
       const nextSelectors = normalizeSelectorsInput(newSource.nextSelector);
       if (nextSelectors) pagination.next_xpath = nextSelectors;
       const nextAttribute = nonEmpty(newSource.nextAttribute);
@@ -714,8 +735,9 @@ export default function WatchlistsPage() {
       show({ title: `Added ${name}`, variant: 'success' });
       resetSourceForm();
       fetchSources();
-    } catch (error: any) {
-      show({ title: `Failed to add ${name}`, description: error?.message, variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: `Failed to add ${name}`, description: message, variant: 'danger' });
     } finally {
       setSavingSource(false);
     }
@@ -730,8 +752,9 @@ export default function WatchlistsPage() {
       await apiClient.patch(`/watchlists/jobs/${job.id}`, payload);
       show({ title: `Updated ${job.name}`, variant: 'success' });
       fetchJobs();
-    } catch (error: any) {
-      show({ title: `Failed to update ${job.name}`, description: error?.message, variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: `Failed to update ${job.name}`, description: message, variant: 'danger' });
     } finally {
       setSavingJobId(null);
     }
@@ -742,8 +765,9 @@ export default function WatchlistsPage() {
     try {
       const run = await apiClient.post<{ id: number; status: string }>(`/watchlists/jobs/${jobId}/run`);
       show({ title: 'Run triggered', description: `Run ${run.id} status: ${run.status}`, variant: 'success' });
-    } catch (error: any) {
-      show({ title: 'Failed to start run', description: error?.message, variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to start run', description: message, variant: 'danger' });
     } finally {
       setRunningJobId(null);
     }
@@ -795,6 +819,7 @@ export default function WatchlistsPage() {
                 <table className="w-full text-left text-sm">
                   <thead><tr><th className="px-2 py-1">Name</th><th className="px-2 py-1">URL</th><th className="px-2 py-1">Status</th><th className="px-2 py-1">Error</th><th className="px-2 py-1">ID</th></tr></thead>
                   <tbody>
+                    {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                     {(opmlResult.items || []).map((it: any, idx: number) => (
                       <tr key={idx} className="border-t">
                         <td className="px-2 py-1">{it.name || ''}</td>
@@ -810,7 +835,9 @@ export default function WatchlistsPage() {
               {opmlResult.errors > 0 && (
                 <div className="mt-3">
                   <Button variant="secondary" onClick={() => {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const rows = (opmlResult.items || []).filter((it: any) => it.status !== 'created');
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const csv = ['name,url,status,error'].concat(rows.map((r: any) => [r.name || '', r.url || '', r.status || '', r.error || ''].map((s: string) => '"' + String(s).replaceAll('"','""') + '"').join(','))).join('\n');
                     const blob = new Blob([csv], { type: 'text/csv' });
                     const url = URL.createObjectURL(blob);
@@ -832,6 +859,7 @@ export default function WatchlistsPage() {
                 <table className="w-full text-left text-sm">
                   <thead><tr><th className="px-2 py-1">Name</th><th className="px-2 py-1">URL</th><th className="px-2 py-1">Type</th><th className="px-2 py-1">Status</th><th className="px-2 py-1">Error</th><th className="px-2 py-1">ID</th></tr></thead>
                   <tbody>
+                    {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                     {(bulkResult.items || []).map((it: any, idx: number) => (
                       <tr key={idx} className="border-t">
                         <td className="px-2 py-1">{it.name || ''}</td>
@@ -848,7 +876,9 @@ export default function WatchlistsPage() {
               {bulkResult.errors > 0 && (
                 <div className="mt-3">
                   <Button variant="secondary" onClick={() => {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const rows = (bulkResult.items || []).filter((it: any) => it.status !== 'created');
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const csv = ['name,url,source_type,status,error'].concat(rows.map((r: any) => [r.name || '', r.url || '', r.source_type || '', r.status || '', r.error || ''].map((s: string) => '"' + String(s).replaceAll('"','""') + '"').join(','))).join('\n');
                     const blob = new Blob([csv], { type: 'text/csv' });
                     const url = URL.createObjectURL(blob);
@@ -992,8 +1022,9 @@ export default function WatchlistsPage() {
                               try {
                                 await navigator.clipboard.writeText(String(o.id));
                                 show({ title: 'Copied ID', description: String(o.id), variant: 'success' });
-                              } catch (e: any) {
-                                show({ title: 'Copy failed', description: e?.message, variant: 'danger' });
+                              } catch (error: unknown) {
+                                const message = error instanceof Error ? error.message : 'Unknown error';
+                                show({ title: 'Copy failed', description: message, variant: 'danger' });
                               }
                             }}
                           >
@@ -1008,8 +1039,9 @@ export default function WatchlistsPage() {
                                 try {
                                   await navigator.clipboard.writeText(String(o.slug));
                                   show({ title: 'Copied slug', description: String(o.slug), variant: 'success' });
-                                } catch (e: any) {
-                                  show({ title: 'Copy failed', description: e?.message, variant: 'danger' });
+                                } catch (error: unknown) {
+                                  const message = error instanceof Error ? error.message : 'Unknown error';
+                                  show({ title: 'Copy failed', description: message, variant: 'danger' });
                                 }
                               }}
                             >
@@ -1495,10 +1527,12 @@ export default function WatchlistsPage() {
                       size="sm"
                       onClick={async () => {
                         try {
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
                           const data = await apiClient.post<{ items: any[]; total: number; ingestable: number; filtered: number }>(`/watchlists/jobs/${job.id}/preview`, { }, { params: { limit: 10, per_source: 5 } });
                           updateForm(job.id, { previewItems: data.items, showPreview: true });
-                        } catch (e: any) {
-                          show({ title: 'Preview failed', description: e?.message, variant: 'danger' });
+                        } catch (error: unknown) {
+                          const message = error instanceof Error ? error.message : 'Unknown error';
+                          show({ title: 'Preview failed', description: message, variant: 'danger' });
                         }
                       }}
                     >
@@ -1609,6 +1643,7 @@ export default function WatchlistsPage() {
                         onClick={() => {
                           if (!state.showAdvancedFilters) {
                             // Prefill with current state
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
                             const payload = { require_include: state.requireInclude, filters: state.filters || [] } as any;
                             const pretty = JSON.stringify(payload, null, 2);
                             updateForm(job.id, { showAdvancedFilters: true, advancedFiltersJson: pretty });
@@ -1619,7 +1654,7 @@ export default function WatchlistsPage() {
                               const filters = Array.isArray(obj?.filters) ? obj.filters : [];
                               const req = Boolean(obj?.require_include || false);
                               updateForm(job.id, { showAdvancedFilters: false, filters, requireInclude: req });
-                            } catch (e) {
+                            } catch {
                               updateForm(job.id, { showAdvancedFilters: false });
                             }
                           }
@@ -1721,6 +1756,7 @@ export default function WatchlistsPage() {
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-indigo-100">
+                            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                             {state.previewItems.map((it: any, idx: number) => (
                               <tr key={idx} className="bg-white">
                                 <td className="px-2 py-1">{it.decision}</td>

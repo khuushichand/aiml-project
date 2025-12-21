@@ -1,29 +1,34 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import Sidebar from '@/components/Sidebar';
+import { useEffect, useState, Suspense } from 'react';
 import ProtectedRoute from '@/components/ProtectedRoute';
+import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Plus, Trash2, Shield } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Pagination } from '@/components/ui/pagination';
+import { Eye, Key, Search } from 'lucide-react';
 import { api } from '@/lib/api-client';
-import { AdminUser } from '@/lib/auth';
+import { User } from '@/types';
+import { ExportMenu } from '@/components/ui/export-menu';
+import { exportUsers, ExportFormat } from '@/lib/export';
+import { Skeleton, TableSkeleton } from '@/components/ui/skeleton';
+import { useUrlState, useUrlPagination } from '@/lib/use-url-state';
+import Link from 'next/link';
 
-export default function UsersPage() {
-  const [users, setUsers] = useState<AdminUser[]>([]);
-  const [showCreateForm, setShowCreateForm] = useState(false);
+function UsersPageContent() {
+  const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [formData, setFormData] = useState({
-    email: '',
-    display_name: '',
-    password: '',
-    role: 'user' as 'owner' | 'admin' | 'user',
-  });
+
+  // URL state for search
+  const [searchQuery, setSearchQuery] = useUrlState<string>('q', { defaultValue: '' });
+
+  // URL state for pagination
+  const { page: currentPage, pageSize, setPage: setCurrentPage, setPageSize, resetPagination } = useUrlPagination();
 
   useEffect(() => {
     loadUsers();
@@ -33,8 +38,8 @@ export default function UsersPage() {
     try {
       setLoading(true);
       setError('');
-      const users = await api.getAdminUsers();
-      setUsers(users);
+      const data = await api.getUsers();
+      setUsers(Array.isArray(data) ? data : []);
     } catch (error: any) {
       console.error('Failed to load users:', error);
       setError(error.message || 'Failed to load users');
@@ -44,64 +49,72 @@ export default function UsersPage() {
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    try {
-      await api.createAdminUser(formData);
-      setShowCreateForm(false);
-      setFormData({ email: '', display_name: '', password: '', role: 'user' });
-      await loadUsers();
-    } catch (error: any) {
-      console.error('Failed to create user:', error);
-      setError(error.message || 'Failed to create user');
-    }
+  const filteredUsers = users.filter((user) => {
+    if (!searchQuery) return true;
+    const query = (searchQuery || '').toLowerCase();
+    return (
+      user.username?.toLowerCase().includes(query) ||
+      user.email?.toLowerCase().includes(query) ||
+      user.role?.toLowerCase().includes(query)
+    );
+  });
+
+  // Pagination calculations
+  const totalItems = filteredUsers.length;
+  const totalPages = Math.ceil(totalItems / pageSize);
+  const startIndex = (currentPage - 1) * pageSize;
+  const paginatedUsers = filteredUsers.slice(startIndex, startIndex + pageSize);
+
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
   };
 
-  const handleDelete = async (userId: string, email: string) => {
-    if (!confirm(`Are you sure you want to deactivate ${email}?`)) {
-      return;
-    }
-
-    try {
-      setError('');
-      await api.deleteAdminUser(userId);
-      await loadUsers();
-    } catch (error: any) {
-      console.error('Failed to delete user:', error);
-      setError(error.message || 'Failed to delete user');
-    }
+  const handlePageSizeChange = (size: number) => {
+    setPageSize(size);
+    resetPagination();
   };
 
-  const getRoleBadgeColor = (role: string) => {
+  const handleSearchChange = (value: string) => {
+    setSearchQuery(value || undefined);
+    resetPagination();
+  };
+
+  const getRoleBadgeVariant = (role: string) => {
     switch (role) {
-      case 'owner':
-        return 'bg-purple-100 text-purple-800';
       case 'admin':
-        return 'bg-blue-100 text-blue-800';
-      case 'user':
-        return 'bg-gray-100 text-gray-800';
+      case 'super_admin':
+      case 'owner':
+        return 'default';
       default:
-        return 'bg-gray-100 text-gray-800';
+        return 'secondary';
     }
+  };
+
+  const formatStorageUsage = (usedMb: number, quotaMb: number) => {
+    const percentage = quotaMb > 0 ? (usedMb / quotaMb) * 100 : 0;
+    return {
+      text: `${usedMb.toFixed(1)} / ${quotaMb} MB`,
+      percentage: Math.min(percentage, 100),
+    };
+  };
+
+  const handleExport = (format: ExportFormat) => {
+    exportUsers(filteredUsers, format);
   };
 
   return (
-    <ProtectedRoute requiredRoles={['owner', 'admin']}>
-      <div className="flex h-screen bg-background">
-        <Sidebar />
-
-        <main className="flex-1 overflow-y-auto">
-          <div className="p-8">
-            <div className="mb-8 flex items-center justify-between">
+    <ProtectedRoute>
+      <ResponsiveLayout>
+          <div className="p-4 lg:p-8">
+            <div className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
-                <h1 className="text-3xl font-bold">Admin Users</h1>
-                <p className="text-muted-foreground">Manage admin dashboard users and permissions</p>
+                <h1 className="text-3xl font-bold">Users</h1>
+                <p className="text-muted-foreground">Manage system users and their access</p>
               </div>
-              <Button onClick={() => setShowCreateForm(!showCreateForm)}>
-                <Plus className="mr-2 h-4 w-4" />
-                New User
-              </Button>
+              <ExportMenu
+                onExport={handleExport}
+                disabled={filteredUsers.length === 0}
+              />
             </div>
 
             {error && (
@@ -110,144 +123,153 @@ export default function UsersPage() {
               </Alert>
             )}
 
-            {showCreateForm && (
-              <Card className="mb-6">
-                <CardHeader>
-                  <CardTitle>Create Admin User</CardTitle>
-                  <CardDescription>Add a new user to the admin dashboard</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <form onSubmit={handleSubmit} className="space-y-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="display_name">Display Name</Label>
-                      <Input
-                        id="display_name"
-                        value={formData.display_name}
-                        onChange={(e) => setFormData({ ...formData, display_name: e.target.value })}
-                        placeholder="John Doe"
-                        required
-                      />
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="email">Email</Label>
-                      <Input
-                        id="email"
-                        type="email"
-                        value={formData.email}
-                        onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                        placeholder="user@example.com"
-                        required
-                      />
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="password">Password</Label>
-                      <Input
-                        id="password"
-                        type="password"
-                        value={formData.password}
-                        onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                        placeholder="Minimum 8 characters"
-                        minLength={8}
-                        required
-                      />
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="role">Role</Label>
-                      <select
-                        id="role"
-                        value={formData.role}
-                        onChange={(e) => setFormData({ ...formData, role: e.target.value as any })}
-                        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                        required
-                      >
-                        <option value="user">User (Read-only)</option>
-                        <option value="admin">Admin (Manage resources)</option>
-                        <option value="owner">Owner (Full access)</option>
-                      </select>
-                      <p className="text-xs text-muted-foreground">
-                        User: Read-only | Admin: Manage resources | Owner: Full access
-                      </p>
-                    </div>
-
-                    <div className="flex gap-2">
-                      <Button type="submit">Create User</Button>
-                      <Button type="button" variant="outline" onClick={() => setShowCreateForm(false)}>
-                        Cancel
-                      </Button>
-                    </div>
-                  </form>
-                </CardContent>
-              </Card>
-            )}
+            {/* Search */}
+            <Card className="mb-6">
+              <CardContent className="pt-6">
+                <div className="relative max-w-md">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search by username, email, or role..."
+                    value={searchQuery || ''}
+                    onChange={(e) => handleSearchChange(e.target.value)}
+                    className="pl-10"
+                  />
+                </div>
+              </CardContent>
+            </Card>
 
             <Card>
               <CardHeader>
-                <CardTitle>Admin Users</CardTitle>
+                <CardTitle>Users List</CardTitle>
                 <CardDescription>
-                  {users.length} user{users.length !== 1 ? 's' : ''} in the system
+                  {totalItems} user{totalItems !== 1 ? 's' : ''} found
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 {loading ? (
-                  <div className="text-center text-muted-foreground">Loading...</div>
-                ) : users.length === 0 ? (
-                  <div className="text-center text-muted-foreground">No users found</div>
+                  <div className="py-4">
+                    <TableSkeleton rows={5} columns={8} />
+                  </div>
+                ) : filteredUsers.length === 0 ? (
+                  <div className="text-center text-muted-foreground py-8">
+                    {searchQuery ? 'No users match your search' : 'No users found'}
+                  </div>
                 ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Name</TableHead>
-                        <TableHead>Email</TableHead>
-                        <TableHead>Role</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Last Login</TableHead>
-                        <TableHead>Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {users.map((user) => (
-                        <TableRow key={user.user_id}>
-                          <TableCell className="font-medium">{user.display_name}</TableCell>
-                          <TableCell>{user.email}</TableCell>
-                          <TableCell>
-                            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${getRoleBadgeColor(user.role)}`}>
-                              {user.role === 'owner' && <Shield className="mr-1 h-3 w-3" />}
-                              {user.role.charAt(0).toUpperCase() + user.role.slice(1)}
-                            </span>
-                          </TableCell>
-                          <TableCell>
-                            <span className={`inline-flex rounded-full px-2 py-1 text-xs ${user.is_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                              {user.is_active ? 'Active' : 'Inactive'}
-                            </span>
-                          </TableCell>
-                          <TableCell className="text-muted-foreground">
-                            {user.last_login
-                              ? new Date(user.last_login).toLocaleDateString()
-                              : 'Never'}
-                          </TableCell>
-                          <TableCell>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleDelete(user.user_id, user.email)}
-                              disabled={!user.is_active}
-                            >
-                              <Trash2 className="h-4 w-4 text-destructive" />
-                            </Button>
-                          </TableCell>
+                  <>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>ID</TableHead>
+                          <TableHead>Username</TableHead>
+                          <TableHead>Email</TableHead>
+                          <TableHead>Role</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Storage</TableHead>
+                          <TableHead>Last Login</TableHead>
+                          <TableHead className="text-right">Actions</TableHead>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                      </TableHeader>
+                      <TableBody>
+                        {paginatedUsers.map((user) => {
+                          const storage = formatStorageUsage(
+                            user.storage_used_mb || 0,
+                            user.storage_quota_mb || 0
+                          );
+                          return (
+                            <TableRow key={user.id}>
+                              <TableCell className="font-mono text-sm">{user.id}</TableCell>
+                              <TableCell className="font-medium">{user.username}</TableCell>
+                              <TableCell>{user.email}</TableCell>
+                              <TableCell>
+                                <Badge variant={getRoleBadgeVariant(user.role)}>
+                                  {user.role}
+                                </Badge>
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant={user.is_active ? 'default' : 'destructive'}>
+                                  {user.is_active ? 'Active' : 'Inactive'}
+                                </Badge>
+                                {user.is_verified && (
+                                  <Badge variant="outline" className="ml-1">
+                                    Verified
+                                  </Badge>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                <div className="space-y-1">
+                                  <div className="text-xs">{storage.text}</div>
+                                  <div className="w-20 bg-gray-200 rounded-full h-1.5">
+                                    <div
+                                      className={`h-1.5 rounded-full ${
+                                        storage.percentage > 90 ? 'bg-red-500' :
+                                        storage.percentage > 70 ? 'bg-yellow-500' :
+                                        'bg-green-500'
+                                      }`}
+                                      style={{ width: `${storage.percentage}%` }}
+                                    />
+                                  </div>
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-muted-foreground text-sm">
+                                {user.last_login
+                                  ? new Date(user.last_login).toLocaleDateString()
+                                  : 'Never'}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <div className="flex justify-end gap-1">
+                                  <Link href={`/users/${user.id}`}>
+                                    <Button variant="ghost" size="sm" title="View details">
+                                      <Eye className="h-4 w-4" />
+                                    </Button>
+                                  </Link>
+                                  <Link href={`/users/${user.id}/api-keys`}>
+                                    <Button variant="ghost" size="sm" title="Manage API keys">
+                                      <Key className="h-4 w-4" />
+                                    </Button>
+                                  </Link>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+
+                    <Pagination
+                      currentPage={currentPage}
+                      totalPages={totalPages}
+                      totalItems={totalItems}
+                      pageSize={pageSize}
+                      onPageChange={handlePageChange}
+                      onPageSizeChange={handlePageSizeChange}
+                    />
+                  </>
                 )}
               </CardContent>
             </Card>
           </div>
-        </main>
-      </div>
+      </ResponsiveLayout>
     </ProtectedRoute>
+  );
+}
+
+// Wrap with Suspense for useSearchParams
+export default function UsersPage() {
+  return (
+    <Suspense fallback={
+      <ProtectedRoute>
+        <ResponsiveLayout>
+          <div className="p-4 lg:p-8">
+            <div className="mb-8">
+              <Skeleton className="h-8 w-32 mb-2" />
+              <Skeleton className="h-4 w-64" />
+            </div>
+            <TableSkeleton rows={5} columns={8} />
+          </div>
+        </ResponsiveLayout>
+      </ProtectedRoute>
+    }>
+      <UsersPageContent />
+    </Suspense>
   );
 }

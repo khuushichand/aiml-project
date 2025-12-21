@@ -2305,6 +2305,8 @@ def speech_to_text(
             chunk = {
                 "start_seconds": segment_chunk.start,
                 "end_seconds": segment_chunk.end,
+                "Time_Start": segment_chunk.start,
+                "Time_End": segment_chunk.end,
                 "Text": segment_chunk.text.strip() # Strip whitespace from text
             }
             if word_timestamps and hasattr(segment_chunk, 'words') and segment_chunk.words:

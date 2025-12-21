@@ -8,6 +8,7 @@ import logging
 import json
 import os
 import sqlite3
+import hashlib
 from pathlib import Path as FilePath
 
 import aiofiles
@@ -38,6 +39,26 @@ try:  # Align HTTP 413 compatibility with legacy endpoint module
     HTTP_413_TOO_LARGE = status.HTTP_413_CONTENT_TOO_LARGE
 except AttributeError:  # Starlette < 0.27
     HTTP_413_TOO_LARGE = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+
+
+def _ensure_warnings_list(result: Dict[str, Any]) -> List[str]:
+    warnings = result.get("warnings")
+    if not isinstance(warnings, list):
+        warnings = []
+        result["warnings"] = warnings
+    return warnings
+
+
+def _compute_source_hash(file_path: FilePath, *, chunk_size: int = 1024 * 1024) -> Optional[str]:
+    try:
+        hasher = hashlib.sha256()
+        with open(file_path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(chunk_size), b""):
+                hasher.update(chunk)
+        return hasher.hexdigest()
+    except Exception as exc:
+        logger.debug("Source hash compute failed for %s: %s", file_path, exc)
+        return None
 
 
 def validate_add_media_inputs(
@@ -758,6 +779,7 @@ async def persist_primary_av_item(
                 "source",
                 "creators",
                 "rights",
+                "source_hash",
             }
             for k, v in metadata_for_db.items():
                 if k in allowed_keys and isinstance(v, (str, int, float, bool)):
@@ -1007,7 +1029,9 @@ async def persist_primary_av_item(
         )
         process_result["status"] = "Warning"
         process_result["error"] = (process_result.get("error") or "") + f" | DB Error: {db_err}"
-        process_result.setdefault("warnings", []).append(f"Database operation failed: {db_err}")
+        _ensure_warnings_list(process_result).append(
+            f"Database operation failed: {db_err}",
+        )
         process_result["db_message"] = f"DB Error: {db_err}"
         process_result["db_id"] = None
         process_result["media_uuid"] = None
@@ -1029,7 +1053,7 @@ async def persist_primary_av_item(
         )
         process_result["status"] = "Warning"
         process_result["error"] = (process_result.get("error") or "")
-        process_result.setdefault("warnings", []).append(
+        _ensure_warnings_list(process_result).append(
             f"Unexpected persistence error: {exc}",
         )
         process_result["db_message"] = f"Persistence Error: {type(exc).__name__}"
@@ -1067,6 +1091,8 @@ async def process_batch_media(
     combined_results: List[Dict[str, Any]] = []
     all_processing_sources = urls + uploaded_file_paths
     items_to_process: List[str] = []
+    source_hash_by_ref: Dict[str, List[str]] = {}
+    source_hash_by_source: Dict[str, str] = {}
 
     logger.debug(
         "Starting pre-check for %d %s items...",
@@ -1090,38 +1116,99 @@ async def process_batch_media(
         existing_id: Optional[int] = None
         reason = "Ready for processing."
         pre_check_warning: Optional[str] = None
+        source_hash: Optional[str] = None
+        is_url = isinstance(source_path_or_url, str) and source_path_or_url.startswith(
+            ("http://", "https://")
+        )
+
+        if not is_url:
+            try:
+                path_obj = FilePath(source_path_or_url)
+                if path_obj.is_file():
+                    source_hash = _compute_source_hash(path_obj)
+                    if source_hash and input_ref:
+                        source_hash_by_ref.setdefault(str(input_ref), []).append(source_hash)
+                        source_hash_by_source[str(source_path_or_url)] = source_hash
+            except Exception as hash_err:
+                logger.debug(
+                    "Source hash computation failed for %s: %s",
+                    source_path_or_url,
+                    hash_err,
+                )
 
         if not getattr(form_data, "overwrite_existing", False) and str(media_type) in ["video", "audio"]:
             try:
-                temp_db_for_check = MediaDatabase(db_path=db_path, client_id=client_id)
                 model_for_check = getattr(form_data, "transcription_model", None)
-                pre_check_query = """
-                                  SELECT id \
-                                  FROM Media
-                                  WHERE url = ?
-                                    AND transcription_model = ?
-                                    AND is_trash = 0 \
-                                  """
-                cursor = temp_db_for_check.execute_query(
-                    pre_check_query,
-                    (identifier_for_check, model_for_check),
-                )
-                existing_record = cursor.fetchone()
-                temp_db_for_check.close_connection()
+                if source_hash and not is_url:
+                    temp_db_for_check = MediaDatabase(db_path=db_path, client_id=client_id)
+                    pre_check_query = """
+                        SELECT m.id
+                        FROM Media m
+                        JOIN DocumentVersions dv ON dv.media_id = m.id
+                        WHERE m.url = ?
+                          AND m.transcription_model = ?
+                          AND m.is_trash = 0
+                          AND m.deleted = 0
+                          AND dv.deleted = 0
+                          AND dv.safe_metadata LIKE ?
+                        LIMIT 1
+                    """
+                    hash_fragment = f"%\"source_hash\":\"{source_hash}\"%"
+                    cursor = temp_db_for_check.execute_query(
+                        pre_check_query,
+                        (identifier_for_check, model_for_check, hash_fragment),
+                    )
+                    existing_record = cursor.fetchone()
+                    temp_db_for_check.close_connection()
 
-                if existing_record:
-                    existing_id = existing_record["id"]
-                    should_process = False
-                    reason = (
-                        "Media exists (ID: {id}) with the same URL/identifier "
-                        "and transcription model ('{model}'). Overwrite is False."
-                    ).format(id=existing_id, model=model_for_check)
-                else:
+                    if existing_record:
+                        existing_id = existing_record["id"]
+                        should_process = False
+                        reason = (
+                            "Media exists (ID: {id}) with the same filename "
+                            "and source hash for transcription model ('{model}'). "
+                            "Overwrite is False."
+                        ).format(id=existing_id, model=model_for_check)
+                    else:
+                        should_process = True
+                        reason = (
+                            "Media not found with this filename and source hash "
+                            "for transcription model."
+                        )
+                elif not is_url and not source_hash:
                     should_process = True
                     reason = (
-                        "Media not found with this URL/identifier and "
-                        "transcription model."
+                        "Local file pre-check skipped (no source hash available)."
                     )
+                else:
+                    temp_db_for_check = MediaDatabase(db_path=db_path, client_id=client_id)
+                    pre_check_query = """
+                                      SELECT id \
+                                      FROM Media
+                                      WHERE url = ?
+                                        AND transcription_model = ?
+                                        AND is_trash = 0 \
+                                      """
+                    cursor = temp_db_for_check.execute_query(
+                        pre_check_query,
+                        (identifier_for_check, model_for_check),
+                    )
+                    existing_record = cursor.fetchone()
+                    temp_db_for_check.close_connection()
+
+                    if existing_record:
+                        existing_id = existing_record["id"]
+                        should_process = False
+                        reason = (
+                            "Media exists (ID: {id}) with the same URL/identifier "
+                            "and transcription model ('{model}'). Overwrite is False."
+                        ).format(id=existing_id, model=model_for_check)
+                    else:
+                        should_process = True
+                        reason = (
+                            "Media not found with this URL/identifier and "
+                            "transcription model."
+                        )
             except (DatabaseError, sqlite3.Error) as check_err:
                 logger.error(
                     "DB pre-check (custom query) failed for %s: %s",
@@ -1432,7 +1519,21 @@ async def process_batch_media(
         if isinstance(pre_check_info, tuple):
             pre_check_warning_msg = pre_check_info[1]
         if pre_check_warning_msg:
-            process_result.setdefault("warnings", []).append(pre_check_warning_msg)
+            _ensure_warnings_list(process_result).append(pre_check_warning_msg)
+
+        source_hash = None
+        if processing_source:
+            source_hash = source_hash_by_source.get(str(processing_source))
+        if not source_hash and original_input_ref:
+            hash_list = source_hash_by_ref.get(str(original_input_ref))
+            if hash_list:
+                source_hash = hash_list.pop(0)
+        if source_hash:
+            metadata = process_result.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata.setdefault("source_hash", source_hash)
+            process_result["metadata"] = metadata
 
         claims_context: Optional[Dict[str, Any]] = None
         if process_result.get("status") in ("Success", "Warning"):
@@ -1466,13 +1567,16 @@ async def process_batch_media(
     combined_results.extend(final_batch_results)
 
     final_standardized_results: List[Dict[str, Any]] = []
-    processed_input_refs: set[str] = set()
+    processed_keys: set[tuple[str, str]] = set()
 
     for res in combined_results:
         input_ref = res.get("input_ref", "Unknown")
-        if input_ref in processed_input_refs and input_ref != "Unknown":
-            continue
-        processed_input_refs.add(input_ref)
+        processing_source = str(res.get("processing_source") or "")
+        if input_ref != "Unknown" and processing_source:
+            key = (input_ref, processing_source)
+            if key in processed_keys:
+                continue
+            processed_keys.add(key)
 
         standardized = {
             "status": res.get("status", "Error"),

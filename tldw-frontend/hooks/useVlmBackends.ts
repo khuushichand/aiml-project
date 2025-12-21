@@ -28,7 +28,8 @@ export function useVlmBackends(): UseVlmBackendsResult {
       setLoading(true);
       setError(null);
       try {
-        const caps: any = await apiClient.get('/rag/capabilities');
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const caps: Record<string, any> = await apiClient.get('/rag/capabilities');
         const ep: string | undefined = caps?.features?.vlm_late_chunking?.backends_endpoint;
         const discovered = ep && typeof ep === 'string' ? ep : '/api/v1/rag/vlm/backends';
         setEndpoint(discovered);
@@ -37,11 +38,13 @@ export function useVlmBackends(): UseVlmBackendsResult {
         const rel = '/' + discovered.replace(/^\/?api\/?v1\//, '/').replace(/^\/+/, '');
         const finalPath = rel.startsWith('/rag/') ? rel : `/rag/${rel.replace(/^rag\//, '')}`;
 
-        const data: any = await apiClient.get(finalPath);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const data: Record<string, any> = await apiClient.get(finalPath);
         const map: BackendsMap = data?.backends || {};
         if (!cancelled) setRawBackends(map);
-      } catch (e: any) {
-        if (!cancelled) setError(e?.message || 'Failed to load VLM backends');
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'Failed to load VLM backends';
+        if (!cancelled) setError(message);
       } finally {
         if (!cancelled) setLoading(false);
       }

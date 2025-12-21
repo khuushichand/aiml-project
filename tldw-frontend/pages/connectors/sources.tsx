@@ -17,8 +17,9 @@ export default function Sources() {
     try {
       const j = await apiClient.get<Source[]>('/connectors/sources')
       setSources(Array.isArray(j) ? j : [])
-    } catch (e: any) {
-      setError(e?.message || 'Failed to load sources')
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to load sources';
+      setError(message);
     }
   }
   useEffect(() => {
@@ -40,7 +41,7 @@ export default function Sources() {
     try {
       await apiClient.patch(`/connectors/sources/${s.id}`, { enabled: !s.enabled })
       await load()
-    } catch (e: any) { setError(e?.message || 'Failed to update') } finally { setBusy(null) }
+    } catch (error: unknown) { const msg = error instanceof Error ? error.message : 'Failed to update'; setError(msg); } finally { setBusy(null) }
   }
 
   async function importNow(s: Source) {
@@ -49,7 +50,7 @@ export default function Sources() {
       const j = await apiClient.post<{ id?: string }>(`/connectors/sources/${s.id}/import`)
       const jobId = j?.id
       if (jobId) window.location.href = `/connectors/jobs?job_id=${jobId}`
-    } catch (e: any) { setError(e?.message || 'Failed to import') } finally { setBusy(null) }
+    } catch (error: unknown) { const msg = error instanceof Error ? error.message : 'Failed to import'; setError(msg); } finally { setBusy(null) }
   }
 
   return (

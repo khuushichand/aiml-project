@@ -14,6 +14,7 @@ interface RunRow {
   status: string;
   started_at?: string | null;
   finished_at?: string | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   stats?: { [k: string]: any } | null;
 }
 
@@ -25,7 +26,7 @@ interface RunRow {
  * @returns The rendered admin Watchlists Runs page element
  */
 export default function AdminWatchlistsRunsPage() {
-  const { user } = useAuth();
+  const { user: _user } = useAuth();
   const { show } = useToast();
   const [mode, setMode] = useState<'byJob' | 'global'>('byJob');
   const [jobIdInput, setJobIdInput] = useState<string>('');
@@ -70,9 +71,10 @@ export default function AdminWatchlistsRunsPage() {
       if ((includeTallies || (filteredSampleMax || 0) > 0) && items.length > 0) {
         await fetchTalliesForRuns(items.map((r) => r.id));
       }
-    } catch (e: any) {
+    } catch (error: unknown) {
       setRuns([]);
-      show({ title: 'Failed to load runs', description: e?.message, variant: 'danger' });
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to load runs', description: message, variant: 'danger' });
     } finally {
       setLoading(false);
     }
@@ -87,8 +89,9 @@ export default function AdminWatchlistsRunsPage() {
       if ((filteredSampleMax || 0) > 0) {
         setSelectedRunFiltered((prev) => ({ ...prev, [runId]: filteredSample }));
       }
-    } catch (e: any) {
-      show({ title: 'Failed to load tallies', description: e?.message, variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to load tallies', description: message, variant: 'danger' });
     }
   };
 
@@ -110,10 +113,11 @@ export default function AdminWatchlistsRunsPage() {
       if ((includeTallies || (filteredSampleMax || 0) > 0) && items.length > 0) {
         await fetchTalliesForRuns(items.map((r) => r.id));
       }
-    } catch (e: any) {
+    } catch (error: unknown) {
       setRuns([]);
       setTotal(0);
-      show({ title: 'Failed to load runs', description: e?.message, variant: 'danger' });
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to load runs', description: message, variant: 'danger' });
     } finally {
       setLoading(false);
     }
@@ -167,14 +171,23 @@ export default function AdminWatchlistsRunsPage() {
         const n = Number(sFiltered);
         if (Number.isFinite(n) && n >= 0) setFilteredSampleMax(n);
       }
-    } catch {}
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    } catch {
+      // Ignore localStorage errors
+    }
   }, []);
   useEffect(() => {
-    try { localStorage.setItem('wl_runs_includeTallies', includeTallies ? '1' : '0'); } catch {}
+    try {
+      localStorage.setItem('wl_runs_includeTallies', includeTallies ? '1' : '0');
+    } catch {
+      // Ignore localStorage errors
+    }
   }, [includeTallies]);
   useEffect(() => {
-    try { localStorage.setItem('wl_runs_filteredSampleMax', String(filteredSampleMax || 0)); } catch {}
+    try {
+      localStorage.setItem('wl_runs_filteredSampleMax', String(filteredSampleMax || 0));
+    } catch {
+      // Ignore localStorage errors
+    }
   }, [filteredSampleMax]);
 
   const exportJSON = () => {
@@ -218,7 +231,6 @@ export default function AdminWatchlistsRunsPage() {
     setRuns([]);
     setTotal(0);
     setSelectedRunTallies({});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
   if (runsRequireAdmin && !userIsAdmin) {
@@ -240,7 +252,7 @@ export default function AdminWatchlistsRunsPage() {
           <div className="flex items-center gap-3 text-sm">
             <label className="flex items-center gap-2">
               <span>Mode</span>
-              <select className="rounded-md border border-gray-300 bg-white px-2 py-1" value={mode} onChange={(e) => setMode(e.target.value as any)}>
+              <select className="rounded-md border border-gray-300 bg-white px-2 py-1" value={mode} onChange={(e) => setMode(e.target.value as typeof mode)}>
                 <option value="byJob">By Job</option>
                 <option value="global">Global</option>
               </select>
@@ -360,7 +372,7 @@ export default function AdminWatchlistsRunsPage() {
                   const inc = Number((r.stats || {})['filters_include'] || 0);
                   const exc = Number((r.stats || {})['filters_exclude'] || 0);
                   const flg = Number((r.stats || {})['filters_flag'] || 0);
-                  const tallies = selectedRunTallies[r.id];
+                  const _tallies = selectedRunTallies[r.id];
                   return (
                     <tr key={r.id} className="bg-white">
                       <td className="px-3 py-2 text-gray-900">{r.id}</td>

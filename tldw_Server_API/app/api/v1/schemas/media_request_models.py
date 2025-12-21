@@ -80,6 +80,8 @@ class VersionRollbackRequest(BaseModel):
     version_number: int
 
 class SearchRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
     query: Optional[str] = Field(None, max_length=1000, description="Search query (max 1000 chars)")
     fields: List[str] = ["title", "content"]
     exact_phrase: Optional[str] = None
@@ -433,6 +435,18 @@ class MediaItemProcessResponse(BaseModel):
     warnings: Optional[List[str]] # For non-critical issues
     model_config = ConfigDict(
         extra="forbid"  # Disallow extra fields not defined in the model
+    )
+
+
+class ReprocessMediaRequest(ChunkingOptions):
+    """Request model for reprocessing stored media content."""
+    perform_chunking: bool = Field(True, description="Rebuild chunks for the current media content")
+    generate_embeddings: bool = Field(False, description="Regenerate embeddings after re-chunking")
+    embedding_model: Optional[str] = Field(None, description="Embedding model override")
+    embedding_provider: Optional[str] = Field(None, description="Embedding provider override")
+    force_regenerate_embeddings: bool = Field(
+        False,
+        description="Delete existing embeddings before regeneration when possible",
     )
 
 ######################## Processing-only Forms ###################################

@@ -7,6 +7,13 @@ const __dirname = path.dirname(__filename);
 
 const nextConfig = {
   reactStrictMode: true,
+  experimental: {
+    reactCompiler: false,
+  },
+  eslint: {
+    // Skip ESLint during builds - run separately via npm run lint
+    ignoreDuringBuilds: true,
+  },
   webpack: (config) => {
     // Support `@/...` imports (alias to project root)
     config.resolve.alias['@'] = path.resolve(__dirname);

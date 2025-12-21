@@ -1,108 +1,113 @@
+// tldw_server Admin Types
+
 export interface User {
-  id: string
-  username: string
-  role: 'owner' | 'user'
+  id: number;
+  uuid: string;
+  username: string;
+  email: string;
+  role: string;
+  is_active: boolean;
+  is_verified: boolean;
+  storage_quota_mb: number;
+  storage_used_mb: number;
+  created_at: string;
+  updated_at: string;
+  last_login?: string;
 }
 
 export interface Organization {
-  organization_id: string
-  name: string
-  status: string
-  metadata?: Record<string, any>
-  created_at: string
-  updated_at: string
+  id: number;
+  name: string;
+  slug: string;
+  description?: string;
+  owner_user_id: number;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Team {
-  team_id: string
-  organization_id: string
-  team_alias?: string
-  virtual_key: string
-  model_groups: string[]  // Deprecated - use access_groups
-  access_groups: string[]
-  allowed_model_aliases?: string[]
-  credits: {
-    credits_allocated: number
-    credits_used: number
-    credits_remaining: number
-  }
-  credits_allocated?: number
-  credits_remaining?: number
-  credits_used?: number
-  budget_mode?: 'job_based' | 'consumption_usd' | 'consumption_tokens'
-  credits_per_dollar?: number
-  status?: 'active' | 'suspended' | 'paused'
-  created_at?: string
+  id: number;
+  org_id: number;
+  name: string;
+  description?: string;
+  created_at: string;
+  updated_at: string;
 }
 
-export interface ModelGroup {
-  model_group_id: string
-  group_name: string
-  display_name: string
-  description?: string
-  status: string
-  models: Array<{
-    model_name: string
-    priority: number
-  }>
+export interface OrgMember {
+  org_id: number;
+  user_id: number;
+  role: string;
+  joined_at: string;
+  user?: User;
 }
 
-// New model alias types
-export interface ModelAlias {
-  model_alias: string
-  display_name: string
-  provider: string
-  actual_model: string
-  litellm_model_id?: string
-  access_groups: string[]
-  description?: string
-  pricing_input?: number
-  pricing_output?: number
-  status: string
-  teams_using?: string[]
-  created_at: string
-  updated_at: string
+export interface TeamMember {
+  team_id: number;
+  user_id: number;
+  role: string;
+  joined_at: string;
+  user?: User;
 }
 
-export interface ModelAccessGroup {
-  group_name: string
-  display_name: string
-  description?: string
-  status: string
-  model_aliases: Array<{
-    model_alias: string
-    display_name: string
-    provider: string
-    actual_model: string
-  }>
-  teams_using?: string[]
-  created_at: string
-  updated_at: string
+export interface ApiKey {
+  id: string;
+  user_id: number;
+  name?: string;
+  key_prefix: string;
+  scope: string;
+  created_at: string;
+  expires_at?: string;
+  revoked_at?: string;
+  last_used_at?: string;
+}
+
+export interface Role {
+  id: number;
+  name: string;
+  description?: string;
+  is_system: boolean;
+}
+
+export interface Permission {
+  id: number;
+  name: string;
+  description?: string;
 }
 
 export interface AuditLog {
-  id: string
-  timestamp: string
-  user: string
-  user_id: string
-  action: 'create' | 'update' | 'delete'
-  entity_type: 'organization' | 'team' | 'model_group' | 'user'
-  entity_id: string
-  entity_name: string
-  changes?: Record<string, any>
-  metadata?: Record<string, any>
+  id: string;
+  timestamp: string;
+  user_id: number;
+  action: string;
+  resource: string;
+  details?: Record<string, any>;
+}
+
+export interface ProviderSecret {
+  provider: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LLMProvider {
+  name: string;
+  enabled: boolean;
+  models?: string[];
 }
 
 export interface DashboardStats {
-  total_organizations: number
-  total_teams: number
-  total_credits_allocated: number
-  recent_activity: AuditLog[]
+  users: number;
+  organizations: number;
+  teams: number;
+  apiKeys: number;
+  providers: number;
+  storageUsedMb: number;
 }
 
 export interface AuthContextType {
-  user: User | null
-  login: (username: string, password: string) => Promise<boolean>
-  logout: () => void
-  isAuthenticated: boolean
+  user: User | null;
+  login: (username: string, password: string) => Promise<boolean>;
+  logout: () => void;
+  isAuthenticated: boolean;
 }

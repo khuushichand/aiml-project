@@ -57,7 +57,8 @@ function TTSSection() {
   const [loading, setLoading] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
   const blobUrlRef = useRef<string | null>(null);
-  const [respInfo, setRespInfo] = useState<any>(null);
+  const [respInfo, setRespInfo] = // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  useState<any>(null);
 
   const fetchVoices = async () => {
     try {
@@ -66,7 +67,9 @@ function TTSSection() {
       const json = await resp.json();
       const voices = json?.voices || json || [];
       if (voices.length && voices[0]?.name) setVoice(voices[0].name);
-    } catch {}
+    } catch {
+      // Ignore voice fetch errors
+    }
   };
   useEffect(() => { fetchVoices(); }, []);
 
@@ -100,8 +103,9 @@ function TTSSection() {
         await audioRef.current.play();
       }
       show({ title: 'Playing preview', variant: 'success' });
-    } catch (e: any) {
-      show({ title: 'TTS error', description: e?.message || 'Failed', variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'TTS error', description: message, variant: 'danger' });
     } finally {
       setLoading(false);
     }
@@ -143,6 +147,7 @@ function StreamingSTTSection() {
   const startTimeRef = useRef<number>(0);
   const debugRef = useRef<string[]>([]);
   const [debugView, setDebugView] = useState<string[]>([]);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const animTimer = useRef<any>(null);
   const canvasRef = useRef<HTMLCanvasElement|null>(null);
   const analyserRef = useRef<AnalyserNode|null>(null);
@@ -166,13 +171,17 @@ function StreamingSTTSection() {
     if (procRef.current) {
       try {
         procRef.current.disconnect();
-      } catch {}
+      } catch {
+        // Ignore disconnect errors
+      }
       procRef.current = null;
     }
     if (sourceRef.current) {
       try {
         sourceRef.current.disconnect();
-      } catch {}
+      } catch {
+        // Ignore disconnect errors
+      }
       sourceRef.current = null;
     }
     if (streamRef.current) {
@@ -182,7 +191,9 @@ function StreamingSTTSection() {
     if (ctxRef.current) {
       try {
         ctxRef.current.close();
-      } catch {}
+      } catch {
+        // Ignore audio context close errors
+      }
       ctxRef.current = null;
     }
     if (animTimer.current) {
@@ -209,15 +220,17 @@ function StreamingSTTSection() {
         if (token) urlObj.searchParams.set('token', token);
         if (xk) urlObj.searchParams.set('x-api-key', xk);
         wsUrl = urlObj.toString();
-      } catch {}
-      const headers = buildAuthHeaders('GET');
-      // Attach auth headers as query params (fallback) if server supports; primarily rely on cookies/headers.
+      } catch {
+        // Ignore URL parsing errors, use original wsUrl
+      }
+      // Note: WebSocket doesn't support custom headers, auth is passed via query params above
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
       ws.onopen = () => {
         setConnected(true);
         addDebug('WebSocket connected');
         // Send config
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const cfg = { type: 'config', model, sample_rate: sampleRate, language: language || undefined } as any;
         ws.send(JSON.stringify(cfg));
         addDebug(`Sent config: ${JSON.stringify(cfg)}`);
@@ -240,7 +253,7 @@ function StreamingSTTSection() {
           else if (msg.type === 'error') { show({ title: 'STT error', description: msg.message || 'Error', variant: 'danger' }); addDebug(`Error: ${msg.message}`); }
         } catch { addDebug(`RX: ${String(ev.data).slice(0,100)}`); }
       };
-      ws.onerror = (e) => { addDebug('WebSocket error'); };
+      ws.onerror = () => { addDebug('WebSocket error'); };
       ws.onclose = () => {
         cleanupAudio();
         recordingRef.current = false;
@@ -248,8 +261,9 @@ function StreamingSTTSection() {
         setRecording(false);
         addDebug('WebSocket closed');
       };
-    } catch (e: any) {
-      show({ title: 'Connect failed', description: e?.message || 'Failed', variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Connect failed', description: message, variant: 'danger' });
     }
   };
 
@@ -258,7 +272,7 @@ function StreamingSTTSection() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
       streamRef.current = stream;
-      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
       ctxRef.current = ctx;
       const source = ctx.createMediaStreamSource(stream);
       sourceRef.current = source;
@@ -355,8 +369,9 @@ function StreamingSTTSection() {
       recordingRef.current = true;
       setRecording(true);
       show({ title: 'Recording started', variant: 'success' });
-    } catch (e: any) {
-      show({ title: 'Mic failed', description: e?.message || 'Permission error', variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Mic failed', description: message, variant: 'danger' });
     }
   };
 
@@ -385,7 +400,7 @@ function StreamingSTTSection() {
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
         <div>
           <label className="mb-1 block text-sm font-medium text-gray-700">Model</label>
-          <select className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value={model} onChange={(e)=>setModel(e.target.value as any)}>
+          <select className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value={model} onChange={(e)=>setModel(e.target.value as typeof model)}>
             <option value="whisper">Whisper</option>
             <option value="parakeet">Parakeet</option>
             <option value="canary">Canary</option>
@@ -473,7 +488,8 @@ function VoiceChatStreamSection() {
   const [transcripts, setTranscripts] = useState<string[]>([]);
   const [assistant, setAssistant] = useState('');
   const [status, setStatus] = useState('');
-  const [assistantInfo, setAssistantInfo] = useState<any>(null);
+  const [assistantInfo, setAssistantInfo] = // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  useState<any>(null);
   const wsRef = useRef<WebSocket|null>(null);
   const ctxRef = useRef<AudioContext|null>(null);
   const bufferRef = useRef<number[]>([]);
@@ -616,6 +632,7 @@ function VoiceChatStreamSection() {
         setAssistant('');
         setAssistantInfo(null);
         resetTtsBuffers();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const cfg: any = {
           type: 'config',
           session_id: sessionId || undefined,
@@ -628,6 +645,7 @@ function VoiceChatStreamSection() {
       };
       ws.onmessage = async (ev) => {
         if (typeof ev.data === 'string') {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           let msg: any;
           try { msg = JSON.parse(ev.data); } catch { return; }
           switch (msg.type) {
@@ -666,7 +684,8 @@ function VoiceChatStreamSection() {
               show({ title: 'Voice chat error', description: msg.message || 'Streaming failed', variant: 'danger' });
               break;
             case 'action_result':
-              setAssistantInfo((prev)=>({ ...(prev || {}), action: msg }));
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              setAssistantInfo((prev: any)=>({ ...(prev || {}), action: msg }));
               setStatus(`Action: ${msg.status || 'ok'}`);
               break;
             default:
@@ -691,8 +710,9 @@ function VoiceChatStreamSection() {
         setRecording(false);
         setStatus('Disconnected');
       };
-    } catch (e: any) {
-      show({ title: 'Connect failed', description: e?.message || 'Failed', variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Connect failed', description: message, variant: 'danger' });
     }
   };
 
@@ -704,7 +724,7 @@ function VoiceChatStreamSection() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
       streamRef.current = stream;
-      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
       ctxRef.current = ctx;
       const source = ctx.createMediaStreamSource(stream);
       sourceRef.current = source;
@@ -744,10 +764,11 @@ function VoiceChatStreamSection() {
       recordingRef.current = true;
       setRecording(true);
       setStatus('Recording…');
-    } catch (e: any) {
+    } catch (error: unknown) {
       cleanupAudio();
       setRecording(false);
-      show({ title: 'Mic failed', description: e?.message || 'Permission error', variant: 'danger' });
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Mic failed', description: message, variant: 'danger' });
     }
   };
 
@@ -788,7 +809,7 @@ function VoiceChatStreamSection() {
           <select
             className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
             value={sttModel}
-            onChange={(e)=>setSttModel(e.target.value as any)}
+            onChange={(e)=>setSttModel(e.target.value as typeof sttModel)}
           >
             <option value="whisper">Whisper</option>
             <option value="parakeet">Parakeet</option>
@@ -801,7 +822,7 @@ function VoiceChatStreamSection() {
         <Input label="TTS Voice" value={ttsVoice} onChange={(e)=>setTtsVoice(e.target.value)} />
         <div>
           <label className="mb-1 block text-sm font-medium text-gray-700">TTS Format</label>
-          <select className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value={ttsFormat} onChange={(e)=>setTtsFormat(e.target.value as any)}>
+          <select className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value={ttsFormat} onChange={(e)=>setTtsFormat(e.target.value as typeof ttsFormat)}>
             <option value="mp3">mp3</option>
             <option value="opus">opus</option>
             <option value="pcm">pcm</option>

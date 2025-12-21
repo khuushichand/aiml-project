@@ -1,34 +1,28 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import Sidebar from '@/components/Sidebar';
 import ProtectedRoute from '@/components/ProtectedRoute';
+import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Plus, Activity } from 'lucide-react';
+import { Plus, Users, Eye } from 'lucide-react';
 import { Organization } from '@/types';
 import { api } from '@/lib/api-client';
-import { useRouter } from 'next/navigation';
+import { TableSkeleton } from '@/components/ui/skeleton';
+import Link from 'next/link';
 
 export default function OrganizationsPage() {
-  const router = useRouter();
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [loading, setLoading] = useState(true);
   const [formData, setFormData] = useState({
-    organization_id: '',
     name: '',
-    create_default_team: true,
-    default_team_name: '',
-    default_team_access_groups: [] as string[],
-    default_team_credits: 1000,
+    slug: '',
   });
-  const [accessGroupInput, setAccessGroupInput] = useState('');
 
   useEffect(() => {
     loadOrganizations();
@@ -38,7 +32,7 @@ export default function OrganizationsPage() {
     try {
       setLoading(true);
       const data = await api.getOrganizations();
-      setOrganizations(data);
+      setOrganizations(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to load organizations:', error);
       setOrganizations([]);
@@ -52,15 +46,7 @@ export default function OrganizationsPage() {
     try {
       await api.createOrganization(formData);
       setShowCreateForm(false);
-      setFormData({
-        organization_id: '',
-        name: '',
-        create_default_team: true,
-        default_team_name: '',
-        default_team_access_groups: [],
-        default_team_credits: 1000,
-      });
-      setAccessGroupInput('');
+      setFormData({ name: '', slug: '' });
       loadOrganizations();
     } catch (error: any) {
       console.error('Failed to create organization:', error);
@@ -68,34 +54,23 @@ export default function OrganizationsPage() {
     }
   };
 
-  const addAccessGroup = () => {
-    if (accessGroupInput && !formData.default_team_access_groups.includes(accessGroupInput)) {
-      setFormData({
-        ...formData,
-        default_team_access_groups: [...formData.default_team_access_groups, accessGroupInput],
-      });
-      setAccessGroupInput('');
-    }
-  };
-
-  const removeAccessGroup = (group: string) => {
-    setFormData({
-      ...formData,
-      default_team_access_groups: formData.default_team_access_groups.filter((g) => g !== group),
-    });
+  // Auto-generate slug from name
+  const handleNameChange = (name: string) => {
+    const slug = name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '');
+    setFormData({ name, slug });
   };
 
   return (
     <ProtectedRoute>
-      <div className="flex h-screen bg-background">
-        <Sidebar />
-
-        <main className="flex-1 overflow-y-auto">
-          <div className="p-8">
+      <ResponsiveLayout>
+          <div className="p-4 lg:p-8">
             <div className="mb-8 flex items-center justify-between">
               <div>
                 <h1 className="text-3xl font-bold">Organizations</h1>
-                <p className="text-muted-foreground">Manage your organizations</p>
+                <p className="text-muted-foreground">Manage organizations and their members</p>
               </div>
               <Button onClick={() => setShowCreateForm(!showCreateForm)}>
                 <Plus className="mr-2 h-4 w-4" />
@@ -113,113 +88,29 @@ export default function OrganizationsPage() {
                   <form onSubmit={handleSubmit} className="space-y-4">
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
-                        <Label htmlFor="organization_id">Organization ID *</Label>
-                        <Input
-                          id="organization_id"
-                          placeholder="e.g., acme-corp"
-                          value={formData.organization_id}
-                          onChange={(e) => setFormData({ ...formData, organization_id: e.target.value })}
-                          required
-                        />
-                        <p className="text-xs text-muted-foreground">
-                          Unique identifier for this organization
-                        </p>
-                      </div>
-
-                      <div className="space-y-2">
                         <Label htmlFor="name">Organization Name *</Label>
                         <Input
                           id="name"
                           placeholder="e.g., Acme Corporation"
                           value={formData.name}
-                          onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                          onChange={(e) => handleNameChange(e.target.value)}
                           required
                         />
                       </div>
-                    </div>
 
-                    <div className="space-y-4 p-4 border rounded-lg bg-muted/50">
-                      <div className="flex items-center space-x-2">
-                        <Checkbox
-                          id="create_default_team"
-                          checked={formData.create_default_team}
-                          onCheckedChange={(checked) =>
-                            setFormData({ ...formData, create_default_team: checked as boolean })
-                          }
+                      <div className="space-y-2">
+                        <Label htmlFor="slug">Slug *</Label>
+                        <Input
+                          id="slug"
+                          placeholder="e.g., acme-corp"
+                          value={formData.slug}
+                          onChange={(e) => setFormData({ ...formData, slug: e.target.value })}
+                          required
                         />
-                        <Label htmlFor="create_default_team" className="font-semibold">
-                          Create Default Team
-                        </Label>
+                        <p className="text-xs text-muted-foreground">
+                          Unique URL-friendly identifier
+                        </p>
                       </div>
-
-                      {formData.create_default_team && (
-                        <div className="space-y-4 pl-6">
-                          <div className="space-y-2">
-                            <Label htmlFor="default_team_name">Default Team Name</Label>
-                            <Input
-                              id="default_team_name"
-                              placeholder="Leave empty to use organization name"
-                              value={formData.default_team_name}
-                              onChange={(e) =>
-                                setFormData({ ...formData, default_team_name: e.target.value })
-                              }
-                            />
-                          </div>
-
-                          <div className="space-y-2">
-                            <Label>Model Access Groups</Label>
-                            <div className="flex gap-2">
-                              <Input
-                                placeholder="Enter access group name (e.g., basic-chat)"
-                                value={accessGroupInput}
-                                onChange={(e) => setAccessGroupInput(e.target.value)}
-                                onKeyPress={(e) => {
-                                  if (e.key === 'Enter') {
-                                    e.preventDefault();
-                                    addAccessGroup();
-                                  }
-                                }}
-                              />
-                              <Button type="button" variant="outline" onClick={addAccessGroup}>
-                                Add
-                              </Button>
-                            </div>
-                            {formData.default_team_access_groups.length > 0 ? (
-                              <div className="flex flex-wrap gap-2 mt-2">
-                                {formData.default_team_access_groups.map((group) => (
-                                  <Badge
-                                    key={group}
-                                    variant="secondary"
-                                    className="cursor-pointer"
-                                    onClick={() => removeAccessGroup(group)}
-                                  >
-                                    {group} ×
-                                  </Badge>
-                                ))}
-                              </div>
-                            ) : (
-                              <p className="text-sm text-muted-foreground mt-2">
-                                No access groups added. Add groups to grant model access to the default team.
-                              </p>
-                            )}
-                          </div>
-
-                          <div className="space-y-2">
-                            <Label htmlFor="default_team_credits">Initial Credits</Label>
-                            <Input
-                              id="default_team_credits"
-                              type="number"
-                              value={formData.default_team_credits}
-                              onChange={(e) =>
-                                setFormData({
-                                  ...formData,
-                                  default_team_credits: Number(e.target.value),
-                                })
-                              }
-                            />
-                          </div>
-                        </div>
-                      )}
                     </div>
 
                     <div className="flex gap-2">
@@ -239,38 +130,40 @@ export default function OrganizationsPage() {
               </CardHeader>
               <CardContent>
                 {loading ? (
-                  <div className="text-center text-muted-foreground">Loading...</div>
+                  <div className="py-4">
+                    <TableSkeleton rows={3} columns={5} />
+                  </div>
+                ) : organizations.length === 0 ? (
+                  <div className="text-center text-muted-foreground py-8">
+                    No organizations found. Create one to get started.
+                  </div>
                 ) : (
                   <Table>
                     <TableHeader>
                       <TableRow>
                         <TableHead>ID</TableHead>
                         <TableHead>Name</TableHead>
-                        <TableHead>Status</TableHead>
+                        <TableHead>Slug</TableHead>
                         <TableHead>Created</TableHead>
                         <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {organizations.map((org) => (
-                        <TableRow key={org.organization_id}>
-                          <TableCell className="font-mono text-sm">{org.organization_id}</TableCell>
+                        <TableRow key={org.id}>
+                          <TableCell className="font-mono text-sm">{org.id}</TableCell>
                           <TableCell className="font-medium">{org.name}</TableCell>
                           <TableCell>
-                            <Badge variant={org.status === 'active' ? 'default' : 'secondary'}>
-                              {org.status}
-                            </Badge>
+                            <Badge variant="secondary">{org.slug}</Badge>
                           </TableCell>
                           <TableCell>{new Date(org.created_at).toLocaleDateString()}</TableCell>
                           <TableCell className="text-right">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => router.push(`/jobs/organizations/${org.organization_id}`)}
-                              title="View organization analytics"
-                            >
-                              <Activity className="h-4 w-4" />
-                            </Button>
+                            <Link href={`/organizations/${org.id}`}>
+                              <Button variant="outline" size="sm">
+                                <Eye className="mr-2 h-4 w-4" />
+                                Manage
+                              </Button>
+                            </Link>
                           </TableCell>
                         </TableRow>
                       ))}
@@ -280,8 +173,7 @@ export default function OrganizationsPage() {
               </CardContent>
             </Card>
           </div>
-        </main>
-      </div>
+      </ResponsiveLayout>
     </ProtectedRoute>
   );
 }

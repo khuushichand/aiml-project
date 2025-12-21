@@ -1,0 +1,106 @@
+/**
+ * Shared types used across the tldw-frontend codebase.
+ */
+
+import type { AxiosRequestConfig, InternalAxiosRequestConfig } from 'axios';
+
+// ========================================
+// API Types
+// ========================================
+
+/** Extended Axios config with request metadata for timing */
+export interface AxiosConfigWithMetadata extends InternalAxiosRequestConfig {
+  metadata?: {
+    start: number;
+  };
+}
+
+/** Standard API error response structure */
+export interface ApiErrorResponse {
+  detail?: string;
+  message?: string;
+}
+
+/** Generic API client config */
+export type ApiClientConfig = AxiosRequestConfig;
+
+// ========================================
+// User/Auth Types
+// ========================================
+
+/** User object structure from auth endpoints */
+export interface AuthUser {
+  id?: string | number;
+  username?: string;
+  email?: string;
+  is_admin?: boolean;
+  isAdmin?: boolean;
+  role?: string;
+  roles?: string[];
+  permissions?: string[];
+  scopes?: string[];
+}
+
+// ========================================
+// JSON/Schema Types
+// ========================================
+
+/** Generic JSON value type */
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+/** Generic JSON object */
+export type JsonObject = { [key: string]: JsonValue };
+
+// ========================================
+// SSE/Streaming Types
+// ========================================
+
+/** SSE message handler for text deltas */
+export type SSEMessageHandler = (delta: string) => void;
+
+/** SSE JSON handler for parsed JSON objects */
+export type SSEJSONHandler = (json: JsonObject) => void;
+
+/** SSE connection options */
+export interface SSEOptions {
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
+  signal?: AbortSignal;
+}
+
+// ========================================
+// Form/Validation Types
+// ========================================
+
+/** Form state type - record of string keys to unknown values */
+export type FormState = Record<string, unknown>;
+
+/** Validation result - array of error messages */
+export type ValidationErrors = string[];
+
+// ========================================
+// Request History Types
+// ========================================
+
+/** Request history item for API debugging */
+export interface RequestHistoryItem {
+  id: string;
+  method: string;
+  url: string;
+  baseURL?: string;
+  status?: number;
+  ok?: boolean;
+  duration_ms?: number;
+  timestamp: string;
+  requestHeaders?: Record<string, string>;
+  requestBody?: unknown;
+  responseBody?: unknown;
+  errorMessage?: string;
+}

@@ -1,6 +1,7 @@
 import { isAdmin } from '@/lib/authz';
+import type { AuthUser } from '@/types/common';
 
-type Case = { name: string; user: any; expected: boolean };
+type Case = { name: string; user: AuthUser | null | undefined; expected: boolean };
 
 const cases: Case[] = [
   { name: 'null user -> false', user: null, expected: false },

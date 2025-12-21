@@ -37,6 +37,16 @@ class SuccessMessage(BaseModel):
     detail: Optional[str] = Field(None, description="Optional additional details.", json_schema_extra={"example": "Item processed."})
 
 
+class ReprocessMediaResponse(BaseModel):
+    """Response model for media reprocess requests."""
+    media_id: int = Field(..., description="Media item ID")
+    status: str = Field(..., description="Job status (accepted/completed/failed)")
+    message: str = Field(..., description="Human-readable status message")
+    chunks_created: Optional[int] = Field(None, description="Number of chunks created")
+    embeddings_started: bool = Field(False, description="Whether embeddings regeneration was started")
+    job_id: Optional[str] = Field(None, description="Reprocess job identifier when async")
+
+
 ######################## /api/v1/media/ Endpoint Response Models ########################
 #
 #

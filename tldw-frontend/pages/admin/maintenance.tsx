@@ -22,11 +22,12 @@ export default function AdminMaintenancePage() {
       const resp = await fetch(url, { method: 'POST', headers: buildAuthHeaders('POST') });
       const ok = resp.ok;
       const text = await resp.text();
-      let data: any = null;
-      try { data = JSON.parse(text); } catch { data = text; }
+      let _data: unknown = null;
+      try { _data = JSON.parse(text); } catch { _data = text; }
       show({ title: ok ? 'Success' : 'Request failed', description: ok ? `${label} completed` : `${resp.status} ${resp.statusText}`, variant: ok ? 'success' : 'warning' });
-    } catch (e: any) {
-      show({ title: 'Request error', description: e?.message || String(e), variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Request error', description: message, variant: 'danger' });
     } finally {
       setBusy(null);
     }

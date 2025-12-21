@@ -84,6 +84,9 @@ from tldw_Server_API.app.api.v1.endpoints.media import (
     process_mediawiki as process_mediawiki_endpoint,  # noqa: E402
 )
 from tldw_Server_API.app.api.v1.endpoints.media import (
+    reprocess as reprocess_endpoint,  # noqa: E402
+)
+from tldw_Server_API.app.api.v1.endpoints.media import (
     transcription_models as transcription_models_endpoint,  # noqa: E402
 )
 
@@ -105,6 +108,7 @@ for _router in (
     process_audios_endpoint.router,
     process_web_scraping_endpoint.router,
     process_mediawiki_endpoint.router,
+    reprocess_endpoint.router,
     transcription_models_endpoint.router,
 ):
     for route in _router.routes:

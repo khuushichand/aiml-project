@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { apiClient, getApiBaseUrl, buildAuthHeaders } from '@/lib/api'
 
 type Job = { id: string; status: string; progress_percent?: number; counts?: Record<string, number> }
@@ -11,16 +11,17 @@ export default function Jobs() {
   const [error, setError] = useState<string | null>(null)
   const [notEnabled, setNotEnabled] = useState(false)
 
-  async function load() {
+  const load = useCallback(async () => {
     setError(null)
     if (!jobId) return
     try {
       const data = await apiClient.get<Job>(`/connectors/jobs/${jobId}`)
       setJob(data)
-    } catch (e: any) {
-      setError(e?.message || 'Failed to load job')
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Failed to load job'
+      setError(message)
     }
-  }
+  }, [jobId])
 
   useEffect(() => {
     const ping = async () => {
@@ -34,7 +35,7 @@ export default function Jobs() {
       }
     }
     ping()
-  }, [jobId, load])
+  }, [load])
 
   return (
     <div className="p-6 space-y-4">
@@ -52,7 +53,7 @@ export default function Jobs() {
       {!notEnabled && job && (
         <div className="border rounded p-3">
           <div className="font-medium">Job {job.id}</div>
-          <div className="text-sm">Status: {job.status} {typeof (job as any).progress_percent !== 'undefined' ? `• ${ (job as any).progress_percent }%` : ''}</div>
+          <div className="text-sm">Status: {job.status} {typeof job.progress_percent !== 'undefined' ? `• ${ job.progress_percent }%` : ''}</div>
           {job.counts && (
             <div className="text-xs text-gray-600">Counts: processed {job.counts['processed'] || 0}, skipped {job.counts['skipped'] || 0}, failed {job.counts['failed'] || 0}</div>
           )}

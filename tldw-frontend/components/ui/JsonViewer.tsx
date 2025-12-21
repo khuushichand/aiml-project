@@ -27,6 +27,7 @@ function syntaxHighlightJson(json: string): string {
 }
 
 export interface JsonViewerProps {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   data: any;
   className?: string;
   highlight?: boolean;
@@ -37,13 +38,14 @@ export function JsonViewer({ data, className, highlight = true }: JsonViewerProp
     try { return JSON.stringify(data, null, 2); } catch { return String(data); }
   }, [data]);
 
+  const html = useMemo(() => syntaxHighlightJson(pretty), [pretty]);
+
   if (!highlight) {
     return (
       <pre className={`overflow-auto whitespace-pre-wrap break-words font-mono text-sm ${className || ''}`}>{pretty}</pre>
     );
   }
 
-  const html = useMemo(() => syntaxHighlightJson(pretty), [pretty]);
   return (
     <pre className={`overflow-auto whitespace-pre-wrap break-words font-mono text-sm ${className || ''}`} dangerouslySetInnerHTML={{ __html: html }} />
   );

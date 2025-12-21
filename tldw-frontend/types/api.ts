@@ -13,7 +13,7 @@ export interface MediaItem {
   created_at: string;
   updated_at: string;
   tags?: string[];
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface MediaListResponse {
@@ -30,7 +30,7 @@ export interface SearchResult {
   title: string;
   content_snippet: string;
   relevance_score: number;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface SearchResponse {

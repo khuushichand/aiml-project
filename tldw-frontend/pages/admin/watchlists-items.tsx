@@ -51,10 +51,11 @@ export default function AdminWatchlistsItemsPage() {
       const data = await apiClient.get<ItemsListResponse>(`/watchlists/items`, { params: { run_id: rid, status: st || undefined, page: p, size: s } });
       setItems(Array.isArray(data?.items) ? data.items : []);
       setTotal(Number(data?.total || 0));
-    } catch (e: any) {
+    } catch (error: unknown) {
       setItems([]);
       setTotal(0);
-      show({ title: 'Failed to load items', description: e?.message, variant: 'danger' });
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to load items', description: message, variant: 'danger' });
     } finally {
       setLoading(false);
     }

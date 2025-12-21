@@ -1034,15 +1034,16 @@ def format_transcription_with_timestamps(segments: List[Dict[str, Any]], keep_ti
     """
     Formats transcription segments into a single string, optionally with timestamps.
 
-    Each segment is expected to be a dictionary with 'Time_Start', 'Time_End',
-    and 'Text' keys. Timestamps are formatted as HH:MM:SS. If 'Time_Start' or
-    'Time_End' are already strings in HH:MM:SS format, they are used directly.
+    Each segment is expected to be a dictionary with 'Time_Start'/'Time_End' or
+    'start_seconds'/'end_seconds' and 'Text' keys. Timestamps are formatted as
+    HH:MM:SS. If timestamps are already strings in HH:MM:SS format, they are
+    used directly.
     Otherwise, they are assumed to be numeric seconds and converted.
 
     Args:
         segments: A list of dictionaries, where each dictionary represents a
-                  transcription segment. Expected keys: 'Time_Start' (float/str),
-                  'Time_End' (float/str), 'Text' (str).
+                  transcription segment. Expected keys: 'Time_Start'/'Time_End'
+                  or 'start_seconds'/'end_seconds' (float/str), 'Text' (str).
         keep_timestamps: If True, timestamps [HH:MM:SS-HH:MM:SS] are prepended
                          to each segment's text. If False, only the text is joined.
                          Defaults to True.
@@ -1054,33 +1055,40 @@ def format_transcription_with_timestamps(segments: List[Dict[str, Any]], keep_ti
     if not segments:
         return ""
 
+    def _format_time_value(value: Any) -> str:
+        if value is None:
+            return "00:00:00"
+        if isinstance(value, str):
+            stripped = value.strip()
+            if ":" in stripped:
+                return stripped
+            try:
+                value = float(stripped)
+            except (ValueError, TypeError):
+                return stripped
+        try:
+            return time.strftime('%H:%M:%S', time.gmtime(float(value)))
+        except (ValueError, TypeError, OSError):
+            return str(value)
+
     formatted_lines = []
     if keep_timestamps:
-        formatted_segments = []
         for segment in segments:
-            start = segment.get('Time_Start', 0)
-            end = segment.get('Time_End', 0)
+            start = segment.get('Time_Start')
+            end = segment.get('Time_End')
+            if start is None:
+                start = segment.get('start_seconds', segment.get('start', 0))
+            if end is None:
+                end = segment.get('end_seconds', segment.get('end', 0))
             text = segment.get('Text', '').strip()
-
-            # Check if start and end are already formatted strings
-            if isinstance(start, str) and ':' in start:
-                # Already in HH:MM:SS format, use directly
-                formatted_segments.append(f"[{start}-{end}] {text}")
-            else:
-                # Numeric seconds, convert to time format
-                try:
-                    start_time = time.strftime('%H:%M:%S', time.gmtime(float(start)))
-                    end_time = time.strftime('%H:%M:%S', time.gmtime(float(end)))
-                    formatted_segments.append(f"[{start_time}-{end_time}] {text}")
-                except (ValueError, TypeError):
-                    # Fallback if conversion fails
-                    formatted_segments.append(f"[{start}-{end}] {text}")
-            # Join the segments with a newline to ensure proper formatting
-            formatted_segments.append(f"[{start:.2f}-{end:.2f}] {text}")
-        return "\n".join(formatted_segments)
+            start_str = _format_time_value(start)
+            end_str = _format_time_value(end)
+            formatted_lines.append(f"[{start_str}-{end_str}] {text}")
+        return "\n".join(formatted_lines)
     else:
-        # Join the text without timestamps
-        return "\n".join([segment.get('Text', '').strip() for segment in segments])
+        return "\n".join(
+            [segment.get('Text', '').strip() for segment in segments if segment.get('Text', '').strip()]
+        )
 
 
 HTTPONLY_PREFIX = '#HttpOnly_'

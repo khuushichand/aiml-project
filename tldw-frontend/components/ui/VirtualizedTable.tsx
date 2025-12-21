@@ -91,7 +91,7 @@ export function VirtualizedTable<T>({
                 >
                   {columns.map((column, colIdx) => (
                     <div key={column.key} className={cn('truncate', column.className)} style={columnStyles[colIdx]}>
-                      {column.render ? column.render(row, rowIndex) : (row as any)[column.key]}
+                      {column.render ? column.render(row, rowIndex) : String((row as Record<string, unknown>)[column.key] ?? '')}
                     </div>
                   ))}
                 </div>

@@ -29,8 +29,9 @@ export default function LoginPage() {
     try {
       await authService.login(data);
       router.push('/');
-    } catch (err: any) {
-      setError(err.message || 'Login failed. Please try again.');
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Login failed. Please try again.';
+      setError(message);
     } finally {
       setLoading(false);
     }

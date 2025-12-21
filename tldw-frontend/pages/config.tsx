@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Layout } from '@/components/layout/Layout';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import api, { buildAuthHeaders, getApiBaseUrl } from '@/lib/api';
+import { buildAuthHeaders, getApiBaseUrl } from '@/lib/api';
 import { useConfig } from '@/hooks/useConfig';
 import { addRequestHistory, getRequestHistory, RequestHistoryItem, clearRequestHistory } from '@/lib/history';
 import JsonViewer from '@/components/ui/JsonViewer';
@@ -20,19 +20,23 @@ import HotkeysOverlay from '@/components/ui/HotkeysOverlay';
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function tryParseJSON(text: string): { ok: boolean; value?: any; error?: string } {
   if (!text.trim()) return { ok: true, value: undefined };
   try {
     return { ok: true, value: JSON.parse(text) };
-  } catch (e: any) {
-    return { ok: false, error: e?.message || 'Invalid JSON' };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Invalid JSON';
+    return { ok: false, error: message };
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function jsonPrettify(value: any): string {
   try { return JSON.stringify(value, null, 2); } catch { return String(value); }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function buildCurl(method: string, url: string, headers: Record<string, string>, body?: any): string {
   const parts: string[] = [
     `curl -X ${method.toUpperCase()} \\\n+  '${url}' \\\n+  -H 'Accept: application/json'`,
@@ -69,9 +73,10 @@ export default function ConfigPage() {
       setLatencyMs(dur);
       if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
       setStatus('ok');
-    } catch (e: any) {
+    } catch (error: unknown) {
       setStatus('fail');
-      setStatusDetail(e?.message || 'Request failed');
+      const message = error instanceof Error ? error.message : 'Request failed';
+      setStatusDetail(message);
       setLatencyMs(Date.now() - start);
     }
   };
@@ -87,7 +92,8 @@ export default function ConfigPage() {
   const [jsonError, setJsonError] = useState<string>('');
   const [sending, setSending] = useState(false);
   const [respStatus, setRespStatus] = useState<string>('');
-  const [respBody, setRespBody] = useState<any>(null);
+  const [respBody, setRespBody] = // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  useState<any>(null);
   const [builderView, setBuilderView] = useState<'form' | 'response' | 'curl'>('form');
 
   const finalUrl = useMemo(() => {
@@ -108,6 +114,7 @@ export default function ConfigPage() {
     setRespStatus('');
     setRespBody(null);
     setJsonError('');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let bodyVal: any = undefined;
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
       const r = tryParseJSON(bodyText);
@@ -123,6 +130,7 @@ export default function ConfigPage() {
         body: bodyVal !== undefined ? JSON.stringify(bodyVal) : undefined,
       });
       const text = await resp.text();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let parsed: any = null;
       try { parsed = JSON.parse(text); } catch { parsed = text; }
       setRespStatus(`${resp.status} ${resp.statusText}`);
@@ -142,10 +150,11 @@ export default function ConfigPage() {
         requestBody: bodyVal,
         responseBody: parsed,
       });
-    } catch (e: any) {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Request failed';
       setRespStatus(`Error`);
-      setRespBody({ error: e?.message || 'Request failed' });
-      show({ title: 'Request failed', description: e?.message || 'Request failed', variant: 'danger' });
+      setRespBody({ error: message });
+      show({ title: 'Request failed', description: message, variant: 'danger' });
     } finally {
       setSending(false);
     }
@@ -186,7 +195,8 @@ export default function ConfigPage() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [curl, respBody]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [curl, respBody]); // copy is stable from clipboard hook
 
   return (
     <Layout>
@@ -243,7 +253,7 @@ export default function ConfigPage() {
           <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div>
               <label className="mb-1 block text-sm font-medium text-gray-700">Theme</label>
-              <select className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value={config.theme} onChange={(e) => setTheme(e.target.value as any)}>
+              <select className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value={config.theme} onChange={(e) => setTheme(e.target.value as typeof config.theme)}>
                 <option value="system">System</option>
                 <option value="light">Light</option>
                 <option value="dark">Dark</option>
@@ -256,9 +266,10 @@ export default function ConfigPage() {
         <div className="rounded-md border bg-white p-4">
           <div className="mb-3 text-lg font-semibold text-gray-800">Endpoint Request Builder</div>
           <div className="mb-2">
-            <Tabs items={[{ key: 'form', label: 'Form' }, { key: 'response', label: 'Response' }, { key: 'curl', label: 'cURL' }]} value={builderView} onChange={(k)=>setBuilderView(k as any)} />
+            <Tabs items={[{ key: 'form', label: 'Form' }, { key: 'response', label: 'Response' }, { key: 'curl', label: 'cURL' }]} value={builderView} onChange={(k)=>setBuilderView(k as typeof builderView)} />
           </div>
           {builderView === 'form' && (
+          <>
           <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-6">
             <div className="sm:col-span-1">
               <label className="mb-1 block text-sm font-medium text-gray-700">Method</label>
@@ -291,6 +302,7 @@ export default function ConfigPage() {
             <Button onClick={sendRequest} loading={sending}>Send Request</Button>
             <div className="text-xs text-gray-600">Auth and CSRF headers are auto-included.</div>
           </div>
+          </>
           )}
 
           {/* Response */}
@@ -390,13 +402,13 @@ function RequestHistorySection({ history, replay, reload }: { history: RequestHi
         </div>
         <div>
           <label className="mb-1 block text-sm font-medium text-gray-700">Method</label>
-          <select className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value={m} onChange={(e)=>setM(e.target.value as any)}>
+          <select className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value={m} onChange={(e)=>setM(e.target.value as typeof m)}>
             {['ALL','GET','POST','PUT','PATCH','DELETE'].map((x) => (<option key={x} value={x}>{x}</option>))}
           </select>
         </div>
         <div>
           <label className="mb-1 block text-sm font-medium text-gray-700">Status</label>
-          <select className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value={s} onChange={(e)=>setS(e.target.value as any)}>
+          <select className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value={s} onChange={(e)=>setS(e.target.value as typeof s)}>
             <option value="all">All</option>
             <option value="2xx">2xx</option>
             <option value="4xx">4xx</option>
@@ -415,7 +427,9 @@ function RequestHistorySection({ history, replay, reload }: { history: RequestHi
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-2">
                   <span className="font-mono text-xs text-gray-500" title={new Date(h.timestamp).toLocaleString()}>{formatRelativeTime(h.timestamp)}</span>
+                  {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                   <Badge variant={methodBadgeVariant(h.method) as any}>{h.method}</Badge>
+                  {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                   <Badge variant={statusBadgeVariant(h.status, h.ok) as any}>{h.status ?? (h.ok === false ? 'Error' : '-')}</Badge>
                   <span className="text-xs text-gray-600">{h.duration_ms != null ? `${h.duration_ms} ms` : ''}</span>
                 </div>
@@ -437,9 +451,11 @@ function QuickFormsSection() {
   const { show } = useToast();
   const [selected, setSelected] = useState<string>(QUICK_FORMS[0]?.id || '');
   const preset = useMemo(() => QUICK_FORMS.find(p => p.id === selected) as QuickFormPreset | undefined, [selected]);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [state, setState] = useState<Record<string, any>>(preset?.defaults || {});
   const [validateOnSend, setValidateOnSend] = useState(true);
-  const [resp, setResp] = useState<any>(null);
+  const [resp, setResp] = // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  useState<any>(null);
   const [status, setStatus] = useState<string>('');
   const [sending, setSending] = useState(false);
   const [bodyText, setBodyText] = useState('');
@@ -453,7 +469,8 @@ function QuickFormsSection() {
     setStatus('');
     setErrors([]);
     setBodyText('');
-  }, [preset?.id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset?.id]); // Only reset state when preset changes, not when defaults change
 
   const computedBody = useMemo(() => {
     if (!preset) return undefined;
@@ -470,6 +487,7 @@ function QuickFormsSection() {
     setResp(null);
     setStatus('');
     setErrors([]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let body: any = computedBody;
     // Prefer edited JSON if valid
     try {
@@ -477,7 +495,7 @@ function QuickFormsSection() {
         const parsed = JSON.parse(bodyText);
         body = parsed;
       }
-    } catch (e) {
+    } catch {
       // keep computed body; surface a non-blocking error note
       setErrors([...(errors || []), 'Advanced JSON invalid; using form values']);
     }
@@ -497,6 +515,7 @@ function QuickFormsSection() {
       const headers = buildAuthHeaders(method);
       const respRaw = await fetch(url, { method, headers, body: method === 'GET' ? undefined : JSON.stringify(body) });
       const text = await respRaw.text();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let parsed: any = null;
       try { parsed = JSON.parse(text); } catch { parsed = text; }
       setStatus(`${respRaw.status} ${respRaw.statusText}`);
@@ -516,10 +535,11 @@ function QuickFormsSection() {
         requestBody: body,
         responseBody: parsed,
       });
-    } catch (e: any) {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Request failed';
       setStatus('Error');
-      setResp({ error: e?.message || 'Request failed' });
-      show({ title: 'Request failed', description: e?.message || 'Request failed', variant: 'danger' });
+      setResp({ error: message });
+      show({ title: 'Request failed', description: message, variant: 'danger' });
     } finally {
       setSending(false);
     }
@@ -560,7 +580,7 @@ function QuickFormsSection() {
         <Tabs
           items={[{ key: 'form', label: 'Form' }, { key: 'json', label: 'JSON' }, { key: 'response', label: 'Response' }, { key: 'curl', label: 'cURL' }]}
           value={view}
-          onChange={(k) => setView(k as any)}
+          onChange={(k) => setView(k as typeof view)}
         />
       </div>
 

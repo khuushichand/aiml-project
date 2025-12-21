@@ -37,17 +37,18 @@ export default function AdminOrgsPage() {
     setLoading(true);
     try {
       const offset = (page - 1) * size;
-      const params: any = { limit: size, offset };
+      const params: Record<string, unknown> = { limit: size, offset };
       if (filter.trim()) params.q = filter.trim();
       const data = await apiClient.get<OrganizationListResponse>('/admin/orgs', { params });
-      setOrgs(Array.isArray((data as any)?.items) ? data.items : []);
-      setTotal(Number.isFinite((data as any)?.total) ? data.total : 0);
-      setHasMore(Boolean((data as any)?.has_more));
-    } catch (error: any) {
+      setOrgs(Array.isArray(data?.items) ? data.items : []);
+      setTotal(Number.isFinite(data?.total) ? data.total : 0);
+      setHasMore(Boolean(data?.has_more));
+    } catch (error: unknown) {
       setOrgs([]);
       setTotal(0);
       setHasMore(false);
-      show({ title: 'Failed to load organizations', description: error?.message, variant: 'danger' });
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to load organizations', description: message, variant: 'danger' });
     } finally {
       setLoading(false);
     }
@@ -62,8 +63,9 @@ export default function AdminOrgsPage() {
     try {
       await navigator.clipboard.writeText(text);
       show({ title: 'Copied to clipboard', description: text, variant: 'success' });
-    } catch (e: any) {
-      show({ title: 'Copy failed', description: e?.message, variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Copy failed', description: message, variant: 'danger' });
     }
   };
 
