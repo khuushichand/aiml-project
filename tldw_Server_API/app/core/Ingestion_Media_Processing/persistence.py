@@ -1158,13 +1158,14 @@ async def process_batch_media(
 
         if not is_url:
             try:
-                # Ensure that any local file path is constrained to the provided temp_dir.
+                # Treat any non-URL source as a local file path that must live under temp_dir.
                 raw_path = FilePath(source_path_or_url)
                 candidate_path = (
                     raw_path
                     if raw_path.is_absolute()
                     else FilePath(temp_dir) / raw_path
                 )
+                # Normalize and resolve to eliminate any ".." segments.
                 resolved_path = candidate_path.resolve()
 
                 # Verify the resolved path is within temp_dir to prevent path traversal.
@@ -1172,8 +1173,14 @@ async def process_batch_media(
                 try:
                     is_within_temp = resolved_path.is_relative_to(temp_root)  # type: ignore[attr-defined]
                 except AttributeError:
-                    # For Python versions without Path.is_relative_to
-                    is_within_temp = str(resolved_path).startswith(str(temp_root) + os.sep)
+                    # For Python versions without Path.is_relative_to, fall back to a
+                    # conservative prefix check on the resolved absolute paths.
+                    temp_root_str = str(temp_root)
+                    resolved_str = str(resolved_path)
+                    is_within_temp = resolved_str == temp_root_str or resolved_str.startswith(
+                        temp_root_str + os.sep
+                    )
+                    # Only compute a hash for safe, existing files under temp_dir.
 
                 if is_within_temp and resolved_path.is_file():
                     source_hash = _compute_source_hash(resolved_path)
