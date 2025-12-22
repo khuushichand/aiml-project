@@ -668,7 +668,7 @@ export default function MonitoringPage() {
                             onChange={(e) => setNewWatchlist({ ...newWatchlist, target: e.target.value })}
                           />
                         </div>
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           <div className="space-y-2">
                             <Label htmlFor="watchType">Type</Label>
                             <select

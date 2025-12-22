@@ -104,7 +104,7 @@ export default function OrganizationsPage() {
                         <AlertDescription>{createError}</AlertDescription>
                       </Alert>
                     )}
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div className="space-y-2">
                         <Label htmlFor="name">Organization Name *</Label>
                         <Input

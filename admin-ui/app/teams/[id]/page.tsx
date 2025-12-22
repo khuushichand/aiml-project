@@ -23,7 +23,7 @@ export default function TeamDetailPage() {
   const params = useParams();
   const router = useRouter();
   const confirm = useConfirm();
-  const teamId = params.id as string;
+  const teamId = Array.isArray(params.id) ? params.id[0] : params.id;
 
   const [team, setTeam] = useState<Team | null>(null);
   const [members, setMembers] = useState<TeamMember[]>([]);
@@ -35,6 +35,17 @@ export default function TeamDetailPage() {
   const [showAddMember, setShowAddMember] = useState(false);
   const [newMemberUserId, setNewMemberUserId] = useState('');
   const [newMemberRole, setNewMemberRole] = useState('member');
+
+  const formatJoinedAt = (value?: string | null) => {
+    if (!value) {
+      return 'N/A';
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return 'N/A';
+    }
+    return date.toLocaleDateString();
+  };
 
   const isTeamResponse = (value: unknown): value is Team => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -313,7 +324,7 @@ export default function TeamDetailPage() {
                             </Badge>
                           </TableCell>
                           <TableCell className="text-sm text-muted-foreground">
-                            {new Date(member.joined_at).toLocaleDateString()}
+                            {formatJoinedAt(member.joined_at)}
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="flex justify-end gap-1">

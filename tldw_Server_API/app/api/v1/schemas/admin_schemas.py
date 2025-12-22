@@ -6,7 +6,7 @@ from __future__ import annotations
 from typing import Optional, Dict, Any, List, Union, Literal
 from uuid import UUID
 from datetime import datetime, date
-from pydantic import BaseModel, Field, EmailStr, ConfigDict
+from pydantic import BaseModel, Field, EmailStr, ConfigDict, NonNegativeInt
 
 #######################################################################################################################
 #
@@ -147,16 +147,16 @@ class SystemStatsResponse(BaseModel):
 
 class ActivityPoint(BaseModel):
     """Daily activity point for dashboard charts."""
-    date: str
-    requests: int
-    users: int
+    date: date
+    requests: NonNegativeInt
+    users: NonNegativeInt
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class ActivitySummaryResponse(BaseModel):
     """Dashboard activity summary response."""
-    days: int
+    days: int = Field(..., ge=0)
     points: List[ActivityPoint]
 
     model_config = ConfigDict(from_attributes=True)

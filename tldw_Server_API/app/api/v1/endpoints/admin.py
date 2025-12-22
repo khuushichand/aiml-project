@@ -208,6 +208,8 @@ from tldw_Server_API.app.core.Security.webui_access_guard import (
 from tldw_Server_API.app.core.config import load_comprehensive_config
 import ipaddress
 
+REQUIRED_ADMIN_RANK = ROLE_HIERARCHY.get("admin", 3)
+
 # Test shim: some tests expect a private helper `_is_postgres_backend` to monkeypatch.
 # Provide an alias to the public function for backward compatibility in tests.
 _is_postgres_backend = is_postgres_backend
@@ -343,11 +345,10 @@ async def _enforce_admin_user_scope(
     if not require_hierarchy:
         return
 
-    required_admin_rank = ROLE_HIERARCHY.get("admin", 3)
     for org_id in shared_orgs:
         admin_role = admin_org_roles.get(org_id)
         target_role = target_org_roles.get(org_id)
-        if _role_rank(admin_role) >= required_admin_rank and _role_rank(admin_role) >= _role_rank(target_role):
+        if _role_rank(admin_role) >= REQUIRED_ADMIN_RANK and _role_rank(admin_role) >= _role_rank(target_role):
             return
 
     raise HTTPException(
@@ -911,9 +912,13 @@ async def admin_list_orgs(
         result = await list_organizations(limit=limit, offset=offset, q=q, with_total=wants_wrapper)
         if wants_wrapper:
             if not isinstance(result, tuple) or len(result) != 2:
-                raise ValueError(
+                logger.error(
                     f"Expected (rows, total) tuple, got {type(result).__name__} with "
                     f"{len(result) if isinstance(result, tuple) else 'N/A'} elements"
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail="Internal error: unexpected response format from list_organizations",
                 )
             rows, total = result
         else:
@@ -932,6 +937,8 @@ async def admin_list_orgs(
             }
         # Raw list for legacy/simple callers
         return items
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to list organizations: {e}")
         raise HTTPException(status_code=500, detail="Failed to list organizations")
@@ -1683,9 +1690,10 @@ async def update_user(
 
         if affected == 0:
             if is_pg:
-                raise UserNotFoundError(f"User {user_id}")
-            cursor = await db.execute("SELECT 1 FROM users WHERE id = ?", (user_id,))
-            row = await cursor.fetchone()
+                row = await db.fetchrow("SELECT 1 FROM users WHERE id = $1", user_id)
+            else:
+                cursor = await db.execute("SELECT 1 FROM users WHERE id = ?", (user_id,))
+                row = await cursor.fetchone()
             if not row:
                 raise UserNotFoundError(f"User {user_id}")
 
@@ -3470,7 +3478,7 @@ async def get_dashboard_activity(
                     metric_value.timestamp,
                     timezone.utc,
                 ).date()
-            except Exception:
+            except (OSError, OverflowError, ValueError):
                 continue
             if metric_day in activity_by_date:
                 activity_by_date[metric_day]["requests"] += int(metric_value.value or 0)
@@ -3964,7 +3972,10 @@ async def get_personalization_status():
         svc = get_consolidation_service()
         status_fn = getattr(svc, "get_status", None)
         if not callable(status_fn):
-            raise ValueError("Personalization service does not provide a callable get_status method")
+            raise TypeError(
+                "Personalization service get_status is not callable: "
+                f"{status_fn!r} (type={type(status_fn).__name__})"
+            )
         return status_fn()
     except Exception as e:
         logger.warning(f"Admin status fetch failed: {e}")

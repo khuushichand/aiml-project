@@ -40,3 +40,14 @@ def test_fts_query_builder_hyphen_and_unicode():
     q2 = "naïve café"
     built2 = r._build_fts_query(q2)
     assert built2.startswith('"') and built2.endswith('"')
+
+
+def test_fts_query_translation_truncates_long_input():
+    from tldw_Server_API.app.core.DB_Management.backends.fts_translator import (
+        FTSQueryTranslator,
+        MAX_FTS_QUERY_LENGTH,
+    )
+
+    long_query = "a" * (MAX_FTS_QUERY_LENGTH + 50)
+    out = FTSQueryTranslator.sqlite_to_postgres(long_query)
+    assert len(out) == MAX_FTS_QUERY_LENGTH

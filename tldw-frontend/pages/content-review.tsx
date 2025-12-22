@@ -54,6 +54,7 @@ export default function ContentReviewPage() {
   const [reattachFile, setReattachFile] = useState<File | null>(null);
   const [reattachError, setReattachError] = useState<string | null>(null);
   const assetsHydratedRef = useRef(false);
+  const dirtyRef = useRef(false);
   const [isCommitting, setIsCommitting] = useState(false);
 
   const selectedDraft = useMemo(
@@ -62,6 +63,16 @@ export default function ContentReviewPage() {
   );
 
   useEffect(() => {
+    dirtyRef.current = dirty;
+  }, [dirty]);
+
+  useEffect(() => {
+    if (dirtyRef.current) {
+      const ok = window.confirm('You have unsaved changes - discard them and switch drafts?');
+      if (!ok) {
+        return;
+      }
+    }
     setEditorText(selectedDraft?.content || '');
     setKeywordsInput(selectedDraft?.keywords?.join(', ') || '');
     setDirty(false);
@@ -78,6 +89,7 @@ export default function ContentReviewPage() {
     };
   }, []);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- hydrate once with ref guard
   useEffect(() => {
     if (assetsHydratedRef.current) {
       return;
@@ -124,7 +136,7 @@ export default function ContentReviewPage() {
     return () => {
       cancelled = true;
     };
-  }, [drafts]);
+  }, []);
 
   const updateDraft = (id: string, patch: Partial<Draft>) => {
     setDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
@@ -258,6 +270,23 @@ export default function ContentReviewPage() {
     const commit = async () => {
       setIsCommitting(true);
       try {
+        if (!selectedDraft.title.trim()) {
+          show({
+            title: 'Title required',
+            description: 'Provide a title before committing.',
+            variant: 'warning',
+          });
+          return;
+        }
+        if (!editorText.trim()) {
+          show({
+            title: 'Content required',
+            description: 'Provide content before committing.',
+            variant: 'warning',
+          });
+          return;
+        }
+
         const keywords = keywordsInput
           .split(',')
           .map((keyword) => keyword.trim())

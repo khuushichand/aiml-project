@@ -33,7 +33,7 @@ const PermissionItem = ({ perm, isChecked, onToggle, disabled }: PermissionItemP
     }`}
   >
     <div className="flex items-center gap-3">
-      <Checkbox checked={isChecked} onCheckedChange={() => onToggle()} disabled={disabled} />
+      <Checkbox checked={isChecked} onCheckedChange={onToggle} disabled={disabled} />
       <div>
         <code className="text-sm font-mono">{perm.name}</code>
         {perm.description && (
@@ -85,24 +85,44 @@ export default function RoleDetailPage() {
         api.getRoleUsers(roleId),
       ]);
 
+      const getErrorMessage = (reason: unknown, fallback: string) =>
+        reason instanceof Error && reason.message ? reason.message : fallback;
+
+      if (roleData.status === 'rejected') {
+        setError(getErrorMessage(roleData.reason, 'Failed to load role details'));
+        return;
+      }
+
       if (roleData.status === 'fulfilled') {
         setRole(roleData.value);
         setEditName(roleData.value.name || '');
         setEditDescription(roleData.value.description || '');
       }
 
+      const errors: string[] = [];
+
       if (allPermsData.status === 'fulfilled') {
         setAllPermissions(Array.isArray(allPermsData.value) ? allPermsData.value : []);
+      } else {
+        errors.push(getErrorMessage(allPermsData.reason, 'Failed to load permissions'));
       }
 
       if (rolePermsData.status === 'fulfilled') {
         const perms = Array.isArray(rolePermsData.value) ? rolePermsData.value : [];
         const permIds = new Set(perms.map((p: Permission) => p.id));
         setRolePermissions(permIds);
+      } else {
+        errors.push(getErrorMessage(rolePermsData.reason, 'Failed to load role permissions'));
       }
 
       if (usersData.status === 'fulfilled') {
         setRoleUsers(Array.isArray(usersData.value) ? usersData.value : []);
+      } else {
+        errors.push(getErrorMessage(usersData.reason, 'Failed to load role users'));
+      }
+
+      if (errors.length > 0) {
+        setError(errors.join(' | '));
       }
     } catch (err: unknown) {
       console.error('Failed to load role data:', err);
@@ -169,7 +189,7 @@ export default function RoleDetailPage() {
       });
       setSuccess('Role updated successfully');
       setEditMode(false);
-      loadData();
+      await loadData();
     } catch (err: unknown) {
       console.error('Failed to update role:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to update role');
@@ -324,8 +344,10 @@ export default function RoleDetailPage() {
             )}
 
             {success && (
-              <Alert className="mb-6 bg-green-50 border-green-200">
-                <AlertDescription className="text-green-800">{success}</AlertDescription>
+              <Alert className="mb-6 bg-green-50 border-green-200 dark:bg-green-900/20 dark:border-green-800">
+                <AlertDescription className="text-green-800 dark:text-green-200">
+                  {success}
+                </AlertDescription>
               </Alert>
             )}
 
