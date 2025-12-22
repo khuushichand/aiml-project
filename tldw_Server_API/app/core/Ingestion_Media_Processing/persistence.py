@@ -1158,12 +1158,34 @@ async def process_batch_media(
 
         if not is_url:
             try:
-                path_obj = FilePath(source_path_or_url)
-                if path_obj.is_file():
-                    source_hash = _compute_source_hash(path_obj)
+                # Ensure that any local file path is constrained to the provided temp_dir.
+                raw_path = FilePath(source_path_or_url)
+                candidate_path = (
+                    raw_path
+                    if raw_path.is_absolute()
+                    else FilePath(temp_dir) / raw_path
+                )
+                resolved_path = candidate_path.resolve()
+
+                # Verify the resolved path is within temp_dir to prevent path traversal.
+                temp_root = FilePath(temp_dir).resolve()
+                try:
+                    is_within_temp = resolved_path.is_relative_to(temp_root)  # type: ignore[attr-defined]
+                except AttributeError:
+                    # For Python versions without Path.is_relative_to
+                    is_within_temp = str(resolved_path).startswith(str(temp_root) + os.sep)
+
+                if is_within_temp and resolved_path.is_file():
+                    source_hash = _compute_source_hash(resolved_path)
                     if source_hash and input_ref:
                         source_hash_by_ref.setdefault(str(input_ref), []).append(source_hash)
                         source_hash_by_source[str(source_path_or_url)] = source_hash
+                else:
+                    logger.debug(
+                        "Skipping hash computation for unsafe or non-file path %s (resolved: %s)",
+                        source_path_or_url,
+                        resolved_path,
+                    )
             except Exception as hash_err:
                 logger.debug(
                     "Source hash computation failed for %s: %s",
