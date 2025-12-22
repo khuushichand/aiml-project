@@ -26,38 +26,44 @@ export default function MetricsChart({ metricsHistory }: MetricsChartProps) {
         <CardDescription>CPU, memory usage, and request volume over time</CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="h-64">
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={metricsHistory}>
-              <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-              <XAxis dataKey="time" className="text-xs" />
-              <YAxis className="text-xs" />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: 'hsl(var(--background))',
-                  border: '1px solid hsl(var(--border))',
-                  borderRadius: '8px',
-                }}
-              />
-              <Area
-                type="monotone"
-                dataKey="cpu"
-                stroke="#3b82f6"
-                fill="#3b82f6"
-                fillOpacity={0.2}
-                name="CPU %"
-              />
-              <Area
-                type="monotone"
-                dataKey="memory"
-                stroke="#10b981"
-                fill="#10b981"
-                fillOpacity={0.2}
-                name="Memory %"
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
+        {metricsHistory.length === 0 ? (
+          <div className="flex h-64 items-center justify-center text-sm text-muted-foreground">
+            Collecting metrics data...
+          </div>
+        ) : (
+          <div className="h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={metricsHistory}>
+                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                <XAxis dataKey="time" className="text-xs" />
+                <YAxis className="text-xs" />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: 'hsl(var(--background))',
+                    border: '1px solid hsl(var(--border))',
+                    borderRadius: '8px',
+                  }}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="cpu"
+                  stroke="#3b82f6"
+                  fill="#3b82f6"
+                  fillOpacity={0.2}
+                  name="CPU %"
+                />
+                <Area
+                  type="monotone"
+                  dataKey="memory"
+                  stroke="#10b981"
+                  fill="#10b981"
+                  fillOpacity={0.2}
+                  name="Memory %"
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

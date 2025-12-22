@@ -445,8 +445,7 @@ export default function ContentReviewPage() {
     return success.db_id;
   };
 
-  const updateMediaMetadata = async (mediaId: number, draft: Draft, keywords: string[]) => {
-    void keywords;
+  const updateMediaMetadata = async (mediaId: number, draft: Draft) => {
     const safeMetadata: Record<string, string> = {
       content_review_draft_id: draft.id,
       content_review_media_type: draft.mediaType,
@@ -564,7 +563,7 @@ export default function ContentReviewPage() {
     closeReattachModal();
   };
 
-  const handleCommit = () => {
+  const handleCommit = async () => {
     if (!selectedDraft) return;
     if (!isOnline) {
       show({
@@ -583,74 +582,70 @@ export default function ContentReviewPage() {
       return;
     }
 
-    const commit = async () => {
-      dispatch({ type: 'SET_COMMITTING', value: true });
-      try {
-        validateCommit(selectedDraft, editorText);
+    dispatch({ type: 'SET_COMMITTING', value: true });
+    try {
+      validateCommit(selectedDraft, editorText);
 
-        const keywords = parseKeywords(keywordsInput);
-        const formResult = await buildCommitFormData(selectedDraft, keywords);
-        if (!formResult.formData) {
-          if (formResult.fileResult) {
-            updateDraft(selectedDraft.id, {
-              assetStatus: formResult.fileResult.assetStatus,
-              assetNote: formResult.fileResult.assetNote,
-              source: formResult.fileResult.source ?? selectedDraft.source,
-            });
-            show({
-              title: 'Source missing',
-              description: formResult.fileResult.assetNote || 'Reattach the file to continue.',
-              variant: 'warning',
-            });
-          } else {
-            show({
-              title: 'Source missing',
-              description: formResult.message || 'Reattach a file or URL before committing.',
-              variant: 'warning',
-            });
-          }
-          return;
+      const keywords = parseKeywords(keywordsInput);
+      const formResult = await buildCommitFormData(selectedDraft, keywords);
+      if (!formResult.formData) {
+        if (formResult.fileResult) {
+          updateDraft(selectedDraft.id, {
+            assetStatus: formResult.fileResult.assetStatus,
+            assetNote: formResult.fileResult.assetNote,
+            source: formResult.fileResult.source ?? selectedDraft.source,
+          });
+          show({
+            title: 'Source missing',
+            description: formResult.fileResult.assetNote || 'Reattach the file to continue.',
+            variant: 'warning',
+          });
+        } else {
+          show({
+            title: 'Source missing',
+            description: formResult.message || 'Reattach a file or URL before committing.',
+            variant: 'warning',
+          });
         }
-
-        const mediaId = await uploadMedia(formResult.formData);
-
-        await apiClient.put(`/media/${mediaId}`, {
-          title: selectedDraft.title,
-          content: editorText,
-          keywords,
-        });
-
-        await updateMediaMetadata(mediaId, selectedDraft, keywords);
-        await triggerReprocess(mediaId);
-
-        updateDraft(selectedDraft.id, {
-          content: editorText,
-          keywords,
-          status: 'reviewed',
-        });
-        dispatch({ type: 'SET_DIRTY', value: false });
-        show({
-          title: 'Committed',
-          description: 'Draft has been committed.',
-          variant: 'success',
-        });
-      } catch (err: unknown) {
-        if (err instanceof CommitValidationError) {
-          return;
-        }
-        console.error('Commit failed:', err);
-        const message = err instanceof Error ? err.message : 'Failed to commit draft.';
-        show({
-          title: 'Commit failed',
-          description: message,
-          variant: 'danger',
-        });
-      } finally {
-        dispatch({ type: 'SET_COMMITTING', value: false });
+        return;
       }
-    };
 
-    void commit();
+      const mediaId = await uploadMedia(formResult.formData);
+
+      await apiClient.put(`/media/${mediaId}`, {
+        title: selectedDraft.title,
+        content: editorText,
+        keywords,
+      });
+
+      await updateMediaMetadata(mediaId, selectedDraft);
+      await triggerReprocess(mediaId);
+
+      updateDraft(selectedDraft.id, {
+        content: editorText,
+        keywords,
+        status: 'reviewed',
+      });
+      dispatch({ type: 'SET_DIRTY', value: false });
+      show({
+        title: 'Committed',
+        description: 'Draft has been committed.',
+        variant: 'success',
+      });
+    } catch (err: unknown) {
+      if (err instanceof CommitValidationError) {
+        return;
+      }
+      console.error('Commit failed:', err);
+      const message = err instanceof Error ? err.message : 'Failed to commit draft.';
+      show({
+        title: 'Commit failed',
+        description: message,
+        variant: 'danger',
+      });
+    } finally {
+      dispatch({ type: 'SET_COMMITTING', value: false });
+    }
   };
 
   const commitDisabled = !selectedDraft || selectedDraft.assetStatus !== 'present' || !isOnline || isCommitting;

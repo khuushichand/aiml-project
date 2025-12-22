@@ -40,8 +40,8 @@ export default function MetricsGrid({ metrics, loading }: MetricsGridProps) {
           </CardContent>
         </Card>
       ) : (
-        metrics.slice(0, 8).map((metric, index) => (
-          <Card key={index}>
+        metrics.slice(0, 8).map((metric) => (
+          <Card key={metric.name}>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">
                 {metric.name.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())}
