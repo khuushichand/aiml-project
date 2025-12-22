@@ -3675,10 +3675,10 @@ async def run_usage_aggregate(day: Optional[str] = Query(None, description="YYYY
     try:
         await aggregate_usage_daily(day=day)
         return {"status": "ok", "day": day}
-    except Exception as e:
-        logger.warning(f"Manual usage aggregation failed/skipped: {e}")
+    except Exception:
+        logger.exception("Manual usage aggregation failed/skipped")
         # Non-fatal: e.g., table absent in PG during partial setups
-        return {"status": "skipped", "reason": str(e), "day": day}
+        return {"status": "skipped", "reason": "aggregation failed or was skipped", "day": day}
 
 
 @router.get("/usage/daily/export.csv", response_class=PlainTextResponse)
