@@ -23,7 +23,7 @@ export default function MetricsChart({ metricsHistory }: MetricsChartProps) {
           <Activity className="h-5 w-5" />
           System Metrics (24h)
         </CardTitle>
-        <CardDescription>CPU, memory usage, and request volume over time</CardDescription>
+        <CardDescription>CPU and memory usage over time</CardDescription>
       </CardHeader>
       <CardContent>
         {metricsHistory.length === 0 ? (
@@ -44,22 +44,22 @@ export default function MetricsChart({ metricsHistory }: MetricsChartProps) {
                     borderRadius: '8px',
                   }}
                 />
-                <Area
-                  type="monotone"
-                  dataKey="cpu"
-                  stroke="#3b82f6"
-                  fill="#3b82f6"
-                  fillOpacity={0.2}
-                  name="CPU %"
-                />
-                <Area
-                  type="monotone"
-                  dataKey="memory"
-                  stroke="#10b981"
-                  fill="#10b981"
-                  fillOpacity={0.2}
-                  name="Memory %"
-                />
+              <Area
+                type="monotone"
+                dataKey="cpu"
+                stroke="hsl(var(--chart-1))"
+                fill="hsl(var(--chart-1))"
+                fillOpacity={0.2}
+                name="CPU %"
+              />
+              <Area
+                type="monotone"
+                dataKey="memory"
+                stroke="hsl(var(--chart-2))"
+                fill="hsl(var(--chart-2))"
+                fillOpacity={0.2}
+                name="Memory %"
+              />
               </AreaChart>
             </ResponsiveContainer>
           </div>

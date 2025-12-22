@@ -3309,6 +3309,15 @@ async def get_system_stats(
     try:
         stats = {}
 
+        def _row_to_dict(row, keys: list[str]) -> dict:
+            if row is None:
+                return {}
+            if isinstance(row, dict):
+                return row
+            if hasattr(row, "keys"):
+                return {key: row[key] for key in row.keys()}
+            return {key: row[idx] if idx < len(row) else None for idx, key in enumerate(keys)}
+
         is_pg = await is_postgres_backend()
         if is_pg:
             # PostgreSQL
@@ -3375,52 +3384,32 @@ async def get_system_stats(
                 WHERE is_active = 1 AND datetime(expires_at) > datetime('now')
             """)
             session_stats = await cursor.fetchone()
-            # Normalize Postgres rows via dict for explicit key access and casting
-            us = dict(user_stats) if user_stats is not None else {}
-            ss = dict(storage_stats) if storage_stats is not None else {}
-            se = dict(session_stats) if session_stats is not None else {}
 
-            return SystemStatsResponse(
-                users={
-                    "total": int(us.get("total_users") or 0),
-                    "active": int(us.get("active_users") or 0),
-                    "verified": int(us.get("verified_users") or 0),
-                    "admins": int(us.get("admin_users") or 0),
-                    "new_last_30d": int(us.get("new_users_30d") or 0),
-                },
-                storage={
-                    "total_used_mb": float(ss.get("total_used_mb") or 0.0),
-                    "total_quota_mb": float(ss.get("total_quota_mb") or 0.0),
-                    "average_used_mb": float(ss.get("avg_used_mb") or 0.0),
-                    "max_used_mb": float(ss.get("max_used_mb") or 0.0),
-                },
-                sessions={
-                    "active": int(se.get("active_sessions") or 0),
-                    "unique_users": int(se.get("unique_users") or 0),
-                },
-            )
+        user_keys = ["total_users", "active_users", "verified_users", "admin_users", "new_users_30d"]
+        storage_keys = ["total_used_mb", "total_quota_mb", "avg_used_mb", "max_used_mb"]
+        session_keys = ["active_sessions", "unique_users"]
+        us = _row_to_dict(user_stats, user_keys)
+        ss = _row_to_dict(storage_stats, storage_keys)
+        se = _row_to_dict(session_stats, session_keys)
 
-        # SQLite fallback path already returns tuples; keep existing casting
-
-        # Convert to response model
         return SystemStatsResponse(
             users={
-                "total": user_stats[0] or 0,
-                "active": user_stats[1] or 0,
-                "verified": user_stats[2] or 0,
-                "admins": user_stats[3] or 0,
-                "new_last_30d": user_stats[4] or 0
+                "total": int(us.get("total_users") or 0),
+                "active": int(us.get("active_users") or 0),
+                "verified": int(us.get("verified_users") or 0),
+                "admins": int(us.get("admin_users") or 0),
+                "new_last_30d": int(us.get("new_users_30d") or 0),
             },
             storage={
-                "total_used_mb": float(storage_stats[0] or 0),
-                "total_quota_mb": float(storage_stats[1] or 0),
-                "average_used_mb": float(storage_stats[2] or 0),
-                "max_used_mb": float(storage_stats[3] or 0)
+                "total_used_mb": float(ss.get("total_used_mb") or 0.0),
+                "total_quota_mb": float(ss.get("total_quota_mb") or 0.0),
+                "average_used_mb": float(ss.get("avg_used_mb") or 0.0),
+                "max_used_mb": float(ss.get("max_used_mb") or 0.0),
             },
             sessions={
-                "active": session_stats[0] or 0,
-                "unique_users": session_stats[1] or 0
-            }
+                "active": int(se.get("active_sessions") or 0),
+                "unique_users": int(se.get("unique_users") or 0),
+            },
         )
 
     except Exception as e:
@@ -3574,12 +3563,21 @@ async def get_audit_log(
 
         where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
+        def _format_resource(resource_type: Optional[str], resource_id: Optional[int]) -> Optional[str]:
+            if not resource_type and resource_id is None:
+                return None
+            if resource_type and resource_id is not None:
+                return f"{resource_type}:{resource_id}"
+            if resource_type:
+                return str(resource_type)
+            return str(resource_id)
+
         if is_pg:
             # PostgreSQL
             query = f"""
-                SELECT a.id, a.user_id, u.username, a.action, a.details,
+                SELECT a.id, a.user_id, u.username, a.action, a.resource_type, a.resource_id, a.details,
                        a.ip_address, a.created_at
-                FROM audit_log a
+                FROM audit_logs a
                 LEFT JOIN users u ON a.user_id = u.id
                 {where_clause}
                 ORDER BY a.created_at DESC
@@ -3590,9 +3588,9 @@ async def get_audit_log(
         else:
             # SQLite
             query = f"""
-                SELECT a.id, a.user_id, u.username, a.action, a.details,
+                SELECT a.id, a.user_id, u.username, a.action, a.resource_type, a.resource_id, a.details,
                        a.ip_address, a.created_at
-                FROM audit_log a
+                FROM audit_logs a
                 LEFT JOIN users u ON a.user_id = u.id
                 {where_clause}
                 ORDER BY a.created_at DESC
@@ -3605,16 +3603,20 @@ async def get_audit_log(
         entries = []
         for row in rows:
             if isinstance(row, dict):
+                resource_value = _format_resource(row.get("resource_type"), row.get("resource_id"))
+                row["resource"] = resource_value
                 entries.append(row)
             else:
+                resource_value = _format_resource(row[4], row[5])
                 entry = {
                     "id": row[0],
                     "user_id": row[1],
                     "username": row[2],
                     "action": row[3],
-                    "details": row[4],
-                    "ip_address": row[5],
-                    "created_at": row[6]
+                    "resource": resource_value,
+                    "details": row[6],
+                    "ip_address": row[7],
+                    "created_at": row[8]
                 }
                 entries.append(entry)
 

@@ -135,6 +135,8 @@ class UsersDB:
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)")
                     await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS metadata JSONB")
                     await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS uuid UUID")
+                    await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS storage_quota_mb INTEGER DEFAULT 5120")
+                    await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS storage_used_mb INTEGER DEFAULT 0")
                     # Populate missing UUIDs using available function
                     try:
                         await conn.execute("UPDATE users SET uuid = gen_random_uuid() WHERE uuid IS NULL")
@@ -186,6 +188,10 @@ class UsersDB:
                         await conn.execute("ALTER TABLE users ADD COLUMN metadata TEXT")
                     if "uuid" not in columns:
                         await conn.execute("ALTER TABLE users ADD COLUMN uuid TEXT UNIQUE")
+                    if "storage_quota_mb" not in columns:
+                        await conn.execute("ALTER TABLE users ADD COLUMN storage_quota_mb INTEGER DEFAULT 5120")
+                    if "storage_used_mb" not in columns:
+                        await conn.execute("ALTER TABLE users ADD COLUMN storage_used_mb INTEGER DEFAULT 0")
                     await conn.execute(
                         "UPDATE users SET uuid = lower(hex(randomblob(16))) WHERE uuid IS NULL OR uuid = ''"
                     )

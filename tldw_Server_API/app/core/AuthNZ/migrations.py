@@ -1790,6 +1790,28 @@ def rollback_038_drop_org_provider_secrets_cleanup_triggers(conn: sqlite3.Connec
     logger.info("Rollback 038: Dropped org_provider_secrets cleanup triggers")
 
 
+def migration_039_ensure_user_storage_columns(conn: sqlite3.Connection) -> None:
+    """Ensure legacy users tables include storage quota/usage columns."""
+    logger.info("Migration 039: START ensure storage columns on users table")
+    try:
+        cur = conn.execute("PRAGMA table_info(users)")
+        columns = {row[1] for row in cur.fetchall()}
+
+        if "storage_quota_mb" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN storage_quota_mb INTEGER DEFAULT 5120")
+            columns.add("storage_quota_mb")
+
+        if "storage_used_mb" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN storage_used_mb INTEGER DEFAULT 0")
+            columns.add("storage_used_mb")
+
+        conn.commit()
+        logger.info("Migration 039: storage columns ensured on users table")
+    except Exception as exc:
+        logger.error("Migration 039: failed to ensure storage columns: %s", exc)
+        raise
+
+
 #######################################################################################################################
 #
 # Migration Registry
@@ -1893,6 +1915,11 @@ def get_authnz_migrations() -> List[Migration]:
             "Add org_provider_secrets cleanup triggers",
             migration_038_add_org_provider_secrets_cleanup_triggers,
             rollback_038_drop_org_provider_secrets_cleanup_triggers,
+        ),
+        Migration(
+            39,
+            "Ensure users storage columns",
+            migration_039_ensure_user_storage_columns,
         ),
     ]
 

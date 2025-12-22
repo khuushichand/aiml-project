@@ -19,13 +19,6 @@ import {
 
 const LARGE_FILE_WARNING_BYTES = 100 * 1024 * 1024;
 
-class CommitValidationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'CommitValidationError';
-  }
-}
-
 const seedDrafts: Draft[] = [
   {
     id: 'draft-1',
@@ -172,6 +165,7 @@ export default function ContentReviewPage() {
   const assetsHydratedRef = useRef(false);
   const dirtyRef = useRef(false);
   const selectedIdRef = useRef(state.selectedId);
+  const draftsRef = useRef(state.drafts);
 
   const {
     drafts,
@@ -201,6 +195,10 @@ export default function ContentReviewPage() {
   useEffect(() => {
     selectedIdRef.current = selectedId;
   }, [selectedId]);
+
+  useEffect(() => {
+    draftsRef.current = drafts;
+  }, [drafts]);
 
   const selectDraftWithConfirm = (nextId: string) => {
     if (nextId === selectedId) {
@@ -278,8 +276,9 @@ export default function ContentReviewPage() {
     let cancelled = false;
 
     const hydrateAssets = async () => {
+      const draftSnapshot = draftsRef.current;
       const nextDrafts = await Promise.all(
-        drafts.map(async (draft) => {
+        draftSnapshot.map(async (draft) => {
           if (draft.source?.kind !== 'file') {
             return draft;
           }
@@ -305,7 +304,7 @@ export default function ContentReviewPage() {
         return;
       }
 
-      const changed = nextDrafts.some((draft, index) => draft !== drafts[index]);
+      const changed = nextDrafts.some((draft, index) => draft !== draftSnapshot[index]);
       if (changed) {
         dispatch({ type: 'SET_DRAFTS', drafts: nextDrafts });
       }
@@ -316,7 +315,7 @@ export default function ContentReviewPage() {
     return () => {
       cancelled = true;
     };
-  }, [draftsHydrated, drafts]);
+  }, [draftsHydrated]);
 
   const updateDraft = (id: string, patch: Partial<Draft>) => {
     dispatch({ type: 'UPDATE_DRAFT', id, patch });
@@ -375,14 +374,14 @@ export default function ContentReviewPage() {
     dispatch({ type: 'CLOSE_REATTACH' });
   };
 
-  const validateCommit = (draft: Draft, content: string) => {
+  const validateCommit = (draft: Draft, content: string): boolean => {
     if (!draft.title.trim()) {
       show({
         title: 'Title required',
         description: 'Provide a title before committing.',
         variant: 'warning',
       });
-      throw new CommitValidationError('Title required');
+      return false;
     }
     if (!content.trim()) {
       show({
@@ -390,8 +389,9 @@ export default function ContentReviewPage() {
         description: 'Provide content before committing.',
         variant: 'warning',
       });
-      throw new CommitValidationError('Content required');
+      return false;
     }
+    return true;
   };
 
   const buildCommitFormData = async (
@@ -582,10 +582,13 @@ export default function ContentReviewPage() {
       return;
     }
 
+    const isValid = validateCommit(selectedDraft, editorText);
+    if (!isValid) {
+      return;
+    }
+
     dispatch({ type: 'SET_COMMITTING', value: true });
     try {
-      validateCommit(selectedDraft, editorText);
-
       const keywords = parseKeywords(keywordsInput);
       const formResult = await buildCommitFormData(selectedDraft, keywords);
       if (!formResult.formData) {
@@ -633,9 +636,6 @@ export default function ContentReviewPage() {
         variant: 'success',
       });
     } catch (err: unknown) {
-      if (err instanceof CommitValidationError) {
-        return;
-      }
       console.error('Commit failed:', err);
       const message = err instanceof Error ? err.message : 'Failed to commit draft.';
       show({

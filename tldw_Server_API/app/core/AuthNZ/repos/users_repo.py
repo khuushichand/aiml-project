@@ -212,14 +212,8 @@ class AuthnzUsersRepo:
 
         try:
             # Total count
-            if is_pg:
-                count_query = f"SELECT COUNT(*) FROM users{where_clause}"
-                total = await db.db_pool.fetchval(count_query, *params)
-            else:
-                count_query = f"SELECT COUNT(*) FROM users{where_clause}"
-                cursor = await db.db_pool.execute(count_query, params)
-                row = await cursor.fetchone()
-                total = row[0] if row else 0
+            count_query = f"SELECT COUNT(*) FROM users{where_clause}"
+            total = await db.db_pool.fetchval(count_query, *params)
 
             # Page of users
             if is_pg:
@@ -241,8 +235,7 @@ class AuthnzUsersRepo:
                     LIMIT ? OFFSET ?
                 """
                 q_params = [*params, limit, offset]
-                cursor = await db.db_pool.execute(query, q_params)
-                rows = await cursor.fetchall()
+                rows = await db.db_pool.fetchall(query, *q_params)
 
             users: list[Dict[str, Any]] = []
             for row in rows:

@@ -108,7 +108,7 @@ class AuthDatabaseConfig:
             if combined in {":memory:", "/:memory:"}:
                 return ":memory:"
             if combined.startswith("///"):
-                combined = combined.lstrip("/")
+                combined = "/" + combined.lstrip("/")
             if combined.startswith("/"):
                 try:
                     return str(Path(combined).resolve())

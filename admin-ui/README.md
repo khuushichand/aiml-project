@@ -203,6 +203,9 @@ All components and functions are fully typed with TypeScript:
 
 ## Development Notes
 
+### Release Checklist
+See `Release_Checklist.md` for the admin UI release readiness checklist.
+
 ### Mock Data
 Currently, the admin panel uses mock data for demonstration. To connect to the real API:
 

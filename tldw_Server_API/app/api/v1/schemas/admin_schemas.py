@@ -203,6 +203,7 @@ class AuditLogEntry(BaseModel):
     user_id: Optional[int] = None
     username: Optional[str] = None
     action: str
+    resource: Optional[str] = None
     details: Optional[Any] = None
     ip_address: Optional[str] = None
     created_at: datetime

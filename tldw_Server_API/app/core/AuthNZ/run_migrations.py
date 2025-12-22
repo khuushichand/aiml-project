@@ -9,6 +9,8 @@
 import argparse
 import sys
 from pathlib import Path
+from typing import Optional
+from urllib.parse import urlsplit
 from loguru import logger
 
 # Add parent directory to path for imports
@@ -21,6 +23,25 @@ from tldw_Server_API.app.core.AuthNZ.migrations import (
     ensure_authnz_tables
 )
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
+
+
+def _resolve_sqlite_db_path(db_url: str) -> Optional[Path]:
+    """Resolve a sqlite/file DATABASE_URL into a filesystem path, if applicable."""
+    try:
+        parsed = urlsplit(db_url)
+        scheme = (parsed.scheme or "").lower().split("+", 1)[0]
+    except Exception:
+        scheme = ""
+
+    if scheme not in {"sqlite", "file", ""}:
+        return None
+
+    _, _, fs_path = DatabasePool._resolve_sqlite_paths(db_url)
+    if not fs_path or fs_path == ":memory:":
+        return None
+
+    return Path(fs_path)
 
 def main():
     """Main function to run migrations"""
@@ -60,11 +81,9 @@ def main():
         db_path = Path(args.db_path)
     else:
         settings = get_settings()
-        # Extract database path from DATABASE_URL
         db_url = settings.DATABASE_URL
-        if db_url.startswith("sqlite:///"):
-            db_path = Path(db_url.replace("sqlite:///", ""))
-        else:
+        db_path = _resolve_sqlite_db_path(db_url)
+        if db_path is None:
             logger.error("Only SQLite databases are supported for migrations currently")
             sys.exit(1)
 
