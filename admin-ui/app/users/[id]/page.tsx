@@ -46,6 +46,38 @@ type OrgMembership = {
   role: string;
 };
 
+const canEditFromMemberships = (
+  adminRoles: OrgMembership[],
+  targetRoles: OrgMembership[]
+): boolean => {
+  if (adminRoles.length === 0 && targetRoles.length === 0) {
+    return true;
+  }
+  if (adminRoles.length === 0 || targetRoles.length === 0) {
+    return false;
+  }
+
+  const adminByOrg = new Map<number, string>(
+    adminRoles.map((membership) => [membership.org_id, membership.role])
+  );
+  const targetByOrg = new Map<number, string>(
+    targetRoles.map((membership) => [membership.org_id, membership.role])
+  );
+
+  const sharedOrgs = [...adminByOrg.keys()].filter((orgId) => targetByOrg.has(orgId));
+  if (sharedOrgs.length === 0) {
+    return false;
+  }
+
+  return sharedOrgs.some((orgId) => {
+    const adminRole = adminByOrg.get(orgId) || '';
+    const targetRole = targetByOrg.get(orgId) || '';
+    const adminRank = roleRank[adminRole] || 0;
+    const targetRank = roleRank[targetRole] || 0;
+    return adminRank >= roleRank.admin && adminRank >= targetRank;
+  });
+};
+
 const isForbiddenError = (err: unknown): boolean => {
   if (err instanceof ApiError) {
     return err.status === 403;
@@ -62,7 +94,7 @@ const isForbiddenError = (err: unknown): boolean => {
 export default function UserDetailPage() {
   const params = useParams();
   const router = useRouter();
-  const userId = params.id as string;
+  const userId = Array.isArray(params.id) ? params.id[0] : params.id;
 
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -104,38 +136,6 @@ export default function UserDetailPage() {
 
         const adminList = Array.isArray(adminMemberships) ? adminMemberships : [];
         const targetList = Array.isArray(targetMemberships) ? targetMemberships : [];
-
-        const canEditFromMemberships = (
-          adminRoles: OrgMembership[],
-          targetRoles: OrgMembership[]
-        ): boolean => {
-          if (adminRoles.length === 0 && targetRoles.length === 0) {
-            return true;
-          }
-          if (adminRoles.length === 0 || targetRoles.length === 0) {
-            return false;
-          }
-
-          const adminByOrg = new Map<number, string>(
-            adminRoles.map((membership) => [membership.org_id, membership.role])
-          );
-          const targetByOrg = new Map<number, string>(
-            targetRoles.map((membership) => [membership.org_id, membership.role])
-          );
-
-          const sharedOrgs = [...adminByOrg.keys()].filter((orgId) => targetByOrg.has(orgId));
-          if (sharedOrgs.length === 0) {
-            return false;
-          }
-
-          return sharedOrgs.some((orgId) => {
-            const adminRole = adminByOrg.get(orgId) || '';
-            const targetRole = targetByOrg.get(orgId) || '';
-            const adminRank = roleRank[adminRole] || 0;
-            const targetRank = roleRank[targetRole] || 0;
-            return adminRank >= roleRank.admin && adminRank >= targetRank;
-          });
-        };
 
         if (!canEditFromMemberships(adminList, targetList)) {
           setIsAuthorized(false);
@@ -180,7 +180,7 @@ export default function UserDetailPage() {
       setSuccess('');
       await api.updateUser(userId, formData);
       setSuccess('User updated successfully');
-      loadUser();
+      void loadUser();
     } catch (err: unknown) {
       if (isForbiddenError(err)) {
         setIsAuthorized(false);

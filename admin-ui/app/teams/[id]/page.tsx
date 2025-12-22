@@ -35,6 +35,7 @@ export default function TeamDetailPage() {
   const [showAddMember, setShowAddMember] = useState(false);
   const [newMemberUserId, setNewMemberUserId] = useState('');
   const [newMemberRole, setNewMemberRole] = useState('member');
+  const [addingMember, setAddingMember] = useState(false);
 
   const formatJoinedAt = (value?: string | null) => {
     if (!value) {
@@ -104,8 +105,8 @@ export default function TeamDetailPage() {
       return;
     }
 
+    setError('');
     try {
-      setError('');
       const userId = parseInt(newMemberUserId, 10);
       if (Number.isNaN(userId)) {
         setError('Please enter a valid numeric User ID');
@@ -115,6 +116,7 @@ export default function TeamDetailPage() {
         setError('This user is already a member of the team');
         return;
       }
+      setAddingMember(true);
       await api.addTeamMember(teamId, {
         user_id: userId,
         role: newMemberRole,
@@ -128,6 +130,8 @@ export default function TeamDetailPage() {
       const msg = err instanceof Error ? err.message : String(err ?? 'Failed to add member');
       console.error('Failed to add member:', err);
       setError(msg);
+    } finally {
+      setAddingMember(false);
     }
   };
 
@@ -242,7 +246,9 @@ export default function TeamDetailPage() {
                     >
                       Cancel
                     </Button>
-                    <Button onClick={handleAddMember}>Add Member</Button>
+                    <Button onClick={handleAddMember} disabled={addingMember}>
+                      {addingMember ? 'Adding...' : 'Add Member'}
+                    </Button>
                   </DialogFooter>
                 </DialogContent>
               </Dialog>

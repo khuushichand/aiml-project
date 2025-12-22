@@ -913,12 +913,11 @@ async def admin_list_orgs(
         if wants_wrapper:
             if not isinstance(result, tuple) or len(result) != 2:
                 logger.error(
-                    f"Expected (rows, total) tuple, got {type(result).__name__} with "
-                    f"{len(result) if isinstance(result, tuple) else 'N/A'} elements"
+                    f"list_organizations returned unexpected format: {type(result).__name__}"
                 )
                 raise HTTPException(
                     status_code=500,
-                    detail="Internal error: unexpected response format from list_organizations",
+                    detail="Failed to list organizations",
                 )
             rows, total = result
         else:
@@ -1675,27 +1674,19 @@ async def update_user(
 
         # Execute update
         if is_pg:
-            result = await db.execute(query, *params)
-            affected = 0
-            if isinstance(result, str):
-                parts = result.split()
-                if parts and parts[-1].isdigit():
-                    affected = int(parts[-1])
+            row = await db.fetchrow(query + " RETURNING id", *params)
+            if not row:
+                raise UserNotFoundError(f"User {user_id}")
         else:
             cursor = await db.execute(query, params)
             affected = int(getattr(cursor, "rowcount", 0) or 0)
             if affected < 0:
                 affected = 0
-            await db.commit()
-
-        if affected == 0:
-            if is_pg:
-                row = await db.fetchrow("SELECT 1 FROM users WHERE id = $1", user_id)
-            else:
+            if affected == 0:
                 cursor = await db.execute("SELECT 1 FROM users WHERE id = ?", (user_id,))
-                row = await cursor.fetchone()
-            if not row:
-                raise UserNotFoundError(f"User {user_id}")
+                if not await cursor.fetchone():
+                    raise UserNotFoundError(f"User {user_id}")
+            await db.commit()
 
         logger.info(f"Admin updated user {user_id}")
 
@@ -3468,6 +3459,7 @@ async def get_dashboard_activity(
         }
         for day in date_range
     }
+    warnings: list[str] = []
 
     try:
         registry = get_metrics_registry()
@@ -3483,7 +3475,8 @@ async def get_dashboard_activity(
             if metric_day in activity_by_date:
                 activity_by_date[metric_day]["requests"] += int(metric_value.value or 0)
     except Exception as exc:
-        logger.debug("Admin activity request metrics unavailable: {}", exc)
+        logger.warning("Admin activity request metrics unavailable: {}", exc)
+        warnings.append("request_metrics_unavailable")
 
     try:
         start_dt = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
@@ -3529,10 +3522,11 @@ async def get_dashboard_activity(
             if metric_day in activity_by_date:
                 activity_by_date[metric_day]["users"] = int(active_users or 0)
     except Exception as exc:
-        logger.debug("Admin activity user metrics unavailable: {}", exc)
+        logger.warning("Admin activity user metrics unavailable: {}", exc)
+        warnings.append("user_metrics_unavailable")
 
     points = [activity_by_date[day] for day in date_range]
-    return ActivitySummaryResponse(days=days, points=points)
+    return ActivitySummaryResponse(days=days, points=points, warnings=warnings or None)
 
 
 @router.get("/audit-log", response_model=AuditLogResponse)

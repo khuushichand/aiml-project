@@ -58,6 +58,7 @@ export default function RoleDetailPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [warning, setWarning] = useState('');
   const [success, setSuccess] = useState('');
 
   // Edit mode
@@ -77,6 +78,7 @@ export default function RoleDetailPage() {
     try {
       setLoading(true);
       setError('');
+      setWarning('');
 
       const [roleData, allPermsData, rolePermsData, usersData] = await Promise.allSettled([
         api.getRole(roleId),
@@ -122,7 +124,7 @@ export default function RoleDetailPage() {
       }
 
       if (errors.length > 0) {
-        setError(errors.join(' | '));
+        setWarning(errors.join(' | '));
       }
     } catch (err: unknown) {
       console.error('Failed to load role data:', err);
@@ -340,6 +342,22 @@ export default function RoleDetailPage() {
             {error && (
               <Alert variant="destructive" className="mb-6">
                 <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+
+            {warning && (
+              <Alert className="mb-6 border-yellow-200 bg-yellow-50 text-yellow-900 dark:border-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-200">
+                <AlertDescription className="flex items-start justify-between gap-4">
+                  <span>{warning}</span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setWarning('')}
+                    aria-label="Dismiss warning"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </AlertDescription>
               </Alert>
             )}
 

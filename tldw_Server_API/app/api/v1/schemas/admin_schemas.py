@@ -158,6 +158,7 @@ class ActivitySummaryResponse(BaseModel):
     """Dashboard activity summary response."""
     days: int = Field(..., ge=0)
     points: List[ActivityPoint]
+    warnings: Optional[List[str]] = None
 
     model_config = ConfigDict(from_attributes=True)
 

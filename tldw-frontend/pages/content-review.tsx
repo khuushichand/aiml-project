@@ -1,5 +1,6 @@
 import type { Draft } from '@/types/content-review';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import type { DraftFileLoadResult } from '@/lib/drafts';
+import { useEffect, useMemo, useReducer, useRef } from 'react';
 import { Layout } from '@/components/layout/Layout';
 import { useToast } from '@/components/ui/ToastProvider';
 import { DraftEditor } from '@/components/content-review/DraftEditor';
@@ -9,12 +10,21 @@ import { apiClient } from '@/lib/api';
 import {
   getDraftFileAsset,
   getDraftFileForUpload,
+  loadDrafts,
+  persistDraft,
   persistDraftFileAsset,
   requestFileHandleForFile,
   resolveDraftFileAssetStatus,
 } from '@/lib/drafts';
 
 const LARGE_FILE_WARNING_BYTES = 100 * 1024 * 1024;
+
+class CommitValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CommitValidationError';
+  }
+}
 
 const seedDrafts: Draft[] = [
   {
@@ -38,24 +48,146 @@ const seedDrafts: Draft[] = [
   },
 ];
 
+const mergeDrafts = (defaults: Draft[], stored: Draft[]) => {
+  if (stored.length === 0) {
+    return defaults;
+  }
+  const storedIds = new Set(stored.map((draft) => draft.id));
+  const missingDefaults = defaults.filter((draft) => !storedIds.has(draft.id));
+  return [...stored, ...missingDefaults];
+};
+
+type ContentReviewState = {
+  drafts: Draft[];
+  selectedId: string;
+  editorText: string;
+  keywordsInput: string;
+  dirty: boolean;
+  isOnline: boolean;
+  reattachOpen: boolean;
+  reattachTab: ReattachTab;
+  reattachUrl: string;
+  reattachFile: File | null;
+  reattachError: string | null;
+  draftsHydrated: boolean;
+  isCommitting: boolean;
+};
+
+type ContentReviewAction =
+  | { type: 'SET_DRAFTS'; drafts: Draft[] }
+  | { type: 'UPDATE_DRAFT'; id: string; patch: Partial<Draft> }
+  | { type: 'SET_SELECTED_ID'; selectedId: string }
+  | { type: 'SYNC_EDITOR_FROM_DRAFT'; draft: Draft | null }
+  | { type: 'SET_EDITOR_TEXT'; value: string }
+  | { type: 'SET_KEYWORDS_INPUT'; value: string }
+  | { type: 'SET_DIRTY'; value: boolean }
+  | { type: 'SET_ONLINE'; value: boolean }
+  | { type: 'OPEN_REATTACH' }
+  | { type: 'CLOSE_REATTACH' }
+  | { type: 'SET_REATTACH_TAB'; value: ReattachTab }
+  | { type: 'SET_REATTACH_URL'; value: string }
+  | { type: 'SET_REATTACH_FILE'; value: File | null }
+  | { type: 'SET_REATTACH_ERROR'; value: string | null }
+  | { type: 'SET_DRAFTS_HYDRATED'; value: boolean }
+  | { type: 'SET_COMMITTING'; value: boolean };
+
+const initialState: ContentReviewState = {
+  drafts: seedDrafts,
+  selectedId: seedDrafts[0]?.id || '',
+  editorText: seedDrafts[0]?.content || '',
+  keywordsInput: seedDrafts[0]?.keywords?.join(', ') || '',
+  dirty: false,
+  isOnline: true,
+  reattachOpen: false,
+  reattachTab: 'file',
+  reattachUrl: '',
+  reattachFile: null,
+  reattachError: null,
+  draftsHydrated: false,
+  isCommitting: false,
+};
+
+const contentReviewReducer = (
+  state: ContentReviewState,
+  action: ContentReviewAction
+): ContentReviewState => {
+  switch (action.type) {
+    case 'SET_DRAFTS':
+      return { ...state, drafts: action.drafts };
+    case 'UPDATE_DRAFT':
+      return {
+        ...state,
+        drafts: state.drafts.map((draft) =>
+          draft.id === action.id ? { ...draft, ...action.patch } : draft
+        ),
+      };
+    case 'SET_SELECTED_ID':
+      return { ...state, selectedId: action.selectedId };
+    case 'SYNC_EDITOR_FROM_DRAFT':
+      return {
+        ...state,
+        editorText: action.draft?.content || '',
+        keywordsInput: action.draft?.keywords?.join(', ') || '',
+        dirty: false,
+      };
+    case 'SET_EDITOR_TEXT':
+      return { ...state, editorText: action.value };
+    case 'SET_KEYWORDS_INPUT':
+      return { ...state, keywordsInput: action.value };
+    case 'SET_DIRTY':
+      return { ...state, dirty: action.value };
+    case 'SET_ONLINE':
+      return { ...state, isOnline: action.value };
+    case 'OPEN_REATTACH':
+      return {
+        ...state,
+        reattachOpen: true,
+        reattachTab: 'file',
+        reattachUrl: '',
+        reattachFile: null,
+        reattachError: null,
+      };
+    case 'CLOSE_REATTACH':
+      return { ...state, reattachOpen: false, reattachError: null };
+    case 'SET_REATTACH_TAB':
+      return { ...state, reattachTab: action.value };
+    case 'SET_REATTACH_URL':
+      return { ...state, reattachUrl: action.value };
+    case 'SET_REATTACH_FILE':
+      return { ...state, reattachFile: action.value };
+    case 'SET_REATTACH_ERROR':
+      return { ...state, reattachError: action.value };
+    case 'SET_DRAFTS_HYDRATED':
+      return { ...state, draftsHydrated: action.value };
+    case 'SET_COMMITTING':
+      return { ...state, isCommitting: action.value };
+    default:
+      return state;
+  }
+};
+
 export default function ContentReviewPage() {
   const { show } = useToast();
-  const [drafts, setDrafts] = useState<Draft[]>(seedDrafts);
-  const [selectedId, setSelectedId] = useState<string>(seedDrafts[0]?.id || '');
-  const [editorText, setEditorText] = useState<string>(seedDrafts[0]?.content || '');
-  const [keywordsInput, setKeywordsInput] = useState<string>(
-    seedDrafts[0]?.keywords?.join(', ') || ''
-  );
-  const [dirty, setDirty] = useState(false);
-  const [isOnline, setIsOnline] = useState(true);
-  const [reattachOpen, setReattachOpen] = useState(false);
-  const [reattachTab, setReattachTab] = useState<ReattachTab>('file');
-  const [reattachUrl, setReattachUrl] = useState('');
-  const [reattachFile, setReattachFile] = useState<File | null>(null);
-  const [reattachError, setReattachError] = useState<string | null>(null);
+  const [state, dispatch] = useReducer(contentReviewReducer, initialState);
   const assetsHydratedRef = useRef(false);
   const dirtyRef = useRef(false);
-  const [isCommitting, setIsCommitting] = useState(false);
+  const selectedIdRef = useRef(state.selectedId);
+
+  const {
+    drafts,
+    selectedId,
+    editorText,
+    keywordsInput,
+    dirty,
+    isOnline,
+    reattachOpen,
+    reattachTab,
+    reattachUrl,
+    reattachFile,
+    reattachError,
+    draftsHydrated,
+    isCommitting,
+  } = state;
 
   const selectedDraft = useMemo(
     () => drafts.find((d) => d.id === selectedId) || null,
@@ -67,19 +199,29 @@ export default function ContentReviewPage() {
   }, [dirty]);
 
   useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
+
+  const selectDraftWithConfirm = (nextId: string) => {
+    if (nextId === selectedId) {
+      return;
+    }
     if (dirtyRef.current) {
       const ok = window.confirm('You have unsaved changes - discard them and switch drafts?');
       if (!ok) {
         return;
       }
     }
-    setEditorText(selectedDraft?.content || '');
-    setKeywordsInput(selectedDraft?.keywords?.join(', ') || '');
-    setDirty(false);
+    dispatch({ type: 'SET_SELECTED_ID', selectedId: nextId });
+  };
+
+  useEffect(() => {
+    dispatch({ type: 'SYNC_EDITOR_FROM_DRAFT', draft: selectedDraft });
   }, [selectedDraft?.id]); // Reset editor only when switching drafts, not on content changes
 
   useEffect(() => {
-    const update = () => setIsOnline(typeof navigator !== 'undefined' ? navigator.onLine : true);
+    const update = () =>
+      dispatch({ type: 'SET_ONLINE', value: typeof navigator !== 'undefined' ? navigator.onLine : true });
     update();
     window.addEventListener('online', update);
     window.addEventListener('offline', update);
@@ -89,9 +231,47 @@ export default function ContentReviewPage() {
     };
   }, []);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- hydrate once with ref guard
   useEffect(() => {
-    if (assetsHydratedRef.current) {
+    let cancelled = false;
+
+    const hydrateDrafts = async () => {
+      try {
+        const storedDrafts = await loadDrafts();
+        if (cancelled || storedDrafts.length === 0) {
+          return;
+        }
+        const nextDrafts = mergeDrafts(seedDrafts, storedDrafts);
+        const currentSelectedId = selectedIdRef.current;
+        const nextSelectedId = nextDrafts.some((draft) => draft.id === currentSelectedId)
+          ? currentSelectedId
+          : nextDrafts[0]?.id || '';
+        const selectionChanged = nextSelectedId !== currentSelectedId;
+
+        dispatch({ type: 'SET_DRAFTS', drafts: nextDrafts });
+        dispatch({ type: 'SET_SELECTED_ID', selectedId: nextSelectedId });
+
+        if (!dirtyRef.current && !selectionChanged) {
+          const selected = nextDrafts.find((draft) => draft.id === nextSelectedId) || null;
+          dispatch({ type: 'SYNC_EDITOR_FROM_DRAFT', draft: selected });
+        }
+      } catch (err: unknown) {
+        console.error('Failed to load stored drafts:', err);
+      } finally {
+        if (!cancelled) {
+          dispatch({ type: 'SET_DRAFTS_HYDRATED', value: true });
+        }
+      }
+    };
+
+    void hydrateDrafts();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!draftsHydrated || assetsHydratedRef.current) {
       return;
     }
     assetsHydratedRef.current = true;
@@ -127,7 +307,7 @@ export default function ContentReviewPage() {
 
       const changed = nextDrafts.some((draft, index) => draft !== drafts[index]);
       if (changed) {
-        setDrafts(nextDrafts);
+        dispatch({ type: 'SET_DRAFTS', drafts: nextDrafts });
       }
     };
 
@@ -136,58 +316,191 @@ export default function ContentReviewPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [draftsHydrated, drafts]);
 
   const updateDraft = (id: string, patch: Partial<Draft>) => {
-    setDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
+    dispatch({ type: 'UPDATE_DRAFT', id, patch });
+  };
+
+  const parseKeywords = (input: string) => {
+    return input
+      .split(',')
+      .map((keyword) => keyword.trim())
+      .filter(Boolean);
   };
 
   const handleKeywordsChange = (nextValue: string) => {
-    setKeywordsInput(nextValue);
+    dispatch({ type: 'SET_KEYWORDS_INPUT', value: nextValue });
     if (selectedDraft) {
-      setDirty(true);
+      dispatch({ type: 'SET_DIRTY', value: true });
     }
   };
 
   const handleEditorChange = (value: string) => {
-    setEditorText(value);
-    setDirty(true);
+    dispatch({ type: 'SET_EDITOR_TEXT', value });
+    if (selectedDraft) {
+      dispatch({ type: 'SET_DIRTY', value: true });
+    }
   };
 
-  const saveDraft = () => {
+  const saveDraft = async () => {
     if (!selectedDraft) return;
-    const keywords = keywordsInput
-      .split(',')
-      .map((keyword) => keyword.trim())
-      .filter(Boolean);
+    const keywords = parseKeywords(keywordsInput);
+    const updatedDraft = {
+      ...selectedDraft,
+      content: editorText,
+      keywords,
+    };
+    try {
+      await persistDraft(updatedDraft);
+    } catch (err: unknown) {
+      console.error('Failed to persist draft:', err);
+      show({
+        title: 'Save failed',
+        description: 'Draft changes could not be saved locally.',
+        variant: 'danger',
+      });
+      return;
+    }
     updateDraft(selectedDraft.id, { content: editorText, keywords });
-    setDirty(false);
+    dispatch({ type: 'SET_DIRTY', value: false });
     show({ title: 'Draft saved', variant: 'success' });
   };
 
   const openReattach = () => {
-    setReattachTab('file');
-    setReattachUrl('');
-    setReattachFile(null);
-    setReattachError(null);
-    setReattachOpen(true);
+    dispatch({ type: 'OPEN_REATTACH' });
   };
 
   const closeReattachModal = () => {
-    setReattachOpen(false);
-    setReattachError(null);
+    dispatch({ type: 'CLOSE_REATTACH' });
+  };
+
+  const validateCommit = (draft: Draft, content: string) => {
+    if (!draft.title.trim()) {
+      show({
+        title: 'Title required',
+        description: 'Provide a title before committing.',
+        variant: 'warning',
+      });
+      throw new CommitValidationError('Title required');
+    }
+    if (!content.trim()) {
+      show({
+        title: 'Content required',
+        description: 'Provide content before committing.',
+        variant: 'warning',
+      });
+      throw new CommitValidationError('Content required');
+    }
+  };
+
+  const buildCommitFormData = async (
+    draft: Draft,
+    keywords: string[]
+  ): Promise<{ formData: FormData } | { formData: null; fileResult?: DraftFileLoadResult; message?: string }> => {
+    const formData = new FormData();
+    formData.append('media_type', draft.mediaType);
+    formData.append('title', draft.title);
+    formData.append('keywords', keywords.join(', '));
+
+    if (draft.source?.kind === 'url' && draft.source.value) {
+      formData.append('urls', draft.source.value);
+      return { formData };
+    }
+
+    if (draft.source?.kind === 'file') {
+      const fileResult = await getDraftFileForUpload(draft.id);
+      if (!fileResult.file) {
+        return { formData: null, fileResult };
+      }
+      formData.append('files', fileResult.file, fileResult.file.name);
+      return { formData };
+    }
+
+    return {
+      formData: null,
+      message: 'Reattach a file or URL before committing.',
+    };
+  };
+
+  const uploadMedia = async (formData: FormData): Promise<number> => {
+    const addResponse = await apiClient.post<{ results?: Array<Record<string, unknown>> }>(
+      '/media/add',
+      formData,
+      {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      }
+    );
+
+    const results = Array.isArray(addResponse?.results) ? addResponse.results : [];
+    const success = results.find(
+      (result) =>
+        typeof result?.db_id === 'number'
+        && (result?.status === 'Success' || result?.status === 'success')
+    );
+    if (!success || typeof success.db_id !== 'number') {
+      throw new Error('Media ingestion did not return a media id.');
+    }
+
+    return success.db_id;
+  };
+
+  const updateMediaMetadata = async (mediaId: number, draft: Draft, keywords: string[]) => {
+    void keywords;
+    const safeMetadata: Record<string, string> = {
+      content_review_draft_id: draft.id,
+      content_review_media_type: draft.mediaType,
+      content_review_source_kind: draft.source?.kind || 'unknown',
+    };
+    if (draft.source?.kind === 'url' && draft.source.value) {
+      safeMetadata.content_review_source_value = draft.source.value;
+    }
+    if (draft.source?.kind === 'file' && draft.source.filename) {
+      safeMetadata.content_review_source_filename = draft.source.filename;
+    }
+
+    try {
+      await apiClient.patch(`/media/${mediaId}/metadata`, {
+        safe_metadata: safeMetadata,
+        merge: true,
+        new_version: false,
+      });
+    } catch (err: unknown) {
+      console.error('Failed to update metadata:', err);
+      show({
+        title: 'Metadata update failed',
+        description: 'Content saved, but metadata update failed.',
+        variant: 'warning',
+      });
+    }
+  };
+
+  const triggerReprocess = async (mediaId: number) => {
+    try {
+      await apiClient.post(`/media/${mediaId}/reprocess`, {
+        perform_chunking: true,
+        generate_embeddings: true,
+      });
+    } catch (err: unknown) {
+      console.error('Failed to reprocess media:', err);
+      show({
+        title: 'Reprocess queued with issues',
+        description: 'Content saved, but reprocessing failed. Try reprocessing later.',
+        variant: 'warning',
+      });
+    }
   };
 
   const submitReattach = async () => {
     if (!selectedDraft) return;
     if (!isOnline) {
-      setReattachError('You are offline. Reattach requires a connection.');
+      dispatch({ type: 'SET_REATTACH_ERROR', value: 'You are offline. Reattach requires a connection.' });
       return;
     }
 
     if (reattachTab === 'file') {
       if (!reattachFile) {
-        setReattachError('Select a file to attach.');
+        dispatch({ type: 'SET_REATTACH_ERROR', value: 'Select a file to attach.' });
         return;
       }
       try {
@@ -219,22 +532,25 @@ export default function ContentReviewPage() {
         });
       } catch (err: unknown) {
         console.error('Failed to persist draft asset:', err);
-        setReattachError('Failed to save the attachment. Please try again.');
+        dispatch({
+          type: 'SET_REATTACH_ERROR',
+          value: 'Failed to save the attachment. Please try again.',
+        });
         return;
       }
     } else {
       if (!reattachUrl.trim()) {
-        setReattachError('Provide a valid URL.');
+        dispatch({ type: 'SET_REATTACH_ERROR', value: 'Provide a valid URL.' });
         return;
       }
       try {
         const parsedUrl = new URL(reattachUrl.trim());
         if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
-          setReattachError('URL must use http or https.');
+          dispatch({ type: 'SET_REATTACH_ERROR', value: 'URL must use http or https.' });
           return;
         }
       } catch {
-        setReattachError('URL format looks invalid.');
+        dispatch({ type: 'SET_REATTACH_ERROR', value: 'URL format looks invalid.' });
         return;
       }
       updateDraft(selectedDraft.id, {
@@ -268,79 +584,35 @@ export default function ContentReviewPage() {
     }
 
     const commit = async () => {
-      setIsCommitting(true);
+      dispatch({ type: 'SET_COMMITTING', value: true });
       try {
-        if (!selectedDraft.title.trim()) {
-          show({
-            title: 'Title required',
-            description: 'Provide a title before committing.',
-            variant: 'warning',
-          });
-          return;
-        }
-        if (!editorText.trim()) {
-          show({
-            title: 'Content required',
-            description: 'Provide content before committing.',
-            variant: 'warning',
-          });
-          return;
-        }
+        validateCommit(selectedDraft, editorText);
 
-        const keywords = keywordsInput
-          .split(',')
-          .map((keyword) => keyword.trim())
-          .filter(Boolean);
-
-        const formData = new FormData();
-        formData.append('media_type', selectedDraft.mediaType);
-        formData.append('title', selectedDraft.title);
-        formData.append('keywords', keywords.join(', '));
-
-        if (selectedDraft.source?.kind === 'url' && selectedDraft.source.value) {
-          formData.append('urls', selectedDraft.source.value);
-        } else if (selectedDraft.source?.kind === 'file') {
-          const fileResult = await getDraftFileForUpload(selectedDraft.id);
-          if (!fileResult.file) {
+        const keywords = parseKeywords(keywordsInput);
+        const formResult = await buildCommitFormData(selectedDraft, keywords);
+        if (!formResult.formData) {
+          if (formResult.fileResult) {
             updateDraft(selectedDraft.id, {
-              assetStatus: fileResult.assetStatus,
-              assetNote: fileResult.assetNote,
-              source: fileResult.source ?? selectedDraft.source,
+              assetStatus: formResult.fileResult.assetStatus,
+              assetNote: formResult.fileResult.assetNote,
+              source: formResult.fileResult.source ?? selectedDraft.source,
             });
             show({
               title: 'Source missing',
-              description: fileResult.assetNote || 'Reattach the file to continue.',
+              description: formResult.fileResult.assetNote || 'Reattach the file to continue.',
               variant: 'warning',
             });
-            return;
+          } else {
+            show({
+              title: 'Source missing',
+              description: formResult.message || 'Reattach a file or URL before committing.',
+              variant: 'warning',
+            });
           }
-          formData.append('files', fileResult.file, fileResult.file.name);
-        } else {
-          show({
-            title: 'Source missing',
-            description: 'Reattach a file or URL before committing.',
-            variant: 'warning',
-          });
           return;
         }
 
-        const addResponse = await apiClient.post<{ results?: Array<Record<string, unknown>> }>(
-          '/media/add',
-          formData,
-          {
-            headers: { 'Content-Type': 'multipart/form-data' },
-          }
-        );
-
-        const results = Array.isArray(addResponse?.results) ? addResponse.results : [];
-        const success = results.find(
-          (result) => result?.status === 'Success' && typeof result?.db_id === 'number'
-        );
-        if (!success || typeof success.db_id !== 'number') {
-          throw new Error('Media ingestion did not return a media id.');
-        }
-
-        const mediaId = success.db_id;
+        const mediaId = await uploadMedia(formResult.formData);
 
         await apiClient.put(`/media/${mediaId}`, {
           title: selectedDraft.title,
@@ -348,59 +620,24 @@ export default function ContentReviewPage() {
           keywords,
         });
 
-        const safeMetadata: Record<string, string> = {
-          content_review_draft_id: selectedDraft.id,
-          content_review_media_type: selectedDraft.mediaType,
-          content_review_source_kind: selectedDraft.source?.kind || 'unknown',
-        };
-        if (selectedDraft.source?.kind === 'url' && selectedDraft.source.value) {
-          safeMetadata.content_review_source_value = selectedDraft.source.value;
-        }
-        if (selectedDraft.source?.kind === 'file' && selectedDraft.source.filename) {
-          safeMetadata.content_review_source_filename = selectedDraft.source.filename;
-        }
-
-        try {
-          await apiClient.patch(`/media/${mediaId}/metadata`, {
-            safe_metadata: safeMetadata,
-            merge: true,
-            new_version: false,
-          });
-        } catch (err: unknown) {
-          console.error('Failed to update metadata:', err);
-          show({
-            title: 'Metadata update failed',
-            description: 'Content saved, but metadata update failed.',
-            variant: 'warning',
-          });
-        }
-
-        try {
-          await apiClient.post(`/media/${mediaId}/reprocess`, {
-            perform_chunking: true,
-            generate_embeddings: true,
-          });
-        } catch (err: unknown) {
-          console.error('Failed to reprocess media:', err);
-          show({
-            title: 'Reprocess queued with issues',
-            description: 'Content saved, but reprocessing failed. Try reprocessing later.',
-            variant: 'warning',
-          });
-        }
+        await updateMediaMetadata(mediaId, selectedDraft, keywords);
+        await triggerReprocess(mediaId);
 
         updateDraft(selectedDraft.id, {
           content: editorText,
           keywords,
           status: 'reviewed',
         });
-        setDirty(false);
+        dispatch({ type: 'SET_DIRTY', value: false });
         show({
           title: 'Committed',
           description: 'Draft has been committed.',
           variant: 'success',
         });
       } catch (err: unknown) {
+        if (err instanceof CommitValidationError) {
+          return;
+        }
         console.error('Commit failed:', err);
         const message = err instanceof Error ? err.message : 'Failed to commit draft.';
         show({
@@ -409,7 +646,7 @@ export default function ContentReviewPage() {
           variant: 'danger',
         });
       } finally {
-        setIsCommitting(false);
+        dispatch({ type: 'SET_COMMITTING', value: false });
       }
     };
 
@@ -421,7 +658,7 @@ export default function ContentReviewPage() {
   return (
     <Layout>
       <div className="flex min-h-[calc(100vh-140px)] flex-col gap-6 lg:flex-row">
-        <DraftListSidebar drafts={drafts} selectedId={selectedId} onSelect={setSelectedId} />
+        <DraftListSidebar drafts={drafts} selectedId={selectedId} onSelect={selectDraftWithConfirm} />
 
         <section className="flex-1">
           {!selectedDraft ? (
@@ -452,9 +689,9 @@ export default function ContentReviewPage() {
         url={reattachUrl}
         error={reattachError}
         largeFileWarningBytes={LARGE_FILE_WARNING_BYTES}
-        onTabChange={setReattachTab}
-        onUrlChange={setReattachUrl}
-        onFileChange={setReattachFile}
+        onTabChange={(value) => dispatch({ type: 'SET_REATTACH_TAB', value })}
+        onUrlChange={(value) => dispatch({ type: 'SET_REATTACH_URL', value })}
+        onFileChange={(value) => dispatch({ type: 'SET_REATTACH_FILE', value })}
         onClose={closeReattachModal}
         onSubmit={submitReattach}
       />

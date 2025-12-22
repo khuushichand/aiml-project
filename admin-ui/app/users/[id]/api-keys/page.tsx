@@ -1,21 +1,18 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Select } from '@/components/ui/select';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
 import { useConfirm } from '@/components/ui/confirm-dialog';
-import { ArrowLeft, Plus, RotateCw, Trash2, Copy } from 'lucide-react';
+import { ArrowLeft, Plus, Copy } from 'lucide-react';
 import { api } from '@/lib/api-client';
-import { ApiKey, User } from '@/types';
+import { ApiKeyCreateForm } from '@/components/users/ApiKeyCreateForm';
+import { ApiKeysTable } from '@/components/users/ApiKeysTable';
+import { useUserApiKeys } from '@/lib/use-user-api-keys';
 
 export default function UserApiKeysPage() {
   const params = useParams();
@@ -23,9 +20,6 @@ export default function UserApiKeysPage() {
   const confirm = useConfirm();
   const userId = params.id as string;
 
-  const [user, setUser] = useState<User | null>(null);
-  const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -39,27 +33,7 @@ export default function UserApiKeysPage() {
     expires_days: 90,
   });
 
-  const loadData = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError('');
-      const [userData, keysData] = await Promise.all([
-        api.getUser(userId),
-        api.getUserApiKeys(userId),
-      ]);
-      setUser(userData);
-      setApiKeys(Array.isArray(keysData) ? keysData : []);
-    } catch (err: unknown) {
-      console.error('Failed to load data:', err);
-      setError(err instanceof Error && err.message ? err.message : 'Failed to load data');
-    } finally {
-      setLoading(false);
-    }
-  }, [userId]);
-
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  const { user, apiKeys, loading, reload } = useUserApiKeys(userId, { onError: setError });
 
   useEffect(() => {
     return () => {
@@ -90,7 +64,7 @@ export default function UserApiKeysPage() {
       setSuccess('API key created successfully');
       setShowCreateForm(false);
       setFormData({ name: '', scope: 'read', expires_days: 90 });
-      loadData();
+      void reload();
     } catch (err: unknown) {
       console.error('Failed to create API key:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to create API key');
@@ -115,7 +89,7 @@ export default function UserApiKeysPage() {
         setNewKeyValue(result.key);
       }
       setSuccess('API key rotated successfully');
-      loadData();
+      void reload();
     } catch (err: unknown) {
       console.error('Failed to rotate API key:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to rotate API key');
@@ -137,7 +111,7 @@ export default function UserApiKeysPage() {
       setSuccess('');
       await api.revokeApiKey(userId, keyId);
       setSuccess('API key revoked successfully');
-      loadData();
+      void reload();
     } catch (err: unknown) {
       console.error('Failed to revoke API key:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to revoke API key');
@@ -169,26 +143,6 @@ export default function UserApiKeysPage() {
       }
       setError('Failed to copy to clipboard. Please copy manually or check browser permissions.');
     }
-  };
-
-  const formatDate = (dateStr?: string) => {
-    if (!dateStr) return '-';
-    return new Date(dateStr).toLocaleDateString();
-  };
-
-  const isExpired = (expiresAt?: string) => {
-    if (!expiresAt) return false;
-    return new Date(expiresAt) < new Date();
-  };
-
-  const isRevoked = (revokedAt?: string) => {
-    return !!revokedAt;
-  };
-
-  const getKeyStatus = (key: ApiKey) => {
-    if (isRevoked(key.revoked_at)) return { label: 'Revoked', variant: 'destructive' as const };
-    if (isExpired(key.expires_at)) return { label: 'Expired', variant: 'secondary' as const };
-    return { label: 'Active', variant: 'default' as const };
   };
 
   if (loading) {
@@ -273,60 +227,12 @@ export default function UserApiKeysPage() {
 
             {/* Create Form */}
             {showCreateForm && (
-              <Card className="mb-6">
-                <CardHeader>
-                  <CardTitle>Create API Key</CardTitle>
-                  <CardDescription>Generate a new API key for this user</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <form onSubmit={handleCreate} className="space-y-4">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="name">Key Name</Label>
-                        <Input
-                          id="name"
-                          placeholder="e.g., Production API"
-                          value={formData.name}
-                          onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                          required
-                        />
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label htmlFor="scope">Scope</Label>
-                        <Select
-                          id="scope"
-                          value={formData.scope}
-                          onChange={(e) => setFormData({ ...formData, scope: e.target.value })}
-                        >
-                          <option value="read">Read Only</option>
-                          <option value="write">Read & Write</option>
-                          <option value="admin">Admin</option>
-                        </Select>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label htmlFor="expires">Expires In (days)</Label>
-                        <Input
-                          id="expires"
-                          type="number"
-                          min="1"
-                          max="365"
-                          value={formData.expires_days}
-                          onChange={(e) => setFormData({ ...formData, expires_days: parseInt(e.target.value, 10) || 90 })}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="flex gap-2">
-                      <Button type="submit">Create Key</Button>
-                      <Button type="button" variant="outline" onClick={() => setShowCreateForm(false)}>
-                        Cancel
-                      </Button>
-                    </div>
-                  </form>
-                </CardContent>
-              </Card>
+              <ApiKeyCreateForm
+                formData={formData}
+                onFormDataChange={setFormData}
+                onSubmit={handleCreate}
+                onCancel={() => setShowCreateForm(false)}
+              />
             )}
 
             {/* API Keys Table */}
@@ -338,84 +244,11 @@ export default function UserApiKeysPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                {apiKeys.length === 0 ? (
-                  <div className="text-center text-muted-foreground py-8">
-                    No API keys found. Create one to get started.
-                  </div>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Name</TableHead>
-                        <TableHead>Key Prefix</TableHead>
-                        <TableHead>Scope</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Created</TableHead>
-                        <TableHead>Expires</TableHead>
-                        <TableHead>Last Used</TableHead>
-                        <TableHead className="text-right">Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {apiKeys.map((key) => {
-                        const status = getKeyStatus(key);
-                        const isActive = status.label === 'Active';
-
-                        return (
-                          <TableRow key={key.id} className={!isActive ? 'opacity-60' : ''}>
-                            <TableCell className="font-medium">{key.name || '-'}</TableCell>
-                            <TableCell>
-                              <code className="bg-muted px-2 py-1 rounded text-sm">
-                                {key.key_prefix}...
-                              </code>
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant="outline">{key.scope}</Badge>
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant={status.variant}>{status.label}</Badge>
-                            </TableCell>
-                            <TableCell className="text-sm">{formatDate(key.created_at)}</TableCell>
-                            <TableCell className="text-sm">
-                              {key.expires_at ? (
-                                <span className={isExpired(key.expires_at) ? 'text-red-500' : ''}>
-                                  {formatDate(key.expires_at)}
-                                </span>
-                              ) : (
-                                'Never'
-                              )}
-                            </TableCell>
-                            <TableCell className="text-sm text-muted-foreground">
-                              {formatDate(key.last_used_at)}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              <div className="flex justify-end gap-1">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleRotate(key.id)}
-                                  disabled={!isActive}
-                                  title="Rotate key"
-                                >
-                                  <RotateCw className="h-4 w-4" />
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleRevoke(key.id, key.name || '')}
-                                  disabled={!isActive}
-                                  title="Revoke key"
-                                >
-                                  <Trash2 className="h-4 w-4 text-red-500" />
-                                </Button>
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                )}
+                <ApiKeysTable
+                  apiKeys={apiKeys}
+                  onRotate={handleRotate}
+                  onRevoke={handleRevoke}
+                />
               </CardContent>
             </Card>
           </div>

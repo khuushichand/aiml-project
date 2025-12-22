@@ -6,6 +6,7 @@ import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select } from '@/components/ui/select';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/components/ui/toast';
@@ -118,17 +119,17 @@ export default function TeamsPage() {
                     </Link>
                   </p>
                 ) : (
-                  <select
+                  <Select
                     value={selectedOrgId}
                     onChange={(e) => setSelectedOrgId(e.target.value)}
-                    className="flex h-10 w-full max-w-md rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    className="max-w-md"
                   >
                     {organizations.map((org) => (
                       <option key={org.id} value={org.id}>
                         {org.name} ({org.slug})
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 )}
               </CardContent>
             </Card>
