@@ -6,7 +6,7 @@ from __future__ import annotations
 from typing import Optional, Dict, Any, List, Union, Literal
 from uuid import UUID
 from datetime import datetime, date
-from pydantic import BaseModel, Field, EmailStr, ConfigDict, NonNegativeInt
+from pydantic import BaseModel, Field, EmailStr, ConfigDict, NonNegativeInt, field_validator
 
 #######################################################################################################################
 #
@@ -22,6 +22,36 @@ class UserUpdateRequest(BaseModel):
     storage_quota_mb: Optional[int] = Field(None, ge=100)
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class AdminUserCreateRequest(BaseModel):
+    """Request to create a user as an admin."""
+    username: str = Field(
+        ...,
+        min_length=3,
+        max_length=50,
+        pattern="^[a-zA-Z0-9_-]+$",
+    )
+    email: EmailStr
+    password: str = Field(..., min_length=10, max_length=128)
+    role: str = Field("user", pattern="^(user|admin|service)$")
+    is_active: bool = True
+    is_verified: bool = True
+    storage_quota_mb: Optional[int] = Field(None, ge=100)
+
+    @field_validator("username")
+    @classmethod
+    def username_valid(cls, v: str) -> str:
+        reserved = {"admin", "root", "system", "api", "null", "undefined"}
+        normalized = v.strip()
+        if normalized.lower() in reserved:
+            raise ValueError("This username is reserved")
+        return normalized.lower()
+
+    @field_validator("email")
+    @classmethod
+    def email_lowercase(cls, v: str) -> str:
+        return v.lower()
 
 
 class UserSummary(BaseModel):
@@ -69,6 +99,9 @@ class RegistrationCodeRequest(BaseModel):
     expiry_days: int = Field(7, ge=1, le=365)
     role_to_grant: str = Field("user", pattern="^(user|admin|service)$")
     metadata: Optional[Dict[str, Any]] = None
+    org_id: Optional[int] = Field(None, ge=1)
+    org_role: Optional[str] = Field(None, pattern=r"^(owner|admin|lead|member)$")
+    team_id: Optional[int] = Field(None, ge=1)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -82,6 +115,10 @@ class RegistrationCodeResponse(BaseModel):
     expires_at: datetime
     created_at: datetime
     role_to_grant: str
+    org_id: Optional[int] = None
+    org_role: Optional[str] = None
+    team_id: Optional[int] = None
+    metadata: Optional[Dict[str, Any]] = None
     is_valid: Optional[bool] = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -99,6 +136,25 @@ class RegistrationCodeResponse(BaseModel):
 class RegistrationCodeListResponse(BaseModel):
     """Response for registration code list"""
     codes: List[RegistrationCodeResponse]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RegistrationSettingsResponse(BaseModel):
+    """Registration configuration status for admin surfaces."""
+    enable_registration: bool
+    require_registration_code: bool
+    auth_mode: Optional[str] = None
+    profile: Optional[str] = None
+    self_registration_allowed: Optional[bool] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RegistrationSettingsUpdateRequest(BaseModel):
+    """Request to update registration settings."""
+    enable_registration: Optional[bool] = None
+    require_registration_code: Optional[bool] = None
 
     model_config = ConfigDict(from_attributes=True)
 

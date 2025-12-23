@@ -128,6 +128,36 @@ Notes:
 - We use logging data as source of truth for spend/token usage; aggregation to daily table can be leveraged for monthly sums in future.
 - Budgets are soft state. A request that tips over a limit will be allowed once (the tipping request), and subsequent requests will be blocked.
  - Error codes: 403 for disallowed endpoint/provider/model; 402 for budget exceeded.
+ - **Stable contract**: the 402 response payload shape (`error`, `message`, `details`) is stable.
+
+402 example (stable contract):
+```json
+{
+  "error": "budget_exceeded",
+  "message": "Virtual key budget exceeded",
+  "details": {
+    "over": true,
+    "reasons": ["day_tokens_exceeded:1200/1000"],
+    "day": {"tokens": 1200, "usd": 0.55},
+    "month": {"tokens": 20000, "usd": 12.34},
+    "limits": {
+      "is_virtual": true,
+      "llm_budget_day_tokens": 1000,
+      "llm_budget_day_usd": 5.0,
+      "llm_budget_month_tokens": 20000,
+      "llm_budget_month_usd": 100.0
+    },
+    "principal": {
+      "principal_id": "user:1:api_key:42",
+      "kind": "api_key",
+      "user_id": 1,
+      "api_key_id": 42,
+      "org_ids": [],
+      "team_ids": []
+    }
+  }
+}
+```
  - Membership operations are idempotent. No cascading deletes or implicit role propagation in v1.
  - Audit logging is best-effort on membership changes (add/remove/update). Uses get_audit_service_for_user when a real user context exists; failures never block.
 

@@ -17,8 +17,9 @@ import {
   ArrowLeft, Building2, Users, UserPlus, Mail, Trash2, Key, Shield, Copy, Plus, Eye, EyeOff
 } from 'lucide-react';
 import { api } from '@/lib/api-client';
-import { Organization, OrgMember, Team, ProviderSecret } from '@/types';
+import { Organization, OrgMember, Team, ProviderSecret, User } from '@/types';
 import Link from 'next/link';
+import { UserPicker } from '@/components/users/UserPicker';
 
 export default function OrganizationDetailPage() {
   const params = useParams();
@@ -39,6 +40,7 @@ export default function OrganizationDetailPage() {
   const [showAddMember, setShowAddMember] = useState(false);
   const [newMemberUserId, setNewMemberUserId] = useState('');
   const [newMemberRole, setNewMemberRole] = useState('member');
+  const [selectedMember, setSelectedMember] = useState<User | null>(null);
 
   // Invite dialog
   const [showInvite, setShowInvite] = useState(false);
@@ -100,7 +102,7 @@ export default function OrganizationDetailPage() {
 
   const handleAddMember = async () => {
     if (!newMemberUserId) {
-      setError('User ID is required');
+      setError('Select a user to add');
       return;
     }
     const userId = parseInt(newMemberUserId, 10);
@@ -119,6 +121,7 @@ export default function OrganizationDetailPage() {
       setShowAddMember(false);
       setNewMemberUserId('');
       setNewMemberRole('member');
+      setSelectedMember(null);
       void loadData();
     } catch (err: unknown) {
       console.error('Failed to add member:', err);
@@ -406,16 +409,20 @@ export default function OrganizationDetailPage() {
                           </DialogDescription>
                         </DialogHeader>
                         <div className="space-y-4 py-4">
-                          <div className="space-y-2">
-                            <Label htmlFor="userId">User ID</Label>
-                            <Input
-                              id="userId"
-                              type="number"
-                              placeholder="Enter user ID"
-                              value={newMemberUserId}
-                              onChange={(e) => setNewMemberUserId(e.target.value)}
-                            />
-                          </div>
+                          <UserPicker
+                            label="User"
+                            value={selectedMember}
+                            helperText="Search by username or email to add a member."
+                            onSelect={(user) => {
+                              setSelectedMember(user);
+                              setNewMemberUserId(String(user.id));
+                              setError('');
+                            }}
+                            onClear={() => {
+                              setSelectedMember(null);
+                              setNewMemberUserId('');
+                            }}
+                          />
                           <div className="space-y-2">
                             <Label htmlFor="memberRole">Role</Label>
                             <select

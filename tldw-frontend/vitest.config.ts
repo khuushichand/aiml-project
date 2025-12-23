@@ -17,6 +17,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './'),
+      dexie: path.resolve(__dirname, './test/dexie-stub.ts'),
     },
   },
 });

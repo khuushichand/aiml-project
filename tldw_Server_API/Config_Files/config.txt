@@ -932,7 +932,7 @@ stable_only = true
 disable =
 
 # Comma-separated list of route keys to force-enable (useful when stable_only = true)
-enable = tools
+enable = tools, jobs
 
 # Optionally extend the curated experimental set (comma-separated)
 experimental_routes =

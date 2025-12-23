@@ -4,7 +4,7 @@
 
 The Answer-Time Claims Engine extracts atomic claims from a generated answer and verifies each claim against evidence. It is intended for faithfulness checks, attribution, and analysis within RAG and evaluation pipelines.
 
-Core module: `tldw_Server_API.app.core.Ingestion_Media_Processing.Claims.claims_engine`
+Core module: `tldw_Server_API.app.core.Claims_Extraction.claims_engine`
 
 ## Extraction
 
@@ -64,7 +64,7 @@ Verifier: `HybridClaimVerifier` (per claim)
 ## Usage Example
 
 ```python
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Claims.claims_engine import ClaimsEngine
+from tldw_Server_API.app.core.Claims_Extraction.claims_engine import ClaimsEngine
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 
 # Minimal Document type (id, content, score) - or use RAG types

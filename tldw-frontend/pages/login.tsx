@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useRouter } from 'next/router';
 import { useForm } from 'react-hook-form';
+import { z } from 'zod';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { Layout } from '@/components/layout/Layout';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -11,6 +13,11 @@ interface LoginForm {
   password: string;
 }
 
+const loginSchema = z.object({
+  username: z.string().min(1, 'Username is required'),
+  password: z.string().min(1, 'Password is required'),
+});
+
 export default function LoginPage() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -20,7 +27,9 @@ export default function LoginPage() {
     register,
     handleSubmit,
     formState: { errors },
-  } = useForm<LoginForm>();
+  } = useForm<LoginForm>({
+    resolver: zodResolver(loginSchema),
+  });
 
   const onSubmit = async (data: LoginForm) => {
     setError(null);
@@ -55,7 +64,7 @@ export default function LoginPage() {
             <Input
               label="Username"
               type="text"
-              {...register('username', { required: 'Username is required' })}
+              {...register('username')}
               error={errors.username?.message}
               placeholder="Enter your username"
             />
@@ -63,7 +72,7 @@ export default function LoginPage() {
             <Input
               label="Password"
               type="password"
-              {...register('password', { required: 'Password is required' })}
+              {...register('password')}
               error={errors.password?.message}
               placeholder="Enter your password"
             />

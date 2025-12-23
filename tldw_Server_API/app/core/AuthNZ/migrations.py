@@ -1812,6 +1812,45 @@ def migration_039_ensure_user_storage_columns(conn: sqlite3.Connection) -> None:
         raise
 
 
+def migration_040_extend_registration_codes_for_org_invites(conn: sqlite3.Connection) -> None:
+    """Add org-scoped invite columns and missing registration code fields."""
+    logger.info("Migration 040: START registration_codes org invite fields")
+    cur = conn.execute("PRAGMA table_info(registration_codes)")
+    columns = {row[1] for row in cur.fetchall()}
+
+    def add_col(name: str, decl: str) -> None:
+        if name not in columns:
+            conn.execute(f"ALTER TABLE registration_codes ADD COLUMN {decl}")
+            columns.add(name)
+
+    # Core fields expected by registration/admin flows
+    add_col("role_to_grant", "role_to_grant TEXT DEFAULT 'user'")
+    add_col("description", "description TEXT")
+    add_col("allowed_email_domain", "allowed_email_domain TEXT")
+    add_col("times_used", "times_used INTEGER DEFAULT 0")
+    add_col("is_active", "is_active INTEGER DEFAULT 1")
+    add_col("metadata", "metadata TEXT")
+
+    # Org-scoped invite extension
+    add_col("org_id", "org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL")
+    add_col("org_role", "org_role TEXT")
+    add_col("team_id", "team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL")
+
+    # Backfill times_used from legacy uses_count if present
+    if "uses_count" in columns and "times_used" in columns:
+        conn.execute(
+            """
+            UPDATE registration_codes
+            SET times_used = uses_count
+            WHERE (times_used IS NULL OR times_used = 0)
+              AND uses_count > 0
+            """
+        )
+
+    conn.commit()
+    logger.info("Migration 040: Updated registration_codes for org invites")
+
+
 #######################################################################################################################
 #
 # Migration Registry
@@ -1920,6 +1959,11 @@ def get_authnz_migrations() -> List[Migration]:
             39,
             "Ensure users storage columns",
             migration_039_ensure_user_storage_columns,
+        ),
+        Migration(
+            40,
+            "Extend registration_codes for org invites",
+            migration_040_extend_registration_codes_for_org_invites,
         ),
     ]
 

@@ -9,6 +9,7 @@ import { Tabs } from '@/components/ui/Tabs';
 import JsonEditor from '@/components/ui/JsonEditor';
 import JsonViewer from '@/components/ui/JsonViewer';
 import JsonTree from '@/components/ui/JsonTree';
+import { CardSkeleton, LineSkeleton } from '@/components/ui/Skeleton';
 import { useToast } from '@/components/ui/ToastProvider';
 import HotkeysOverlay from '@/components/ui/HotkeysOverlay';
 
@@ -832,7 +833,18 @@ export default function SearchPage() {
                 </div>
               </div>
               <div className="rounded border bg-gray-50 p-3">
-                {respView === 'pretty' ? <JsonViewer data={result} /> : <JsonTree data={result} />}
+                {loading ? (
+                  <div className="space-y-2">
+                    <LineSkeleton width="30%" height={12} />
+                    <LineSkeleton height={12} />
+                    <LineSkeleton width="80%" height={12} />
+                    <LineSkeleton width="65%" height={12} />
+                  </div>
+                ) : respView === 'pretty' ? (
+                  <JsonViewer data={result} />
+                ) : (
+                  <JsonTree data={result} />
+                )}
               </div>
             </div>
           )}
@@ -850,7 +862,26 @@ export default function SearchPage() {
           )}
 
           {error && <div className="rounded bg-red-50 p-3 text-sm text-red-800">{error}</div>}
-          {result && (
+          {loading && !result && (
+            <div className="space-y-4">
+              <div>
+                <LineSkeleton width="25%" height={16} />
+                <div className="mt-2 space-y-2">
+                  <LineSkeleton height={12} />
+                  <LineSkeleton width="85%" height={12} />
+                </div>
+              </div>
+              <div>
+                <LineSkeleton width="30%" height={16} />
+                <div className="mt-2 space-y-2">
+                  {Array.from({ length: 3 }).map((_, i) => (
+                    <CardSkeleton key={`doc-skeleton-${i}`} />
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+          {result && !loading && (
             <div className="space-y-4">
               {result.generated_answer && (
                 <div>

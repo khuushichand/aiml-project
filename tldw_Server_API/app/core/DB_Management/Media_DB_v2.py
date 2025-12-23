@@ -708,6 +708,36 @@ class MediaDatabase:
     CREATE INDEX IF NOT EXISTS idx_claims_deleted ON Claims(deleted);
     """
 
+    _MEDIA_FILES_TABLE_SQL = """
+    -- MediaFiles Table --
+    -- Stores original uploaded files and derived artifacts for media items.
+    -- Enables PDF viewing and other original file retrieval features.
+    CREATE TABLE IF NOT EXISTS MediaFiles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        media_id INTEGER NOT NULL,
+        file_type TEXT NOT NULL DEFAULT 'original',
+        storage_path TEXT NOT NULL,
+        original_filename TEXT,
+        file_size INTEGER,
+        mime_type TEXT,
+        checksum TEXT,
+        uuid TEXT UNIQUE NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        last_modified DATETIME NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1,
+        client_id TEXT NOT NULL,
+        deleted BOOLEAN NOT NULL DEFAULT 0,
+        prev_version INTEGER,
+        merge_parent_uuid TEXT,
+        FOREIGN KEY (media_id) REFERENCES Media(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_media_files_media_id ON MediaFiles(media_id);
+    CREATE INDEX IF NOT EXISTS idx_media_files_type ON MediaFiles(file_type);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_media_files_uuid ON MediaFiles(uuid);
+    CREATE INDEX IF NOT EXISTS idx_media_files_deleted ON MediaFiles(deleted);
+    """
+
     def __init__(
         self,
         db_path: Union[str, Path],
@@ -1490,6 +1520,262 @@ class MediaDatabase:
             raise DatabaseError(f"Failed to delete VisualDocuments for media_id={media_id}: {exc}") from exc
 
     # -------------------------
+    # MediaFiles CRUD helpers
+    # -------------------------
+
+    def insert_media_file(
+        self,
+        media_id: int,
+        file_type: str,
+        storage_path: str,
+        *,
+        original_filename: Optional[str] = None,
+        file_size: Optional[int] = None,
+        mime_type: Optional[str] = None,
+        checksum: Optional[str] = None,
+    ) -> str:
+        """
+        Insert a new MediaFiles row for a given media item.
+
+        Args:
+            media_id: ID of the parent media item
+            file_type: Type of file ('original', 'thumbnail', etc.)
+            storage_path: Path in storage backend (relative to base)
+            original_filename: Original filename from upload
+            file_size: Size in bytes
+            mime_type: MIME type (e.g., 'application/pdf')
+            checksum: SHA-256 hash of file contents
+
+        Returns:
+            The generated UUID for the inserted file record.
+        """
+        conn = self.get_connection()
+        new_uuid = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        data: Dict[str, Any] = {
+            "media_id": media_id,
+            "file_type": file_type,
+            "storage_path": storage_path,
+            "original_filename": original_filename,
+            "file_size": file_size,
+            "mime_type": mime_type,
+            "checksum": checksum,
+            "uuid": new_uuid,
+            "created_at": now,
+            "last_modified": now,
+            "version": 1,
+            "client_id": self.client_id,
+            "deleted": 0,
+            "prev_version": None,
+            "merge_parent_uuid": None,
+        }
+        placeholders = ", ".join([f":{k}" for k in data.keys()])
+        columns = ", ".join(data.keys())
+        sql = f"INSERT INTO MediaFiles ({columns}) VALUES ({placeholders})"
+        try:
+            self._execute_with_connection(conn, sql, data)
+            try:
+                self._log_sync_event(
+                    conn,
+                    "MediaFiles",
+                    new_uuid,
+                    "create",
+                    1,
+                    json.dumps(
+                        {
+                            "media_id": media_id,
+                            "file_type": file_type,
+                            "storage_path": storage_path,
+                        }
+                    ),
+                )
+            except Exception:
+                pass
+        except Exception as exc:
+            raise DatabaseError(f"Failed to insert MediaFile: {exc}") from exc
+        return new_uuid
+
+    def get_media_file(
+        self,
+        media_id: int,
+        file_type: str = "original",
+        *,
+        include_deleted: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get a specific file record for a media item by type.
+
+        Args:
+            media_id: ID of the media item
+            file_type: Type of file to retrieve (default: 'original')
+            include_deleted: Whether to include soft-deleted records
+
+        Returns:
+            Dict with file record or None if not found.
+        """
+        conn = self.get_connection()
+        clauses: List[str] = ["media_id = :media_id", "file_type = :file_type"]
+        params: Dict[str, Any] = {"media_id": media_id, "file_type": file_type}
+        if not include_deleted:
+            clauses.append("deleted = 0")
+        where_sql = " AND ".join(clauses)
+        sql = f"SELECT * FROM MediaFiles WHERE {where_sql} LIMIT 1"
+        try:
+            rows = self._fetchall_with_connection(conn, sql, params)
+            return rows[0] if rows else None
+        except Exception as exc:
+            raise DatabaseError(f"Failed to get MediaFile for media_id={media_id}: {exc}") from exc
+
+    def get_media_files(
+        self,
+        media_id: int,
+        *,
+        include_deleted: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get all file records for a media item.
+
+        Args:
+            media_id: ID of the media item
+            include_deleted: Whether to include soft-deleted records
+
+        Returns:
+            List of file record dicts.
+        """
+        conn = self.get_connection()
+        clauses: List[str] = ["media_id = :media_id"]
+        params: Dict[str, Any] = {"media_id": media_id}
+        if not include_deleted:
+            clauses.append("deleted = 0")
+        where_sql = " AND ".join(clauses)
+        sql = f"SELECT * FROM MediaFiles WHERE {where_sql} ORDER BY file_type, id"
+        try:
+            return self._fetchall_with_connection(conn, sql, params)
+        except Exception as exc:
+            raise DatabaseError(f"Failed to list MediaFiles for media_id={media_id}: {exc}") from exc
+
+    def has_original_file(self, media_id: int) -> bool:
+        """
+        Check if a media item has an original file stored.
+
+        Args:
+            media_id: ID of the media item
+
+        Returns:
+            True if an original file exists and is not deleted.
+        """
+        file_record = self.get_media_file(media_id, "original", include_deleted=False)
+        return file_record is not None
+
+    def soft_delete_media_file(
+        self,
+        file_id: int,
+    ) -> None:
+        """
+        Soft-delete a MediaFile record by ID.
+
+        Args:
+            file_id: ID of the file record to delete
+        """
+        conn = self.get_connection()
+        try:
+            # Get current record for version bump
+            rows = self._fetchall_with_connection(
+                conn,
+                "SELECT uuid, version FROM MediaFiles WHERE id = :id",
+                {"id": file_id},
+            )
+            if not rows:
+                return
+            row = rows[0]
+            file_uuid = row.get("uuid")
+            current_version = int(row.get("version") or 1)
+            new_version = current_version + 1
+            now = datetime.now(timezone.utc).isoformat()
+
+            self._execute_with_connection(
+                conn,
+                "UPDATE MediaFiles SET deleted = 1, version = :version, last_modified = :last_modified WHERE id = :id",
+                {"id": file_id, "version": new_version, "last_modified": now},
+            )
+            try:
+                self._log_sync_event(
+                    conn,
+                    "MediaFiles",
+                    file_uuid,
+                    "delete",
+                    new_version,
+                    json.dumps({"file_id": file_id}),
+                )
+            except Exception:
+                pass
+        except Exception as exc:
+            raise DatabaseError(f"Failed to soft-delete MediaFile id={file_id}: {exc}") from exc
+
+    def soft_delete_media_files_for_media(
+        self,
+        media_id: int,
+        *,
+        hard_delete: bool = False,
+    ) -> None:
+        """
+        Soft-delete (or hard-delete) all MediaFiles for a media item.
+
+        Args:
+            media_id: ID of the media item
+            hard_delete: If True, permanently delete records instead of soft-delete
+        """
+        conn = self.get_connection()
+        try:
+            if hard_delete:
+                self._execute_with_connection(
+                    conn,
+                    "DELETE FROM MediaFiles WHERE media_id = :media_id",
+                    {"media_id": media_id},
+                )
+                try:
+                    self._log_sync_event(
+                        conn,
+                        "MediaFiles",
+                        "",
+                        "delete",
+                        1,
+                        json.dumps({"media_id": media_id, "hard_delete": True}),
+                    )
+                except Exception:
+                    pass
+            else:
+                # Soft delete each record with version bump
+                rows = self._fetchall_with_connection(
+                    conn,
+                    "SELECT id, uuid, version FROM MediaFiles WHERE media_id = :media_id AND deleted = 0",
+                    {"media_id": media_id},
+                )
+                now = datetime.now(timezone.utc).isoformat()
+                for row in rows:
+                    file_uuid = row.get("uuid")
+                    current_version = int(row.get("version") or 1)
+                    new_version = current_version + 1
+                    self._execute_with_connection(
+                        conn,
+                        "UPDATE MediaFiles SET deleted = 1, version = :version, last_modified = :last_modified WHERE uuid = :uuid",
+                        {"uuid": file_uuid, "version": new_version, "last_modified": now},
+                    )
+                    try:
+                        self._log_sync_event(
+                            conn,
+                            "MediaFiles",
+                            file_uuid,
+                            "delete",
+                            new_version,
+                            json.dumps({"media_id": media_id}),
+                        )
+                    except Exception:
+                        pass
+        except Exception as exc:
+            raise DatabaseError(f"Failed to delete MediaFiles for media_id={media_id}: {exc}") from exc
+
+    # -------------------------
     # Chunk-level FTS helpers
     # -------------------------
     def ensure_chunk_fts(self) -> None:
@@ -1679,6 +1965,14 @@ class MediaDatabase:
                     logging.debug("[Schema V1] Claims table and indices ensured.")
                 except sqlite3.Error as e:
                     logging.error(f"[Schema V1] Failed creating Claims table: {e}", exc_info=True)
+                    raise
+
+                # Ensure MediaFiles table exists for original file storage
+                try:
+                    conn.executescript(self._MEDIA_FILES_TABLE_SQL)
+                    logging.debug("[Schema V1] MediaFiles table and indices ensured.")
+                except sqlite3.Error as e:
+                    logging.error(f"[Schema V1] Failed creating MediaFiles table: {e}", exc_info=True)
                     raise
 
                 # Ensure Collections tables exist (output_templates, reading_highlights)
@@ -1874,6 +2168,8 @@ class MediaDatabase:
         # Ensure base tables definitely exist before any indices
         # Add Claims table after base
         table_statements += self._convert_sqlite_sql_to_postgres_statements(self._CLAIMS_TABLE_SQL)
+        # Add MediaFiles table for original file storage
+        table_statements += self._convert_sqlite_sql_to_postgres_statements(self._MEDIA_FILES_TABLE_SQL)
 
         # Defensive ordering: run CREATE TABLE statements first, then non-DDL (INSERT/UPDATE), then indexes
         create_tables = [s for s in table_statements if s.strip().upper().startswith('CREATE TABLE')]
@@ -1946,6 +2242,8 @@ class MediaDatabase:
                 try:
                     # Ensure Claims table exists for older DBs without bumping version
                     conn.executescript(self._CLAIMS_TABLE_SQL)
+                    # Ensure MediaFiles table exists for original file storage
+                    conn.executescript(self._MEDIA_FILES_TABLE_SQL)
                     self._ensure_fts_structures(conn)
                     # Ensure Collections tables exist
                     conn.executescript(
@@ -2921,6 +3219,219 @@ class MediaDatabase:
         )
         rows = cur.fetchall()
         return [dict(row) for row in rows]
+
+    def list_claims(
+        self,
+        *,
+        media_id: Optional[int] = None,
+        owner_user_id: Optional[int] = None,
+        org_id: Optional[int] = None,
+        team_id: Optional[int] = None,
+        limit: int = 100,
+        offset: int = 0,
+        include_deleted: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """
+        List claims with optional media and scope filtering.
+
+        Joins Media to apply visibility scoping when a request scope is active.
+        """
+        try:
+            limit = int(limit)
+            offset = int(offset)
+        except (TypeError, ValueError):
+            limit, offset = 100, 0
+        limit = max(1, min(1000, limit))
+        offset = max(0, offset)
+
+        conditions: List[str] = ["c.media_id = m.id"]
+        params: List[Any] = []
+
+        if not include_deleted:
+            conditions.append("c.deleted = 0")
+        if media_id is not None:
+            conditions.append("c.media_id = ?")
+            params.append(int(media_id))
+        if owner_user_id is not None:
+            conditions.append("COALESCE(CAST(m.owner_user_id AS TEXT), m.client_id) = ?")
+            params.append(str(owner_user_id))
+        if org_id is not None:
+            conditions.append("m.org_id = ?")
+            params.append(int(org_id))
+        if team_id is not None:
+            conditions.append("m.team_id = ?")
+            params.append(int(team_id))
+
+        # Visibility filtering (SQLite or Postgres shared backend)
+        try:
+            scope = get_scope()
+        except Exception as scope_err:
+            logging.debug(f"Failed to resolve scope for claims visibility filter: {scope_err}")
+            scope = None
+        if scope and not scope.is_admin:
+            visibility_parts: List[str] = []
+            user_id_str = str(scope.user_id) if scope.user_id is not None else ""
+            if user_id_str:
+                visibility_parts.append(
+                    "(COALESCE(m.visibility, 'personal') = 'personal' "
+                    "AND (COALESCE(CAST(m.owner_user_id AS TEXT), m.client_id) = ?))"
+                )
+                params.append(user_id_str)
+            if scope.team_ids:
+                team_placeholders = ",".join("?" * len(scope.team_ids))
+                visibility_parts.append(
+                    f"(m.visibility = 'team' AND m.team_id IN ({team_placeholders}))"
+                )
+                params.extend(scope.team_ids)
+            if scope.org_ids:
+                org_placeholders = ",".join("?" * len(scope.org_ids))
+                visibility_parts.append(
+                    f"(m.visibility = 'org' AND m.org_id IN ({org_placeholders}))"
+                )
+                params.extend(scope.org_ids)
+
+            if visibility_parts:
+                conditions.append(f"({' OR '.join(visibility_parts)})")
+            else:
+                conditions.append("(0 = 1)")
+
+        sql = (
+            "SELECT c.id, c.media_id, c.chunk_index, c.span_start, c.span_end, c.claim_text, "
+            "c.confidence, c.extractor, c.extractor_version, c.chunk_hash, c.created_at, c.uuid, "
+            "c.last_modified, c.version, c.client_id, "
+            "m.title AS media_title, m.visibility AS media_visibility, "
+            "m.owner_user_id AS media_owner_user_id, m.org_id AS media_org_id, "
+            "m.team_id AS media_team_id, m.client_id AS media_client_id "
+            "FROM Claims c JOIN Media m ON c.media_id = m.id "
+            f"WHERE {' AND '.join(conditions)} "
+            "ORDER BY c.media_id ASC, c.chunk_index ASC, c.id ASC "
+            "LIMIT ? OFFSET ?"
+        )
+        params.extend([limit, offset])
+        rows = self.execute_query(sql, tuple(params)).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_claim_with_media(self, claim_id: int, *, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+        """Fetch a claim by id with media visibility metadata (scoped)."""
+        conditions: List[str] = ["c.media_id = m.id", "c.id = ?"]
+        params: List[Any] = [int(claim_id)]
+
+        if not include_deleted:
+            conditions.append("c.deleted = 0")
+
+        try:
+            scope = get_scope()
+        except Exception as scope_err:
+            logging.debug(f"Failed to resolve scope for claim lookup: {scope_err}")
+            scope = None
+        if scope and not scope.is_admin:
+            visibility_parts: List[str] = []
+            user_id_str = str(scope.user_id) if scope.user_id is not None else ""
+            if user_id_str:
+                visibility_parts.append(
+                    "(COALESCE(m.visibility, 'personal') = 'personal' "
+                    "AND (COALESCE(CAST(m.owner_user_id AS TEXT), m.client_id) = ?))"
+                )
+                params.append(user_id_str)
+            if scope.team_ids:
+                team_placeholders = ",".join("?" * len(scope.team_ids))
+                visibility_parts.append(
+                    f"(m.visibility = 'team' AND m.team_id IN ({team_placeholders}))"
+                )
+                params.extend(scope.team_ids)
+            if scope.org_ids:
+                org_placeholders = ",".join("?" * len(scope.org_ids))
+                visibility_parts.append(
+                    f"(m.visibility = 'org' AND m.org_id IN ({org_placeholders}))"
+                )
+                params.extend(scope.org_ids)
+
+            if visibility_parts:
+                conditions.append(f"({' OR '.join(visibility_parts)})")
+            else:
+                conditions.append("(0 = 1)")
+
+        sql = (
+            "SELECT c.id, c.media_id, c.chunk_index, c.span_start, c.span_end, c.claim_text, "
+            "c.confidence, c.extractor, c.extractor_version, c.chunk_hash, c.created_at, c.uuid, "
+            "c.last_modified, c.version, c.client_id, c.deleted, "
+            "m.title AS media_title, m.visibility AS media_visibility, "
+            "m.owner_user_id AS media_owner_user_id, m.org_id AS media_org_id, "
+            "m.team_id AS media_team_id, m.client_id AS media_client_id "
+            "FROM Claims c JOIN Media m ON c.media_id = m.id "
+            f"WHERE {' AND '.join(conditions)} "
+            "LIMIT 1"
+        )
+        row = self.execute_query(sql, tuple(params)).fetchone()
+        return dict(row) if row else None
+
+    def update_claim(
+        self,
+        claim_id: int,
+        *,
+        claim_text: Optional[str] = None,
+        span_start: Optional[int] = None,
+        span_end: Optional[int] = None,
+        confidence: Optional[float] = None,
+        extractor: Optional[str] = None,
+        extractor_version: Optional[str] = None,
+        deleted: Optional[bool] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Update a claim row and return the updated record (or None if missing).
+        """
+        update_parts: List[str] = []
+        params: List[Any] = []
+
+        if claim_text is not None:
+            update_parts.append("claim_text = ?")
+            params.append(str(claim_text))
+        if span_start is not None:
+            update_parts.append("span_start = ?")
+            params.append(int(span_start))
+        if span_end is not None:
+            update_parts.append("span_end = ?")
+            params.append(int(span_end))
+        if confidence is not None:
+            update_parts.append("confidence = ?")
+            params.append(float(confidence))
+        if extractor is not None:
+            update_parts.append("extractor = ?")
+            params.append(str(extractor))
+        if extractor_version is not None:
+            update_parts.append("extractor_version = ?")
+            params.append(str(extractor_version))
+        if deleted is not None:
+            update_parts.append("deleted = ?")
+            params.append(1 if deleted else 0)
+
+        if not update_parts:
+            return self.get_claim_with_media(int(claim_id), include_deleted=True)
+
+        now = self._get_current_utc_timestamp_str()
+        update_parts.append("last_modified = ?")
+        params.append(now)
+        update_parts.append("version = version + 1")
+        update_parts.append("client_id = ?")
+        params.append(str(self.client_id))
+
+        params.append(int(claim_id))
+
+        sql = "UPDATE Claims SET " + ", ".join(update_parts) + " WHERE id = ?"
+        self.execute_query(sql, tuple(params), commit=True)
+
+        if self.backend_type == BackendType.POSTGRESQL and claim_text is not None:
+            self.execute_query(
+                "UPDATE Claims "
+                "SET claims_fts_tsv = CASE "
+                "WHEN deleted = 0 THEN to_tsvector('english', coalesce(claim_text, '')) "
+                "ELSE NULL END "
+                "WHERE id = ?",
+                (int(claim_id),),
+                commit=True,
+            )
+
+        return self.get_claim_with_media(int(claim_id), include_deleted=True)
 
     def soft_delete_claims_for_media(self, media_id: int) -> int:
         """
@@ -7561,6 +8072,10 @@ def get_full_media_details_rich(
         raw_timestamps = [str(x) for x in raw_timestamps]
     else:
         raw_timestamps = []
+    # Check if original file is available
+    has_original = db_instance.has_original_file(media_id)
+    original_file_url = f"/api/v1/media/{media_id}/file" if has_original else None
+
     return {
         "media_id": media_id,
         "source": {
@@ -7584,6 +8099,8 @@ def get_full_media_details_rich(
         "keywords": keywords,
         "timestamps": raw_timestamps,
         "versions": versions_list,
+        "has_original_file": has_original,
+        "original_file_url": original_file_url,
     }
 
 # Add similar get_media_by_uuid, get_media_by_url, get_media_by_hash, get_media_by_title

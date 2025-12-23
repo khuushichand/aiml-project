@@ -10,7 +10,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { ArrowLeft, Plus, Copy } from 'lucide-react';
 import { api } from '@/lib/api-client';
-import { ApiKeyCreateForm } from '@/components/users/ApiKeyCreateForm';
+import { ApiKeyCreateForm, ApiKeyFormData } from '@/components/users/ApiKeyCreateForm';
 import { ApiKeysTable } from '@/components/users/ApiKeysTable';
 import { useUserApiKeys } from '@/lib/use-user-api-keys';
 
@@ -24,14 +24,9 @@ export default function UserApiKeysPage() {
   const [success, setSuccess] = useState('');
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newKeyValue, setNewKeyValue] = useState<string | null>(null);
+  const [creatingKey, setCreatingKey] = useState(false);
   const successTimerRef = useRef<number | null>(null);
   const isMountedRef = useRef(true);
-
-  const [formData, setFormData] = useState({
-    name: '',
-    scope: 'read',
-    expires_days: 90,
-  });
 
   const { user, apiKeys, loading, reload } = useUserApiKeys(userId, { onError: setError });
 
@@ -45,15 +40,15 @@ export default function UserApiKeysPage() {
     };
   }, []);
 
-  const handleCreate = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleCreate = async (data: ApiKeyFormData) => {
     try {
+      setCreatingKey(true);
       setError('');
       setSuccess('');
       const result = await api.createApiKey(userId, {
-        name: formData.name,
-        scope: formData.scope,
-        expires_in_days: formData.expires_days,
+        name: data.name,
+        scope: data.scope,
+        expires_in_days: data.expires_days,
       });
 
       // The API returns the full key value only on creation
@@ -63,11 +58,12 @@ export default function UserApiKeysPage() {
 
       setSuccess('API key created successfully');
       setShowCreateForm(false);
-      setFormData({ name: '', scope: 'read', expires_days: 90 });
       void reload();
     } catch (err: unknown) {
       console.error('Failed to create API key:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to create API key');
+    } finally {
+      setCreatingKey(false);
     }
   };
 
@@ -228,10 +224,9 @@ export default function UserApiKeysPage() {
             {/* Create Form */}
             {showCreateForm && (
               <ApiKeyCreateForm
-                formData={formData}
-                onFormDataChange={setFormData}
                 onSubmit={handleCreate}
                 onCancel={() => setShowCreateForm(false)}
+                isSubmitting={creatingKey}
               />
             )}
 

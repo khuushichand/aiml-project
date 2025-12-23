@@ -2766,7 +2766,7 @@ async def unified_rag_pipeline(
                                 pass
                         if pre_claims:
                             # Verify these claims directly, skipping extraction
-                            from tldw_Server_API.app.core.Ingestion_Media_Processing.Claims.claims_engine import Claim as _Claim
+                            from tldw_Server_API.app.core.Claims_Extraction.claims_engine import Claim as _Claim
                             verifications = []
                             for i, ctext in enumerate(pre_claims[:claims_max]):
                                 cv = await engine.verifier.verify(

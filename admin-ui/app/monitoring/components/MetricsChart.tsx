@@ -31,8 +31,8 @@ export default function MetricsChart({ metricsHistory }: MetricsChartProps) {
             Collecting metrics data...
           </div>
         ) : (
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%" minHeight={1} minWidth={1}>
               <AreaChart data={metricsHistory}>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
                 <XAxis dataKey="time" className="text-xs" />

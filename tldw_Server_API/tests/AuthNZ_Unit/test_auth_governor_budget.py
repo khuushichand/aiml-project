@@ -104,6 +104,76 @@ async def test_auth_governor_under_budget_includes_principal(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_auth_governor_budget_check_failure_fails_open(monkeypatch):
+    async def _fake_is_key_over_budget(_key_id: int):
+        raise RuntimeError("budget backend down")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.auth_governor.is_key_over_budget",
+        _fake_is_key_over_budget,
+    )
+    monkeypatch.setenv("AUTH_BUDGET_FAIL_OPEN", "1")
+
+    principal = AuthPrincipal(
+        kind="api_key",
+        user_id=3,
+        api_key_id=789,
+        subject=None,
+        token_type="api_key",
+        jti=None,
+        roles=[],
+        permissions=[],
+        is_admin=False,
+        org_ids=[],
+        team_ids=[],
+    )
+
+    gov = AuthGovernor()
+    result = await gov.check_llm_budget_for_api_key(principal, 789)
+
+    assert result["over"] is False
+    assert result["reasons"] == []
+    meta = result.get("principal") or {}
+    assert meta.get("api_key_id") == 789
+    assert meta.get("user_id") == 3
+
+
+@pytest.mark.asyncio
+async def test_auth_governor_budget_check_failure_fails_closed(monkeypatch):
+    async def _fake_is_key_over_budget(_key_id: int):
+        raise RuntimeError("budget backend down")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.auth_governor.is_key_over_budget",
+        _fake_is_key_over_budget,
+    )
+    monkeypatch.setenv("AUTH_BUDGET_FAIL_OPEN", "0")
+
+    principal = AuthPrincipal(
+        kind="api_key",
+        user_id=4,
+        api_key_id=321,
+        subject=None,
+        token_type="api_key",
+        jti=None,
+        roles=[],
+        permissions=[],
+        is_admin=False,
+        org_ids=[],
+        team_ids=[],
+    )
+
+    gov = AuthGovernor()
+    result = await gov.check_llm_budget_for_api_key(principal, 321)
+
+    assert result["over"] is True
+    assert "budget_check_failed" in result.get("reasons", [])
+    meta = result.get("principal") or {}
+    assert meta.get("api_key_id") == 321
+    assert meta.get("user_id") == 4
+
+
+@pytest.mark.asyncio
 async def test_enforce_llm_budget_uses_auth_governor_and_raises_402(monkeypatch):
     # Settings with budget enforcement enabled and virtual keys enabled
     fake_settings = SimpleNamespace(

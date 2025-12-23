@@ -256,11 +256,8 @@ class PostGenerationVerifier:
 
         # Record metrics for unsupported and total claims
         try:
-            from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter as _inc
-            if total > 0:
-                _inc("rag_total_claims_checked_total", total)
-            if unsupported > 0:
-                _inc("rag_unsupported_claims_total", unsupported)
+            from tldw_Server_API.app.core.Claims_Extraction.monitoring import record_postcheck_metrics
+            record_postcheck_metrics(total, unsupported)
         except Exception:
             pass
 

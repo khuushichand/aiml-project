@@ -21,9 +21,13 @@ from loguru import logger
 from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     UserListResponse,
     UserUpdateRequest,
+    AdminUserCreateRequest,
+    UserSummary,
     RegistrationCodeRequest,
     RegistrationCodeResponse,
     RegistrationCodeListResponse,
+    RegistrationSettingsResponse,
+    RegistrationSettingsUpdateRequest,
     SystemStatsResponse,
     ActivitySummaryResponse,
     SecurityAlertStatusResponse,
@@ -55,6 +59,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     AdminCleanupSettingsUpdate,
     KanbanFtsMaintenanceResponse,
 )
+from tldw_Server_API.app.api.v1.schemas.auth_schemas import SessionResponse, MessageResponse
 from tldw_Server_API.app.api.v1.schemas.api_key_schemas import (
     APIKeyCreateRequest,
     APIKeyCreateResponse,
@@ -97,12 +102,15 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     require_roles,
     get_db_transaction,
     get_storage_service_dep,
+    get_registration_service_dep,
     get_auth_principal,
     check_rate_limit,
+    get_session_manager_dep,
 )
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import get_rate_limiter as get_authnz_rate_limiter
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, is_postgres_backend
-from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings, get_profile, reset_settings
+from tldw_Server_API.app.core.AuthNZ.mfa_service import get_mfa_service
 from tldw_Server_API.app.core.AuthNZ.byok_helpers import (
     is_byok_enabled,
     is_provider_allowlisted,
@@ -114,6 +122,9 @@ from tldw_Server_API.app.services.storage_quota_service import StorageQuotaServi
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     UserNotFoundError,
     DuplicateUserError,
+    RegistrationError,
+    RegistrationDisabledError,
+    WeakPasswordError,
     QuotaExceededError
 )
 from tldw_Server_API.app.core.exceptions import ResourceNotFoundError
@@ -199,6 +210,7 @@ from tldw_Server_API.app.services.admin_usage_service import (
     export_usage_top_csv_text as svc_export_usage_top_csv_text,
     fetch_llm_usage as svc_fetch_llm_usage,
     fetch_llm_usage_summary as svc_fetch_llm_usage_summary,
+    fetch_llm_top_spenders as svc_fetch_llm_top_spenders,
 )
 from tldw_Server_API.app.services.admin_service import update_api_key_metadata
 from tldw_Server_API.app.core.Security.webui_access_guard import (
@@ -206,9 +218,12 @@ from tldw_Server_API.app.core.Security.webui_access_guard import (
     setup_remote_access_enabled,
 )
 from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.Setup import setup_manager
+from tldw_Server_API.app.services.registration_service import reset_registration_service
 import ipaddress
 
 REQUIRED_ADMIN_RANK = ROLE_HIERARCHY.get("admin", 3)
+PLATFORM_ADMIN_ROLES = {"owner", "super_admin"}
 
 # Test shim: some tests expect a private helper `_is_postgres_backend` to monkeypatch.
 # Provide an alias to the public function for backward compatibility in tests.
@@ -312,7 +327,7 @@ async def _enforce_admin_user_scope(
     require_hierarchy: bool,
 ) -> None:
     """Enforce shared-org membership and optional role hierarchy for admin actions."""
-    if is_single_user_principal(principal):
+    if is_single_user_principal(principal) or _is_platform_admin(principal):
         return
 
     if principal.user_id is None:
@@ -356,19 +371,139 @@ async def _enforce_admin_user_scope(
         detail="Not authorized to update this user",
     )
 
+
+def _is_platform_admin(principal: AuthPrincipal) -> bool:
+    if is_single_user_principal(principal):
+        return True
+    roles = {str(role).strip().lower() for role in (principal.roles or [])}
+    return bool(roles & PLATFORM_ADMIN_ROLES)
+
+
+async def _get_admin_org_ids(principal: AuthPrincipal) -> Optional[List[int]]:
+    if is_single_user_principal(principal) or _is_platform_admin(principal):
+        return None
+    if principal.user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to access organization data",
+        )
+    memberships = await list_org_memberships_for_user(principal.user_id)
+    return [int(m.get("org_id")) for m in memberships if m.get("org_id") is not None]
+
+
+async def _enforce_admin_org_access(
+    principal: AuthPrincipal,
+    org_id: int,
+    *,
+    require_admin: bool = True,
+) -> None:
+    if is_single_user_principal(principal) or _is_platform_admin(principal):
+        return
+    if principal.user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to access this organization",
+        )
+    memberships = await list_org_memberships_for_user(principal.user_id)
+    membership = next((m for m in memberships if m.get("org_id") == org_id), None)
+    if not membership:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to access this organization",
+        )
+    if require_admin and _role_rank(membership.get("role")) < REQUIRED_ADMIN_RANK:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Organization admin role required",
+        )
+
+
+async def _get_scoped_team(
+    team_id: int,
+    principal: AuthPrincipal,
+    *,
+    require_admin: bool = True,
+) -> Dict[str, Any]:
+    team = await get_team(team_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="team_not_found")
+    await _enforce_admin_org_access(
+        principal,
+        int(team.get("org_id")),
+        require_admin=require_admin,
+    )
+    return team
+
 #######################################################################################################################
 #
 # User Management Endpoints
+
+@router.post("/users", response_model=UserSummary)
+async def admin_create_user(
+    payload: AdminUserCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    registration_service=Depends(get_registration_service_dep),
+) -> UserSummary:
+    """
+    Create a new user as an admin.
+    """
+    profile = get_profile()
+    if isinstance(profile, str) and profile.strip().lower() in {"local-single-user", "single_user"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User creation is not allowed in local-single-user profile",
+        )
+
+    created_by = int(principal.user_id) if principal.user_id is not None else None
+    try:
+        user_info = await registration_service.register_user(
+            username=payload.username,
+            email=payload.email,
+            password=payload.password,
+            created_by=created_by,
+            role_override=payload.role,
+            is_active_override=payload.is_active,
+            is_verified_override=payload.is_verified,
+            storage_quota_override=payload.storage_quota_mb,
+        )
+        repo = await AuthnzUsersRepo.from_pool()
+        user = await repo.get_user_by_id(int(user_info["user_id"]))
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to load created user",
+            )
+        logger.info("Admin created user {} (id={})", payload.username, user_info["user_id"])
+        return user
+    except DuplicateUserError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except WeakPasswordError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except RegistrationDisabledError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except RegistrationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to create user: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create user",
+        ) from exc
+
 
 @router.get("/users", response_model=UserListResponse)
 async def list_users(
     request: Request,
     response: Response,
+    principal: AuthPrincipal = Depends(get_auth_principal),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     role: Optional[str] = None,
     is_active: Optional[bool] = None,
     search: Optional[str] = None,
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
 ) -> UserListResponse:
     """
     List all users with pagination and filters
@@ -405,12 +540,19 @@ async def list_users(
     try:
         offset = (page - 1) * limit
         repo = await AuthnzUsersRepo.from_pool()
+        org_ids = await _get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
         users, total = await repo.list_users(
             offset=offset,
             limit=limit,
             role=role,
             is_active=is_active,
             search=search,
+            org_ids=org_ids,
         )
         return UserListResponse(
             users=users,
@@ -439,10 +581,12 @@ async def list_users(
 @router.get("/users/{user_id}/api-keys", response_model=List[APIKeyMetadata])
 async def admin_list_user_api_keys(
     user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
     include_revoked: bool = False,
 ) -> list[APIKeyMetadata]:
     """List API keys for a specific user (admin)."""
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
         api_mgr = await get_api_key_manager()
         rows = await api_mgr.list_user_keys(user_id=user_id, include_revoked=include_revoked)
         return [APIKeyMetadata(**row) for row in rows]
@@ -455,9 +599,11 @@ async def admin_list_user_api_keys(
 async def admin_create_user_api_key(
     user_id: int,
     request: APIKeyCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> APIKeyCreateResponse:
     """Create a new API key for the given user (admin)."""
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
         api_mgr = await get_api_key_manager()
         result = await api_mgr.create_api_key(
             user_id=user_id,
@@ -477,9 +623,11 @@ async def admin_rotate_user_api_key(
     user_id: int,
     key_id: int,
     request: APIKeyRotateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> APIKeyCreateResponse:
     """Rotate an API key for the given user and return the new key (admin)."""
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
         api_mgr = await get_api_key_manager()
         result = await api_mgr.rotate_api_key(
             key_id=key_id,
@@ -496,9 +644,11 @@ async def admin_rotate_user_api_key(
 async def admin_revoke_user_api_key(
     user_id: int,
     key_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> Dict[str, Any]:
     """Revoke an API key for the given user (admin)."""
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
         api_mgr = await get_api_key_manager()
         success = await api_mgr.revoke_api_key(key_id=key_id, user_id=user_id)
         if not success:
@@ -516,10 +666,12 @@ async def admin_update_user_api_key(
     user_id: int,
     key_id: int,
     request: APIKeyUpdateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction)
 ) -> APIKeyMetadata:
     """Update per-key limits like rate_limit and allowed_ips (admin)."""
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
         try:
             row = await update_api_key_metadata(
                 db,
@@ -621,8 +773,12 @@ async def _touch_shared_last_used_if_match(
     response_model=AdminUserKeysResponse,
     dependencies=[Depends(check_rate_limit)],
 )
-async def admin_list_user_byok_keys(user_id: int) -> AdminUserKeysResponse:
+async def admin_list_user_byok_keys(
+    user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> AdminUserKeysResponse:
     _require_byok_enabled()
+    await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
     repo = await _get_user_byok_repo()
     try:
         rows = await repo.list_secrets_for_user(user_id)
@@ -647,8 +803,13 @@ async def admin_list_user_byok_keys(user_id: int) -> AdminUserKeysResponse:
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(check_rate_limit)],
 )
-async def admin_revoke_user_byok_key(user_id: int, provider: str) -> None:
+async def admin_revoke_user_byok_key(
+    user_id: int,
+    provider: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> None:
     _require_byok_enabled()
+    await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
     repo = await _get_user_byok_repo()
     provider_norm = normalize_provider_name(provider)
     try:
@@ -852,8 +1013,10 @@ def _get_kanban_db_for_user_id(user_id: int) -> KanbanDB:
 async def admin_kanban_fts_maintenance(
     action: Literal["optimize", "rebuild"],
     user_id: int = Query(..., ge=1),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> KanbanFtsMaintenanceResponse:
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
         db = _get_kanban_db_for_user_id(user_id)
         if action == "rebuild":
             db.rebuild_fts()
@@ -892,9 +1055,11 @@ async def admin_create_org(payload: OrganizationCreateRequest) -> OrganizationRe
 @router.get("/orgs")
 async def admin_list_orgs(
     request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     q: Optional[str] = Query(None),
+    org_id: Optional[int] = Query(None),
 ) -> Any:
     """List organizations.
 
@@ -909,7 +1074,20 @@ async def admin_list_orgs(
         wants_wrapper = any(k in qp for k in ("limit", "offset", "q"))
 
         # Ask service for rows and optionally total
-        result = await list_organizations(limit=limit, offset=offset, q=q, with_total=wants_wrapper)
+        org_ids = await _get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
+
+        result = await list_organizations(
+            limit=limit,
+            offset=offset,
+            q=q,
+            org_ids=org_ids,
+            with_total=wants_wrapper,
+        )
         if wants_wrapper:
             if not isinstance(result, tuple) or len(result) != 2:
                 logger.error(
@@ -944,8 +1122,13 @@ async def admin_list_orgs(
 
 
 @router.post("/orgs/{org_id}/teams", response_model=TeamResponse)
-async def admin_create_team(org_id: int, payload: TeamCreateRequest) -> TeamResponse:
+async def admin_create_team(
+    org_id: int,
+    payload: TeamCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> TeamResponse:
     try:
+        await _enforce_admin_org_access(principal, org_id, require_admin=True)
         # CI/pytest (SQLite) guard: ensure migrations before team creation
         await _ensure_sqlite_authnz_ready_if_test_mode()
         row = await create_team(org_id=org_id, name=payload.name, slug=payload.slug, description=payload.description)
@@ -958,8 +1141,15 @@ async def admin_create_team(org_id: int, payload: TeamCreateRequest) -> TeamResp
 
 
 @router.get("/orgs/{org_id}/teams", response_model=List[TeamResponse])
-async def admin_list_teams(org_id: int, limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0), db=Depends(get_db_transaction)) -> list[TeamResponse]:
+async def admin_list_teams(
+    org_id: int,
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> list[TeamResponse]:
     try:
+        await _enforce_admin_org_access(principal, org_id, require_admin=True)
         rows = await svc_list_teams_by_org(db, org_id, limit, offset)
         return [TeamResponse(**r) for r in rows]
     except Exception as e:
@@ -973,16 +1163,7 @@ async def admin_get_team(
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> TeamResponse:
     try:
-        team = await get_team(team_id)
-        if not team:
-            raise HTTPException(status_code=404, detail="team_not_found")
-        if not is_single_user_principal(principal):
-            if principal.user_id is None:
-                raise HTTPException(status_code=403, detail="Not authorized to access this team")
-            admin_memberships = await list_org_memberships_for_user(principal.user_id)
-            admin_org_ids = {m.get("org_id") for m in admin_memberships if m.get("org_id") is not None}
-            if team.get("org_id") not in admin_org_ids:
-                raise HTTPException(status_code=404, detail="team_not_found")
+        team = await _get_scoped_team(team_id, principal, require_admin=True)
         return TeamResponse(**team)
     except HTTPException:
         raise
@@ -995,6 +1176,7 @@ async def admin_get_team(
 async def admin_update_org_watchlists_settings(
     org_id: int,
     payload: OrganizationWatchlistsSettingsUpdate,
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction),
 ):
     """Update watchlists-related organization settings (metadata).
@@ -1003,6 +1185,7 @@ async def admin_update_org_watchlists_settings(
       - require_include_default: default include-only gating for jobs in this org
     """
     try:
+        await _enforce_admin_org_access(principal, org_id, require_admin=True)
         # Fetch existing metadata for this org (works for both backends)
         if hasattr(db, "fetchrow"):
             row = await db.fetchrow("SELECT metadata FROM organizations WHERE id = $1", org_id)
@@ -1050,9 +1233,14 @@ async def admin_update_org_watchlists_settings(
 
 
 @router.get("/orgs/{org_id}/watchlists/settings", response_model=OrganizationWatchlistsSettingsResponse)
-async def admin_get_org_watchlists_settings(org_id: int, db=Depends(get_db_transaction)) -> OrganizationWatchlistsSettingsResponse:
+async def admin_get_org_watchlists_settings(
+    org_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> OrganizationWatchlistsSettingsResponse:
     """Fetch watchlists-related organization settings (from metadata)."""
     try:
+        await _enforce_admin_org_access(principal, org_id, require_admin=True)
         if hasattr(db, "fetchrow"):
             row = await db.fetchrow("SELECT metadata FROM organizations WHERE id = $1", org_id)
             meta_raw = row.get("metadata") if row else None
@@ -1083,8 +1271,14 @@ async def admin_get_org_watchlists_settings(org_id: int, db=Depends(get_db_trans
 
 
 @router.post("/teams/{team_id}/members", response_model=TeamMemberResponse)
-async def admin_add_team_member(team_id: int, payload: TeamMemberAddRequest, request: Request) -> TeamMemberResponse:
+async def admin_add_team_member(
+    team_id: int,
+    payload: TeamMemberAddRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> TeamMemberResponse:
     try:
+        await _get_scoped_team(team_id, principal, require_admin=True)
         row = await add_team_member(team_id=team_id, user_id=payload.user_id, role=payload.role or 'member')
         # Best-effort audit
         try:
@@ -1123,8 +1317,12 @@ async def admin_add_team_member(team_id: int, payload: TeamMemberAddRequest, req
 
 
 @router.get("/teams/{team_id}/members", response_model=List[TeamMemberResponse])
-async def admin_list_team_members(team_id: int) -> list[TeamMemberResponse]:
+async def admin_list_team_members(
+    team_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> list[TeamMemberResponse]:
     try:
+        await _get_scoped_team(team_id, principal, require_admin=True)
         rows = await list_team_members(team_id)
         return [TeamMemberResponse(**r) for r in rows]
     except Exception as e:
@@ -1133,9 +1331,15 @@ async def admin_list_team_members(team_id: int) -> list[TeamMemberResponse]:
 
 
 @router.delete("/teams/{team_id}/members/{user_id}")
-async def admin_remove_team_member(team_id: int, user_id: int, request: Request) -> Dict[str, Any]:
+async def admin_remove_team_member(
+    team_id: int,
+    user_id: int,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> Dict[str, Any]:
     """Remove a user from a team (admin)."""
     try:
+        await _get_scoped_team(team_id, principal, require_admin=True)
         res = await remove_team_member(team_id=team_id, user_id=user_id)
         if not res.get("removed"):
             # Even if delete didn't error, treat as not found when no rows affected
@@ -1182,8 +1386,14 @@ async def admin_remove_team_member(team_id: int, user_id: int, request: Request)
 # ============================
 
 @router.post("/orgs/{org_id}/members", response_model=OrgMemberResponse)
-async def admin_add_org_member(org_id: int, payload: OrgMemberAddRequest, request: Request) -> OrgMemberResponse:
+async def admin_add_org_member(
+    org_id: int,
+    payload: OrgMemberAddRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> OrgMemberResponse:
     try:
+        await _enforce_admin_org_access(principal, org_id, require_admin=True)
         row = await add_org_member(org_id=org_id, user_id=payload.user_id, role=payload.role or 'member')
         # Best-effort audit
         try:
@@ -1228,8 +1438,10 @@ async def admin_list_org_members(
     offset: int = Query(0, ge=0),
     role: Optional[str] = None,
     status: Optional[str] = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> list[OrgMemberListItem]:
     try:
+        await _enforce_admin_org_access(principal, org_id, require_admin=True)
         rows = await list_org_members(org_id=org_id, limit=limit, offset=offset, role=role, status=status)
         out: list[OrgMemberListItem] = []
         for r in rows:
@@ -1248,8 +1460,14 @@ async def admin_list_org_members(
 
 
 @router.delete("/orgs/{org_id}/members/{user_id}")
-async def admin_remove_org_member(org_id: int, user_id: int, request: Request) -> Dict[str, Any]:
+async def admin_remove_org_member(
+    org_id: int,
+    user_id: int,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> Dict[str, Any]:
     try:
+        await _enforce_admin_org_access(principal, org_id, require_admin=True)
         res = await remove_org_member(org_id=org_id, user_id=user_id)
         if res.get("error") == "owner_required":
             raise HTTPException(
@@ -1297,8 +1515,15 @@ async def admin_remove_org_member(org_id: int, user_id: int, request: Request) -
 
 
 @router.patch("/orgs/{org_id}/members/{user_id}", response_model=OrgMemberResponse)
-async def admin_update_org_member_role(org_id: int, user_id: int, payload: OrgMemberRoleUpdateRequest, request: Request) -> OrgMemberResponse:
+async def admin_update_org_member_role(
+    org_id: int,
+    user_id: int,
+    payload: OrgMemberRoleUpdateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> OrgMemberResponse:
     try:
+        await _enforce_admin_org_access(principal, org_id, require_admin=True)
         row = await update_org_member_role(org_id=org_id, user_id=user_id, role=payload.role)
         if not row:
             raise HTTPException(status_code=404, detail="Org membership not found")
@@ -1346,8 +1571,12 @@ async def admin_update_org_member_role(org_id: int, user_id: int, payload: OrgMe
 
 
 @router.get("/users/{user_id}/org-memberships", response_model=List[OrgMembershipItem])
-async def admin_list_user_org_memberships(user_id: int) -> list[OrgMembershipItem]:
+async def admin_list_user_org_memberships(
+    user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> list[OrgMembershipItem]:
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
         rows = await list_org_memberships_for_user(user_id)
         return [OrgMembershipItem(**r) for r in rows]
     except Exception as e:
@@ -1355,8 +1584,19 @@ async def admin_list_user_org_memberships(user_id: int) -> list[OrgMembershipIte
         raise HTTPException(status_code=500, detail="Failed to list org memberships")
 
 @router.post("/users/{user_id}/virtual-keys")
-async def admin_create_virtual_key(user_id: int, payload: VirtualKeyCreateRequest) -> Dict[str, Any]:
+async def admin_create_virtual_key(
+    user_id: int,
+    payload: VirtualKeyCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> Dict[str, Any]:
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
+        if payload.org_id is not None:
+            await _enforce_admin_org_access(principal, payload.org_id, require_admin=True)
+        if payload.team_id is not None:
+            team = await _get_scoped_team(payload.team_id, principal, require_admin=True)
+            if payload.org_id is not None and int(team.get("org_id")) != int(payload.org_id):
+                raise HTTPException(status_code=400, detail="team_id does not belong to org_id")
         api_mgr = await get_api_key_manager()
         result = await api_mgr.create_virtual_key(
             user_id=user_id,
@@ -1384,8 +1624,13 @@ async def admin_create_virtual_key(user_id: int, payload: VirtualKeyCreateReques
 
 
 @router.get("/users/{user_id}/virtual-keys", response_model=List[APIKeyMetadata])
-async def admin_list_virtual_keys(user_id: int, db=Depends(get_db_transaction)) -> list[APIKeyMetadata]:
+async def admin_list_virtual_keys(
+    user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> list[APIKeyMetadata]:
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
         wanted = {
             'id','key_prefix','name','description','scope','status','created_at','expires_at','usage_count','last_used_at','last_used_ip'
         }
@@ -1413,6 +1658,7 @@ async def admin_list_virtual_keys(user_id: int, db=Depends(get_db_transaction)) 
 @router.get("/api-keys/{key_id}/audit-log", response_model=APIKeyAuditListResponse)
 async def admin_get_api_key_audit_log(
     key_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db=Depends(get_db_transaction)
@@ -1420,6 +1666,15 @@ async def admin_get_api_key_audit_log(
     """Get audit log entries for a specific API key (admin)."""
     try:
         is_pg = await is_postgres_backend()
+        if is_pg:
+            key_owner = await db.fetchval("SELECT user_id FROM api_keys WHERE id = $1", key_id)
+        else:
+            cur = await db.execute("SELECT user_id FROM api_keys WHERE id = ?", (key_id,))
+            row = await cur.fetchone()
+            key_owner = row[0] if row else None
+        if key_owner is None:
+            raise HTTPException(status_code=404, detail="API key not found")
+        await _enforce_admin_user_scope(principal, int(key_owner), require_hierarchy=False)
         if is_pg:
             rows = await db.fetch(
                 """
@@ -1680,8 +1935,6 @@ async def update_user(
         else:
             cursor = await db.execute(query, params)
             affected = int(getattr(cursor, "rowcount", 0) or 0)
-            if affected < 0:
-                affected = 0
             if affected == 0:
                 cursor = await db.execute("SELECT 1 FROM users WHERE id = ?", (user_id,))
                 if not await cursor.fetchone():
@@ -1705,6 +1958,108 @@ async def update_user(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update user"
         )
+
+
+@router.get("/users/{user_id}/sessions", response_model=List[SessionResponse])
+async def admin_list_user_sessions(
+    user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    session_manager=Depends(get_session_manager_dep),
+) -> List[SessionResponse]:
+    """List active sessions for a user (admin scope)."""
+    try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
+        sessions = await session_manager.get_user_sessions(user_id)
+        return [
+            SessionResponse(
+                id=session["id"],
+                ip_address=session.get("ip_address"),
+                user_agent=session.get("user_agent"),
+                created_at=session["created_at"],
+                last_activity=session["last_activity"],
+                expires_at=session["expires_at"],
+            )
+            for session in sessions
+        ]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to list sessions for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list sessions")
+
+
+@router.delete("/users/{user_id}/sessions/{session_id}", response_model=MessageResponse)
+async def admin_revoke_user_session(
+    user_id: int,
+    session_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    session_manager=Depends(get_session_manager_dep),
+) -> MessageResponse:
+    """Revoke a specific session for a user (admin scope)."""
+    try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
+        await session_manager.revoke_session(session_id=session_id, revoked_by=principal.user_id)
+        return MessageResponse(message="Session revoked")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to revoke session {session_id} for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to revoke session")
+
+
+@router.post("/users/{user_id}/sessions/revoke-all", response_model=MessageResponse)
+async def admin_revoke_all_user_sessions(
+    user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    session_manager=Depends(get_session_manager_dep),
+) -> MessageResponse:
+    """Revoke all sessions for a user (admin scope)."""
+    try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
+        await session_manager.revoke_all_user_sessions(user_id=user_id)
+        return MessageResponse(message="All sessions revoked")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to revoke all sessions for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to revoke sessions")
+
+
+@router.get("/users/{user_id}/mfa", response_model=Dict[str, Any])
+async def admin_get_user_mfa_status(
+    user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> Dict[str, Any]:
+    """Fetch MFA status for a user (admin scope)."""
+    try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
+        mfa_service = get_mfa_service()
+        return await mfa_service.get_user_mfa_status(user_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch MFA status for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch MFA status")
+
+
+@router.post("/users/{user_id}/mfa/disable", response_model=MessageResponse)
+async def admin_disable_user_mfa(
+    user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> MessageResponse:
+    """Disable MFA for a user (admin scope)."""
+    try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
+        mfa_service = get_mfa_service()
+        success = await mfa_service.disable_mfa(user_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="MFA not enabled")
+        return MessageResponse(message="MFA disabled")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to disable MFA for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to disable MFA")
 
 
 #######################################################################################################################
@@ -2418,8 +2773,12 @@ async def revoke_permission_from_role(role_id: int, permission_id: int, db=Depen
 
 
 @router.get("/users/{user_id}/roles", response_model=UserRoleListResponse)
-async def get_user_roles_admin(user_id: int) -> UserRoleListResponse:
+async def get_user_roles_admin(
+    user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> UserRoleListResponse:
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
         repo = _get_rbac_repo()
         loop = asyncio.get_event_loop()
         rows = await loop.run_in_executor(None, repo.get_user_roles, int(user_id))
@@ -2439,8 +2798,14 @@ async def get_user_roles_admin(user_id: int) -> UserRoleListResponse:
 
 
 @router.post("/users/{user_id}/roles/{role_id}")
-async def add_role_to_user(user_id: int, role_id: int, db=Depends(get_db_transaction)) -> dict:
+async def add_role_to_user(
+    user_id: int,
+    role_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> dict:
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
         is_pg = await is_postgres_backend()
         if is_pg:
             await db.execute(
@@ -2460,8 +2825,14 @@ async def add_role_to_user(user_id: int, role_id: int, db=Depends(get_db_transac
 
 
 @router.delete("/users/{user_id}/roles/{role_id}")
-async def remove_role_from_user(user_id: int, role_id: int, db=Depends(get_db_transaction)) -> dict:
+async def remove_role_from_user(
+    user_id: int,
+    role_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> dict:
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
         is_pg = await is_postgres_backend()
         if is_pg:
             await db.execute("DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2", user_id, role_id)
@@ -2475,8 +2846,12 @@ async def remove_role_from_user(user_id: int, role_id: int, db=Depends(get_db_tr
 
 
 @router.get("/users/{user_id}/overrides", response_model=UserOverridesResponse)
-async def list_user_overrides(user_id: int) -> UserOverridesResponse:
+async def list_user_overrides(
+    user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> UserOverridesResponse:
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
         repo = _get_rbac_repo()
         rows = repo.get_user_overrides(user_id=int(user_id))
         entries = [
@@ -2495,8 +2870,14 @@ async def list_user_overrides(user_id: int) -> UserOverridesResponse:
 
 
 @router.post("/users/{user_id}/overrides")
-async def upsert_user_override(user_id: int, payload: UserOverrideUpsertRequest, db=Depends(get_db_transaction)) -> dict:
+async def upsert_user_override(
+    user_id: int,
+    payload: UserOverrideUpsertRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> dict:
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
         _settings = _get_settings()
         _is_pg = await is_postgres_backend()
@@ -2571,8 +2952,14 @@ async def upsert_user_override(user_id: int, payload: UserOverrideUpsertRequest,
 
 
 @router.delete("/users/{user_id}/overrides/{permission_id}")
-async def delete_user_override(user_id: int, permission_id: int, db=Depends(get_db_transaction)) -> dict:
+async def delete_user_override(
+    user_id: int,
+    permission_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> dict:
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
         _is_pg = await is_postgres_backend()
         if _is_pg:
             await db.execute("DELETE FROM user_permissions WHERE user_id = $1 AND permission_id = $2", user_id, permission_id)
@@ -2589,7 +2976,10 @@ async def delete_user_override(user_id: int, permission_id: int, db=Depends(get_
 
 
 @router.get("/users/{user_id}/effective-permissions", response_model=EffectivePermissionsResponse)
-async def get_effective_permissions_admin(user_id: int) -> EffectivePermissionsResponse:
+async def get_effective_permissions_admin(
+    user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> EffectivePermissionsResponse:
     """Compute effective permissions for a user.
 
     Delegates to the central RBAC helper, which in turn uses the AuthNZ
@@ -2597,6 +2987,7 @@ async def get_effective_permissions_admin(user_id: int) -> EffectivePermissionsR
     SQLite and Postgres backends share the same logic.
     """
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
         loop = asyncio.get_event_loop()
         perms = await loop.run_in_executor(None, get_effective_permissions, user_id)
         return EffectivePermissionsResponse(user_id=user_id, permissions=sorted(perms))
@@ -2747,7 +3138,10 @@ async def get_role_effective_permissions(role_id: int) -> RoleEffectivePermissio
         }
     },
 )
-async def admin_reset_rate_limit(payload: RateLimitResetRequest) -> RateLimitResetResponse:
+async def admin_reset_rate_limit(
+    payload: RateLimitResetRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> RateLimitResetResponse:
     """Reset AuthNZ rate limiter counters for the given identifier.
 
     Parameters
@@ -2803,6 +3197,19 @@ async def admin_reset_rate_limit(payload: RateLimitResetRequest) -> RateLimitRes
                 identifier = f"api:{payload.api_key_hash[:16]}"
             else:
                 raise HTTPException(status_code=400, detail="Must provide identifier or one of ip, user_id, api_key_hash, or 'kind'")
+
+    # Enforce user scoping for user-based identifiers.
+    scoped_user_id: Optional[int] = None
+    if payload.user_id is not None:
+        scoped_user_id = int(payload.user_id)
+    elif identifier and identifier.startswith("user:"):
+        raw = identifier.split("user:", 1)[-1]
+        try:
+            scoped_user_id = int(raw)
+        except ValueError:
+            scoped_user_id = None
+    if scoped_user_id is not None:
+        await _enforce_admin_user_scope(principal, scoped_user_id, require_hierarchy=True)
 
     limiter = await get_authnz_rate_limiter()
 
@@ -2931,8 +3338,14 @@ async def upsert_role_rate_limit(role_id: int, payload: RateLimitUpsertRequest, 
 
 
 @router.post("/users/{user_id}/rate-limits", response_model=RateLimitResponse)
-async def upsert_user_rate_limit(user_id: int, payload: RateLimitUpsertRequest, db=Depends(get_db_transaction)) -> RateLimitResponse:
+async def upsert_user_rate_limit(
+    user_id: int,
+    payload: RateLimitUpsertRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> RateLimitResponse:
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
         is_pg = await is_postgres_backend()
         if is_pg:
             await db.execute(
@@ -2982,6 +3395,7 @@ async def delete_user(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot delete your own account"
             )
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
 
         # Soft delete - just mark as inactive
         is_pg = await is_postgres_backend()
@@ -3017,6 +3431,68 @@ async def delete_user(
 #
 # Registration Code Management
 
+@router.get("/registration-settings", response_model=RegistrationSettingsResponse)
+async def get_registration_settings() -> RegistrationSettingsResponse:
+    """Return current registration settings."""
+    settings = get_settings()
+    profile = get_profile()
+    self_allowed = bool(settings.ENABLE_REGISTRATION)
+    if isinstance(profile, str) and profile.strip().lower() in {"local-single-user", "single_user"}:
+        self_allowed = False
+
+    return RegistrationSettingsResponse(
+        enable_registration=bool(settings.ENABLE_REGISTRATION),
+        require_registration_code=bool(settings.REQUIRE_REGISTRATION_CODE),
+        auth_mode=str(settings.AUTH_MODE) if getattr(settings, "AUTH_MODE", None) is not None else None,
+        profile=str(profile) if profile is not None else None,
+        self_registration_allowed=self_allowed,
+    )
+
+
+@router.post("/registration-settings", response_model=RegistrationSettingsResponse)
+async def update_registration_settings(
+    payload: RegistrationSettingsUpdateRequest,
+) -> RegistrationSettingsResponse:
+    """Update registration settings and refresh cached config."""
+    updates: Dict[str, Any] = {}
+    if payload.enable_registration is not None:
+        updates["enable_registration"] = payload.enable_registration
+    if payload.require_registration_code is not None:
+        updates["require_registration_code"] = payload.require_registration_code
+
+    if not updates:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No registration settings provided")
+
+    try:
+        setup_manager.update_config({"AuthNZ": updates})
+        reset_settings()
+        try:
+            await reset_registration_service()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Registration service reset failed: {}", exc)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error(f"Failed to update registration settings: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update registration settings",
+        ) from exc
+
+    settings = get_settings()
+    profile = get_profile()
+    self_allowed = bool(settings.ENABLE_REGISTRATION)
+    if isinstance(profile, str) and profile.strip().lower() in {"local-single-user", "single_user"}:
+        self_allowed = False
+
+    return RegistrationSettingsResponse(
+        enable_registration=bool(settings.ENABLE_REGISTRATION),
+        require_registration_code=bool(settings.REQUIRE_REGISTRATION_CODE),
+        auth_mode=str(settings.AUTH_MODE) if getattr(settings, "AUTH_MODE", None) is not None else None,
+        profile=str(profile) if profile is not None else None,
+        self_registration_allowed=self_allowed,
+    )
+
 @router.post("/registration-codes", response_model=RegistrationCodeResponse)
 async def create_registration_code(
     request: RegistrationCodeRequest,
@@ -3041,13 +3517,61 @@ async def create_registration_code(
 
         is_pg = await is_postgres_backend()
         creator_id = int(principal.user_id) if principal.user_id is not None else None
+        org_id = request.org_id
+        org_role = request.org_role or ("member" if org_id is not None else None)
+        team_id = request.team_id
+
+        if team_id is not None and org_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="org_id is required when team_id is provided",
+            )
+
+        if org_id is not None:
+            if is_pg:
+                org_row = await db.fetchrow("SELECT id FROM organizations WHERE id = $1", org_id)
+            else:
+                cursor = await db.execute("SELECT id FROM organizations WHERE id = ?", (org_id,))
+                org_row = await cursor.fetchone()
+            if not org_row:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Organization not found",
+                )
+
+        if team_id is not None:
+            if is_pg:
+                team_row = await db.fetchrow(
+                    "SELECT id, org_id FROM teams WHERE id = $1",
+                    team_id,
+                )
+                team_org_id = team_row["org_id"] if team_row else None
+            else:
+                cursor = await db.execute(
+                    "SELECT id, org_id FROM teams WHERE id = ?",
+                    (team_id,),
+                )
+                team_row = await cursor.fetchone()
+                team_org_id = team_row[1] if team_row else None
+            if not team_row:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Team not found",
+                )
+            if org_id is not None and team_org_id != org_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Team does not belong to the specified organization",
+                )
+
         if is_pg:
             # PostgreSQL
             result = await db.fetchrow("""
                 INSERT INTO registration_codes
-                (code, max_uses, expires_at, created_by, role_to_grant, metadata)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                RETURNING id, code, max_uses, times_used, expires_at, created_at, role_to_grant
+                (code, max_uses, expires_at, created_by, role_to_grant, metadata, org_id, org_role, team_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                RETURNING id, code, max_uses, times_used, expires_at, created_at, role_to_grant,
+                          org_id, org_role, team_id, metadata
             """,
                 code,
                 request.max_uses,
@@ -3055,13 +3579,16 @@ async def create_registration_code(
                 creator_id,
                 request.role_to_grant,
                 json.dumps(request.metadata or {}),
+                org_id,
+                org_role,
+                team_id,
             )
         else:
             # SQLite
             cursor = await db.execute("""
                 INSERT INTO registration_codes
-                (code, max_uses, expires_at, created_by, role_to_grant, metadata)
-                VALUES (?, ?, ?, ?, ?, ?)
+                (code, max_uses, expires_at, created_by, role_to_grant, metadata, org_id, org_role, team_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     code,
@@ -3070,6 +3597,9 @@ async def create_registration_code(
                     creator_id,
                     request.role_to_grant,
                     json.dumps(request.metadata or {}),
+                    org_id,
+                    org_role,
+                    team_id,
                 ),
             )
 
@@ -3078,8 +3608,13 @@ async def create_registration_code(
 
             # Fetch the created code
             cursor = await db.execute(
-                "SELECT * FROM registration_codes WHERE id = ?",
-                (code_id,)
+                """
+                SELECT id, code, max_uses, times_used, expires_at, created_at, role_to_grant,
+                       org_id, org_role, team_id, metadata
+                FROM registration_codes
+                WHERE id = ?
+                """,
+                (code_id,),
             )
             result = await cursor.fetchone()
 
@@ -3087,10 +3622,18 @@ async def create_registration_code(
 
         if isinstance(result, tuple):
             created_at = result[5]
+            metadata_value = result[10]
         else:
             created_at = result["created_at"]
+            metadata_value = result["metadata"]
         if isinstance(created_at, str):
             created_at = datetime.fromisoformat(created_at)
+
+        if isinstance(metadata_value, str):
+            try:
+                metadata_value = json.loads(metadata_value)
+            except json.JSONDecodeError:
+                metadata_value = None
 
         return RegistrationCodeResponse(
             id=result[0] if isinstance(result, tuple) else result["id"],
@@ -3100,6 +3643,10 @@ async def create_registration_code(
             expires_at=expires_at,
             created_at=created_at,
             role_to_grant=request.role_to_grant,
+            org_id=result[7] if isinstance(result, tuple) else result["org_id"],
+            org_role=result[8] if isinstance(result, tuple) else result["org_role"],
+            team_id=result[9] if isinstance(result, tuple) else result["team_id"],
+            metadata=metadata_value if metadata_value is not None else request.metadata,
         )
 
     except Exception as e:
@@ -3131,14 +3678,16 @@ async def list_registration_codes(
             if include_expired:
                 query = """
                     SELECT id, code, max_uses, times_used, expires_at,
-                           created_at, created_by, role_to_grant
+                           created_at, created_by, role_to_grant,
+                           org_id, org_role, team_id, metadata
                     FROM registration_codes
                     ORDER BY created_at DESC
                 """
             else:
                 query = """
                     SELECT id, code, max_uses, times_used, expires_at,
-                           created_at, created_by, role_to_grant
+                           created_at, created_by, role_to_grant,
+                           org_id, org_role, team_id, metadata
                     FROM registration_codes
                     WHERE expires_at > CURRENT_TIMESTAMP
                     ORDER BY created_at DESC
@@ -3149,14 +3698,16 @@ async def list_registration_codes(
             if include_expired:
                 query = """
                     SELECT id, code, max_uses, times_used, expires_at,
-                           created_at, created_by, role_to_grant
+                           created_at, created_by, role_to_grant,
+                           org_id, org_role, team_id, metadata
                     FROM registration_codes
                     ORDER BY created_at DESC
                 """
             else:
                 query = """
                     SELECT id, code, max_uses, times_used, expires_at,
-                           created_at, created_by, role_to_grant
+                           created_at, created_by, role_to_grant,
+                           org_id, org_role, team_id, metadata
                     FROM registration_codes
                     WHERE datetime(expires_at) > datetime('now')
                     ORDER BY created_at DESC
@@ -3167,8 +3718,21 @@ async def list_registration_codes(
         codes = []
         for row in rows:
             if isinstance(row, dict):
+                metadata_value = row.get("metadata")
+                if isinstance(metadata_value, str):
+                    try:
+                        metadata_value = json.loads(metadata_value)
+                    except json.JSONDecodeError:
+                        metadata_value = None
+                row["metadata"] = metadata_value
                 codes.append(row)
             else:
+                metadata_value = row[11]
+                if isinstance(metadata_value, str):
+                    try:
+                        metadata_value = json.loads(metadata_value)
+                    except json.JSONDecodeError:
+                        metadata_value = None
                 code_dict = {
                     "id": row[0],
                     "code": row[1],
@@ -3178,10 +3742,14 @@ async def list_registration_codes(
                     "created_at": row[5],
                     "created_by": row[6],
                     "role_to_grant": row[7],
+                    "org_id": row[8],
+                    "org_role": row[9],
+                    "team_id": row[10],
+                    "metadata": metadata_value,
                     "is_valid": row[3] < row[2] and (
                         row[4] > datetime.utcnow() if isinstance(row[4], datetime)
                         else datetime.fromisoformat(row[4]) > datetime.utcnow()
-                    )
+                    ),
                 }
                 codes.append(code_dict)
 
@@ -3524,6 +4092,8 @@ async def get_audit_log(
     action: Optional[str] = None,
     days: int = Query(7, ge=1, le=90),
     limit: int = Query(100, ge=1, le=1000),
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction)
 ) -> AuditLogResponse:
     """
@@ -3543,8 +4113,17 @@ async def get_audit_log(
         conditions = []
         params = []
         param_count = 0
+        org_ids = await _get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
+        if org_ids is not None and len(org_ids) == 0:
+            return AuditLogResponse(entries=[])
 
         if user_id:
+            await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
             param_count += 1
             conditions.append(f"user_id = ${param_count}" if is_pg else "user_id = ?")
             params.append(user_id)
@@ -3560,6 +4139,18 @@ async def get_audit_log(
         else:
             conditions.append("datetime(a.created_at) > datetime('now', ? || ' days')")
             params.append(f"-{days}")
+
+        join_clause = ""
+        if org_ids is not None:
+            join_clause = " JOIN org_members om ON om.user_id = a.user_id"
+            if is_pg:
+                param_count += 1
+                conditions.append(f"om.org_id = ANY(${param_count})")
+                params.append(org_ids)
+            else:
+                placeholders = ",".join("?" for _ in org_ids)
+                conditions.append(f"om.org_id IN ({placeholders})")
+                params.extend(org_ids)
 
         where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
@@ -3579,6 +4170,7 @@ async def get_audit_log(
                        a.ip_address, a.created_at
                 FROM audit_logs a
                 LEFT JOIN users u ON a.user_id = u.id
+                {join_clause}
                 {where_clause}
                 ORDER BY a.created_at DESC
                 LIMIT ${param_count + 1}
@@ -3592,6 +4184,7 @@ async def get_audit_log(
                        a.ip_address, a.created_at
                 FROM audit_logs a
                 LEFT JOIN users u ON a.user_id = u.id
+                {join_clause}
                 {where_clause}
                 ORDER BY a.created_at DESC
                 LIMIT ?
@@ -3640,11 +4233,29 @@ async def get_usage_daily(
     end: Optional[str] = Query(None, description="YYYY-MM-DD inclusive"),
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=500),
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction)
 ) -> UsageDailyResponse:
     """Query daily usage aggregates, optionally filtered by user and date range."""
     try:
-        rows, total, _ = await svc_fetch_usage_daily(db, user_id=user_id, start=start, end=end, page=page, limit=limit)
+        if user_id is not None:
+            await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
+        org_ids = await _get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
+        rows, total, _ = await svc_fetch_usage_daily(
+            db,
+            user_id=user_id,
+            org_ids=org_ids,
+            start=start,
+            end=end,
+            page=page,
+            limit=limit,
+        )
         items = [UsageDailyRow(**r) for r in rows]
         return UsageDailyResponse(items=items, total=int(total or 0), page=page, limit=limit)
     except Exception:
@@ -3658,11 +4269,26 @@ async def get_usage_top(
     end: Optional[str] = Query(None, description="YYYY-MM-DD inclusive"),
     limit: int = Query(10, ge=1, le=100),
     metric: str = Query("requests", pattern="^(requests|bytes_total|bytes_in_total|errors)$"),
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction)
 ) -> UsageTopResponse:
     """Top users by aggregate usage over a date range."""
     try:
-        rows = await svc_fetch_usage_top(db, start=start, end=end, limit=limit, metric=metric)
+        org_ids = await _get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
+        rows = await svc_fetch_usage_top(
+            db,
+            start=start,
+            end=end,
+            limit=limit,
+            metric=metric,
+            org_ids=org_ids,
+        )
         for r in rows:
             r.setdefault('bytes_in_total', None)
         return UsageTopResponse(items=[UsageTopRow(**r) for r in rows])
@@ -3690,11 +4316,28 @@ async def export_usage_daily_csv(
     end: Optional[str] = Query(None, description="YYYY-MM-DD inclusive"),
     limit: int = Query(1000, ge=1, le=10000),
     filename: Optional[str] = Query(None, description="Optional filename for Content-Disposition"),
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction)
 ) -> PlainTextResponse:
     """Export usage_daily rows as CSV (includes bytes_in_total when available)."""
     try:
-        content = await svc_export_usage_daily_csv_text(db, user_id=user_id, start=start, end=end, limit=limit)
+        if user_id is not None:
+            await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
+        org_ids = await _get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
+        content = await svc_export_usage_daily_csv_text(
+            db,
+            user_id=user_id,
+            org_ids=org_ids,
+            start=start,
+            end=end,
+            limit=limit,
+        )
         resp = PlainTextResponse(content=content, media_type="text/csv")
         # Default filename when not provided
         if not filename:
@@ -3717,10 +4360,25 @@ async def export_usage_top_csv(
     limit: int = Query(100, ge=1, le=10000),
     metric: str = Query("requests", pattern="^(requests|bytes_total|bytes_in_total|errors)$"),
     filename: Optional[str] = Query(None, description="Optional filename for Content-Disposition"),
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction)
 ) -> PlainTextResponse:
     try:
-        content = await svc_export_usage_top_csv_text(db, start=start, end=end, limit=limit, metric=metric)
+        org_ids = await _get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
+        content = await svc_export_usage_top_csv_text(
+            db,
+            start=start,
+            end=end,
+            limit=limit,
+            metric=metric,
+            org_ids=org_ids,
+        )
         resp = PlainTextResponse(content=content, media_type="text/csv")
         # Default filename when not provided
         if not filename:
@@ -3760,9 +4418,19 @@ async def get_llm_usage(
     end: Optional[str] = Query(None, description="ISO timestamp inclusive"),
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=500),
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction)
 ) -> LLMUsageLogResponse:
     try:
+        if user_id is not None:
+            await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
+        org_ids = await _get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
         rows, total = await svc_fetch_llm_usage(
             db,
             user_id=user_id,
@@ -3774,6 +4442,7 @@ async def get_llm_usage(
             end=end,
             page=page,
             limit=limit,
+            org_ids=org_ids,
         )
         items = [LLMUsageLogRow(**r) for r in rows]
         return LLMUsageLogResponse(items=items, total=int(total or 0), page=page, limit=limit)
@@ -3788,11 +4457,26 @@ async def get_llm_usage_summary(
     start: Optional[str] = Query(None, description="ISO timestamp inclusive"),
     end: Optional[str] = Query(None, description="ISO timestamp inclusive"),
     group_by: str = Query("user", pattern="^(user|provider|model|operation|day)$"),
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction)
 ) -> LLMUsageSummaryResponse:
     try:
+        org_ids = await _get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
         # Directly support 'user'|'operation'|'day'|'provider'|'model'
-        rows = await svc_fetch_llm_usage_summary(db, group_by=group_by, provider=None, start=start, end=end)
+        rows = await svc_fetch_llm_usage_summary(
+            db,
+            group_by=group_by,
+            provider=None,
+            start=start,
+            end=end,
+            org_ids=org_ids,
+        )
         return LLMUsageSummaryResponse(items=[LLMUsageSummaryRow(**r) for r in rows])
     except Exception as e:
         logger.error(f"Failed to summarize llm_usage_log: {e}")
@@ -3804,10 +4488,18 @@ async def get_llm_top_spenders(
     start: Optional[str] = Query(None, description="ISO timestamp inclusive"),
     end: Optional[str] = Query(None, description="ISO timestamp inclusive"),
     limit: int = Query(10, ge=1, le=500),
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction)
 ) -> LLMTopSpendersResponse:
     try:
-        rows = await svc_fetch_llm_top_spenders(db, start=start, end=end, limit=limit)
+        org_ids = await _get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
+        rows = await svc_fetch_llm_top_spenders(db, start=start, end=end, limit=limit, org_ids=org_ids)
         return LLMTopSpendersResponse(items=[LLMTopSpenderRow(**r) for r in rows])
     except Exception as e:
         logger.error(f"Failed to load llm top spenders: {e}")
@@ -3824,10 +4516,20 @@ async def export_llm_usage_csv(
     start: Optional[str] = Query(None, description="ISO timestamp inclusive"),
     end: Optional[str] = Query(None, description="ISO timestamp inclusive"),
     limit: int = Query(1000, ge=1, le=10000),
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction)
 ) -> PlainTextResponse:
     """Export filtered llm_usage_log rows as CSV."""
     try:
+        if user_id is not None:
+            await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
+        org_ids = await _get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
         is_pg = await is_postgres_backend()
         conditions: list[str] = []
         params: list = []
@@ -3850,6 +4552,16 @@ async def export_llm_usage_csv(
             add_cond("ts >= ?", start)
         if end:
             add_cond("ts <= ?", end)
+        join_clause = ""
+        if org_ids is not None:
+            join_clause = " JOIN org_members om ON om.user_id = llm_usage_log.user_id"
+            if is_pg:
+                conditions.append(f"om.org_id = ANY(${len(params) + 1})")
+                params.append(org_ids)
+            else:
+                placeholders = ",".join("?" for _ in org_ids)
+                conditions.append(f"om.org_id IN ({placeholders})")
+                params.extend(org_ids)
         where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
 
         if is_pg:
@@ -3857,7 +4569,7 @@ async def export_llm_usage_csv(
             sql = (
                 f"SELECT id, ts, COALESCE(user_id,0) as user_id, COALESCE(key_id,0) as key_id, endpoint, operation, provider, model, status, latency_ms, "
                 f"COALESCE(prompt_tokens,0), COALESCE(completion_tokens,0), COALESCE(total_tokens,0), COALESCE(total_cost_usd,0), currency, estimated, request_id "
-                f"FROM llm_usage_log{where_clause} ORDER BY ts DESC LIMIT {limit_placeholder}"
+                f"FROM llm_usage_log{join_clause}{where_clause} ORDER BY ts DESC LIMIT {limit_placeholder}"
             )
             rows = await db.fetch(sql, *params, limit)
             data = [(
@@ -3868,7 +4580,7 @@ async def export_llm_usage_csv(
             sql = (
                 f"SELECT id, ts, IFNULL(user_id,0), IFNULL(key_id,0), endpoint, operation, provider, model, status, latency_ms, "
                 f"IFNULL(prompt_tokens,0), IFNULL(completion_tokens,0), IFNULL(total_tokens,0), IFNULL(total_cost_usd,0), currency, estimated, request_id "
-                f"FROM llm_usage_log{where_clause} ORDER BY ts DESC LIMIT ?"
+                f"FROM llm_usage_log{join_clause}{where_clause} ORDER BY ts DESC LIMIT ?"
             )
             cur = await db.execute(sql, params + [limit])
             data = await cur.fetchall()

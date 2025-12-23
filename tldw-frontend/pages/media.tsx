@@ -383,6 +383,14 @@ export default function MediaPage() {
               <div className="mb-2 flex items-center justify-between">
                 <h2 className="text-lg font-semibold">Details: {selectedItem?.source?.title || 'Untitled'}</h2>
                 <div className="space-x-2">
+                  {selectedItem.has_original_file && (
+                    <Button
+                      variant="secondary"
+                      onClick={() => router.push(`/media/${selectedItem.media_id}/view`)}
+                    >
+                      View PDF
+                    </Button>
+                  )}
                   <Button onClick={summarizeSelected} loading={analyzing} disabled={analyzing}>Summarize</Button>
                   <Button variant="secondary" onClick={sendToChatSelected}>Send to Chat</Button>
                 </div>

@@ -29,7 +29,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import
     prepare_chunking_options_dict,
     prepare_common_options,
 )
-from tldw_Server_API.app.core.Ingestion_Media_Processing.claims_utils import (
+from tldw_Server_API.app.core.Claims_Extraction.claims_utils import (
     extract_claims_if_requested,
     persist_claims_if_applicable,
 )
@@ -70,6 +70,42 @@ def _compute_source_hash(file_path: FilePath, *, chunk_size: int = 1024 * 1024) 
         except Exception:
             logger.debug("Source hash compute failed for %s: %s", file_path, exc)
         return None
+
+
+def _is_safe_local_path(path: FilePath, base_dir: FilePath) -> bool:
+    """
+    Validate that ``path`` is a local file path contained within ``base_dir``.
+
+    This helps prevent directory traversal or absolute-path access outside the
+    expected base directory when dealing with user-influenced inputs.
+    """
+    try:
+        base_resolved = FilePath(base_dir).resolve(strict=False)
+        path_obj = FilePath(path)
+        path_resolved = (
+            path_obj.resolve(strict=False)
+            if path_obj.is_absolute()
+            else base_resolved.joinpath(path_obj).resolve(strict=False)
+        )
+        try:
+            common_path = os.path.commonpath([str(base_resolved), str(path_resolved)])
+        except ValueError:
+            logger.warning(
+                "Rejected path on different drive for local media source: %s",
+                path,
+            )
+            return False
+        if common_path == str(base_resolved):
+            return True
+        logger.warning(
+            "Rejected path outside of base directory for local media source: %s (base: %s)",
+            path_resolved,
+            base_resolved,
+        )
+        return False
+    except Exception as exc:
+        logger.warning("Error while validating local media path %s: %s", path, exc)
+        return False
 
 
 def _media_has_source_hash_column(db: MediaDatabase) -> bool:
@@ -524,6 +560,116 @@ async def add_media_orchestrate(
                 ]
                 individual_results = await asyncio.gather(*tasks)
                 results.extend(individual_results)
+
+            # --- 6a. Store Original Files if Requested ---
+            # For PDFs and documents, save originals to permanent storage when keep_original_file=True
+            if form_data.keep_original_file and form_data.media_type in ["pdf", "document"]:
+                try:
+                    from tldw_Server_API.app.core.Storage import get_storage_backend
+
+                    storage = get_storage_backend()
+                    user_id_str = str(current_user.id) if hasattr(current_user, "id") else "anonymous"
+
+                    # Build reverse map: original_filename -> source_path
+                    ref_to_source_map = {v: k for k, v in source_to_ref_map.items()}
+
+                    for result in results:
+                        if result.get("status") != "Success" or not result.get("db_id"):
+                            continue
+
+                        media_id = result["db_id"]
+                        input_ref = result.get("input_ref")
+                        source_path = ref_to_source_map.get(input_ref)
+
+                        # Only store uploaded files, not URLs
+                        if not source_path or source_path in url_list:
+                            continue
+
+                        # Check if the source file exists
+                        source_file = FilePath(source_path)
+                        if not source_file.exists():
+                            logger.warning(
+                                f"Original file not found for storage: {source_path}"
+                            )
+                            continue
+
+                        try:
+                            # Get file info
+                            file_size = source_file.stat().st_size
+                            original_filename = input_ref or source_file.name
+                            mime_type = "application/pdf" if form_data.media_type == "pdf" else "application/octet-stream"
+
+                            # Check storage quota before storing
+                            try:
+                                from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService
+                                quota_service = StorageQuotaService()
+                                await quota_service.initialize()
+
+                                has_quota = await quota_service.check_quota(
+                                    user_id=int(current_user.id) if hasattr(current_user, "id") else 0,
+                                    additional_bytes=file_size
+                                )
+                                if not has_quota:
+                                    logger.warning(
+                                        f"Storage quota exceeded for user {user_id_str}, "
+                                        f"skipping original file storage for media_id={media_id}"
+                                    )
+                                    result.setdefault("warnings", []).append(
+                                        "Original file not stored: storage quota exceeded"
+                                    )
+                                    continue
+                            except ImportError:
+                                # Quota service not available, proceed without check
+                                pass
+                            except Exception as quota_err:
+                                # Non-fatal quota check failure - log and proceed
+                                logger.debug(f"Quota check failed, proceeding: {quota_err}")
+
+                            # Read file bytes
+                            with open(source_file, "rb") as f:
+                                file_bytes = f.read()
+
+                            # Compute checksum
+                            import hashlib
+                            checksum = hashlib.sha256(file_bytes).hexdigest()
+
+                            # Store in permanent storage
+                            storage_path = await storage.store(
+                                user_id=user_id_str,
+                                media_id=media_id,
+                                filename="original" + source_file.suffix,
+                                data=file_bytes,
+                                mime_type=mime_type,
+                            )
+
+                            # Insert database record
+                            db.insert_media_file(
+                                media_id=media_id,
+                                file_type="original",
+                                storage_path=storage_path,
+                                original_filename=original_filename,
+                                file_size=file_size,
+                                mime_type=mime_type,
+                                checksum=checksum,
+                            )
+
+                            logger.info(
+                                f"Stored original file for media_id={media_id}: {storage_path}"
+                            )
+                            result["original_file_stored"] = True
+
+                        except Exception as store_err:
+                            logger.error(
+                                f"Failed to store original file for media_id={media_id}: {store_err}"
+                            )
+                            # Non-fatal - don't fail the entire ingestion
+                            result["original_file_stored"] = False
+                            result.setdefault("warnings", []).append(
+                                f"Failed to store original file: {store_err}"
+                            )
+
+                except Exception as storage_init_err:
+                    logger.error(f"Failed to initialize storage backend: {storage_init_err}")
 
 
         # --- 7. Generate Embeddings if Requested ---
@@ -1159,11 +1305,27 @@ async def process_batch_media(
         if not is_url:
             try:
                 path_obj = FilePath(source_path_or_url)
-                if path_obj.is_file():
-                    source_hash = _compute_source_hash(path_obj)
-                    if source_hash and input_ref:
-                        source_hash_by_ref.setdefault(str(input_ref), []).append(source_hash)
-                        source_hash_by_source[str(source_path_or_url)] = source_hash
+                if _is_safe_local_path(path_obj, temp_dir):
+                    safe_path = (
+                        path_obj.resolve(strict=False)
+                        if path_obj.is_absolute()
+                        else FilePath(temp_dir).joinpath(path_obj).resolve(strict=False)
+                    )
+                    if safe_path.is_file():
+                        source_hash = _compute_source_hash(safe_path)
+                        if source_hash and input_ref:
+                            source_hash_by_ref.setdefault(str(input_ref), []).append(source_hash)
+                            source_hash_by_source[str(source_path_or_url)] = source_hash
+                    else:
+                        logger.debug(
+                            "Skipping source hash computation for non-file path: %s",
+                            source_path_or_url,
+                        )
+                else:
+                    logger.debug(
+                        "Skipping source hash computation for unsafe path: %s",
+                        source_path_or_url,
+                    )
             except Exception as hash_err:
                 logger.debug(
                     "Source hash computation failed for %s: %s",

@@ -2,7 +2,7 @@ import os
 import tempfile
 
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Claims.ingestion_claims import (
+from tldw_Server_API.app.core.Claims_Extraction.ingestion_claims import (
     extract_claims_for_chunks,
     store_claims,
 )

@@ -131,6 +131,7 @@ export function ReattachSourceModal({
         {tab === 'file' ? (
           <div className="mt-4 space-y-3">
             <Input
+              key="reattach-file"
               type="file"
               label="Select file"
               onChange={(e) => onFileChange(e.target.files?.[0] || null)}
@@ -142,9 +143,10 @@ export function ReattachSourceModal({
         ) : (
           <div className="mt-4 space-y-3">
             <Input
+              key="reattach-url"
               label="Source URL"
               placeholder="https://..."
-              value={url}
+              value={url ?? ''}
               onChange={(e) => onUrlChange(e.target.value)}
             />
             <p className="text-xs text-gray-500">

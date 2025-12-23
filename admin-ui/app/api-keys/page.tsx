@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
@@ -10,48 +10,109 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Pagination } from '@/components/ui/pagination';
-import { Key, Search, ExternalLink } from 'lucide-react';
+import { TableSkeleton } from '@/components/ui/skeleton';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Label } from '@/components/ui/label';
+import { Select } from '@/components/ui/select';
+import { useConfirm } from '@/components/ui/confirm-dialog';
+import { useToast } from '@/components/ui/toast';
+import { Key, Search, ExternalLink, BookmarkPlus, BookmarkX } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { User } from '@/types';
 import Link from 'next/link';
+import { useOrgContext } from '@/components/OrgContextSwitcher';
+import { useUrlPagination, useUrlState } from '@/lib/use-url-state';
 
 interface UserWithKeyCount extends User {
   api_key_count?: number;
 }
 
+type SavedKeyView = {
+  id: string;
+  name: string;
+  query: string;
+};
+
+const SAVED_VIEWS_STORAGE_KEY = 'admin_api_keys_saved_views';
+
 export default function ApiKeysPage() {
+  const confirm = useConfirm();
+  const { success, error: showError } = useToast();
+  const { selectedOrg } = useOrgContext();
   const [users, setUsers] = useState<UserWithKeyCount[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [searchQuery, setSearchQuery] = useState('');
-
-  // Pagination
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [searchQuery, setSearchQuery] = useUrlState<string>('q', { defaultValue: '' });
+  const [savedViews, setSavedViews] = useState<SavedKeyView[]>([]);
+  const [activeViewId, setActiveViewId] = useState('');
+  const [showSaveViewDialog, setShowSaveViewDialog] = useState(false);
+  const [saveViewName, setSaveViewName] = useState('');
+  const [saveViewError, setSaveViewError] = useState('');
+  const {
+    page: currentPage,
+    pageSize,
+    setPage: setCurrentPage,
+    setPageSize,
+    resetPagination,
+  } = useUrlPagination();
 
   useEffect(() => {
-    loadUsers();
+    if (typeof window === 'undefined') return;
+    try {
+      const stored = window.localStorage.getItem(SAVED_VIEWS_STORAGE_KEY);
+      if (!stored) return;
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed)) {
+        setSavedViews(parsed as SavedKeyView[]);
+      }
+    } catch (err) {
+      console.warn('Failed to load saved API key views:', err);
+    }
   }, []);
 
-  // Reset to first page when search changes
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchQuery]);
+  const persistSavedViews = useCallback((views: SavedKeyView[]) => {
+    setSavedViews(views);
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(SAVED_VIEWS_STORAGE_KEY, JSON.stringify(views));
+    } catch (err) {
+      console.warn('Failed to persist API key saved views:', err);
+    }
+  }, []);
 
-  const loadUsers = async () => {
+  const loadUsers = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
-      const data = await api.getUsers();
-      setUsers(Array.isArray(data) ? data : []);
+      const params: Record<string, string> = {};
+      if (selectedOrg) {
+        params.org_id = String(selectedOrg.id);
+      }
+      if (searchQuery) {
+        params.search = searchQuery;
+      }
+      const data = await api.getUsers(Object.keys(params).length ? params : undefined);
+      if (Array.isArray(data)) {
+        setUsers(data);
+      } else if (data && typeof data === 'object' && Array.isArray((data as { users?: UserWithKeyCount[] }).users)) {
+        setUsers((data as { users: UserWithKeyCount[] }).users);
+      } else {
+        setUsers([]);
+      }
     } catch (err: unknown) {
       console.error('Failed to load users:', err);
-      setError(err instanceof Error && err.message ? err.message : 'Failed to load users');
+      const message = err instanceof Error && err.message ? err.message : 'Failed to load users';
+      setError(message);
+      showError('Load users failed', message);
       setUsers([]);
     } finally {
       setLoading(false);
     }
-  };
+  }, [searchQuery, selectedOrg]);
+
+  useEffect(() => {
+    loadUsers();
+  }, [loadUsers]);
 
   const filteredUsers = users.filter((user) => {
     if (!searchQuery) return true;
@@ -62,11 +123,70 @@ export default function ApiKeysPage() {
     );
   });
 
+  useEffect(() => {
+    const match = savedViews.find((view) => view.query === (searchQuery || ''));
+    setActiveViewId(match ? match.id : '');
+  }, [savedViews, searchQuery]);
+
   // Pagination calculations
   const totalItems = filteredUsers.length;
   const totalPages = Math.ceil(totalItems / pageSize);
   const startIndex = (currentPage - 1) * pageSize;
   const paginatedUsers = filteredUsers.slice(startIndex, startIndex + pageSize);
+
+  const handleSearchChange = (value: string) => {
+    setSearchQuery(value || undefined);
+    resetPagination();
+  };
+
+  const handleApplySavedView = (viewId: string) => {
+    if (!viewId) {
+      setSearchQuery(undefined);
+      resetPagination();
+      return;
+    }
+    const view = savedViews.find((item) => item.id === viewId);
+    if (!view) return;
+    setSearchQuery(view.query || undefined);
+    resetPagination();
+  };
+
+  const handleSaveView = () => {
+    const name = saveViewName.trim();
+    if (!name) {
+      setSaveViewError('Provide a name for this view.');
+      return;
+    }
+    const query = searchQuery || '';
+    const newView: SavedKeyView = {
+      id: `${Date.now()}`,
+      name,
+      query,
+    };
+    persistSavedViews([newView, ...savedViews]);
+    setSaveViewName('');
+    setSaveViewError('');
+    setShowSaveViewDialog(false);
+    success('Saved view', `${name} has been added.`);
+  };
+
+  const handleDeleteView = async () => {
+    if (!activeViewId) return;
+    const view = savedViews.find((item) => item.id === activeViewId);
+    if (!view) return;
+    const confirmed = await confirm({
+      title: 'Delete saved view',
+      message: `Delete "${view.name}"?`,
+      confirmText: 'Delete',
+      variant: 'danger',
+      icon: 'delete',
+    });
+    if (!confirmed) return;
+    const next = savedViews.filter((item) => item.id !== activeViewId);
+    persistSavedViews(next);
+    setActiveViewId('');
+    success('Saved view removed', `"${view.name}" deleted.`);
+  };
 
   return (
     <ProtectedRoute>
@@ -104,14 +224,84 @@ export default function ApiKeysPage() {
             {/* Search */}
             <Card className="mb-6">
               <CardContent className="pt-6">
-                <div className="relative max-w-md">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Search users by name or email..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="pl-10"
-                  />
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="relative max-w-md w-full">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search users by name or email..."
+                      value={searchQuery || ''}
+                      onChange={(e) => handleSearchChange(e.target.value)}
+                      className="pl-10"
+                    />
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Select
+                      value={activeViewId}
+                      onChange={(event) => handleApplySavedView(event.target.value)}
+                      className="min-w-[200px]"
+                      disabled={savedViews.length === 0}
+                    >
+                      <option value="">Saved views</option>
+                      {savedViews.map((view) => (
+                        <option key={view.id} value={view.id}>
+                          {view.name}
+                        </option>
+                      ))}
+                    </Select>
+                    <Dialog open={showSaveViewDialog} onOpenChange={(open) => {
+                      setShowSaveViewDialog(open);
+                      if (!open) {
+                        setSaveViewError('');
+                        setSaveViewName('');
+                      }
+                    }}>
+                      <DialogTrigger asChild>
+                        <Button variant="outline">
+                          <BookmarkPlus className="mr-2 h-4 w-4" />
+                          Save view
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>Save view</DialogTitle>
+                          <DialogDescription>Store the current search for quick reuse.</DialogDescription>
+                        </DialogHeader>
+                        {saveViewError && (
+                          <Alert variant="destructive">
+                            <AlertDescription>{saveViewError}</AlertDescription>
+                          </Alert>
+                        )}
+                        <div className="space-y-2">
+                          <Label htmlFor="saved-keys-view-name">View name</Label>
+                          <Input
+                            id="saved-keys-view-name"
+                            value={saveViewName}
+                            onChange={(event) => setSaveViewName(event.target.value)}
+                            placeholder="e.g., Active admins"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Current search: {searchQuery || 'All users'}
+                          </p>
+                        </div>
+                        <DialogFooter>
+                          <Button variant="outline" onClick={() => setShowSaveViewDialog(false)}>
+                            Cancel
+                          </Button>
+                          <Button onClick={handleSaveView}>
+                            Save view
+                          </Button>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
+                    <Button
+                      variant="outline"
+                      onClick={handleDeleteView}
+                      disabled={!activeViewId}
+                    >
+                      <BookmarkX className="mr-2 h-4 w-4" />
+                      Delete view
+                    </Button>
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -126,7 +316,9 @@ export default function ApiKeysPage() {
               </CardHeader>
               <CardContent>
                 {loading ? (
-                  <div className="text-center text-muted-foreground py-8">Loading...</div>
+                  <div className="py-4">
+                    <TableSkeleton rows={5} columns={5} />
+                  </div>
                 ) : filteredUsers.length === 0 ? (
                   <div className="text-center text-muted-foreground py-8">
                     {searchQuery ? 'No users match your search' : 'No users found'}
@@ -178,7 +370,7 @@ export default function ApiKeysPage() {
                       onPageChange={setCurrentPage}
                       onPageSizeChange={(size) => {
                         setPageSize(size);
-                        setCurrentPage(1);
+                        resetPagination();
                       }}
                     />
                   </>

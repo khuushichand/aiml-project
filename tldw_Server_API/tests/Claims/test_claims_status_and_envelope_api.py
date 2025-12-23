@@ -8,7 +8,7 @@ from typing import Any, AsyncGenerator
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.services.claims_rebuild_service import get_claims_rebuild_service
+from tldw_Server_API.app.core.Claims_Extraction.claims_rebuild_service import get_claims_rebuild_service
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
 

@@ -447,6 +447,61 @@ async def isolated_test_environment(monkeypatch):
         """)
 
         await test_conn.execute("""
+            CREATE TABLE IF NOT EXISTS organizations (
+                id SERIAL PRIMARY KEY,
+                uuid UUID UNIQUE DEFAULT gen_random_uuid(),
+                name VARCHAR(255) UNIQUE NOT NULL,
+                slug VARCHAR(255) UNIQUE,
+                owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                is_active BOOLEAN DEFAULT TRUE,
+                metadata JSONB,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_owner ON organizations(owner_user_id)")
+
+        await test_conn.execute("""
+            CREATE TABLE IF NOT EXISTS org_members (
+                org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                role VARCHAR(32) DEFAULT 'member',
+                status VARCHAR(32) DEFAULT 'active',
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (org_id, user_id)
+            )
+        """)
+        await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_org_members_user ON org_members(user_id)")
+
+        await test_conn.execute("""
+            CREATE TABLE IF NOT EXISTS teams (
+                id SERIAL PRIMARY KEY,
+                org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                name VARCHAR(255) NOT NULL,
+                slug VARCHAR(255),
+                description TEXT,
+                is_active BOOLEAN DEFAULT TRUE,
+                metadata JSONB,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (org_id, name)
+            )
+        """)
+        await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_teams_org ON teams(org_id)")
+
+        await test_conn.execute("""
+            CREATE TABLE IF NOT EXISTS team_members (
+                team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                role VARCHAR(32) DEFAULT 'member',
+                status VARCHAR(32) DEFAULT 'active',
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (team_id, user_id)
+            )
+        """)
+        await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_id)")
+
+        await test_conn.execute("""
             CREATE TABLE IF NOT EXISTS api_keys (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -498,8 +553,13 @@ async def isolated_test_environment(monkeypatch):
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 role_to_grant VARCHAR(50) DEFAULT 'user',
                 is_active BOOLEAN DEFAULT TRUE,
+                description TEXT,
+                allowed_email_domain TEXT,
                 metadata JSONB,
-                role_id INTEGER REFERENCES roles(id)
+                role_id INTEGER REFERENCES roles(id),
+                org_id INTEGER,
+                org_role VARCHAR(50),
+                team_id INTEGER
             )
         """)
 
@@ -1027,8 +1087,13 @@ async def setup_test_database(monkeypatch):
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 role_to_grant VARCHAR(50) DEFAULT 'user',
                 is_active BOOLEAN DEFAULT TRUE,
+                description TEXT,
+                allowed_email_domain TEXT,
                 metadata JSONB,
-                role_id INTEGER REFERENCES roles(id)
+                role_id INTEGER REFERENCES roles(id),
+                org_id INTEGER,
+                org_role VARCHAR(50),
+                team_id INTEGER
             )
         """)
 

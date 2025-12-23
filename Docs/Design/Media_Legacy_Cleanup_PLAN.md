@@ -30,10 +30,10 @@ after auditing external usage and updating the changelog.
   - `_prepare_claims_chunks`
   - Notes:
     - Behavior is implemented and documented in
-      `core/Ingestion_Media_Processing/claims_utils.py`.
+      `core/Claims_Extraction/claims_utils.py`.
     - No call sites in `_legacy_media` or modular endpoints.
   - Outcome: Removed from `_legacy_media.py` after one minor release,
-    leaving `claims_utils` as the canonical implementation.
+    leaving `claims_utils` in `core/Claims_Extraction` as the canonical implementation.
 
 - `_single_pdf_worker` (`_legacy_media.py:4158`)
   - Notes:

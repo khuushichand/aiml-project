@@ -152,6 +152,9 @@ export function OrgContextSwitcher({ className = '' }: OrgContextSwitcherProps) 
   const { isSuperAdmin } = usePermissions();
 
   // Super admins see all orgs but can choose to scope; org admins must select from their orgs
+  if (!isSuperAdmin()) {
+    return null;
+  }
   if (loading) {
     return (
       <div className={`flex items-center gap-2 px-3 py-2 ${className}`}>

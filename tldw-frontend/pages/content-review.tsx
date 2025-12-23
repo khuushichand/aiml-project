@@ -1,8 +1,9 @@
 import type { Draft } from '@/types/content-review';
 import type { DraftFileLoadResult } from '@/lib/drafts';
-import { useEffect, useMemo, useReducer, useRef } from 'react';
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { Layout } from '@/components/layout/Layout';
 import { useToast } from '@/components/ui/ToastProvider';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { DraftEditor } from '@/components/content-review/DraftEditor';
 import { DraftListSidebar } from '@/components/content-review/DraftListSidebar';
 import { ReattachSourceModal, type ReattachTab } from '@/components/content-review/ReattachSourceModal';
@@ -166,6 +167,8 @@ export default function ContentReviewPage() {
   const dirtyRef = useRef(false);
   const selectedIdRef = useRef(state.selectedId);
   const draftsRef = useRef(state.drafts);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const pendingSelectionRef = useRef<string | null>(null);
 
   const {
     drafts,
@@ -205,12 +208,25 @@ export default function ContentReviewPage() {
       return;
     }
     if (dirtyRef.current) {
-      const ok = window.confirm('You have unsaved changes - discard them and switch drafts?');
-      if (!ok) {
-        return;
-      }
+      pendingSelectionRef.current = nextId;
+      setConfirmOpen(true);
+      return;
     }
     dispatch({ type: 'SET_SELECTED_ID', selectedId: nextId });
+  };
+
+  const handleConfirmSwitch = () => {
+    const nextId = pendingSelectionRef.current;
+    if (nextId) {
+      dispatch({ type: 'SET_SELECTED_ID', selectedId: nextId });
+    }
+    pendingSelectionRef.current = null;
+    setConfirmOpen(false);
+  };
+
+  const handleCancelSwitch = () => {
+    pendingSelectionRef.current = null;
+    setConfirmOpen(false);
   };
 
   useEffect(() => {
@@ -426,10 +442,7 @@ export default function ContentReviewPage() {
   const uploadMedia = async (formData: FormData): Promise<number> => {
     const addResponse = await apiClient.post<{ results?: Array<Record<string, unknown>> }>(
       '/media/add',
-      formData,
-      {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      }
+      formData
     );
 
     const results = Array.isArray(addResponse?.results) ? addResponse.results : [];
@@ -689,6 +702,17 @@ export default function ContentReviewPage() {
         onFileChange={(value) => dispatch({ type: 'SET_REATTACH_FILE', value })}
         onClose={closeReattachModal}
         onSubmit={submitReattach}
+      />
+
+      <ConfirmDialog
+        open={confirmOpen}
+        title="Discard unsaved changes?"
+        message="You have unsaved edits in this draft. Discard them and switch drafts?"
+        confirmText="Discard changes"
+        cancelText="Keep editing"
+        destructive
+        onConfirm={handleConfirmSwitch}
+        onCancel={handleCancelSwitch}
       />
     </Layout>
   );

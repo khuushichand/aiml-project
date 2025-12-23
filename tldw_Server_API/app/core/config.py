@@ -2078,6 +2078,8 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
             "jobs",
             "personalization",
             "evaluations",
+            "orgs",
+            "org-invites",
             # Ensure experimental connectors endpoints are available in tests
             # to avoid 404s when the app is imported before ROUTES_ENABLE is set.
             "connectors",

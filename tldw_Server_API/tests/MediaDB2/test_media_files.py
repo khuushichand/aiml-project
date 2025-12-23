@@ -1,0 +1,324 @@
+# tests/MediaDB2/test_media_files.py
+"""
+Unit tests for MediaFiles table operations in Media_DB_v2.
+
+Tests cover:
+- Inserting media file records
+- Retrieving media files by media_id and type
+- Listing all files for a media item
+- has_original_file check
+- Soft-delete and include_deleted behavior
+"""
+import pytest
+
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+
+
+@pytest.fixture
+def memory_db():
+    """Create an in-memory database instance."""
+    db = MediaDatabase(db_path=":memory:", client_id="test_client")
+    yield db
+    db.close_connection()
+
+
+@pytest.fixture
+def db_with_media(memory_db):
+    """Create a database with a single media item for testing."""
+    media_id, _, _ = memory_db.add_media_with_keywords(
+        title="Test PDF Document",
+        content="This is the content of the test document.",
+        media_type="pdf",
+        url="file:///test/document.pdf",
+        keywords=["test", "pdf"]
+    )
+    return memory_db, media_id
+
+
+class TestInsertMediaFile:
+    """Tests for insert_media_file method."""
+
+    @pytest.mark.unit
+    def test_insert_media_file_returns_uuid(self, db_with_media):
+        """Test that insert_media_file returns a valid UUID."""
+        db, media_id = db_with_media
+
+        file_uuid = db.insert_media_file(
+            media_id=media_id,
+            file_type="original",
+            storage_path="user1/media/1/original.pdf",
+            original_filename="document.pdf",
+            file_size=12345,
+            mime_type="application/pdf",
+            checksum="abc123def456"
+        )
+
+        assert file_uuid is not None
+        assert len(file_uuid) == 36  # UUID format: 8-4-4-4-12
+
+    @pytest.mark.unit
+    def test_insert_media_file_minimal_params(self, db_with_media):
+        """Test inserting a file with only required parameters."""
+        db, media_id = db_with_media
+
+        file_uuid = db.insert_media_file(
+            media_id=media_id,
+            file_type="original",
+            storage_path="path/to/file.pdf"
+        )
+
+        assert file_uuid is not None
+        # Verify we can retrieve it
+        record = db.get_media_file(media_id, "original")
+        assert record is not None
+        assert record["storage_path"] == "path/to/file.pdf"
+
+    @pytest.mark.unit
+    def test_insert_multiple_file_types(self, db_with_media):
+        """Test inserting multiple file types for same media."""
+        db, media_id = db_with_media
+
+        db.insert_media_file(
+            media_id=media_id,
+            file_type="original",
+            storage_path="path/original.pdf"
+        )
+        db.insert_media_file(
+            media_id=media_id,
+            file_type="thumbnail",
+            storage_path="path/thumb.png"
+        )
+
+        files = db.get_media_files(media_id)
+        assert len(files) == 2
+        file_types = {f["file_type"] for f in files}
+        assert file_types == {"original", "thumbnail"}
+
+
+class TestGetMediaFile:
+    """Tests for get_media_file method."""
+
+    @pytest.mark.unit
+    def test_get_media_file_returns_record(self, db_with_media):
+        """Test that get_media_file returns the correct record."""
+        db, media_id = db_with_media
+
+        db.insert_media_file(
+            media_id=media_id,
+            file_type="original",
+            storage_path="path/to/file.pdf",
+            original_filename="my_document.pdf",
+            file_size=5000,
+            mime_type="application/pdf",
+            checksum="sha256hash"
+        )
+
+        record = db.get_media_file(media_id, "original")
+
+        assert record is not None
+        assert record["storage_path"] == "path/to/file.pdf"
+        assert record["original_filename"] == "my_document.pdf"
+        assert record["file_size"] == 5000
+        assert record["mime_type"] == "application/pdf"
+        assert record["checksum"] == "sha256hash"
+
+    @pytest.mark.unit
+    def test_get_media_file_returns_none_when_missing(self, db_with_media):
+        """Test that get_media_file returns None for non-existent file."""
+        db, media_id = db_with_media
+
+        record = db.get_media_file(media_id, "original")
+        assert record is None
+
+    @pytest.mark.unit
+    def test_get_media_file_respects_file_type(self, db_with_media):
+        """Test that get_media_file correctly filters by file_type."""
+        db, media_id = db_with_media
+
+        db.insert_media_file(
+            media_id=media_id,
+            file_type="original",
+            storage_path="path/original.pdf"
+        )
+        db.insert_media_file(
+            media_id=media_id,
+            file_type="thumbnail",
+            storage_path="path/thumb.png"
+        )
+
+        original = db.get_media_file(media_id, "original")
+        thumbnail = db.get_media_file(media_id, "thumbnail")
+
+        assert original["storage_path"] == "path/original.pdf"
+        assert thumbnail["storage_path"] == "path/thumb.png"
+
+
+class TestGetMediaFiles:
+    """Tests for get_media_files method."""
+
+    @pytest.mark.unit
+    def test_get_media_files_returns_all_files(self, db_with_media):
+        """Test that get_media_files returns all files for media."""
+        db, media_id = db_with_media
+
+        db.insert_media_file(media_id=media_id, file_type="original", storage_path="a.pdf")
+        db.insert_media_file(media_id=media_id, file_type="thumbnail", storage_path="b.png")
+        db.insert_media_file(media_id=media_id, file_type="preview", storage_path="c.jpg")
+
+        files = db.get_media_files(media_id)
+        assert len(files) == 3
+
+    @pytest.mark.unit
+    def test_get_media_files_returns_empty_list_when_none(self, db_with_media):
+        """Test that get_media_files returns empty list when no files."""
+        db, media_id = db_with_media
+
+        files = db.get_media_files(media_id)
+        assert files == []
+
+
+class TestHasOriginalFile:
+    """Tests for has_original_file method."""
+
+    @pytest.mark.unit
+    def test_has_original_file_returns_false_when_none(self, db_with_media):
+        """Test that has_original_file returns False when no file."""
+        db, media_id = db_with_media
+
+        assert db.has_original_file(media_id) is False
+
+    @pytest.mark.unit
+    def test_has_original_file_returns_true_when_exists(self, db_with_media):
+        """Test that has_original_file returns True when file exists."""
+        db, media_id = db_with_media
+
+        db.insert_media_file(
+            media_id=media_id,
+            file_type="original",
+            storage_path="path/file.pdf"
+        )
+
+        assert db.has_original_file(media_id) is True
+
+    @pytest.mark.unit
+    def test_has_original_file_ignores_other_types(self, db_with_media):
+        """Test that has_original_file only checks for 'original' type."""
+        db, media_id = db_with_media
+
+        db.insert_media_file(
+            media_id=media_id,
+            file_type="thumbnail",  # Not 'original'
+            storage_path="path/thumb.png"
+        )
+
+        assert db.has_original_file(media_id) is False
+
+
+class TestSoftDeleteMediaFile:
+    """Tests for soft_delete_media_file method."""
+
+    @pytest.mark.unit
+    def test_soft_delete_hides_file(self, db_with_media):
+        """Test that soft-deleted files are not returned by default."""
+        db, media_id = db_with_media
+
+        db.insert_media_file(
+            media_id=media_id,
+            file_type="original",
+            storage_path="path/file.pdf"
+        )
+
+        record = db.get_media_file(media_id, "original")
+        file_id = record["id"]
+
+        db.soft_delete_media_file(file_id)
+
+        # Should not find deleted record by default
+        assert db.get_media_file(media_id, "original") is None
+        assert db.has_original_file(media_id) is False
+
+    @pytest.mark.unit
+    def test_soft_delete_visible_with_include_deleted(self, db_with_media):
+        """Test that soft-deleted files are visible with include_deleted=True."""
+        db, media_id = db_with_media
+
+        db.insert_media_file(
+            media_id=media_id,
+            file_type="original",
+            storage_path="path/file.pdf"
+        )
+
+        record = db.get_media_file(media_id, "original")
+        file_id = record["id"]
+
+        db.soft_delete_media_file(file_id)
+
+        # Should find with include_deleted=True
+        record = db.get_media_file(media_id, "original", include_deleted=True)
+        assert record is not None
+        assert record["deleted"] == 1
+
+    @pytest.mark.unit
+    def test_soft_delete_increments_version(self, db_with_media):
+        """Test that soft-delete increments the version number."""
+        db, media_id = db_with_media
+
+        db.insert_media_file(
+            media_id=media_id,
+            file_type="original",
+            storage_path="path/file.pdf"
+        )
+
+        record_before = db.get_media_file(media_id, "original")
+        file_id = record_before["id"]
+        version_before = record_before["version"]
+
+        db.soft_delete_media_file(file_id)
+
+        record_after = db.get_media_file(media_id, "original", include_deleted=True)
+        assert record_after["version"] == version_before + 1
+
+    @pytest.mark.unit
+    def test_soft_delete_nonexistent_is_safe(self, db_with_media):
+        """Test that soft-deleting a non-existent file doesn't raise."""
+        db, media_id = db_with_media
+
+        # Should not raise
+        db.soft_delete_media_file(99999)
+
+
+class TestGetMediaFilesWithDeleted:
+    """Tests for get_media_files with include_deleted parameter."""
+
+    @pytest.mark.unit
+    def test_get_media_files_excludes_deleted_by_default(self, db_with_media):
+        """Test that get_media_files excludes deleted files by default."""
+        db, media_id = db_with_media
+
+        db.insert_media_file(media_id=media_id, file_type="original", storage_path="a.pdf")
+        db.insert_media_file(media_id=media_id, file_type="thumbnail", storage_path="b.png")
+
+        # Delete one
+        record = db.get_media_file(media_id, "original")
+        db.soft_delete_media_file(record["id"])
+
+        # Should only return non-deleted
+        files = db.get_media_files(media_id)
+        assert len(files) == 1
+        assert files[0]["file_type"] == "thumbnail"
+
+    @pytest.mark.unit
+    def test_get_media_files_includes_deleted_when_requested(self, db_with_media):
+        """Test that get_media_files includes deleted files when requested."""
+        db, media_id = db_with_media
+
+        db.insert_media_file(media_id=media_id, file_type="original", storage_path="a.pdf")
+        db.insert_media_file(media_id=media_id, file_type="thumbnail", storage_path="b.png")
+
+        # Delete one
+        record = db.get_media_file(media_id, "original")
+        db.soft_delete_media_file(record["id"])
+
+        # Should return both with include_deleted
+        files = db.get_media_files(media_id, include_deleted=True)
+        assert len(files) == 2

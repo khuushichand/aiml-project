@@ -85,7 +85,7 @@ Response 200 (application/json):
 ## Enforcement
 
 - Endpoint allowlists: enforced for LLM endpoints (`/api/v1/chat/completions`, `/api/v1/embeddings`). Requests to disallowed endpoints receive 403.
-- Budgets: evaluated from `llm_usage_log` daily/monthly. Exceeding a budget returns 402 with details.
+- Budgets: evaluated from `llm_usage_log` daily/monthly. Exceeding a budget returns 402 with details. The response shape (`error`, `message`, `details`) is a stable contract.
 - Optional allowlists: set `llm_allowed_providers` and/or `llm_allowed_models` (on the key via admin SQL for now). If present, middleware enforces provider via `X-LLM-Provider` header and model parsed from JSON request body when available.
 
 ```http
@@ -99,7 +99,22 @@ Content-Type: application/json
     "over": true,
     "reasons": ["day_tokens_exceeded:1200/1000"],
     "day": {"tokens": 1200, "usd": 0.55},
-    "month": {"tokens": 20000, "usd": 12.34}
+    "month": {"tokens": 20000, "usd": 12.34},
+    "limits": {
+      "is_virtual": true,
+      "llm_budget_day_tokens": 1000,
+      "llm_budget_day_usd": 5.0,
+      "llm_budget_month_tokens": 20000,
+      "llm_budget_month_usd": 100.0
+    },
+    "principal": {
+      "principal_id": "user:1:api_key:42",
+      "kind": "api_key",
+      "user_id": 1,
+      "api_key_id": 42,
+      "org_ids": [],
+      "team_ids": []
+    }
   }
 }
 ```

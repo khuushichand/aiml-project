@@ -2,7 +2,7 @@
 
 ## 1. Background
 - The ingestion pipeline optionally extracts factual statements from media chunks and stores them in `MediaDatabase.Claims`, with optional vector embeddings (`tldw_Server_API/app/core/Embeddings/ChromaDB_Library.py`).
-- The answer-time `ClaimsEngine` extracts and verifies claims for RAG outputs, providing supported/refuted/NEI labels, evidence, and citations (`tldw_Server_API/app/core/Ingestion_Media_Processing/Claims/claims_engine.py`).
+- The answer-time `ClaimsEngine` extracts and verifies claims for RAG outputs, providing supported/refuted/NEI labels, evidence, and citations (`tldw_Server_API/app/core/Claims_Extraction/claims_engine.py`).
 - REST endpoints and a background rebuild worker expose lifecycle controls, while the front-end search page provides toggles for claim extraction and verification.
 
 ## 2. Problem Statement
@@ -29,7 +29,7 @@ Analysts and downstream automations need grounded, inspectable factual statement
 
 ## 6. Functional Requirements
 ### 6.1 Ingestion-Time Claims
-- After chunking, extract up to `CLAIMS_MAX_PER_CHUNK` statements using configured mode (`heuristic`, `ner`, provider, or fallback) and store with chunk hashes (`tldw_Server_API/app/core/Ingestion_Media_Processing/Claims/ingestion_claims.py`).
+- After chunking, extract up to `CLAIMS_MAX_PER_CHUNK` statements using configured mode (`heuristic`, `ner`, provider, or fallback) and store with chunk hashes (`tldw_Server_API/app/core/Claims_Extraction/ingestion_claims.py`).
 - When `CLAIMS_EMBED` is enabled, upsert claim embeddings into a per-user Chroma collection with metadata linking to media/chunk/extractor (`tldw_Server_API/app/core/Embeddings/ChromaDB_Library.py`).
 - Soft-delete prior claims before inserting rebuilt sets to maintain version history.
 
@@ -45,7 +45,7 @@ Analysts and downstream automations need grounded, inspectable factual statement
 - Deliver `POST` endpoints to rebuild single media, bulk media (`missing`, `all`, `stale` policies), and FTS indexes; expose `GET /status` for worker stats (`tldw_Server_API/app/api/v1/endpoints/claims.py`).
 
 ### 6.4 Background Rebuild & Automation
-- `ClaimsRebuildService` queues rebuild tasks, chunks stored content, reapplies extraction, soft-deletes old rows, and logs counts (`tldw_Server_API/app/services/claims_rebuild_service.py`).
+- `ClaimsRebuildService` queues rebuild tasks, chunks stored content, reapplies extraction, soft-deletes old rows, and logs counts (`tldw_Server_API/app/core/Claims_Extraction/claims_rebuild_service.py`).
 - Periodic loop in `main.py` optionally enqueues rebuilds based on `CLAIMS_REBUILD_*` settings, obeying single-user defaults until multi-user scheduling is implemented.
 
 ### 6.5 UI & Integrations

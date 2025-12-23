@@ -1,29 +1,36 @@
 'use client';
 
-import { useEffect, useState, Suspense } from 'react';
+import { useCallback, useEffect, useState, Suspense } from 'react';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Pagination } from '@/components/ui/pagination';
-import { FileText, Search, RefreshCw, Filter } from 'lucide-react';
+import { FileText, Search, RefreshCw, Filter, Eye, Clipboard } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { AuditLog } from '@/types';
 import { ExportMenu } from '@/components/ui/export-menu';
 import { exportAuditLogs, ExportFormat } from '@/lib/export';
 import { Skeleton, TableSkeleton } from '@/components/ui/skeleton';
 import { useUrlMultiState, useUrlPagination } from '@/lib/use-url-state';
+import { useOrgContext } from '@/components/OrgContextSwitcher';
+import { useToast } from '@/components/ui/toast';
+import Link from 'next/link';
 
 function AuditPageContent() {
+  const { selectedOrg } = useOrgContext();
+  const { success, error: showError } = useToast();
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [allLogs, setAllLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [selectedLog, setSelectedLog] = useState<AuditLog | null>(null);
 
   // URL state for filters
   const [filters, setFilters, clearFilters] = useUrlMultiState({
@@ -37,16 +44,16 @@ function AuditPageContent() {
   // URL state for pagination
   const { page: currentPage, pageSize, setPage: setCurrentPage, setPageSize, resetPagination } = useUrlPagination();
 
-  useEffect(() => {
-    loadLogs();
-  }, []);
-
-  const loadLogs = async () => {
+  const loadLogs = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
 
-      const data = await api.getAuditLogs();
+      const params: Record<string, string> = {};
+      if (selectedOrg) {
+        params.org_id = String(selectedOrg.id);
+      }
+      const data = await api.getAuditLogs(Object.keys(params).length ? params : undefined);
       const logsArray = Array.isArray(data) ? data : (data.items || []);
       setAllLogs(logsArray);
       setLogs(logsArray);
@@ -58,7 +65,11 @@ function AuditPageContent() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedOrg]);
+
+  useEffect(() => {
+    loadLogs();
+  }, [loadLogs]);
 
   // Apply filters - now filters from URL state
   const applyFilters = () => {
@@ -105,6 +116,27 @@ function AuditPageContent() {
 
   const handleExport = (format: ExportFormat) => {
     exportAuditLogs(logs, format);
+  };
+
+  const handleCopyRaw = async () => {
+    if (!selectedLog) return;
+    const rawPayload = selectedLog.raw ?? {
+      id: selectedLog.id,
+      timestamp: selectedLog.timestamp,
+      user_id: selectedLog.user_id,
+      action: selectedLog.action,
+      resource: selectedLog.resource,
+      details: selectedLog.details,
+      ip_address: selectedLog.ip_address,
+      username: selectedLog.username,
+    };
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(rawPayload, null, 2));
+      success('Copied audit event');
+    } catch (err) {
+      console.error('Failed to copy audit log:', err);
+      showError('Copy failed', 'Unable to copy audit event details.');
+    }
   };
 
   // Pagination
@@ -238,6 +270,79 @@ function AuditPageContent() {
               </CardContent>
             </Card>
 
+            <Dialog open={!!selectedLog} onOpenChange={(open) => !open && setSelectedLog(null)}>
+              <DialogContent className="max-w-3xl">
+                <DialogHeader>
+                  <DialogTitle>Audit Event</DialogTitle>
+                  <DialogDescription>
+                    {selectedLog ? `${selectedLog.action} · ${formatTimestamp(selectedLog.timestamp)}` : 'Event details'}
+                  </DialogDescription>
+                </DialogHeader>
+                {selectedLog && (
+                  <div className="space-y-4">
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-1">
+                        <Label>Event ID</Label>
+                        <div className="text-sm font-mono">{selectedLog.id}</div>
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Resource</Label>
+                        <div className="text-sm font-mono">{selectedLog.resource || '—'}</div>
+                      </div>
+                      <div className="space-y-1">
+                        <Label>User</Label>
+                        <div className="text-sm">
+                          <div className="font-mono">{selectedLog.user_id || '—'}</div>
+                          {selectedLog.username && (
+                            <div className="text-xs text-muted-foreground">{selectedLog.username}</div>
+                          )}
+                          {selectedLog.user_id ? (
+                            <Link href={`/users/${selectedLog.user_id}`} className="text-xs text-primary underline">
+                              View user
+                            </Link>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <Label>IP Address</Label>
+                        <div className="text-sm font-mono">{selectedLog.ip_address || '—'}</div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <Label>Details</Label>
+                      </div>
+                      {selectedLog.details ? (
+                        <pre className="text-xs bg-muted p-3 rounded max-h-64 overflow-auto">
+                          {JSON.stringify(selectedLog.details, null, 2)}
+                        </pre>
+                      ) : (
+                        <div className="text-sm text-muted-foreground">No details captured.</div>
+                      )}
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <Label>Raw Event</Label>
+                        <Button variant="outline" size="sm" onClick={handleCopyRaw}>
+                          <Clipboard className="mr-2 h-4 w-4" />
+                          Copy JSON
+                        </Button>
+                      </div>
+                      <pre className="text-xs bg-muted p-3 rounded max-h-64 overflow-auto">
+                        {JSON.stringify(
+                          selectedLog.raw ?? selectedLog,
+                          null,
+                          2
+                        )}
+                      </pre>
+                    </div>
+                  </div>
+                )}
+              </DialogContent>
+            </Dialog>
+
             {/* Logs Table */}
             <Card>
               <CardHeader>
@@ -266,6 +371,7 @@ function AuditPageContent() {
                             <TableHead>Action</TableHead>
                             <TableHead>Resource</TableHead>
                             <TableHead>Details</TableHead>
+                            <TableHead className="text-right">Actions</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -275,7 +381,12 @@ function AuditPageContent() {
                                 {formatTimestamp(log.timestamp)}
                               </TableCell>
                               <TableCell className="font-mono text-sm">
-                                {log.user_id}
+                                <div className="flex flex-col">
+                                  <span>{log.user_id}</span>
+                                  {log.username && (
+                                    <span className="text-xs text-muted-foreground">{log.username}</span>
+                                  )}
+                                </div>
                               </TableCell>
                               <TableCell>
                                 <Badge variant={getActionBadgeVariant(log.action)}>
@@ -293,6 +404,12 @@ function AuditPageContent() {
                                 ) : (
                                   <span className="text-muted-foreground">-</span>
                                 )}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <Button variant="outline" size="sm" onClick={() => setSelectedLog(log)}>
+                                  <Eye className="mr-2 h-4 w-4" />
+                                  View
+                                </Button>
                               </TableCell>
                             </TableRow>
                           ))}

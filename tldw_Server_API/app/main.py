@@ -675,6 +675,8 @@ else:
 
     # Flashcards Endpoint (V5 - ChaChaNotes)
     from tldw_Server_API.app.api.v1.endpoints.flashcards import router as flashcards_router
+    # Quizzes Endpoint (ChaChaNotes)
+    from tldw_Server_API.app.api.v1.endpoints.quizzes import router as quizzes_router
 
     # LLM Providers Endpoint
     from tldw_Server_API.app.api.v1.endpoints.llm_providers import router as llm_providers_router
@@ -1685,7 +1687,7 @@ async def lifespan(app: FastAPI):
         import asyncio as _asyncio
         from tldw_Server_API.app.core.config import settings as _app_settings
         from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path as _get_media_db_path
-        from tldw_Server_API.app.services.claims_rebuild_service import get_claims_rebuild_service as _get_claims_svc
+        from tldw_Server_API.app.core.Claims_Extraction.claims_rebuild_service import get_claims_rebuild_service as _get_claims_svc
         from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase as _MediaDB
 
         _claims_enabled = bool(_app_settings.get("CLAIMS_REBUILD_ENABLED", False))
@@ -2746,6 +2748,7 @@ OPENAPI_TAGS = [
         },
     },
     {"name": "flashcards", "description": "Flashcards/Decks (ChaChaNotes)"},
+    {"name": "quizzes", "description": "Quizzes (ChaChaNotes)"},
     {
         "name": "chatbooks",
         "description": "Import/export chatbooks (backup/restore).",
@@ -4041,6 +4044,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(flashcards_router, prefix=f"{API_V1_PREFIX}", tags=["flashcards"])
     except Exception as _flash_min_err:
         logger.debug(f"Skipping flashcards router in minimal test app: {_flash_min_err}")
+    # Quizzes endpoints (ChaChaNotes-backed) for integration tests
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.quizzes import router as quizzes_router
+
+        app.include_router(quizzes_router, prefix=f"{API_V1_PREFIX}", tags=["quizzes"])
+    except Exception as _quiz_min_err:
+        logger.debug(f"Skipping quizzes router in minimal test app: {_quiz_min_err}")
     # Metrics endpoints (/api/v1/metrics/text)
     try:
         from tldw_Server_API.app.api.v1.endpoints.metrics import router as metrics_router
@@ -4099,6 +4109,25 @@ elif _MINIMAL_TEST_APP:
         app.include_router(admin_router, prefix=f"{API_V1_PREFIX}", tags=["admin"])
     except Exception as _adm_inc_err:  # noqa: BLE001
         logger.debug(f"Skipping admin router include in minimal test app: {_adm_inc_err}")
+    # Organization endpoints used by AuthNZ integration tests
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.orgs import router as orgs_router
+
+        app.include_router(orgs_router, prefix=f"{API_V1_PREFIX}", tags=["organizations"])
+        try:
+            from tldw_Server_API.app.api.v1.endpoints.shared_keys_scoped import router as shared_keys_scoped_router
+
+            app.include_router(shared_keys_scoped_router, prefix=f"{API_V1_PREFIX}", tags=["organizations"])
+        except Exception as _org_keys_min_err:  # noqa: BLE001
+            logger.debug(f"Skipping shared_keys_scoped router in minimal test app: {_org_keys_min_err}")
+    except Exception as _orgs_min_err:  # noqa: BLE001
+        logger.debug(f"Skipping orgs router in minimal test app: {_orgs_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.org_invites import router as org_invites_router
+
+        app.include_router(org_invites_router, prefix=f"{API_V1_PREFIX}", tags=["invites"])
+    except Exception as _org_inv_min_err:  # noqa: BLE001
+        logger.debug(f"Skipping org_invites router in minimal test app: {_org_inv_min_err}")
     # Resource Governor admin/diag endpoints are required for RG tests in minimal app
     try:
         from tldw_Server_API.app.api.v1.endpoints.resource_governor import router as resource_governor_router
@@ -4493,6 +4522,9 @@ else:
     # Flashcards are now considered stable; include by default unless disabled
     _include_if_enabled(
         "flashcards", flashcards_router, prefix=f"{API_V1_PREFIX}", tags=["flashcards"], default_stable=True
+    )
+    _include_if_enabled(
+        "quizzes", quizzes_router, prefix=f"{API_V1_PREFIX}", tags=["quizzes"], default_stable=True
     )
     from tldw_Server_API.app.api.v1.endpoints.personalization import (
         router as personalization_router,

@@ -1,21 +1,37 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { useForm, FormProvider } from 'react-hook-form';
+import { z } from 'zod';
+import { zodResolver } from '@hookform/resolvers/zod';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { TableSkeleton } from '@/components/ui/skeleton';
+import { Form, FormInput } from '@/components/ui/form';
 import { Shield, Plus, Trash2, Lock, Settings } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { Role, Permission } from '@/types';
 import Link from 'next/link';
+
+const roleSchema = z.object({
+  name: z.string().min(1, 'Role name is required'),
+  description: z.string().optional(),
+});
+
+const permissionSchema = z.object({
+  name: z.string().min(1, 'Permission name is required'),
+  description: z.string().optional(),
+});
+
+type RoleFormData = z.infer<typeof roleSchema>;
+type PermissionFormData = z.infer<typeof permissionSchema>;
 
 export default function RolesPage() {
   const [roles, setRoles] = useState<Role[]>([]);
@@ -26,15 +42,25 @@ export default function RolesPage() {
 
   // Create role dialog
   const [showCreateRole, setShowCreateRole] = useState(false);
-  const [newRoleName, setNewRoleName] = useState('');
-  const [newRoleDescription, setNewRoleDescription] = useState('');
   const [creatingRole, setCreatingRole] = useState(false);
+  const roleForm = useForm<RoleFormData>({
+    resolver: zodResolver(roleSchema),
+    defaultValues: {
+      name: '',
+      description: '',
+    },
+  });
 
   // Create permission dialog
   const [showCreatePermission, setShowCreatePermission] = useState(false);
-  const [newPermName, setNewPermName] = useState('');
-  const [newPermDescription, setNewPermDescription] = useState('');
   const [creatingPermission, setCreatingPermission] = useState(false);
+  const permissionForm = useForm<PermissionFormData>({
+    resolver: zodResolver(permissionSchema),
+    defaultValues: {
+      name: '',
+      description: '',
+    },
+  });
 
   const loadData = useCallback(async () => {
     try {
@@ -57,22 +83,28 @@ export default function RolesPage() {
     loadData();
   }, [loadData]);
 
-  const handleCreateRole = async () => {
-    if (!newRoleName.trim()) {
-      showError('Validation Error', 'Role name is required');
-      return;
+  useEffect(() => {
+    if (!showCreateRole) {
+      roleForm.reset();
     }
+  }, [roleForm, showCreateRole]);
 
+  useEffect(() => {
+    if (!showCreatePermission) {
+      permissionForm.reset();
+    }
+  }, [permissionForm, showCreatePermission]);
+
+  const handleCreateRole = roleForm.handleSubmit(async (data) => {
     try {
       setCreatingRole(true);
       await api.createRole({
-        name: newRoleName.trim(),
-        description: newRoleDescription.trim() || undefined,
+        name: data.name.trim(),
+        description: data.description?.trim() || undefined,
       });
-      success('Role Created', `Role "${newRoleName}" has been created`);
+      success('Role Created', `Role "${data.name}" has been created`);
       setShowCreateRole(false);
-      setNewRoleName('');
-      setNewRoleDescription('');
+      roleForm.reset();
       loadData();
     } catch (err: unknown) {
       console.error('Failed to create role:', err);
@@ -80,7 +112,7 @@ export default function RolesPage() {
     } finally {
       setCreatingRole(false);
     }
-  };
+  });
 
   const handleDeleteRole = async (role: Role) => {
     if (role.is_system) {
@@ -107,22 +139,16 @@ export default function RolesPage() {
     }
   };
 
-  const handleCreatePermission = async () => {
-    if (!newPermName.trim()) {
-      showError('Validation Error', 'Permission name is required');
-      return;
-    }
-
+  const handleCreatePermission = permissionForm.handleSubmit(async (data) => {
     try {
       setCreatingPermission(true);
       await api.createPermission({
-        name: newPermName.trim(),
-        description: newPermDescription.trim() || undefined,
+        name: data.name.trim(),
+        description: data.description?.trim() || undefined,
       });
-      success('Permission Created', `Permission "${newPermName}" has been created`);
+      success('Permission Created', `Permission "${data.name}" has been created`);
       setShowCreatePermission(false);
-      setNewPermName('');
-      setNewPermDescription('');
+      permissionForm.reset();
       loadData();
     } catch (err: unknown) {
       console.error('Failed to create permission:', err);
@@ -130,7 +156,7 @@ export default function RolesPage() {
     } finally {
       setCreatingPermission(false);
     }
-  };
+  });
 
   const handleDeletePermission = async (perm: Permission) => {
     const confirmed = await confirm({
@@ -203,38 +229,37 @@ export default function RolesPage() {
                           Add a new role to the system. You can assign permissions after creation.
                         </DialogDescription>
                       </DialogHeader>
-                      <div className="space-y-4 py-4">
-                        <div className="space-y-2">
-                          <Label htmlFor="roleName">Role Name</Label>
-                          <Input
-                            id="roleName"
-                            placeholder="e.g., editor, viewer, moderator"
-                            value={newRoleName}
-                            onChange={(e) => setNewRoleName(e.target.value)}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="roleDescription">Description (optional)</Label>
-                          <Input
-                            id="roleDescription"
-                            placeholder="What this role is for..."
-                            value={newRoleDescription}
-                            onChange={(e) => setNewRoleDescription(e.target.value)}
-                          />
-                        </div>
-                      </div>
-                      <DialogFooter>
-                        <Button variant="outline" onClick={() => setShowCreateRole(false)}>Cancel</Button>
-                        <Button onClick={handleCreateRole} disabled={creatingRole}>
-                          {creatingRole ? 'Creating...' : 'Create Role'}
-                        </Button>
-                      </DialogFooter>
+                      <FormProvider {...roleForm}>
+                        <Form onSubmit={handleCreateRole}>
+                          <div className="space-y-4 py-4">
+                            <FormInput<RoleFormData>
+                              name="name"
+                              label="Role Name"
+                              placeholder="e.g., editor, viewer, moderator"
+                              required
+                            />
+                            <FormInput<RoleFormData>
+                              name="description"
+                              label="Description (optional)"
+                              placeholder="What this role is for..."
+                            />
+                          </div>
+                          <DialogFooter>
+                            <Button type="button" variant="outline" onClick={() => setShowCreateRole(false)}>Cancel</Button>
+                            <Button type="submit" disabled={creatingRole}>
+                              {creatingRole ? 'Creating...' : 'Create Role'}
+                            </Button>
+                          </DialogFooter>
+                        </Form>
+                      </FormProvider>
                     </DialogContent>
                   </Dialog>
                 </CardHeader>
                 <CardContent>
                   {loading ? (
-                    <div className="text-center text-muted-foreground py-8">Loading...</div>
+                    <div className="py-4">
+                      <TableSkeleton rows={4} columns={3} />
+                    </div>
                   ) : roles.length === 0 ? (
                     <div className="text-center text-muted-foreground py-8">
                       No roles found. Create one to get started.
@@ -323,38 +348,37 @@ export default function RolesPage() {
                           Add a new permission that can be assigned to roles.
                         </DialogDescription>
                       </DialogHeader>
-                      <div className="space-y-4 py-4">
-                        <div className="space-y-2">
-                          <Label htmlFor="permName">Permission Name</Label>
-                          <Input
-                            id="permName"
-                            placeholder="e.g., read:users, write:media"
-                            value={newPermName}
-                            onChange={(e) => setNewPermName(e.target.value)}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="permDescription">Description (optional)</Label>
-                          <Input
-                            id="permDescription"
-                            placeholder="What this permission allows..."
-                            value={newPermDescription}
-                            onChange={(e) => setNewPermDescription(e.target.value)}
-                          />
-                        </div>
-                      </div>
-                      <DialogFooter>
-                        <Button variant="outline" onClick={() => setShowCreatePermission(false)}>Cancel</Button>
-                        <Button onClick={handleCreatePermission} disabled={creatingPermission}>
-                          {creatingPermission ? 'Creating...' : 'Create Permission'}
-                        </Button>
-                      </DialogFooter>
+                      <FormProvider {...permissionForm}>
+                        <Form onSubmit={handleCreatePermission}>
+                          <div className="space-y-4 py-4">
+                            <FormInput<PermissionFormData>
+                              name="name"
+                              label="Permission Name"
+                              placeholder="e.g., read:users, write:media"
+                              required
+                            />
+                            <FormInput<PermissionFormData>
+                              name="description"
+                              label="Description (optional)"
+                              placeholder="What this permission allows..."
+                            />
+                          </div>
+                          <DialogFooter>
+                            <Button type="button" variant="outline" onClick={() => setShowCreatePermission(false)}>Cancel</Button>
+                            <Button type="submit" disabled={creatingPermission}>
+                              {creatingPermission ? 'Creating...' : 'Create Permission'}
+                            </Button>
+                          </DialogFooter>
+                        </Form>
+                      </FormProvider>
                     </DialogContent>
                   </Dialog>
                 </CardHeader>
                 <CardContent>
                   {loading ? (
-                    <div className="text-center text-muted-foreground py-8">Loading...</div>
+                    <div className="py-4">
+                      <TableSkeleton rows={4} columns={2} />
+                    </div>
                   ) : permissions.length === 0 ? (
                     <div className="text-center text-muted-foreground py-8">
                       No permissions found. Create one to get started.

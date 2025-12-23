@@ -1,6 +1,6 @@
 import time
 
-from tldw_Server_API.app.services.claims_rebuild_service import ClaimsRebuildService, ClaimsRebuildTask
+from tldw_Server_API.app.core.Claims_Extraction.claims_rebuild_service import ClaimsRebuildService, ClaimsRebuildTask
 
 
 def test_claims_rebuild_service_worker_handles_failure(monkeypatch):

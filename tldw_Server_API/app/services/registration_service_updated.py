@@ -172,7 +172,7 @@ class RegistrationService:
             # Validate registration code if required
             role = self.settings.DEFAULT_USER_ROLE
 
-            if self.require_code and registration_code and not created_by:
+            if registration_code and not created_by:
                 code_info = self.user_db.validate_registration_code(registration_code)
                 if not code_info:
                     raise InvalidRegistrationCodeError()

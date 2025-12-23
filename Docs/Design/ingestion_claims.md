@@ -79,4 +79,4 @@ Feature is additive. If disabled, code paths do not write to `Claims`. Removing 
 - `POST /api/v1/claims/rebuild/all` - enqueue rebuild for all items (policies: `missing|all|stale`)
 - `POST /api/v1/claims/rebuild_fts` - rebuild `claims_fts` from `Claims`
 
-Background service: `ClaimsRebuildService` manages a worker thread that rebuilds claims by chunking, extracting (`heuristic|llm|auto`), and storing with chunk hashes. See `tldw_Server_API.app.services.claims_rebuild_service`.
+Background service: `ClaimsRebuildService` manages a worker thread that rebuilds claims by chunking, extracting (`heuristic|llm|auto`), and storing with chunk hashes. See `tldw_Server_API.app.core.Claims_Extraction.claims_rebuild_service`.

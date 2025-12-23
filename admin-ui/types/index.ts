@@ -34,6 +34,25 @@ export interface Team {
   updated_at: string;
 }
 
+export interface RegistrationCode {
+  id: number;
+  code: string;
+  max_uses: number;
+  times_used: number;
+  expires_at: string;
+  created_at: string;
+  role_to_grant: string;
+  is_valid?: boolean;
+}
+
+export interface RegistrationSettings {
+  enable_registration: boolean;
+  require_registration_code: boolean;
+  auth_mode?: string;
+  profile?: string;
+  self_registration_allowed?: boolean;
+}
+
 export interface OrgMember {
   org_id: number;
   user_id: number;
@@ -82,6 +101,9 @@ export interface AuditLog {
   action: string;
   resource: string;
   details?: Record<string, unknown>;
+  ip_address?: string;
+  username?: string;
+  raw?: Record<string, unknown>;
 }
 
 export interface ProviderSecret {

@@ -142,13 +142,111 @@ class RegistrationService:
         except Exception as e:
             logger.error(f"Error cleaning up directories for user {user_id}: {e}")
 
+    def _merge_org_scope_from_metadata(self, code_info: Dict[str, Any]) -> Dict[str, Any]:
+        metadata = code_info.get("metadata")
+        if metadata:
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except json.JSONDecodeError:
+                    metadata = {}
+            elif not isinstance(metadata, dict):
+                metadata = {}
+        else:
+            metadata = {}
+
+        for key in ("org_id", "org_role", "team_id"):
+            if code_info.get(key) is None and metadata.get(key) is not None:
+                code_info[key] = metadata.get(key)
+
+        for key in ("org_id", "team_id"):
+            if code_info.get(key) is not None:
+                try:
+                    code_info[key] = int(code_info[key])
+                except (TypeError, ValueError):
+                    code_info[key] = None
+
+        if code_info.get("org_role") is not None:
+            code_info["org_role"] = str(code_info["org_role"]).lower()
+
+        return code_info
+
+    async def _ensure_org_membership(
+        self,
+        conn,
+        *,
+        user_id: int,
+        org_id: int,
+        org_role: Optional[str],
+        team_id: Optional[int],
+    ) -> bool:
+        org_role_value = (org_role or "member").lower()
+        if org_role_value not in {"owner", "admin", "lead", "member"}:
+            org_role_value = "member"
+
+        was_already_member = False
+        if hasattr(conn, 'fetchrow'):
+            existing = await conn.fetchrow(
+                "SELECT 1 FROM org_members WHERE org_id = $1 AND user_id = $2",
+                org_id,
+                user_id,
+            )
+            if existing:
+                was_already_member = True
+            else:
+                await conn.execute(
+                    """
+                    INSERT INTO org_members (org_id, user_id, role)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT (org_id, user_id) DO NOTHING
+                    """,
+                    org_id,
+                    user_id,
+                    org_role_value,
+                )
+            if team_id is not None:
+                await conn.execute(
+                    """
+                    INSERT INTO team_members (team_id, user_id, role)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT (team_id, user_id) DO NOTHING
+                    """,
+                    team_id,
+                    user_id,
+                    "member",
+                )
+        else:
+            cursor = await conn.execute(
+                "SELECT 1 FROM org_members WHERE org_id = ? AND user_id = ?",
+                (org_id, user_id),
+            )
+            existing = await cursor.fetchone()
+            if existing:
+                was_already_member = True
+            else:
+                await conn.execute(
+                    "INSERT OR IGNORE INTO org_members (org_id, user_id, role) VALUES (?, ?, ?)",
+                    (org_id, user_id, org_role_value),
+                )
+            if team_id is not None:
+                await conn.execute(
+                    "INSERT OR IGNORE INTO team_members (team_id, user_id, role) VALUES (?, ?, ?)",
+                    (team_id, user_id, "member"),
+                )
+
+        return was_already_member
+
     async def register_user(
         self,
         username: str,
         email: str,
         password: str,
         registration_code: Optional[str] = None,
-        created_by: Optional[int] = None
+        created_by: Optional[int] = None,
+        role_override: Optional[str] = None,
+        is_active_override: Optional[bool] = None,
+        is_verified_override: Optional[bool] = None,
+        storage_quota_override: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Register a new user with full transaction safety
@@ -159,6 +257,10 @@ class RegistrationService:
             password: Plain text password
             registration_code: Optional registration code
             created_by: ID of user creating this account (for admin creation)
+            role_override: Optional admin-specified role for the new user
+            is_active_override: Optional admin override for active status
+            is_verified_override: Optional admin override for verification status
+            storage_quota_override: Optional admin override for storage quota
 
         Returns:
             Dictionary with user information
@@ -179,6 +281,7 @@ class RegistrationService:
 
         user_id = None
         directories_created = False
+        code_info: Optional[Dict[str, Any]] = None
 
         try:
             async with self.db_pool.transaction() as conn:
@@ -215,11 +318,14 @@ class RegistrationService:
                 role = self.settings.DEFAULT_USER_ROLE
                 storage_quota = self.settings.DEFAULT_STORAGE_QUOTA_MB
 
-                if self.require_code and not created_by:
-                    if not registration_code:
-                        raise InvalidRegistrationCodeError("Registration code required")
+                if created_by is not None:
+                    if role_override:
+                        role = role_override
+                    if storage_quota_override is not None:
+                        storage_quota = storage_quota_override
 
-                    # Validate and use registration code
+                if registration_code and not created_by:
+                    # Validate and use registration code (optional when not required)
                     code_info = await self._validate_and_use_registration_code(
                         registration_code, conn
                     )
@@ -228,6 +334,8 @@ class RegistrationService:
                     # Check if code specifies storage quota
                     if 'storage_quota_mb' in code_info:
                         storage_quota = code_info['storage_quota_mb']
+                elif self.require_code and not created_by:
+                    raise InvalidRegistrationCodeError("Registration code required")
 
                 # Hash the password
                 password_hash = self.password_service.hash_password(password)
@@ -236,6 +344,17 @@ class RegistrationService:
                 user_uuid = str(uuid4())
 
                 # Create user
+                is_active = True
+                if created_by is not None and is_active_override is not None:
+                    is_active = bool(is_active_override)
+
+                is_verified = not self.require_code
+                if created_by is not None:
+                    if is_verified_override is not None:
+                        is_verified = bool(is_verified_override)
+                    else:
+                        is_verified = True
+
                 if hasattr(conn, 'fetchval'):
                     # PostgreSQL
                     user_id = await conn.fetchval(
@@ -248,7 +367,7 @@ class RegistrationService:
                         RETURNING id
                         """,
                         user_uuid, username, email, password_hash, role,
-                        True, not self.require_code, created_by, storage_quota
+                        is_active, is_verified, created_by, storage_quota
                     )
                 else:
                     # SQLite
@@ -261,12 +380,21 @@ class RegistrationService:
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (user_uuid, username, email, password_hash, role,
-                         1, 0 if self.require_code else 1, created_by, storage_quota)
+                         int(is_active), int(is_verified), created_by, storage_quota)
                     )
                     user_id = cursor.lastrowid
 
                 # Add password to history
                 await self._add_password_to_history(user_id, password_hash, conn)
+
+                if code_info and code_info.get("org_id") is not None:
+                    await self._ensure_org_membership(
+                        conn,
+                        user_id=user_id,
+                        org_id=int(code_info["org_id"]),
+                        org_role=code_info.get("org_role"),
+                        team_id=code_info.get("team_id"),
+                    )
 
                 # Create user directories (before committing transaction)
                 directories_created = await asyncio.to_thread(
@@ -309,8 +437,9 @@ class RegistrationService:
                     "username": username,
                     "email": email,
                     "role": role,
-                    "is_verified": not self.require_code,
-                    "storage_quota_mb": storage_quota
+                    "is_active": is_active,
+                    "is_verified": is_verified,
+                    "storage_quota_mb": storage_quota,
                 }
 
         except Exception as e:
@@ -330,6 +459,40 @@ class RegistrationService:
 
             # Re-raise the exception
             raise
+
+    async def accept_org_invite_code(
+        self,
+        *,
+        code: str,
+        user_id: int,
+    ) -> Dict[str, Any]:
+        """Accept an org-scoped registration code for an existing user."""
+        if not self.registration_enabled:
+            raise RegistrationDisabledError()
+
+        if not self.db_pool:
+            await self.initialize()
+
+        async with self.db_pool.transaction() as conn:
+            code_info = await self._validate_and_use_registration_code(code, conn)
+            org_id = code_info.get("org_id")
+            if org_id is None:
+                raise InvalidRegistrationCodeError("Invite code does not grant organization access")
+
+            was_already_member = await self._ensure_org_membership(
+                conn,
+                user_id=user_id,
+                org_id=int(org_id),
+                org_role=code_info.get("org_role"),
+                team_id=code_info.get("team_id"),
+            )
+
+            return {
+                "org_id": int(org_id),
+                "org_role": code_info.get("org_role") or "member",
+                "team_id": code_info.get("team_id"),
+                "was_already_member": was_already_member,
+            }
 
     async def _validate_and_use_registration_code(
         self,
@@ -354,7 +517,8 @@ class RegistrationService:
             code_row = await conn.fetchrow(
                 """
                 SELECT id, role_to_grant, times_used, max_uses,
-                       expires_at, is_active, description
+                       expires_at, is_active, description,
+                       org_id, org_role, team_id, metadata
                 FROM registration_codes
                 WHERE code = $1
                 FOR UPDATE
@@ -387,14 +551,16 @@ class RegistrationService:
                 code_row['id']
             )
 
-            return dict(code_row)
+            code_info = dict(code_row)
+            return self._merge_org_scope_from_metadata(code_info)
 
         else:
             # SQLite - Manual locking with transaction
             cursor = await conn.execute(
                 """
                 SELECT id, role_to_grant, times_used, max_uses,
-                       expires_at, is_active, description
+                       expires_at, is_active, description,
+                       org_id, org_role, team_id, metadata
                 FROM registration_codes
                 WHERE code = ?
                 """,
@@ -413,7 +579,11 @@ class RegistrationService:
                 "max_uses": code_row[3],
                 "expires_at": datetime.fromisoformat(code_row[4]),
                 "is_active": code_row[5],
-                "description": code_row[6]
+                "description": code_row[6],
+                "org_id": code_row[7],
+                "org_role": code_row[8],
+                "team_id": code_row[9],
+                "metadata": code_row[10],
             }
 
             # Validate
@@ -436,7 +606,7 @@ class RegistrationService:
                 (code_info['id'],)
             )
 
-            return code_info
+            return self._merge_org_scope_from_metadata(code_info)
 
     async def _add_password_to_history(
         self,

@@ -89,6 +89,7 @@ from tldw_Server_API.app.api.v1.endpoints.media import (
 from tldw_Server_API.app.api.v1.endpoints.media import (
     transcription_models as transcription_models_endpoint,  # noqa: E402
 )
+from tldw_Server_API.app.api.v1.endpoints.media import file as file_endpoint  # noqa: E402
 
 
 router = APIRouter()
@@ -96,6 +97,7 @@ for _router in (
     listing_endpoint.router,
     item_endpoint.router,
     versions_endpoint.router,
+    file_endpoint.router,
     add_endpoint.router,
     debug_endpoint.router,
     ingest_web_content_endpoint.router,

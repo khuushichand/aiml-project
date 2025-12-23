@@ -75,6 +75,8 @@ export interface MediaDetailResponse {
   keywords: string[];
   timestamps: string[];
   versions?: VersionDetail[];
+  has_original_file?: boolean;
+  original_file_url?: string;
 }
 
 export interface SearchResult {

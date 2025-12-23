@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from '@/hooks/useAuth';
 import { ConfigProvider } from '@/hooks/useConfig';
 import { ToastProvider } from '@/components/ui/ToastProvider';
+import ErrorBoundary from '@/components/ErrorBoundary';
 import { useState } from 'react';
 
 export default function App({ Component, pageProps }: AppProps) {
@@ -18,14 +19,16 @@ export default function App({ Component, pageProps }: AppProps) {
   }));
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <ConfigProvider>
-        <AuthProvider>
-          <ToastProvider>
-            <Component {...pageProps} />
-          </ToastProvider>
-        </AuthProvider>
-      </ConfigProvider>
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <ConfigProvider>
+          <AuthProvider>
+            <ToastProvider>
+              <Component {...pageProps} />
+            </ToastProvider>
+          </AuthProvider>
+        </ConfigProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
   );
 }

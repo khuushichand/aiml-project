@@ -163,6 +163,26 @@ _CREATE_AUTHNZ_CORE_TABLES = [
         """,
         (),
     ),
+    ("ALTER TABLE registration_codes ADD COLUMN IF NOT EXISTS times_used INTEGER DEFAULT 0", ()),
+    ("ALTER TABLE registration_codes ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE", ()),
+    ("ALTER TABLE registration_codes ADD COLUMN IF NOT EXISTS description TEXT", ()),
+    ("ALTER TABLE registration_codes ADD COLUMN IF NOT EXISTS allowed_email_domain TEXT", ()),
+    (
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'registration_codes' AND column_name = 'uses'
+            ) THEN
+                UPDATE registration_codes
+                SET times_used = uses
+                WHERE times_used IS NULL OR times_used = 0;
+            END IF;
+        END $$;
+        """,
+        (),
+    ),
     # RBAC core tables
     (
         """
@@ -312,6 +332,9 @@ _CREATE_AUTHNZ_CORE_TABLES = [
         (),
     ),
     ("CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_id)", ()),
+    ("ALTER TABLE registration_codes ADD COLUMN IF NOT EXISTS org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL", ()),
+    ("ALTER TABLE registration_codes ADD COLUMN IF NOT EXISTS org_role VARCHAR(50)", ()),
+    ("ALTER TABLE registration_codes ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL", ()),
 ]
 
 

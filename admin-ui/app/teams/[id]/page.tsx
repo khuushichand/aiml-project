@@ -16,8 +16,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { ArrowLeft, Users, UserPlus, Trash2, Shield, Building2 } from 'lucide-react';
 import { api } from '@/lib/api-client';
-import { Team, TeamMember } from '@/types';
+import { Team, TeamMember, User } from '@/types';
 import Link from 'next/link';
+import { UserPicker } from '@/components/users/UserPicker';
 
 export default function TeamDetailPage() {
   const params = useParams();
@@ -35,6 +36,7 @@ export default function TeamDetailPage() {
   const [showAddMember, setShowAddMember] = useState(false);
   const [newMemberUserId, setNewMemberUserId] = useState('');
   const [newMemberRole, setNewMemberRole] = useState('member');
+  const [selectedMember, setSelectedMember] = useState<User | null>(null);
   const [addingMember, setAddingMember] = useState(false);
 
   const formatJoinedAt = (value?: string | null) => {
@@ -101,7 +103,7 @@ export default function TeamDetailPage() {
 
   const handleAddMember = async () => {
     if (!newMemberUserId) {
-      setError('User ID is required');
+      setError('Select a user to add');
       return;
     }
 
@@ -125,6 +127,7 @@ export default function TeamDetailPage() {
       setShowAddMember(false);
       setNewMemberUserId('');
       setNewMemberRole('member');
+      setSelectedMember(null);
       void loadData();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err ?? 'Failed to add member');
@@ -210,19 +213,20 @@ export default function TeamDetailPage() {
                     </DialogDescription>
                   </DialogHeader>
                   <div className="space-y-4 py-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="userId">User ID</Label>
-                      <Input
-                        id="userId"
-                        type="number"
-                        placeholder="Enter user ID"
-                        value={newMemberUserId}
-                        onChange={(e) => setNewMemberUserId(e.target.value)}
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        The user must be a member of the parent organization
-                      </p>
-                    </div>
+                    <UserPicker
+                      label="User"
+                      value={selectedMember}
+                      helperText="Search by username or email. The user must belong to this organization."
+                      onSelect={(user) => {
+                        setSelectedMember(user);
+                        setNewMemberUserId(String(user.id));
+                        setError('');
+                      }}
+                      onClear={() => {
+                        setSelectedMember(null);
+                        setNewMemberUserId('');
+                      }}
+                    />
                     <div className="space-y-2">
                       <Label htmlFor="memberRole">Role</Label>
                       <Select

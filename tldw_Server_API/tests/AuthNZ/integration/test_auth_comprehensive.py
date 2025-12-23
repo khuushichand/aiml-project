@@ -52,6 +52,22 @@ def _db_params():
     password = os.getenv("TEST_DB_PASSWORD", "TestPassword123!")
     return host, port, user, password
 
+
+async def _insert_team(db_name: str, *, org_id: int, name: str) -> int:
+    import asyncpg
+
+    host, port, user, pwd = _db_params()
+    conn = await asyncpg.connect(host=host, port=port, user=user, password=pwd, database=db_name)
+    try:
+        row = await conn.fetchrow(
+            "INSERT INTO teams (org_id, name) VALUES ($1, $2) RETURNING id",
+            org_id,
+            name,
+        )
+        return int(row["id"])
+    finally:
+        await conn.close()
+
 # Note: We now use isolated_test_environment from conftest.py for true DB isolation
 # Each test gets its own unique database that is created and destroyed per test
 
@@ -471,6 +487,127 @@ class TestAdminEndpoints:
         assert "code" in data
         assert data["max_uses"] == 5
         assert data["role_to_grant"] == "user"
+
+    @pytest.mark.asyncio
+    async def test_org_scoped_registration_code_assigns_membership(
+        self,
+        isolated_test_environment,
+        admin_headers,
+    ):
+        """Test org-scoped registration codes assign membership on signup."""
+        client, db_name = isolated_test_environment
+        org_suffix = uuid.uuid4().hex[:8]
+        org_response = client.post(
+            "/api/v1/orgs",
+            headers=admin_headers,
+            json={"name": f"Invite Org {org_suffix}", "slug": f"invite-org-{org_suffix}"},
+        )
+        assert org_response.status_code == 201
+        org_id = org_response.json()["id"]
+
+        team_id = await _insert_team(
+            db_name,
+            org_id=org_id,
+            name=f"Team {org_suffix}",
+        )
+
+        code_response = client.post(
+            "/api/v1/admin/registration-codes",
+            headers=admin_headers,
+            json={
+                "max_uses": 2,
+                "expiry_days": 7,
+                "role_to_grant": "user",
+                "org_id": org_id,
+                "org_role": "member",
+                "team_id": team_id,
+            },
+        )
+        assert code_response.status_code == 200
+        code_data = code_response.json()
+        assert code_data["org_id"] == org_id
+        assert code_data["team_id"] == team_id
+
+        username = f"invite_user_{org_suffix}"
+        email = f"{username}@example.com"
+        password = "TestInvite@2024!"
+        register_response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "username": username,
+                "email": email,
+                "password": password,
+                "registration_code": code_data["code"],
+            },
+        )
+        assert register_response.status_code in (200, 201)
+
+        login_response = client.post(
+            "/api/v1/auth/login",
+            data={"username": username, "password": password},
+        )
+        assert login_response.status_code == 200
+        user_headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+
+        org_list_response = client.get("/api/v1/orgs", headers=user_headers)
+        assert org_list_response.status_code == 200
+        assert any(org["id"] == org_id for org in org_list_response.json()["items"])
+
+        list_codes = client.get("/api/v1/admin/registration-codes", headers=admin_headers)
+        assert list_codes.status_code == 200
+        code_row = next(
+            (row for row in list_codes.json()["codes"] if row["code"] == code_data["code"]),
+            None,
+        )
+        assert code_row is not None
+        assert code_row["org_id"] == org_id
+
+    @pytest.mark.asyncio
+    async def test_accept_org_invite_for_existing_user(
+        self,
+        isolated_test_environment,
+        admin_headers,
+        auth_headers,
+    ):
+        """Test accepting org-scoped registration codes for existing users."""
+        client, db_name = isolated_test_environment
+        org_suffix = uuid.uuid4().hex[:8]
+        org_response = client.post(
+            "/api/v1/orgs",
+            headers=admin_headers,
+            json={"name": f"Accept Org {org_suffix}", "slug": f"accept-org-{org_suffix}"},
+        )
+        assert org_response.status_code == 201
+        org_id = org_response.json()["id"]
+
+        code_response = client.post(
+            "/api/v1/admin/registration-codes",
+            headers=admin_headers,
+            json={
+                "max_uses": 3,
+                "expiry_days": 7,
+                "role_to_grant": "user",
+                "org_id": org_id,
+                "org_role": "member",
+            },
+        )
+        assert code_response.status_code == 200
+        code_data = code_response.json()
+
+        accept_response = client.post(
+            "/api/v1/orgs/invites/accept",
+            headers=auth_headers,
+            json={"code": code_data["code"]},
+        )
+        assert accept_response.status_code == 200
+        accept_data = accept_response.json()
+        assert accept_data["success"] is True
+        assert accept_data["org_id"] == org_id
+        assert accept_data["was_already_member"] is False
+
+        org_list_response = client.get("/api/v1/orgs", headers=auth_headers)
+        assert org_list_response.status_code == 200
+        assert any(org["id"] == org_id for org in org_list_response.json()["items"])
 
     @pytest.mark.asyncio
     async def test_get_system_stats(self, isolated_test_environment, admin_headers):

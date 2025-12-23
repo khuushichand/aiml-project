@@ -47,7 +47,7 @@ Contributors must support new media types, improve processing fidelity, and conn
 | External tooling | `ffmpeg`, `yt-dlp`, optional `faster_whisper`, `NVIDIA NeMo`, `Qwen2Audio`, `pymupdf4llm`, `docling`, `pypandoc`, system Tesseract. |
 | Persistence | API layer persists into `Media_DB_v2` (per-user SQLite default) creating `Media`, `DocumentVersions`, `MediaChunks`, `Keywords`, transcripts, `Claims`, and `sync_log` entries. Soft deletes + optimistic concurrency enforced. |
 | Collections bridge | Watchlists and reading services dual-write to `content_items` and tag tables while linking the originating `media_id`. API-driven `/media` uploads currently persist to Media DB only (dual-write roadmap item). Embeddings queue integration uses `Collections.embedding_queue.enqueue_embeddings_job_for_item`. |
-| Downstream hooks | Chunking triggers embeddings enqueue, optional claims extraction (`Claims/ingestion_claims.py`), and watchlist output generation. |
+| Downstream hooks | Chunking triggers embeddings enqueue, optional claims extraction (`core/Claims_Extraction/ingestion_claims.py`), and watchlist output generation. |
 | API surface | `/api/v1/media/...` endpoints for upload + processing; `/api/v1/media/process-*` for ephemeral processing; watchlists and collections reuse ingestion helpers for scheduled scraping and manual saves. |
 | Security | Size limits from config, MIME enforcement, Yara optional, basic HTML/XML sanitization stubs (TODO for stronger sanitization), quarantine paths for archive validation. |
 | Testing | Extensive unit tests per processor, integration tests for media endpoints, watchlists pipeline tests, and collection ingestion tests. Some flows skip when ffmpeg/yt-dlp unavailable. |
