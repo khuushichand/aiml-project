@@ -43,6 +43,7 @@ from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Utils.Utils import downloaded_files, \
     sanitize_filename, logging, get_project_root
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib import extract_metadata
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 from tldw_Server_API.app.core.http_client import download as http_download, fetch as http_fetch, RetryPolicy
 # Lazy wrappers to avoid importing heavy transcription deps at module import time
 # Use the ConversionError defined in the transcription library to ensure
@@ -527,6 +528,7 @@ def process_audio_files(
     # Note: If keep_original=True, the caller needs to manage the lifecycle of temp_dir
     temp_directory_manager = None
     processing_temp_dir_path = None
+    temp_dir_provided = temp_dir is not None
 
     if temp_dir:
         processing_temp_dir_path = Path(temp_dir)
@@ -671,6 +673,20 @@ def process_audio_files(
 
                 else: # Local file input
                     local_path = Path(input_item)
+                    if temp_dir_provided:
+                        safe_local_path = resolve_safe_local_path(
+                            local_path,
+                            processing_temp_dir_path,
+                        )
+                        if safe_local_path is None:
+                            err_msg = (
+                                "Local file path rejected outside the temporary directory."
+                            )
+                            item_result["status"] = "Error"
+                            item_result["error"] = err_msg
+                            item_result.setdefault("warnings", []).append(err_msg)
+                            continue
+                        local_path = safe_local_path
                     if not local_path.exists():
                         raise FileNotFoundError(f"Local file not found: {input_item}")
                     if local_path.stat().st_size > MAX_FILE_SIZE:

@@ -2963,6 +2963,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     elif current_initial_version == 10 and target_version >= 11:
                         self._migrate_from_v10_to_v11(conn)
                         current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 11 and target_version >= 12:
+                        self._migrate_from_v11_to_v12(conn)
+                        current_db_version = self._get_db_version(conn)
                     else:
                         raise SchemaError(
                             f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "

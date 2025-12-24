@@ -13,9 +13,10 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useConfirm } from '@/components/ui/confirm-dialog';
-import { Cpu, RefreshCw, CheckCircle, XCircle, Key, ExternalLink, Plus, Trash2, Search, Building2, User } from 'lucide-react';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Cpu, RefreshCw, CheckCircle, XCircle, Key, ExternalLink, Plus, Trash2, Search, Building2, User, Settings, Activity } from 'lucide-react';
 import { api } from '@/lib/api-client';
-import { LLMProvider, User as UserType, Organization } from '@/types';
+import { LLMProvider, LLMProviderOverride, User as UserType, Organization } from '@/types';
 
 interface ByokKey {
   id?: string;
@@ -27,15 +28,29 @@ interface ByokKey {
 interface ProviderConfig {
   enabled?: boolean;
   models?: string[];
+  default_model?: string;
+  override?: LLMProviderOverride;
   [key: string]: unknown;
 }
 
 export default function ProvidersPage() {
   const confirm = useConfirm();
   const [providers, setProviders] = useState<LLMProvider[]>([]);
+  const [providerOverrides, setProviderOverrides] = useState<Record<string, LLMProviderOverride>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [editingProvider, setEditingProvider] = useState<LLMProvider | null>(null);
+  const [editingOverride, setEditingOverride] = useState<LLMProviderOverride | null>(null);
+  const [showOverrideDialog, setShowOverrideDialog] = useState(false);
+  const [overrideEnabled, setOverrideEnabled] = useState(true);
+  const [overrideAllowedModels, setOverrideAllowedModels] = useState('');
+  const [overrideDefaultModel, setOverrideDefaultModel] = useState('');
+  const [overrideBaseUrl, setOverrideBaseUrl] = useState('');
+  const [overrideApiKey, setOverrideApiKey] = useState('');
+  const [overrideClearApiKey, setOverrideClearApiKey] = useState(false);
+  const [savingOverride, setSavingOverride] = useState(false);
+  const [testingProvider, setTestingProvider] = useState<string | null>(null);
 
   // BYOK management state
   const [users, setUsers] = useState<UserType[]>([]);
@@ -64,18 +79,22 @@ export default function ProvidersPage() {
       setLoading(true);
       setError('');
 
-      const [providersData, usersData, orgsData] = await Promise.allSettled([
+      const [providersData, usersData, orgsData, overridesData] = await Promise.allSettled([
         api.getLLMProviders(),
         api.getUsers(),
         api.getOrganizations(),
+        api.getLLMProviderOverrides(),
       ]);
 
       if (providersData.status === 'fulfilled') {
         let providersArray: LLMProvider[] = [];
-        if (Array.isArray(providersData.value)) {
-          providersArray = providersData.value;
-        } else if (providersData.value && typeof providersData.value === 'object') {
-          providersArray = Object.entries(providersData.value as Record<string, ProviderConfig>).map(([name, value]) => ({
+        const payload = providersData.value;
+        if (Array.isArray(payload)) {
+          providersArray = payload;
+        } else if (payload && typeof payload === 'object' && Array.isArray((payload as { providers?: unknown }).providers)) {
+          providersArray = (payload as { providers: LLMProvider[] }).providers;
+        } else if (payload && typeof payload === 'object') {
+          providersArray = Object.entries(payload as Record<string, ProviderConfig>).map(([name, value]) => ({
             ...value,
             name,
             enabled: value.enabled ?? true,
@@ -91,6 +110,19 @@ export default function ProvidersPage() {
 
       if (orgsData.status === 'fulfilled') {
         setOrganizations(Array.isArray(orgsData.value) ? orgsData.value : []);
+      }
+
+      if (overridesData.status === 'fulfilled') {
+        const items = (overridesData.value && typeof overridesData.value === 'object' && Array.isArray((overridesData.value as { items?: unknown }).items))
+          ? (overridesData.value as { items: LLMProviderOverride[] }).items
+          : [];
+        const map: Record<string, LLMProviderOverride> = {};
+        items.forEach((item) => {
+          if (item?.provider) {
+            map[item.provider.toLowerCase()] = item;
+          }
+        });
+        setProviderOverrides(map);
       }
     } catch (err: unknown) {
       console.error('Failed to load data:', err);
@@ -258,6 +290,124 @@ export default function ProvidersPage() {
     return names[name.toLowerCase()] || name;
   };
 
+  const getOverrideForProvider = (provider: LLMProvider): LLMProviderOverride | undefined => {
+    const key = provider.name.toLowerCase();
+    return providerOverrides[key] || provider.override;
+  };
+
+  const openOverrideDialog = (provider: LLMProvider) => {
+    const override = getOverrideForProvider(provider);
+    setEditingProvider(provider);
+    setEditingOverride(override || null);
+    setOverrideEnabled(override?.is_enabled ?? provider.enabled ?? true);
+    setOverrideAllowedModels(override?.allowed_models?.join(', ') ?? '');
+    setOverrideDefaultModel(
+      (override?.config?.default_model as string) || ''
+    );
+    setOverrideBaseUrl((override?.credential_fields?.base_url as string) || '');
+    setOverrideApiKey('');
+    setOverrideClearApiKey(false);
+    setShowOverrideDialog(true);
+  };
+
+  const handleSaveOverride = async () => {
+    if (!editingProvider) return;
+    setSavingOverride(true);
+    setError('');
+
+    const allowedModels = overrideAllowedModels
+      .split(',')
+      .map((model) => model.trim())
+      .filter(Boolean);
+    const defaultModelValue = overrideDefaultModel.trim();
+    const config: Record<string, unknown> = { ...(editingOverride?.config || {}) };
+    if (defaultModelValue) {
+      config.default_model = defaultModelValue;
+    } else if (editingOverride?.config && Object.prototype.hasOwnProperty.call(editingOverride.config, 'default_model')) {
+      delete config.default_model;
+    }
+    const credentialFields: Record<string, unknown> = {};
+    const existingBaseUrl = editingOverride?.credential_fields?.base_url as string | undefined;
+    const trimmedBaseUrl = overrideBaseUrl.trim();
+    if (trimmedBaseUrl) {
+      credentialFields.base_url = trimmedBaseUrl;
+    }
+
+    const payload: Record<string, unknown> = {
+      is_enabled: overrideEnabled,
+      allowed_models: allowedModels,
+    };
+
+    if (defaultModelValue || (editingOverride?.config && Object.prototype.hasOwnProperty.call(editingOverride.config, 'default_model'))) {
+      payload.config = config;
+    }
+
+    if (Object.keys(credentialFields).length > 0) {
+      payload.credential_fields = credentialFields;
+    } else if (existingBaseUrl) {
+      payload.credential_fields = {};
+    }
+
+    if (overrideApiKey.trim()) {
+      payload.api_key = overrideApiKey.trim();
+    } else if (overrideClearApiKey) {
+      payload.clear_api_key = true;
+    }
+
+    try {
+      await api.updateLLMProviderOverride(editingProvider.name, payload);
+      setSuccess(`Updated override for ${formatProviderName(editingProvider.name)}`);
+      setShowOverrideDialog(false);
+      await loadData();
+    } catch (err: unknown) {
+      console.error('Failed to update provider override:', err);
+      setError(err instanceof Error ? err.message : 'Failed to update provider override');
+    } finally {
+      setSavingOverride(false);
+    }
+  };
+
+  const handleDeleteOverride = async () => {
+    if (!editingProvider) return;
+    const confirmed = await confirm({
+      title: 'Remove Override',
+      message: `Remove override for ${formatProviderName(editingProvider.name)}?`,
+      confirmText: 'Remove',
+      variant: 'danger',
+      icon: 'trash',
+    });
+    if (!confirmed) return;
+    try {
+      await api.deleteLLMProviderOverride(editingProvider.name);
+      setSuccess(`Removed override for ${formatProviderName(editingProvider.name)}`);
+      setShowOverrideDialog(false);
+      await loadData();
+    } catch (err: unknown) {
+      console.error('Failed to delete provider override:', err);
+      setError(err instanceof Error ? err.message : 'Failed to delete provider override');
+    }
+  };
+
+  const handleTestProvider = async (provider: LLMProvider) => {
+    const override = getOverrideForProvider(provider);
+    setTestingProvider(provider.name);
+    setError('');
+    setSuccess('');
+    try {
+      const response = await api.testLLMProvider({
+        provider: provider.name,
+        model: (override?.config?.default_model as string) || provider.default_model || undefined,
+        use_override: true,
+      });
+      setSuccess(`Connectivity check OK for ${formatProviderName(provider.name)} (${response?.model || 'default'})`);
+    } catch (err: unknown) {
+      console.error('Failed to test provider:', err);
+      setError(err instanceof Error ? err.message : 'Provider test failed');
+    } finally {
+      setTestingProvider(null);
+    }
+  };
+
   const filteredUsers = users.filter(
     (u) =>
       userSearch === '' ||
@@ -387,15 +537,17 @@ export default function ProvidersPage() {
                       <Table>
                         <TableHeader>
                           <TableRow>
-                            <TableHead>Provider</TableHead>
-                            <TableHead>Status</TableHead>
-                            <TableHead>Models</TableHead>
-                            <TableHead className="text-right">Documentation</TableHead>
+                          <TableHead>Provider</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Models</TableHead>
+                          <TableHead>Override</TableHead>
+                          <TableHead className="text-right">Actions</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
                           {providers.map((provider) => {
                             const docsUrl = getProviderDocs(provider.name);
+                            const override = getOverrideForProvider(provider);
                             return (
                               <TableRow key={provider.name}>
                                 <TableCell>
@@ -435,18 +587,57 @@ export default function ProvidersPage() {
                                     <span className="text-muted-foreground text-sm">-</span>
                                   )}
                                 </TableCell>
+                                <TableCell>
+                                  {override ? (
+                                    <div className="space-y-1">
+                                      <Badge variant="outline" className="text-xs">
+                                        Override {override.is_enabled === false ? 'disabled' : 'active'}
+                                      </Badge>
+                                      {override.allowed_models?.length ? (
+                                        <div className="text-xs text-muted-foreground">
+                                          {override.allowed_models.length} models allowlisted
+                                        </div>
+                                      ) : null}
+                                      {override.api_key_hint ? (
+                                        <div className="text-xs text-muted-foreground">
+                                          Key • ****{override.api_key_hint}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  ) : (
+                                    <span className="text-muted-foreground text-sm">-</span>
+                                  )}
+                                </TableCell>
                                 <TableCell className="text-right">
-                                  {docsUrl ? (
+                                  <div className="flex justify-end gap-2">
                                     <Button
                                       variant="ghost"
                                       size="sm"
-                                      onClick={() => window.open(docsUrl, '_blank')}
+                                      onClick={() => openOverrideDialog(provider)}
+                                      title="Manage override"
                                     >
-                                      <ExternalLink className="h-4 w-4" />
+                                      <Settings className="h-4 w-4" />
                                     </Button>
-                                  ) : (
-                                    <span className="text-muted-foreground">-</span>
-                                  )}
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => handleTestProvider(provider)}
+                                      disabled={testingProvider === provider.name}
+                                      title="Test connectivity"
+                                    >
+                                      <Activity className={`h-4 w-4 ${testingProvider === provider.name ? 'animate-spin' : ''}`} />
+                                    </Button>
+                                    {docsUrl ? (
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => window.open(docsUrl, '_blank')}
+                                        title="Open documentation"
+                                      >
+                                        <ExternalLink className="h-4 w-4" />
+                                      </Button>
+                                    ) : null}
+                                  </div>
                                 </TableCell>
                               </TableRow>
                             );
@@ -739,6 +930,102 @@ export default function ProvidersPage() {
               </TabsContent>
             </Tabs>
           </div>
+
+        {/* Provider Override Dialog */}
+        <Dialog open={showOverrideDialog} onOpenChange={setShowOverrideDialog}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Provider Override</DialogTitle>
+              <DialogDescription>
+                {editingProvider
+                  ? `Manage ${formatProviderName(editingProvider.name)} overrides`
+                  : 'Manage provider overrides'}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label>Enable provider</Label>
+                  <p className="text-xs text-muted-foreground">Disable to block usage across the system.</p>
+                </div>
+                <Checkbox
+                  checked={overrideEnabled}
+                  onCheckedChange={(checked) => setOverrideEnabled(Boolean(checked))}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="overrideDefaultModel">Default model</Label>
+                <Input
+                  id="overrideDefaultModel"
+                  placeholder={editingProvider?.default_model || 'e.g. gpt-4o-mini'}
+                  value={overrideDefaultModel}
+                  onChange={(e) => setOverrideDefaultModel(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="overrideAllowedModels">Allowlisted models</Label>
+                <Input
+                  id="overrideAllowedModels"
+                  placeholder="Comma-separated list (leave empty for all)"
+                  value={overrideAllowedModels}
+                  onChange={(e) => setOverrideAllowedModels(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="overrideBaseUrl">Base URL</Label>
+                <Input
+                  id="overrideBaseUrl"
+                  placeholder="https://api.example.com"
+                  value={overrideBaseUrl}
+                  onChange={(e) => setOverrideBaseUrl(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="overrideApiKey">API key</Label>
+                <Input
+                  id="overrideApiKey"
+                  type="password"
+                  placeholder={editingOverride?.api_key_hint ? `Stored (****${editingOverride.api_key_hint})` : 'sk-...'}
+                  value={overrideApiKey}
+                  onChange={(e) => setOverrideApiKey(e.target.value)}
+                />
+                {editingOverride?.api_key_hint && (
+                  <p className="text-xs text-muted-foreground">
+                    Stored key hint: ****{editingOverride.api_key_hint}
+                  </p>
+                )}
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label>Clear stored API key</Label>
+                  <p className="text-xs text-muted-foreground">Remove the stored key for this provider.</p>
+                </div>
+                <Checkbox
+                  checked={overrideClearApiKey}
+                  onCheckedChange={(checked) => setOverrideClearApiKey(Boolean(checked))}
+                  disabled={overrideApiKey.trim().length > 0}
+                />
+              </div>
+            </div>
+            <DialogFooter className="flex items-center justify-between sm:justify-between">
+              <div className="flex gap-2">
+                {editingOverride && (
+                  <Button variant="destructive" onClick={handleDeleteOverride}>
+                    Remove Override
+                  </Button>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={() => setShowOverrideDialog(false)}>
+                  Cancel
+                </Button>
+                <Button onClick={handleSaveOverride} disabled={savingOverride}>
+                  {savingOverride ? 'Saving...' : 'Save'}
+                </Button>
+              </div>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Add BYOK Dialog */}
         <Dialog open={showAddByok} onOpenChange={setShowAddByok}>

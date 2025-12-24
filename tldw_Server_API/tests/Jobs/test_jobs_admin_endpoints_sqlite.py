@@ -83,6 +83,23 @@ def test_reschedule_and_retry_now_endpoints_sqlite(monkeypatch, tmp_path):
         assert r3.status_code == 200
 
 
+def test_job_detail_endpoint_sqlite(monkeypatch, tmp_path):
+    _setup_env(monkeypatch, tmp_path)
+    ensure_jobs_tables(Path(os.environ["JOBS_DB_PATH"]))
+    app, headers = _client(monkeypatch)
+    jm = JobManager()
+    job = jm.create_job(domain="ps", queue="default", job_type="detail", payload={"hello": "world"}, owner_user_id="u")
+
+    with TestClient(app, headers=headers) as client:
+        r = client.get(f"/api/v1/jobs/{int(job['id'])}", params={"domain": "ps"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["id"] == int(job["id"])
+        assert body["domain"] == "ps"
+        assert body.get("payload", {}).get("hello") == "world"
+        assert body.get("archived") is False
+
+
 def test_attachments_and_sla_endpoints_sqlite(monkeypatch, tmp_path):
     _setup_env(monkeypatch, tmp_path)
     ensure_jobs_tables(Path(os.environ["JOBS_DB_PATH"]))

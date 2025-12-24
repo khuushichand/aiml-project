@@ -699,6 +699,13 @@ async def reset_db_pool():
         await _reset_api_manager()
     except Exception as e:
         logger.debug(f"reset_db_pool: ignoring API key manager reset error: {e}")
+    try:
+        from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
+            set_llm_provider_overrides_cache_for_tests as _reset_llm_overrides_cache,
+        )
+        _reset_llm_overrides_cache({})
+    except Exception as e:
+        logger.debug(f"reset_db_pool: ignoring LLM provider overrides cache reset error: {e}")
 
 async def get_db():
     """FastAPI dependency to get database connection"""

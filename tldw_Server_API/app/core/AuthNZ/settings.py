@@ -203,6 +203,8 @@ class Settings(BaseSettings):
             "media.create",
             "media.update",
             "media.delete",
+            "claims.review",
+            "claims.admin",
         ],
         description="Default permissions granted to the single-user principal in single_user mode",
     )

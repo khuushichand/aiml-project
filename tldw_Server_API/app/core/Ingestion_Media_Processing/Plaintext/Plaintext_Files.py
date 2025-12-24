@@ -27,6 +27,7 @@ from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_his
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
 from tldw_Server_API.app.core.Utils.Utils import logging
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 #
 #######################################################################################################################
 #
@@ -294,7 +295,8 @@ def process_document_content( # Renamed from _process_single_document for clarit
     system_prompt: Optional[str],
     title_override: Optional[str] = None,
     author_override: Optional[str] = None,
-    keywords: Optional[List[str]] = None
+    keywords: Optional[List[str]] = None,
+    base_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """
     Reads/converts various document formats, chunks (optional), analyses (optional).
@@ -302,13 +304,45 @@ def process_document_content( # Renamed from _process_single_document for clarit
     Returns a result dictionary aligned with MediaItemProcessResponse.
     *No DB interaction.*
 
+    When base_dir is provided, doc_path must resolve within it.
+
     Returns: Dict aligned with MediaItemProcessResponse structure.
     """
     start_time_func = time.perf_counter()
+    doc_path_obj = Path(doc_path)
+    if base_dir is not None:
+        safe_path = resolve_safe_local_path(doc_path_obj, base_dir)
+        if safe_path is None:
+            err_msg = "Document path rejected outside allowed base directory."
+            return {
+                "status": "Error",
+                "input_ref": str(doc_path_obj),
+                "processing_source": str(doc_path_obj),
+                "media_type": "document",
+                "source_format": None,
+                "content": None,
+                "metadata": {},
+                "segments": None,
+                "chunks": None,
+                "analysis": None,
+                "analysis_details": {
+                    "analysis_model": None,
+                    "custom_prompt_used": None,
+                    "system_prompt_used": None,
+                    "summarized_recursively": summarize_recursively if perform_analysis else False,
+                    "parser_used": None,
+                },
+                "keywords": keywords or [],
+                "error": err_msg,
+                "warnings": [err_msg],
+                "db_id": None,
+                "db_message": None,
+            }
+        doc_path_obj = safe_path
     result: Dict[str, Any] = {
         "status": "Pending",
-        "input_ref": str(doc_path), # Will be overwritten by endpoint with original ref
-        "processing_source": str(doc_path), # Actual file processed
+        "input_ref": str(doc_path_obj), # Will be overwritten by endpoint with original ref
+        "processing_source": str(doc_path_obj), # Actual file processed
         "media_type": "document",
         "source_format": None, # Will be set after conversion
         "content": None, # Renamed from text_content
@@ -329,11 +363,11 @@ def process_document_content( # Renamed from _process_single_document for clarit
         "db_id": None,
         "db_message": None,
     }
-    log_counter("document_processing_attempt", labels={"file_path": str(doc_path)})
+    log_counter("document_processing_attempt", labels={"file_path": str(doc_path_obj)})
 
     try:
         # 1. Read/Convert Content & Get Initial Metadata
-        text_content, source_format_used, raw_metadata = convert_document_to_text(doc_path)
+        text_content, source_format_used, raw_metadata = convert_document_to_text(doc_path_obj)
         result["content"] = text_content
         result["source_format"] = source_format_used
         result["analysis_details"]["parser_used"] = source_format_used

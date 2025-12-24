@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from queue import Queue, Empty
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
@@ -12,6 +13,9 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_datab
 from tldw_Server_API.app.core.Claims_Extraction.ingestion_claims import (
     extract_claims_for_chunks,
     store_claims,
+)
+from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
+    record_claims_rebuild_metrics,
 )
 from tldw_Server_API.app.core.config import settings
 
@@ -33,6 +37,9 @@ class ClaimsRebuildService:
         # Stats
         self._stats_lock = threading.Lock()
         self._stats = {"enqueued": 0, "processed": 0, "failed": 0}
+        self._last_heartbeat_ts = 0.0
+        self._last_processed_ts = 0.0
+        self._last_failure: Optional[Dict[str, Any]] = None
 
     def start(self) -> None:
         if self._threads:
@@ -67,9 +74,11 @@ class ClaimsRebuildService:
         self._queue.put_nowait(ClaimsRebuildTask(media_id=int(media_id), db_path=str(db_path)))
         with self._stats_lock:
             self._stats["enqueued"] += 1
+        record_claims_rebuild_metrics(queue_size=self._queue.qsize())
 
     def _worker_loop(self) -> None:
         while not self._stop.is_set():
+            self._touch_heartbeat()
             try:
                 task = self._queue.get(timeout=0.5)
             except Empty:
@@ -77,6 +86,7 @@ class ClaimsRebuildService:
             if task.media_id < 0:
                 # sentinel
                 continue
+            start_time = time.time()
             try:
                 logger.debug(
                     "Processing claims rebuild task media_id={mid}, queue_size={qsize}",
@@ -86,10 +96,26 @@ class ClaimsRebuildService:
                 self._process_task(task)
                 with self._stats_lock:
                     self._stats["processed"] += 1
+                self._last_processed_ts = time.time()
+                record_claims_rebuild_metrics(
+                    processed=1,
+                    duration_s=time.time() - start_time,
+                    queue_size=self._queue.qsize(),
+                )
             except Exception as e:
                 logger.error(f"Claims rebuild failed for media_id={task.media_id}: {e}")
                 with self._stats_lock:
                     self._stats["failed"] += 1
+                self._last_failure = {
+                    "media_id": task.media_id,
+                    "error": str(e),
+                    "timestamp": time.time(),
+                }
+                record_claims_rebuild_metrics(
+                    failed=1,
+                    duration_s=time.time() - start_time,
+                    queue_size=self._queue.qsize(),
+                )
             finally:
                 self._queue.task_done()
 
@@ -139,6 +165,19 @@ class ClaimsRebuildService:
 
     def get_worker_count(self) -> int:
         return len(self._threads)
+
+    def get_health(self) -> Dict[str, Any]:
+        return {
+            "queue_length": self.get_queue_length(),
+            "workers": self.get_worker_count(),
+            "last_heartbeat_ts": self._last_heartbeat_ts,
+            "last_processed_ts": self._last_processed_ts or None,
+            "last_failure": self._last_failure,
+        }
+
+    def _touch_heartbeat(self) -> None:
+        self._last_heartbeat_ts = time.time()
+        record_claims_rebuild_metrics(heartbeat_ts=self._last_heartbeat_ts)
 
 
 # Module-level singleton for convenience

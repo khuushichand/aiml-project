@@ -161,6 +161,64 @@ class RegistrationSettingsUpdateRequest(BaseModel):
 
 #######################################################################################################################
 #
+# LLM Provider Overrides Schemas
+
+class LLMProviderOverrideRequest(BaseModel):
+    """Request to upsert LLM provider overrides."""
+    is_enabled: Optional[bool] = None
+    allowed_models: Optional[List[str]] = None
+    config: Optional[Dict[str, Any]] = None
+    api_key: Optional[str] = None
+    credential_fields: Optional[Dict[str, Any]] = None
+    clear_api_key: Optional[bool] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LLMProviderOverrideResponse(BaseModel):
+    """Response payload for LLM provider overrides."""
+    provider: str
+    is_enabled: Optional[bool] = None
+    allowed_models: Optional[List[str]] = None
+    config: Optional[Dict[str, Any]] = None
+    credential_fields: Optional[Dict[str, Any]] = None
+    has_api_key: bool = False
+    api_key_hint: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LLMProviderOverrideListResponse(BaseModel):
+    """Response payload for listing LLM provider overrides."""
+    items: List[LLMProviderOverrideResponse]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LLMProviderTestRequest(BaseModel):
+    """Request to test LLM provider connectivity."""
+    provider: str
+    model: Optional[str] = None
+    api_key: Optional[str] = None
+    credential_fields: Optional[Dict[str, Any]] = None
+    use_override: bool = True
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LLMProviderTestResponse(BaseModel):
+    """Response payload for LLM provider test results."""
+    provider: str
+    status: str
+    model: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
 # System Statistics Schemas
 
 class UserStats(BaseModel):

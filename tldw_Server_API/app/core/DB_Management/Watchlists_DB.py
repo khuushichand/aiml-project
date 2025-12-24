@@ -342,6 +342,15 @@ class WatchlistsDatabase:
         );
         CREATE INDEX IF NOT EXISTS idx_watchlist_outputs_run ON watchlist_outputs(run_id);
         CREATE INDEX IF NOT EXISTS idx_watchlist_outputs_job ON watchlist_outputs(job_id);
+
+        CREATE TABLE IF NOT EXISTS watchlist_clusters (
+            job_id INTEGER NOT NULL,
+            cluster_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE (job_id, cluster_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_watchlist_clusters_job ON watchlist_clusters(job_id);
+        CREATE INDEX IF NOT EXISTS idx_watchlist_clusters_cluster ON watchlist_clusters(cluster_id);
         """
         self.backend.create_tables(ddl)
         # Backfill columns in case tables existed (guarded to avoid noisy duplicate-column errors)
@@ -1470,3 +1479,69 @@ class WatchlistsDatabase:
             if isinstance(k, str) and k:
                 keys.append(k)
         return keys
+
+    # ------------------------
+    # Claim cluster subscriptions
+    # ------------------------
+    def add_watchlist_cluster(self, job_id: int, cluster_id: int) -> None:
+        ts = _utcnow_iso()
+        self.backend.execute(
+            "INSERT INTO watchlist_clusters (job_id, cluster_id, created_at) "
+            "VALUES (?, ?, ?) ON CONFLICT(job_id, cluster_id) DO NOTHING",
+            (int(job_id), int(cluster_id), ts),
+        )
+
+    def remove_watchlist_cluster(self, job_id: int, cluster_id: int) -> bool:
+        result = self.backend.execute(
+            "DELETE FROM watchlist_clusters WHERE job_id = ? AND cluster_id = ?",
+            (int(job_id), int(cluster_id)),
+        )
+        try:
+            return int(getattr(result, "rowcount", 0) or 0) > 0
+        except Exception:
+            return False
+
+    def list_watchlist_clusters(self, job_id: int) -> List[Dict[str, Any]]:
+        rows = self.backend.execute(
+            "SELECT cluster_id, created_at FROM watchlist_clusters WHERE job_id = ? "
+            "ORDER BY created_at DESC",
+            (int(job_id),),
+        ).rows
+        return [dict(r) for r in rows or []]
+
+    def list_watchlist_cluster_subscriptions(
+        self,
+        *,
+        cluster_ids: Optional[List[int]] = None,
+    ) -> List[Dict[str, Any]]:
+        sql = "SELECT job_id, cluster_id, created_at FROM watchlist_clusters"
+        params: List[Any] = []
+        if cluster_ids:
+            placeholders = ",".join("?" * len(cluster_ids))
+            sql += f" WHERE cluster_id IN ({placeholders})"
+            params.extend(int(cid) for cid in cluster_ids)
+        sql += " ORDER BY created_at DESC"
+        rows = self.backend.execute(sql, tuple(params)).rows
+        return [dict(r) for r in rows or []]
+
+    def list_watchlist_cluster_counts(
+        self,
+        *,
+        cluster_ids: Optional[List[int]] = None,
+    ) -> Dict[int, int]:
+        sql = "SELECT cluster_id, COUNT(*) AS cnt FROM watchlist_clusters"
+        params: List[Any] = []
+        if cluster_ids:
+            placeholders = ",".join("?" * len(cluster_ids))
+            sql += f" WHERE cluster_id IN ({placeholders})"
+            params.extend(int(cid) for cid in cluster_ids)
+        sql += " GROUP BY cluster_id"
+        rows = self.backend.execute(sql, tuple(params)).rows
+        counts: Dict[int, int] = {}
+        for row in rows or []:
+            try:
+                cluster_id = int(row.get("cluster_id"))
+                counts[cluster_id] = int(row.get("cnt") or 0)
+            except Exception:
+                continue
+        return counts

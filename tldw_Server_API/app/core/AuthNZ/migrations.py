@@ -671,7 +671,8 @@ def migration_014_seed_roles_permissions(conn: sqlite3.Connection) -> None:
         VALUES
           ('admin', 'Administrator (full access)', 1),
           ('user', 'Standard user (baseline permissions)', 1),
-          ('moderator', 'Moderator (curated elevated access)', 1)
+          ('moderator', 'Moderator (curated elevated access)', 1),
+          ('reviewer', 'Claims reviewer', 1)
         """
     )
 
@@ -700,7 +701,10 @@ def migration_014_seed_roles_permissions(conn: sqlite3.Connection) -> None:
         # api
         ('api.generate_keys','Generate API keys','api'),
         ('api.manage_webhooks','Manage webhooks','api'),
-        ('api.rate_limit_override','Override rate limits','api')
+        ('api.rate_limit_override','Override rate limits','api'),
+        # claims
+        ('claims.review','Review claims','claims'),
+        ('claims.admin','Administer claims','claims')
     ]
     for name, description, category in perms:
         conn.execute(
@@ -717,6 +721,7 @@ def migration_014_seed_roles_permissions(conn: sqlite3.Connection) -> None:
     admin_id = _id('roles', 'admin')
     user_id = _id('roles', 'user')
     mod_id = _id('roles', 'moderator')
+    reviewer_id = _id('roles', 'reviewer')
 
     # Grant all permissions to admin
     cur = conn.execute("SELECT id FROM permissions")
@@ -748,6 +753,16 @@ def migration_014_seed_roles_permissions(conn: sqlite3.Connection) -> None:
             conn.execute(
                 "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
                 (mod_id, pid),
+            )
+
+    # Reviewer: read media + claims.review
+    reviewer_perms = ['media.read', 'claims.review']
+    for code in reviewer_perms:
+        pid = _id('permissions', code)
+        if pid is not None and reviewer_id is not None:
+            conn.execute(
+                "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
+                (reviewer_id, pid),
             )
 
     conn.commit()
@@ -1851,6 +1866,37 @@ def migration_040_extend_registration_codes_for_org_invites(conn: sqlite3.Connec
     logger.info("Migration 040: Updated registration_codes for org invites")
 
 
+def migration_041_add_llm_provider_overrides(conn: sqlite3.Connection) -> None:
+    """Add llm_provider_overrides table for runtime provider overrides."""
+    logger.info("Migration 041: START llm_provider_overrides table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS llm_provider_overrides (
+            provider TEXT PRIMARY KEY,
+            is_enabled INTEGER,
+            allowed_models TEXT,
+            config_json TEXT,
+            secret_blob TEXT,
+            api_key_hint TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_llm_provider_overrides_enabled ON llm_provider_overrides(is_enabled)"
+    )
+    conn.commit()
+    logger.info("Migration 041: Created llm_provider_overrides table")
+
+
+def rollback_041_drop_llm_provider_overrides(conn: sqlite3.Connection) -> None:
+    """Rollback migration 041 by dropping llm_provider_overrides table."""
+    conn.execute("DROP TABLE IF EXISTS llm_provider_overrides")
+    conn.commit()
+    logger.info("Rollback 041: Dropped llm_provider_overrides table")
+
+
 #######################################################################################################################
 #
 # Migration Registry
@@ -1964,6 +2010,12 @@ def get_authnz_migrations() -> List[Migration]:
             40,
             "Extend registration_codes for org invites",
             migration_040_extend_registration_codes_for_org_invites,
+        ),
+        Migration(
+            41,
+            "Add llm_provider_overrides table",
+            migration_041_add_llm_provider_overrides,
+            rollback_041_drop_llm_provider_overrides,
         ),
     ]
 

@@ -33,6 +33,9 @@ from tldw_Server_API.app.core.Claims_Extraction.claims_utils import (
     extract_claims_if_requested,
     persist_claims_if_applicable,
 )
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import (
+    resolve_safe_local_path,
+)
 
 
 try:  # Align HTTP 413 compatibility with legacy endpoint module
@@ -49,6 +52,7 @@ def _ensure_warnings_list(result: Dict[str, Any]) -> List[str]:
     return warnings
 
 
+# Unsafe for user-influenced paths; prefer _compute_source_hash_safe.
 def _compute_source_hash(file_path: FilePath, *, chunk_size: int = 1024 * 1024) -> Optional[str]:
     try:
         hasher = hashlib.sha256()
@@ -72,40 +76,27 @@ def _compute_source_hash(file_path: FilePath, *, chunk_size: int = 1024 * 1024) 
         return None
 
 
-def _is_safe_local_path(path: FilePath, base_dir: FilePath) -> bool:
+def _compute_source_hash_safe(
+    file_path: FilePath,
+    base_dir: FilePath,
+    *,
+    chunk_size: int = 1024 * 1024,
+) -> tuple[Optional[str], Optional[str]]:
     """
-    Validate that ``path`` is a local file path contained within ``base_dir``.
+    Compute a hash only for a validated local path within ``base_dir``.
 
-    This helps prevent directory traversal or absolute-path access outside the
-    expected base directory when dealing with user-influenced inputs.
+    Returns (hash, warning_message). The warning is set only when the path is rejected.
     """
-    try:
-        base_resolved = FilePath(base_dir).resolve(strict=False)
-        path_obj = FilePath(path)
-        path_resolved = (
-            path_obj.resolve(strict=False)
-            if path_obj.is_absolute()
-            else base_resolved.joinpath(path_obj).resolve(strict=False)
+    safe_path = resolve_safe_local_path(file_path, base_dir)
+    if safe_path is None:
+        return None, "Source hash skipped: local path rejected outside allowed base directory."
+    if not safe_path.is_file():
+        logger.debug(
+            "Skipping source hash computation for non-file path: %s",
+            safe_path,
         )
-        try:
-            common_path = os.path.commonpath([str(base_resolved), str(path_resolved)])
-        except ValueError:
-            logger.warning(
-                "Rejected path on different drive for local media source: %s",
-                path,
-            )
-            return False
-        if common_path == str(base_resolved):
-            return True
-        logger.warning(
-            "Rejected path outside of base directory for local media source: %s (base: %s)",
-            path_resolved,
-            base_resolved,
-        )
-        return False
-    except Exception as exc:
-        logger.warning("Error while validating local media path %s: %s", path, exc)
-        return False
+        return None, None
+    return _compute_source_hash(safe_path, chunk_size=chunk_size), None
 
 
 def _media_has_source_hash_column(db: MediaDatabase) -> bool:
@@ -585,11 +576,25 @@ async def add_media_orchestrate(
                         if not source_path or source_path in url_list:
                             continue
 
-                        # Check if the source file exists
-                        source_file = FilePath(source_path)
+                        # Check if the source file exists and is within temp_dir
+                        safe_source = resolve_safe_local_path(
+                            FilePath(source_path),
+                            temp_dir_path,
+                        )
+                        if safe_source is None:
+                            logger.warning(
+                                "Original file path rejected outside temp dir: %s",
+                                source_path,
+                            )
+                            result.setdefault("warnings", []).append(
+                                "Original file not stored: unsafe local path"
+                            )
+                            continue
+                        source_file = safe_source
                         if not source_file.exists():
                             logger.warning(
-                                f"Original file not found for storage: {source_path}"
+                                "Original file not found for storage: %s",
+                                source_path,
                             )
                             continue
 
@@ -1304,63 +1309,19 @@ async def process_batch_media(
 
         if not is_url:
             try:
-                # Treat any non-URL source as a local file path that must live under temp_dir.
-                raw_path = FilePath(source_path_or_url)
-                candidate_path = (
-                    raw_path
-                    if raw_path.is_absolute()
-                    else FilePath(temp_dir) / raw_path
+                source_hash, hash_warning = _compute_source_hash_safe(
+                    FilePath(source_path_or_url),
+                    temp_dir,
                 )
-                # Normalize and resolve to eliminate any ".." segments.
-                resolved_path = candidate_path.resolve()
-
-                # Verify the resolved path is within temp_dir to prevent path traversal.
-                temp_root = FilePath(temp_dir).resolve()
-                try:
-                    is_within_temp = resolved_path.is_relative_to(temp_root)  # type: ignore[attr-defined]
-                except AttributeError:
-                    # For Python versions without Path.is_relative_to, fall back to a
-                    # conservative prefix check on the resolved absolute paths.
-                    temp_root_str = str(temp_root)
-                    resolved_str = str(resolved_path)
-                    is_within_temp = resolved_str == temp_root_str or resolved_str.startswith(
-                        temp_root_str + os.sep
+                if hash_warning:
+                    pre_check_warning = (
+                        hash_warning
+                        if not pre_check_warning
+                        else f"{pre_check_warning}; {hash_warning}"
                     )
-                    # Only compute a hash for safe, existing files under temp_dir.
-
-                if is_within_temp and resolved_path.is_file():
-                    source_hash = _compute_source_hash(resolved_path)
-                    if source_hash and input_ref:
-                        source_hash_by_ref.setdefault(str(input_ref), []).append(source_hash)
-                        source_hash_by_source[str(source_path_or_url)] = source_hash
-                else:
-                    logger.debug(
-                        "Skipping hash computation for unsafe or non-file path %s (resolved: %s)",
-                        source_path_or_url,
-                        resolved_path,
-                    )
-                path_obj = FilePath(source_path_or_url)
-                if _is_safe_local_path(path_obj, temp_dir):
-                    safe_path = (
-                        path_obj.resolve(strict=False)
-                        if path_obj.is_absolute()
-                        else FilePath(temp_dir).joinpath(path_obj).resolve(strict=False)
-                    )
-                    if safe_path.is_file():
-                        source_hash = _compute_source_hash(safe_path)
-                        if source_hash and input_ref:
-                            source_hash_by_ref.setdefault(str(input_ref), []).append(source_hash)
-                            source_hash_by_source[str(source_path_or_url)] = source_hash
-                    else:
-                        logger.debug(
-                            "Skipping source hash computation for non-file path: %s",
-                            source_path_or_url,
-                        )
-                else:
-                    logger.debug(
-                        "Skipping source hash computation for unsafe path: %s",
-                        source_path_or_url,
-                    )
+                if source_hash and input_ref:
+                    source_hash_by_ref.setdefault(str(input_ref), []).append(source_hash)
+                    source_hash_by_source[str(source_path_or_url)] = source_hash
             except Exception as hash_err:
                 logger.debug(
                     "Source hash computation failed for %s: %s",
@@ -1500,6 +1461,7 @@ async def process_batch_media(
 
         if not should_process:
             logger.info("Skipping processing for %s: %s", input_ref, reason)
+            skipped_warnings = [pre_check_warning] if pre_check_warning else None
             skipped_result = {
                 "status": "Skipped",
                 "input_ref": input_ref,
@@ -1516,7 +1478,7 @@ async def process_batch_media(
                 "summary": None,
                 "analysis_details": None,
                 "error": None,
-                "warnings": None,
+                "warnings": skipped_warnings,
                 "db_message": "Skipped processing, no DB action.",
             }
             combined_results.append(skipped_result)
@@ -1988,8 +1950,16 @@ async def process_document_like_item(
                 and isinstance(downloaded_path, FilePath)
                 and downloaded_path.exists()
             ):
-                processing_filepath = downloaded_path
-                processing_filename = downloaded_path.name
+                safe_downloaded_path = resolve_safe_local_path(
+                    downloaded_path,
+                    temp_dir,
+                )
+                if safe_downloaded_path is None:
+                    raise FileNotFoundError(
+                        "Downloaded file path rejected outside temp directory."
+                    )
+                processing_filepath = safe_downloaded_path
+                processing_filename = safe_downloaded_path.name
 
                 if user_id is not None:
                     try:
@@ -2056,12 +2026,17 @@ async def process_document_like_item(
                 )
         else:
             path_obj = FilePath(processing_source)
-            if not path_obj.is_file():
+            safe_path = resolve_safe_local_path(path_obj, temp_dir)
+            if safe_path is None:
+                raise FileNotFoundError(
+                    f"Uploaded file path rejected outside temp directory: {processing_source}",
+                )
+            if not safe_path.is_file():
                 raise FileNotFoundError(
                     f"Uploaded file path not found or is not a file: {processing_source}",
                 )
-            processing_filepath = path_obj
-            processing_filename = path_obj.name
+            processing_filepath = safe_path
+            processing_filename = safe_path.name
 
             if str(media_type) in {"pdf", "email"}:
                 async with aiofiles.open(processing_filepath, "rb") as file_obj:
@@ -2161,7 +2136,10 @@ async def process_document_like_item(
             else:  # pragma: no cover - minimal profiles
                 processing_func = docs.process_document_content
 
-            specific_args = {"doc_path": processing_filepath}
+            specific_args = {
+                "doc_path": processing_filepath,
+                "base_dir": temp_dir,
+            }
 
         elif media_type_str == "json":
             if processing_filepath is None:
@@ -2180,7 +2158,10 @@ async def process_document_like_item(
             else:  # pragma: no cover
                 processing_func = docs.process_document_content
 
-            specific_args = {"doc_path": processing_filepath}
+            specific_args = {
+                "doc_path": processing_filepath,
+                "base_dir": temp_dir,
+            }
 
         elif media_type_str == "ebook":
             if processing_filepath is None:
@@ -2194,6 +2175,7 @@ async def process_document_like_item(
             specific_args = {
                 "file_path": str(processing_filepath),
                 "extraction_method": "filtered",
+                "base_dir": temp_dir,
             }
             custom_pattern = getattr(form_data, "custom_chapter_pattern", None)
             if custom_pattern:

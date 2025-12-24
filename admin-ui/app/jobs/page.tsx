@@ -8,10 +8,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { RefreshCw, Briefcase, Filter, AlertTriangle } from 'lucide-react';
+import { useConfirm } from '@/components/ui/confirm-dialog';
+import { useToast } from '@/components/ui/toast';
+import { RefreshCw, Briefcase, Filter, AlertTriangle, Eye, RotateCcw, XCircle, Repeat } from 'lucide-react';
 import { api, ApiError } from '@/lib/api-client';
 
 interface JobItem {
@@ -30,6 +33,16 @@ interface JobItem {
   started_at?: string | null;
   leased_until?: string | null;
   completed_at?: string | null;
+}
+
+interface JobDetail extends JobItem {
+  payload?: unknown;
+  result?: unknown;
+  archived?: boolean;
+  error_message?: string | null;
+  last_error?: string | null;
+  progress_percent?: number | null;
+  progress_message?: string | null;
 }
 
 interface QueueStats {
@@ -67,12 +80,18 @@ const statusBadge = (status: string) => {
 };
 
 export default function JobsPage() {
+  const confirm = useConfirm();
+  const { success, error: showError } = useToast();
   const [jobs, setJobs] = useState<JobItem[]>([]);
   const [stats, setStats] = useState<QueueStats[]>([]);
   const [staleGroups, setStaleGroups] = useState<StaleGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [routesUnavailable, setRoutesUnavailable] = useState(false);
+  const [selectedJob, setSelectedJob] = useState<JobItem | null>(null);
+  const [jobDetail, setJobDetail] = useState<JobDetail | null>(null);
+  const [jobDetailLoading, setJobDetailLoading] = useState(false);
+  const [jobDetailError, setJobDetailError] = useState('');
 
   const [filters, setFilters] = useState({
     domain: '',
@@ -170,6 +189,99 @@ export default function JobsPage() {
       job_type: '',
       limit: '100',
     });
+  };
+
+  const handleOpenDetail = async (job: JobItem) => {
+    setSelectedJob(job);
+    setJobDetail(null);
+    setJobDetailError('');
+    setJobDetailLoading(true);
+    try {
+      const detail = await api.getJobDetail(job.id, { domain: job.domain });
+      setJobDetail(detail as JobDetail);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to load job detail';
+      setJobDetailError(message);
+      setJobDetail(null);
+    } finally {
+      setJobDetailLoading(false);
+    }
+  };
+
+  const handleCloseDetail = () => {
+    setSelectedJob(null);
+    setJobDetail(null);
+    setJobDetailError('');
+    setJobDetailLoading(false);
+  };
+
+  const handleCancelJob = async (job: JobItem) => {
+    const confirmed = await confirm({
+      title: 'Cancel job',
+      message: `Cancel job ${job.id}? This stops any processing immediately.`,
+      confirmText: 'Cancel job',
+      variant: 'danger',
+      icon: 'warning',
+    });
+    if (!confirmed) return;
+
+    try {
+      await api.cancelJobs({ domain: job.domain, job_id: job.id, dry_run: false });
+      success('Job cancelled', `Job ${job.id} has been cancelled.`);
+      void loadData();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to cancel job';
+      showError('Cancel failed', message);
+    }
+  };
+
+  const handleRetryJob = async (job: JobItem) => {
+    const confirmed = await confirm({
+      title: 'Retry job',
+      message: `Retry job ${job.id}? The job will re-enter the queue immediately.`,
+      confirmText: 'Retry job',
+      variant: 'default',
+    });
+    if (!confirmed) return;
+
+    try {
+      await api.retryJobsNow({ domain: job.domain, job_id: job.id, only_failed: true, dry_run: false });
+      success('Job retried', `Job ${job.id} has been re-queued.`);
+      void loadData();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to retry job';
+      showError('Retry failed', message);
+    }
+  };
+
+  const handleRequeueJob = async (job: JobItem) => {
+    const confirmed = await confirm({
+      title: 'Requeue job',
+      message: `Requeue job ${job.id}? The job will move out of quarantine.`,
+      confirmText: 'Requeue job',
+      variant: 'default',
+    });
+    if (!confirmed) return;
+
+    try {
+      await api.requeueQuarantinedJobs({ domain: job.domain, job_id: job.id, dry_run: false });
+      success('Job requeued', `Job ${job.id} moved back to queued.`);
+      void loadData();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to requeue job';
+      showError('Requeue failed', message);
+    }
+  };
+
+  const formatJson = (value: unknown) => {
+    if (value === undefined || value === null) {
+      return '—';
+    }
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch (err) {
+      return String(value);
+    }
   };
 
   return (
@@ -387,28 +499,161 @@ export default function JobsPage() {
                       <TableHead>Created</TableHead>
                       <TableHead>Started</TableHead>
                       <TableHead>Completed</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {jobs.map((job) => (
-                      <TableRow key={job.id}>
-                        <TableCell className="font-medium">{job.id}</TableCell>
-                        <TableCell>{job.domain}</TableCell>
-                        <TableCell>{job.queue}</TableCell>
-                        <TableCell>{job.job_type}</TableCell>
-                        <TableCell>
-                          <Badge className={statusBadge(job.status)}>{job.status}</Badge>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {job.retry_count ?? 0}/{job.max_retries ?? 0}
-                        </TableCell>
-                        <TableCell>{formatDateTime(job.created_at)}</TableCell>
-                        <TableCell>{formatDateTime(job.started_at)}</TableCell>
-                        <TableCell>{formatDateTime(job.completed_at)}</TableCell>
-                      </TableRow>
-                    ))}
+                    {jobs.map((job) => {
+                      const normalizedStatus = job.status.toLowerCase();
+                      const canCancel = normalizedStatus === 'queued' || normalizedStatus === 'processing';
+                      const canRetry = normalizedStatus === 'failed';
+                      const canRequeue = normalizedStatus === 'quarantined';
+
+                      return (
+                        <TableRow key={job.id}>
+                          <TableCell className="font-medium">{job.id}</TableCell>
+                          <TableCell>{job.domain}</TableCell>
+                          <TableCell>{job.queue}</TableCell>
+                          <TableCell>{job.job_type}</TableCell>
+                          <TableCell>
+                            <Badge className={statusBadge(job.status)}>{job.status}</Badge>
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {job.retry_count ?? 0}/{job.max_retries ?? 0}
+                          </TableCell>
+                          <TableCell>{formatDateTime(job.created_at)}</TableCell>
+                          <TableCell>{formatDateTime(job.started_at)}</TableCell>
+                          <TableCell>{formatDateTime(job.completed_at)}</TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleOpenDetail(job)}
+                              >
+                                <Eye className="mr-2 h-4 w-4" />
+                                View
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="icon"
+                                onClick={() => handleRetryJob(job)}
+                                disabled={!canRetry}
+                                title={canRetry ? 'Retry job' : 'Retry available for failed jobs'}
+                              >
+                                <RotateCcw className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="icon"
+                                onClick={() => handleRequeueJob(job)}
+                                disabled={!canRequeue}
+                                title={canRequeue ? 'Requeue job' : 'Requeue available for quarantined jobs'}
+                              >
+                                <Repeat className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="icon"
+                                onClick={() => handleCancelJob(job)}
+                                disabled={!canCancel}
+                                title={canCancel ? 'Cancel job' : 'Cancel available for queued or processing jobs'}
+                              >
+                                <XCircle className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
+
+                <Dialog open={!!selectedJob} onOpenChange={(open) => !open && handleCloseDetail()}>
+                  <DialogContent className="max-w-4xl">
+                    <DialogHeader>
+                      <DialogTitle>Job {selectedJob?.id}</DialogTitle>
+                      <DialogDescription>
+                        {jobDetail?.archived ? 'Archived job details' : 'Job details and payload'}
+                      </DialogDescription>
+                    </DialogHeader>
+                    {jobDetailLoading && (
+                      <div className="text-sm text-muted-foreground">Loading job details…</div>
+                    )}
+                    {jobDetailError && (
+                      <Alert variant="destructive">
+                        <AlertDescription>{jobDetailError}</AlertDescription>
+                      </Alert>
+                    )}
+                    {jobDetail && (
+                      <div className="space-y-4">
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          <div className="space-y-1">
+                            <Label>ID</Label>
+                            <div className="text-sm font-mono">{jobDetail.id}</div>
+                          </div>
+                          <div className="space-y-1">
+                            <Label>Status</Label>
+                            <Badge className={statusBadge(jobDetail.status)}>{jobDetail.status}</Badge>
+                          </div>
+                          <div className="space-y-1">
+                            <Label>Domain</Label>
+                            <div className="text-sm">{jobDetail.domain}</div>
+                          </div>
+                          <div className="space-y-1">
+                            <Label>Queue</Label>
+                            <div className="text-sm">{jobDetail.queue}</div>
+                          </div>
+                          <div className="space-y-1">
+                            <Label>Job type</Label>
+                            <div className="text-sm">{jobDetail.job_type}</div>
+                          </div>
+                          <div className="space-y-1">
+                            <Label>Retries</Label>
+                            <div className="text-sm">
+                              {jobDetail.retry_count ?? 0}/{jobDetail.max_retries ?? 0}
+                            </div>
+                          </div>
+                          <div className="space-y-1">
+                            <Label>Created</Label>
+                            <div className="text-sm">{formatDateTime(jobDetail.created_at)}</div>
+                          </div>
+                          <div className="space-y-1">
+                            <Label>Started</Label>
+                            <div className="text-sm">{formatDateTime(jobDetail.started_at)}</div>
+                          </div>
+                          <div className="space-y-1">
+                            <Label>Completed</Label>
+                            <div className="text-sm">{formatDateTime(jobDetail.completed_at)}</div>
+                          </div>
+                          <div className="space-y-1">
+                            <Label>Archived</Label>
+                            <div className="text-sm">{jobDetail.archived ? 'Yes' : 'No'}</div>
+                          </div>
+                        </div>
+
+                        {jobDetail.error_message && (
+                          <Alert variant="destructive">
+                            <AlertDescription>{jobDetail.error_message}</AlertDescription>
+                          </Alert>
+                        )}
+
+                        <div className="space-y-2">
+                          <Label>Payload</Label>
+                          <pre className="max-h-64 overflow-auto rounded-md bg-muted p-3 text-xs">
+                            {formatJson(jobDetail.payload)}
+                          </pre>
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Result</Label>
+                          <pre className="max-h-64 overflow-auto rounded-md bg-muted p-3 text-xs">
+                            {formatJson(jobDetail.result)}
+                          </pre>
+                        </div>
+                      </div>
+                    )}
+                  </DialogContent>
+                </Dialog>
               )}
             </CardContent>
           </Card>

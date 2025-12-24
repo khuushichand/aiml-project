@@ -8,11 +8,18 @@ with storage in MediaDatabase.Claims. Optional, behind config flags.
 from __future__ import annotations
 
 import hashlib
+import uuid
 import re
+import time
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
 from tldw_Server_API.app.core.config import settings as _settings
+from tldw_Server_API.app.core.Claims_Extraction.review_assignment import apply_review_rules
+from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
+    estimate_claims_cost,
+    record_claims_provider_request,
+)
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
 try:
@@ -102,6 +109,7 @@ def extract_claims_for_chunks(
         else:
             sents = []
             try:
+                cost_estimate = None
                 import concurrent.futures as _futures
                 import threading as _threading
 
@@ -163,16 +171,39 @@ def extract_claims_for_chunks(
                         model=model_override,
                     )
 
+                cost_estimate = estimate_claims_cost(
+                    provider=provider,
+                    model=model_override or "",
+                    text=prompt,
+                )
+                start_time = time.time()
                 with _futures.ThreadPoolExecutor(max_workers=1) as _exec:
                     fut = _exec.submit(_call_provider)
                     try:
                         resp = fut.result(timeout=timeout_sec)
+                        record_claims_provider_request(
+                            provider=provider,
+                            model=model_override or "",
+                            mode="ingestion",
+                            latency_s=time.time() - start_time,
+                            estimated_cost=cost_estimate,
+                        )
                     except _futures.TimeoutError:
                         try:
                             fut.cancel()
                         except Exception:
                             pass
-                        raise TimeoutError(f"LLM extraction timed out after {timeout_sec:.1f}s for provider '{provider}'.")
+                        record_claims_provider_request(
+                            provider=provider,
+                            model=model_override or "",
+                            mode="ingestion",
+                            latency_s=None,
+                            error="timeout",
+                            estimated_cost=cost_estimate,
+                        )
+                        raise TimeoutError(
+                            f"LLM extraction timed out after {timeout_sec:.1f}s for provider '{provider}'."
+                        )
 
                 # Normalize response to string
                 if isinstance(resp, str):
@@ -225,6 +256,14 @@ def extract_claims_for_chunks(
                         if len(sents) >= max_per_chunk:
                             break
             except Exception as e:
+                record_claims_provider_request(
+                    provider=provider,
+                    model=model_override or "",
+                    mode="ingestion",
+                    latency_s=None,
+                    error=str(e),
+                    estimated_cost=cost_estimate,
+                )
                 logger.debug(f"LLM-based claim extraction failed ({mode}): {e}; falling back to heuristic")
                 sents = []
                 parts = re.split(r"(?<=[\.!?])\s+", (txt or "").strip())
@@ -255,9 +294,12 @@ def store_claims(
     if not claims:
         return 0
     rows: List[Dict[str, Any]] = []
+    assignments: List[Dict[str, Any]] = []
     for c in claims:
         idx = int(c.get("chunk_index", 0))
         ctext = str(c.get("claim_text", ""))
+        claim_uuid = str(c.get("uuid") or uuid.uuid4())
+        c["uuid"] = claim_uuid
         chunk_txt = chunk_texts_by_index.get(idx, "")
         chash = hashlib.sha256(chunk_txt.encode()).hexdigest() if chunk_txt else hashlib.sha256(b"").hexdigest()
         rows.append({
@@ -270,9 +312,50 @@ def store_claims(
             "extractor": extractor,
             "extractor_version": extractor_version,
             "chunk_hash": chash,
+            "uuid": claim_uuid,
         })
     try:
+        rows = apply_review_rules(db=db, claims=rows)
+        for row in rows:
+            if row.get("reviewer_id") is not None or row.get("review_group"):
+                assignments.append(
+                    {
+                        "uuid": row.get("uuid"),
+                        "reviewer_id": row.get("reviewer_id"),
+                        "review_group": row.get("review_group"),
+                    }
+                )
         inserted = db.upsert_claims(rows)
+        if assignments:
+            from tldw_Server_API.app.core.Claims_Extraction.claims_notifications import (
+                record_review_assignment_notifications,
+            )
+            owner_row = db.execute_query(
+                "SELECT owner_user_id, client_id FROM Media WHERE id = ?",
+                (int(media_id),),
+            ).fetchone()
+            owner_user_id = None
+            client_id = None
+            if owner_row:
+                try:
+                    owner_user_id = owner_row["owner_user_id"]
+                    client_id = owner_row["client_id"]
+                except Exception:
+                    try:
+                        owner_user_id = owner_row[0]
+                    except Exception:
+                        owner_user_id = None
+                    try:
+                        client_id = owner_row[1]
+                    except Exception:
+                        client_id = None
+            if owner_user_id is None:
+                owner_user_id = client_id or db.client_id
+            record_review_assignment_notifications(
+                db=db,
+                owner_user_id=str(owner_user_id),
+                assignments=assignments,
+            )
         return inserted
     except Exception as e:  # pragma: no cover
         logger.error(f"Failed to store claims for media_id={media_id}: {e}")

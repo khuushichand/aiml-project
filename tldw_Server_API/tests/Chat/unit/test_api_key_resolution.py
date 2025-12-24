@@ -3,6 +3,10 @@ import pytest
 from tldw_Server_API.app.api.v1.schemas import chat_request_schemas
 from tldw_Server_API.app.api.v1.endpoints import chat as chat_endpoint
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
+from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
+    LLMProviderOverride,
+    set_llm_provider_overrides_cache_for_tests,
+)
 
 
 def test_resolver_prefers_module_keys_in_tests(monkeypatch):
@@ -66,3 +70,26 @@ def test_get_api_keys_supports_hyphenated_provider_env_vars(monkeypatch):
 
     assert keys.get("local-llm") == "local-key"
     assert keys.get("custom-openai-api") == "custom-key"
+
+
+def test_resolver_prefers_provider_override(monkeypatch):
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("TEST_MODE", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(chat_request_schemas, "get_api_keys", lambda: {"openai": "env-key"})
+
+    set_llm_provider_overrides_cache_for_tests(
+        {
+            "openai": LLMProviderOverride(
+                provider="openai",
+                api_key="override-key",
+            )
+        }
+    )
+
+    try:
+        resolved_key, debug_info = resolve_provider_api_key("openai")
+        assert resolved_key == "override-key"
+        assert debug_info["selected_source"] == "override"
+    finally:
+        set_llm_provider_overrides_cache_for_tests({})

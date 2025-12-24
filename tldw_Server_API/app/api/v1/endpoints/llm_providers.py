@@ -9,6 +9,9 @@ import requests
 from fastapi import APIRouter, HTTPException, Depends
 from loguru import logger
 from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
+    apply_llm_provider_overrides_to_listing,
+)
 from tldw_Server_API.app.core.Chat.provider_config import (
     PROVIDER_REQUIRES_KEY,
     PROVIDER_CAPABILITIES,
@@ -1094,7 +1097,7 @@ def get_all_available_models() -> List[str]:
     Returns:
         List of all available model names
     """
-    result = get_configured_providers()
+    result = apply_llm_provider_overrides_to_listing(get_configured_providers())
     models = []
 
     for provider in result.get('providers', []):
@@ -1124,6 +1127,8 @@ async def get_llm_providers(include_deprecated: bool = False):
     """
     try:
         result = await get_configured_providers_async(include_deprecated=include_deprecated)
+        result = apply_llm_provider_overrides_to_listing(result)
+        result = apply_llm_provider_overrides_to_listing(result)
 
         # Inject Diagnostics UI interval bounds from server config if available
         try:
@@ -1152,6 +1157,8 @@ async def get_llm_providers(include_deprecated: bool = False):
             # Best-effort; omit diagnostics_ui on failure
             pass
 
+        result = apply_llm_provider_overrides_to_listing(result)
+
         if result['total_configured'] == 0:
             logger.warning("No LLM providers are configured")
             return {
@@ -1179,6 +1186,7 @@ async def get_llm_providers(include_deprecated: bool = False):
 async def get_models_metadata(include_deprecated: bool = False):
     try:
         result = await get_configured_providers_async(include_deprecated=include_deprecated)
+        result = apply_llm_provider_overrides_to_listing(result)
         flattened: List[Dict[str, Any]] = []
         for provider in result.get('providers', []):
             for mi in provider.get('models_info', []):

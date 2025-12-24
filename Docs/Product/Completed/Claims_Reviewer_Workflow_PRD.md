@@ -23,6 +23,11 @@ Teams need confidence that surfaced claims have been vetted, yet the platform pr
 - Extractor delta report shows measurable reduction in post-review corrections over release cycles.
 - Audit coverage: every claim transition has reviewer, timestamp, and notes.
 
+## Implementation Status (repo state)
+- Complete: review schema + audit log + rules tables; review queue/history/update/bulk/rules endpoints; rule evaluation on ingest; review metrics and basic analytics export; reviewer assignment notifications + digest APIs.
+- Partial: review analytics are basic aggregates only; no nightly extractor delta report or correction pipelines.
+- Pending: webhooks/email for review events; UI/batch tooling beyond API surface.
+
 ## 4. Out of Scope (v1)
 - Full-blown workflow builder or external ticketing integration.
 - Automated truth scoring beyond reviewer decisions.

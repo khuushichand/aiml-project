@@ -895,6 +895,7 @@ async def lifespan(app: FastAPI):
                     ensure_api_keys_tables_pg,
                     ensure_usage_tables_pg,
                     ensure_virtual_key_counters_pg,
+                    ensure_llm_provider_overrides_pg,
                 )
 
                 ok_catalogs = await ensure_tool_catalogs_tables_pg(db_pool)
@@ -912,6 +913,9 @@ async def lifespan(app: FastAPI):
                 ok_vk_pg = await ensure_virtual_key_counters_pg(db_pool)
                 if ok_vk_pg:
                     logger.info("App Startup: Ensured PG virtual-key counters tables")
+                ok_overrides_pg = await ensure_llm_provider_overrides_pg(db_pool)
+                if ok_overrides_pg:
+                    logger.info("App Startup: Ensured PG llm_provider_overrides table")
         except Exception as _pg_e:
             logger.debug(f"App Startup: PG extras ensure failed/skipped: {_pg_e}")
         # Ensure RBAC seed exists in single-user mode (idempotent; both backends)
@@ -920,6 +924,17 @@ async def lifespan(app: FastAPI):
             logger.info("App Startup: Ensured single-user RBAC seed (baseline roles/permissions)")
         except Exception as _e:
             logger.debug(f"App Startup: RBAC single-user seed ensure skipped: {_e}")
+
+        # Load LLM provider overrides into memory for runtime enforcement.
+        try:
+            from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
+                refresh_llm_provider_overrides as _refresh_llm_provider_overrides,
+            )
+
+            await _refresh_llm_provider_overrides(db_pool)
+            logger.info("App Startup: Loaded LLM provider overrides")
+        except Exception as _e:
+            logger.debug(f"App Startup: LLM provider overrides load skipped: {_e}")
 
         # Initialize ResourceGovernor policy loader (file or DB store)
         try:

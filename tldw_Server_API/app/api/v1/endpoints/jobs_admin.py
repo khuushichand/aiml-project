@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from typing import Any, Optional
+import base64
+import gzip
 import os
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, ConfigDict
@@ -142,6 +144,47 @@ def _set_pg_rls_for_user(user: dict, domain: Optional[str]) -> None:
         _JM.set_rls_context(is_admin=True, domain_allowlist=str(domain) if domain else None, owner_user_id=uid)
     except Exception:
         pass
+
+
+def _parse_json_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            return _parse_json_value(bytes(value).decode("utf-8"))
+        except Exception:
+            return value
+    if isinstance(value, str):
+        try:
+            return _json.loads(value)
+        except Exception:
+            return value
+    return value
+
+
+def _decode_archive_blob(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            decoded = gzip.decompress(bytes(value)).decode("utf-8")
+            return _parse_json_value(decoded)
+        except Exception:
+            return _parse_json_value(value)
+    if isinstance(value, str) and value.startswith("gzip64:"):
+        try:
+            payload = value[len("gzip64:"):]
+            decoded = gzip.decompress(base64.b64decode(payload)).decode("utf-8")
+            return _parse_json_value(decoded)
+        except Exception:
+            return _parse_json_value(value)
+    return _parse_json_value(value)
 
 
 class PruneRequest(BaseModel):
@@ -409,6 +452,7 @@ class RetryNowRequest(BaseModel):
     domain: Optional[str] = None
     queue: Optional[str] = None
     job_type: Optional[str] = None
+    job_id: Optional[int] = None
     only_failed: bool = True
     dry_run: bool = False
 
@@ -424,7 +468,14 @@ async def retry_now_jobs_endpoint(
     if backend == "postgres":
         _set_pg_rls_for_user(admin_user, req.domain)
     jm = JobManager(backend=backend, db_url=db_url)
-    n = jm.retry_now_jobs(domain=req.domain, queue=req.queue, job_type=req.job_type, only_failed=req.only_failed, dry_run=req.dry_run)
+    n = jm.retry_now_jobs(
+        job_id=req.job_id,
+        domain=req.domain,
+        queue=req.queue,
+        job_type=req.job_type,
+        only_failed=req.only_failed,
+        dry_run=req.dry_run,
+    )
     return AffectedResponse(affected=int(n))
 
 
@@ -1255,6 +1306,80 @@ class JobItem(BaseModel):
     completed_at: Optional[str] = None
 
 
+class JobDetailResponse(BaseModel):
+    id: int
+    uuid: Optional[str] = None
+    domain: str
+    queue: str
+    job_type: str
+    status: str
+    payload: Optional[Any] = None
+    result: Optional[Any] = None
+    archived: bool = False
+
+    model_config = ConfigDict(extra="allow")
+
+
+@router.get("/jobs/{job_id}", response_model=JobDetailResponse)
+async def get_job_detail(
+    job_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    domain: Optional[str] = None,
+) -> JobDetailResponse:
+    admin_user = _enforce_domain_scope_unified(principal, domain)
+    db_url = os.getenv("JOBS_DB_URL")
+    backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    if backend == "postgres":
+        _set_pg_rls_for_user(admin_user, domain)
+    jm = JobManager(backend=backend, db_url=db_url)
+    job = jm.get_job(job_id)
+    if job:
+        if domain and job.get("domain") != domain:
+            raise HTTPException(status_code=404, detail="Job not found")
+        job["archived"] = False
+        return JobDetailResponse(**job)
+
+    conn = jm._connect()
+    try:
+        row = None
+        if jm.backend == "postgres":
+            with jm._pg_cursor(conn) as cur:
+                if domain:
+                    cur.execute("SELECT * FROM jobs_archive WHERE id = %s AND domain = %s", (int(job_id), domain))
+                else:
+                    cur.execute("SELECT * FROM jobs_archive WHERE id = %s", (int(job_id),))
+                row = cur.fetchone()
+        else:
+            if domain:
+                row = conn.execute(
+                    "SELECT * FROM jobs_archive WHERE id = ? AND domain = ?",
+                    (int(job_id), domain),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT * FROM jobs_archive WHERE id = ?",
+                    (int(job_id),),
+                ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Job not found")
+        job_data = dict(row)
+        payload = _parse_json_value(job_data.get("payload"))
+        result = _parse_json_value(job_data.get("result"))
+        if payload is None:
+            payload = _decode_archive_blob(job_data.get("payload_compressed"))
+        if result is None:
+            result = _decode_archive_blob(job_data.get("result_compressed"))
+        job_data["payload"] = jm._maybe_decrypt_json(payload)
+        job_data["result"] = jm._maybe_decrypt_json(result)
+        job_data["archived"] = True
+        return JobDetailResponse(**job_data)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 @router.get("/jobs/list", response_model=list[JobItem])
 async def list_jobs_endpoint(
     domain: Optional[str] = None,
@@ -1380,6 +1505,7 @@ class BatchCancelRequest(BaseModel):
     domain: str
     queue: Optional[str] = None
     job_type: Optional[str] = None
+    job_id: Optional[int] = None
     dry_run: bool = False
 
 
@@ -1415,6 +1541,9 @@ async def batch_cancel_endpoint(
             if req.job_type:
                 where.append("job_type = %s" if jm.backend == "postgres" else "job_type = ?")
                 params.append(req.job_type)
+            if req.job_id is not None:
+                where.append("id = %s" if jm.backend == "postgres" else "id = ?")
+                params.append(int(req.job_id))
             # Allow cancelling queued or processing (processing will be terminally cancelled)
             if jm.backend == "postgres":
                 with jm._pg_cursor(conn) as cur:
@@ -1734,6 +1863,7 @@ class BatchRequeueQuarantinedRequest(BaseModel):
     domain: str
     queue: Optional[str] = None
     job_type: Optional[str] = None
+    job_id: Optional[int] = None
     dry_run: bool = False
 
     model_config = ConfigDict(json_schema_extra={
@@ -1829,6 +1959,8 @@ async def batch_requeue_quarantined_endpoint(
                     where.append("queue = %s"); params.append(req.queue)
                 if req.job_type:
                     where.append("job_type = %s"); params.append(req.job_type)
+                if req.job_id is not None:
+                    where.append("id = %s"); params.append(int(req.job_id))
                 with conn:
                     with jm._pg_cursor(conn) as cur:
                         if req.dry_run:
@@ -1880,6 +2012,8 @@ async def batch_requeue_quarantined_endpoint(
                     where.append("queue = ?"); params2.append(req.queue)
                 if req.job_type:
                     where.append("job_type = ?"); params2.append(req.job_type)
+                if req.job_id is not None:
+                    where.append("id = ?"); params2.append(int(req.job_id))
                 if req.dry_run:
                     cur = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where)}", tuple(params2))
                     r = cur.fetchone()

@@ -1591,6 +1591,52 @@ async def update_job(
     )
 
 
+@router.get("/{watchlist_id}/clusters", summary="List claim clusters for a watchlist")
+async def list_watchlist_clusters(
+    watchlist_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    try:
+        db.get_job(watchlist_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="watchlist_not_found")
+    rows = db.list_watchlist_clusters(watchlist_id)
+    return {"watchlist_id": int(watchlist_id), "clusters": rows}
+
+
+@router.post("/{watchlist_id}/clusters", summary="Subscribe watchlist to a claim cluster")
+async def add_watchlist_cluster(
+    watchlist_id: int = Path(..., ge=1),
+    cluster_id: int = Body(..., embed=True, ge=1),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    try:
+        db.get_job(watchlist_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="watchlist_not_found")
+    db.add_watchlist_cluster(watchlist_id, cluster_id)
+    return {"status": "added", "watchlist_id": int(watchlist_id), "cluster_id": int(cluster_id)}
+
+
+@router.delete("/{watchlist_id}/clusters/{cluster_id}", summary="Unsubscribe watchlist from a claim cluster")
+async def remove_watchlist_cluster(
+    watchlist_id: int = Path(..., ge=1),
+    cluster_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
+):
+    try:
+        db.get_job(watchlist_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="watchlist_not_found")
+    removed = db.remove_watchlist_cluster(watchlist_id, cluster_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="cluster_subscription_not_found")
+    return {"status": "removed", "watchlist_id": int(watchlist_id), "cluster_id": int(cluster_id)}
+
+
 @router.delete("/jobs/{job_id}", summary="Delete job")
 async def delete_job(
     job_id: int = Path(..., ge=1),

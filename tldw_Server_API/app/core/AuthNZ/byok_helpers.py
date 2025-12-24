@@ -77,6 +77,14 @@ def _provider_env_key(provider: str) -> str:
 
 def resolve_server_default_key(provider: str) -> Optional[str]:
     provider_norm = normalize_provider_name(provider)
+    try:
+        from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import get_llm_provider_override
+
+        override = get_llm_provider_override(provider_norm)
+        if override and override.api_key:
+            return override.api_key
+    except Exception:
+        pass
     env_key = _provider_env_key(provider_norm)
     env_val = os.getenv(env_key)
     if env_val is not None:

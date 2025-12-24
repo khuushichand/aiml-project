@@ -36,6 +36,21 @@ def is_obviously_invalid_key(api_key: str) -> bool:
 
 
 def resolve_default_model_for_provider(provider: str) -> Optional[str]:
+    try:
+        from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
+            get_override_default_model,
+            get_llm_provider_override,
+        )
+
+        override_default = get_override_default_model(provider)
+        if override_default:
+            return override_default
+        override = get_llm_provider_override(provider)
+        if override and override.allowed_models:
+            return override.allowed_models[0]
+    except Exception:
+        pass
+
     normalized = (provider or "").replace(".", "_").replace("-", "_")
     env_key = f"DEFAULT_MODEL_{normalized.upper()}"
     env_val = os.getenv(env_key)

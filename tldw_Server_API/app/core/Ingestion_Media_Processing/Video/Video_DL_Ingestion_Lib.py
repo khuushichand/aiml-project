@@ -54,6 +54,7 @@ from tldw_Server_API.app.core.Utils.Utils import (
     extract_text_from_segments,
     logging
 )
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
 from tldw_Server_API.app.core.Metrics.metrics_logger import (
@@ -1209,22 +1210,38 @@ def process_single_video(
                     f"Download failed or file not found (target in {download_target_dir_str}) for URL: {video_input}"
                 )
 
-            local_file_path_for_transcription = downloaded_path
+            safe_downloaded = resolve_safe_local_path(
+                Path(downloaded_path),
+                processing_temp_dir,
+            )
+            if safe_downloaded is None:
+                raise FileNotFoundError(
+                    "Downloaded file path rejected outside temp directory."
+                )
+            local_file_path_for_transcription = str(safe_downloaded)
             # *** Update only the processing_source, keep original input_ref ***
             processing_result["processing_source"] = local_file_path_for_transcription
             logger.info(f"Download successful. Using local path: {local_file_path_for_transcription}")
 
         else:
             # Input is already a local file path
-            if not os.path.exists(video_input):
+            safe_local_path = resolve_safe_local_path(
+                Path(video_input),
+                processing_temp_dir,
+            )
+            if safe_local_path is None:
+                raise FileNotFoundError(
+                    f"Local file path rejected outside temp directory: {video_input}"
+                )
+            if not safe_local_path.exists():
                 raise FileNotFoundError(f"Local file not found: {video_input}")
-            local_file_path_for_transcription = video_input
+            local_file_path_for_transcription = str(safe_local_path)
             # *** Update only the processing_source, keep original input_ref ***
             processing_result["processing_source"] = local_file_path_for_transcription
             # Extract/create minimal metadata for local files if not already present
             if not processing_result.get("metadata"):
                  # Basic info; could potentially use ffprobe or similar for more details if needed
-                 path_obj = Path(video_input)
+                 path_obj = safe_local_path
                  info_dict = {
                      "title": path_obj.stem,
                      "description": "Local file",

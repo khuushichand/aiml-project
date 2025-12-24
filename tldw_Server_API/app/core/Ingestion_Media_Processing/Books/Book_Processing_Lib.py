@@ -58,6 +58,7 @@ from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Chunking import improved_chunking_process, ChunkingError, \
     InvalidChunkingMethodError
 from tldw_Server_API.app.core.Metrics.metrics_logger import (log_counter, log_histogram)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 from tldw_Server_API.app.core.Utils.Utils import logging
 #
 #######################################################################################################################
@@ -568,7 +569,8 @@ def process_epub(
     api_name: Optional[str] = None,
     api_key: Optional[str] = None,
     summarize_recursively: bool = False,
-    extraction_method: str = 'filtered' # 'markdown', 'filtered', 'basic'
+    extraction_method: str = 'filtered', # 'markdown', 'filtered', 'basic'
+    base_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """
     Processes an EPUB file: extracts content & metadata, chunks, and optionally summarizes.
@@ -617,6 +619,8 @@ def process_epub(
             - 'filtered': Reads EPUB spine, skips front matter, cleans text (uses `read_epub_filtered`).
             - 'basic': Reads all document items, extracts Hx/P tags (uses `read_epub`).
             Defaults to 'filtered'. If the chosen method fails, it attempts a fallback to 'basic'.
+        base_dir (Optional[Path], optional): If provided, require file_path to resolve within
+            this directory before processing.
 
     Returns:
         Dict[str, Any]: A dictionary containing the processing results. Keys include:
@@ -665,6 +669,16 @@ def process_epub(
             "summarized_recursively": summarize_recursively if perform_analysis else False,
         }
     }
+    if base_dir is not None:
+        safe_path = resolve_safe_local_path(Path(file_path), base_dir)
+        if safe_path is None:
+            err_msg = "EPUB path rejected outside allowed base directory."
+            result["status"] = "Error"
+            result["error"] = err_msg
+            result["warnings"] = [err_msg]
+            return result
+        file_path = str(safe_path)
+        result["processing_source"] = file_path
     log_counter("epub_processing_attempt", labels={"file_path": file_path, "extractor": extraction_method})
 
     extracted_text: Optional[str] = None
@@ -950,6 +964,7 @@ def process_epub(
 def process_zip_of_epubs(
     zip_file_path: str,
     keywords: Optional[List[str]] = None,
+    base_dir: Optional[Path] = None,
     # Pass all other relevant options down to process_epub
     **epub_options # Collects title_override, author_override, perform_chunking, chunk_options etc.
     ) -> List[Dict[str, Any]]:
@@ -967,6 +982,8 @@ def process_zip_of_epubs(
         keywords (Optional[List[str]], optional): Base keywords to apply to all
             EPUBs found within the ZIP. These will be passed to `process_epub`.
             Defaults to None.
+        base_dir (Optional[Path], optional): If provided, require zip_file_path to
+            resolve within this directory before processing.
         **epub_options (Any): Arbitrary keyword arguments that will be passed
             directly to the `process_epub` function for each EPUB file.
             Examples: `title_override`, `author_override`, `perform_chunking`,
@@ -984,6 +1001,17 @@ def process_zip_of_epubs(
     results = []
     temp_dir_path_obj = None
     try:
+        if base_dir is not None:
+            safe_zip_path = resolve_safe_local_path(Path(zip_file_path), base_dir)
+            if safe_zip_path is None:
+                err_msg = "ZIP path rejected outside allowed base directory."
+                return [{
+                    "status": "Error",
+                    "input_ref": zip_file_path,
+                    "media_type": "zip",
+                    "error": err_msg,
+                }]
+            zip_file_path = str(safe_zip_path)
         # Use context manager for reliable cleanup
         with tempfile.TemporaryDirectory(prefix="epub_zip_") as temp_dir:
             temp_dir_path_obj = Path(temp_dir)
@@ -1080,6 +1108,7 @@ def process_zip_of_epubs(
                     result = process_epub(
                         file_path=str(epub_path),
                         keywords=keywords,
+                        base_dir=temp_dir_path_obj,
                         **epub_options # Pass title_override, perform_analysis etc.
                     )
                     # Add zip source info for clarity

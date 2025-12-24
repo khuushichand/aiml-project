@@ -623,6 +623,48 @@ def test_process_single_video_sets_kept_path_on_success(
     assert result["kept_video_path"] == str(kept_path)
 
 
+@pytest.mark.unit
+def test_process_single_video_rejects_local_path_outside_temp_dir(tmp_path):
+    allowed_dir = tmp_path / "allowed"
+    allowed_dir.mkdir()
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    outside_path = outside_dir / "local.mp4"
+
+    result = process_single_video(
+        video_input=str(outside_path),
+        start_seconds=0,
+        end_seconds=None,
+        diarize=False,
+        vad_use=False,
+        transcription_model="whisper-small",
+        transcription_language="en",
+        perform_analysis=False,
+        custom_prompt=None,
+        system_prompt=None,
+        perform_chunking=False,
+        chunk_method=None,
+        max_chunk_size=1000,
+        chunk_overlap=0,
+        use_adaptive_chunking=False,
+        use_multi_level_chunking=False,
+        chunk_language=None,
+        summarize_recursively=False,
+        api_name=None,
+        use_cookies=False,
+        cookies=None,
+        timestamp_option=False,
+        temp_dir=str(allowed_dir),
+        keep_intermediate_audio=False,
+        perform_diarization=False,
+        keep_original=False,
+        user_id=42,
+    )
+
+    assert result["status"] == "Error"
+    assert "rejected outside temp directory" in (result.get("error") or "")
+
+
 @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.extract_text_from_segments")
 @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.perform_transcription")
 def test_process_single_video_returns_error_for_sentinel_transcript(mock_transcribe, mock_extract, tmp_path):

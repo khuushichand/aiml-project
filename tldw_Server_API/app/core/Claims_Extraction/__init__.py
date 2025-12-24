@@ -22,6 +22,9 @@ from tldw_Server_API.app.core.Claims_Extraction.claims_utils import (
     resolve_claims_parameters,
 )
 from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
+    record_claims_provider_request,
+    record_claims_rebuild_metrics,
+    record_claims_review_metrics,
     record_postcheck_metrics,
 )
 from tldw_Server_API.app.core.Claims_Extraction.ingestion_claims import (
@@ -50,4 +53,7 @@ __all__ = [
     "resolve_claims_parameters",
     "store_claims",
     "record_postcheck_metrics",
+    "record_claims_provider_request",
+    "record_claims_rebuild_metrics",
+    "record_claims_review_metrics",
 ]

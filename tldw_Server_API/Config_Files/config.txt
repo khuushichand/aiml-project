@@ -377,6 +377,13 @@ max_models_in_memory = 3
 max_model_memory_gb = 8
 model_lru_ttl_seconds = 3600
 
+[ClaimsMonitoring]
+CLAIMS_MONITORING_ENABLED = false
+CLAIMS_ALERT_THRESHOLD_DEFAULT = 0.2
+CLAIMS_REBUILD_MAX_QUEUE_ALERT = 1000
+CLAIMS_REBUILD_HEARTBEAT_WARN_SEC = 600
+CLAIMS_PROVIDER_COST_MULTIPLIERS = {}
+
 [RAG]
 vector_store_type = chromadb
 # pgvector connection options (optional; do not set defaults here)

@@ -19,6 +19,16 @@ from dotenv import load_dotenv
 from loguru import logger
 from collections.abc import MutableMapping
 
+
+def _safe_json_dict(raw: Optional[str]) -> dict:
+    if raw is None or str(raw).strip() == "":
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
 # Guard logging during module import so Loguru does not enqueue records before
 # the import lock is released. Messages emitted before `_LOGGER_READY` flips to
 # True are buffered and flushed once initialization completes.
@@ -968,6 +978,21 @@ def load_settings():
                                 _cp.get('Claims', 'CLAIMS_EMBED_MODEL_ID', fallback='') if _cp else ''
                             )
                         ),
+                        "CLAIMS_CLUSTER_METHOD": (
+                            _env.get("CLAIMS_CLUSTER_METHOD") if _env.get("CLAIMS_CLUSTER_METHOD") is not None else (
+                                _cp.get('Claims', 'CLAIMS_CLUSTER_METHOD', fallback='embeddings') if _cp else 'embeddings'
+                            )
+                        ),
+                        "CLAIMS_CLUSTER_SIMILARITY_THRESHOLD": (
+                            float(_env.get("CLAIMS_CLUSTER_SIMILARITY_THRESHOLD")) if _env.get("CLAIMS_CLUSTER_SIMILARITY_THRESHOLD") is not None else (
+                                float(_cp.get('Claims', 'CLAIMS_CLUSTER_SIMILARITY_THRESHOLD', fallback='0.85')) if _cp else 0.85
+                            )
+                        ),
+                        "CLAIMS_CLUSTER_BATCH_SIZE": (
+                            int(_env.get("CLAIMS_CLUSTER_BATCH_SIZE")) if _env.get("CLAIMS_CLUSTER_BATCH_SIZE") is not None else (
+                                int(_cp.getint('Claims', 'CLAIMS_CLUSTER_BATCH_SIZE', fallback=200)) if _cp else 200
+                            )
+                        ),
                         # Claims LLM selection (provider + optional knobs)
                         "CLAIMS_LLM_PROVIDER": (
                             _env.get("CLAIMS_LLM_PROVIDER") if _env.get("CLAIMS_LLM_PROVIDER") is not None else (
@@ -994,8 +1019,9 @@ def load_settings():
                 ))({
                     k: os.getenv(k) for k in [
                         "ENABLE_INGESTION_CLAIMS", "CLAIM_EXTRACTOR_MODE", "CLAIMS_MAX_PER_CHUNK",
-                        "CLAIMS_EMBED", "CLAIMS_EMBED_MODEL_ID", "CLAIMS_LLM_PROVIDER",
-                        "CLAIMS_LLM_TEMPERATURE", "CLAIMS_LOCAL_NER_MODEL"
+                        "CLAIMS_EMBED", "CLAIMS_EMBED_MODEL_ID", "CLAIMS_CLUSTER_METHOD",
+                        "CLAIMS_CLUSTER_SIMILARITY_THRESHOLD", "CLAIMS_CLUSTER_BATCH_SIZE",
+                        "CLAIMS_LLM_PROVIDER", "CLAIMS_LLM_TEMPERATURE", "CLAIMS_LOCAL_NER_MODEL"
                     ]
                 })
             ))(load_comprehensive_config())
@@ -1007,6 +1033,49 @@ def load_settings():
         # Policy: missing | all | stale (stale requires CLAIMS_STALE_DAYS)
         "CLAIMS_REBUILD_POLICY": os.getenv("CLAIMS_REBUILD_POLICY", "missing"),
         "CLAIMS_STALE_DAYS": int(os.getenv("CLAIMS_STALE_DAYS", "7")),
+
+        # Claims monitoring (alerts/config)
+        **(lambda: (
+            (lambda _cp, _env: (
+                (lambda raw_cost: (
+                    {
+                        "CLAIMS_MONITORING_ENABLED": (
+                            (_env.get("CLAIMS_MONITORING_ENABLED").lower() == "true") if _env.get("CLAIMS_MONITORING_ENABLED") is not None else (
+                                _cp.getboolean('ClaimsMonitoring', 'CLAIMS_MONITORING_ENABLED', fallback=False) if _cp else False
+                            )
+                        ),
+                        "CLAIMS_ALERT_THRESHOLD_DEFAULT": (
+                            float(_env.get("CLAIMS_ALERT_THRESHOLD_DEFAULT")) if _env.get("CLAIMS_ALERT_THRESHOLD_DEFAULT") is not None else (
+                                float(_cp.get('ClaimsMonitoring', 'CLAIMS_ALERT_THRESHOLD_DEFAULT', fallback='0.2')) if _cp else 0.2
+                            )
+                        ),
+                        "CLAIMS_REBUILD_MAX_QUEUE_ALERT": (
+                            int(_env.get("CLAIMS_REBUILD_MAX_QUEUE_ALERT")) if _env.get("CLAIMS_REBUILD_MAX_QUEUE_ALERT") is not None else (
+                                int(_cp.get('ClaimsMonitoring', 'CLAIMS_REBUILD_MAX_QUEUE_ALERT', fallback='1000')) if _cp else 1000
+                            )
+                        ),
+                        "CLAIMS_REBUILD_HEARTBEAT_WARN_SEC": (
+                            int(_env.get("CLAIMS_REBUILD_HEARTBEAT_WARN_SEC")) if _env.get("CLAIMS_REBUILD_HEARTBEAT_WARN_SEC") is not None else (
+                                int(_cp.get('ClaimsMonitoring', 'CLAIMS_REBUILD_HEARTBEAT_WARN_SEC', fallback='600')) if _cp else 600
+                            )
+                        ),
+                        "CLAIMS_PROVIDER_COST_MULTIPLIERS": _safe_json_dict(raw_cost),
+                    }
+                ))(
+                    _env.get("CLAIMS_PROVIDER_COST_MULTIPLIERS") if _env.get("CLAIMS_PROVIDER_COST_MULTIPLIERS") is not None else (
+                        _cp.get('ClaimsMonitoring', 'CLAIMS_PROVIDER_COST_MULTIPLIERS', fallback='') if _cp else ''
+                    )
+                )
+            ))(load_comprehensive_config(), {
+                k: os.getenv(k) for k in [
+                    "CLAIMS_MONITORING_ENABLED",
+                    "CLAIMS_ALERT_THRESHOLD_DEFAULT",
+                    "CLAIMS_REBUILD_MAX_QUEUE_ALERT",
+                    "CLAIMS_REBUILD_HEARTBEAT_WARN_SEC",
+                    "CLAIMS_PROVIDER_COST_MULTIPLIERS",
+                ]
+            })
+        ))(),
 
         # Contextual retrieval defaults (parent/siblings) - from env or config.txt [RAG] section
         "RAG_CONTEXTUAL_DEFAULTS": (lambda: (

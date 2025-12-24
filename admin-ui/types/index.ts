@@ -112,10 +112,24 @@ export interface ProviderSecret {
   updated_at: string;
 }
 
+export interface LLMProviderOverride {
+  provider: string;
+  is_enabled?: boolean;
+  allowed_models?: string[];
+  config?: Record<string, unknown>;
+  credential_fields?: Record<string, unknown>;
+  has_api_key?: boolean;
+  api_key_hint?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface LLMProvider {
   name: string;
   enabled: boolean;
   models?: string[];
+  default_model?: string;
+  override?: LLMProviderOverride;
 }
 
 export interface DashboardStats {

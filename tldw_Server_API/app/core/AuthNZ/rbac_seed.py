@@ -22,6 +22,7 @@ _BASELINE_ROLES: Sequence[RoleDef] = (
     ("admin", "Administrator", True),
     ("user", "Standard User", True),
     ("viewer", "Read-only User", True),
+    ("reviewer", "Claims Reviewer", True),
 )
 
 _BASELINE_PERMISSIONS: Sequence[PermissionDef] = (
@@ -30,6 +31,8 @@ _BASELINE_PERMISSIONS: Sequence[PermissionDef] = (
     ("media.delete", "Delete media", "media"),
     ("system.configure", "Configure system", "system"),
     ("users.manage_roles", "Manage user roles", "users"),
+    ("claims.review", "Review claims", "claims"),
+    ("claims.admin", "Administer claims", "claims"),
 )
 
 _MCP_PERMISSIONS: Sequence[PermissionDef] = (
@@ -48,6 +51,7 @@ def _build_role_grants(permission_names: Iterable[str], *, include_mcp_permissio
     grants: Dict[str, List[str]] = {
         "user": [p for p in ("media.read", "media.create") if p in base],
         "viewer": [p for p in ("media.read",) if p in base],
+        "reviewer": [p for p in ("media.read", "claims.review") if p in base],
         "admin": [p for p in sorted(base)],
     }
 

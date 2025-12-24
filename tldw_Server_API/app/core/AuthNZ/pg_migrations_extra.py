@@ -472,6 +472,32 @@ _CREATE_ORG_PROVIDER_SECRETS = [
     ("CREATE INDEX IF NOT EXISTS idx_org_provider_secrets_provider ON org_provider_secrets(provider)", ()),
 ]
 
+_CREATE_LLM_PROVIDER_OVERRIDES = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS llm_provider_overrides (
+            provider TEXT PRIMARY KEY,
+            is_enabled BOOLEAN,
+            allowed_models TEXT,
+            config_json TEXT,
+            secret_blob TEXT,
+            api_key_hint TEXT,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("ALTER TABLE llm_provider_overrides ADD COLUMN IF NOT EXISTS is_enabled BOOLEAN", ()),
+    ("ALTER TABLE llm_provider_overrides ADD COLUMN IF NOT EXISTS allowed_models TEXT", ()),
+    ("ALTER TABLE llm_provider_overrides ADD COLUMN IF NOT EXISTS config_json TEXT", ()),
+    ("ALTER TABLE llm_provider_overrides ADD COLUMN IF NOT EXISTS secret_blob TEXT", ()),
+    ("ALTER TABLE llm_provider_overrides ADD COLUMN IF NOT EXISTS api_key_hint TEXT", ()),
+    ("ALTER TABLE llm_provider_overrides ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP", ()),
+    ("ALTER TABLE llm_provider_overrides ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_llm_provider_overrides_enabled ON llm_provider_overrides(is_enabled)", ()),
+]
+
 
 _CREATE_USAGE_TABLES = [
     # usage_log + usage_daily
@@ -791,6 +817,26 @@ async def ensure_org_provider_secrets_pg(pool: Optional[DatabasePool] = None) ->
         return True
     except Exception as exc:
         logger.warning(f"Failed to ensure PostgreSQL org_provider_secrets table: {exc}")
+        return False
+
+
+async def ensure_llm_provider_overrides_pg(pool: Optional[DatabasePool] = None) -> bool:
+    """Ensure llm_provider_overrides table exists for PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+
+        for sql, params in _CREATE_LLM_PROVIDER_OVERRIDES:
+            try:
+                await db_pool.execute(sql, *params)
+            except Exception as exc:
+                logger.debug(f"PG ensure llm_provider_overrides DDL failed: {exc}")
+
+        logger.info("Ensured PostgreSQL llm_provider_overrides table (idempotent)")
+        return True
+    except Exception as exc:
+        logger.warning(f"Failed to ensure PostgreSQL llm_provider_overrides table: {exc}")
         return False
 
 async def ensure_usage_tables_pg(pool: Optional[DatabasePool] = None) -> bool:

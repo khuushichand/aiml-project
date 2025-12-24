@@ -12,10 +12,15 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from loguru import logger
+from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
+    estimate_claims_cost,
+    record_claims_provider_request,
+)
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
 # Prefer importing Document from RAG types to keep consistency in pipelines
@@ -193,6 +198,7 @@ class LLMBasedClaimExtractor:
             prompt = _tmpl.format(max_claims=max_claims, answer=answer)
 
         try:
+            cost_estimate = None
             # Resolve provider/model/temperature from [Claims] with sensible fallbacks
             try:
                 from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
@@ -234,6 +240,12 @@ class LLMBasedClaimExtractor:
                 except Exception:
                     model_override = None
 
+            cost_estimate = estimate_claims_cost(
+                provider=provider or "openai",
+                model=model_override or "",
+                text=prompt,
+            )
+            start_time = time.time()
             raw = await asyncio.to_thread(
                 self._analyze,
                 provider or "openai",
@@ -247,6 +259,13 @@ class LLMBasedClaimExtractor:
                 chunked_summarization=False,
                 chunk_options=None,
                 model_override=model_override,
+            )
+            record_claims_provider_request(
+                provider=provider or "openai",
+                model=model_override or "",
+                mode="extract",
+                latency_s=time.time() - start_time,
+                estimated_cost=cost_estimate,
             )
             text = raw if isinstance(raw, str) else str(raw)
             # find JSON block (support fenced blocks)
@@ -273,6 +292,14 @@ class LLMBasedClaimExtractor:
                 return await HeuristicSentenceExtractor().extract(answer, max_claims)
             return out
         except Exception as e:
+            record_claims_provider_request(
+                provider=provider or "openai",
+                model=model_override or "",
+                mode="extract",
+                latency_s=None,
+                error=str(e),
+                estimated_cost=cost_estimate,
+            )
             logger.warning(f"Claim extraction via LLM failed: {e}")
             return await HeuristicSentenceExtractor().extract(answer, max_claims)
 
@@ -421,6 +448,7 @@ class HybridClaimVerifier:
         confidence = 0.5
         rationale = None
         try:
+            cost_estimate = None
             # Resolve provider/model/temp from settings with sensible fallbacks (align with extractor)
             try:
                 from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
@@ -461,6 +489,12 @@ class HybridClaimVerifier:
                 except Exception:
                     model_override = None
 
+            cost_estimate = estimate_claims_cost(
+                provider=provider or "openai",
+                model=model_override or "",
+                text=f"{system}\n{judge_prompt}",
+            )
+            start_time = time.time()
             raw = await asyncio.to_thread(
                 self._analyze,
                 provider or "openai",
@@ -470,6 +504,13 @@ class HybridClaimVerifier:
                 system,
                 temperature,
                 model_override=model_override,
+            )
+            record_claims_provider_request(
+                provider=provider or "openai",
+                model=model_override or "",
+                mode="verify",
+                latency_s=time.time() - start_time,
+                estimated_cost=cost_estimate,
             )
             text = raw if isinstance(raw, str) else str(raw)
             # Parse fenced JSON if present
@@ -492,6 +533,14 @@ class HybridClaimVerifier:
             confidence = float(data.get("confidence", confidence))
             rationale = data.get("rationale")
         except Exception as e:
+            record_claims_provider_request(
+                provider=provider or "openai",
+                model=model_override or "",
+                mode="verify",
+                latency_s=None,
+                error=str(e),
+                estimated_cost=cost_estimate,
+            )
             logger.warning(f"LLM judge failed; defaulting to NEI: {e}")
         # Construct citations for traceability (doc IDs with snippet offsets)
         citations: List[Dict[str, Any]] = []

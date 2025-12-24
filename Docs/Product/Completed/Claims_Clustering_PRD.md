@@ -27,6 +27,12 @@ Without claim clustering and deduplication:
 - Watchlist alerts generated for key topics with <5 min latency post-ingestion.
 - Evidence aggregation reduces analyst comparison time by ≥30%.
 
+## Implementation Status (repo state)
+- Complete: cluster tables (`claim_clusters`, `claim_cluster_membership`) + `claim_cluster_id` column; cluster list/detail/members/timeline/evidence endpoints; watchlist cluster link endpoints.
+- Complete: embedding-based rebuild using existing Chroma claim embeddings (optional), with exact-text rebuild available as fallback.
+- Complete: watchlist cluster notifications + digest APIs.
+- Pending: cluster relationship graph/parent-child links; `/api/v1/claims/search` `group_by_cluster`; analytics/trending dashboards and metrics.
+
 ## 4. Out of Scope (v1)
 - Cross-language clustering (focus on English).
 - Automatic fact-checking or truth scoring.

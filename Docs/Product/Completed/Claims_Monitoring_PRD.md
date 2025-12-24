@@ -29,6 +29,11 @@ Operators lack actionable visibility into claim extraction health. Without granu
 - Data quality dashboards adopted by research team (weekly usage).
 - Reduction in unsupported claim incidents by 30% quarter-over-quarter due to early warning.
 
+## Implementation Status (repo state)
+- Complete: provider/rebuild/review metrics; monitoring config + alerts CRUD and evaluate endpoints; rebuild health endpoint; dashboard analytics + expanded export.
+- Partial: alert evaluation is manual (no scheduler/Alertmanager); notifications are webhook-only.
+- Pending: Grafana dashboards, Alertmanager rules/runbooks, hotspot index, data quality dashboards.
+
 ## 4. Out of Scope (v1)
 - Automated remediation (e.g., auto-switching providers) beyond alerts.
 - Full cost accounting pipeline; cost estimates are coarse projections.
