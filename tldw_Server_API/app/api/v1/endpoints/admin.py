@@ -4376,6 +4376,7 @@ async def get_audit_log(
     action: Optional[str] = None,
     days: int = Query(7, ge=1, le=90),
     limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
     org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
     principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction)
@@ -4388,6 +4389,7 @@ async def get_audit_log(
         action: Filter by action type
         days: Number of days to look back
         limit: Maximum entries to return
+        offset: Number of entries to skip
 
     Returns:
         Audit log entries
@@ -4458,8 +4460,10 @@ async def get_audit_log(
                 {where_clause}
                 ORDER BY a.created_at DESC
                 LIMIT ${param_count + 1}
+                OFFSET ${param_count + 2}
             """
             params.append(limit)
+            params.append(offset)
             rows = await db.fetch(query, *params)
         else:
             # SQLite
@@ -4472,8 +4476,10 @@ async def get_audit_log(
                 {where_clause}
                 ORDER BY a.created_at DESC
                 LIMIT ?
+                OFFSET ?
             """
             params.append(limit)
+            params.append(offset)
             cursor = await db.execute(query, params)
             rows = await cursor.fetchall()
 

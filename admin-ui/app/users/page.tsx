@@ -65,10 +65,6 @@ function UsersPageContent() {
   const [createUserError, setCreateUserError] = useState('');
   const [creatingUser, setCreatingUser] = useState(false);
   const [savedViews, setSavedViews] = useState<SavedUserView[]>([]);
-  const activeViewId = useMemo(() => {
-    const match = savedViews.find((view) => view.query === (searchQuery || ''));
-    return match ? match.id : '';
-  }, [savedViews, searchQuery]);
   const [showSaveViewDialog, setShowSaveViewDialog] = useState(false);
   const [saveViewName, setSaveViewName] = useState('');
   const [saveViewError, setSaveViewError] = useState('');
@@ -86,6 +82,10 @@ function UsersPageContent() {
 
   // URL state for search
   const [searchQuery, setSearchQuery] = useUrlState<string>('q', { defaultValue: '' });
+  const activeViewId = useMemo(() => {
+    const match = savedViews.find((view) => view.query === (searchQuery || ''));
+    return match ? match.id : '';
+  }, [savedViews, searchQuery]);
 
   // URL state for pagination
   const { page: currentPage, pageSize, setPage: setCurrentPage, setPageSize, resetPagination } = useUrlPagination();

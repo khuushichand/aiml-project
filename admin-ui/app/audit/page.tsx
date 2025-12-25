@@ -33,6 +33,7 @@ type AuditFilters = {
 
 const parseDateInput = (value: string) => {
   if (!value) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
   const date = new Date(`${value}T00:00:00`);
   return Number.isNaN(date.getTime()) ? null : date;
 };
@@ -99,8 +100,10 @@ function AuditPageContent() {
       setLoading(true);
       setError('');
 
+      const offsetValue = Math.max(0, (currentPage - 1) * pageSize);
       const params: Record<string, string> = {
-        limit: String(Math.min(1000, Math.max(1, pageSize * currentPage))),
+        limit: String(Math.min(1000, Math.max(1, pageSize))),
+        offset: String(offsetValue),
       };
       if (selectedOrg) {
         params.org_id = String(selectedOrg.id);
@@ -186,6 +189,10 @@ function AuditPageContent() {
       username: selectedLog.username,
     };
     try {
+      if (!navigator.clipboard) {
+        showError('Copy failed', 'Clipboard API not available. Ensure you are using HTTPS.');
+        return;
+      }
       await navigator.clipboard.writeText(JSON.stringify(rawPayload, null, 2));
       success('Copied audit event');
     } catch (err) {
