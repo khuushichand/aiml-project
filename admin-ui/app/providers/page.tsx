@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
@@ -8,11 +8,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { useToast } from '@/components/ui/toast';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Cpu, RefreshCw, CheckCircle, XCircle, Key, ExternalLink, Plus, Trash2, Search, Building2, User, Settings, Activity } from 'lucide-react';
 import { api } from '@/lib/api-client';
@@ -33,51 +33,153 @@ interface ProviderConfig {
   [key: string]: unknown;
 }
 
+interface OverrideDialogState {
+  isOpen: boolean;
+  provider: LLMProvider | null;
+  override: LLMProviderOverride | null;
+  enabled: boolean;
+  allowedModels: string;
+  defaultModel: string;
+  baseUrl: string;
+  apiKey: string;
+  clearApiKey: boolean;
+  isSaving: boolean;
+}
+
+interface ByokState {
+  users: UserType[];
+  organizations: Organization[];
+  selectedUser: UserType | null;
+  selectedOrg: Organization | null;
+  userKeys: ByokKey[];
+  orgKeys: ByokKey[];
+  isLoading: boolean;
+  userSearch: string;
+  userLimit: number;
+}
+
+interface AddByokDialogState {
+  isOpen: boolean;
+  mode: 'user' | 'org';
+  provider: string;
+  customProviderName: string;
+  apiKey: string;
+  isAdding: boolean;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
+
+const getStringValue = (value: unknown): string =>
+  typeof value === 'string' ? value : '';
+
+interface ByokKeysTableProps {
+  keys: ByokKey[];
+  onDelete: (provider: string) => void;
+  formatProviderName: (name: string) => string;
+}
+
+function ByokKeysTable({ keys, onDelete, formatProviderName }: ByokKeysTableProps) {
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Provider</TableHead>
+          <TableHead>Key Hint</TableHead>
+          <TableHead>Created</TableHead>
+          <TableHead className="text-right">Actions</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {keys.map((key) => (
+          <TableRow key={key.provider}>
+            <TableCell>
+              <div className="font-medium">{formatProviderName(key.provider)}</div>
+            </TableCell>
+            <TableCell>
+              <code className="text-xs bg-muted px-2 py-1 rounded">
+                {key.key_hint || '****...****'}
+              </code>
+            </TableCell>
+            <TableCell className="text-sm text-muted-foreground">
+              {key.created_at
+                ? new Date(key.created_at).toLocaleDateString()
+                : '-'}
+            </TableCell>
+            <TableCell className="text-right">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onDelete(key.provider)}
+              >
+                <Trash2 className="h-4 w-4 text-red-500" />
+              </Button>
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
 export default function ProvidersPage() {
   const confirm = useConfirm();
+  const { success: toastSuccess, error: toastError } = useToast();
   const [providers, setProviders] = useState<LLMProvider[]>([]);
   const [providerOverrides, setProviderOverrides] = useState<Record<string, LLMProviderOverride>>({});
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const [editingProvider, setEditingProvider] = useState<LLMProvider | null>(null);
-  const [editingOverride, setEditingOverride] = useState<LLMProviderOverride | null>(null);
-  const [showOverrideDialog, setShowOverrideDialog] = useState(false);
-  const [overrideEnabled, setOverrideEnabled] = useState(true);
-  const [overrideAllowedModels, setOverrideAllowedModels] = useState('');
-  const [overrideDefaultModel, setOverrideDefaultModel] = useState('');
-  const [overrideBaseUrl, setOverrideBaseUrl] = useState('');
-  const [overrideApiKey, setOverrideApiKey] = useState('');
-  const [overrideClearApiKey, setOverrideClearApiKey] = useState(false);
-  const [savingOverride, setSavingOverride] = useState(false);
+  const [overrideDialog, setOverrideDialog] = useState<OverrideDialogState>({
+    isOpen: false,
+    provider: null,
+    override: null,
+    enabled: true,
+    allowedModels: '',
+    defaultModel: '',
+    baseUrl: '',
+    apiKey: '',
+    clearApiKey: false,
+    isSaving: false,
+  });
   const [testingProvider, setTestingProvider] = useState<string | null>(null);
 
   // BYOK management state
-  const [users, setUsers] = useState<UserType[]>([]);
-  const [organizations, setOrganizations] = useState<Organization[]>([]);
-  const [selectedUser, setSelectedUser] = useState<UserType | null>(null);
-  const [selectedOrg, setSelectedOrg] = useState<Organization | null>(null);
-  const [userByokKeys, setUserByokKeys] = useState<ByokKey[]>([]);
-  const [orgByokKeys, setOrgByokKeys] = useState<ByokKey[]>([]);
-  const [loadingByok, setLoadingByok] = useState(false);
-  const [userSearch, setUserSearch] = useState('');
+  const [byokState, setByokState] = useState<ByokState>({
+    users: [],
+    organizations: [],
+    selectedUser: null,
+    selectedOrg: null,
+    userKeys: [],
+    orgKeys: [],
+    isLoading: false,
+    userSearch: '',
+    userLimit: 20,
+  });
 
   // Add BYOK dialog
-  const [showAddByok, setShowAddByok] = useState(false);
-  const [addByokMode, setAddByokMode] = useState<'user' | 'org'>('user');
-  const [newByokProvider, setNewByokProvider] = useState('');
-  const [customProviderName, setCustomProviderName] = useState('');
-  const [newByokKey, setNewByokKey] = useState('');
-  const [addingByok, setAddingByok] = useState(false);
+  const [addByokDialog, setAddByokDialog] = useState<AddByokDialogState>({
+    isOpen: false,
+    mode: 'user',
+    provider: '',
+    customProviderName: '',
+    apiKey: '',
+    isAdding: false,
+  });
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  const updateOverrideDialog = (updates: Partial<OverrideDialogState>) => {
+    setOverrideDialog((prev) => ({ ...prev, ...updates }));
+  };
 
-  const loadData = async () => {
+  const updateByokState = (updates: Partial<ByokState>) => {
+    setByokState((prev) => ({ ...prev, ...updates }));
+  };
+
+  const updateAddByokDialog = (updates: Partial<AddByokDialogState>) => {
+    setAddByokDialog((prev) => ({ ...prev, ...updates }));
+  };
+
+  const loadData = useCallback(async () => {
     try {
       setLoading(true);
-      setError('');
 
       const [providersData, usersData, orgsData, overridesData] = await Promise.allSettled([
         api.getLLMProviders(),
@@ -105,11 +207,13 @@ export default function ProvidersPage() {
       }
 
       if (usersData.status === 'fulfilled') {
-        setUsers(Array.isArray(usersData.value) ? usersData.value : usersData.value?.users || []);
+        const users = Array.isArray(usersData.value) ? usersData.value : usersData.value?.users || [];
+        setByokState((prev) => ({ ...prev, users }));
       }
 
       if (orgsData.status === 'fulfilled') {
-        setOrganizations(Array.isArray(orgsData.value) ? orgsData.value : []);
+        const organizations = Array.isArray(orgsData.value) ? orgsData.value : [];
+        setByokState((prev) => ({ ...prev, organizations }));
       }
 
       if (overridesData.status === 'fulfilled') {
@@ -126,85 +230,90 @@ export default function ProvidersPage() {
       }
     } catch (err: unknown) {
       console.error('Failed to load data:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load data');
+      toastError('Failed to load providers', err instanceof Error ? err.message : 'Failed to load data');
     } finally {
       setLoading(false);
     }
-  };
+  }, [toastError]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
 
   const loadUserByokKeys = async (user: UserType) => {
-    setSelectedUser(user);
-    setLoadingByok(true);
+    updateByokState({ selectedUser: user, isLoading: true });
     try {
       const keys = await api.getUserByokKeys(user.id.toString());
-      setUserByokKeys(Array.isArray(keys) ? keys : []);
+      updateByokState({ userKeys: Array.isArray(keys) ? keys : [] });
     } catch (err: unknown) {
       console.error('Failed to load user BYOK keys:', err);
-      setUserByokKeys([]);
+      updateByokState({ userKeys: [] });
+      toastError('Failed to load user keys', err instanceof Error ? err.message : 'Unable to load BYOK keys');
     } finally {
-      setLoadingByok(false);
+      updateByokState({ isLoading: false });
     }
   };
 
   const loadOrgByokKeys = async (org: Organization) => {
-    setSelectedOrg(org);
-    setLoadingByok(true);
+    updateByokState({ selectedOrg: org, isLoading: true });
     try {
       const keys = await api.getOrgByokKeys(org.id.toString());
-      setOrgByokKeys(Array.isArray(keys) ? keys : []);
+      updateByokState({ orgKeys: Array.isArray(keys) ? keys : [] });
     } catch (err: unknown) {
       console.error('Failed to load org BYOK keys:', err);
-      setOrgByokKeys([]);
+      updateByokState({ orgKeys: [] });
+      toastError('Failed to load org keys', err instanceof Error ? err.message : 'Unable to load BYOK keys');
     } finally {
-      setLoadingByok(false);
+      updateByokState({ isLoading: false });
     }
   };
 
   const handleAddByok = async () => {
-    const providerName = newByokProvider === 'other'
-      ? customProviderName.trim()
-      : newByokProvider.trim();
-    if (!providerName || !newByokKey.trim()) {
-      setError('Provider and API key are required');
+    const providerName = addByokDialog.provider === 'other'
+      ? addByokDialog.customProviderName.trim()
+      : addByokDialog.provider.trim();
+    if (!canSubmitByok) {
+      toastError('Missing fields', byokValidationError || 'Provider and API key are required');
       return;
     }
 
-    setAddingByok(true);
-    setError('');
+    updateAddByokDialog({ isAdding: true });
     try {
       const data = {
         provider: providerName.trim().toLowerCase(),
-        api_key: newByokKey.trim(),
+        api_key: addByokDialog.apiKey.trim(),
       };
 
-      if (addByokMode === 'user' && selectedUser) {
-        await api.createUserByokKey(selectedUser.id.toString(), data);
-        await loadUserByokKeys(selectedUser);
-        setSuccess(`BYOK key added for ${selectedUser.email}`);
-      } else if (addByokMode === 'org' && selectedOrg) {
-        await api.createOrgByokKey(selectedOrg.id.toString(), data);
-        await loadOrgByokKeys(selectedOrg);
-        setSuccess(`BYOK key added for ${selectedOrg.name}`);
+      if (addByokDialog.mode === 'user' && byokState.selectedUser) {
+        await api.createUserByokKey(byokState.selectedUser.id.toString(), data);
+        await loadUserByokKeys(byokState.selectedUser);
+        toastSuccess('BYOK key added', `Added for ${byokState.selectedUser.email}`);
+      } else if (addByokDialog.mode === 'org' && byokState.selectedOrg) {
+        await api.createOrgByokKey(byokState.selectedOrg.id.toString(), data);
+        await loadOrgByokKeys(byokState.selectedOrg);
+        toastSuccess('BYOK key added', `Added for ${byokState.selectedOrg.name}`);
       }
 
-      setShowAddByok(false);
-      setNewByokProvider('');
-      setCustomProviderName('');
-      setNewByokKey('');
+      updateAddByokDialog({
+        isOpen: false,
+        provider: '',
+        customProviderName: '',
+        apiKey: '',
+      });
     } catch (err: unknown) {
       console.error('Failed to add BYOK key:', err);
-      setError(err instanceof Error ? err.message : 'Failed to add BYOK key');
+      toastError('Failed to add BYOK key', err instanceof Error ? err.message : 'Try again.');
     } finally {
-      setAddingByok(false);
+      updateAddByokDialog({ isAdding: false });
     }
   };
 
   const handleDeleteUserByok = async (provider: string) => {
-    if (!selectedUser) return;
+    if (!byokState.selectedUser) return;
 
     const confirmed = await confirm({
       title: 'Delete API Key',
-      message: `Delete ${provider} key for ${selectedUser.email}?`,
+      message: `Delete ${provider} key for ${byokState.selectedUser.email}?`,
       confirmText: 'Delete',
       variant: 'danger',
       icon: 'key',
@@ -212,22 +321,21 @@ export default function ProvidersPage() {
     if (!confirmed) return;
 
     try {
-      setError('');
-      await api.deleteUserByokKey(selectedUser.id.toString(), provider);
-      await loadUserByokKeys(selectedUser);
-      setSuccess(`Deleted ${provider} key for ${selectedUser.email}`);
+      await api.deleteUserByokKey(byokState.selectedUser.id.toString(), provider);
+      await loadUserByokKeys(byokState.selectedUser);
+      toastSuccess('BYOK key deleted', `Removed ${provider} for ${byokState.selectedUser.email}`);
     } catch (err: unknown) {
       console.error('Failed to delete BYOK key:', err);
-      setError(err instanceof Error ? err.message : 'Failed to delete BYOK key');
+      toastError('Failed to delete BYOK key', err instanceof Error ? err.message : 'Try again.');
     }
   };
 
   const handleDeleteOrgByok = async (provider: string) => {
-    if (!selectedOrg) return;
+    if (!byokState.selectedOrg) return;
 
     const confirmed = await confirm({
       title: 'Delete API Key',
-      message: `Delete ${provider} key for ${selectedOrg.name}?`,
+      message: `Delete ${provider} key for ${byokState.selectedOrg.name}?`,
       confirmText: 'Delete',
       variant: 'danger',
       icon: 'key',
@@ -235,22 +343,24 @@ export default function ProvidersPage() {
     if (!confirmed) return;
 
     try {
-      setError('');
-      await api.deleteOrgByokKey(selectedOrg.id.toString(), provider);
-      await loadOrgByokKeys(selectedOrg);
-      setSuccess(`Deleted ${provider} key for ${selectedOrg.name}`);
+      await api.deleteOrgByokKey(byokState.selectedOrg.id.toString(), provider);
+      await loadOrgByokKeys(byokState.selectedOrg);
+      toastSuccess('BYOK key deleted', `Removed ${provider} for ${byokState.selectedOrg.name}`);
     } catch (err: unknown) {
       console.error('Failed to delete BYOK key:', err);
-      setError(err instanceof Error ? err.message : 'Failed to delete BYOK key');
+      toastError('Failed to delete BYOK key', err instanceof Error ? err.message : 'Try again.');
     }
   };
 
   const openAddByokDialog = (mode: 'user' | 'org') => {
-    setAddByokMode(mode);
-    setNewByokProvider('');
-    setCustomProviderName('');
-    setNewByokKey('');
-    setShowAddByok(true);
+    updateAddByokDialog({
+      mode,
+      provider: '',
+      customProviderName: '',
+      apiKey: '',
+      isAdding: false,
+      isOpen: true,
+    });
   };
 
   const getProviderDocs = (name: string): string | null => {
@@ -297,48 +407,54 @@ export default function ProvidersPage() {
 
   const openOverrideDialog = (provider: LLMProvider) => {
     const override = getOverrideForProvider(provider);
-    setEditingProvider(provider);
-    setEditingOverride(override || null);
-    setOverrideEnabled(override?.is_enabled ?? provider.enabled ?? true);
-    setOverrideAllowedModels(override?.allowed_models?.join(', ') ?? '');
-    setOverrideDefaultModel(
-      (override?.config?.default_model as string) || ''
-    );
-    setOverrideBaseUrl((override?.credential_fields?.base_url as string) || '');
-    setOverrideApiKey('');
-    setOverrideClearApiKey(false);
-    setShowOverrideDialog(true);
+    setOverrideDialog({
+      isOpen: true,
+      provider,
+      override: override || null,
+      enabled: override?.is_enabled ?? provider.enabled ?? true,
+      allowedModels: override?.allowed_models?.join(', ') ?? '',
+      defaultModel: getStringValue(override?.config?.default_model),
+      baseUrl: getStringValue(override?.credential_fields?.base_url),
+      apiKey: '',
+      clearApiKey: false,
+      isSaving: false,
+    });
   };
 
   const handleSaveOverride = async () => {
-    if (!editingProvider) return;
-    setSavingOverride(true);
-    setError('');
+    if (!overrideDialog.provider) return;
+    updateOverrideDialog({ isSaving: true });
 
-    const allowedModels = overrideAllowedModels
+    const allowedModels = overrideDialog.allowedModels
       .split(',')
       .map((model) => model.trim())
       .filter(Boolean);
-    const defaultModelValue = overrideDefaultModel.trim();
-    const config: Record<string, unknown> = { ...(editingOverride?.config || {}) };
+    const defaultModelValue = overrideDialog.defaultModel.trim();
+    const overrideConfig = overrideDialog.override?.config;
+    const configSource = isRecord(overrideConfig) ? overrideConfig : {};
+    const config: Record<string, unknown> = { ...configSource };
     if (defaultModelValue) {
       config.default_model = defaultModelValue;
-    } else if (editingOverride?.config && Object.prototype.hasOwnProperty.call(editingOverride.config, 'default_model')) {
+    } else if ('default_model' in configSource) {
       delete config.default_model;
     }
     const credentialFields: Record<string, unknown> = {};
-    const existingBaseUrl = editingOverride?.credential_fields?.base_url as string | undefined;
-    const trimmedBaseUrl = overrideBaseUrl.trim();
+    const overrideCredentials = overrideDialog.override?.credential_fields;
+    const credentialSource = isRecord(overrideCredentials)
+      ? overrideCredentials
+      : {};
+    const existingBaseUrl = getStringValue(credentialSource.base_url);
+    const trimmedBaseUrl = overrideDialog.baseUrl.trim();
     if (trimmedBaseUrl) {
       credentialFields.base_url = trimmedBaseUrl;
     }
 
     const payload: Record<string, unknown> = {
-      is_enabled: overrideEnabled,
+      is_enabled: overrideDialog.enabled,
       allowed_models: allowedModels,
     };
 
-    if (defaultModelValue || (editingOverride?.config && Object.prototype.hasOwnProperty.call(editingOverride.config, 'default_model'))) {
+    if (defaultModelValue || 'default_model' in configSource) {
       payload.config = config;
     }
 
@@ -348,78 +464,106 @@ export default function ProvidersPage() {
       payload.credential_fields = {};
     }
 
-    if (overrideApiKey.trim()) {
-      payload.api_key = overrideApiKey.trim();
-    } else if (overrideClearApiKey) {
+    if (overrideDialog.apiKey.trim()) {
+      payload.api_key = overrideDialog.apiKey.trim();
+    } else if (overrideDialog.clearApiKey) {
       payload.clear_api_key = true;
     }
 
     try {
-      await api.updateLLMProviderOverride(editingProvider.name, payload);
-      setSuccess(`Updated override for ${formatProviderName(editingProvider.name)}`);
-      setShowOverrideDialog(false);
+      await api.updateLLMProviderOverride(overrideDialog.provider.name, payload);
+      toastSuccess(
+        'Override updated',
+        `Updated ${formatProviderName(overrideDialog.provider.name)} overrides.`
+      );
+      updateOverrideDialog({ isOpen: false });
       await loadData();
     } catch (err: unknown) {
       console.error('Failed to update provider override:', err);
-      setError(err instanceof Error ? err.message : 'Failed to update provider override');
+      toastError('Failed to update override', err instanceof Error ? err.message : 'Try again.');
     } finally {
-      setSavingOverride(false);
+      updateOverrideDialog({ isSaving: false });
     }
   };
 
   const handleDeleteOverride = async () => {
-    if (!editingProvider) return;
+    if (!overrideDialog.provider) return;
     const confirmed = await confirm({
       title: 'Remove Override',
-      message: `Remove override for ${formatProviderName(editingProvider.name)}?`,
+      message: `Remove override for ${formatProviderName(overrideDialog.provider.name)}?`,
       confirmText: 'Remove',
       variant: 'danger',
       icon: 'trash',
     });
     if (!confirmed) return;
     try {
-      await api.deleteLLMProviderOverride(editingProvider.name);
-      setSuccess(`Removed override for ${formatProviderName(editingProvider.name)}`);
-      setShowOverrideDialog(false);
+      await api.deleteLLMProviderOverride(overrideDialog.provider.name);
+      toastSuccess(
+        'Override removed',
+        `Removed ${formatProviderName(overrideDialog.provider.name)} override.`
+      );
+      updateOverrideDialog({ isOpen: false });
       await loadData();
     } catch (err: unknown) {
       console.error('Failed to delete provider override:', err);
-      setError(err instanceof Error ? err.message : 'Failed to delete provider override');
+      toastError('Failed to remove override', err instanceof Error ? err.message : 'Try again.');
     }
   };
 
   const handleTestProvider = async (provider: LLMProvider) => {
     const override = getOverrideForProvider(provider);
     setTestingProvider(provider.name);
-    setError('');
-    setSuccess('');
     try {
+      const overrideDefaultModel = getStringValue(override?.config?.default_model);
       const response = await api.testLLMProvider({
         provider: provider.name,
-        model: (override?.config?.default_model as string) || provider.default_model || undefined,
+        model: overrideDefaultModel || provider.default_model || undefined,
         use_override: true,
       });
-      setSuccess(`Connectivity check OK for ${formatProviderName(provider.name)} (${response?.model || 'default'})`);
+      toastSuccess(
+        'Connectivity check OK',
+        `${formatProviderName(provider.name)} (${response?.model || 'default'})`
+      );
     } catch (err: unknown) {
       console.error('Failed to test provider:', err);
-      setError(err instanceof Error ? err.message : 'Provider test failed');
+      toastError('Provider test failed', err instanceof Error ? err.message : 'Try again.');
     } finally {
       setTestingProvider(null);
     }
   };
 
-  const filteredUsers = users.filter(
+  const filteredUsers = byokState.users.filter(
     (u) =>
-      userSearch === '' ||
-      u.email?.toLowerCase().includes(userSearch.toLowerCase()) ||
-      u.username?.toLowerCase().includes(userSearch.toLowerCase())
+      byokState.userSearch === '' ||
+      u.email?.toLowerCase().includes(byokState.userSearch.toLowerCase()) ||
+      u.username?.toLowerCase().includes(byokState.userSearch.toLowerCase())
   );
+  const visibleUsers = filteredUsers.slice(0, byokState.userLimit);
 
   const enabledProviders = providers.filter((p) => p.enabled);
   const disabledProviders = providers.filter((p) => !p.enabled);
 
   // Common provider options for BYOK
   const commonProviders = ['openai', 'anthropic', 'google', 'cohere', 'groq', 'mistral', 'deepseek', 'openrouter'];
+  const byokValidationError = (() => {
+    if (addByokDialog.mode === 'user' && !byokState.selectedUser) {
+      return 'Choose a user before adding a BYOK key.';
+    }
+    if (addByokDialog.mode === 'org' && !byokState.selectedOrg) {
+      return 'Choose an organization before adding a BYOK key.';
+    }
+    if (!addByokDialog.provider) {
+      return 'Select a provider.';
+    }
+    if (addByokDialog.provider === 'other' && !addByokDialog.customProviderName.trim()) {
+      return 'Enter a provider name.';
+    }
+    if (!addByokDialog.apiKey.trim()) {
+      return 'API key is required.';
+    }
+    return '';
+  })();
+  const canSubmitByok = byokValidationError === '';
 
   return (
     <ProtectedRoute>
@@ -437,18 +581,6 @@ export default function ProvidersPage() {
                 Refresh
               </Button>
             </div>
-
-            {error && (
-              <Alert variant="destructive" className="mb-6">
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            )}
-
-            {success && (
-              <Alert className="mb-6 bg-green-50 border-green-200">
-                <AlertDescription className="text-green-800">{success}</AlertDescription>
-              </Alert>
-            )}
 
             <Tabs defaultValue="providers" className="space-y-4">
               <TabsList>
@@ -667,16 +799,16 @@ export default function ProvidersPage() {
                           <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                           <Input
                             placeholder="Search users..."
-                            value={userSearch}
-                            onChange={(e) => setUserSearch(e.target.value)}
+                            value={byokState.userSearch}
+                            onChange={(e) => updateByokState({ userSearch: e.target.value, userLimit: 20 })}
                             className="pl-8"
                           />
                         </div>
                         <div className="max-h-80 overflow-y-auto space-y-1">
-                          {filteredUsers.slice(0, 20).map((user) => (
+                          {visibleUsers.map((user) => (
                             <Button
                               key={user.id}
-                              variant={selectedUser?.id === user.id ? 'default' : 'ghost'}
+                              variant={byokState.selectedUser?.id === user.id ? 'default' : 'ghost'}
                               className="w-full justify-start text-left"
                               onClick={() => loadUserByokKeys(user)}
                             >
@@ -692,10 +824,20 @@ export default function ProvidersPage() {
                           {filteredUsers.length === 0 && (
                             <p className="text-center text-muted-foreground py-4">No users found</p>
                           )}
-                          {filteredUsers.length > 20 && (
-                            <p className="text-center text-xs text-muted-foreground py-2">
-                              Showing 20 of {filteredUsers.length} users
-                            </p>
+                          {filteredUsers.length > byokState.userLimit && (
+                            <div className="space-y-2 pt-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="w-full"
+                                onClick={() => updateByokState({ userLimit: byokState.userLimit + 20 })}
+                              >
+                                Show more
+                              </Button>
+                              <p className="text-center text-xs text-muted-foreground">
+                                Showing {byokState.userLimit} of {filteredUsers.length} users
+                              </p>
+                            </div>
                           )}
                         </div>
                       </div>
@@ -711,12 +853,12 @@ export default function ProvidersPage() {
                           User BYOK Keys
                         </CardTitle>
                         <CardDescription>
-                          {selectedUser
-                            ? `Managing keys for ${selectedUser.email}`
+                          {byokState.selectedUser
+                            ? `Managing keys for ${byokState.selectedUser.email}`
                             : 'Select a user to view their BYOK keys'}
                         </CardDescription>
                       </div>
-                      {selectedUser && (
+                      {byokState.selectedUser && (
                         <Button size="sm" onClick={() => openAddByokDialog('user')}>
                           <Plus className="mr-2 h-4 w-4" />
                           Add Key
@@ -724,14 +866,14 @@ export default function ProvidersPage() {
                       )}
                     </CardHeader>
                     <CardContent>
-                      {!selectedUser ? (
+                      {!byokState.selectedUser ? (
                         <div className="text-center text-muted-foreground py-8">
                           <Key className="h-12 w-12 mx-auto mb-2 opacity-50" />
                           <p>Select a user to manage their BYOK keys</p>
                         </div>
-                      ) : loadingByok ? (
+                      ) : byokState.isLoading ? (
                         <div className="text-center text-muted-foreground py-8">Loading...</div>
-                      ) : userByokKeys.length === 0 ? (
+                      ) : byokState.userKeys.length === 0 ? (
                         <div className="text-center text-muted-foreground py-8">
                           <Key className="h-12 w-12 mx-auto mb-2 opacity-50" />
                           <p>No BYOK keys configured for this user</p>
@@ -741,44 +883,11 @@ export default function ProvidersPage() {
                           </Button>
                         </div>
                       ) : (
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead>Provider</TableHead>
-                              <TableHead>Key Hint</TableHead>
-                              <TableHead>Created</TableHead>
-                              <TableHead className="text-right">Actions</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {userByokKeys.map((key) => (
-                              <TableRow key={key.provider}>
-                                <TableCell>
-                                  <div className="font-medium">{formatProviderName(key.provider)}</div>
-                                </TableCell>
-                                <TableCell>
-                                  <code className="text-xs bg-muted px-2 py-1 rounded">
-                                    {key.key_hint || '****...****'}
-                                  </code>
-                                </TableCell>
-                                <TableCell className="text-sm text-muted-foreground">
-                                  {key.created_at
-                                    ? new Date(key.created_at).toLocaleDateString()
-                                    : '-'}
-                                </TableCell>
-                                <TableCell className="text-right">
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => handleDeleteUserByok(key.provider)}
-                                  >
-                                    <Trash2 className="h-4 w-4 text-red-500" />
-                                  </Button>
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
+                        <ByokKeysTable
+                          keys={byokState.userKeys}
+                          onDelete={handleDeleteUserByok}
+                          formatProviderName={formatProviderName}
+                        />
                       )}
                     </CardContent>
                   </Card>
@@ -799,13 +908,13 @@ export default function ProvidersPage() {
                     </CardHeader>
                     <CardContent>
                       <div className="max-h-80 overflow-y-auto space-y-1">
-                        {organizations.length === 0 ? (
+                        {byokState.organizations.length === 0 ? (
                           <p className="text-center text-muted-foreground py-4">No organizations found</p>
                         ) : (
-                          organizations.map((org) => (
+                          byokState.organizations.map((org) => (
                             <Button
                               key={org.id}
-                              variant={selectedOrg?.id === org.id ? 'default' : 'ghost'}
+                              variant={byokState.selectedOrg?.id === org.id ? 'default' : 'ghost'}
                               className="w-full justify-start text-left"
                               onClick={() => loadOrgByokKeys(org)}
                             >
@@ -832,12 +941,12 @@ export default function ProvidersPage() {
                           Organization BYOK Keys
                         </CardTitle>
                         <CardDescription>
-                          {selectedOrg
-                            ? `Managing keys for ${selectedOrg.name}`
+                          {byokState.selectedOrg
+                            ? `Managing keys for ${byokState.selectedOrg.name}`
                             : 'Select an organization to view BYOK keys'}
                         </CardDescription>
                       </div>
-                      {selectedOrg && (
+                      {byokState.selectedOrg && (
                         <Button size="sm" onClick={() => openAddByokDialog('org')}>
                           <Plus className="mr-2 h-4 w-4" />
                           Add Key
@@ -845,14 +954,14 @@ export default function ProvidersPage() {
                       )}
                     </CardHeader>
                     <CardContent>
-                      {!selectedOrg ? (
+                      {!byokState.selectedOrg ? (
                         <div className="text-center text-muted-foreground py-8">
                           <Key className="h-12 w-12 mx-auto mb-2 opacity-50" />
                           <p>Select an organization to manage BYOK keys</p>
                         </div>
-                      ) : loadingByok ? (
+                      ) : byokState.isLoading ? (
                         <div className="text-center text-muted-foreground py-8">Loading...</div>
-                      ) : orgByokKeys.length === 0 ? (
+                      ) : byokState.orgKeys.length === 0 ? (
                         <div className="text-center text-muted-foreground py-8">
                           <Key className="h-12 w-12 mx-auto mb-2 opacity-50" />
                           <p>No BYOK keys configured for this organization</p>
@@ -862,44 +971,11 @@ export default function ProvidersPage() {
                           </Button>
                         </div>
                       ) : (
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead>Provider</TableHead>
-                              <TableHead>Key Hint</TableHead>
-                              <TableHead>Created</TableHead>
-                              <TableHead className="text-right">Actions</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {orgByokKeys.map((key) => (
-                              <TableRow key={key.provider}>
-                                <TableCell>
-                                  <div className="font-medium">{formatProviderName(key.provider)}</div>
-                                </TableCell>
-                                <TableCell>
-                                  <code className="text-xs bg-muted px-2 py-1 rounded">
-                                    {key.key_hint || '****...****'}
-                                  </code>
-                                </TableCell>
-                                <TableCell className="text-sm text-muted-foreground">
-                                  {key.created_at
-                                    ? new Date(key.created_at).toLocaleDateString()
-                                    : '-'}
-                                </TableCell>
-                                <TableCell className="text-right">
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => handleDeleteOrgByok(key.provider)}
-                                  >
-                                    <Trash2 className="h-4 w-4 text-red-500" />
-                                  </Button>
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
+                        <ByokKeysTable
+                          keys={byokState.orgKeys}
+                          onDelete={handleDeleteOrgByok}
+                          formatProviderName={formatProviderName}
+                        />
                       )}
                     </CardContent>
                   </Card>
@@ -932,13 +1008,16 @@ export default function ProvidersPage() {
           </div>
 
         {/* Provider Override Dialog */}
-        <Dialog open={showOverrideDialog} onOpenChange={setShowOverrideDialog}>
+        <Dialog
+          open={overrideDialog.isOpen}
+          onOpenChange={(open) => updateOverrideDialog({ isOpen: open })}
+        >
           <DialogContent className="max-w-lg">
             <DialogHeader>
               <DialogTitle>Provider Override</DialogTitle>
               <DialogDescription>
-                {editingProvider
-                  ? `Manage ${formatProviderName(editingProvider.name)} overrides`
+                {overrideDialog.provider
+                  ? `Manage ${formatProviderName(overrideDialog.provider.name)} overrides`
                   : 'Manage provider overrides'}
               </DialogDescription>
             </DialogHeader>
@@ -949,17 +1028,17 @@ export default function ProvidersPage() {
                   <p className="text-xs text-muted-foreground">Disable to block usage across the system.</p>
                 </div>
                 <Checkbox
-                  checked={overrideEnabled}
-                  onCheckedChange={(checked) => setOverrideEnabled(Boolean(checked))}
+                  checked={overrideDialog.enabled}
+                  onCheckedChange={(checked) => updateOverrideDialog({ enabled: Boolean(checked) })}
                 />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="overrideDefaultModel">Default model</Label>
                 <Input
                   id="overrideDefaultModel"
-                  placeholder={editingProvider?.default_model || 'e.g. gpt-4o-mini'}
-                  value={overrideDefaultModel}
-                  onChange={(e) => setOverrideDefaultModel(e.target.value)}
+                  placeholder={overrideDialog.provider?.default_model || 'e.g. gpt-4o-mini'}
+                  value={overrideDialog.defaultModel}
+                  onChange={(e) => updateOverrideDialog({ defaultModel: e.target.value })}
                 />
               </div>
               <div className="space-y-2">
@@ -967,8 +1046,8 @@ export default function ProvidersPage() {
                 <Input
                   id="overrideAllowedModels"
                   placeholder="Comma-separated list (leave empty for all)"
-                  value={overrideAllowedModels}
-                  onChange={(e) => setOverrideAllowedModels(e.target.value)}
+                  value={overrideDialog.allowedModels}
+                  onChange={(e) => updateOverrideDialog({ allowedModels: e.target.value })}
                 />
               </div>
               <div className="space-y-2">
@@ -976,8 +1055,8 @@ export default function ProvidersPage() {
                 <Input
                   id="overrideBaseUrl"
                   placeholder="https://api.example.com"
-                  value={overrideBaseUrl}
-                  onChange={(e) => setOverrideBaseUrl(e.target.value)}
+                  value={overrideDialog.baseUrl}
+                  onChange={(e) => updateOverrideDialog({ baseUrl: e.target.value })}
                 />
               </div>
               <div className="space-y-2">
@@ -985,13 +1064,13 @@ export default function ProvidersPage() {
                 <Input
                   id="overrideApiKey"
                   type="password"
-                  placeholder={editingOverride?.api_key_hint ? `Stored (****${editingOverride.api_key_hint})` : 'sk-...'}
-                  value={overrideApiKey}
-                  onChange={(e) => setOverrideApiKey(e.target.value)}
+                  placeholder={overrideDialog.override?.api_key_hint ? `Stored (****${overrideDialog.override.api_key_hint})` : 'sk-...'}
+                  value={overrideDialog.apiKey}
+                  onChange={(e) => updateOverrideDialog({ apiKey: e.target.value })}
                 />
-                {editingOverride?.api_key_hint && (
+                {overrideDialog.override?.api_key_hint && (
                   <p className="text-xs text-muted-foreground">
-                    Stored key hint: ****{editingOverride.api_key_hint}
+                    Stored key hint: ****{overrideDialog.override.api_key_hint}
                   </p>
                 )}
               </div>
@@ -1001,26 +1080,26 @@ export default function ProvidersPage() {
                   <p className="text-xs text-muted-foreground">Remove the stored key for this provider.</p>
                 </div>
                 <Checkbox
-                  checked={overrideClearApiKey}
-                  onCheckedChange={(checked) => setOverrideClearApiKey(Boolean(checked))}
-                  disabled={overrideApiKey.trim().length > 0}
+                  checked={overrideDialog.clearApiKey}
+                  onCheckedChange={(checked) => updateOverrideDialog({ clearApiKey: Boolean(checked) })}
+                  disabled={overrideDialog.apiKey.trim().length > 0}
                 />
               </div>
             </div>
             <DialogFooter className="flex items-center justify-between sm:justify-between">
               <div className="flex gap-2">
-                {editingOverride && (
+                {overrideDialog.override && (
                   <Button variant="destructive" onClick={handleDeleteOverride}>
                     Remove Override
                   </Button>
                 )}
               </div>
               <div className="flex gap-2">
-                <Button variant="outline" onClick={() => setShowOverrideDialog(false)}>
+                <Button variant="outline" onClick={() => updateOverrideDialog({ isOpen: false })}>
                   Cancel
                 </Button>
-                <Button onClick={handleSaveOverride} disabled={savingOverride}>
-                  {savingOverride ? 'Saving...' : 'Save'}
+                <Button onClick={handleSaveOverride} disabled={overrideDialog.isSaving}>
+                  {overrideDialog.isSaving ? 'Saving...' : 'Save'}
                 </Button>
               </div>
             </DialogFooter>
@@ -1028,15 +1107,30 @@ export default function ProvidersPage() {
         </Dialog>
 
         {/* Add BYOK Dialog */}
-        <Dialog open={showAddByok} onOpenChange={setShowAddByok}>
+        <Dialog
+          open={addByokDialog.isOpen}
+          onOpenChange={(open) => {
+            if (!open) {
+              updateAddByokDialog({
+                isOpen: false,
+                provider: '',
+                customProviderName: '',
+                apiKey: '',
+                isAdding: false,
+              });
+            } else {
+              updateAddByokDialog({ isOpen: true });
+            }
+          }}
+        >
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Add BYOK Key</DialogTitle>
               <DialogDescription>
-                {addByokMode === 'user' && selectedUser
-                  ? `Add an API key for ${selectedUser.email}`
-                  : addByokMode === 'org' && selectedOrg
-                  ? `Add an API key for ${selectedOrg.name}`
+                {addByokDialog.mode === 'user' && byokState.selectedUser
+                  ? `Add an API key for ${byokState.selectedUser.email}`
+                  : addByokDialog.mode === 'org' && byokState.selectedOrg
+                  ? `Add an API key for ${byokState.selectedOrg.name}`
                   : 'Add a new provider API key'}
               </DialogDescription>
             </DialogHeader>
@@ -1045,12 +1139,12 @@ export default function ProvidersPage() {
                 <Label htmlFor="provider">Provider</Label>
                 <select
                   id="provider"
-                  value={newByokProvider}
+                  value={addByokDialog.provider}
                   onChange={(e) => {
                     const value = e.target.value;
-                    setNewByokProvider(value);
+                    updateAddByokDialog({ provider: value });
                     if (value !== 'other') {
-                      setCustomProviderName('');
+                      updateAddByokDialog({ customProviderName: '' });
                     }
                   }}
                   className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -1063,11 +1157,11 @@ export default function ProvidersPage() {
                   ))}
                   <option value="other">Other (custom)</option>
                 </select>
-                {newByokProvider === 'other' && (
+                {addByokDialog.provider === 'other' && (
                   <Input
                     placeholder="Enter provider name..."
-                    value={customProviderName}
-                    onChange={(e) => setCustomProviderName(e.target.value)}
+                    value={addByokDialog.customProviderName}
+                    onChange={(e) => updateAddByokDialog({ customProviderName: e.target.value })}
                     className="mt-2"
                   />
                 )}
@@ -1078,8 +1172,8 @@ export default function ProvidersPage() {
                   id="apiKey"
                   type="password"
                   placeholder="sk-..."
-                  value={newByokKey}
-                  onChange={(e) => setNewByokKey(e.target.value)}
+                  value={addByokDialog.apiKey}
+                  onChange={(e) => updateAddByokDialog({ apiKey: e.target.value })}
                 />
                 <p className="text-xs text-muted-foreground">
                   The key will be encrypted before storage
@@ -1087,19 +1181,26 @@ export default function ProvidersPage() {
               </div>
             </div>
             <DialogFooter>
-              <Button variant="outline" onClick={() => setShowAddByok(false)}>
+              <Button
+                variant="outline"
+                onClick={() => updateAddByokDialog({
+                  isOpen: false,
+                  provider: '',
+                  customProviderName: '',
+                  apiKey: '',
+                  isAdding: false,
+                })}
+              >
                 Cancel
               </Button>
               <Button
                 onClick={handleAddByok}
                 disabled={
-                  addingByok ||
-                  !newByokKey.trim() ||
-                  !newByokProvider ||
-                  (newByokProvider === 'other' && !customProviderName.trim())
+                  addByokDialog.isAdding ||
+                  !canSubmitByok
                 }
               >
-                {addingByok ? 'Adding...' : 'Add Key'}
+                {addByokDialog.isAdding ? 'Adding...' : 'Add Key'}
               </Button>
             </DialogFooter>
           </DialogContent>

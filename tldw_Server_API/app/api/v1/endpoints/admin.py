@@ -44,6 +44,9 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     LLMUsageSummaryRow,
     LLMTopSpendersResponse,
     LLMTopSpenderRow,
+    OrgBudgetItem,
+    OrgBudgetListResponse,
+    OrgBudgetUpdateRequest,
     ToolPermissionCreateRequest,
     ToolPermissionResponse,
     ToolPermissionGrantRequest,
@@ -224,6 +227,10 @@ from tldw_Server_API.app.services.admin_usage_service import (
     fetch_llm_usage as svc_fetch_llm_usage,
     fetch_llm_usage_summary as svc_fetch_llm_usage_summary,
     fetch_llm_top_spenders as svc_fetch_llm_top_spenders,
+)
+from tldw_Server_API.app.services.admin_budgets_service import (
+    list_org_budgets as svc_list_org_budgets,
+    upsert_org_budget as svc_upsert_org_budget,
 )
 from tldw_Server_API.app.services.admin_service import update_api_key_metadata
 from tldw_Server_API.app.core.Security.webui_access_guard import (
@@ -4498,6 +4505,115 @@ async def get_audit_log(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve audit log"
         )
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Budget Governance Endpoints
+
+@router.get("/budgets", response_model=OrgBudgetListResponse)
+async def admin_list_budgets(
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> OrgBudgetListResponse:
+    """List organization budgets and plan context."""
+    try:
+        del principal  # admin role already enforced by router dependency
+        if org_id is not None:
+            org_ids = [org_id]
+        else:
+            org_ids = None
+        items, total = await svc_list_org_budgets(
+            db,
+            org_ids=org_ids,
+            page=page,
+            limit=limit,
+        )
+        return OrgBudgetListResponse(
+            items=[OrgBudgetItem(**item) for item in items],
+            total=total,
+            page=page,
+            limit=limit,
+        )
+    except Exception as exc:
+        logger.error(f"Failed to list org budgets: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to list org budgets")
+
+
+@router.post("/budgets", response_model=OrgBudgetItem)
+async def admin_upsert_budget(
+    payload: OrgBudgetUpdateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> OrgBudgetItem:
+    """Upsert budget settings for an organization."""
+    budget_updates = None
+    if payload.budgets is not None:
+        budget_updates = payload.budgets.model_dump(exclude_unset=True)
+    try:
+        item = await svc_upsert_org_budget(
+            db,
+            org_id=payload.org_id,
+            budget_updates=budget_updates,
+            clear_budgets=payload.clear_budgets,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "org_not_found":
+            raise HTTPException(status_code=404, detail="org_not_found") from exc
+        if detail == "plan_not_found":
+            raise HTTPException(status_code=500, detail="plan_not_found") from exc
+        if detail == "subscription_not_found":
+            raise HTTPException(status_code=500, detail="subscription_not_found") from exc
+        raise HTTPException(status_code=400, detail="invalid_budget_update") from exc
+    except Exception as exc:
+        logger.error(f"Failed to upsert org budget: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to upsert org budget") from exc
+
+    # Best-effort audit
+    try:
+        actor_id = getattr(request.state, "user_id", None) or principal.user_id
+        if isinstance(actor_id, int):
+            from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user
+            from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User as _User
+            from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+            from tldw_Server_API.app.core.Audit.unified_audit_service import (
+                AuditContext,
+                AuditEventType,
+                AuditEventCategory,
+            )
+
+            _ud = await _get_user(actor_id)
+            if _ud:
+                _user = _User(**_ud)
+                _svc = await get_audit_service_for_user(_user)
+                _ctx = AuditContext(
+                    user_id=str(actor_id),
+                    ip_address=(request.client.host if request.client else None),
+                    user_agent=request.headers.get("user-agent"),
+                    endpoint=str(request.url.path),
+                    method=request.method,
+                )
+                await _svc.log_event(
+                    event_type=AuditEventType.CONFIG_CHANGED,
+                    category=AuditEventCategory.SYSTEM,
+                    context=_ctx,
+                    resource_type="org_budget",
+                    resource_id=str(payload.org_id),
+                    action="budget.update",
+                    metadata={
+                        "org_id": payload.org_id,
+                        "clear_budgets": payload.clear_budgets,
+                        "updates": budget_updates or {},
+                    },
+                )
+    except Exception as _e:
+        logger.debug(f"Audit (org budget update) skipped/failed: {_e}")
+
+    return OrgBudgetItem(**item)
 
 
 # ---------------------------------------------------------------------------------------------------------------------

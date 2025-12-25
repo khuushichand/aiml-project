@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState, Suspense } from 'react';
+import { useCallback, useEffect, useMemo, useState, Suspense } from 'react';
 import { useForm, FormProvider } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -20,6 +20,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Form, FormCheckbox, FormInput, FormSelect } from '@/components/ui/form';
 import { Eye, Key, Search, Plus, Trash2, UserCheck, UserX, BookmarkPlus, BookmarkX } from 'lucide-react';
 import { api } from '@/lib/api-client';
+import { getCurrentUser } from '@/lib/auth';
 import { User } from '@/types';
 import { ExportMenu } from '@/components/ui/export-menu';
 import { exportUsers, ExportFormat } from '@/lib/export';
@@ -53,6 +54,8 @@ function UsersPageContent() {
   const confirm = useConfirm();
   const { success, error: showError } = useToast();
   const { selectedOrg } = useOrgContext();
+  const currentUser = getCurrentUser();
+  const currentUserId = currentUser?.id;
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -62,7 +65,10 @@ function UsersPageContent() {
   const [createUserError, setCreateUserError] = useState('');
   const [creatingUser, setCreatingUser] = useState(false);
   const [savedViews, setSavedViews] = useState<SavedUserView[]>([]);
-  const [activeViewId, setActiveViewId] = useState('');
+  const activeViewId = useMemo(() => {
+    const match = savedViews.find((view) => view.query === (searchQuery || ''));
+    return match ? match.id : '';
+  }, [savedViews, searchQuery]);
   const [showSaveViewDialog, setShowSaveViewDialog] = useState(false);
   const [saveViewName, setSaveViewName] = useState('');
   const [saveViewError, setSaveViewError] = useState('');
@@ -169,17 +175,16 @@ function UsersPageContent() {
     );
   });
 
-  useEffect(() => {
-    const match = savedViews.find((view) => view.query === (searchQuery || ''));
-    setActiveViewId(match ? match.id : '');
-  }, [savedViews, searchQuery]);
-
   // Pagination calculations
   const totalItems = filteredUsers.length;
   const totalPages = Math.ceil(totalItems / pageSize);
   const startIndex = (currentPage - 1) * pageSize;
   const paginatedUsers = filteredUsers.slice(startIndex, startIndex + pageSize);
-  const allVisibleSelected = paginatedUsers.length > 0 && paginatedUsers.every((user) => selectedUserIds.has(user.id));
+  const selectableUsers = currentUserId
+    ? paginatedUsers.filter((user) => user.id !== currentUserId)
+    : paginatedUsers;
+  const allVisibleSelected = selectableUsers.length > 0
+    && selectableUsers.every((user) => selectedUserIds.has(user.id));
   const selectedCount = selectedUserIds.size;
 
   const handlePageChange = (page: number) => {
@@ -197,6 +202,7 @@ function UsersPageContent() {
   };
 
   const handleToggleSelectUser = (userId: number, checked: boolean) => {
+    if (currentUserId && userId === currentUserId) return;
     setSelectedUserIds((prev) => {
       const next = new Set(prev);
       if (checked) {
@@ -212,9 +218,15 @@ function UsersPageContent() {
     setSelectedUserIds((prev) => {
       const next = new Set(prev);
       if (checked) {
-        paginatedUsers.forEach((user) => next.add(user.id));
+        paginatedUsers.forEach((user) => {
+          if (currentUserId && user.id === currentUserId) return;
+          next.add(user.id);
+        });
       } else {
-        paginatedUsers.forEach((user) => next.delete(user.id));
+        paginatedUsers.forEach((user) => {
+          if (currentUserId && user.id === currentUserId) return;
+          next.delete(user.id);
+        });
       }
       return next;
     });
@@ -266,6 +278,10 @@ function UsersPageContent() {
   const handleBulkDelete = async () => {
     const ids = Array.from(selectedUserIds);
     if (ids.length === 0) return;
+    if (currentUser && ids.includes(currentUser.id)) {
+      showError('Cannot delete yourself', 'Remove your account from the selection to continue.');
+      return;
+    }
     const confirmed = await confirm({
       title: 'Delete selected users',
       message: `Delete ${ids.length} selected user${ids.length !== 1 ? 's' : ''}? This cannot be undone.`,
@@ -370,7 +386,6 @@ function UsersPageContent() {
     if (!confirmed) return;
     const next = savedViews.filter((item) => item.id !== activeViewId);
     persistSavedViews(next);
-    setActiveViewId('');
     success('Saved view removed', `"${view.name}" deleted.`);
   };
 
@@ -421,6 +436,10 @@ function UsersPageContent() {
   };
 
   const handleDeleteUser = async (user: User) => {
+    if (currentUser && user.id === currentUser.id) {
+      showError('Cannot delete yourself', 'You cannot delete your own account.');
+      return;
+    }
     const confirmed = await confirm({
       title: 'Delete User',
       message: `Delete ${user.username || user.email}? This cannot be undone.`,
@@ -719,6 +738,7 @@ function UsersPageContent() {
                             user.storage_used_mb || 0,
                             user.storage_quota_mb || 0
                           );
+                          const isCurrentUser = currentUserId === user.id;
                           return (
                             <TableRow key={user.id}>
                               <TableCell>
@@ -726,6 +746,7 @@ function UsersPageContent() {
                                   checked={selectedUserIds.has(user.id)}
                                   onCheckedChange={(checked) => handleToggleSelectUser(user.id, checked)}
                                   aria-label={`Select user ${user.username || user.email || user.id}`}
+                                  disabled={isCurrentUser}
                                 />
                               </TableCell>
                               <TableCell className="font-mono text-sm">{user.id}</TableCell>
@@ -793,8 +814,9 @@ function UsersPageContent() {
                                   <Button
                                     variant="ghost"
                                     size="sm"
-                                    title="Delete user"
+                                    title={isCurrentUser ? 'Cannot delete yourself' : 'Delete user'}
                                     onClick={() => handleDeleteUser(user)}
+                                    disabled={isCurrentUser}
                                   >
                                     <Trash2 className="h-4 w-4 text-destructive" />
                                   </Button>

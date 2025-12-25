@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+import json
+
 from loguru import logger
 
 from .database import get_db_pool, DatabasePool
@@ -335,6 +337,63 @@ _CREATE_AUTHNZ_CORE_TABLES = [
     ("ALTER TABLE registration_codes ADD COLUMN IF NOT EXISTS org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL", ()),
     ("ALTER TABLE registration_codes ADD COLUMN IF NOT EXISTS org_role VARCHAR(50)", ()),
     ("ALTER TABLE registration_codes ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL", ()),
+]
+
+
+_CREATE_BILLING_TABLES = [
+    (
+        """
+        CREATE TABLE IF NOT EXISTS subscription_plans (
+            id SERIAL PRIMARY KEY,
+            name TEXT UNIQUE NOT NULL,
+            display_name TEXT NOT NULL,
+            description TEXT,
+            stripe_product_id TEXT,
+            stripe_price_id TEXT,
+            stripe_price_id_yearly TEXT,
+            price_usd_monthly DOUBLE PRECISION DEFAULT 0,
+            price_usd_yearly DOUBLE PRECISION DEFAULT 0,
+            limits_json JSONB NOT NULL,
+            is_active BOOLEAN DEFAULT TRUE,
+            is_public BOOLEAN DEFAULT TRUE,
+            sort_order INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_subscription_plans_name ON subscription_plans(name)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_subscription_plans_active ON subscription_plans(is_active)", ()),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS org_subscriptions (
+            id SERIAL PRIMARY KEY,
+            org_id INTEGER NOT NULL UNIQUE REFERENCES organizations(id) ON DELETE CASCADE,
+            plan_id INTEGER NOT NULL REFERENCES subscription_plans(id) ON DELETE RESTRICT,
+            stripe_customer_id TEXT,
+            stripe_subscription_id TEXT,
+            stripe_subscription_status TEXT,
+            billing_cycle TEXT DEFAULT 'monthly',
+            current_period_start TIMESTAMP,
+            current_period_end TIMESTAMP,
+            status TEXT DEFAULT 'active',
+            trial_start TIMESTAMP,
+            trial_end TIMESTAMP,
+            canceled_at TIMESTAMP,
+            cancel_at_period_end BOOLEAN DEFAULT FALSE,
+            custom_limits_json JSONB,
+            metadata JSONB,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_org_subs_org ON org_subscriptions(org_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_org_subs_stripe_customer ON org_subscriptions(stripe_customer_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_org_subs_stripe_sub ON org_subscriptions(stripe_subscription_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_org_subs_status ON org_subscriptions(status)", ()),
 ]
 
 
@@ -698,6 +757,119 @@ async def ensure_authnz_core_tables_pg(pool: Optional[DatabasePool] = None) -> b
         return True
     except Exception as exc:
         logger.warning(f"Failed to ensure PostgreSQL AuthNZ core tables: {exc}")
+        return False
+
+
+async def ensure_billing_tables_pg(pool: Optional[DatabasePool] = None) -> bool:
+    """Ensure billing-related tables exist for PostgreSQL backends."""
+    try:
+        db_pool = pool or await get_db_pool()
+        if getattr(db_pool, "pool", None) is None:
+            return False
+        try:
+            await ensure_authnz_core_tables_pg(db_pool)
+        except Exception as exc:
+            logger.debug(f"ensure_billing_tables_pg: core table ensure skipped/failed: {exc}")
+
+        for sql, params in _CREATE_BILLING_TABLES:
+            try:
+                await db_pool.execute(sql, *params)
+            except Exception as exc:
+                logger.debug(f"PG ensure billing DDL failed: {exc}")
+
+        default_plans = [
+            {
+                "name": "free",
+                "display_name": "Free",
+                "description": "Get started with basic features",
+                "price_usd_monthly": 0,
+                "price_usd_yearly": 0,
+                "sort_order": 0,
+                "limits_json": json.dumps({
+                    "storage_mb": 1024,
+                    "api_calls_day": 100,
+                    "api_calls_month": 3000,
+                    "llm_tokens_day": 10000,
+                    "llm_tokens_month": 300000,
+                    "llm_cost_month_usd": 0,
+                    "transcription_minutes_month": 10,
+                    "rag_queries_day": 50,
+                    "concurrent_jobs": 1,
+                    "team_members": 1,
+                    "rate_limit_rpm": 10,
+                    "features": ["basic_search", "fts5_search", "basic_chat"],
+                }),
+            },
+            {
+                "name": "pro",
+                "display_name": "Pro",
+                "description": "For power users and small teams",
+                "price_usd_monthly": 29,
+                "price_usd_yearly": 290,
+                "sort_order": 1,
+                "limits_json": json.dumps({
+                    "storage_mb": 10240,
+                    "api_calls_day": 5000,
+                    "api_calls_month": 150000,
+                    "llm_tokens_day": 500000,
+                    "llm_tokens_month": 15000000,
+                    "llm_cost_month_usd": 50,
+                    "transcription_minutes_month": 300,
+                    "rag_queries_day": 500,
+                    "concurrent_jobs": 5,
+                    "team_members": 5,
+                    "rate_limit_rpm": 120,
+                    "features": ["*", "rag_advanced", "vector_search", "priority_support"],
+                }),
+            },
+            {
+                "name": "enterprise",
+                "display_name": "Enterprise",
+                "description": "For organizations with advanced needs",
+                "price_usd_monthly": 199,
+                "price_usd_yearly": 1990,
+                "sort_order": 2,
+                "limits_json": json.dumps({
+                    "storage_mb": 102400,
+                    "api_calls_day": 50000,
+                    "api_calls_month": 1500000,
+                    "llm_tokens_day": 5000000,
+                    "llm_tokens_month": 150000000,
+                    "llm_cost_month_usd": 500,
+                    "transcription_minutes_month": 3000,
+                    "rag_queries_day": 5000,
+                    "concurrent_jobs": 20,
+                    "team_members": -1,
+                    "rate_limit_rpm": 600,
+                    "features": ["*", "sso", "audit_logs", "dedicated_support", "custom_models"],
+                }),
+            },
+        ]
+
+        for plan in default_plans:
+            try:
+                await db_pool.execute(
+                    """
+                    INSERT INTO subscription_plans
+                    (name, display_name, description, price_usd_monthly, price_usd_yearly, limits_json, sort_order)
+                    VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+                    ON CONFLICT (name) DO NOTHING
+                    """,
+                    plan["name"],
+                    plan["display_name"],
+                    plan["description"],
+                    plan["price_usd_monthly"],
+                    plan["price_usd_yearly"],
+                    plan["limits_json"],
+                    plan["sort_order"],
+                )
+            except Exception as exc:
+                logger.debug(f"PG ensure billing seed failed: {exc}")
+
+        logger.info("Ensured PostgreSQL billing tables (subscription_plans, org_subscriptions)")
+        return True
+    except Exception as exc:
+        logger.warning(f"Failed to ensure PostgreSQL billing tables: {exc}")
         return False
 
 

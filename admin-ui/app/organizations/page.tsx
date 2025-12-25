@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useForm, FormProvider } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -51,10 +51,14 @@ export default function OrganizationsPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [createError, setCreateError] = useState('');
+  const [totalItems, setTotalItems] = useState(0);
   const [slugTouched, setSlugTouched] = useState(false);
   const [searchQuery, setSearchQuery] = useUrlState<string>('q', { defaultValue: '' });
   const [savedViews, setSavedViews] = useState<SavedOrgView[]>([]);
-  const [activeViewId, setActiveViewId] = useState('');
+  const activeViewId = useMemo(() => {
+    const match = savedViews.find((view) => view.query === (searchQuery || ''));
+    return match ? match.id : '';
+  }, [savedViews, searchQuery]);
   const [showSaveViewDialog, setShowSaveViewDialog] = useState(false);
   const [saveViewName, setSaveViewName] = useState('');
   const [saveViewError, setSaveViewError] = useState('');
@@ -101,19 +105,33 @@ export default function OrganizationsPage() {
     try {
       setLoading(true);
       setLoadError('');
-      const params: Record<string, string> = {};
+      const params: Record<string, string> = {
+        limit: String(pageSize),
+        offset: String((currentPage - 1) * pageSize),
+      };
       if (searchQuery) {
         params.q = searchQuery;
       }
-      const data = await api.getOrganizations(Object.keys(params).length ? params : undefined);
-      const orgList = Array.isArray(data)
-        ? data
-        : (data && Array.isArray((data as { items?: Organization[] }).items))
+      const data = await api.getOrganizations(params);
+      if (data && typeof data === 'object' && 'items' in data) {
+        const items = Array.isArray((data as { items?: Organization[] }).items)
           ? (data as { items: Organization[] }).items
           : [];
-      setOrganizations(orgList);
+        const total = (data as { total?: number }).total;
+        setOrganizations(items);
+        setTotalItems(typeof total === 'number' ? total : items.length);
+        return;
+      }
+      if (Array.isArray(data)) {
+        setOrganizations(data);
+        setTotalItems(data.length);
+        return;
+      }
+      setOrganizations([]);
+      setTotalItems(0);
     } catch (error: unknown) {
       setOrganizations([]);
+      setTotalItems(0);
       setLoadError(
         error instanceof Error && error.message
           ? error.message
@@ -122,7 +140,7 @@ export default function OrganizationsPage() {
     } finally {
       setLoading(false);
     }
-  }, [searchQuery]);
+  }, [currentPage, pageSize, searchQuery]);
 
   useEffect(() => {
     loadOrganizations();
@@ -217,28 +235,11 @@ export default function OrganizationsPage() {
     if (!confirmed) return;
     const next = savedViews.filter((item) => item.id !== activeViewId);
     persistSavedViews(next);
-    setActiveViewId('');
     success('Saved view removed', `"${view.name}" deleted.`);
   };
 
-  const filteredOrganizations = organizations.filter((org) => {
-    if (!searchQuery) return true;
-    const query = searchQuery.toLowerCase();
-    return (
-      org.name?.toLowerCase().includes(query) ||
-      org.slug?.toLowerCase().includes(query)
-    );
-  });
-
-  useEffect(() => {
-    const match = savedViews.find((view) => view.query === (searchQuery || ''));
-    setActiveViewId(match ? match.id : '');
-  }, [savedViews, searchQuery]);
-
-  const totalItems = filteredOrganizations.length;
   const totalPages = Math.ceil(totalItems / pageSize);
-  const startIndex = (currentPage - 1) * pageSize;
-  const paginatedOrganizations = filteredOrganizations.slice(startIndex, startIndex + pageSize);
+  const paginatedOrganizations = organizations;
 
   return (
     <ProtectedRoute>
@@ -413,7 +414,7 @@ export default function OrganizationsPage() {
                   <div className="py-4">
                     <TableSkeleton rows={3} columns={5} />
                   </div>
-                ) : filteredOrganizations.length === 0 ? (
+                ) : organizations.length === 0 ? (
                   <div className="text-center text-muted-foreground py-8">
                     {searchQuery ? 'No organizations match your search' : 'No organizations found. Create one to get started.'}
                   </div>

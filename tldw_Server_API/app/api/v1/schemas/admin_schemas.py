@@ -401,6 +401,67 @@ class UsageTopResponse(BaseModel):
 
 #######################################################################################################################
 #
+# Budget Governance Schemas
+
+class BudgetSettings(BaseModel):
+    """Budget configuration for an organization."""
+    budget_day_usd: Optional[float] = Field(None, ge=0)
+    budget_month_usd: Optional[float] = Field(None, ge=0)
+    budget_day_tokens: Optional[int] = Field(None, ge=0)
+    budget_month_tokens: Optional[int] = Field(None, ge=0)
+    alert_thresholds: Optional[List[int]] = Field(None, min_length=1)
+    enforcement_mode: Optional[Literal["none", "soft", "hard"]] = None
+
+    @field_validator("alert_thresholds")
+    @classmethod
+    def validate_alert_thresholds(cls, v: Optional[List[int]]) -> Optional[List[int]]:
+        if v is None:
+            return v
+        cleaned: List[int] = []
+        for val in v:
+            try:
+                num = int(val)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Alert thresholds must be integers") from exc
+            if num < 1 or num > 100:
+                raise ValueError("Alert thresholds must be between 1 and 100")
+            cleaned.append(num)
+        return cleaned
+
+
+class OrgBudgetUpdateRequest(BaseModel):
+    """Upsert budget settings for an organization."""
+    org_id: int = Field(..., ge=1)
+    budgets: Optional[BudgetSettings] = None
+    clear_budgets: bool = False
+
+
+class OrgBudgetItem(BaseModel):
+    """Budget details for an organization."""
+    org_id: int
+    org_name: str
+    org_slug: Optional[str] = None
+    plan_name: str
+    plan_display_name: str
+    budgets: BudgetSettings = Field(default_factory=BudgetSettings)
+    custom_limits: Dict[str, Any] = Field(default_factory=dict)
+    effective_limits: Dict[str, Any] = Field(default_factory=dict)
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class OrgBudgetListResponse(BaseModel):
+    items: List[OrgBudgetItem]
+    total: int
+    page: int
+    limit: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
 # LLM Usage Schemas
 
 class LLMUsageLogRow(BaseModel):

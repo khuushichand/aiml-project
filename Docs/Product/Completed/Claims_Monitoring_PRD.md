@@ -173,6 +173,6 @@ Operators lack actionable visibility into claim extraction health. Without granu
 
 ## 15. References
 - Claims Module PRD (`Docs/Product/Completed/Claims_Module_PRD.md`).
-- Reviewer Workflow PRD (`Docs/Product/Claims_Reviewer_Workflow_PRD.md`).
+- Reviewer Workflow PRD (`Docs/Product/Completed/Claims_Reviewer_Workflow_PRD.md`).
 - Metrics subsystem (`tldw_Server_API/app/core/Metrics`).
 - Rebuild service (`tldw_Server_API/app/core/Claims_Extraction/claims_rebuild_service.py`).

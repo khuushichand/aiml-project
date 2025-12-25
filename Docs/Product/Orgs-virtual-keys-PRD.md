@@ -127,7 +127,7 @@ On each request to configured LLM endpoints (defaults: `/api/v1/chat/completions
 Notes:
 - We use logging data as source of truth for spend/token usage; aggregation to daily table can be leveraged for monthly sums in future.
 - Budgets are soft state. A request that tips over a limit will be allowed once (the tipping request), and subsequent requests will be blocked.
- - Error codes: 403 for disallowed endpoint/provider/model; 402 for budget exceeded.
+- Error codes: 403 for disallowed endpoint/provider/model; 402 for budget exceeded.
  - **Stable contract**: the 402 response payload shape (`error`, `message`, `details`) is stable.
 
 402 example (stable contract):

@@ -665,6 +665,73 @@ def test_process_single_video_rejects_local_path_outside_temp_dir(tmp_path):
     assert "rejected outside temp directory" in (result.get("error") or "")
 
 
+@pytest.mark.unit
+def test_process_single_video_blocks_disallowed_url(monkeypatch, tmp_path):
+    def fake_evaluate_url_policy(*_args, **_kwargs):
+        class _Res:
+            allowed = False
+            reason = "blocked"
+        return _Res()
+
+    monkeypatch.setattr(video_lib, "evaluate_url_policy", fake_evaluate_url_policy)
+
+    result = process_single_video(
+        video_input="https://example.com/video",
+        start_seconds=0,
+        end_seconds=None,
+        diarize=False,
+        vad_use=False,
+        transcription_model="whisper-small",
+        transcription_language="en",
+        perform_analysis=False,
+        custom_prompt=None,
+        system_prompt=None,
+        perform_chunking=False,
+        chunk_method=None,
+        max_chunk_size=1000,
+        chunk_overlap=0,
+        use_adaptive_chunking=False,
+        use_multi_level_chunking=False,
+        chunk_language=None,
+        summarize_recursively=False,
+        api_name=None,
+        use_cookies=False,
+        cookies=None,
+        timestamp_option=False,
+        temp_dir=str(tmp_path),
+        keep_intermediate_audio=False,
+        perform_diarization=False,
+        keep_original=False,
+        user_id=42,
+    )
+
+    assert result["status"] == "Error"
+    assert "blocked" in (result.get("error") or "")
+
+
+@pytest.mark.unit
+def test_download_video_blocks_disallowed_url(monkeypatch, tmp_path):
+    def fake_evaluate_url_policy(*_args, **_kwargs):
+        class _Res:
+            allowed = False
+            reason = "blocked"
+        return _Res()
+
+    monkeypatch.setattr(video_lib, "evaluate_url_policy", fake_evaluate_url_policy)
+
+    with pytest.raises(ValueError) as exc:
+        video_lib.download_video(
+            "https://example.com/video",
+            str(tmp_path),
+            info_dict=None,
+            download_video_flag=True,
+            use_cookies=False,
+            cookies=None,
+        )
+
+    assert "blocked" in str(exc.value)
+
+
 @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.extract_text_from_segments")
 @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.perform_transcription")
 def test_process_single_video_returns_error_for_sentinel_transcript(mock_transcribe, mock_extract, tmp_path):

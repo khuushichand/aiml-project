@@ -45,8 +45,8 @@ export function UserPicker({
   const [error, setError] = useState('');
 
   const showResults = useMemo(() => {
-    return query.trim().length >= MIN_QUERY_LENGTH && results.length > 0;
-  }, [query, results]);
+    return query.trim().length >= MIN_QUERY_LENGTH;
+  }, [query]);
 
   useEffect(() => {
     if (disabled) {
@@ -141,7 +141,7 @@ export function UserPicker({
               </Badge>
             </button>
           ))}
-          {results.length === 0 && (
+          {results.length === 0 && !loading && !error && (
             <div className="px-3 py-2 text-xs text-muted-foreground">No matches</div>
           )}
         </div>

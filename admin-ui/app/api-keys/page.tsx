@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
@@ -44,7 +44,10 @@ export default function ApiKeysPage() {
   const [error, setError] = useState('');
   const [searchQuery, setSearchQuery] = useUrlState<string>('q', { defaultValue: '' });
   const [savedViews, setSavedViews] = useState<SavedKeyView[]>([]);
-  const [activeViewId, setActiveViewId] = useState('');
+  const activeViewId = useMemo(() => {
+    const match = savedViews.find((view) => view.query === (searchQuery || ''));
+    return match ? match.id : '';
+  }, [savedViews, searchQuery]);
   const [showSaveViewDialog, setShowSaveViewDialog] = useState(false);
   const [saveViewName, setSaveViewName] = useState('');
   const [saveViewError, setSaveViewError] = useState('');
@@ -108,31 +111,17 @@ export default function ApiKeysPage() {
     } finally {
       setLoading(false);
     }
-  }, [searchQuery, selectedOrg]);
+  }, [searchQuery, selectedOrg, showError]);
 
   useEffect(() => {
     loadUsers();
   }, [loadUsers]);
 
-  const filteredUsers = users.filter((user) => {
-    if (!searchQuery) return true;
-    const query = searchQuery.toLowerCase();
-    return (
-      user.username?.toLowerCase().includes(query) ||
-      user.email?.toLowerCase().includes(query)
-    );
-  });
-
-  useEffect(() => {
-    const match = savedViews.find((view) => view.query === (searchQuery || ''));
-    setActiveViewId(match ? match.id : '');
-  }, [savedViews, searchQuery]);
-
   // Pagination calculations
-  const totalItems = filteredUsers.length;
+  const totalItems = users.length;
   const totalPages = Math.ceil(totalItems / pageSize);
   const startIndex = (currentPage - 1) * pageSize;
-  const paginatedUsers = filteredUsers.slice(startIndex, startIndex + pageSize);
+  const paginatedUsers = users.slice(startIndex, startIndex + pageSize);
 
   const handleSearchChange = (value: string) => {
     setSearchQuery(value || undefined);
@@ -184,7 +173,6 @@ export default function ApiKeysPage() {
     if (!confirmed) return;
     const next = savedViews.filter((item) => item.id !== activeViewId);
     persistSavedViews(next);
-    setActiveViewId('');
     success('Saved view removed', `"${view.name}" deleted.`);
   };
 
@@ -319,7 +307,7 @@ export default function ApiKeysPage() {
                   <div className="py-4">
                     <TableSkeleton rows={5} columns={5} />
                   </div>
-                ) : filteredUsers.length === 0 ? (
+                ) : users.length === 0 ? (
                   <div className="text-center text-muted-foreground py-8">
                     {searchQuery ? 'No users match your search' : 'No users found'}
                   </div>

@@ -1,4 +1,4 @@
-import { Component, type ReactNode } from 'react';
+import { Component, Fragment, type ReactNode, type ErrorInfo } from 'react';
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -7,23 +7,59 @@ interface ErrorBoundaryProps {
 interface ErrorBoundaryState {
   hasError: boolean;
   error?: Error;
+  errorInfo?: ErrorInfo;
+  resetKey: number;
 }
 
 export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  state: ErrorBoundaryState = { hasError: false };
+  state: ErrorBoundaryState = { hasError: false, resetKey: 0 };
 
-  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
-    return { hasError: true, error };
+  static getDerivedStateFromError(error: Error): Partial<ErrorBoundaryState> {
+    return { hasError: true, error, errorInfo: undefined };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    console.error('ErrorBoundary caught error:', error, info.componentStack);
+    this.setState({ errorInfo: info });
+
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const sentry = (window as unknown as {
+      Sentry?: {
+        captureException?: (err: Error, context?: { extra?: Record<string, unknown> }) => void;
+      };
+    }).Sentry;
+    if (sentry?.captureException) {
+      sentry.captureException(error, { extra: { componentStack: info.componentStack } });
+    }
+
+    const analytics = (window as unknown as {
+      analytics?: { track?: (event: string, properties?: Record<string, unknown>) => void };
+    }).analytics;
+    if (analytics?.track) {
+      analytics.track('error_boundary', {
+        message: error.message,
+        componentStack: info.componentStack,
+      });
+    }
   }
 
   handleReset = () => {
-    this.setState({ hasError: false, error: undefined });
+    this.setState((prev) => ({
+      hasError: false,
+      error: undefined,
+      errorInfo: undefined,
+      resetKey: prev.resetKey + 1,
+    }));
   };
 
   render() {
     if (!this.state.hasError) {
-      return this.props.children;
+      return <Fragment key={this.state.resetKey}>{this.props.children}</Fragment>;
     }
+    const showErrorDetails = process.env.NODE_ENV !== 'production';
 
     return (
       <div className="min-h-screen bg-gray-50 px-4 py-12">
@@ -32,8 +68,11 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
           <p className="mt-2 text-sm text-gray-600">
             An unexpected error occurred. Try again or reload the page.
           </p>
-          {this.state.error?.message && (
+          {showErrorDetails && this.state.error?.message && (
             <p className="mt-4 text-sm text-red-600">{this.state.error.message}</p>
+          )}
+          {!showErrorDetails && (
+            <p className="mt-4 text-sm text-gray-500">Something went wrong.</p>
           )}
           <div className="mt-6 flex flex-wrap justify-center gap-3">
             <button

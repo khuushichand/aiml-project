@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
@@ -35,6 +35,7 @@ export default function OrganizationDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const successTimerRef = useRef<number | null>(null);
 
   // Add member dialog
   const [showAddMember, setShowAddMember] = useState(false);
@@ -72,7 +73,15 @@ export default function OrganizationDetailPage() {
     }
 
     if (membersData.status === 'fulfilled') {
-      setMembers(Array.isArray(membersData.value) ? membersData.value : []);
+      const nextMembers = Array.isArray(membersData.value) ? membersData.value : [];
+      setMembers(nextMembers);
+      setMemberRoleSelections(() => {
+        const nextSelections: Record<number, string> = {};
+        nextMembers.forEach((member) => {
+          nextSelections[member.user_id] = member.role;
+        });
+        return nextSelections;
+      });
     }
 
     if (teamsData.status === 'fulfilled') {
@@ -87,18 +96,25 @@ export default function OrganizationDetailPage() {
   }, [orgId]);
 
   useEffect(() => {
-    void loadData();
+    let isActive = true;
+    void Promise.resolve().then(() => {
+      if (isActive) {
+        void loadData();
+      }
+    });
+    return () => {
+      isActive = false;
+    };
   }, [loadData]);
 
   useEffect(() => {
-    setMemberRoleSelections(() => {
-      const nextSelections: Record<number, string> = {};
-      members.forEach((member) => {
-        nextSelections[member.user_id] = member.role;
-      });
-      return nextSelections;
-    });
-  }, [members]);
+    return () => {
+      if (successTimerRef.current !== null) {
+        window.clearTimeout(successTimerRef.current);
+        successTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const handleAddMember = async () => {
     if (!newMemberUserId) {
@@ -240,7 +256,13 @@ export default function OrganizationDetailPage() {
     try {
       await navigator.clipboard.writeText(text);
       setSuccess('Copied to clipboard!');
-      setTimeout(() => setSuccess(''), 2000);
+      if (successTimerRef.current !== null) {
+        window.clearTimeout(successTimerRef.current);
+      }
+      successTimerRef.current = window.setTimeout(() => {
+        setSuccess('');
+        successTimerRef.current = null;
+      }, 2000);
     } catch (err: unknown) {
       console.error('Failed to copy to clipboard:', err);
       setError('Failed to copy to clipboard');

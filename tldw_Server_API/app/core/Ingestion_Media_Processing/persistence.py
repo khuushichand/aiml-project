@@ -34,6 +34,7 @@ from tldw_Server_API.app.core.Claims_Extraction.claims_utils import (
     persist_claims_if_applicable,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import (
+    open_safe_local_path,
     resolve_safe_local_path,
 )
 
@@ -50,30 +51,6 @@ def _ensure_warnings_list(result: Dict[str, Any]) -> List[str]:
         warnings = []
         result["warnings"] = warnings
     return warnings
-
-
-# Unsafe for user-influenced paths; prefer _compute_source_hash_safe.
-def _compute_source_hash(file_path: FilePath, *, chunk_size: int = 1024 * 1024) -> Optional[str]:
-    try:
-        hasher = hashlib.sha256()
-        with open(file_path, "rb") as handle:
-            for chunk in iter(lambda: handle.read(chunk_size), b""):
-                hasher.update(chunk)
-        return hasher.hexdigest()
-    except Exception as exc:
-        try:
-            path = FilePath(file_path)
-            if path.exists():
-                logger.warning(
-                    "Source hash compute failed for existing file %s: %s",
-                    file_path,
-                    exc,
-                )
-            else:
-                logger.debug("Source hash compute failed for %s: %s", file_path, exc)
-        except Exception:
-            logger.debug("Source hash compute failed for %s: %s", file_path, exc)
-        return None
 
 
 def _compute_source_hash_safe(
@@ -96,7 +73,29 @@ def _compute_source_hash_safe(
             safe_path,
         )
         return None, None
-    return _compute_source_hash(safe_path, chunk_size=chunk_size), None
+    try:
+        hasher = hashlib.sha256()
+        handle = open_safe_local_path(safe_path, base_dir, mode="rb")
+        if handle is None:
+            logger.warning("Source hash compute skipped for rejected path: %s", safe_path)
+            return None, None
+        with handle:
+            for chunk in iter(lambda: handle.read(chunk_size), b""):
+                hasher.update(chunk)
+        return hasher.hexdigest(), None
+    except Exception as exc:
+        try:
+            if safe_path.exists():
+                logger.warning(
+                    "Source hash compute failed for existing file %s: %s",
+                    safe_path,
+                    exc,
+                )
+            else:
+                logger.debug("Source hash compute failed for %s: %s", safe_path, exc)
+        except Exception:
+            logger.debug("Source hash compute failed for %s: %s", safe_path, exc)
+        return None, None
 
 
 def _media_has_source_hash_column(db: MediaDatabase) -> bool:
@@ -561,19 +560,16 @@ async def add_media_orchestrate(
                     storage = get_storage_backend()
                     user_id_str = str(current_user.id) if hasattr(current_user, "id") else "anonymous"
 
-                    # Build reverse map: original_filename -> source_path
-                    ref_to_source_map = {v: k for k, v in source_to_ref_map.items()}
-
                     for result in results:
                         if result.get("status") != "Success" or not result.get("db_id"):
                             continue
 
                         media_id = result["db_id"]
                         input_ref = result.get("input_ref")
-                        source_path = ref_to_source_map.get(input_ref)
+                        source_path = result.get("processing_source")
 
                         # Only store uploaded files, not URLs
-                        if not source_path or source_path in url_list:
+                        if not source_path or input_ref in url_list:
                             continue
 
                         # Check if the source file exists and is within temp_dir
@@ -610,9 +606,10 @@ async def add_media_orchestrate(
                                 quota_service = StorageQuotaService()
                                 await quota_service.initialize()
 
-                                has_quota = await quota_service.check_quota(
+                                has_quota, _info = await quota_service.check_quota(
                                     user_id=int(current_user.id) if hasattr(current_user, "id") else 0,
-                                    additional_bytes=file_size
+                                    new_bytes=file_size,
+                                    raise_on_exceed=False,
                                 )
                                 if not has_quota:
                                     logger.warning(
@@ -1306,6 +1303,62 @@ async def process_batch_media(
         is_url = isinstance(source_path_or_url, str) and source_path_or_url.startswith(
             ("http://", "https://")
         )
+
+        if is_url:
+            try:
+                from tldw_Server_API.app.core.Security.egress import (  # type: ignore
+                    evaluate_url_policy,
+                )
+
+                block_override: Optional[bool] = None
+                if (
+                    os.getenv("PYTEST_CURRENT_TEST")
+                    or os.getenv("TESTING")
+                    or str(os.getenv("TEST_MODE", "")).lower()
+                    in {"1", "true", "yes", "on"}
+                ):
+                    block_override = False
+
+                policy_result = evaluate_url_policy(
+                    str(source_path_or_url),
+                    block_private_override=block_override,
+                )
+                if not getattr(policy_result, "allowed", False):
+                    reason = policy_result.reason or "URL blocked by security policy"
+                    try:
+                        get_metrics_registry().increment(
+                            "security_ssrf_block_total",
+                            1,
+                        )
+                    except Exception:
+                        pass
+                    combined_results.append(
+                        {
+                            "status": "Error",
+                            "input_ref": input_ref,
+                            "processing_source": source_path_or_url,
+                            "media_type": media_type,
+                            "error": f"URL blocked by security policy: {reason}",
+                            "metadata": None,
+                            "content": None,
+                            "transcript": None,
+                            "segments": None,
+                            "chunks": None,
+                            "analysis": None,
+                            "summary": None,
+                            "analysis_details": None,
+                            "warnings": None,
+                            "db_id": None,
+                            "db_message": "URL blocked by security policy.",
+                        }
+                    )
+                    continue
+            except Exception as policy_err:
+                logger.warning(
+                    "URL policy check failed for %s: %s",
+                    source_path_or_url,
+                    policy_err,
+                )
 
         if not is_url:
             try:

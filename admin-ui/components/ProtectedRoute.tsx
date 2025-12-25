@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { getCurrentUser, isAuthenticated as checkAuth } from '@/lib/auth';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -42,26 +42,18 @@ const hasRoleAccess = (currentRole: string, requiredRoles: string[]): boolean =>
 
 export default function ProtectedRoute({ children, requiredRoles }: ProtectedRouteProps) {
   const router = useRouter();
-  const [authState, setAuthState] = useState<{
-    isAuthed: boolean;
-    hasPermission: boolean;
-  } | null>(null);
+  const currentUser = getCurrentUser();
+  const isAuthed = checkAuth() && !!currentUser;
+  const hasPermission = !!currentUser && (!requiredRoles || requiredRoles.length === 0
+    || hasRoleAccess(currentUser.role, requiredRoles));
 
   useEffect(() => {
-    const currentUser = getCurrentUser();
-    const isAuthed = checkAuth() && !!currentUser;
-    const hasPermission = !!currentUser && (!requiredRoles || requiredRoles.length === 0
-      || hasRoleAccess(currentUser.role, requiredRoles));
-    setAuthState({ isAuthed, hasPermission });
-  }, [requiredRoles]);
-
-  useEffect(() => {
-    if (authState && !authState.isAuthed) {
+    if (!isAuthed) {
       router.push('/login');
     }
-  }, [authState, router]);
+  }, [isAuthed, router]);
 
-  if (!authState || !authState.isAuthed) {
+  if (!isAuthed) {
     return (
       <div className="flex h-screen items-center justify-center">
         <div className="text-muted-foreground">Loading...</div>
@@ -69,7 +61,7 @@ export default function ProtectedRoute({ children, requiredRoles }: ProtectedRou
     );
   }
 
-  if (!authState.hasPermission) {
+  if (!hasPermission) {
     return (
       <div className="flex h-screen items-center justify-center p-8">
         <Alert variant="destructive" className="max-w-md">

@@ -60,6 +60,7 @@ from tldw_Server_API.app.core.Chunking import improved_chunking_process
 from tldw_Server_API.app.core.Metrics.metrics_logger import (
     log_counter, log_histogram
 )
+from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
 #
 #######################################################################################################################
 # Function Definitions
@@ -435,6 +436,13 @@ def download_video(
     When ``download_video_flag`` is True, the best muxed audio+video stream is
     downloaded instead so the original media can be retained.
     """
+    block_override: Optional[bool] = None
+    if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TESTING"):
+        block_override = False
+    policy_result = evaluate_url_policy(video_url, block_private_override=block_override)
+    if not getattr(policy_result, "allowed", False):
+        reason = policy_result.reason or "URL blocked by security policy"
+        raise ValueError(f"URL blocked by security policy: {reason}")
     download_dir = Path(download_path)
     download_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1178,6 +1186,15 @@ def process_single_video(
 
         # 1. Get Metadata & Determine LOCAL Processing Path
         if is_remote:
+            block_override: Optional[bool] = None
+            if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TESTING"):
+                block_override = False
+            policy_result = evaluate_url_policy(video_input, block_private_override=block_override)
+            if not getattr(policy_result, "allowed", False):
+                reason = policy_result.reason or "URL blocked by security policy"
+                err_msg = f"URL blocked by security policy: {reason}"
+                processing_result.update({"status": "Error", "error": err_msg})
+                return processing_result
             logger.info("Input is URL. Extracting metadata and downloading...")
             info_dict = extract_metadata(video_input, use_cookies, cookies)
             if not info_dict:

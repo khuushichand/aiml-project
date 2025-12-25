@@ -78,6 +78,18 @@ const formatLatency = (value?: number | null) => {
   return `${value.toFixed(1)} ms`;
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
+
+const getErrorMessage = (reason: unknown, fallback: string) => {
+  if (reason instanceof Error && reason.message) return reason.message;
+  if (typeof reason === 'string' && reason.trim().length > 0) return reason;
+  if (isRecord(reason) && typeof reason.message === 'string' && reason.message.trim().length > 0) {
+    return reason.message;
+  }
+  return fallback;
+};
+
 export default function UsagePage() {
   const { selectedOrg } = useOrgContext();
   const [usageDaily, setUsageDaily] = useState<UsageDailyRow[]>([]);
@@ -86,6 +98,7 @@ export default function UsagePage() {
   const [llmTop, setLlmTop] = useState<LlmTopSpenderRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
   const [startDate, setStartDate] = useState(defaultStart());
   const [endDate, setEndDate] = useState(defaultEnd());
@@ -115,6 +128,7 @@ export default function UsagePage() {
     try {
       setLoading(true);
       setError('');
+      setErrors({});
 
       const topSpenderParams: Record<string, string> = { limit: '10' };
       if (llmParams.start) topSpenderParams.start = llmParams.start;
@@ -128,33 +142,45 @@ export default function UsagePage() {
         api.getLlmTopSpenders(topSpenderParams),
       ]);
 
-      if (dailyResult.status === 'fulfilled') {
-        const items = (dailyResult.value as { items?: UsageDailyRow[] } | null)?.items;
-        setUsageDaily(Array.isArray(items) ? items : []);
+      const nextErrors: Record<string, string> = {};
+
+      if (dailyResult.status === 'fulfilled' && isRecord(dailyResult.value)) {
+        const items = dailyResult.value.items;
+        setUsageDaily(Array.isArray(items) ? (items as UsageDailyRow[]) : []);
       } else {
         setUsageDaily([]);
+        const reason = dailyResult.status === 'rejected' ? dailyResult.reason : null;
+        nextErrors.daily = getErrorMessage(reason, 'Failed to load daily usage');
       }
 
-      if (topResult.status === 'fulfilled') {
-        const items = (topResult.value as { items?: UsageTopRow[] } | null)?.items;
-        setUsageTop(Array.isArray(items) ? items : []);
+      if (topResult.status === 'fulfilled' && isRecord(topResult.value)) {
+        const items = topResult.value.items;
+        setUsageTop(Array.isArray(items) ? (items as UsageTopRow[]) : []);
       } else {
         setUsageTop([]);
+        const reason = topResult.status === 'rejected' ? topResult.reason : null;
+        nextErrors.top = getErrorMessage(reason, 'Failed to load top users');
       }
 
-      if (summaryResult.status === 'fulfilled') {
-        const items = (summaryResult.value as { items?: LlmSummaryRow[] } | null)?.items;
-        setLlmSummary(Array.isArray(items) ? items : []);
+      if (summaryResult.status === 'fulfilled' && isRecord(summaryResult.value)) {
+        const items = summaryResult.value.items;
+        setLlmSummary(Array.isArray(items) ? (items as LlmSummaryRow[]) : []);
       } else {
         setLlmSummary([]);
+        const reason = summaryResult.status === 'rejected' ? summaryResult.reason : null;
+        nextErrors.summary = getErrorMessage(reason, 'Failed to load LLM usage summary');
       }
 
-      if (topSpendersResult.status === 'fulfilled') {
-        const items = (topSpendersResult.value as { items?: LlmTopSpenderRow[] } | null)?.items;
-        setLlmTop(Array.isArray(items) ? items : []);
+      if (topSpendersResult.status === 'fulfilled' && isRecord(topSpendersResult.value)) {
+        const items = topSpendersResult.value.items;
+        setLlmTop(Array.isArray(items) ? (items as LlmTopSpenderRow[]) : []);
       } else {
         setLlmTop([]);
+        const reason = topSpendersResult.status === 'rejected' ? topSpendersResult.reason : null;
+        nextErrors.topSpenders = getErrorMessage(reason, 'Failed to load top spenders');
       }
+
+      setErrors(nextErrors);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to load usage data';
       setError(message);
@@ -162,6 +188,12 @@ export default function UsagePage() {
       setUsageTop([]);
       setLlmSummary([]);
       setLlmTop([]);
+      setErrors({
+        daily: 'Failed to load daily usage',
+        top: 'Failed to load top users',
+        summary: 'Failed to load LLM usage summary',
+        topSpenders: 'Failed to load top spenders',
+      });
     } finally {
       setLoading(false);
     }
@@ -274,6 +306,10 @@ export default function UsagePage() {
                 <CardContent>
                   {loading ? (
                     <div className="text-muted-foreground">Loading usage…</div>
+                  ) : errors.daily ? (
+                    <Alert variant="destructive" className="mb-4">
+                      <AlertDescription>{errors.daily}</AlertDescription>
+                    </Alert>
                   ) : usageDaily.length === 0 ? (
                     <div className="text-muted-foreground">No usage data for this range.</div>
                   ) : (
@@ -315,6 +351,10 @@ export default function UsagePage() {
                 <CardContent>
                   {loading ? (
                     <div className="text-muted-foreground">Loading top users…</div>
+                  ) : errors.top ? (
+                    <Alert variant="destructive" className="mb-4">
+                      <AlertDescription>{errors.top}</AlertDescription>
+                    </Alert>
                   ) : usageTop.length === 0 ? (
                     <div className="text-muted-foreground">No top-user data for this range.</div>
                   ) : (
@@ -356,6 +396,10 @@ export default function UsagePage() {
                 <CardContent>
                   {loading ? (
                     <div className="text-muted-foreground">Loading LLM summary…</div>
+                  ) : errors.summary ? (
+                    <Alert variant="destructive" className="mb-4">
+                      <AlertDescription>{errors.summary}</AlertDescription>
+                    </Alert>
                   ) : llmSummary.length === 0 ? (
                     <div className="text-muted-foreground">No LLM usage data for this range.</div>
                   ) : (
@@ -399,6 +443,10 @@ export default function UsagePage() {
                 <CardContent>
                   {loading ? (
                     <div className="text-muted-foreground">Loading top spenders…</div>
+                  ) : errors.topSpenders ? (
+                    <Alert variant="destructive" className="mb-4">
+                      <AlertDescription>{errors.topSpenders}</AlertDescription>
+                    </Alert>
                   ) : llmTop.length === 0 ? (
                     <div className="text-muted-foreground">No spend data for this range.</div>
                   ) : (

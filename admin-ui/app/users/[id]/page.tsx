@@ -16,6 +16,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import { ArrowLeft, Key, Save, Building2, Users, Shield, Monitor, RefreshCw, Trash2 } from 'lucide-react';
 import { api, ApiError } from '@/lib/api-client';
+import { canEditFromMemberships } from '@/lib/permissions';
 import { User } from '@/types';
 import Link from 'next/link';
 
@@ -37,18 +38,6 @@ type UserFormData = {
 };
 
 const isValidRole = (role: string): role is UserRole => roleOptions.some((option) => option.value === role);
-const roleRank: Record<string, number> = {
-  owner: 4,
-  super_admin: 5,
-  admin: 3,
-  member: 1,
-};
-
-type OrgMembership = {
-  org_id: number;
-  role: string;
-};
-
 type MfaStatus = {
   enabled: boolean;
   has_secret: boolean;
@@ -63,38 +52,6 @@ type UserSession = {
   created_at: string;
   last_activity?: string | null;
   expires_at?: string | null;
-};
-
-const canEditFromMemberships = (
-  adminRoles: OrgMembership[],
-  targetRoles: OrgMembership[]
-): boolean => {
-  if (adminRoles.length === 0 && targetRoles.length === 0) {
-    return true;
-  }
-  if (adminRoles.length === 0 || targetRoles.length === 0) {
-    return false;
-  }
-
-  const adminByOrg = new Map<number, string>(
-    adminRoles.map((membership) => [membership.org_id, membership.role])
-  );
-  const targetByOrg = new Map<number, string>(
-    targetRoles.map((membership) => [membership.org_id, membership.role])
-  );
-
-  const sharedOrgs = [...adminByOrg.keys()].filter((orgId) => targetByOrg.has(orgId));
-  if (sharedOrgs.length === 0) {
-    return false;
-  }
-
-  return sharedOrgs.some((orgId) => {
-    const adminRole = adminByOrg.get(orgId) || '';
-    const targetRole = targetByOrg.get(orgId) || '';
-    const adminRank = roleRank[adminRole] || 0;
-    const targetRank = roleRank[targetRole] || 0;
-    return adminRank >= roleRank.admin && adminRank >= targetRank;
-  });
 };
 
 const isForbiddenError = (err: unknown): boolean => {
@@ -215,7 +172,7 @@ export default function UserDetailPage() {
       if (mfaResult.status === 'rejected' || sessionsResult.status === 'rejected') {
         setSecurityError('Failed to load security controls.');
       }
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('Failed to load security controls:', err);
       setSecurityError('Failed to load security controls.');
       setMfaStatus(null);

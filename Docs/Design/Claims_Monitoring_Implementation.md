@@ -53,3 +53,10 @@ failure state tracked in memory.
 ## Testing
 - API tests for config CRUD and rebuild health response shape.
 - Unit tests for metric registration and alert config serialization.
+- Config CRUD cases: reject invalid `webhook_url`/`slack_webhook_url`, enforce
+  `workspace_id` constraints on create/update, and return 404 on deleting
+  non-existent configs.
+- Alert threshold edge cases: validate `baseline_ratio <= threshold_ratio` and
+  reject negative ratios.
+- Integration coverage: webhook delivery retries and end-to-end alert emission
+  from threshold breach to stored `ClaimsMonitoringEvents`.

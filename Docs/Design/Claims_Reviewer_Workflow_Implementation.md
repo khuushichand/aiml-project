@@ -27,6 +27,14 @@
 - `POST /api/v1/claims/review/bulk`
 - `GET/POST/PATCH/DELETE /api/v1/claims/review/rules`
 - `GET /api/v1/claims/review/analytics`
+  - Pagination: offset/limit with defaults `limit=25`, `offset=0`, max `limit=100`.
+  - Filters for review queue: `status`, `reviewer_id`, `review_group`, `priority`,
+    `created_after`, `created_before`, `reviewed_after`, `reviewed_before`,
+    `sort` (default `created_at desc`).
+  - Bulk review constraints: max 50 claim updates per request; reject over-limit
+    with 400 and a clear error message.
+  - Rules validation on POST/PATCH: validate `predicate_json` schema, allowed
+    fields/operators, and guardrails on predicate depth/complexity.
 
 ## Workflow Rules
 - Default state: `pending`.
@@ -42,3 +50,8 @@
 ## Testing
 - Unit tests for transition validation and optimistic lock handling.
 - API tests for review queue filtering, review update, and history entries.
+- Authorization tests: reviewers cannot access claims outside assignment scope
+  or edit/delete rules they do not own.
+- Bulk operation atomicity: partial failures do not commit any updates.
+- Audit trail completeness: `ClaimsReviewLog` records every state transition
+  with correct reviewer and timestamps.

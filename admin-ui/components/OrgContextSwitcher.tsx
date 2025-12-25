@@ -151,7 +151,7 @@ export function OrgContextSwitcher({ className = '' }: OrgContextSwitcherProps) 
   const { organizations, selectedOrg, setSelectedOrg, loading } = useOrgContext();
   const { isSuperAdmin } = usePermissions();
 
-  // Super admins see all orgs but can choose to scope; org admins must select from their orgs
+  // Super admins see all orgs and can choose to scope to one; org-scoped users are auto-selected and don't need a switcher
   if (!isSuperAdmin()) {
     return null;
   }

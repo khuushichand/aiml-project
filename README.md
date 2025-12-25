@@ -77,19 +77,20 @@ Great for:
 - Building research workflows with RAG, evaluation, and prompt tooling.
 
 New here? Start with the Quickstart section below.
+If you're looking for a one line non-jargon explanation: Modular monolithic FastAPI application, exposes different functionality via REST endpoints for access to each core module, each module following loose coupling, aiming towards atomicity of each where/when possible. 
 
 
 ## Current Status
 
-Version 0.1.8 (beta). Expect bugs and rough edges; please report issues.
+Version 0.1.12 (beta). Expect bugs and rough edges; please report issues.
 
 <details>
 <summary>Current focus and migration notes</summary>
 
 ### Active Work-in-Progress (not in order)
 - Workflows
-- Browser extension (tldw_Assistant)
-- Unified Admin Dashboard
+- Browser extension ([tldw_Browser_Assistant](https://github.com/rmusser01/tldw_browser_assistant))
+- Unified Admin Dashboard ([admin-ui](./admin-ui))
 - Watchlists
 - Collections (read-it-later)
 - Documentation
@@ -112,7 +113,7 @@ Version 0.1.8 (beta). Expect bugs and rough edges; please report issues.
     - Or integrate directly against the API;
 </details>
 
-## What's New
+## What's New (compared to Gradio)
 
 - FastAPI-first backend with OpenAI-compatible Chat and Audio APIs (including streaming STT and TTS)
 - Unified RAG and Evaluations modules (hybrid BM25 + vector with re-ranking; unified metrics)
@@ -129,6 +130,7 @@ See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
 - Users own and control their data; see hardening guidance for production.
 - Auth modes: single-user API key or multi-user JWT.
 - Security reporting and hardening docs: `SECURITY.md`, `Docs/Published/User_Guides/Production_Hardening_Checklist.md`.
+- Outbound URL egress policy blocks SSRF to private networks and disallowed ports for media downloads (audio/video/doc URLs), with test-mode DNS relaxations for hostnames.
 
 ## Highlights
 
@@ -144,7 +146,7 @@ See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
 
 ## Feature Status
 
-See the full Feature Status Matrix in `Docs/Published/Overview/Feature_Status.md`.
+See the full [Feature Status Matrix at `Docs/Published/Overview/Feature_Status.md`](./Docs/Published/Overview/Feature_Status.md).
 
 ## Quickstart
 
@@ -391,25 +393,25 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
 <details>
 <summary>Key Endpoints</summary>
 
-- Media: `POST /api/v1/media/add` - ingest/process media (URLs/files) with DB persistence
-- Media Search: `POST /api/v1/media/search` - search ingested content
-- Chat: `POST /api/v1/chat/completions` - OpenAI-compatible chat
-- Chat Commands: `GET /api/v1/chat/commands` - list available slash commands
-- Chat Dictionary Validate: `POST /api/v1/chat/dictionaries/validate` - validate a chat dictionary
-- Embeddings: `POST /api/v1/embeddings` - OpenAI-compatible embeddings
-- RAG: `POST /api/v1/rag/search` - unified RAG search
-- Audio STT: `POST /api/v1/audio/transcriptions` - file-based transcription
-- Audio STT (WS): `WS /api/v1/audio/stream/transcribe` - real-time transcription
-- Audio TTS: `POST /api/v1/audio/speech` - text-to-speech (streaming and non-streaming)
-- TTS Voices: `GET /api/v1/audio/voices/catalog` - voice catalog across providers
-- Vector Stores: `POST /api/v1/vector_stores` - create; `POST /api/v1/vector_stores/{id}/query` - query
-- OCR Backends: `GET /api/v1/ocr/backends` - available OCR providers
-- VLM Backends: `GET /api/v1/vlm/backends` - available VLM providers
-- Connectors: `GET /api/v1/connectors/providers` - Drive/Notion providers
-- Outputs: `POST /api/v1/outputs` - generate output artifact (md/html/mp3)
-- Metrics: `GET /api/v1/metrics/text` - Prometheus metrics (text format)
-- Providers: `GET /api/v1/llm/providers` - provider/models list
-- MCP: `GET /api/v1/mcp/status` - MCP server status
+- Media: `POST /api/v1/media/add` - ingest/process media (URLs/files) with DB persistence ([docs](Docs/Code_Documentation/Ingestion_Media_Processing.md))
+- Media Search: `POST /api/v1/media/search` - search ingested content ([docs](Docs/API-related/API_Design.md))
+- Chat: `POST /api/v1/chat/completions` - OpenAI-compatible chat ([docs](Docs/API-related/Chat_API_Documentation.md))
+- Chat Commands: `GET /api/v1/chat/commands` - list available slash commands ([docs](Docs/API-related/Chatbook_Features_API_Documentation.md#chat-tools-slash-commands))
+- Chat Dictionary Validate: `POST /api/v1/chat/dictionaries/validate` - validate a chat dictionary ([docs](Docs/API-related/Chatbook_Features_API_Documentation.md#chat-dictionary-api))
+- Embeddings: `POST /api/v1/embeddings` - OpenAI-compatible embeddings ([docs](Docs/API-related/Embeddings_API_Documentation.md))
+- RAG: `POST /api/v1/rag/search` - unified RAG search ([docs](Docs/API-related/RAG-API-Guide.md))
+- Audio STT: `POST /api/v1/audio/transcriptions` - file-based transcription ([docs](Docs/API-related/Audio_Transcription_API.md))
+- Audio STT (WS): `WS /api/v1/audio/stream/transcribe` - real-time transcription ([docs](Docs/API-related/Audio_Transcription_API.md))
+- Audio TTS: `POST /api/v1/audio/speech` - text-to-speech (streaming and non-streaming) ([docs](Docs/API-related/TTS_API.md))
+- TTS Voices: `GET /api/v1/audio/voices/catalog` - voice catalog across providers ([docs](Docs/API-related/TTS_API.md))
+- Vector Stores: `POST /api/v1/vector_stores` - create; `POST /api/v1/vector_stores/{id}/query` - query ([docs](Docs/API-related/Vector_Stores_Admin_and_Query.md))
+- OCR Backends: `GET /api/v1/ocr/backends` - available OCR providers ([docs](Docs/API-related/OCR_API_Documentation.md))
+- VLM Backends: `GET /api/v1/vlm/backends` - available VLM providers ([docs](Docs/Code_Documentation/VLM_Backends.md))
+- Connectors: `GET /api/v1/connectors/providers` - Drive/Notion providers ([docs](Docs/Product/External_Connectors_PRD.md))
+- Outputs: `POST /api/v1/outputs` - generate output artifact (md/html/mp3) ([docs](Docs/Product/Content_Collections_PRD.md))
+- Metrics: `GET /api/v1/metrics/text` - Prometheus metrics (text format) ([docs](Docs/Deployment/Monitoring/Metrics_Cheatsheet.md))
+- Providers: `GET /api/v1/llm/providers` - provider/models list ([docs](Docs/API-related/Providers_API_Documentation.md))
+- MCP: `GET /api/v1/mcp/status` - MCP server status ([docs](Docs/MCP/Unified/System_Admin_Guide.md))
 
 Admin maintenance
 - Chat model aliases cache reload: `POST /api/v1/admin/chat/model-aliases/reload`

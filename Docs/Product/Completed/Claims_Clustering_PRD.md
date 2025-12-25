@@ -180,6 +180,6 @@ Without claim clustering and deduplication:
 
 ## 16. References
 - Claims Module PRD (`Docs/Product/Completed/Claims_Module_PRD.md`).
-- Reviewer Workflow PRD (`Docs/Product/Claims_Reviewer_Workflow_PRD.md`).
-- Monitoring PRD (`Docs/Product/Claims_Monitoring_PRD.md`).
+- Reviewer Workflow PRD (`Docs/Product/Completed/Claims_Reviewer_Workflow_PRD.md`).
+- Monitoring PRD (`Docs/Product/Completed/Claims_Monitoring_PRD.md`).
 - Embeddings infrastructure (`tldw_Server_API/app/core/Embeddings`).

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState, Suspense } from 'react';
+import { useCallback, useEffect, useMemo, useState, Suspense } from 'react';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
@@ -12,7 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Pagination } from '@/components/ui/pagination';
-import { FileText, Search, RefreshCw, Filter, Eye, Clipboard } from 'lucide-react';
+import { FileText, RefreshCw, Filter, Eye, Clipboard } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { AuditLog } from '@/types';
 import { ExportMenu } from '@/components/ui/export-menu';
@@ -23,69 +23,127 @@ import { useOrgContext } from '@/components/OrgContextSwitcher';
 import { useToast } from '@/components/ui/toast';
 import Link from 'next/link';
 
+type AuditFilters = {
+  user: string;
+  action: string;
+  resource: string;
+  start: string;
+  end: string;
+};
+
+const parseDateInput = (value: string) => {
+  if (!value) return null;
+  const date = new Date(`${value}T00:00:00`);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const getDaysParam = (start: string, end: string) => {
+  const anchor = parseDateInput(start) ?? parseDateInput(end);
+  if (!anchor) return undefined;
+  const now = new Date();
+  const diffMs = now.getTime() - anchor.getTime();
+  if (!Number.isFinite(diffMs)) return undefined;
+  const days = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+  return String(Math.min(90, Math.max(1, days)));
+};
+
+const parseUserFilter = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return /^\d+$/.test(trimmed) ? trimmed : null;
+};
+
 function AuditPageContent() {
   const { selectedOrg } = useOrgContext();
   const { success, error: showError } = useToast();
   const [logs, setLogs] = useState<AuditLog[]>([]);
-  const [allLogs, setAllLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedLog, setSelectedLog] = useState<AuditLog | null>(null);
 
   // URL state for filters
-  const [filters, setFilters, clearFilters] = useUrlMultiState({
+  const [filters, setFilters, clearFilters] = useUrlMultiState<AuditFilters>({
     user: '',
     action: '',
     resource: '',
     start: '',
     end: '',
   });
+  const [debouncedFilters, setDebouncedFilters] = useState<AuditFilters>(filters);
 
   // URL state for pagination
   const { page: currentPage, pageSize, setPage: setCurrentPage, setPageSize, resetPagination } = useUrlPagination();
 
-  const loadLogs = useCallback(async () => {
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      setDebouncedFilters((prev) => {
+        if (
+          prev.user === filters.user
+          && prev.action === filters.action
+          && prev.resource === filters.resource
+          && prev.start === filters.start
+          && prev.end === filters.end
+        ) {
+          return prev;
+        }
+        return filters;
+      });
+    }, 300);
+    return () => window.clearTimeout(handle);
+  }, [filters]);
+
+  const loadLogs = useCallback(async (activeFilters: AuditFilters) => {
     try {
       setLoading(true);
       setError('');
 
-      const params: Record<string, string> = {};
+      const params: Record<string, string> = {
+        limit: String(Math.min(1000, Math.max(1, pageSize * currentPage))),
+      };
       if (selectedOrg) {
         params.org_id = String(selectedOrg.id);
       }
-      const data = await api.getAuditLogs(Object.keys(params).length ? params : undefined);
-      const logsArray = Array.isArray(data) ? data : (data.items || []);
-      setAllLogs(logsArray);
-      setLogs(logsArray);
+      const userIdParam = parseUserFilter(activeFilters.user);
+      if (userIdParam) {
+        params.user_id = userIdParam;
+      }
+      const actionFilter = activeFilters.action.trim();
+      if (actionFilter) {
+        params.action = actionFilter;
+      }
+      const daysParam = getDaysParam(activeFilters.start, activeFilters.end);
+      if (daysParam) {
+        params.days = daysParam;
+      }
+      const data = await api.getAuditLogs(params);
+      setLogs(Array.isArray(data) ? data : []);
     } catch (err: unknown) {
       console.error('Failed to load audit logs:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to load audit logs');
-      setAllLogs([]);
       setLogs([]);
     } finally {
       setLoading(false);
     }
-  }, [selectedOrg]);
+  }, [currentPage, pageSize, selectedOrg]);
 
   useEffect(() => {
-    loadLogs();
-  }, [loadLogs]);
+    void loadLogs(debouncedFilters);
+  }, [debouncedFilters, loadLogs]);
 
-  // Apply filters - now filters from URL state
-  const applyFilters = () => {
-    let filtered = [...allLogs];
+  const handleFilterChange = (updates: Partial<AuditFilters>) => {
+    setFilters(updates);
+    resetPagination();
+  };
 
-    if (filters.user) {
-      filtered = filtered.filter((log) =>
-        log.user_id.toString().includes(filters.user)
-      );
-    }
+  const handleClearFilters = () => {
+    clearFilters();
+    resetPagination();
+  };
 
-    if (filters.action) {
-      filtered = filtered.filter((log) =>
-        log.action.toLowerCase().includes(filters.action.toLowerCase())
-      );
-    }
+  const filteredLogs = useMemo(() => {
+    let filtered = [...logs];
 
     if (filters.resource) {
       filtered = filtered.filter((log) =>
@@ -94,28 +152,25 @@ function AuditPageContent() {
     }
 
     if (filters.start) {
-      const start = new Date(filters.start);
-      filtered = filtered.filter((log) => new Date(log.timestamp) >= start);
+      const start = parseDateInput(filters.start);
+      if (start) {
+        filtered = filtered.filter((log) => new Date(log.timestamp) >= start);
+      }
     }
 
     if (filters.end) {
-      const end = new Date(filters.end);
-      end.setHours(23, 59, 59, 999);
-      filtered = filtered.filter((log) => new Date(log.timestamp) <= end);
+      const end = parseDateInput(filters.end);
+      if (end) {
+        end.setHours(23, 59, 59, 999);
+        filtered = filtered.filter((log) => new Date(log.timestamp) <= end);
+      }
     }
 
-    setLogs(filtered);
-    resetPagination();
-  };
-
-  const handleClearFilters = () => {
-    clearFilters();
-    setLogs(allLogs);
-    resetPagination();
-  };
+    return filtered;
+  }, [filters.end, filters.resource, filters.start, logs]);
 
   const handleExport = (format: ExportFormat) => {
-    exportAuditLogs(logs, format);
+    exportAuditLogs(filteredLogs, format);
   };
 
   const handleCopyRaw = async () => {
@@ -140,10 +195,10 @@ function AuditPageContent() {
   };
 
   // Pagination
-  const totalItems = logs.length;
+  const totalItems = filteredLogs.length;
   const totalPages = Math.ceil(totalItems / pageSize);
   const startIndex = (currentPage - 1) * pageSize;
-  const paginatedLogs = logs.slice(startIndex, startIndex + pageSize);
+  const paginatedLogs = filteredLogs.slice(startIndex, startIndex + pageSize);
 
   const formatTimestamp = (ts: string) => {
     return new Date(ts).toLocaleString();
@@ -169,13 +224,13 @@ function AuditPageContent() {
                 </p>
               </div>
               <div className="flex gap-2">
-                <Button variant="outline" onClick={loadLogs} disabled={loading}>
+                <Button variant="outline" onClick={() => loadLogs(debouncedFilters)} disabled={loading}>
                   <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
                   Refresh
                 </Button>
                 <ExportMenu
                   onExport={handleExport}
-                  disabled={logs.length === 0}
+                  disabled={filteredLogs.length === 0}
                 />
               </div>
             </div>
@@ -213,21 +268,21 @@ function AuditPageContent() {
               <CardContent>
                 <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="userFilter">User ID</Label>
+                    <Label htmlFor="userFilter">User ID (exact)</Label>
                     <Input
                       id="userFilter"
-                      placeholder="Filter by user..."
+                      placeholder="e.g., 42"
                       value={filters.user}
-                      onChange={(e) => setFilters({ user: e.target.value })}
+                      onChange={(e) => handleFilterChange({ user: e.target.value })}
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="actionFilter">Action</Label>
+                    <Label htmlFor="actionFilter">Action (exact)</Label>
                     <Input
                       id="actionFilter"
-                      placeholder="e.g., create, delete..."
+                      placeholder="e.g., user.create"
                       value={filters.action}
-                      onChange={(e) => setFilters({ action: e.target.value })}
+                      onChange={(e) => handleFilterChange({ action: e.target.value })}
                     />
                   </div>
                   <div className="space-y-2">
@@ -236,7 +291,7 @@ function AuditPageContent() {
                       id="resourceFilter"
                       placeholder="e.g., user, api_key..."
                       value={filters.resource}
-                      onChange={(e) => setFilters({ resource: e.target.value })}
+                      onChange={(e) => handleFilterChange({ resource: e.target.value })}
                     />
                   </div>
                   <div className="space-y-2">
@@ -245,7 +300,7 @@ function AuditPageContent() {
                       id="startDate"
                       type="date"
                       value={filters.start}
-                      onChange={(e) => setFilters({ start: e.target.value })}
+                      onChange={(e) => handleFilterChange({ start: e.target.value })}
                     />
                   </div>
                   <div className="space-y-2">
@@ -254,15 +309,11 @@ function AuditPageContent() {
                       id="endDate"
                       type="date"
                       value={filters.end}
-                      onChange={(e) => setFilters({ end: e.target.value })}
+                      onChange={(e) => handleFilterChange({ end: e.target.value })}
                     />
                   </div>
                 </div>
                 <div className="flex gap-2 mt-4">
-                  <Button onClick={applyFilters}>
-                    <Search className="mr-2 h-4 w-4" />
-                    Apply Filters
-                  </Button>
                   <Button variant="outline" onClick={handleClearFilters}>
                     Clear Filters
                   </Button>
@@ -356,7 +407,7 @@ function AuditPageContent() {
                   <div className="py-4">
                     <TableSkeleton rows={5} columns={5} />
                   </div>
-                ) : logs.length === 0 ? (
+                ) : filteredLogs.length === 0 ? (
                   <div className="text-center text-muted-foreground py-8">
                     No audit logs found for the selected filters.
                   </div>

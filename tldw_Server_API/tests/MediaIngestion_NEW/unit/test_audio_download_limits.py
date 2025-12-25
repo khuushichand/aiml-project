@@ -25,7 +25,10 @@ def test_download_audio_aborts_when_stream_exceeds_limit(monkeypatch, tmp_path):
     dummy_uuid = SimpleNamespace(hex="1234567890abcdef")
     monkeypatch.setattr(audio_files.uuid, "uuid4", lambda: dummy_uuid)
 
-    faux_response = _FakeResponse(headers={}, chunks=[b"a" * 600, b"b" * 600])
+    faux_response = _FakeResponse(
+        headers={"content-type": "audio/mpeg"},
+        chunks=[b"a" * 600, b"b" * 600],
+    )
     monkeypatch.setattr(audio_files.requests, "get", lambda *_, **__: faux_response)
 
     with pytest.raises(audio_files.AudioFileSizeError):
@@ -42,11 +45,21 @@ def test_download_audio_rejects_when_content_length_exceeds_limit(monkeypatch, t
     dummy_uuid = SimpleNamespace(hex="abcdef1234567890")
     monkeypatch.setattr(audio_files.uuid, "uuid4", lambda: dummy_uuid)
 
-    faux_response = _FakeResponse(headers={"content-length": "2048"}, chunks=[b"x"])
+    faux_response = _FakeResponse(
+        headers={"content-length": "2048", "content-type": "audio/mpeg"},
+        chunks=[b"x"],
+    )
+
+
+@pytest.mark.unit
+def test_download_audio_rejects_unexpected_content_type(monkeypatch, tmp_path):
+    dummy_uuid = SimpleNamespace(hex="abcdef1234567890")
+    monkeypatch.setattr(audio_files.uuid, "uuid4", lambda: dummy_uuid)
+
+    faux_response = _FakeResponse(headers={"content-type": "text/plain"}, chunks=[b"x"])
     monkeypatch.setattr(audio_files.requests, "get", lambda *_, **__: faux_response)
 
-    with pytest.raises(audio_files.AudioFileSizeError):
+    with pytest.raises(audio_files.AudioDownloadError):
         audio_files.download_audio_file("https://example.com/music.mp3", str(tmp_path))
-
     expected_path = tmp_path / "music_abcdef12.mp3"
     assert not expected_path.exists()

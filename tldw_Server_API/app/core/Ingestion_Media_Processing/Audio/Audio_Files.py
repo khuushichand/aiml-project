@@ -45,6 +45,7 @@ from tldw_Server_API.app.core.Utils.Utils import downloaded_files, \
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib import extract_metadata
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 from tldw_Server_API.app.core.http_client import download as http_download, fetch as http_fetch, RetryPolicy
+from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
 # Lazy wrappers to avoid importing heavy transcription deps at module import time
 # Use the ConversionError defined in the transcription library to ensure
 # exception handling is consistent across modules (enables pytest fallback).
@@ -175,6 +176,16 @@ def _get_model_estimated_size(model_name: str) -> str:
     # Default for unknown models
     return 'Unknown size'
 
+
+def _validate_outbound_url(url: str) -> Optional[str]:
+    block_override: Optional[bool] = None
+    if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TESTING"):
+        block_override = False
+    result = evaluate_url_policy(url, block_private_override=block_override)
+    if not getattr(result, "allowed", False):
+        return result.reason or "URL blocked by security policy"
+    return None
+
 def download_audio_file(
     url: str,
     target_temp_dir: str,
@@ -216,6 +227,9 @@ def download_audio_file(
         Exception: For other unexpected errors during the download process.
     """
     try:
+        block_reason = _validate_outbound_url(url)
+        if block_reason:
+            raise AudioDownloadError(f"URL blocked by security policy: {block_reason}")
         logging.info(f"Attempting audio download from: {url} into {target_temp_dir}")
         headers = {}
         if use_cookies and cookies:
@@ -265,6 +279,11 @@ def download_audio_file(
         def _requests_stream_download(get_callable: Callable[..., Any]) -> str:
             resp = get_callable(url, headers=headers, stream=True, timeout=30)
             resp.raise_for_status()
+            content_type = (resp.headers.get("content-type") or "").lower()
+            if "audio/" not in content_type:
+                raise AudioDownloadError(
+                    f"Unexpected Content-Type for {url}: {content_type or 'unknown'}"
+                )
             # Prefer filename from Content-Disposition if provided by server
             content_disposition_hdr = resp.headers.get('content-disposition')
             if content_disposition_hdr and 'filename=' in content_disposition_hdr:
@@ -1187,6 +1206,9 @@ def download_youtube_audio(url: str, *, use_cookies: bool = False, cookies: Opti
         current working directory.
     """
     try:
+        block_reason = _validate_outbound_url(url)
+        if block_reason:
+            return None, f"URL blocked by security policy: {block_reason}"
         # Determine ffmpeg path based on the operating system.
         if os.name == 'nt':
             ffmpeg_path = './Bin/ffmpeg.exe'
