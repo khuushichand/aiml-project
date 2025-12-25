@@ -4801,7 +4801,12 @@ async def run_llm_usage_aggregate(day: Optional[str] = Query(None, description="
         return {"status": "ok", "day": day}
     except Exception as e:
         logger.warning(f"Manual LLM usage aggregation failed/skipped: {e}")
-        return {"status": "skipped", "reason": str(e), "day": day}
+        # Do not expose internal exception details to the client
+        return {
+            "status": "skipped",
+            "reason": "Manual LLM usage aggregation failed or was skipped",
+            "day": day,
+        }
 
 # ---------------------------------------------------------------------------------------------------------------------
 # LLM Usage Reporting Endpoints
