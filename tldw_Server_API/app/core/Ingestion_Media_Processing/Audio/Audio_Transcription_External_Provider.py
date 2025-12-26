@@ -28,6 +28,8 @@ import json
 import base64
 from urllib.parse import urlparse, urljoin
 
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import open_safe_local_path
+
 logger = logger
 
 
@@ -145,6 +147,7 @@ async def transcribe_with_external_provider_async(
     sample_rate: int = 16000,
     provider_name: str = "default",
     config: Optional[ExternalProviderConfig] = None,
+    base_dir: Optional[Path] = None,
     **kwargs
 ) -> str:
     """
@@ -155,6 +158,7 @@ async def transcribe_with_external_provider_async(
         sample_rate: Sample rate of the audio
         provider_name: Name of the provider configuration to use
         config: Optional ExternalProviderConfig to use instead of loading from config
+        base_dir: Optional base directory to enforce when reading local file paths
         **kwargs: Additional parameters to pass to the API
 
     Returns:
@@ -186,8 +190,11 @@ async def transcribe_with_external_provider_async(
 
     try:
         if isinstance(audio_data, (str, Path)):
-            audio_file_path = str(audio_data)
-            file_handle = open(audio_file_path, "rb")
+            audio_path = Path(audio_data)
+            base_dir_for_open = base_dir or audio_path.parent
+            file_handle = open_safe_local_path(audio_path, base_dir_for_open, mode="rb")
+            if file_handle is None:
+                return "[Error: Audio file path rejected outside allowed base directory]"
         else:
             buffer = io.BytesIO()
             sf.write(buffer, audio_data, sample_rate, format="WAV")
@@ -314,6 +321,7 @@ def transcribe_with_external_provider(
     sample_rate: int = 16000,
     provider_name: str = "default",
     config: Optional[ExternalProviderConfig] = None,
+    base_dir: Optional[Path] = None,
     **kwargs
 ) -> str:
     """
@@ -324,6 +332,7 @@ def transcribe_with_external_provider(
         sample_rate: Sample rate of the audio
         provider_name: Name of the provider configuration to use
         config: Optional ExternalProviderConfig to use instead of loading from config
+        base_dir: Optional base directory to enforce when reading local file paths
         **kwargs: Additional parameters to pass to the API
 
     Returns:
@@ -343,7 +352,12 @@ def transcribe_with_external_provider(
             def _run_in_fresh_loop():
                 return asyncio.run(
                     transcribe_with_external_provider_async(
-                        audio_data, sample_rate, provider_name, config, **kwargs
+                        audio_data,
+                        sample_rate,
+                        provider_name,
+                        config,
+                        base_dir=base_dir,
+                        **kwargs,
                     )
                 )
 
@@ -354,7 +368,12 @@ def transcribe_with_external_provider(
             # Normal case - no loop running in this thread
             return asyncio.run(
                 transcribe_with_external_provider_async(
-                    audio_data, sample_rate, provider_name, config, **kwargs
+                    audio_data,
+                    sample_rate,
+                    provider_name,
+                    config,
+                    base_dir=base_dir,
+                    **kwargs,
                 )
             )
     except Exception as e:

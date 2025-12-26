@@ -2,6 +2,29 @@ import axios, { AxiosError, AxiosInstance, AxiosRequestConfig, InternalAxiosRequ
 import { addRequestHistory } from '@/lib/history';
 import type { AxiosConfigWithMetadata, ApiErrorResponse } from '@/types/common';
 
+// Custom error type that preserves HTTP status and retry hints while remaining compatible with Error
+export class ApiError extends Error {
+  status?: number;
+  statusCode?: number;
+  detail?: string;
+  retryAfter?: number;
+
+  constructor(message: string, options?: { status?: number; detail?: string; retryAfter?: number }) {
+    super(message);
+    this.name = 'ApiError';
+    if (options?.status !== undefined) {
+      this.status = options.status;
+      this.statusCode = options.status;
+    }
+    if (options?.detail !== undefined) {
+      this.detail = options.detail;
+    }
+    if (options?.retryAfter !== undefined) {
+      this.retryAfter = options.retryAfter;
+    }
+  }
+}
+
 // Resolve API base URL with sensible defaults
 const apiHost = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 const apiVersion = process.env.NEXT_PUBLIC_API_VERSION || 'v1';
@@ -114,7 +137,9 @@ api.interceptors.response.use(
     } catch {
       // Silently ignore history logging errors to not disrupt error handling
     }
-    if (error.response?.status === 401) {
+
+    const status = error.response?.status;
+    if (status === 401) {
       if (typeof window !== 'undefined') {
         localStorage.removeItem('access_token');
         localStorage.removeItem('user');
@@ -123,7 +148,7 @@ api.interceptors.response.use(
         if (!hasEnvAuth) window.location.href = '/login';
       }
     }
-    if (error.response?.status === 403) {
+    if (status === 403) {
       // Likely CSRF failure for modifying request
       const detail = error.response?.data?.detail;
       if (detail && typeof detail === 'string' && detail.toLowerCase().includes('csrf')) {
@@ -131,13 +156,23 @@ api.interceptors.response.use(
       }
     }
 
+    const data = (error.response?.data || {}) as ApiErrorResponse;
+    const detail = data.detail || data.message;
+    const retryAfterHeader = error.response?.headers?.['retry-after'];
+    const retryAfter =
+      typeof retryAfterHeader === 'string' ? parseInt(retryAfterHeader, 10) || undefined : undefined;
     const message =
-      error.response?.data?.detail ||
-      error.response?.data?.message ||
+      detail ||
       error.message ||
       'An unexpected error occurred';
 
-    return Promise.reject(new Error(message));
+    const apiError = new ApiError(message, {
+      status,
+      detail,
+      retryAfter,
+    });
+
+    return Promise.reject(apiError);
   }
 );
 

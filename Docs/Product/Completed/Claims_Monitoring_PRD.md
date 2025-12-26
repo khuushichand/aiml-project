@@ -30,9 +30,11 @@ Operators lack actionable visibility into claim extraction health. Without granu
 - Reduction in unsupported claim incidents by 30% quarter-over-quarter due to early warning.
 
 ## Implementation Status (repo state)
-- Complete: provider/rebuild/review metrics; monitoring config + alerts CRUD and evaluate endpoints; rebuild health endpoint; dashboard analytics + expanded export.
-- Partial: alert evaluation is manual (no scheduler/Alertmanager); notifications are webhook-only.
-- Pending: Grafana dashboards, Alertmanager rules/runbooks, hotspot index, data quality dashboards.
+- Complete: provider/rebuild/review metrics; monitoring config + alerts CRUD and evaluate endpoints persisted in Media DB; rebuild health endpoint with persisted heartbeat; dashboard analytics + export handles (download + history listing); alert scheduler (interval-based).
+- Complete: webhook delivery retries/backoff, delivery metrics, and event recording.
+- Partial: Alertmanager wiring/runbooks and email digest; notifications are webhook-only (Slack/webhook).
+- Partial: Grafana dashboard template + Prometheus alert rules exist; full data quality dashboards still pending.
+- Pending: hotspot index, richer data quality dashboards.
 
 ## 4. Out of Scope (v1)
 - Automated remediation (e.g., auto-switching providers) beyond alerts.
@@ -73,7 +75,7 @@ Operators lack actionable visibility into claim extraction health. Without granu
 - Notification channels:
   - Slack webhook integration (configurable channel, severity).
   - Generic webhooks for automation (payload includes workspace, current ratio, baseline, top sources).
-  - Optional email digest.
+  - Optional email digest (pending; recipients stored but delivery not implemented).
 - Alert suppression/exponential backoff to avoid flapping.
 - Provide dashboard card showing current ratio vs. threshold.
 
@@ -134,6 +136,9 @@ Operators lack actionable visibility into claim extraction health. Without granu
 | `/api/v1/claims/rebuild/health` | GET | Worker heartbeat and queue stats | claims_admin/SRE |
 | `/api/v1/claims/monitoring/config` | GET/PATCH | View/update monitoring settings | claims_admin |
 | `/api/v1/claims/analytics/export` | POST | Export data quality metrics (CSV/JSON) | claims_admin |
+| `/api/v1/claims/analytics/export/{export_id}` | GET | Download prepared export payload | claims_admin |
+| `/api/v1/claims/analytics/exports` | GET | List export history | claims_admin |
+| `/api/v1/claims/analytics/dashboard` | GET | Dashboard-ready analytics summary | claims_admin |
 
 ## 10. Dashboard & Alerting Assets
 - Grafana dashboards:

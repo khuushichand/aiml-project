@@ -28,10 +28,10 @@ Without claim clustering and deduplication:
 - Evidence aggregation reduces analyst comparison time by ≥30%.
 
 ## Implementation Status (repo state)
-- Complete: cluster tables (`claim_clusters`, `claim_cluster_membership`) + `claim_cluster_id` column; cluster list/detail/members/timeline/evidence endpoints; watchlist cluster link endpoints.
+- Complete: cluster tables (`claim_clusters`, `claim_cluster_membership`, `claim_cluster_links`) + `claim_cluster_id` column; cluster list/detail/members/timeline/evidence endpoints; watchlist cluster link endpoints; cluster relationship link APIs; claims search grouping.
 - Complete: embedding-based rebuild using existing Chroma claim embeddings (optional), with exact-text rebuild available as fallback.
 - Complete: watchlist cluster notifications + digest APIs.
-- Pending: cluster relationship graph/parent-child links; `/api/v1/claims/search` `group_by_cluster`; analytics/trending dashboards and metrics.
+- Pending: analytics/trending dashboards and metrics.
 
 ## 4. Out of Scope (v1)
 - Cross-language clustering (focus on English).
@@ -56,6 +56,7 @@ Without claim clustering and deduplication:
 - Graph structure:
   - Build relationships between clusters and sources (media IDs, providers, extraction modes).
   - Support linking clusters that are related but not identical (parent-child relationships).
+  - Implementation note: cluster relationship links are exposed via `/api/v1/claims/clusters/{cluster_id}/links`.
 - Deduplication in UI/search:
   - Provide API flag to return canonical clusters with member claims collapsed.
   - List top representative claim per cluster alongside aggregated counts.
@@ -105,6 +106,7 @@ Without claim clustering and deduplication:
 - Extend `/api/v1/claims/search` with `group_by_cluster=true` option.
 - Provide cluster facets (size, trending, watchlisted).
 - Allow navigation to member claims when deeper inspection required.
+  - Implementation note: `/api/v1/claims/search` now supports `group_by_cluster=true`.
 
 ### 6.6 Analytics & Reporting
 - Metrics:

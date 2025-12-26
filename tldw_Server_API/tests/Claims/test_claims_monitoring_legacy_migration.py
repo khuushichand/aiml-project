@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 from typing import AsyncGenerator
@@ -43,7 +44,7 @@ def _principal_override_admin():
 
 
 def _seed_monitoring_db() -> str:
-    tmpdir = tempfile.mkdtemp(prefix="claims_monitoring_")
+    tmpdir = tempfile.mkdtemp(prefix="claims_monitoring_legacy_")
     db_path = os.path.join(tmpdir, "media.db")
     db = MediaDatabase(db_path=db_path, client_id="1")
     db.initialize_db()
@@ -51,7 +52,7 @@ def _seed_monitoring_db() -> str:
     return db_path
 
 
-def test_claims_monitoring_config_and_alerts():
+def test_claims_alerts_migrate_legacy_configs():
     from tldw_Server_API.app.main import app as fastapi_app
 
     class _User:
@@ -64,6 +65,18 @@ def test_claims_monitoring_config_and_alerts():
         return _User()
 
     db_path = _seed_monitoring_db()
+    db = MediaDatabase(db_path=db_path, client_id="1")
+    legacy = db.create_claims_monitoring_config(
+        user_id="1",
+        threshold_ratio=0.5,
+        baseline_ratio=0.1,
+        slack_webhook_url="https://example.com/slack",
+        webhook_url="https://example.com/webhook",
+        email_recipients=json.dumps(["legacy@example.com"]),
+        enabled=True,
+    )
+    legacy_id = int(legacy["id"])
+    db.close_connection()
 
     async def _override_db() -> AsyncGenerator[MediaDatabase, None]:
         override_db = MediaDatabase(db_path=db_path, client_id="1")
@@ -81,49 +94,24 @@ def test_claims_monitoring_config_and_alerts():
 
     try:
         with TestClient(fastapi_app) as client:
-            r = client.get("/api/v1/claims/monitoring/config")
-            assert r.status_code == 200, r.text
-            data = r.json()
-            assert "threshold_ratio" in data
+            response = client.get("/api/v1/claims/alerts")
+            assert response.status_code == 200, response.text
+            items = response.json()
+            assert len(items) == 1
+            alert = items[0]
+            assert int(alert["id"]) == legacy_id
+            assert alert["name"].startswith("Legacy alert")
+            assert alert["alert_type"] == "threshold_breach"
+            assert alert["channels"]["slack"] is True
+            assert alert["channels"]["webhook"] is True
+            assert alert["channels"]["email"] is True
 
-            payload = {
-                "threshold_ratio": 0.4,
-                "baseline_ratio": 0.1,
-                "enabled": True,
-            }
-            r2 = client.patch("/api/v1/claims/monitoring/config", json=payload)
-            assert r2.status_code == 200, r2.text
-            data2 = r2.json()
-            assert data2["enabled"] is True
-            assert float(data2["threshold_ratio"]) == 0.4
-
-            alert_payload = {
-                "name": "Threshold breach",
-                "alert_type": "threshold_breach",
-                "channels": {"webhook": True},
-                "threshold_ratio": 0.6,
-                "webhook_url": "https://example.com/webhook",
-                "email_recipients": ["alerts@example.com"],
-            }
-            r3 = client.post("/api/v1/claims/alerts", json=alert_payload)
-            assert r3.status_code == 200, r3.text
-            alert = r3.json()
-            assert alert["threshold_ratio"] == 0.6
-            alert_id = int(alert["id"])
-
-            r4 = client.get("/api/v1/claims/alerts")
-            assert r4.status_code == 200, r4.text
-            assert any(int(item["id"]) == alert_id for item in r4.json())
-
-            r5 = client.patch(
-                f"/api/v1/claims/alerts/{alert_id}",
-                json={"enabled": False, "channels": {"webhook": True}},
-            )
-            assert r5.status_code == 200, r5.text
-            assert r5.json()["enabled"] is False
-
-            r6 = client.delete(f"/api/v1/claims/alerts/{alert_id}")
-            assert r6.status_code == 200, r6.text
+        db = MediaDatabase(db_path=db_path, client_id="1")
+        assert db.list_claims_monitoring_configs("1") == []
+        alerts = db.list_claims_monitoring_alerts("1")
+        db.close_connection()
+        assert len(alerts) == 1
+        assert int(alerts[0]["id"]) == legacy_id
     finally:
         fastapi_app.dependency_overrides.pop(get_auth_principal, None)
         fastapi_app.dependency_overrides.pop(get_request_user, None)

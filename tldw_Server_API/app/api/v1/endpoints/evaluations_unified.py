@@ -325,10 +325,6 @@ def _estimate_tokens_from_texts(*texts: Optional[str], provider: Optional[str] =
     return max(0, total_chars // 4)
 
 
-def _get_request(request: Request) -> Request:
-    return request
-
-
 # ============= Rate Limiting =============
 
 # check_evaluation_rate_limit imported
@@ -642,10 +638,10 @@ async def get_metrics(request: Request):
 @router.post("/geval", response_model=GEvalResponse, dependencies=[Depends(check_evaluation_rate_limit)])
 async def evaluate_geval(
     request: GEvalRequest,
+    http_request: Request,
     response: Response,
     user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_eval_request_user),
-    http_request: Request = Depends(_get_request),
 ):
     """
     Evaluate a summary using G-Eval metrics.
@@ -840,10 +836,10 @@ async def evaluate_geval(
 @router.post("/rag", response_model=RAGEvaluationResponse, dependencies=[Depends(check_evaluation_rate_limit)])
 async def evaluate_rag(
     request: RAGEvaluationRequest,
+    http_request: Request,
     response: Response,
     user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_eval_request_user),
-    http_request: Request = Depends(_get_request),
 ):
     """
     Evaluate RAG system performance.
@@ -994,10 +990,10 @@ async def evaluate_rag(
 @router.post("/response-quality", response_model=ResponseQualityResponse, dependencies=[Depends(check_evaluation_rate_limit)])
 async def evaluate_response_quality(
     request: ResponseQualityRequest,
+    http_request: Request,
     response: Response,
     user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_eval_request_user),
-    http_request: Request = Depends(_get_request),
 ):
     """
     Evaluate the quality of a generated response.
@@ -1247,10 +1243,10 @@ async def evaluate_propositions_endpoint(
 @router.post("/batch", response_model=BatchEvaluationResponse, dependencies=[Depends(check_evaluation_rate_limit)])
 async def batch_evaluate(
     request: BatchEvaluationRequest,
+    http_request: Request,
     user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_eval_request_user),
     response: Response = None,
-    http_request: Request = Depends(_get_request),
 ):
     """
     Run multiple evaluations in batch.

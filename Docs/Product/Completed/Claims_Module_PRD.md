@@ -15,11 +15,12 @@ Analysts and downstream automations need grounded, inspectable factual statement
 - Provide operators APIs and UI controls to inspect, rebuild, and configure claims without direct DB access.
 
 ## 4. Out of Scope (v1)
-- Manual review workflow (status updates, notes, audit trails).
+- Reviewer UI/batch tooling beyond the API surface (workflow APIs/audit log are implemented; see Reviewer Workflow PRD).
 - Automated veracity scoring beyond supported/refuted/NEI labels.
 - Multilingual extraction/verification beyond existing English-centric models.
-- External fact-check provider integrations or cross-media claim deduplication.
+- External fact-check provider integrations.
 - Browser extension or export channels beyond existing chatbooks.
+- Cluster graph links, search grouping, or trending dashboards beyond the baseline clustering APIs.
 
 ## 5. Personas & Key Use Cases
 - **Research analyst**: Surface factual highlights from lengthy transcripts ahead of deep review.
@@ -79,14 +80,16 @@ Analysts and downstream automations need grounded, inspectable factual statement
 - Future observability consideration: per-provider latency/cost tracking for claim-specific workloads.
 
 ## 12. Known Gaps & Risks
-- No reviewer workflow or claim-level moderation; all claims remain unreviewed after storage.
+- Reviewer UI/batch tooling and external review-event delivery (webhook/email) are not implemented yet.
+- Review analytics remain basic aggregates; no nightly extractor delta report or correction pipelines.
+- Trending dashboards and hotspot analytics for clustered claims are pending.
 - Multilingual support limited; spaCy default and prompts assume English.
 - Evidence spans rely on heuristic matching and can misalign in longer documents.
 - Cost control is limited to concurrency/timeout knobs; no per-job budget guardrails.
-- Deduplication across media and watchlist-style analytics are not implemented.
 
 ## 13. Roadmap
-1. Introduce reviewer states/notes and expose via API/UI to resolve unsupported claims.
-2. Expand extractor catalog (multilingual heuristics, lightweight local LLMs) and scheduling heuristics.
-3. Implement cross-media claim clustering/deduplication and integrate with watchlists/analytics.
-4. Add richer monitoring (provider latency/cost dashboards) and adaptive throttling for rebuild jobs.
+1. Deliver reviewer UI/batch tooling plus review-event webhooks/email and richer review analytics.
+2. Add trending dashboards and hotspot analytics for clustered claims.
+3. Expand extractor catalog (multilingual heuristics, lightweight local LLMs) and scheduling heuristics.
+4. Add per-job budget guardrails and provider latency/cost dashboards with adaptive throttling.
+5. Improve evidence span alignment and correction workflows.

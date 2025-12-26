@@ -1677,6 +1677,8 @@ def require_token_scope(
     try:
         setattr(_checker, "_tldw_endpoint_id", endpoint_id)
         setattr(_checker, "_tldw_scope_name", scope)
+        setattr(_checker, "_tldw_token_scope", True)
+        setattr(_checker, "_tldw_token_scope_required", str(scope))
     except Exception:
         pass
 

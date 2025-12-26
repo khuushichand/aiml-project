@@ -31,6 +31,8 @@ async def _handle_audio_transcribe_stage(payload: Dict[str, Any]) -> tuple[Dict[
 
     raw_model = payload.get("model")
     model = (raw_model.strip() if isinstance(raw_model, str) else raw_model) or None
+    temp_dir = payload.get("temp_dir")
+    base_dir = Path(temp_dir) if temp_dir else None
 
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (  # type: ignore
         run_stt_job_via_registry,
@@ -41,6 +43,7 @@ async def _handle_audio_transcribe_stage(payload: Dict[str, Any]) -> tuple[Dict[
         wav_path,
         model,
         None,
+        base_dir,
     )
 
     segments_list = artifact.get("segments") or []

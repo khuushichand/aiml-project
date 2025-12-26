@@ -1,12 +1,11 @@
 import { useState } from 'react';
-import { useRouter } from 'next/router';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Layout } from '@/components/layout/Layout';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { authService } from '@/lib/auth';
+import { useAuth } from '@/hooks/useAuth';
 
 interface LoginForm {
   username: string;
@@ -19,9 +18,9 @@ const loginSchema = z.object({
 });
 
 export default function LoginPage() {
-  const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const { login } = useAuth();
 
   const {
     register,
@@ -36,8 +35,7 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      await authService.login(data);
-      router.push('/');
+      await login(data.username, data.password);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Login failed. Please try again.';
       setError(message);

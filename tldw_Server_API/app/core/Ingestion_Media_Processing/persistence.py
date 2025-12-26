@@ -35,6 +35,7 @@ from tldw_Server_API.app.core.Claims_Extraction.claims_utils import (
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import (
     open_safe_local_path,
+    open_safe_local_path_async,
     resolve_safe_local_path,
 )
 
@@ -628,8 +629,11 @@ async def add_media_orchestrate(
                                 logger.debug(f"Quota check failed, proceeding: {quota_err}")
 
                             # Read file bytes
-                            with open(source_file, "rb") as f:
-                                file_bytes = f.read()
+                            handle = open_safe_local_path(source_file, temp_dir_path, mode="rb")
+                            if handle is None:
+                                raise InputError("Original file path rejected outside temp directory.")
+                            with handle:
+                                file_bytes = handle.read()
 
                             # Compute checksum
                             import hashlib
@@ -2069,7 +2073,15 @@ async def process_document_like_item(
 
                 # Read bytes for types that operate on raw content.
                 if str(media_type) in {"pdf", "email"}:
-                    async with aiofiles.open(processing_filepath, "rb") as file_obj:
+                    async with open_safe_local_path_async(
+                        processing_filepath,
+                        temp_dir,
+                        mode="rb",
+                    ) as file_obj:
+                        if file_obj is None:
+                            raise FileNotFoundError(
+                                "Downloaded file path rejected outside temp directory.",
+                            )
                         file_bytes = await file_obj.read()
 
                 final_result["processing_source"] = str(processing_filepath)
@@ -2092,7 +2104,15 @@ async def process_document_like_item(
             processing_filename = safe_path.name
 
             if str(media_type) in {"pdf", "email"}:
-                async with aiofiles.open(processing_filepath, "rb") as file_obj:
+                async with open_safe_local_path_async(
+                    processing_filepath,
+                    temp_dir,
+                    mode="rb",
+                ) as file_obj:
+                    if file_obj is None:
+                        raise FileNotFoundError(
+                            "Uploaded file path rejected outside temp directory.",
+                        )
                     file_bytes = await file_obj.read()
 
             final_result["processing_source"] = processing_source
@@ -2237,10 +2257,15 @@ async def process_document_like_item(
         elif media_type_str == "email":
             if file_bytes is None and processing_filepath is not None:
                 try:
-                    async with aiofiles.open(
+                    async with open_safe_local_path_async(
                         processing_filepath,
-                        "rb",
+                        temp_dir,
+                        mode="rb",
                     ) as file_obj:
+                        if file_obj is None:
+                            raise FileNotFoundError(
+                                "Email file path rejected outside temp directory.",
+                            )
                         file_bytes = await file_obj.read()
                 except Exception as read_err:
                     raise ValueError(

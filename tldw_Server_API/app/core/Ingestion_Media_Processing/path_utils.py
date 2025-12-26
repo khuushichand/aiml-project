@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import IO, Optional
+from typing import IO, AsyncIterator, Optional
+
+from aiofiles import threadpool as aiofiles_threadpool
 
 from loguru import logger
 
@@ -159,7 +162,8 @@ def open_safe_local_path(
 
     On POSIX platforms, this walks the path using ``dir_fd`` and ``O_NOFOLLOW`` to
     reject symlinks. On Windows, it performs a pre-check and a post-open realpath
-    validation as a safer fallback.
+    validation as a safer fallback, but reparse points can still be swapped after
+    opening; treat this as best-effort and keep an explicit allowlist base directory.
     """
     base_resolved = Path(base_dir).resolve(strict=False)
     safe_path = resolve_safe_local_path(path, base_resolved)
@@ -179,3 +183,29 @@ def open_safe_local_path(
         return _open_safe_windows(safe_path, base_resolved, mode)
 
     return _open_safe_posix(relative_path, base_resolved, mode)
+
+
+@asynccontextmanager
+async def open_safe_local_path_async(
+    path: Path,
+    base_dir: Path,
+    *,
+    mode: str = "rb",
+) -> AsyncIterator[Optional[IO]]:
+    """
+    Async wrapper around ``open_safe_local_path`` that returns an aiofiles handle.
+
+    When the path is rejected, yields None.
+    """
+    handle = open_safe_local_path(path, base_dir, mode=mode)
+    if handle is None:
+        yield None
+        return
+    wrapped = aiofiles_threadpool.wrap(handle)
+    try:
+        yield wrapped
+    finally:
+        try:
+            await wrapped.close()
+        except Exception:
+            logger.debug("Failed to close async handle for %s", path)

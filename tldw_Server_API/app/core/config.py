@@ -1059,6 +1059,26 @@ def load_settings():
                                 int(_cp.get('ClaimsMonitoring', 'CLAIMS_REBUILD_HEARTBEAT_WARN_SEC', fallback='600')) if _cp else 600
                             )
                         ),
+                        "CLAIMS_ALERTS_SCHEDULER_ENABLED": (
+                            (_env.get("CLAIMS_ALERTS_SCHEDULER_ENABLED").lower() == "true") if _env.get("CLAIMS_ALERTS_SCHEDULER_ENABLED") is not None else (
+                                _cp.getboolean('ClaimsMonitoring', 'CLAIMS_ALERTS_SCHEDULER_ENABLED', fallback=False) if _cp else False
+                            )
+                        ),
+                        "CLAIMS_ALERTS_EVAL_INTERVAL_SEC": (
+                            int(_env.get("CLAIMS_ALERTS_EVAL_INTERVAL_SEC")) if _env.get("CLAIMS_ALERTS_EVAL_INTERVAL_SEC") is not None else (
+                                int(_cp.get('ClaimsMonitoring', 'CLAIMS_ALERTS_EVAL_INTERVAL_SEC', fallback='300')) if _cp else 300
+                            )
+                        ),
+                        "CLAIMS_ALERTS_WINDOW_SEC": (
+                            int(_env.get("CLAIMS_ALERTS_WINDOW_SEC")) if _env.get("CLAIMS_ALERTS_WINDOW_SEC") is not None else (
+                                int(_cp.get('ClaimsMonitoring', 'CLAIMS_ALERTS_WINDOW_SEC', fallback='3600')) if _cp else 3600
+                            )
+                        ),
+                        "CLAIMS_ALERTS_BASELINE_SEC": (
+                            int(_env.get("CLAIMS_ALERTS_BASELINE_SEC")) if _env.get("CLAIMS_ALERTS_BASELINE_SEC") is not None else (
+                                int(_cp.get('ClaimsMonitoring', 'CLAIMS_ALERTS_BASELINE_SEC', fallback='86400')) if _cp else 86400
+                            )
+                        ),
                         "CLAIMS_PROVIDER_COST_MULTIPLIERS": _safe_json_dict(raw_cost),
                     }
                 ))(
@@ -1072,6 +1092,10 @@ def load_settings():
                     "CLAIMS_ALERT_THRESHOLD_DEFAULT",
                     "CLAIMS_REBUILD_MAX_QUEUE_ALERT",
                     "CLAIMS_REBUILD_HEARTBEAT_WARN_SEC",
+                    "CLAIMS_ALERTS_SCHEDULER_ENABLED",
+                    "CLAIMS_ALERTS_EVAL_INTERVAL_SEC",
+                    "CLAIMS_ALERTS_WINDOW_SEC",
+                    "CLAIMS_ALERTS_BASELINE_SEC",
                     "CLAIMS_PROVIDER_COST_MULTIPLIERS",
                 ]
             })

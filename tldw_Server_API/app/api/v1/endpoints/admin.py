@@ -243,7 +243,7 @@ from tldw_Server_API.app.services.registration_service import reset_registration
 import ipaddress
 
 REQUIRED_ADMIN_RANK = ROLE_HIERARCHY.get("admin", 3)
-PLATFORM_ADMIN_ROLES = {"owner", "super_admin"}
+PLATFORM_ADMIN_ROLES = {"owner", "super_admin", "admin"}
 
 # Test shim: some tests expect a private helper `_is_postgres_backend` to monkeypatch.
 # Provide an alias to the public function for backward compatibility in tests.
@@ -1570,28 +1570,34 @@ async def admin_add_team_member(
             if isinstance(actor_id, int):
                 from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user
                 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User as _User
-                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+                    get_audit_service_for_user,
+                    get_or_create_audit_service_for_user_id,
+                )
                 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
                 _ud = await _get_user(actor_id)
+                _svc = None
                 if _ud:
                     _user = _User(**_ud)
                     _svc = await get_audit_service_for_user(_user)
-                    _ctx = AuditContext(
-                        user_id=str(actor_id),
-                        ip_address=(request.client.host if request.client else None),
-                        user_agent=request.headers.get('user-agent'),
-                        endpoint=str(request.url.path),
-                        method=request.method,
-                    )
-                    await _svc.log_event(
-                        event_type=AuditEventType.DATA_WRITE,
-                        category=AuditEventCategory.AUTHORIZATION,
-                        context=_ctx,
-                        resource_type='team',
-                        resource_id=str(team_id),
-                        action='team_member.add',
-                        metadata={'target_user_id': payload.user_id, 'role': payload.role or 'member'}
-                    )
+                if _svc is None:
+                    _svc = await get_or_create_audit_service_for_user_id(int(actor_id))
+                _ctx = AuditContext(
+                    user_id=str(actor_id),
+                    ip_address=(request.client.host if request.client else None),
+                    user_agent=request.headers.get('user-agent'),
+                    endpoint=str(request.url.path),
+                    method=request.method,
+                )
+                await _svc.log_event(
+                    event_type=AuditEventType.DATA_WRITE,
+                    category=AuditEventCategory.AUTHORIZATION,
+                    context=_ctx,
+                    resource_type='team',
+                    resource_id=str(team_id),
+                    action='team_member.add',
+                    metadata={'target_user_id': payload.user_id, 'role': payload.role or 'member'}
+                )
         except Exception as _e:
             logger.debug(f"Audit (team member add) skipped/failed: {_e}")
         return TeamMemberResponse(**row)
@@ -1635,28 +1641,34 @@ async def admin_remove_team_member(
             if isinstance(actor_id, int):
                 from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user
                 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User as _User
-                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+                    get_audit_service_for_user,
+                    get_or_create_audit_service_for_user_id,
+                )
                 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
                 _ud = await _get_user(actor_id)
+                _svc = None
                 if _ud:
                     _user = _User(**_ud)
                     _svc = await get_audit_service_for_user(_user)
-                    _ctx = AuditContext(
-                        user_id=str(actor_id),
-                        ip_address=(request.client.host if request.client else None),
-                        user_agent=request.headers.get('user-agent'),
-                        endpoint=str(request.url.path),
-                        method=request.method,
-                    )
-                    await _svc.log_event(
-                        event_type=AuditEventType.DATA_DELETE,
-                        category=AuditEventCategory.AUTHORIZATION,
-                        context=_ctx,
-                        resource_type='team',
-                        resource_id=str(team_id),
-                        action='team_member.remove',
-                        metadata={'target_user_id': user_id}
-                    )
+                if _svc is None:
+                    _svc = await get_or_create_audit_service_for_user_id(int(actor_id))
+                _ctx = AuditContext(
+                    user_id=str(actor_id),
+                    ip_address=(request.client.host if request.client else None),
+                    user_agent=request.headers.get('user-agent'),
+                    endpoint=str(request.url.path),
+                    method=request.method,
+                )
+                await _svc.log_event(
+                    event_type=AuditEventType.DATA_DELETE,
+                    category=AuditEventCategory.AUTHORIZATION,
+                    context=_ctx,
+                    resource_type='team',
+                    resource_id=str(team_id),
+                    action='team_member.remove',
+                    metadata={'target_user_id': user_id}
+                )
         except Exception as _e:
             logger.debug(f"Audit (team member remove) skipped/failed: {_e}")
         return {"message": "Team member removed", **res}
@@ -1685,28 +1697,34 @@ async def admin_add_org_member(
             if isinstance(actor_id, int):
                 from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user
                 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User as _User
-                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+                    get_audit_service_for_user,
+                    get_or_create_audit_service_for_user_id,
+                )
                 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
                 _ud = await _get_user(actor_id)
+                _svc = None
                 if _ud:
                     _user = _User(**_ud)
                     _svc = await get_audit_service_for_user(_user)
-                    _ctx = AuditContext(
-                        user_id=str(actor_id),
-                        ip_address=(request.client.host if request.client else None),
-                        user_agent=request.headers.get('user-agent'),
-                        endpoint=str(request.url.path),
-                        method=request.method,
-                    )
-                    await _svc.log_event(
-                        event_type=AuditEventType.DATA_WRITE,
-                        category=AuditEventCategory.AUTHORIZATION,
-                        context=_ctx,
-                        resource_type='organization',
-                        resource_id=str(org_id),
-                        action='org_member.add',
-                        metadata={'target_user_id': payload.user_id, 'role': payload.role or 'member'}
-                    )
+                if _svc is None:
+                    _svc = await get_or_create_audit_service_for_user_id(int(actor_id))
+                _ctx = AuditContext(
+                    user_id=str(actor_id),
+                    ip_address=(request.client.host if request.client else None),
+                    user_agent=request.headers.get('user-agent'),
+                    endpoint=str(request.url.path),
+                    method=request.method,
+                )
+                await _svc.log_event(
+                    event_type=AuditEventType.DATA_WRITE,
+                    category=AuditEventCategory.AUTHORIZATION,
+                    context=_ctx,
+                    resource_type='organization',
+                    resource_id=str(org_id),
+                    action='org_member.add',
+                    metadata={'target_user_id': payload.user_id, 'role': payload.role or 'member'}
+                )
         except Exception as _e:
             logger.debug(f"Audit (org member add) skipped/failed: {_e}")
         return OrgMemberResponse(**row)
@@ -1766,28 +1784,34 @@ async def admin_remove_org_member(
             if isinstance(actor_id, int):
                 from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user
                 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User as _User
-                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+                    get_audit_service_for_user,
+                    get_or_create_audit_service_for_user_id,
+                )
                 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
                 _ud = await _get_user(actor_id)
+                _svc = None
                 if _ud:
                     _user = _User(**_ud)
                     _svc = await get_audit_service_for_user(_user)
-                    _ctx = AuditContext(
-                        user_id=str(actor_id),
-                        ip_address=(request.client.host if request.client else None),
-                        user_agent=request.headers.get('user-agent'),
-                        endpoint=str(request.url.path),
-                        method=request.method,
-                    )
-                    await _svc.log_event(
-                        event_type=AuditEventType.DATA_DELETE,
-                        category=AuditEventCategory.AUTHORIZATION,
-                        context=_ctx,
-                        resource_type='organization',
-                        resource_id=str(org_id),
-                        action='org_member.remove',
-                        metadata={'target_user_id': user_id}
-                    )
+                if _svc is None:
+                    _svc = await get_or_create_audit_service_for_user_id(int(actor_id))
+                _ctx = AuditContext(
+                    user_id=str(actor_id),
+                    ip_address=(request.client.host if request.client else None),
+                    user_agent=request.headers.get('user-agent'),
+                    endpoint=str(request.url.path),
+                    method=request.method,
+                )
+                await _svc.log_event(
+                    event_type=AuditEventType.DATA_DELETE,
+                    category=AuditEventCategory.AUTHORIZATION,
+                    context=_ctx,
+                    resource_type='organization',
+                    resource_id=str(org_id),
+                    action='org_member.remove',
+                    metadata={'target_user_id': user_id}
+                )
         except Exception as _e:
             logger.debug(f"Audit (org member remove) skipped/failed: {_e}")
         return {"message": "Org member removed", **res}
@@ -1822,28 +1846,34 @@ async def admin_update_org_member_role(
             if isinstance(actor_id, int):
                 from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user
                 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User as _User
-                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+                    get_audit_service_for_user,
+                    get_or_create_audit_service_for_user_id,
+                )
                 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
                 _ud = await _get_user(actor_id)
+                _svc = None
                 if _ud:
                     _user = _User(**_ud)
                     _svc = await get_audit_service_for_user(_user)
-                    _ctx = AuditContext(
-                        user_id=str(actor_id),
-                        ip_address=(request.client.host if request.client else None),
-                        user_agent=request.headers.get('user-agent'),
-                        endpoint=str(request.url.path),
-                        method=request.method,
-                    )
-                    await _svc.log_event(
-                        event_type=AuditEventType.DATA_UPDATE,
-                        category=AuditEventCategory.AUTHORIZATION,
-                        context=_ctx,
-                        resource_type='organization',
-                        resource_id=str(org_id),
-                        action='org_member.update',
-                        metadata={'target_user_id': user_id, 'new_role': payload.role}
-                    )
+                if _svc is None:
+                    _svc = await get_or_create_audit_service_for_user_id(int(actor_id))
+                _ctx = AuditContext(
+                    user_id=str(actor_id),
+                    ip_address=(request.client.host if request.client else None),
+                    user_agent=request.headers.get('user-agent'),
+                    endpoint=str(request.url.path),
+                    method=request.method,
+                )
+                await _svc.log_event(
+                    event_type=AuditEventType.DATA_UPDATE,
+                    category=AuditEventCategory.AUTHORIZATION,
+                    context=_ctx,
+                    resource_type='organization',
+                    resource_id=str(org_id),
+                    action='org_member.update',
+                    metadata={'target_user_id': user_id, 'new_role': payload.role}
+                )
         except Exception as _e:
             logger.debug(f"Audit (org member role update) skipped/failed: {_e}")
         return OrgMemberResponse(**row)
@@ -4558,9 +4588,9 @@ async def admin_upsert_budget(
     """Upsert budget settings for an organization."""
     budget_updates = None
     if payload.budgets is not None:
-        budget_updates = payload.budgets.model_dump(exclude_unset=True)
+        budget_updates = payload.budgets.model_dump(exclude_unset=True, by_alias=True)
     try:
-        item = await svc_upsert_org_budget(
+        item, audit_changes = await svc_upsert_org_budget(
             db,
             org_id=payload.org_id,
             budget_updates=budget_updates,
@@ -4579,13 +4609,20 @@ async def admin_upsert_budget(
         logger.error(f"Failed to upsert org budget: {exc}")
         raise HTTPException(status_code=500, detail="Failed to upsert org budget") from exc
 
-    # Best-effort audit
+    # Best-effort audit with detailed change log (always emit)
     try:
-        actor_id = getattr(request.state, "user_id", None) or principal.user_id
+        actor_id_raw = getattr(request.state, "user_id", None) or principal.user_id
+        try:
+            actor_id = int(actor_id_raw) if actor_id_raw is not None else None
+        except (TypeError, ValueError):
+            actor_id = None
         if isinstance(actor_id, int):
             from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user
             from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User as _User
-            from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+            from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+                get_audit_service_for_user,
+                get_or_create_audit_service_for_user_id,
+            )
             from tldw_Server_API.app.core.Audit.unified_audit_service import (
                 AuditContext,
                 AuditEventType,
@@ -4593,29 +4630,62 @@ async def admin_upsert_budget(
             )
 
             _ud = await _get_user(actor_id)
+            _svc = None
             if _ud:
                 _user = _User(**_ud)
                 _svc = await get_audit_service_for_user(_user)
-                _ctx = AuditContext(
-                    user_id=str(actor_id),
-                    ip_address=(request.client.host if request.client else None),
-                    user_agent=request.headers.get("user-agent"),
-                    endpoint=str(request.url.path),
-                    method=request.method,
-                )
-                await _svc.log_event(
-                    event_type=AuditEventType.CONFIG_CHANGED,
-                    category=AuditEventCategory.SYSTEM,
-                    context=_ctx,
-                    resource_type="org_budget",
-                    resource_id=str(payload.org_id),
-                    action="budget.update",
-                    metadata={
-                        "org_id": payload.org_id,
-                        "clear_budgets": payload.clear_budgets,
-                        "updates": budget_updates or {},
-                    },
-                )
+            if _svc is None:
+                _svc = await get_or_create_audit_service_for_user_id(actor_id)
+            correlation_id = (
+                request.headers.get("X-Correlation-ID")
+                or getattr(request.state, "correlation_id", None)
+            )
+            request_id = (
+                request.headers.get("X-Request-ID")
+                or getattr(request.state, "request_id", None)
+            )
+            actor_role = None
+            try:
+                if principal.is_admin:
+                    actor_role = "admin"
+                elif principal.roles:
+                    actor_role = principal.roles[0]
+            except Exception:
+                actor_role = None
+            changes_payload = audit_changes or []
+            _ctx = AuditContext(
+                user_id=str(actor_id),
+                correlation_id=correlation_id,
+                request_id=request_id or "",
+                ip_address=(request.client.host if request.client else None),
+                user_agent=request.headers.get("user-agent"),
+                endpoint=str(request.url.path),
+                method=request.method,
+            )
+            await _svc.log_event(
+                event_type=AuditEventType.CONFIG_CHANGED,
+                category=AuditEventCategory.SYSTEM,
+                context=_ctx,
+                resource_type="org_budget",
+                resource_id=str(payload.org_id),
+                action="budget.update",
+                metadata={
+                    "org_id": payload.org_id,
+                    "actor_id": actor_id,
+                    "resource_type": "org_budget",
+                    "resource_id": str(payload.org_id),
+                    "correlation_id": correlation_id,
+                    "version": 1,
+                    "changes": changes_payload,
+                    "no_changes": len(changes_payload) == 0,
+                    "clear_budgets": payload.clear_budgets,
+                    "requested_updates": budget_updates or {},
+                    "actor_role": actor_role,
+                    "source_ip": request.client.host if request.client else None,
+                    "user_agent": request.headers.get("user-agent"),
+                    "request_id": request_id,
+                },
+            )
     except Exception as _e:
         logger.debug(f"Audit (org budget update) skipped/failed: {_e}")
 

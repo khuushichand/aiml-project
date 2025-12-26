@@ -384,11 +384,28 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         has_scoped_claim = False
 
     if has_scoped_claim:
+        def _route_declares_scope_enforcement(req: Request) -> bool:
+            try:
+                route = getattr(req, "scope", {}).get("route") if req is not None else None
+                dependant = getattr(route, "dependant", None)
+                if dependant is None:
+                    return False
+                stack = list(getattr(dependant, "dependencies", []) or [])
+                while stack:
+                    dep = stack.pop()
+                    call = getattr(dep, "call", None)
+                    if getattr(call, "_tldw_token_scope", False):
+                        return True
+                    stack.extend(getattr(dep, "dependencies", []) or [])
+            except Exception:
+                return False
+            return False
+
         try:
             scope_enforced = bool(getattr(request.state, "_token_scope_enforced", False))
         except Exception:
             scope_enforced = False
-        if not scope_enforced:
+        if not scope_enforced and not _route_declares_scope_enforcement(request):
             if pii_redact_logs:
                 logger.warning("Scoped token used without scope enforcement (details redacted)")
             else:
@@ -688,6 +705,10 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
                         request_id=request_id,
                     )
                     request.state._auth_user = user
+                    try:
+                        request.state.user_id = user.id_int
+                    except Exception:
+                        pass
                 except Exception:
                     logger.debug("Unable to populate AuthContext for single-user API key")
                 return user

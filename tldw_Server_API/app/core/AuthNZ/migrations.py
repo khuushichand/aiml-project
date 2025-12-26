@@ -2,7 +2,7 @@
 # Description: Database migrations for AuthNZ module tables
 #
 # Imports
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 import sqlite3
 import json
 from pathlib import Path
@@ -1897,6 +1897,105 @@ def rollback_041_drop_llm_provider_overrides(conn: sqlite3.Connection) -> None:
     logger.info("Rollback 041: Dropped llm_provider_overrides table")
 
 
+def migration_042_create_org_budgets(conn: sqlite3.Connection) -> None:
+    """Create org_budgets table and migrate legacy budget data."""
+    logger.info("Migration 042: START org_budgets table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS org_budgets (
+            org_id INTEGER PRIMARY KEY,
+            budgets_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_budgets_org ON org_budgets(org_id)")
+
+    def _normalize_alert_thresholds(value: Any) -> Optional[Dict[str, Any]]:
+        if value is None:
+            return None
+        if isinstance(value, list):
+            return {"global": value}
+        if isinstance(value, dict):
+            out: Dict[str, Any] = {}
+            if "global" in value:
+                out["global"] = value.get("global")
+            if "per_metric" in value:
+                out["per_metric"] = value.get("per_metric")
+            return out or None
+        return None
+
+    def _normalize_enforcement_mode(value: Any) -> Optional[Dict[str, Any]]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return {"global": value}
+        if isinstance(value, dict):
+            out: Dict[str, Any] = {}
+            if "global" in value:
+                out["global"] = value.get("global")
+            if "per_metric" in value:
+                out["per_metric"] = value.get("per_metric")
+            return out or None
+        return None
+
+    def _inflate_legacy_budgets(legacy: Dict[str, Any]) -> Dict[str, Any]:
+        budgets = {key: legacy[key] for key in ("budget_day_usd", "budget_month_usd", "budget_day_tokens", "budget_month_tokens") if key in legacy}
+        payload: Dict[str, Any] = {}
+        if budgets:
+            payload["budgets"] = budgets
+        thresholds = _normalize_alert_thresholds(legacy.get("alert_thresholds"))
+        if thresholds is not None:
+            payload["alert_thresholds"] = thresholds
+        enforcement = _normalize_enforcement_mode(legacy.get("enforcement_mode"))
+        if enforcement is not None:
+            payload["enforcement_mode"] = enforcement
+        return payload
+
+    cur = conn.execute(
+        "SELECT org_id, custom_limits_json FROM org_subscriptions WHERE custom_limits_json IS NOT NULL"
+    )
+    rows = cur.fetchall()
+    for org_id, custom_limits_json in rows:
+        if not custom_limits_json:
+            continue
+        try:
+            data = json.loads(custom_limits_json)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        legacy_budgets = data.get("budgets")
+        if not isinstance(legacy_budgets, dict):
+            continue
+        payload = _inflate_legacy_budgets(legacy_budgets)
+        if payload:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO org_budgets (org_id, budgets_json, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                """,
+                (org_id, json.dumps(payload)),
+            )
+        data.pop("budgets", None)
+        conn.execute(
+            "UPDATE org_subscriptions SET custom_limits_json = ? WHERE org_id = ?",
+            (json.dumps(data) if data else None, org_id),
+        )
+
+    conn.commit()
+    logger.info("Migration 042: Created org_budgets table and migrated legacy budgets")
+
+
+def rollback_042_drop_org_budgets(conn: sqlite3.Connection) -> None:
+    """Rollback migration 042 by dropping org_budgets table."""
+    conn.execute("DROP TABLE IF EXISTS org_budgets")
+    conn.commit()
+    logger.info("Rollback 042: Dropped org_budgets table")
+
+
 #######################################################################################################################
 #
 # Migration Registry
@@ -2016,6 +2115,12 @@ def get_authnz_migrations() -> List[Migration]:
             "Add llm_provider_overrides table",
             migration_041_add_llm_provider_overrides,
             rollback_041_drop_llm_provider_overrides,
+        ),
+        Migration(
+            42,
+            "Create org_budgets table",
+            migration_042_create_org_budgets,
+            rollback_042_drop_org_budgets,
         ),
     ]
 

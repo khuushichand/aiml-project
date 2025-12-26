@@ -10,6 +10,14 @@ from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
 from tldw_Server_API.app.core.Billing.plan_limits import get_plan_limits
 
 
+_BUDGET_KEYS = {
+    "budget_day_usd",
+    "budget_month_usd",
+    "budget_day_tokens",
+    "budget_month_tokens",
+}
+
+
 def _parse_json_payload(raw: Any) -> Dict[str, Any]:
     if raw is None:
         return {}
@@ -25,6 +33,96 @@ def _parse_json_payload(raw: Any) -> Dict[str, Any]:
     return {}
 
 
+def _normalize_alert_thresholds(value: Any) -> Optional[Dict[str, Any]]:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return {"global": value}
+    if isinstance(value, dict):
+        out: Dict[str, Any] = {}
+        if "global" in value:
+            out["global"] = value.get("global")
+        if "per_metric" in value:
+            out["per_metric"] = value.get("per_metric")
+        return out or None
+    return None
+
+
+def _normalize_enforcement_mode(value: Any) -> Optional[Dict[str, Any]]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return {"global": value}
+    if isinstance(value, dict):
+        out: Dict[str, Any] = {}
+        if "global" in value:
+            out["global"] = value.get("global")
+        if "per_metric" in value:
+            out["per_metric"] = value.get("per_metric")
+        return out or None
+    return None
+
+
+def _normalize_budget_payload(raw: Any) -> Dict[str, Any]:
+    data = _parse_json_payload(raw)
+    if not data:
+        return {}
+
+    has_budget_shape = any(
+        key in data for key in ("budgets", "alert_thresholds", "enforcement_mode")
+    )
+    if has_budget_shape:
+        budgets = data.get("budgets") if isinstance(data.get("budgets"), dict) else {}
+        payload: Dict[str, Any] = {}
+        if budgets:
+            payload["budgets"] = dict(budgets)
+        thresholds = _normalize_alert_thresholds(data.get("alert_thresholds"))
+        if thresholds is not None:
+            payload["alert_thresholds"] = thresholds
+        enforcement = _normalize_enforcement_mode(data.get("enforcement_mode"))
+        if enforcement is not None:
+            payload["enforcement_mode"] = enforcement
+        return payload
+
+    budgets = {key: data[key] for key in _BUDGET_KEYS if key in data}
+    payload = {"budgets": budgets} if budgets else {}
+    thresholds = _normalize_alert_thresholds(data.get("alert_thresholds"))
+    if thresholds is not None:
+        payload["alert_thresholds"] = thresholds
+    enforcement = _normalize_enforcement_mode(data.get("enforcement_mode"))
+    if enforcement is not None:
+        payload["enforcement_mode"] = enforcement
+    return payload
+
+
+def _flatten_budget_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, dict) or not payload:
+        return {}
+    flat: Dict[str, Any] = {}
+    budgets = payload.get("budgets")
+    if isinstance(budgets, dict):
+        flat.update(budgets)
+    if "alert_thresholds" in payload:
+        flat["alert_thresholds"] = payload.get("alert_thresholds")
+    if "enforcement_mode" in payload:
+        flat["enforcement_mode"] = payload.get("enforcement_mode")
+    return flat
+
+
+def _inflate_budget_payload(flat: Dict[str, Any]) -> Dict[str, Any]:
+    if not flat:
+        return {}
+    payload: Dict[str, Any] = {}
+    budgets = {key: flat[key] for key in _BUDGET_KEYS if key in flat}
+    if budgets:
+        payload["budgets"] = budgets
+    if "alert_thresholds" in flat:
+        payload["alert_thresholds"] = flat.get("alert_thresholds")
+    if "enforcement_mode" in flat:
+        payload["enforcement_mode"] = flat.get("enforcement_mode")
+    return payload
+
+
 def _build_budget_item(row: Dict[str, Any]) -> Dict[str, Any]:
     plan_name = row.get("plan_name") or "free"
     plan_display_name = row.get("plan_display_name") or plan_name.title()
@@ -33,15 +131,19 @@ def _build_budget_item(row: Dict[str, Any]) -> Dict[str, Any]:
         plan_limits = get_plan_limits(plan_name)
 
     custom_limits = _parse_json_payload(row.get("custom_limits_json"))
-    budgets = {}
-    if isinstance(custom_limits, dict):
-        budgets = custom_limits.get("budgets") or {}
-        if not isinstance(budgets, dict):
-            budgets = {}
+    budgets_payload = _normalize_budget_payload(row.get("budgets_json"))
+    if not budgets_payload and isinstance(custom_limits, dict) and "budgets" in custom_limits:
+        budgets_payload = _normalize_budget_payload(custom_limits.get("budgets"))
+    budgets = _flatten_budget_payload(budgets_payload)
+    if isinstance(custom_limits, dict) and "budgets" in custom_limits:
+        custom_limits = dict(custom_limits)
+        custom_limits.pop("budgets", None)
 
     effective_limits = dict(plan_limits)
     if isinstance(custom_limits, dict) and custom_limits:
         effective_limits.update(custom_limits)
+    if budgets_payload:
+        effective_limits["budgets"] = budgets_payload
 
     return {
         "org_id": int(row.get("org_id")),
@@ -52,7 +154,7 @@ def _build_budget_item(row: Dict[str, Any]) -> Dict[str, Any]:
         "budgets": budgets,
         "custom_limits": custom_limits,
         "effective_limits": effective_limits,
-        "updated_at": row.get("updated_at"),
+        "updated_at": row.get("budgets_updated_at") or row.get("updated_at"),
     }
 
 
@@ -74,6 +176,64 @@ def merge_budget_settings(
         else:
             merged[key] = value
     return merged
+
+
+def _infer_change_data_type(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return "string"
+
+
+def build_budget_change_log(
+    existing_budgets: Dict[str, Any],
+    merged_budgets: Dict[str, Any],
+    budget_updates: Optional[Dict[str, Any]],
+    *,
+    clear_budgets: bool,
+) -> List[Dict[str, Any]]:
+    """Create audit-friendly change entries for budget updates."""
+    if clear_budgets:
+        return [
+            {
+                "field_name": "budgets",
+                "old_value": existing_budgets or {},
+                "new_value": None,
+                "data_type": "object",
+                "notes": "clear_budgets=true",
+            }
+        ]
+
+    if not budget_updates:
+        return []
+
+    changes: List[Dict[str, Any]] = []
+    for key, _ in budget_updates.items():
+        old_value = existing_budgets.get(key)
+        new_value = merged_budgets.get(key)
+        if old_value == new_value:
+            continue
+        data_type = _infer_change_data_type(new_value if new_value is not None else old_value)
+        changes.append(
+            {
+                "field_name": f"budgets.{key}",
+                "old_value": old_value,
+                "new_value": new_value,
+                "data_type": data_type,
+            }
+        )
+    return changes
 
 
 async def _fetchval(db, query: str, params: List[Any]) -> Any:
@@ -149,10 +309,12 @@ async def list_org_budgets(
     sql = (
         "SELECT o.id as org_id, o.name as org_name, o.slug as org_slug, "
         "os.custom_limits_json, os.updated_at, "
+        "ob.budgets_json, ob.updated_at as budgets_updated_at, "
         "sp.name as plan_name, sp.display_name as plan_display_name, sp.limits_json as plan_limits_json "
         "FROM organizations o "
         "LEFT JOIN org_subscriptions os ON os.org_id = o.id "
         "LEFT JOIN subscription_plans sp ON os.plan_id = sp.id "
+        "LEFT JOIN org_budgets ob ON ob.org_id = o.id "
         f"{where_clause} "
         f"ORDER BY o.name ASC LIMIT {limit_placeholder} OFFSET {offset_placeholder}"
     )
@@ -171,7 +333,7 @@ async def upsert_org_budget(
     org_id: int,
     budget_updates: Optional[Dict[str, Any]],
     clear_budgets: bool,
-) -> Dict[str, Any]:
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     pg = await is_postgres_backend()
     if pg:
         try:
@@ -278,19 +440,70 @@ async def upsert_org_budget(
 
     row_dict = dict(sub_row) if not isinstance(sub_row, dict) else sub_row
     custom_limits = _parse_json_payload(row_dict.get("custom_limits_json"))
-    existing_budgets = custom_limits.get("budgets") if isinstance(custom_limits, dict) else {}
-    if not isinstance(existing_budgets, dict):
-        existing_budgets = {}
+    cleaned_custom_limits = custom_limits
+    removed_custom_budget = False
+    if isinstance(custom_limits, dict) and "budgets" in custom_limits:
+        cleaned_custom_limits = dict(custom_limits)
+        cleaned_custom_limits.pop("budgets", None)
+        removed_custom_budget = True
 
+    budget_row = await _fetchrow(
+        db,
+        "SELECT org_id, budgets_json, updated_at FROM org_budgets WHERE org_id = $1",
+        [org_id],
+    )
+    budgets_payload = _normalize_budget_payload(
+        budget_row.get("budgets_json") if budget_row else None
+    )
+    legacy_budgets = False
+    if not budgets_payload and isinstance(custom_limits, dict) and "budgets" in custom_limits:
+        budgets_payload = _normalize_budget_payload(custom_limits.get("budgets"))
+        legacy_budgets = True
+
+    existing_budgets = _flatten_budget_payload(budgets_payload)
     merged_budgets = merge_budget_settings(existing_budgets, budget_updates, clear=clear_budgets)
-    if merged_budgets:
-        custom_limits["budgets"] = merged_budgets
-    else:
-        custom_limits.pop("budgets", None)
+    audit_changes = build_budget_change_log(
+        existing_budgets,
+        merged_budgets,
+        budget_updates,
+        clear_budgets=clear_budgets,
+    )
+    updated_payload = _inflate_budget_payload(merged_budgets)
 
-    if budget_updates is not None or clear_budgets:
-        payload = json.dumps(custom_limits) if custom_limits else None
-        now = datetime.utcnow()
+    now = datetime.utcnow()
+    should_upsert_budget = budget_updates is not None or clear_budgets or legacy_budgets
+    if should_upsert_budget:
+        payload = json.dumps(updated_payload) if updated_payload else None
+        if pg:
+            await db.execute(
+                """
+                INSERT INTO org_budgets (org_id, budgets_json, updated_at)
+                VALUES ($1, $2::jsonb, $3)
+                ON CONFLICT (org_id)
+                DO UPDATE SET budgets_json = EXCLUDED.budgets_json, updated_at = EXCLUDED.updated_at
+                """,
+                org_id,
+                payload,
+                now,
+            )
+        else:
+            await db.execute(
+                """
+                INSERT INTO org_budgets (org_id, budgets_json, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(org_id)
+                DO UPDATE SET budgets_json = excluded.budgets_json, updated_at = excluded.updated_at
+                """,
+                (org_id, payload, now),
+            )
+        row_dict["budgets_json"] = payload
+        row_dict["budgets_updated_at"] = now
+    else:
+        row_dict["budgets_json"] = budgets_payload
+        row_dict["budgets_updated_at"] = budget_row.get("updated_at") if budget_row else None
+
+    if removed_custom_budget:
+        payload = json.dumps(cleaned_custom_limits) if cleaned_custom_limits else None
         if pg:
             await db.execute(
                 """
@@ -311,7 +524,6 @@ async def upsert_org_budget(
                 """,
                 (payload, now, org_id),
             )
-
         row_dict["custom_limits_json"] = payload
         row_dict["updated_at"] = now
 
@@ -322,4 +534,4 @@ async def upsert_org_budget(
             "org_slug": org_data.get("slug"),
         }
     )
-    return _build_budget_item(row_dict)
+    return _build_budget_item(row_dict), audit_changes

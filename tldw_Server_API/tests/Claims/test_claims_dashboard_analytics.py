@@ -106,6 +106,12 @@ def _seed_dashboard_db() -> str:
         reviewer_id=1,
         review_notes="needs check",
     )
+    db.insert_claims_monitoring_event(
+        user_id="1",
+        event_type="unsupported_ratio",
+        severity="warning",
+        payload_json='{"provider": "test", "model": "mock"}',
+    )
     db.rebuild_claim_clusters_exact(user_id="1", min_size=2)
     db.close_connection()
     return db_path
@@ -155,12 +161,32 @@ def test_claims_dashboard_analytics_and_export():
             rebuild = data.get("rebuild_health")
             assert rebuild is None or rebuild.get("status") == "ok"
 
-            r2 = client.post("/api/v1/claims/analytics/export", json={"format": "csv"})
+            r2 = client.post(
+                "/api/v1/claims/analytics/export",
+                json={
+                    "format": "json",
+                    "filters": {"event_type": "unsupported_ratio"},
+                    "pagination": {"limit": 10, "offset": 0},
+                },
+            )
             assert r2.status_code == 200, r2.text
-            payload = r2.text
-            assert "section,metric,dimension,value" in payload
-            assert "status_counts" in payload
-            assert "review_throughput" in payload
+            export_meta = r2.json()
+            assert export_meta["status"] == "ready"
+            download_url = export_meta.get("download_url")
+            assert download_url
+
+            r3 = client.get(download_url)
+            assert r3.status_code == 200, r3.text
+            export_payload = r3.json()
+            events = export_payload.get("events") or []
+            assert events
+            assert events[0]["event_type"] == "unsupported_ratio"
+
+            r4 = client.get("/api/v1/claims/analytics/exports?limit=10&offset=0")
+            assert r4.status_code == 200, r4.text
+            list_payload = r4.json()
+            export_ids = [item["export_id"] for item in list_payload.get("exports", [])]
+            assert export_meta["export_id"] in export_ids
     finally:
         fastapi_app.dependency_overrides.pop(get_auth_principal, None)
         fastapi_app.dependency_overrides.pop(get_request_user, None)

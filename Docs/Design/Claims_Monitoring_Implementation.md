@@ -39,6 +39,9 @@ Register in a dedicated claims monitoring module:
 - `claims_review_queue_size` (gauge).
 - `claims_review_processed_total` (counter).
 - `claims_review_latency_seconds` (histogram).
+- `claims_alert_webhook_delivered_total` (counter) labels: status (`success`, `failure`).
+- `claims_alert_webhook_failed_total` (counter) labels: reason (`timeout`, `dns`, `tls`, `http_4xx`, `http_5xx`, `invalid_url`, `other`).
+- `claims_alert_webhook_latency_seconds` (histogram) labels: status (`success`, `failure`).
 
 ## API Surface
 - `GET /api/v1/claims/monitoring/config`
@@ -215,6 +218,46 @@ Response schema:
   "created_at": "string"
 }
 ```
+Download endpoint: `GET /api/v1/claims/analytics/export/{export_id}` returns the export payload (JSON) or CSV body.
+
+#### GET /api/v1/claims/analytics/exports
+Lists stored analytics exports.
+
+Query params:
+```
+{
+  "limit": 100,                       // optional, max 1000
+  "offset": 0,                        // optional
+  "status": "queued|ready|failed",    // optional
+  "format": "csv|json",               // optional
+  "workspace_id": "string|null"       // optional, admin only
+}
+```
+
+Response schema:
+```
+{
+  "exports": [
+    {
+      "export_id": "string",
+      "format": "csv|json",
+      "status": "queued|ready|failed",
+      "download_url": "string|null",
+      "created_at": "string",
+      "updated_at": "string",
+      "filters": "object|null",
+      "pagination": "object|null",
+      "error_message": "string|null"
+    }
+  ],
+  "total": 0,
+  "limit": 100,
+  "offset": 0
+}
+```
+
+Retention: exports older than `CLAIMS_ANALYTICS_EXPORT_RETENTION_HOURS` (default 24)
+are deleted during new export creation.
 
 ### Error Handling
 All endpoints return consistent error payloads:
@@ -235,8 +278,21 @@ Webhook delivery:
 - Max retries: 5 attempts (initial attempt + 4 retries).
 - Backoff schedule: 5s, 15s, 45s, 120s, 300s (cap at 5 minutes).
 - On non-2xx response or network error, record a failed delivery event with
-  reason and attempt count; log at warn and emit a `claims_alert_webhook_failed_total` counter.
-- On success (2xx), record delivery success and log at info.
+  reason and attempt count; log at warn and emit `claims_alert_webhook_failed_total`
+  and `claims_alert_webhook_delivered_total{status="failure"}`.
+- On success (2xx), record delivery success, log at info, emit
+  `claims_alert_webhook_delivered_total{status="success"}`, and record
+  `claims_alert_webhook_latency_seconds` with the observed duration.
+- Reason/status mapping guidance:
+  - `status="success"`: any 2xx response.
+  - `status="failure"`: any non-2xx response or network/validation error.
+  - `reason="http_4xx"`: response status 400-499.
+  - `reason="http_5xx"`: response status 500-599.
+  - `reason="timeout"`: connect/read timeout exceeded.
+  - `reason="dns"`: name resolution failure.
+  - `reason="tls"`: TLS handshake/verification error.
+  - `reason="invalid_url"`: URL validation fails (scheme/host/SSRF policy).
+  - `reason="other"`: fallback for uncategorized errors.
 
 ### Health Persistence
 Health endpoints must read from persisted state in Media DB so multi-instance

@@ -66,31 +66,95 @@ class ClaimUpdateRequest(BaseModel):
     deleted: Optional[bool] = Field(default=None)
 
 
-class ClaimsMonitoringSettingsResponse(BaseModel):
-    """Runtime monitoring configuration values."""
+class ClaimsSearchResult(BaseModel):
+    """Claims search result row."""
 
     model_config = ConfigDict(extra="forbid")
 
-    claims_monitoring_enabled: bool = Field(..., description="Enable claims monitoring.")
-    claims_alert_threshold_default: float = Field(..., description="Default unsupported ratio threshold.")
-    claims_rebuild_max_queue_alert: int = Field(..., description="Queue size warning threshold.")
-    claims_rebuild_heartbeat_warn_sec: int = Field(..., description="Heartbeat warning threshold in seconds.")
-    claims_provider_cost_multipliers: Dict[str, float] = Field(
-        default_factory=dict, description="Provider cost multipliers mapping."
-    )
+    id: int
+    media_id: int
+    chunk_index: int
+    claim_text: str
+    claim_cluster_id: Optional[int] = None
+    relevance_score: Optional[float] = None
+
+
+class ClaimsSearchClusterResult(BaseModel):
+    """Clustered claims search result."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    cluster_id: int
+    canonical_claim_text: Optional[str] = None
+    representative_claim_id: Optional[int] = None
+    watchlist_count: Optional[int] = None
+    match_count: int
+    top_claim: ClaimsSearchResult
+
+
+class ClaimsSearchResponse(BaseModel):
+    """Claims search response payload."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    group_by_cluster: bool
+    total: int
+    results: List[ClaimsSearchResult] = Field(default_factory=list)
+    clusters: Optional[List[ClaimsSearchClusterResult]] = None
+    orphaned: Optional[List[ClaimsSearchResult]] = None
+
+
+class ClaimsClusterLinkCreate(BaseModel):
+    """Create a cluster relationship link."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    child_cluster_id: int
+    relation_type: Optional[str] = Field(default=None)
+
+
+class ClaimsClusterLinkResponse(BaseModel):
+    """Cluster relationship link response."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    parent_cluster_id: int
+    child_cluster_id: int
+    relation_type: Optional[str] = None
+    created_at: Optional[str] = None
+    direction: Optional[str] = None
+
+
+class ClaimsMonitoringSettingsResponse(BaseModel):
+    """Claims monitoring configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: int
+    user_id: str
+    threshold_ratio: float = Field(..., ge=0.0, le=1.0)
+    baseline_ratio: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    slack_webhook_url: Optional[str] = Field(default=None)
+    webhook_url: Optional[str] = Field(default=None)
+    email_recipients: List[str] = Field(default_factory=list)
+    enabled: bool
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 class ClaimsMonitoringSettingsUpdate(BaseModel):
-    """Update monitoring config (optional persistence)."""
+    """Update monitoring config."""
 
     model_config = ConfigDict(extra="forbid")
 
-    claims_monitoring_enabled: Optional[bool] = Field(default=None)
-    claims_alert_threshold_default: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    claims_rebuild_max_queue_alert: Optional[int] = Field(default=None, ge=0)
-    claims_rebuild_heartbeat_warn_sec: Optional[int] = Field(default=None, ge=0)
-    claims_provider_cost_multipliers: Optional[Dict[str, float]] = Field(default=None)
-    persist: Optional[bool] = Field(default=None, description="Persist updates to config.txt.")
+    threshold_ratio: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    baseline_ratio: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    slack_webhook_url: Optional[str] = Field(default=None)
+    webhook_url: Optional[str] = Field(default=None)
+    email_recipients: Optional[List[str]] = Field(default=None)
+    enabled: Optional[bool] = Field(default=None)
+    persist: Optional[bool] = Field(default=None, description="Legacy no-op.")
 
 
 class ClaimsAlertConfigResponse(BaseModel):
@@ -100,8 +164,11 @@ class ClaimsAlertConfigResponse(BaseModel):
 
     id: int
     user_id: str
+    name: str
+    alert_type: str
     threshold_ratio: Optional[float] = None
     baseline_ratio: Optional[float] = None
+    channels: Dict[str, bool] = Field(default_factory=dict)
     slack_webhook_url: Optional[str] = None
     webhook_url: Optional[str] = None
     email_recipients: List[str] = Field(default_factory=list)
@@ -115,8 +182,11 @@ class ClaimsAlertConfigCreate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    name: str = Field(..., min_length=1)
+    alert_type: str = Field(..., min_length=1)
     threshold_ratio: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     baseline_ratio: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    channels: Dict[str, bool] = Field(default_factory=dict)
     slack_webhook_url: Optional[str] = Field(default=None)
     webhook_url: Optional[str] = Field(default=None)
     email_recipients: Optional[List[str]] = Field(default=None)
@@ -128,8 +198,11 @@ class ClaimsAlertConfigUpdate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    name: Optional[str] = Field(default=None, min_length=1)
+    alert_type: Optional[str] = Field(default=None, min_length=1)
     threshold_ratio: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     baseline_ratio: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    channels: Optional[Dict[str, bool]] = Field(default=None)
     slack_webhook_url: Optional[str] = Field(default=None)
     webhook_url: Optional[str] = Field(default=None)
     email_recipients: Optional[List[str]] = Field(default=None)
@@ -224,15 +297,86 @@ class ClaimReviewRuleUpdate(BaseModel):
     active: Optional[bool] = Field(default=None)
 
 
+class ClaimsAnalyticsExportFilters(BaseModel):
+    """Filters for claims analytics exports."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: Optional[str] = Field(default=None)
+    event_type: Optional[str] = Field(default=None)
+    severity: Optional[str] = Field(default=None)
+    provider: Optional[str] = Field(default=None)
+    model: Optional[str] = Field(default=None)
+    start_time: Optional[str] = Field(default=None)
+    end_time: Optional[str] = Field(default=None)
+
+
+class ClaimsAnalyticsExportPagination(BaseModel):
+    """Pagination controls for claims analytics exports."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    limit: Optional[int] = Field(default=1000, ge=1, le=10000)
+    offset: Optional[int] = Field(default=0, ge=0)
+
+
 class ClaimsAnalyticsExportRequest(BaseModel):
     """Export analytics payload."""
 
     model_config = ConfigDict(extra="forbid")
 
-    format: Literal["json", "csv"] = Field(default="json")
-    window_days: Optional[int] = Field(default=None, ge=1, le=365)
-    window_sec: Optional[int] = Field(default=None, ge=60, le=604800)
-    baseline_sec: Optional[int] = Field(default=None, ge=60, le=2592000)
+    format: Literal["json", "csv"]
+    filters: Optional[ClaimsAnalyticsExportFilters] = Field(default=None)
+    pagination: Optional[ClaimsAnalyticsExportPagination] = Field(default=None)
+
+
+class ClaimsAnalyticsExportResponse(BaseModel):
+    """Claims analytics export handle."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    export_id: str
+    format: Literal["json", "csv"]
+    status: str
+    download_url: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class ClaimsAnalyticsExportPaginationMeta(BaseModel):
+    """Pagination metadata for stored exports."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    limit: Optional[int] = None
+    offset: Optional[int] = None
+    total: Optional[int] = None
+
+
+class ClaimsAnalyticsExportListItem(BaseModel):
+    """Claims analytics export history item."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    export_id: str
+    format: Literal["json", "csv"]
+    status: str
+    download_url: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    filters: Optional[ClaimsAnalyticsExportFilters] = None
+    pagination: Optional[ClaimsAnalyticsExportPaginationMeta] = None
+    error_message: Optional[str] = None
+
+
+class ClaimsAnalyticsExportListResponse(BaseModel):
+    """Claims analytics export history payload."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    exports: List[ClaimsAnalyticsExportListItem] = Field(default_factory=list)
+    total: int
+    limit: int
+    offset: int
 
 
 class ClaimsAnalyticsPerMediaCount(BaseModel):

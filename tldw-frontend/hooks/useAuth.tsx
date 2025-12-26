@@ -1,6 +1,6 @@
 import { useState, useEffect, createContext, useContext, ReactNode } from 'react';
 import { useRouter } from 'next/router';
-import { authService, User } from '@/lib/auth';
+import { authService, getAuthMode, User } from '@/lib/auth';
 
 interface AuthContextType {
   user: User | null;
@@ -21,14 +21,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Check if user is logged in on mount
     const checkAuth = async () => {
       try {
-        const storedUser = authService.getUser();
-        if (storedUser && authService.isAuthenticated()) {
-          // Validate token with backend
+        const mode = getAuthMode();
+
+        // Env-based auth: synthesize a user and treat as authenticated
+        if (mode === 'env_single_user' || mode === 'env_bearer') {
+          const envUser = authService.getUser();
+          if (envUser) {
+            setUser(envUser);
+          }
+          return;
+        }
+
+        // JWT-based auth: validate token against backend and hydrate user profile
+        if (mode === 'jwt') {
           const isValid = await authService.validateToken();
           if (isValid) {
-            setUser(storedUser);
+            const currentUser = authService.getUser();
+            if (currentUser) {
+              setUser(currentUser);
+            }
           } else {
             authService.logout();
+            router.push('/login');
           }
         }
       } catch (error) {
@@ -42,10 +56,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = async (username: string, password: string) => {
-    await authService.login({ username, password });
-    const loggedInUser = authService.getUser();
-    setUser(loggedInUser);
-    router.push('/');
+    try {
+      await authService.login({ username, password });
+      const loggedInUser = authService.getUser();
+      setUser(loggedInUser);
+      router.push('/');
+    } catch (error) {
+      throw error;
+    }
   };
 
   const logout = () => {

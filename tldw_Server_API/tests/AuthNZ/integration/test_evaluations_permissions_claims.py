@@ -57,6 +57,7 @@ def _build_app_with_overrides(principal: AuthPrincipal):
     from tldw_Server_API.app.core.AuthNZ import User_DB_Handling as udh
 
     app.dependency_overrides[udh.get_request_user] = _fake_get_request_user
+    app.dependency_overrides[eval_auth.get_eval_request_user] = _fake_get_request_user
 
     async def _noop_rbac_rate_limit(*_args, **_kwargs) -> None:
         return None
@@ -109,7 +110,7 @@ async def test_evaluations_list_forbidden_without_claims():
     app = _build_app_with_overrides(principal)
 
     with TestClient(app) as client:
-        resp = client.get("/api/v1/evaluations/")
+        resp = client.get("/api/v1/evaluations/", headers={"Authorization": "Bearer test"})
     assert resp.status_code == 403
 
 
@@ -151,7 +152,7 @@ async def test_evaluations_list_allows_with_evals_read(monkeypatch):
     monkeypatch.setattr(ues, "get_unified_evaluation_service_for_user", _fake_service_for_user)
 
     with TestClient(app) as client:
-        resp = client.get("/api/v1/evaluations/")
+        resp = client.get("/api/v1/evaluations/", headers={"Authorization": "Bearer test"})
     assert resp.status_code == 200
     body = resp.json()
     assert body.get("object") == "list"
@@ -219,6 +220,7 @@ def _build_app_with_admin_cleanup(principal: AuthPrincipal):
     from tldw_Server_API.app.core.AuthNZ import User_DB_Handling as udh
 
     app.dependency_overrides[udh.get_request_user] = _fake_get_request_user
+    app.dependency_overrides[eval_auth.get_eval_request_user] = _fake_get_request_user
 
     return app
 
@@ -243,7 +245,10 @@ async def test_evaluations_admin_cleanup_forbidden_without_admin_role(monkeypatc
     monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "true")
 
     with TestClient(app) as client:
-        resp = client.post("/api/v1/evaluations/admin/idempotency/cleanup")
+        resp = client.post(
+            "/api/v1/evaluations/admin/idempotency/cleanup",
+            headers={"Authorization": "Bearer test"},
+        )
     assert resp.status_code == 403
 
 
@@ -299,7 +304,10 @@ async def test_evaluations_admin_cleanup_allowed_with_admin_role(monkeypatch, tm
     monkeypatch.setattr(eval_db_mod, "EvaluationsDatabase", _FakeEvalDB)
 
     with TestClient(app) as client:
-        resp = client.post("/api/v1/evaluations/admin/idempotency/cleanup")
+        resp = client.post(
+            "/api/v1/evaluations/admin/idempotency/cleanup",
+            headers={"Authorization": "Bearer test"},
+        )
 
     assert resp.status_code == 200
     body = resp.json()

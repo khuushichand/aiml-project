@@ -756,6 +756,48 @@ class MediaDatabase:
     CREATE INDEX IF NOT EXISTS idx_claims_review_rules_user ON claims_review_rules(user_id);
     CREATE INDEX IF NOT EXISTS idx_claims_review_rules_active ON claims_review_rules(active);
 
+    CREATE TABLE IF NOT EXISTS claims_monitoring_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        severity TEXT,
+        payload_json TEXT,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_claims_monitoring_events_user ON claims_monitoring_events(user_id);
+    CREATE INDEX IF NOT EXISTS idx_claims_monitoring_events_type ON claims_monitoring_events(event_type);
+
+    CREATE TABLE IF NOT EXISTS claims_monitoring_settings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        threshold_ratio REAL,
+        baseline_ratio REAL,
+        slack_webhook_url TEXT,
+        webhook_url TEXT,
+        email_recipients TEXT,
+        enabled BOOLEAN NOT NULL DEFAULT 1,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_claims_monitoring_settings_user ON claims_monitoring_settings(user_id);
+
+    CREATE TABLE IF NOT EXISTS claims_monitoring_alerts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        alert_type TEXT NOT NULL,
+        threshold_ratio REAL,
+        baseline_ratio REAL,
+        channels_json TEXT NOT NULL,
+        slack_webhook_url TEXT,
+        webhook_url TEXT,
+        email_recipients TEXT,
+        enabled BOOLEAN NOT NULL DEFAULT 1,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_claims_monitoring_alerts_user ON claims_monitoring_alerts(user_id);
+
     CREATE TABLE IF NOT EXISTS claims_monitoring_config (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
@@ -770,16 +812,33 @@ class MediaDatabase:
     );
     CREATE INDEX IF NOT EXISTS idx_claims_monitoring_user ON claims_monitoring_config(user_id);
 
-    CREATE TABLE IF NOT EXISTS claims_monitoring_events (
+    CREATE TABLE IF NOT EXISTS claims_monitoring_health (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
-        event_type TEXT NOT NULL,
-        severity TEXT,
-        payload_json TEXT,
-        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        queue_size INTEGER NOT NULL DEFAULT 0,
+        worker_count INTEGER,
+        last_worker_heartbeat TEXT,
+        last_processed_at TEXT,
+        last_failure_at TEXT,
+        last_failure_reason TEXT,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
-    CREATE INDEX IF NOT EXISTS idx_claims_monitoring_events_user ON claims_monitoring_events(user_id);
-    CREATE INDEX IF NOT EXISTS idx_claims_monitoring_events_type ON claims_monitoring_events(event_type);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_claims_monitoring_health_user ON claims_monitoring_health(user_id);
+
+    CREATE TABLE IF NOT EXISTS claims_analytics_exports (
+        export_id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        format TEXT NOT NULL,
+        status TEXT NOT NULL,
+        payload_json TEXT,
+        payload_csv TEXT,
+        filters_json TEXT,
+        pagination_json TEXT,
+        error_message TEXT,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_claims_analytics_exports_user ON claims_analytics_exports(user_id);
 
     CREATE TABLE IF NOT EXISTS claims_notifications (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3303,6 +3362,53 @@ class MediaDatabase:
 
             backend.execute(
                 (
+                    f"CREATE TABLE IF NOT EXISTS {ident('claims_monitoring_settings')} ("
+                    "id BIGSERIAL PRIMARY KEY, "
+                    "user_id TEXT NOT NULL, "
+                    "threshold_ratio DOUBLE PRECISION, "
+                    "baseline_ratio DOUBLE PRECISION, "
+                    "slack_webhook_url TEXT, "
+                    "webhook_url TEXT, "
+                    "email_recipients TEXT, "
+                    "enabled BOOLEAN NOT NULL DEFAULT TRUE, "
+                    "created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+                    "updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+                ),
+                connection=conn,
+            )
+            backend.execute(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS {ident('idx_claims_monitoring_settings_user')} "
+                f"ON {ident('claims_monitoring_settings')} ({ident('user_id')})",
+                connection=conn,
+            )
+
+            backend.execute(
+                (
+                    f"CREATE TABLE IF NOT EXISTS {ident('claims_monitoring_alerts')} ("
+                    "id BIGSERIAL PRIMARY KEY, "
+                    "user_id TEXT NOT NULL, "
+                    "name TEXT NOT NULL, "
+                    "alert_type TEXT NOT NULL, "
+                    "threshold_ratio DOUBLE PRECISION, "
+                    "baseline_ratio DOUBLE PRECISION, "
+                    "channels_json TEXT NOT NULL, "
+                    "slack_webhook_url TEXT, "
+                    "webhook_url TEXT, "
+                    "email_recipients TEXT, "
+                    "enabled BOOLEAN NOT NULL DEFAULT TRUE, "
+                    "created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+                    "updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+                ),
+                connection=conn,
+            )
+            backend.execute(
+                f"CREATE INDEX IF NOT EXISTS {ident('idx_claims_monitoring_alerts_user')} "
+                f"ON {ident('claims_monitoring_alerts')} ({ident('user_id')})",
+                connection=conn,
+            )
+
+            backend.execute(
+                (
                     f"CREATE TABLE IF NOT EXISTS {ident('claims_monitoring_config')} ("
                     "id BIGSERIAL PRIMARY KEY, "
                     "user_id TEXT NOT NULL, "
@@ -3343,6 +3449,50 @@ class MediaDatabase:
             backend.execute(
                 f"CREATE INDEX IF NOT EXISTS {ident('idx_claims_monitoring_events_type')} "
                 f"ON {ident('claims_monitoring_events')} ({ident('event_type')})",
+                connection=conn,
+            )
+
+            backend.execute(
+                (
+                    f"CREATE TABLE IF NOT EXISTS {ident('claims_monitoring_health')} ("
+                    "id BIGSERIAL PRIMARY KEY, "
+                    "user_id TEXT NOT NULL, "
+                    "queue_size INTEGER NOT NULL DEFAULT 0, "
+                    "worker_count INTEGER, "
+                    "last_worker_heartbeat TIMESTAMPTZ, "
+                    "last_processed_at TIMESTAMPTZ, "
+                    "last_failure_at TIMESTAMPTZ, "
+                    "last_failure_reason TEXT, "
+                    "updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+                ),
+                connection=conn,
+            )
+            backend.execute(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS {ident('idx_claims_monitoring_health_user')} "
+                f"ON {ident('claims_monitoring_health')} ({ident('user_id')})",
+                connection=conn,
+            )
+
+            backend.execute(
+                (
+                    f"CREATE TABLE IF NOT EXISTS {ident('claims_analytics_exports')} ("
+                    "export_id TEXT PRIMARY KEY, "
+                    "user_id TEXT NOT NULL, "
+                    "format TEXT NOT NULL, "
+                    "status TEXT NOT NULL, "
+                    "payload_json TEXT, "
+                    "payload_csv TEXT, "
+                    "filters_json TEXT, "
+                    "pagination_json TEXT, "
+                    "error_message TEXT, "
+                    "created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+                    "updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+                ),
+                connection=conn,
+            )
+            backend.execute(
+                f"CREATE INDEX IF NOT EXISTS {ident('idx_claims_analytics_exports_user')} "
+                f"ON {ident('claims_analytics_exports')} ({ident('user_id')})",
                 connection=conn,
             )
 
@@ -4266,6 +4416,264 @@ class MediaDatabase:
             commit=True,
         )
 
+    def get_claims_monitoring_settings(self, user_id: str) -> Dict[str, Any]:
+        row = self.execute_query(
+            "SELECT id, user_id, threshold_ratio, baseline_ratio, slack_webhook_url, webhook_url, "
+            "email_recipients, enabled, created_at, updated_at "
+            "FROM claims_monitoring_settings WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1",
+            (str(user_id),),
+        ).fetchone()
+        return dict(row) if row else {}
+
+    def upsert_claims_monitoring_settings(
+        self,
+        *,
+        user_id: str,
+        threshold_ratio: Optional[float] = None,
+        baseline_ratio: Optional[float] = None,
+        slack_webhook_url: Optional[str] = None,
+        webhook_url: Optional[str] = None,
+        email_recipients: Optional[str] = None,
+        enabled: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        existing = self.get_claims_monitoring_settings(str(user_id))
+        now = self._get_current_utc_timestamp_str()
+        if not existing:
+            insert_sql = (
+                "INSERT INTO claims_monitoring_settings "
+                "(user_id, threshold_ratio, baseline_ratio, slack_webhook_url, webhook_url, "
+                "email_recipients, enabled, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            if self.backend_type == BackendType.POSTGRESQL:
+                insert_sql += " RETURNING id"
+            cursor = self.execute_query(
+                insert_sql,
+                (
+                    str(user_id),
+                    threshold_ratio,
+                    baseline_ratio,
+                    slack_webhook_url,
+                    webhook_url,
+                    email_recipients,
+                    1 if enabled is None else (1 if enabled else 0),
+                    now,
+                    now,
+                ),
+                commit=True,
+            )
+            if self.backend_type == BackendType.POSTGRESQL:
+                row = cursor.fetchone()
+                config_id = int(row["id"]) if row else None
+            else:
+                config_id = cursor.lastrowid
+            return self.get_claims_monitoring_settings(str(user_id)) if config_id else {}
+
+        update_parts: List[str] = []
+        params: List[Any] = []
+        if threshold_ratio is not None:
+            update_parts.append("threshold_ratio = ?")
+            params.append(float(threshold_ratio))
+        if baseline_ratio is not None:
+            update_parts.append("baseline_ratio = ?")
+            params.append(float(baseline_ratio))
+        if slack_webhook_url is not None:
+            update_parts.append("slack_webhook_url = ?")
+            params.append(str(slack_webhook_url))
+        if webhook_url is not None:
+            update_parts.append("webhook_url = ?")
+            params.append(str(webhook_url))
+        if email_recipients is not None:
+            update_parts.append("email_recipients = ?")
+            params.append(str(email_recipients))
+        if enabled is not None:
+            update_parts.append("enabled = ?")
+            params.append(1 if enabled else 0)
+        if not update_parts:
+            return self.get_claims_monitoring_settings(str(user_id))
+
+        update_parts.append("updated_at = ?")
+        params.append(now)
+        params.append(int(existing.get("id")))
+        sql = "UPDATE claims_monitoring_settings SET " + ", ".join(update_parts) + " WHERE id = ?"
+        self.execute_query(sql, tuple(params), commit=True)
+        return self.get_claims_monitoring_settings(str(user_id))
+
+    def list_claims_monitoring_alerts(self, user_id: str) -> List[Dict[str, Any]]:
+        rows = self.execute_query(
+            "SELECT id, user_id, name, alert_type, threshold_ratio, baseline_ratio, channels_json, "
+            "slack_webhook_url, webhook_url, email_recipients, enabled, created_at, updated_at "
+            "FROM claims_monitoring_alerts WHERE user_id = ? ORDER BY id DESC",
+            (str(user_id),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_claims_monitoring_alert(self, alert_id: int) -> Dict[str, Any]:
+        row = self.execute_query(
+            "SELECT id, user_id, name, alert_type, threshold_ratio, baseline_ratio, channels_json, "
+            "slack_webhook_url, webhook_url, email_recipients, enabled, created_at, updated_at "
+            "FROM claims_monitoring_alerts WHERE id = ?",
+            (int(alert_id),),
+        ).fetchone()
+        return dict(row) if row else {}
+
+    def create_claims_monitoring_alert(
+        self,
+        *,
+        user_id: str,
+        name: str,
+        alert_type: str,
+        channels_json: str,
+        threshold_ratio: Optional[float] = None,
+        baseline_ratio: Optional[float] = None,
+        slack_webhook_url: Optional[str] = None,
+        webhook_url: Optional[str] = None,
+        email_recipients: Optional[str] = None,
+        enabled: bool = True,
+        alert_id: Optional[int] = None,
+        created_at: Optional[str] = None,
+        updated_at: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        now = self._get_current_utc_timestamp_str()
+        created = created_at or now
+        updated = updated_at or now
+        if alert_id is not None:
+            insert_sql = (
+                "INSERT INTO claims_monitoring_alerts "
+                "(id, user_id, name, alert_type, threshold_ratio, baseline_ratio, channels_json, "
+                "slack_webhook_url, webhook_url, email_recipients, enabled, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            self.execute_query(
+                insert_sql,
+                (
+                    int(alert_id),
+                    str(user_id),
+                    str(name),
+                    str(alert_type),
+                    threshold_ratio,
+                    baseline_ratio,
+                    str(channels_json),
+                    slack_webhook_url,
+                    webhook_url,
+                    email_recipients,
+                    1 if enabled else 0,
+                    created,
+                    updated,
+                ),
+                commit=True,
+            )
+            if self.backend_type == BackendType.POSTGRESQL:
+                try:
+                    self.execute_query(
+                        "SELECT setval(pg_get_serial_sequence('claims_monitoring_alerts','id'), "
+                        "GREATEST((SELECT MAX(id) FROM claims_monitoring_alerts), 1))",
+                        commit=True,
+                    )
+                except Exception:
+                    pass
+            return self.get_claims_monitoring_alert(int(alert_id))
+
+        insert_sql = (
+            "INSERT INTO claims_monitoring_alerts "
+            "(user_id, name, alert_type, threshold_ratio, baseline_ratio, channels_json, "
+            "slack_webhook_url, webhook_url, email_recipients, enabled, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        if self.backend_type == BackendType.POSTGRESQL:
+            insert_sql += " RETURNING id"
+        cursor = self.execute_query(
+            insert_sql,
+            (
+                str(user_id),
+                str(name),
+                str(alert_type),
+                threshold_ratio,
+                baseline_ratio,
+                str(channels_json),
+                slack_webhook_url,
+                webhook_url,
+                email_recipients,
+                1 if enabled else 0,
+                created,
+                updated,
+            ),
+            commit=True,
+        )
+        if self.backend_type == BackendType.POSTGRESQL:
+            row = cursor.fetchone()
+            new_id = int(row["id"]) if row else None
+        else:
+            new_id = cursor.lastrowid
+        return self.get_claims_monitoring_alert(new_id) if new_id else {}
+
+    def update_claims_monitoring_alert(
+        self,
+        alert_id: int,
+        *,
+        name: Optional[str] = None,
+        alert_type: Optional[str] = None,
+        threshold_ratio: Optional[float] = None,
+        baseline_ratio: Optional[float] = None,
+        channels_json: Optional[str] = None,
+        slack_webhook_url: Optional[str] = None,
+        webhook_url: Optional[str] = None,
+        email_recipients: Optional[str] = None,
+        enabled: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        update_parts: List[str] = []
+        params: List[Any] = []
+        now = self._get_current_utc_timestamp_str()
+        if name is not None:
+            update_parts.append("name = ?")
+            params.append(str(name))
+        if alert_type is not None:
+            update_parts.append("alert_type = ?")
+            params.append(str(alert_type))
+        if threshold_ratio is not None:
+            update_parts.append("threshold_ratio = ?")
+            params.append(float(threshold_ratio))
+        if baseline_ratio is not None:
+            update_parts.append("baseline_ratio = ?")
+            params.append(float(baseline_ratio))
+        if channels_json is not None:
+            update_parts.append("channels_json = ?")
+            params.append(str(channels_json))
+        if slack_webhook_url is not None:
+            update_parts.append("slack_webhook_url = ?")
+            params.append(str(slack_webhook_url))
+        if webhook_url is not None:
+            update_parts.append("webhook_url = ?")
+            params.append(str(webhook_url))
+        if email_recipients is not None:
+            update_parts.append("email_recipients = ?")
+            params.append(str(email_recipients))
+        if enabled is not None:
+            update_parts.append("enabled = ?")
+            params.append(1 if enabled else 0)
+        if not update_parts:
+            return self.get_claims_monitoring_alert(int(alert_id))
+        update_parts.append("updated_at = ?")
+        params.append(now)
+        params.append(int(alert_id))
+        sql = "UPDATE claims_monitoring_alerts SET " + ", ".join(update_parts) + " WHERE id = ?"
+        self.execute_query(sql, tuple(params), commit=True)
+        return self.get_claims_monitoring_alert(int(alert_id))
+
+    def delete_claims_monitoring_alert(self, alert_id: int) -> None:
+        self.execute_query(
+            "DELETE FROM claims_monitoring_alerts WHERE id = ?",
+            (int(alert_id),),
+            commit=True,
+        )
+
+    def delete_claims_monitoring_configs_by_user(self, user_id: str) -> None:
+        self.execute_query(
+            "DELETE FROM claims_monitoring_config WHERE user_id = ?",
+            (str(user_id),),
+            commit=True,
+        )
+
     def list_claims_monitoring_configs(
         self,
         user_id: str,
@@ -4381,6 +4789,53 @@ class MediaDatabase:
             (int(config_id),),
             commit=True,
         )
+
+    def migrate_legacy_claims_monitoring_alerts(self, user_id: str) -> int:
+        """Migrate legacy claims_monitoring_config rows into claims_monitoring_alerts."""
+        existing = self.list_claims_monitoring_alerts(user_id)
+        if existing:
+            return 0
+        legacy_rows = self.list_claims_monitoring_configs(user_id)
+        if not legacy_rows:
+            return 0
+        migrated = 0
+        for row in legacy_rows:
+            slack_url = row.get("slack_webhook_url")
+            webhook_url = row.get("webhook_url")
+            email_recipients = row.get("email_recipients")
+            email_enabled = False
+            if email_recipients:
+                try:
+                    parsed = json.loads(str(email_recipients))
+                    if isinstance(parsed, list):
+                        email_enabled = bool(parsed)
+                    else:
+                        email_enabled = bool(str(email_recipients).strip())
+                except Exception:
+                    email_enabled = bool(str(email_recipients).strip())
+            channels = {
+                "slack": bool(slack_url),
+                "webhook": bool(webhook_url),
+                "email": email_enabled,
+            }
+            self.create_claims_monitoring_alert(
+                alert_id=int(row.get("id")),
+                user_id=str(user_id),
+                name=f"Legacy alert {row.get('id')}",
+                alert_type="threshold_breach",
+                threshold_ratio=row.get("threshold_ratio"),
+                baseline_ratio=row.get("baseline_ratio"),
+                channels_json=json.dumps(channels),
+                slack_webhook_url=slack_url,
+                webhook_url=webhook_url,
+                email_recipients=email_recipients,
+                enabled=bool(row.get("enabled", True)),
+                created_at=row.get("created_at"),
+                updated_at=row.get("updated_at"),
+            )
+            migrated += 1
+        self.delete_claims_monitoring_configs_by_user(str(user_id))
+        return migrated
 
     def insert_claim_notification(
         self,
@@ -4613,6 +5068,288 @@ class MediaDatabase:
             commit=True,
         )
 
+    def list_claims_monitoring_events(
+        self,
+        *,
+        user_id: str,
+        event_type: Optional[str] = None,
+        severity: Optional[str] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        conditions: List[str] = ["user_id = ?"]
+        params: List[Any] = [str(user_id)]
+        if event_type:
+            conditions.append("event_type = ?")
+            params.append(str(event_type))
+        if severity:
+            conditions.append("severity = ?")
+            params.append(str(severity))
+        if start_time:
+            conditions.append("created_at >= ?")
+            params.append(str(start_time))
+        if end_time:
+            conditions.append("created_at <= ?")
+            params.append(str(end_time))
+        where_clause = " AND ".join(conditions)
+        rows = self.execute_query(
+            (
+                "SELECT id, user_id, event_type, severity, payload_json, created_at "
+                "FROM claims_monitoring_events WHERE "
+                + where_clause
+                + " ORDER BY created_at ASC"
+            ),
+            tuple(params),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_claims_monitoring_user_ids(self) -> List[str]:
+        rows = self.execute_query(
+            (
+                "SELECT DISTINCT user_id FROM claims_monitoring_alerts "
+                "UNION SELECT DISTINCT user_id FROM claims_monitoring_settings"
+            ),
+            tuple(),
+        ).fetchall()
+        user_ids: List[str] = []
+        for row in rows:
+            try:
+                user_ids.append(str(row["user_id"]))
+            except Exception:
+                try:
+                    user_ids.append(str(row[0]))
+                except Exception:
+                    continue
+        return [uid for uid in user_ids if uid]
+
+    def get_claims_monitoring_health(self, user_id: str) -> Dict[str, Any]:
+        row = self.execute_query(
+            "SELECT id, user_id, queue_size, worker_count, last_worker_heartbeat, last_processed_at, "
+            "last_failure_at, last_failure_reason, updated_at "
+            "FROM claims_monitoring_health WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1",
+            (str(user_id),),
+        ).fetchone()
+        return dict(row) if row else {}
+
+    def upsert_claims_monitoring_health(
+        self,
+        *,
+        user_id: str,
+        queue_size: int,
+        worker_count: Optional[int] = None,
+        last_worker_heartbeat: Optional[str] = None,
+        last_processed_at: Optional[str] = None,
+        last_failure_at: Optional[str] = None,
+        last_failure_reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        now = self._get_current_utc_timestamp_str()
+        existing = self.execute_query(
+            "SELECT id FROM claims_monitoring_health WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1",
+            (str(user_id),),
+        ).fetchone()
+        existing_id: Optional[int] = None
+        if existing is not None:
+            try:
+                existing_id = int(existing["id"])
+            except Exception:
+                try:
+                    existing_id = int(existing[0])
+                except Exception:
+                    existing_id = None
+        if existing_id is None:
+            self.execute_query(
+                (
+                    "INSERT INTO claims_monitoring_health "
+                    "(user_id, queue_size, worker_count, last_worker_heartbeat, last_processed_at, "
+                    "last_failure_at, last_failure_reason, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                ),
+                (
+                    str(user_id),
+                    int(queue_size),
+                    worker_count,
+                    last_worker_heartbeat,
+                    last_processed_at,
+                    last_failure_at,
+                    last_failure_reason,
+                    now,
+                ),
+                commit=True,
+            )
+            return self.get_claims_monitoring_health(str(user_id))
+
+        self.execute_query(
+            (
+                "UPDATE claims_monitoring_health SET "
+                "queue_size = ?, worker_count = ?, last_worker_heartbeat = ?, last_processed_at = ?, "
+                "last_failure_at = ?, last_failure_reason = ?, updated_at = ? "
+                "WHERE id = ?"
+            ),
+            (
+                int(queue_size),
+                worker_count,
+                last_worker_heartbeat,
+                last_processed_at,
+                last_failure_at,
+                last_failure_reason,
+                now,
+                int(existing_id),
+            ),
+            commit=True,
+        )
+        return self.get_claims_monitoring_health(str(user_id))
+
+    def create_claims_analytics_export(
+        self,
+        *,
+        export_id: str,
+        user_id: str,
+        format: str,
+        status: str,
+        payload_json: Optional[str] = None,
+        payload_csv: Optional[str] = None,
+        filters_json: Optional[str] = None,
+        pagination_json: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        now = self._get_current_utc_timestamp_str()
+        self.execute_query(
+            (
+                "INSERT INTO claims_analytics_exports "
+                "(export_id, user_id, format, status, payload_json, payload_csv, filters_json, "
+                "pagination_json, error_message, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ),
+            (
+                str(export_id),
+                str(user_id),
+                str(format),
+                str(status),
+                payload_json,
+                payload_csv,
+                filters_json,
+                pagination_json,
+                error_message,
+                now,
+                now,
+            ),
+            commit=True,
+        )
+        return self.get_claims_analytics_export(export_id, user_id=str(user_id))
+
+    def get_claims_analytics_export(
+        self,
+        export_id: str,
+        *,
+        user_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        params: List[Any] = [str(export_id)]
+        conditions = ["export_id = ?"]
+        if user_id is not None:
+            conditions.append("user_id = ?")
+            params.append(str(user_id))
+        row = self.execute_query(
+            (
+                "SELECT export_id, user_id, format, status, payload_json, payload_csv, filters_json, "
+                "pagination_json, error_message, created_at, updated_at "
+                "FROM claims_analytics_exports WHERE "
+                + " AND ".join(conditions)
+                + " LIMIT 1"
+            ),
+            tuple(params),
+        ).fetchone()
+        return dict(row) if row else {}
+
+    def list_claims_analytics_exports(
+        self,
+        user_id: str,
+        *,
+        status: Optional[str] = None,
+        format: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        try:
+            limit = int(limit)
+            offset = int(offset)
+        except (TypeError, ValueError):
+            limit, offset = 100, 0
+        limit = max(1, min(1000, limit))
+        offset = max(0, offset)
+        conditions = ["user_id = ?"]
+        params: List[Any] = [str(user_id)]
+        if status:
+            conditions.append("status = ?")
+            params.append(str(status))
+        if format:
+            conditions.append("format = ?")
+            params.append(str(format))
+        query = (
+            "SELECT export_id, user_id, format, status, filters_json, pagination_json, error_message, "
+            "created_at, updated_at "
+            "FROM claims_analytics_exports WHERE "
+            + " AND ".join(conditions)
+            + " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        )
+        params.extend([limit, offset])
+        rows = self.execute_query(query, tuple(params)).fetchall()
+        return [dict(row) for row in rows]
+
+    def count_claims_analytics_exports(
+        self,
+        user_id: str,
+        *,
+        status: Optional[str] = None,
+        format: Optional[str] = None,
+    ) -> int:
+        conditions = ["user_id = ?"]
+        params: List[Any] = [str(user_id)]
+        if status:
+            conditions.append("status = ?")
+            params.append(str(status))
+        if format:
+            conditions.append("format = ?")
+            params.append(str(format))
+        row = self.execute_query(
+            "SELECT COUNT(*) AS count FROM claims_analytics_exports WHERE " + " AND ".join(conditions),
+            tuple(params),
+        ).fetchone()
+        if not row:
+            return 0
+        try:
+            return int(row["count"] or 0)
+        except Exception:
+            try:
+                return int(row[0] or 0)
+            except Exception:
+                return 0
+
+    def cleanup_claims_analytics_exports(
+        self,
+        *,
+        user_id: str,
+        retention_hours: float,
+    ) -> int:
+        try:
+            retention_hours = float(retention_hours)
+        except (TypeError, ValueError):
+            return 0
+        if retention_hours <= 0:
+            return 0
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(hours=retention_hours)
+        ).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+        cursor = self.execute_query(
+            "DELETE FROM claims_analytics_exports WHERE user_id = ? AND created_at < ?",
+            (str(user_id), cutoff),
+            commit=True,
+        )
+        try:
+            deleted = int(cursor.rowcount or 0)
+        except Exception:
+            deleted = 0
+        return max(deleted, 0)
+
     def list_claim_clusters(
         self,
         user_id: str,
@@ -4672,6 +5409,97 @@ class MediaDatabase:
             (int(cluster_id),),
         ).fetchone()
         return dict(row) if row else {}
+
+    def get_claim_cluster_link(
+        self,
+        *,
+        parent_cluster_id: int,
+        child_cluster_id: int,
+    ) -> Dict[str, Any]:
+        row = self.execute_query(
+            (
+                "SELECT parent_cluster_id, child_cluster_id, relation_type, created_at "
+                "FROM claim_cluster_links WHERE parent_cluster_id = ? AND child_cluster_id = ?"
+            ),
+            (int(parent_cluster_id), int(child_cluster_id)),
+        ).fetchone()
+        return dict(row) if row else {}
+
+    def list_claim_cluster_links(
+        self,
+        *,
+        cluster_id: int,
+        direction: str = "both",
+    ) -> List[Dict[str, Any]]:
+        direction_norm = str(direction or "both").lower()
+        conditions: List[str] = []
+        params: List[Any] = []
+        if direction_norm in {"outbound", "parent"}:
+            conditions.append("parent_cluster_id = ?")
+            params.append(int(cluster_id))
+        elif direction_norm in {"inbound", "child"}:
+            conditions.append("child_cluster_id = ?")
+            params.append(int(cluster_id))
+        else:
+            conditions.append("(parent_cluster_id = ? OR child_cluster_id = ?)")
+            params.extend([int(cluster_id), int(cluster_id)])
+        rows = self.execute_query(
+            (
+                "SELECT parent_cluster_id, child_cluster_id, relation_type, created_at "
+                "FROM claim_cluster_links WHERE "
+                + " AND ".join(conditions)
+                + " ORDER BY created_at DESC"
+            ),
+            tuple(params),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def create_claim_cluster_link(
+        self,
+        *,
+        parent_cluster_id: int,
+        child_cluster_id: int,
+        relation_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        now = self._get_current_utc_timestamp_str()
+        self.execute_query(
+            (
+                "INSERT OR IGNORE INTO claim_cluster_links "
+                "(parent_cluster_id, child_cluster_id, relation_type, created_at) "
+                "VALUES (?, ?, ?, ?)"
+            ),
+            (
+                int(parent_cluster_id),
+                int(child_cluster_id),
+                relation_type,
+                now,
+            ),
+            commit=True,
+        )
+        return self.get_claim_cluster_link(
+            parent_cluster_id=parent_cluster_id,
+            child_cluster_id=child_cluster_id,
+        )
+
+    def delete_claim_cluster_link(
+        self,
+        *,
+        parent_cluster_id: int,
+        child_cluster_id: int,
+    ) -> int:
+        cur = self.execute_query(
+            (
+                "DELETE FROM claim_cluster_links "
+                "WHERE parent_cluster_id = ? AND child_cluster_id = ?"
+            ),
+            (int(parent_cluster_id), int(child_cluster_id)),
+            commit=True,
+        )
+        try:
+            deleted = int(cur.rowcount or 0)
+        except Exception:
+            deleted = 0
+        return max(deleted, 0)
 
     def list_claim_cluster_members(
         self,
@@ -5186,7 +6014,8 @@ class MediaDatabase:
         query: str,
         *,
         limit: int = 20,
-        fallback_to_like: bool = True
+        fallback_to_like: bool = True,
+        owner_user_id: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Search claims using the configured backend."""
         cleaned_query = (query or "").strip()
@@ -5197,6 +6026,12 @@ class MediaDatabase:
         except (TypeError, ValueError):
             limit = 20
         results: List[Dict[str, Any]] = []
+        scope = None
+        try:
+            scope = get_scope()
+        except Exception as scope_err:
+            logging.debug(f"Failed to resolve scope for claims search: {scope_err}")
+            scope = None
         try:
             with self.transaction() as conn:
                 if self.backend_type == BackendType.SQLITE:
@@ -5208,27 +6043,87 @@ class MediaDatabase:
                         conn.execute("INSERT INTO claims_fts(claims_fts) VALUES('rebuild')")
                     except sqlite3.Error:
                         pass
+                    conditions: List[str] = ["c.deleted = 0"]
+                    params: List[Any] = []
+                    if owner_user_id is not None:
+                        conditions.append("COALESCE(CAST(m.owner_user_id AS TEXT), m.client_id) = ?")
+                        params.append(str(owner_user_id))
+                    if scope and not scope.is_admin:
+                        visibility_parts: List[str] = []
+                        user_id_str = str(scope.user_id) if scope.user_id is not None else ""
+                        if user_id_str:
+                            visibility_parts.append(
+                                "(COALESCE(m.visibility, 'personal') = 'personal' "
+                                "AND (COALESCE(CAST(m.owner_user_id AS TEXT), m.client_id) = ?))"
+                            )
+                            params.append(user_id_str)
+                        if scope.team_ids:
+                            team_placeholders = ",".join("?" * len(scope.team_ids))
+                            visibility_parts.append(
+                                f"(m.visibility = 'team' AND m.team_id IN ({team_placeholders}))"
+                            )
+                            params.extend(scope.team_ids)
+                        if scope.org_ids:
+                            org_placeholders = ",".join("?" * len(scope.org_ids))
+                            visibility_parts.append(
+                                f"(m.visibility = 'org' AND m.org_id IN ({org_placeholders}))"
+                            )
+                            params.extend(scope.org_ids)
+                        if visibility_parts:
+                            conditions.append("(" + " OR ".join(visibility_parts) + ")")
+                    where_clause = " AND ".join(conditions)
                     sql = (
-                        "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, "
+                        "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, c.claim_cluster_id, "
                         "       bm25(claims_fts) AS relevance_score "
                         "FROM claims_fts JOIN Claims c ON claims_fts.rowid = c.id "
-                        "WHERE claims_fts MATCH ? AND c.deleted = 0 "
-                        "ORDER BY relevance_score ASC LIMIT ?"
+                        "JOIN Media m ON c.media_id = m.id "
+                        "WHERE claims_fts MATCH ? AND "
+                        + where_clause +
+                        " ORDER BY relevance_score ASC LIMIT ?"
                     )
-                    rows = self._fetchall_with_connection(conn, sql, (cleaned_query, limit))
+                    rows = self._fetchall_with_connection(conn, sql, (cleaned_query, *params, limit))
                     results.extend(dict(row) for row in rows)
                 elif self.backend_type == BackendType.POSTGRESQL:
                     tsquery = FTSQueryTranslator.normalize_query(cleaned_query, 'postgresql')
                     if tsquery:
+                        conditions: List[str] = ["c.deleted IS FALSE"]
+                        params: List[Any] = []
+                        if owner_user_id is not None:
+                            conditions.append("COALESCE(CAST(m.owner_user_id AS TEXT), m.client_id) = ?")
+                            params.append(str(owner_user_id))
+                        if scope and not scope.is_admin:
+                            visibility_parts: List[str] = []
+                            user_id_str = str(scope.user_id) if scope.user_id is not None else ""
+                            if user_id_str:
+                                visibility_parts.append(
+                                    "(COALESCE(m.visibility, 'personal') = 'personal' "
+                                    "AND (COALESCE(CAST(m.owner_user_id AS TEXT), m.client_id) = ?))"
+                                )
+                                params.append(user_id_str)
+                            if scope.team_ids:
+                                team_placeholders = ",".join("?" * len(scope.team_ids))
+                                visibility_parts.append(
+                                    f"(m.visibility = 'team' AND m.team_id IN ({team_placeholders}))"
+                                )
+                                params.extend(scope.team_ids)
+                            if scope.org_ids:
+                                org_placeholders = ",".join("?" * len(scope.org_ids))
+                                visibility_parts.append(
+                                    f"(m.visibility = 'org' AND m.org_id IN ({org_placeholders}))"
+                                )
+                                params.extend(scope.org_ids)
+                            if visibility_parts:
+                                conditions.append("(" + " OR ".join(visibility_parts) + ")")
+                        where_clause = " AND ".join(conditions)
                         sql = (
-                            "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, "
+                            "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, c.claim_cluster_id, "
                             "       ts_rank(c.claims_fts_tsv, to_tsquery('english', ?)) AS relevance_score "
-                            "FROM claims c "
-                            "WHERE c.deleted IS FALSE "
-                            "  AND c.claims_fts_tsv @@ to_tsquery('english', ?) "
-                            "ORDER BY relevance_score DESC LIMIT ?"
+                            "FROM claims c JOIN media m ON c.media_id = m.id "
+                            "WHERE c.claims_fts_tsv @@ to_tsquery('english', ?) AND "
+                            + where_clause +
+                            " ORDER BY relevance_score DESC LIMIT ?"
                         )
-                        rows = self._fetchall_with_connection(conn, sql, (tsquery, tsquery, limit))
+                        rows = self._fetchall_with_connection(conn, sql, (tsquery, tsquery, *params, limit))
                         results.extend(dict(row) for row in rows)
                 else:
                     raise NotImplementedError(
@@ -5236,18 +6131,57 @@ class MediaDatabase:
                     )
 
                 if fallback_to_like and not results:
+                    like_conditions: List[str] = []
+                    like_params: List[Any] = []
+                    if owner_user_id is not None:
+                        like_conditions.append("COALESCE(CAST(m.owner_user_id AS TEXT), m.client_id) = ?")
+                        like_params.append(str(owner_user_id))
+                    if scope and not scope.is_admin:
+                        visibility_parts = []
+                        user_id_str = str(scope.user_id) if scope.user_id is not None else ""
+                        if user_id_str:
+                            visibility_parts.append(
+                                "(COALESCE(m.visibility, 'personal') = 'personal' "
+                                "AND (COALESCE(CAST(m.owner_user_id AS TEXT), m.client_id) = ?))"
+                            )
+                            like_params.append(user_id_str)
+                        if scope.team_ids:
+                            team_placeholders = ",".join("?" * len(scope.team_ids))
+                            visibility_parts.append(
+                                f"(m.visibility = 'team' AND m.team_id IN ({team_placeholders}))"
+                            )
+                            like_params.extend(scope.team_ids)
+                        if scope.org_ids:
+                            org_placeholders = ",".join("?" * len(scope.org_ids))
+                            visibility_parts.append(
+                                f"(m.visibility = 'org' AND m.org_id IN ({org_placeholders}))"
+                            )
+                            like_params.extend(scope.org_ids)
+                        if visibility_parts:
+                            like_conditions.append("(" + " OR ".join(visibility_parts) + ")")
+                    like_clause = " AND " + " AND ".join(like_conditions) if like_conditions else ""
                     like_pattern = f"%{cleaned_query}%"
                     if self.backend_type == BackendType.POSTGRESQL:
                         like_sql = (
-                            "SELECT id, media_id, chunk_index, claim_text "
-                            "FROM claims WHERE deleted IS FALSE AND claim_text ILIKE ? LIMIT ?"
+                            "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, c.claim_cluster_id "
+                            "FROM claims c JOIN media m ON c.media_id = m.id "
+                            "WHERE c.deleted IS FALSE AND c.claim_text ILIKE ?"
+                            + like_clause +
+                            " LIMIT ?"
                         )
                     else:
                         like_sql = (
-                            "SELECT id, media_id, chunk_index, claim_text "
-                            "FROM Claims WHERE deleted = 0 AND claim_text LIKE ? LIMIT ?"
+                            "SELECT c.id, c.media_id, c.chunk_index, c.claim_text, c.claim_cluster_id "
+                            "FROM Claims c JOIN Media m ON c.media_id = m.id "
+                            "WHERE c.deleted = 0 AND c.claim_text LIKE ?"
+                            + like_clause +
+                            " LIMIT ?"
                         )
-                    fallback_rows = self._fetchall_with_connection(conn, like_sql, (like_pattern, limit))
+                    fallback_rows = self._fetchall_with_connection(
+                        conn,
+                        like_sql,
+                        (like_pattern, *like_params, limit),
+                    )
                     for row in fallback_rows:
                         row_dict = dict(row)
                         row_dict.setdefault('relevance_score', 0.0)

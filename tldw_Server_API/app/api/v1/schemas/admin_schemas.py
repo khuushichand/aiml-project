@@ -403,18 +403,14 @@ class UsageTopResponse(BaseModel):
 #
 # Budget Governance Schemas
 
-class BudgetSettings(BaseModel):
-    """Budget configuration for an organization."""
-    budget_day_usd: Optional[float] = Field(None, ge=0)
-    budget_month_usd: Optional[float] = Field(None, ge=0)
-    budget_day_tokens: Optional[int] = Field(None, ge=0)
-    budget_month_tokens: Optional[int] = Field(None, ge=0)
-    alert_thresholds: Optional[List[int]] = Field(None, min_length=1)
-    enforcement_mode: Optional[Literal["none", "soft", "hard"]] = None
+class BudgetAlertThresholds(BaseModel):
+    """Alert thresholds for budgets (global + per-metric)."""
+    global_: Optional[List[int]] = Field(default=None, alias="global")
+    per_metric: Optional[Dict[str, List[int]]] = None
 
-    @field_validator("alert_thresholds")
+    @field_validator("global_")
     @classmethod
-    def validate_alert_thresholds(cls, v: Optional[List[int]]) -> Optional[List[int]]:
+    def validate_global_thresholds(cls, v: Optional[List[int]]) -> Optional[List[int]]:
         if v is None:
             return v
         cleaned: List[int] = []
@@ -427,6 +423,87 @@ class BudgetSettings(BaseModel):
                 raise ValueError("Alert thresholds must be between 1 and 100")
             cleaned.append(num)
         return cleaned
+
+    @field_validator("per_metric")
+    @classmethod
+    def validate_per_metric_thresholds(
+        cls, v: Optional[Dict[str, List[int]]]
+    ) -> Optional[Dict[str, List[int]]]:
+        if v is None:
+            return v
+        if not isinstance(v, dict):
+            raise ValueError("Per-metric thresholds must be a mapping")
+        cleaned: Dict[str, List[int]] = {}
+        for key, values in v.items():
+            if values is None:
+                continue
+            cleaned_values: List[int] = []
+            for val in values:
+                try:
+                    num = int(val)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("Alert thresholds must be integers") from exc
+                if num < 1 or num > 100:
+                    raise ValueError("Alert thresholds must be between 1 and 100")
+                cleaned_values.append(num)
+            cleaned[key] = cleaned_values
+        return cleaned
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class BudgetEnforcementMode(BaseModel):
+    """Enforcement mode for budgets (global + per-metric)."""
+    global_: Optional[Literal["none", "soft", "hard"]] = Field(default=None, alias="global")
+    per_metric: Optional[Dict[str, Literal["none", "soft", "hard"]]] = None
+
+    @field_validator("per_metric")
+    @classmethod
+    def validate_per_metric_modes(
+        cls, v: Optional[Dict[str, Literal["none", "soft", "hard"]]]
+    ) -> Optional[Dict[str, Literal["none", "soft", "hard"]]]:
+        if v is None:
+            return v
+        if not isinstance(v, dict):
+            raise ValueError("Per-metric enforcement must be a mapping")
+        cleaned: Dict[str, Literal["none", "soft", "hard"]] = {}
+        for key, value in v.items():
+            if value is None:
+                continue
+            if value not in ("none", "soft", "hard"):
+                raise ValueError("Enforcement mode must be none, soft, or hard")
+            cleaned[key] = value
+        return cleaned
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class BudgetSettings(BaseModel):
+    """Budget configuration for an organization."""
+    budget_day_usd: Optional[float] = Field(None, ge=0)
+    budget_month_usd: Optional[float] = Field(None, ge=0)
+    budget_day_tokens: Optional[int] = Field(None, ge=0)
+    budget_month_tokens: Optional[int] = Field(None, ge=0)
+    alert_thresholds: Optional[BudgetAlertThresholds] = None
+    enforcement_mode: Optional[BudgetEnforcementMode] = None
+
+    @field_validator("alert_thresholds", mode="before")
+    @classmethod
+    def coerce_alert_thresholds(cls, v: Optional[Any]) -> Optional[Any]:
+        if v is None:
+            return v
+        if isinstance(v, list):
+            return {"global": v}
+        return v
+
+    @field_validator("enforcement_mode", mode="before")
+    @classmethod
+    def coerce_enforcement_mode(cls, v: Optional[Any]) -> Optional[Any]:
+        if v is None:
+            return v
+        if isinstance(v, str):
+            return {"global": v}
+        return v
 
 
 class OrgBudgetUpdateRequest(BaseModel):

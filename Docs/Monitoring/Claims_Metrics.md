@@ -21,3 +21,7 @@
 ## Post-Check Metrics
 - `rag_total_claims_checked_total`
 - `rag_unsupported_claims_total`
+
+## Dashboards & Alerts
+- Grafana dashboard JSON: `Docs/Monitoring/claims_grafana_dashboard.json`
+- Prometheus alert rules: `Docs/Monitoring/claims_alerts_prometheus.yaml`

@@ -58,7 +58,10 @@ from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Chunking import improved_chunking_process, ChunkingError, \
     InvalidChunkingMethodError
 from tldw_Server_API.app.core.Metrics.metrics_logger import (log_counter, log_histogram)
-from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import (
+    open_safe_local_path,
+    resolve_safe_local_path,
+)
 from tldw_Server_API.app.core.Utils.Utils import logging
 #
 #######################################################################################################################
@@ -1165,6 +1168,7 @@ def _process_markup_or_plain_text(
     custom_prompt: Optional[str] = None,
     system_prompt: Optional[str] = None,
     summarize_recursively: bool = False,
+    base_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """
     Internal helper to process HTML, XML, OPML, or plain text files.
@@ -1193,6 +1197,8 @@ def _process_markup_or_plain_text(
         system_prompt (Optional[str], optional): System prompt for summarization. Defaults to None.
         summarize_recursively (bool, optional): If True and multiple chunks are
             summarized, their summaries are combined and summarized again. Defaults to False.
+        base_dir (Optional[Path], optional): If provided, require file paths to resolve
+            within this directory before reading content.
 
     Returns:
         Dict[str, Any]: A dictionary containing processing results, structured similarly
@@ -1238,13 +1244,17 @@ def _process_markup_or_plain_text(
         final_title_for_logging = filename_stem # Refine with stem if path is valid
 
         # 1. Read and Convert Content
+        base_dir_for_open = base_dir or file_path_obj.parent
         if file_type == 'html':
             h = html2text.HTML2Text()
             h.ignore_links = False
             h.body_width = 0
             try:
-                with open(file_path, 'r', encoding='utf-8') as file:
-                    html_content = file.read()
+                handle = open_safe_local_path(file_path_obj, base_dir_for_open, mode="rb")
+                if handle is None:
+                    raise ValueError("HTML path rejected outside allowed base directory.")
+                with handle:
+                    html_content = handle.read().decode("utf-8")
                 markdown_content = h.handle(html_content)
                 soup = BeautifulSoup(html_content, 'html.parser')
                 title_tag = soup.find('title')
@@ -1258,7 +1268,11 @@ def _process_markup_or_plain_text(
 
         elif file_type == 'xml':
             try:
-                tree = ET.parse(file_path)
+                handle = open_safe_local_path(file_path_obj, base_dir_for_open, mode="rb")
+                if handle is None:
+                    raise ValueError("XML path rejected outside allowed base directory.")
+                with handle:
+                    tree = ET.parse(handle)
                 root = tree.getroot()
                 markdown_content = xml_to_markdown(root)
                 title_elem = root.find('.//title')
@@ -1269,7 +1283,11 @@ def _process_markup_or_plain_text(
 
         elif file_type == 'opml':
              try:
-                 tree = ET.parse(file_path)
+                 handle = open_safe_local_path(file_path_obj, base_dir_for_open, mode="rb")
+                 if handle is None:
+                     raise ValueError("OPML path rejected outside allowed base directory.")
+                 with handle:
+                     tree = ET.parse(handle)
                  root = tree.getroot()
                  markdown_content = opml_to_markdown(root)
                  title_elem = root.find("./head/title")
@@ -1280,8 +1298,11 @@ def _process_markup_or_plain_text(
 
         elif file_type == 'text':
             try:
-                with open(file_path, 'r', encoding='utf-8') as file:
-                    markdown_content = file.read()
+                handle = open_safe_local_path(file_path_obj, base_dir_for_open, mode="rb")
+                if handle is None:
+                    raise ValueError("Text path rejected outside allowed base directory.")
+                with handle:
+                    markdown_content = handle.read().decode("utf-8")
                 epub_title, epub_author = extract_epub_metadata_from_text(markdown_content)
                 extracted_title = epub_title
                 if epub_author: extracted_author = epub_author
@@ -1475,7 +1496,7 @@ def extract_epub_metadata(content: str) -> Tuple[Optional[str], Optional[str]]:
     return title, author
 
 
-def ingest_text_file(file_path, title=None, author=None, keywords=None):
+def ingest_text_file(file_path, title=None, author=None, keywords=None, base_dir: Optional[Path] = None):
     """
     Ingests a plain text file into the database with optional metadata.
 
@@ -1498,13 +1519,20 @@ def ingest_text_file(file_path, title=None, author=None, keywords=None):
             If None, defaults to 'text_file,epub_converted'.
             'text_file' and 'epub_converted' are always added if keywords are provided.
             Defaults to None.
+        base_dir (Optional[Path], optional): If provided, require file paths to resolve
+            within this directory before reading content.
 
     Returns:
         - str: Status message indicating success or failure.
     """
     try:
-        with open(file_path, 'r', encoding='utf-8') as file:
-            content = file.read()
+        file_path_obj = Path(file_path)
+        base_dir_for_open = base_dir or file_path_obj.parent
+        handle = open_safe_local_path(file_path_obj, base_dir_for_open, mode="rb")
+        if handle is None:
+            raise ValueError("Text file path rejected outside allowed base directory.")
+        with handle:
+            content = handle.read().decode("utf-8")
 
         # Check if it's a converted epub and extract metadata if so
         if 'epub_converted' in (keywords or '').lower():
@@ -1552,7 +1580,7 @@ def ingest_text_file(file_path, title=None, author=None, keywords=None):
         return f"Error ingesting text file: {str(e)}"
 
 
-def ingest_folder(folder_path, keywords=None):
+def ingest_folder(folder_path, keywords=None, base_dir: Optional[Path] = None):
     """
     Ingests all text files (.txt) within a specified folder into the database.
 
@@ -1567,6 +1595,8 @@ def ingest_folder(folder_path, keywords=None):
         keywords (Optional[str], optional): A comma-separated string of keywords
             to be added to each text file ingested from this folder. These keywords
             are passed to `ingest_text_file`. Defaults to None.
+        base_dir (Optional[Path], optional): If provided, require file paths to resolve
+            within this directory before reading content.
 
     Returns:
         str: A string containing combined status messages from each `ingest_text_file`
@@ -1576,10 +1606,15 @@ def ingest_folder(folder_path, keywords=None):
     results = []
     try:
         logging.info(f"Ingesting all text files from folder {folder_path}")
+        base_dir_for_open = base_dir or Path(folder_path).resolve(strict=False)
         for filename in os.listdir(folder_path):
             if filename.lower().endswith('.txt'):
                 file_path = os.path.join(folder_path, filename)
-                result = ingest_text_file(file_path, keywords=keywords)
+                result = ingest_text_file(
+                    file_path,
+                    keywords=keywords,
+                    base_dir=base_dir_for_open,
+                )
                 results.append(result)
         logging.info("Completed ingestion of all text files in the folder.")
     except Exception as e:

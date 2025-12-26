@@ -415,6 +415,7 @@ def perform_transcription(
         transcription_model_sanitized = "".join(c if c.isalnum() or c in ['-', '_'] else '_' for c in transcription_model)
         segments_json_path = f"{base_path}-transcription_model-{transcription_model_sanitized}.segments.json"
         diarized_json_path = f"{base_path}-transcription_model-{transcription_model_sanitized}.diarized.json"
+        base_dir_path = Path(temp_dir) if temp_dir else None
 
         # --- Perform Diarization and Combination (if requested) ---
         if diarize:
@@ -457,6 +458,7 @@ def perform_transcription(
                     transcription_model,
                     vad_filter=vad_use,
                     selected_source_lang=transcription_language,
+                    base_dir=base_dir_path,
                 )
                 transcription_segments = artifact.get("segments") or []
 
@@ -540,6 +542,7 @@ def perform_transcription(
                 transcription_model,
                 vad_filter=vad_use,
                 selected_source_lang=transcription_language,
+                base_dir=base_dir_path,
             )
             segments = artifact.get("segments") or []
             if not segments:
@@ -1121,6 +1124,7 @@ def run_stt_batch_via_registry(
     vad_filter: bool = False,
     selected_source_lang: str = "en",
     duration_seconds: Optional[float] = None,
+    base_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """
     Run batch STT via the shared provider registry and return a normalized artifact.
@@ -1172,6 +1176,7 @@ def run_stt_batch_via_registry(
         task="transcribe",
         word_timestamps=False,
         prompt=None,
+        base_dir=base_dir,
     )
 
     # Ensure duration_ms is set when we know duration.
@@ -1191,6 +1196,7 @@ def run_stt_job_via_registry(
     wav_path: str,
     model: Optional[str],
     language: Optional[str],
+    base_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """
     Run STT for Jobs via the shared provider registry and return a normalized artifact.
@@ -1225,6 +1231,7 @@ def run_stt_job_via_registry(
             task="transcribe",
             word_timestamps=False,
             prompt=None,
+            base_dir=base_dir,
         )
         return artifact
 
@@ -1237,6 +1244,7 @@ def run_stt_job_via_registry(
         task="transcribe",
         word_timestamps=False,
         prompt=None,
+        base_dir=base_dir,
     )
     return artifact
 

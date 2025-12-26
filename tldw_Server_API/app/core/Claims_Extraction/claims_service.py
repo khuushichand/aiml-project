@@ -4,13 +4,18 @@ import csv
 import io
 import json
 import math
+import random
 import threading
 import time
+import socket
+import ssl
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from uuid import uuid4
 
 from fastapi import HTTPException, status
+from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
@@ -22,18 +27,23 @@ from tldw_Server_API.app.core.AuthNZ.permissions import (
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
 from tldw_Server_API.app.core.Claims_Extraction.claims_rebuild_service import get_claims_rebuild_service
-from tldw_Server_API.app.core.Claims_Extraction.monitoring import record_claims_review_metrics
+from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
+    record_claims_review_metrics,
+    record_claims_webhook_delivery,
+)
 from tldw_Server_API.app.core.Claims_Extraction.claims_clustering import rebuild_claim_clusters_embeddings
 from tldw_Server_API.app.core.Claims_Extraction.claims_embeddings import claim_embedding_id
 from tldw_Server_API.app.core.Claims_Extraction.claims_notifications import (
     record_watchlist_cluster_notifications,
 )
+from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 from tldw_Server_API.app.core.Setup import setup_manager
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.exceptions import EgressPolicyError, RetryExhaustedError
 
 
 _ROLE_HIERARCHY = {
@@ -78,6 +88,21 @@ def _normalize_claim_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return row
 
 
+def _normalize_search_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(row)
+    try:
+        cluster_id = normalized.get("claim_cluster_id")
+        normalized["claim_cluster_id"] = int(cluster_id) if cluster_id is not None else None
+    except Exception:
+        normalized["claim_cluster_id"] = None
+    try:
+        score = normalized.get("relevance_score")
+        normalized["relevance_score"] = float(score) if score is not None else None
+    except Exception:
+        normalized["relevance_score"] = None
+    return normalized
+
+
 def _parse_email_recipients(raw_value: Optional[str]) -> List[str]:
     if raw_value is None:
         return []
@@ -93,9 +118,34 @@ def _parse_email_recipients(raw_value: Optional[str]) -> List[str]:
     return [item.strip() for item in text.split(",") if item.strip()]
 
 
+def _normalize_channels(raw_value: Optional[Any]) -> Dict[str, bool]:
+    if isinstance(raw_value, dict):
+        data = raw_value
+    else:
+        data = {}
+        if raw_value:
+            try:
+                data = json.loads(str(raw_value))
+            except Exception:
+                data = {}
+    return {
+        "slack": bool(data.get("slack")),
+        "webhook": bool(data.get("webhook")),
+        "email": bool(data.get("email")),
+    }
+
+
 def _normalize_alert_row(row: Dict[str, Any]) -> Dict[str, Any]:
     normalized = dict(row)
     normalized["email_recipients"] = _parse_email_recipients(row.get("email_recipients"))
+    normalized["channels"] = _normalize_channels(
+        row.get("channels_json") or row.get("channels")
+    )
+    normalized.pop("channels_json", None)
+    if not normalized.get("name"):
+        normalized["name"] = f"Legacy alert {row.get('id')}"
+    if not normalized.get("alert_type"):
+        normalized["alert_type"] = "threshold_breach"
     return normalized
 
 
@@ -118,6 +168,37 @@ def _normalize_notification_row(row: Dict[str, Any]) -> Dict[str, Any]:
         normalized["payload"] = {}
     normalized.pop("payload_json", None)
     return normalized
+
+
+def _normalize_monitoring_event_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(row)
+    raw = normalized.get("payload_json")
+    try:
+        payload = json.loads(raw) if raw else {}
+    except Exception:
+        payload = {}
+    normalized["payload"] = payload
+    normalized.pop("payload_json", None)
+    return normalized
+
+
+def _filter_monitoring_events_by_payload(
+    events: List[Dict[str, Any]],
+    *,
+    provider: Optional[str],
+    model: Optional[str],
+) -> List[Dict[str, Any]]:
+    if not provider and not model:
+        return events
+    filtered: List[Dict[str, Any]] = []
+    for event in events:
+        payload = event.get("payload") or {}
+        if provider and str(payload.get("provider")) != str(provider):
+            continue
+        if model and str(payload.get("model")) != str(model):
+            continue
+        filtered.append(event)
+    return filtered
 
 
 def _get_watchlists_db(user_id: str) -> Optional[WatchlistsDatabase]:
@@ -174,31 +255,313 @@ def _format_ratio(value: Optional[float]) -> str:
         return "n/a"
 
 
-def _send_claims_alert_webhook(url: str, payload: Dict[str, Any]) -> None:
-    """Send a claims alert payload to a webhook endpoint."""
+def _build_alert_channels(
+    payload: Dict[str, Any],
+    existing: Optional[Dict[str, Any]] = None,
+) -> Dict[str, bool]:
+    channels = payload.get("channels")
+    if channels is None:
+        channels = {}
+    if not channels:
+        slack_url = payload.get("slack_webhook_url")
+        webhook_url = payload.get("webhook_url")
+        email_recipients = payload.get("email_recipients")
+        if existing:
+            if slack_url is None:
+                slack_url = existing.get("slack_webhook_url")
+            if webhook_url is None:
+                webhook_url = existing.get("webhook_url")
+            if email_recipients is None:
+                email_recipients = existing.get("email_recipients")
+        channels = {
+            "slack": bool(slack_url),
+            "webhook": bool(webhook_url),
+            "email": bool(email_recipients),
+        }
+    return {
+        "slack": bool(channels.get("slack")),
+        "webhook": bool(channels.get("webhook")),
+        "email": bool(channels.get("email")),
+    }
+
+
+def _classify_webhook_exception(exc: Exception) -> str:
+    if isinstance(exc, EgressPolicyError):
+        return "invalid_url"
+    if isinstance(exc, RetryExhaustedError):
+        return "timeout"
+    msg = str(exc).lower()
+    if "timeout" in msg:
+        return "timeout"
+    if isinstance(exc, ssl.SSLError) or "ssl" in msg or "tls" in msg:
+        return "tls"
+    if isinstance(exc, socket.gaierror) or "name or service not known" in msg:
+        return "dns"
     try:
-        from tldw_Server_API.app.core.http_client import create_client, fetch
+        import httpx
+    except Exception:
+        httpx = None  # type: ignore
+    if httpx is not None:
+        if isinstance(exc, getattr(httpx, "TimeoutException", Exception)):
+            return "timeout"
+        if isinstance(exc, getattr(httpx, "ConnectError", Exception)):
+            if isinstance(getattr(exc, "__cause__", None), ssl.SSLError):
+                return "tls"
+            if isinstance(getattr(exc, "__cause__", None), socket.gaierror):
+                return "dns"
+            if "name or service not known" in msg or "dns" in msg:
+                return "dns"
+    return "other"
+
+
+def _record_webhook_event(
+    *,
+    db_path: str,
+    user_id: str,
+    channel: str,
+    status: str,
+    attempt: int,
+    reason: Optional[str] = None,
+    status_code: Optional[int] = None,
+    alert_id: Optional[int] = None,
+) -> None:
+    try:
+        db = create_media_database(
+            client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
+            db_path=db_path,
+        )
     except Exception:
         return
     try:
-        with create_client(timeout=5.0) as client:
-            fetch(
-                method="POST",
-                url=url,
-                client=client,
-                headers={"Content-Type": "application/json"},
-                json=payload,
-                timeout=5.0,
+        try:
+            db.initialize_db()
+        except Exception:
+            pass
+        payload = {
+            "channel": channel,
+            "status": status,
+            "attempt": int(attempt),
+        }
+        if reason:
+            payload["reason"] = reason
+        if status_code is not None:
+            payload["status_code"] = int(status_code)
+        if alert_id is not None:
+            payload["alert_id"] = int(alert_id)
+        db.insert_claims_monitoring_event(
+            user_id=str(user_id),
+            event_type="webhook_delivery",
+            severity="info" if status == "success" else "warning",
+            payload_json=json.dumps(payload),
+        )
+    except Exception:
+        pass
+    finally:
+        try:
+            db.close_connection()
+        except Exception:
+            pass
+
+
+def _deliver_claims_alert_webhook(
+    *,
+    url: str,
+    payload: Dict[str, Any],
+    channel: str,
+    db_path: str,
+    user_id: str,
+    alert_id: Optional[int] = None,
+) -> None:
+    try:
+        from tldw_Server_API.app.core.http_client import create_client, fetch, RetryPolicy
+    except Exception:
+        return
+    backoff_schedule = [5, 15, 45, 120, 300]
+    max_attempts = 5
+    for attempt in range(1, max_attempts + 1):
+        if attempt > 1:
+            base_delay = backoff_schedule[min(attempt - 2, len(backoff_schedule) - 1)]
+            jitter = random.uniform(0.8, 1.2)
+            time.sleep(max(0.0, base_delay * jitter))
+        start_ts = time.time()
+        try:
+            with create_client(timeout=5.0) as client:
+                response = fetch(
+                    method="POST",
+                    url=url,
+                    client=client,
+                    headers={"Content-Type": "application/json"},
+                    json=payload,
+                    timeout=5.0,
+                    retry=RetryPolicy(attempts=1, retry_on_unsafe=False),
+                )
+            status_code = int(getattr(response, "status_code", 0) or 0)
+            duration = time.time() - start_ts
+            if 200 <= status_code < 300:
+                logger.info(
+                    "Claims webhook delivered channel=%s attempt=%s status=%s",
+                    channel,
+                    attempt,
+                    status_code,
+                )
+                record_claims_webhook_delivery(status="success", latency_s=duration)
+                _record_webhook_event(
+                    db_path=db_path,
+                    user_id=user_id,
+                    channel=channel,
+                    status="success",
+                    attempt=attempt,
+                    status_code=status_code,
+                    alert_id=alert_id,
+                )
+                return
+            if 400 <= status_code < 500:
+                reason = "http_4xx"
+            elif 500 <= status_code < 600:
+                reason = "http_5xx"
+            else:
+                reason = "other"
+            logger.warning(
+                "Claims webhook failed channel=%s attempt=%s status=%s reason=%s",
+                channel,
+                attempt,
+                status_code,
+                reason,
             )
+            record_claims_webhook_delivery(status="failure", reason=reason, latency_s=duration)
+            _record_webhook_event(
+                db_path=db_path,
+                user_id=user_id,
+                channel=channel,
+                status="failure",
+                attempt=attempt,
+                reason=reason,
+                status_code=status_code,
+                alert_id=alert_id,
+            )
+        except Exception as exc:
+            reason = _classify_webhook_exception(exc)
+            duration = time.time() - start_ts
+            logger.warning(
+                "Claims webhook failed channel=%s attempt=%s reason=%s",
+                channel,
+                attempt,
+                reason,
+            )
+            record_claims_webhook_delivery(status="failure", reason=reason, latency_s=duration)
+            _record_webhook_event(
+                db_path=db_path,
+                user_id=user_id,
+                channel=channel,
+                status="failure",
+                attempt=attempt,
+                reason=reason,
+                alert_id=alert_id,
+            )
+        if attempt >= max_attempts:
+            return
+
+def _claims_monitoring_system_user_id() -> int:
+    try:
+        return int(settings.get("CLAIMS_MONITORING_SYSTEM_USER_ID", 0))
     except Exception:
-        return
+        return 0
 
 
-def _dispatch_claims_alert_notifications(config_row: Dict[str, Any], payload: Dict[str, Any]) -> None:
+def _parse_iso_timestamp(value: Optional[str]) -> Optional[float]:
+    if not value:
+        return None
+    try:
+        normalized = str(value).replace("Z", "+00:00")
+        return datetime.fromisoformat(normalized).timestamp()
+    except Exception:
+        return None
+
+
+def _format_utc_timestamp(value: Optional[float]) -> Optional[str]:
+    if not value:
+        return None
+    try:
+        return datetime.fromtimestamp(float(value), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    except Exception:
+        return None
+
+
+def _build_rebuild_health_summary_from_persisted(persisted: Dict[str, Any]) -> Dict[str, Any]:
+    now_ts = datetime.utcnow().timestamp()
+    heartbeat_ts = _parse_iso_timestamp(persisted.get("last_worker_heartbeat")) or 0.0
+    age_sec = now_ts - heartbeat_ts if heartbeat_ts > 0 else None
+    warn_threshold = int(settings.get("CLAIMS_REBUILD_HEARTBEAT_WARN_SEC", 600))
+    stale = age_sec is not None and age_sec > warn_threshold
+    last_failure = None
+    if persisted.get("last_failure_reason") or persisted.get("last_failure_at"):
+        last_failure = {
+            "error": persisted.get("last_failure_reason"),
+            "timestamp": persisted.get("last_failure_at"),
+        }
+    return {
+        "status": "ok",
+        "queue_length": int(persisted.get("queue_size") or 0),
+        "workers": int(persisted.get("worker_count") or 0),
+        "last_heartbeat_ts": heartbeat_ts,
+        "heartbeat_age_sec": age_sec,
+        "last_processed_ts": _parse_iso_timestamp(persisted.get("last_processed_at")),
+        "last_failure": last_failure,
+        "stale": stale,
+    }
+
+
+def _build_rebuild_health_summary_from_service(health: Dict[str, Any]) -> Dict[str, Any]:
+    now_ts = datetime.utcnow().timestamp()
+    heartbeat_ts = float(health.get("last_heartbeat_ts") or 0.0)
+    age_sec = now_ts - heartbeat_ts if heartbeat_ts > 0 else None
+    warn_threshold = int(settings.get("CLAIMS_REBUILD_HEARTBEAT_WARN_SEC", 600))
+    stale = age_sec is not None and age_sec > warn_threshold
+    return {
+        "status": "ok",
+        "queue_length": int(health.get("queue_length") or 0),
+        "workers": int(health.get("workers") or 0),
+        "last_heartbeat_ts": heartbeat_ts,
+        "heartbeat_age_sec": age_sec,
+        "last_processed_ts": health.get("last_processed_ts"),
+        "last_failure": health.get("last_failure"),
+        "stale": stale,
+    }
+
+
+def _load_persisted_rebuild_health() -> Dict[str, Any]:
+    user_id = _claims_monitoring_system_user_id()
+    db_path = get_user_media_db_path(user_id)
+    db = create_media_database(
+        client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
+        db_path=db_path,
+    )
+    try:
+        try:
+            db.initialize_db()
+        except Exception:
+            pass
+        return db.get_claims_monitoring_health(str(user_id))
+    finally:
+        try:
+            db.close_connection()
+        except Exception:
+            pass
+
+
+def _dispatch_claims_alert_notifications(
+    *,
+    config_row: Dict[str, Any],
+    payload: Dict[str, Any],
+    db_path: str,
+    user_id: str,
+) -> None:
     """Dispatch best-effort notifications for a claims alert."""
+    channels = _normalize_channels(config_row.get("channels_json") or config_row.get("channels"))
     slack_url = config_row.get("slack_webhook_url")
     webhook_url = config_row.get("webhook_url")
-    if slack_url:
+    alert_id = config_row.get("id")
+    if channels.get("slack") and slack_url:
         slack_payload = {
             "text": (
                 "Claims alert: unsupported ratio "
@@ -208,14 +571,28 @@ def _dispatch_claims_alert_notifications(config_row: Dict[str, Any], payload: Di
             )
         }
         threading.Thread(
-            target=_send_claims_alert_webhook,
-            args=(str(slack_url), slack_payload),
+            target=_deliver_claims_alert_webhook,
+            kwargs={
+                "url": str(slack_url),
+                "payload": slack_payload,
+                "channel": "slack",
+                "db_path": db_path,
+                "user_id": user_id,
+                "alert_id": alert_id,
+            },
             daemon=True,
         ).start()
-    if webhook_url:
+    if channels.get("webhook") and webhook_url:
         threading.Thread(
-            target=_send_claims_alert_webhook,
-            args=(str(webhook_url), payload),
+            target=_deliver_claims_alert_webhook,
+            kwargs={
+                "url": str(webhook_url),
+                "payload": payload,
+                "channel": "webhook",
+                "db_path": db_path,
+                "user_id": user_id,
+                "alert_id": alert_id,
+            },
             daemon=True,
         ).start()
 
@@ -319,11 +696,12 @@ def _claims_settings_snapshot() -> Dict[str, Any]:
 
 def _claims_monitoring_settings_snapshot() -> Dict[str, Any]:
     return {
-        "claims_monitoring_enabled": bool(settings.get("CLAIMS_MONITORING_ENABLED", False)),
-        "claims_alert_threshold_default": float(settings.get("CLAIMS_ALERT_THRESHOLD_DEFAULT", 0.2)),
-        "claims_rebuild_max_queue_alert": int(settings.get("CLAIMS_REBUILD_MAX_QUEUE_ALERT", 1000)),
-        "claims_rebuild_heartbeat_warn_sec": int(settings.get("CLAIMS_REBUILD_HEARTBEAT_WARN_SEC", 600)),
-        "claims_provider_cost_multipliers": dict(settings.get("CLAIMS_PROVIDER_COST_MULTIPLIERS") or {}),
+        "threshold_ratio": float(settings.get("CLAIMS_ALERT_THRESHOLD_DEFAULT", 0.2)),
+        "baseline_ratio": None,
+        "slack_webhook_url": None,
+        "webhook_url": None,
+        "email_recipients": [],
+        "enabled": bool(settings.get("CLAIMS_MONITORING_ENABLED", False)),
     }
 
 
@@ -746,6 +1124,89 @@ def list_all_claims(
         return [_normalize_claim_row(dict(row)) for row in claims]
 
 
+def search_claims(
+    *,
+    query: str,
+    limit: int,
+    offset: int,
+    group_by_cluster: bool,
+    user_id: Optional[int],
+    current_user: User,
+    db: MediaDatabase,
+) -> Dict[str, Any]:
+    with _resolve_media_db(
+        db=db,
+        current_user=current_user,
+        user_id=user_id,
+        admin_required=True,
+        owner_filter=True,
+    ) as (target_db, owner_filter):
+        fetch_limit = max(1, int(limit) + int(offset))
+        rows = target_db.search_claims(
+            query,
+            limit=fetch_limit,
+            owner_user_id=owner_filter,
+        )
+        normalized = [_normalize_search_row(dict(r)) for r in rows]
+        total = len(normalized)
+        sliced = normalized[offset: offset + limit]
+        if not group_by_cluster:
+            return {
+                "query": query,
+                "group_by_cluster": False,
+                "total": total,
+                "results": sliced,
+                "clusters": None,
+                "orphaned": None,
+            }
+
+        clusters: List[Dict[str, Any]] = []
+        orphaned: List[Dict[str, Any]] = []
+        cluster_ids: List[int] = []
+        for row in sliced:
+            cluster_id = row.get("claim_cluster_id")
+            if cluster_id is None:
+                orphaned.append(row)
+                continue
+            if int(cluster_id) not in cluster_ids:
+                cluster_ids.append(int(cluster_id))
+        cluster_map = {
+            int(c.get("id")): c
+            for c in target_db.get_claim_clusters_by_ids(cluster_ids)
+            if c.get("id") is not None
+        }
+        cluster_hits: Dict[int, Dict[str, Any]] = {}
+        for row in sliced:
+            cluster_id = row.get("claim_cluster_id")
+            if cluster_id is None:
+                continue
+            cluster_id = int(cluster_id)
+            entry = cluster_hits.get(cluster_id)
+            if entry is None:
+                entry = {
+                    "cluster_id": cluster_id,
+                    "match_count": 0,
+                    "top_claim": row,
+                }
+                cluster_hits[cluster_id] = entry
+            entry["match_count"] += 1
+        for cluster_id, entry in cluster_hits.items():
+            cluster_row = cluster_map.get(cluster_id, {})
+            entry["canonical_claim_text"] = cluster_row.get("canonical_claim_text")
+            entry["representative_claim_id"] = cluster_row.get("representative_claim_id")
+            entry["watchlist_count"] = cluster_row.get("watchlist_count")
+            clusters.append(entry)
+
+        return {
+            "query": query,
+            "group_by_cluster": True,
+            "total": total,
+            "results": [],
+            "clusters": clusters,
+            "orphaned": orphaned,
+        }
+
+
 def list_claim_notifications(
     *,
     kind: Optional[str],
@@ -937,47 +1398,75 @@ def update_claims_settings(
     return _claims_settings_snapshot()
 
 
-def get_claims_monitoring_config(principal: AuthPrincipal) -> Dict[str, Any]:
+def _normalize_monitoring_config_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(row)
+    if normalized.get("threshold_ratio") is None:
+        normalized["threshold_ratio"] = float(settings.get("CLAIMS_ALERT_THRESHOLD_DEFAULT", 0.2))
+    normalized["email_recipients"] = _parse_email_recipients(row.get("email_recipients"))
+    normalized["enabled"] = bool(normalized.get("enabled", True))
+    return normalized
+
+
+def get_claims_monitoring_config(
+    *,
+    principal: AuthPrincipal,
+    current_user: User,
+    db: MediaDatabase,
+) -> Dict[str, Any]:
     _ensure_claims_admin(principal)
-    return _claims_monitoring_settings_snapshot()
+    target_user_id = str(current_user.id)
+    row = db.get_claims_monitoring_settings(target_user_id)
+    if not row:
+        defaults = _claims_monitoring_settings_snapshot()
+        email_json = json.dumps(defaults["email_recipients"]) if defaults.get("email_recipients") else None
+        row = db.upsert_claims_monitoring_settings(
+            user_id=target_user_id,
+            threshold_ratio=defaults.get("threshold_ratio"),
+            baseline_ratio=defaults.get("baseline_ratio"),
+            slack_webhook_url=defaults.get("slack_webhook_url"),
+            webhook_url=defaults.get("webhook_url"),
+            email_recipients=email_json,
+            enabled=defaults.get("enabled"),
+        )
+    return _normalize_monitoring_config_row(row)
 
 
 def update_claims_monitoring_config(
     *,
     payload: Dict[str, Any],
     principal: AuthPrincipal,
+    current_user: User,
+    db: MediaDatabase,
 ) -> Dict[str, Any]:
     _ensure_claims_admin(principal)
-    updates: Dict[str, Any] = {}
-    if payload.get("claims_monitoring_enabled") is not None:
-        updates["CLAIMS_MONITORING_ENABLED"] = bool(payload["claims_monitoring_enabled"])
-    if payload.get("claims_alert_threshold_default") is not None:
-        updates["CLAIMS_ALERT_THRESHOLD_DEFAULT"] = float(payload["claims_alert_threshold_default"])
-    if payload.get("claims_rebuild_max_queue_alert") is not None:
-        updates["CLAIMS_REBUILD_MAX_QUEUE_ALERT"] = int(payload["claims_rebuild_max_queue_alert"])
-    if payload.get("claims_rebuild_heartbeat_warn_sec") is not None:
-        updates["CLAIMS_REBUILD_HEARTBEAT_WARN_SEC"] = int(payload["claims_rebuild_heartbeat_warn_sec"])
-    if payload.get("claims_provider_cost_multipliers") is not None:
-        updates["CLAIMS_PROVIDER_COST_MULTIPLIERS"] = dict(payload["claims_provider_cost_multipliers"])
+    target_user_id = str(current_user.id)
+    existing = db.get_claims_monitoring_settings(target_user_id) or {}
+    if not existing:
+        existing = _claims_monitoring_settings_snapshot()
 
-    if not updates:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No updates provided")
-
-    for key, value in updates.items():
-        settings[key] = value
-
-    if payload.get("persist"):
-        persist_updates = dict(updates)
-        if "CLAIMS_PROVIDER_COST_MULTIPLIERS" in persist_updates:
-            persist_updates["CLAIMS_PROVIDER_COST_MULTIPLIERS"] = json.dumps(
-                persist_updates["CLAIMS_PROVIDER_COST_MULTIPLIERS"]
+    threshold_ratio = payload.get("threshold_ratio", existing.get("threshold_ratio"))
+    baseline_ratio = payload.get("baseline_ratio", existing.get("baseline_ratio"))
+    if threshold_ratio is not None and baseline_ratio is not None:
+        if float(baseline_ratio) > float(threshold_ratio):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="baseline_ratio must be <= threshold_ratio",
             )
-        try:
-            setup_manager.update_config({"ClaimsMonitoring": persist_updates})
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    return _claims_monitoring_settings_snapshot()
+    email_json = None
+    if payload.get("email_recipients") is not None:
+        email_json = json.dumps(payload["email_recipients"])
+
+    updated = db.upsert_claims_monitoring_settings(
+        user_id=target_user_id,
+        threshold_ratio=payload.get("threshold_ratio", existing.get("threshold_ratio")),
+        baseline_ratio=payload.get("baseline_ratio", existing.get("baseline_ratio")),
+        slack_webhook_url=payload.get("slack_webhook_url", existing.get("slack_webhook_url")),
+        webhook_url=payload.get("webhook_url", existing.get("webhook_url")),
+        email_recipients=email_json if email_json is not None else existing.get("email_recipients"),
+        enabled=payload.get("enabled") if payload.get("enabled") is not None else existing.get("enabled"),
+    )
+    return _normalize_monitoring_config_row(updated)
 
 
 def list_claims_alerts(
@@ -993,7 +1482,11 @@ def list_claims_alerts(
         if not principal.is_admin:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
         target_user_id = str(int(user_id))
-    rows = db.list_claims_monitoring_configs(target_user_id)
+    try:
+        db.migrate_legacy_claims_monitoring_alerts(target_user_id)
+    except Exception:
+        pass
+    rows = db.list_claims_monitoring_alerts(target_user_id)
     return [_normalize_alert_row(dict(r)) for r in rows]
 
 
@@ -1011,21 +1504,43 @@ def create_claims_alert(
         if not principal.is_admin:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
         target_user_id = str(int(user_id))
+    try:
+        db.migrate_legacy_claims_monitoring_alerts(target_user_id)
+    except Exception:
+        pass
+    name = payload.get("name")
+    alert_type = payload.get("alert_type")
+    if not name or not alert_type:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="name and alert_type are required")
+    channels = _build_alert_channels(payload)
+    if not any(channels.values()):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="At least one channel must be enabled")
+    threshold_val = payload.get("threshold_ratio")
+    baseline_val = payload.get("baseline_ratio")
+    if threshold_val is not None and baseline_val is not None:
+        if float(baseline_val) > float(threshold_val):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="baseline_ratio must be <= threshold_ratio",
+            )
     email_json = None
     if payload.get("email_recipients") is not None:
         email_json = json.dumps(payload["email_recipients"])
-    config = db.create_claims_monitoring_config(
+    alert = db.create_claims_monitoring_alert(
         user_id=target_user_id,
+        name=str(name),
+        alert_type=str(alert_type),
         threshold_ratio=payload.get("threshold_ratio"),
         baseline_ratio=payload.get("baseline_ratio"),
+        channels_json=json.dumps(channels),
         slack_webhook_url=payload.get("slack_webhook_url"),
         webhook_url=payload.get("webhook_url"),
         email_recipients=email_json,
         enabled=payload.get("enabled") if payload.get("enabled") is not None else True,
     )
-    if not config:
+    if not alert:
         raise HTTPException(status_code=500, detail="Failed to create alert config")
-    return _normalize_alert_row(config)
+    return _normalize_alert_row(alert)
 
 
 def update_claims_alert(
@@ -1037,18 +1552,47 @@ def update_claims_alert(
     db: MediaDatabase,
 ) -> Dict[str, Any]:
     _ensure_claims_admin(principal)
-    existing = db.get_claims_monitoring_config(int(config_id))
+    try:
+        db.migrate_legacy_claims_monitoring_alerts(str(current_user.id))
+    except Exception:
+        pass
+    existing = db.get_claims_monitoring_alert(int(config_id))
     if not existing:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert config not found")
     if not principal.is_admin and str(existing.get("user_id")) != str(current_user.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
+    threshold_val = payload.get("threshold_ratio", existing.get("threshold_ratio"))
+    baseline_val = payload.get("baseline_ratio", existing.get("baseline_ratio"))
+    if threshold_val is not None and baseline_val is not None:
+        if float(baseline_val) > float(threshold_val):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="baseline_ratio must be <= threshold_ratio",
+            )
     email_json = None
     if payload.get("email_recipients") is not None:
         email_json = json.dumps(payload["email_recipients"])
-    updated = db.update_claims_monitoring_config(
+    channels_json = None
+    if (
+        payload.get("channels") is not None
+        or payload.get("slack_webhook_url") is not None
+        or payload.get("webhook_url") is not None
+        or payload.get("email_recipients") is not None
+    ):
+        channels = _build_alert_channels(payload, existing)
+        if not any(channels.values()):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At least one channel must be enabled",
+            )
+        channels_json = json.dumps(channels)
+    updated = db.update_claims_monitoring_alert(
         int(config_id),
+        name=payload.get("name"),
+        alert_type=payload.get("alert_type"),
         threshold_ratio=payload.get("threshold_ratio"),
         baseline_ratio=payload.get("baseline_ratio"),
+        channels_json=channels_json,
         slack_webhook_url=payload.get("slack_webhook_url"),
         webhook_url=payload.get("webhook_url"),
         email_recipients=email_json,
@@ -1067,12 +1611,16 @@ def delete_claims_alert(
     db: MediaDatabase,
 ) -> Dict[str, Any]:
     _ensure_claims_admin(principal)
-    existing = db.get_claims_monitoring_config(int(config_id))
+    try:
+        db.migrate_legacy_claims_monitoring_alerts(str(current_user.id))
+    except Exception:
+        pass
+    existing = db.get_claims_monitoring_alert(int(config_id))
     if not existing:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert config not found")
     if not principal.is_admin and str(existing.get("user_id")) != str(current_user.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
-    db.delete_claims_monitoring_config(int(config_id))
+    db.delete_claims_monitoring_alert(int(config_id))
     return {"status": "deleted", "id": int(config_id)}
 
 
@@ -1091,14 +1639,52 @@ def evaluate_claims_alerts(
         if not principal.is_admin:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
         target_user_id = str(int(user_id))
+    return _evaluate_claims_alerts_for_user(
+        target_user_id=target_user_id,
+        db=db,
+        window_sec=window_sec,
+        baseline_sec=baseline_sec,
+    )
 
+
+def evaluate_claims_alerts_for_scheduler(
+    *,
+    target_user_id: str,
+    window_sec: int,
+    baseline_sec: int,
+    db: MediaDatabase,
+) -> Dict[str, Any]:
+    return _evaluate_claims_alerts_for_user(
+        target_user_id=target_user_id,
+        db=db,
+        window_sec=window_sec,
+        baseline_sec=baseline_sec,
+    )
+
+
+def _evaluate_claims_alerts_for_user(
+    *,
+    target_user_id: str,
+    window_sec: int,
+    baseline_sec: int,
+    db: MediaDatabase,
+) -> Dict[str, Any]:
     monitoring_enabled = bool(settings.get("CLAIMS_MONITORING_ENABLED", False))
+    try:
+        db.migrate_legacy_claims_monitoring_alerts(target_user_id)
+    except Exception:
+        pass
     ratios = _compute_unsupported_ratios(window_sec, baseline_sec)
-    configs = db.list_claims_monitoring_configs(target_user_id)
+    configs = db.list_claims_monitoring_alerts(target_user_id)
+    config_defaults = db.get_claims_monitoring_settings(target_user_id) or {}
+    if config_defaults and not bool(config_defaults.get("enabled", True)):
+        monitoring_enabled = False
     results: List[Dict[str, Any]] = []
     for cfg in configs:
         enabled = bool(cfg.get("enabled", True))
         threshold = cfg.get("threshold_ratio")
+        if threshold is None:
+            threshold = config_defaults.get("threshold_ratio")
         if threshold is None:
             threshold = settings.get("CLAIMS_ALERT_THRESHOLD_DEFAULT", 0.2)
         try:
@@ -1107,6 +1693,8 @@ def evaluate_claims_alerts(
             threshold_val = 0.2
         drift_threshold_val = None
         drift_threshold = cfg.get("baseline_ratio")
+        if drift_threshold is None:
+            drift_threshold = config_defaults.get("baseline_ratio")
         if drift_threshold is not None:
             try:
                 drift_threshold_val = float(drift_threshold)
@@ -1143,7 +1731,12 @@ def evaluate_claims_alerts(
                 severity="warning",
                 payload_json=json.dumps(payload),
             )
-            _dispatch_claims_alert_notifications(dict(cfg), payload)
+            _dispatch_claims_alert_notifications(
+                config_row=dict(cfg),
+                payload=payload,
+                db_path=db.db_path_str,
+                user_id=target_user_id,
+            )
         results.append(
             {
                 "config_id": cfg.get("id"),
@@ -1182,25 +1775,37 @@ def claims_rebuild_status(*, rebuild_service: Any = None) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-def claims_rebuild_health(principal: AuthPrincipal) -> Dict[str, Any]:
+def claims_rebuild_health(principal: AuthPrincipal, *, summary: bool = False) -> Dict[str, Any]:
     _ensure_claims_admin(principal)
+    persisted: Dict[str, Any] = {}
+    try:
+        persisted = _load_persisted_rebuild_health()
+    except Exception:
+        persisted = {}
+    if summary:
+        if persisted:
+            return _build_rebuild_health_summary_from_persisted(persisted)
+        svc = get_claims_rebuild_service()
+        health = svc.get_health()
+        return _build_rebuild_health_summary_from_service(health)
+
+    if persisted:
+        payload = _build_rebuild_health_summary_from_persisted(persisted)
+        payload["last_worker_heartbeat"] = persisted.get("last_worker_heartbeat")
+        payload["last_processed_at"] = persisted.get("last_processed_at")
+        payload["last_failure_at"] = persisted.get("last_failure_at")
+        payload["updated_at"] = persisted.get("updated_at")
+        return payload
+
     svc = get_claims_rebuild_service()
     health = svc.get_health()
-    now_ts = datetime.utcnow().timestamp()
-    heartbeat_ts = float(health.get("last_heartbeat_ts") or 0.0)
-    age_sec = now_ts - heartbeat_ts if heartbeat_ts > 0 else None
-    warn_threshold = int(settings.get("CLAIMS_REBUILD_HEARTBEAT_WARN_SEC", 600))
-    stale = age_sec is not None and age_sec > warn_threshold
-    return {
-        "status": "ok",
-        "queue_length": int(health.get("queue_length") or 0),
-        "workers": int(health.get("workers") or 0),
-        "last_heartbeat_ts": heartbeat_ts,
-        "heartbeat_age_sec": age_sec,
-        "last_processed_ts": health.get("last_processed_ts"),
-        "last_failure": health.get("last_failure"),
-        "stale": stale,
-    }
+    last_failure = health.get("last_failure") or {}
+    payload = _build_rebuild_health_summary_from_service(health)
+    payload["last_worker_heartbeat"] = _format_utc_timestamp(health.get("last_heartbeat_ts"))
+    payload["last_processed_at"] = _format_utc_timestamp(health.get("last_processed_ts"))
+    payload["last_failure_at"] = _format_utc_timestamp(last_failure.get("timestamp"))
+    payload["updated_at"] = _format_utc_timestamp(time.time())
+    return payload
 
 
 def get_review_queue(
@@ -1557,7 +2162,7 @@ def claims_dashboard_analytics(
         "baseline_ratio": ratios.get("baseline_ratio"),
     }
     try:
-        payload["rebuild_health"] = claims_rebuild_health(principal)
+        payload["rebuild_health"] = claims_rebuild_health(principal, summary=True)
     except Exception:
         payload["rebuild_health"] = None
     return payload
@@ -1567,99 +2172,216 @@ def export_claims_analytics(
     *,
     payload: Dict[str, Any],
     principal: AuthPrincipal,
+    current_user: User,
     db: MediaDatabase,
 ) -> Any:
     _ensure_claims_admin(principal)
-    window_days = int(payload.get("window_days") or 7)
-    window_sec = int(payload.get("window_sec") or 3600)
-    baseline_sec = int(payload.get("baseline_sec") or 86400)
-    data = claims_dashboard_analytics(
-        window_days=window_days,
-        window_sec=window_sec,
-        baseline_sec=baseline_sec,
-        principal=principal,
-        db=db,
+    fmt = str(payload.get("format") or "json").lower()
+    if fmt not in {"json", "csv"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported export format")
+
+    filters = payload.get("filters") or {}
+    pagination = payload.get("pagination") or {}
+    target_user_id = str(current_user.id)
+    workspace_id = filters.get("workspace_id")
+    if workspace_id:
+        if not principal.is_admin:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
+        target_user_id = str(workspace_id)
+
+    retention_hours = settings.get("CLAIMS_ANALYTICS_EXPORT_RETENTION_HOURS", 24)
+    try:
+        retention_val = float(retention_hours)
+    except (TypeError, ValueError):
+        retention_val = 24.0
+    if retention_val > 0:
+        try:
+            db.cleanup_claims_analytics_exports(user_id=target_user_id, retention_hours=retention_val)
+        except Exception as exc:
+            logger.debug("Claims analytics export cleanup failed: %s", exc)
+
+    events = db.list_claims_monitoring_events(
+        user_id=target_user_id,
+        event_type=filters.get("event_type"),
+        severity=filters.get("severity"),
+        start_time=filters.get("start_time"),
+        end_time=filters.get("end_time"),
     )
-    if payload.get("format") == "csv":
+    normalized_events = [_normalize_monitoring_event_row(row) for row in events]
+    filtered_events = _filter_monitoring_events_by_payload(
+        normalized_events,
+        provider=filters.get("provider"),
+        model=filters.get("model"),
+    )
+    total = len(filtered_events)
+    try:
+        limit = int(pagination.get("limit", 1000))
+    except Exception:
+        limit = 1000
+    try:
+        offset = int(pagination.get("offset", 0))
+    except Exception:
+        offset = 0
+    limit = max(1, min(10000, limit))
+    offset = max(0, offset)
+    page_events = filtered_events[offset: offset + limit]
+    pagination_meta = {
+        "limit": limit,
+        "offset": offset,
+        "total": total,
+    }
+
+    export_id = uuid4().hex
+    filters_json = json.dumps(filters) if filters else None
+    pagination_json = json.dumps(pagination_meta)
+
+    payload_json = None
+    payload_csv = None
+    if fmt == "csv":
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["section", "metric", "dimension", "value"])
-        writer.writerow(["summary", "total_claims", "", data.get("total_claims")])
-        writer.writerow(["summary", "avg_review_latency_sec", "", data.get("avg_review_latency_sec")])
-        writer.writerow(["summary", "p95_review_latency_sec", "", data.get("p95_review_latency_sec")])
-        writer.writerow(["summary", "review_backlog", "", data.get("review_backlog")])
-
-        for status_key, count in (data.get("status_counts") or {}).items():
-            writer.writerow(["status_counts", "count", str(status_key), count])
-
-        media_stats = data.get("claims_per_media_stats") or {}
-        writer.writerow(["claims_per_media_stats", "mean", "", media_stats.get("mean")])
-        writer.writerow(["claims_per_media_stats", "p95", "", media_stats.get("p95")])
-        writer.writerow(["claims_per_media_stats", "max", "", media_stats.get("max")])
-        for row in data.get("claims_per_media_top") or []:
+        writer.writerow(["id", "event_type", "severity", "created_at", "payload_json"])
+        for event in page_events:
             writer.writerow(
                 [
-                    "claims_per_media_top",
-                    "count",
-                    f"media_id={row.get('media_id')}",
-                    row.get("count"),
+                    event.get("id"),
+                    event.get("event_type"),
+                    event.get("severity"),
+                    event.get("created_at"),
+                    json.dumps(event.get("payload") or {}),
                 ]
             )
+        payload_csv = output.getvalue()
+    else:
+        export_payload = {
+            "events": page_events,
+            "filters": filters,
+            "pagination": pagination_meta,
+        }
+        payload_json = json.dumps(export_payload)
 
-        review_throughput = data.get("review_throughput") or {}
-        for point in review_throughput.get("daily") or []:
-            writer.writerow(["review_throughput", "count", str(point.get("date")), point.get("count")])
+    export_row = db.create_claims_analytics_export(
+        export_id=export_id,
+        user_id=target_user_id,
+        format=fmt,
+        status="ready",
+        payload_json=payload_json,
+        payload_csv=payload_csv,
+        filters_json=filters_json,
+        pagination_json=pagination_json,
+    )
 
-        clusters = data.get("clusters") or {}
-        writer.writerow(["clusters", "total_clusters", "", clusters.get("total_clusters")])
-        writer.writerow(["clusters", "clusters_with_members", "", clusters.get("clusters_with_members")])
-        writer.writerow(["clusters", "total_members", "", clusters.get("total_members")])
-        writer.writerow(["clusters", "avg_member_count", "", clusters.get("avg_member_count")])
-        writer.writerow(["clusters", "p95_member_count", "", clusters.get("p95_member_count")])
-        writer.writerow(["clusters", "max_member_count", "", clusters.get("max_member_count")])
-        writer.writerow(["clusters", "orphan_claims", "", clusters.get("orphan_claims")])
-        for row in clusters.get("top_clusters") or []:
-            cluster_id = row.get("cluster_id")
-            writer.writerow(
-                [
-                    "clusters_top",
-                    "member_count",
-                    f"cluster_id={cluster_id}",
-                    row.get("member_count"),
-                ]
-            )
-            writer.writerow(
-                [
-                    "clusters_top",
-                    "watchlist_count",
-                    f"cluster_id={cluster_id}",
-                    row.get("watchlist_count"),
-                ]
-            )
-            if row.get("canonical_claim_text") is not None:
-                writer.writerow(
-                    [
-                        "clusters_top",
-                        "canonical_claim_text",
-                        f"cluster_id={cluster_id}",
-                        row.get("canonical_claim_text"),
-                    ]
-                )
+    return {
+        "export_id": export_id,
+        "format": fmt,
+        "status": export_row.get("status", "ready") if export_row else "ready",
+        "download_url": f"/api/v1/claims/analytics/export/{export_id}",
+        "created_at": export_row.get("created_at") if export_row else None,
+    }
 
-        ratios = data.get("unsupported_ratios") or {}
-        writer.writerow(["unsupported_ratios", "window_sec", "", ratios.get("window_sec")])
-        writer.writerow(["unsupported_ratios", "baseline_sec", "", ratios.get("baseline_sec")])
-        writer.writerow(["unsupported_ratios", "window_ratio", "", ratios.get("window_ratio")])
-        writer.writerow(["unsupported_ratios", "baseline_ratio", "", ratios.get("baseline_ratio")])
 
-        rebuild = data.get("rebuild_health") or {}
-        if isinstance(rebuild, dict):
-            for key, value in rebuild.items():
-                if key == "last_failure" and value is not None:
-                    value = json.dumps(value)
-                writer.writerow(["rebuild_health", key, "", value])
-        return output.getvalue()
-    return data
+def list_claims_analytics_exports(
+    *,
+    limit: int,
+    offset: int,
+    status_filter: Optional[str],
+    format_filter: Optional[str],
+    workspace_id: Optional[str],
+    principal: AuthPrincipal,
+    current_user: User,
+    db: MediaDatabase,
+) -> Dict[str, Any]:
+    _ensure_claims_admin(principal)
+    target_user_id = str(current_user.id)
+    if workspace_id:
+        if not principal.is_admin:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
+        target_user_id = str(workspace_id)
+
+    if format_filter:
+        normalized = str(format_filter).lower()
+        if normalized not in {"json", "csv"}:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported export format")
+        format_filter = normalized
+
+    rows = db.list_claims_analytics_exports(
+        user_id=target_user_id,
+        status=status_filter,
+        format=format_filter,
+        limit=limit,
+        offset=offset,
+    )
+    total = db.count_claims_analytics_exports(
+        user_id=target_user_id,
+        status=status_filter,
+        format=format_filter,
+    )
+    exports: List[Dict[str, Any]] = []
+    for row in rows:
+        filters = None
+        pagination = None
+        raw_filters = row.get("filters_json")
+        if raw_filters:
+            try:
+                filters = json.loads(raw_filters)
+            except Exception:
+                filters = None
+        raw_pagination = row.get("pagination_json")
+        if raw_pagination:
+            try:
+                pagination = json.loads(raw_pagination)
+            except Exception:
+                pagination = None
+        exports.append(
+            {
+                "export_id": row.get("export_id"),
+                "format": row.get("format"),
+                "status": row.get("status"),
+                "download_url": f"/api/v1/claims/analytics/export/{row.get('export_id')}",
+                "created_at": row.get("created_at"),
+                "updated_at": row.get("updated_at"),
+                "filters": filters,
+                "pagination": pagination,
+                "error_message": row.get("error_message"),
+            }
+        )
+
+    return {
+        "exports": exports,
+        "total": int(total),
+        "limit": int(limit),
+        "offset": int(offset),
+    }
+
+
+def get_claims_analytics_export(
+    *,
+    export_id: str,
+    principal: AuthPrincipal,
+    current_user: User,
+    db: MediaDatabase,
+) -> Dict[str, Any]:
+    _ensure_claims_admin(principal)
+    row = db.get_claims_analytics_export(str(export_id))
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Export not found")
+    if not principal.is_admin and str(row.get("user_id")) != str(current_user.id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
+    fmt = row.get("format")
+    if fmt == "csv":
+        payload = row.get("payload_csv") or ""
+    else:
+        raw = row.get("payload_json") or "{}"
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            payload = {}
+    return {
+        "export_id": row.get("export_id"),
+        "format": fmt,
+        "status": row.get("status"),
+        "payload": payload,
+    }
 
 
 def list_claim_clusters(
@@ -1827,6 +2549,105 @@ def get_claim_cluster(
         payload["watchlist_count"] = int(counts.get(int(cluster_id), payload.get("watchlist_count") or 0))
     payload["member_count"] = size
     return payload
+
+
+def list_claim_cluster_links(
+    *,
+    cluster_id: int,
+    direction: str,
+    principal: AuthPrincipal,
+    current_user: User,
+    db: MediaDatabase,
+) -> List[Dict[str, Any]]:
+    _ensure_claims_review(principal)
+    cluster = db.get_claim_cluster(int(cluster_id))
+    if not cluster:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster not found")
+    if not principal.is_admin and str(cluster.get("user_id")) != str(current_user.id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
+    rows = db.list_claim_cluster_links(cluster_id=int(cluster_id), direction=direction)
+    links: List[Dict[str, Any]] = []
+    for row in rows:
+        parent_id = int(row.get("parent_cluster_id") or 0)
+        child_id = int(row.get("child_cluster_id") or 0)
+        if parent_id == int(cluster_id):
+            direction_val = "outbound"
+        elif child_id == int(cluster_id):
+            direction_val = "inbound"
+        else:
+            direction_val = "unknown"
+        links.append(
+            {
+                "parent_cluster_id": parent_id,
+                "child_cluster_id": child_id,
+                "relation_type": row.get("relation_type"),
+                "created_at": row.get("created_at"),
+                "direction": direction_val,
+            }
+        )
+    return links
+
+
+def create_claim_cluster_link(
+    *,
+    cluster_id: int,
+    payload: Dict[str, Any],
+    principal: AuthPrincipal,
+    current_user: User,
+    db: MediaDatabase,
+) -> Dict[str, Any]:
+    _ensure_claims_review(principal)
+    parent_id = int(cluster_id)
+    child_id = int(payload.get("child_cluster_id"))
+    if parent_id == child_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cluster link must be to a different cluster")
+    parent = db.get_claim_cluster(parent_id)
+    child = db.get_claim_cluster(child_id)
+    if not parent or not child:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster not found")
+    if not principal.is_admin:
+        if str(parent.get("user_id")) != str(current_user.id) or str(child.get("user_id")) != str(current_user.id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
+    created = db.create_claim_cluster_link(
+        parent_cluster_id=parent_id,
+        child_cluster_id=child_id,
+        relation_type=payload.get("relation_type"),
+    )
+    if not created:
+        created = {
+            "parent_cluster_id": parent_id,
+            "child_cluster_id": child_id,
+            "relation_type": payload.get("relation_type"),
+        }
+    created["direction"] = "outbound"
+    return created
+
+
+def delete_claim_cluster_link(
+    *,
+    cluster_id: int,
+    child_cluster_id: int,
+    principal: AuthPrincipal,
+    current_user: User,
+    db: MediaDatabase,
+) -> Dict[str, Any]:
+    _ensure_claims_review(principal)
+    parent = db.get_claim_cluster(int(cluster_id))
+    child = db.get_claim_cluster(int(child_cluster_id))
+    if not parent or not child:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster not found")
+    if not principal.is_admin:
+        if str(parent.get("user_id")) != str(current_user.id) or str(child.get("user_id")) != str(current_user.id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
+    deleted = db.delete_claim_cluster_link(
+        parent_cluster_id=int(cluster_id),
+        child_cluster_id=int(child_cluster_id),
+    )
+    return {
+        "status": "deleted" if deleted else "missing",
+        "parent_cluster_id": int(cluster_id),
+        "child_cluster_id": int(child_cluster_id),
+    }
 
 
 def list_claim_cluster_members(

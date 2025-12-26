@@ -39,6 +39,7 @@ export function Header() {
     { href: '/audio', label: 'Audio' },
     { href: '/evaluations', label: 'Evals' },
     ...(userIsAdmin ? [{ href: '/admin/maintenance', label: 'Admin' } as const] : []),
+    { href: '/profile', label: 'Profile' },
     { href: '/config', label: 'Config' },
   ];
 

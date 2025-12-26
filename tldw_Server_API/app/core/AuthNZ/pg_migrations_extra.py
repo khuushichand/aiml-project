@@ -394,6 +394,18 @@ _CREATE_BILLING_TABLES = [
     ("CREATE INDEX IF NOT EXISTS idx_org_subs_stripe_customer ON org_subscriptions(stripe_customer_id)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_org_subs_stripe_sub ON org_subscriptions(stripe_subscription_id)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_org_subs_status ON org_subscriptions(status)", ()),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS org_budgets (
+            org_id INTEGER PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
+            budgets_json JSONB,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_org_budgets_org ON org_budgets(org_id)", ()),
 ]
 
 

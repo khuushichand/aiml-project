@@ -45,7 +45,7 @@ class DatabasePaths:
         Returns:
             Path to the user's database directory
         """
-        user_db_base = settings.get("USER_DB_BASE_DIR")
+        user_db_base = os.getenv("USER_DB_BASE_DIR") or settings.get("USER_DB_BASE_DIR")
         project_root = Path(get_project_root())
         if not user_db_base:
             # Fallback to default location

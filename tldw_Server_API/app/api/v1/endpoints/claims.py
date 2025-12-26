@@ -21,6 +21,11 @@ from tldw_Server_API.app.api.v1.schemas.claims_schemas import (
     ClaimsAlertConfigUpdate,
     ClaimsAnalyticsDashboardResponse,
     ClaimsAnalyticsExportRequest,
+    ClaimsAnalyticsExportResponse,
+    ClaimsAnalyticsExportListResponse,
+    ClaimsClusterLinkCreate,
+    ClaimsClusterLinkResponse,
+    ClaimsSearchResponse,
     ClaimsMonitoringSettingsResponse,
     ClaimsMonitoringSettingsUpdate,
     ClaimsSettingsResponse,
@@ -203,20 +208,30 @@ def update_claims_settings(
 @router.get("/monitoring/config", response_model=ClaimsMonitoringSettingsResponse)
 def get_claims_monitoring_config(
     principal: AuthPrincipal = Depends(get_auth_principal),
+    current_user: User = Depends(get_request_user),
+    db: MediaDatabase = Depends(get_media_db_for_user),
 ) -> ClaimsMonitoringSettingsResponse:
     """Return claims monitoring configuration (admin only)."""
-    return claims_service.get_claims_monitoring_config(principal)
+    return claims_service.get_claims_monitoring_config(
+        principal=principal,
+        current_user=current_user,
+        db=db,
+    )
 
 
 @router.patch("/monitoring/config", response_model=ClaimsMonitoringSettingsResponse)
 def update_claims_monitoring_config(
     payload: ClaimsMonitoringSettingsUpdate,
     principal: AuthPrincipal = Depends(get_auth_principal),
+    current_user: User = Depends(get_request_user),
+    db: MediaDatabase = Depends(get_media_db_for_user),
 ) -> ClaimsMonitoringSettingsResponse:
     """Update claims monitoring configuration (optionally persisted)."""
     return claims_service.update_claims_monitoring_config(
         payload=payload.model_dump(exclude_unset=True),
         principal=principal,
+        current_user=current_user,
+        db=db,
     )
 
 
@@ -505,21 +520,63 @@ def claims_dashboard_analytics(
     )
 
 
-@router.post("/analytics/export")
+@router.post("/analytics/export", response_model=ClaimsAnalyticsExportResponse)
 def export_claims_analytics(
     payload: ClaimsAnalyticsExportRequest,
     principal: AuthPrincipal = Depends(get_auth_principal),
+    current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
 ) -> Any:
     """Export claims analytics in JSON or CSV."""
-    data = claims_service.export_claims_analytics(
+    return claims_service.export_claims_analytics(
         payload=payload.model_dump(exclude_unset=True),
         principal=principal,
+        current_user=current_user,
         db=db,
     )
-    if payload.format == "csv":
-        return Response(content=str(data), media_type="text/csv")
-    return data
+
+
+@router.get("/analytics/exports", response_model=ClaimsAnalyticsExportListResponse)
+def list_claims_analytics_exports(
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0, le=100000),
+    status: Optional[str] = None,
+    format_filter: Optional[str] = Query(None, alias="format"),
+    workspace_id: Optional[str] = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    current_user: User = Depends(get_request_user),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+) -> Dict[str, Any]:
+    """List available claims analytics exports."""
+    return claims_service.list_claims_analytics_exports(
+        limit=limit,
+        offset=offset,
+        status_filter=status,
+        format_filter=format_filter,
+        workspace_id=workspace_id,
+        principal=principal,
+        current_user=current_user,
+        db=db,
+    )
+
+
+@router.get("/analytics/export/{export_id}")
+def download_claims_analytics_export(
+    export_id: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    current_user: User = Depends(get_request_user),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+) -> Any:
+    """Download a prepared claims analytics export."""
+    result = claims_service.get_claims_analytics_export(
+        export_id=export_id,
+        principal=principal,
+        current_user=current_user,
+        db=db,
+    )
+    if result.get("format") == "csv":
+        return Response(content=str(result.get("payload") or ""), media_type="text/csv")
+    return result.get("payload") or {}
 
 
 @router.get("/clusters")
@@ -588,6 +645,60 @@ def get_claim_cluster(
     )
 
 
+@router.get("/clusters/{cluster_id}/links", response_model=List[ClaimsClusterLinkResponse])
+def list_claim_cluster_links(
+    cluster_id: int,
+    direction: str = Query("both", pattern="^(both|inbound|outbound|parent|child)$"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    current_user: User = Depends(get_request_user),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+) -> List[Dict[str, Any]]:
+    """List cluster relationships."""
+    return claims_service.list_claim_cluster_links(
+        cluster_id=cluster_id,
+        direction=direction,
+        principal=principal,
+        current_user=current_user,
+        db=db,
+    )
+
+
+@router.post("/clusters/{cluster_id}/links", response_model=ClaimsClusterLinkResponse)
+def create_claim_cluster_link(
+    cluster_id: int,
+    payload: ClaimsClusterLinkCreate,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    current_user: User = Depends(get_request_user),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+) -> Dict[str, Any]:
+    """Create a cluster relationship."""
+    return claims_service.create_claim_cluster_link(
+        cluster_id=cluster_id,
+        payload=payload.model_dump(exclude_unset=True),
+        principal=principal,
+        current_user=current_user,
+        db=db,
+    )
+
+
+@router.delete("/clusters/{cluster_id}/links/{child_cluster_id}")
+def delete_claim_cluster_link(
+    cluster_id: int,
+    child_cluster_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    current_user: User = Depends(get_request_user),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+) -> Dict[str, Any]:
+    """Delete a cluster relationship."""
+    return claims_service.delete_claim_cluster_link(
+        cluster_id=cluster_id,
+        child_cluster_id=child_cluster_id,
+        principal=principal,
+        current_user=current_user,
+        db=db,
+    )
+
+
 @router.get("/clusters/{cluster_id}/members")
 def list_claim_cluster_members(
     cluster_id: int,
@@ -643,6 +754,28 @@ def claim_cluster_evidence(
         limit=limit,
         offset=offset,
         principal=principal,
+        current_user=current_user,
+        db=db,
+    )
+
+
+@router.get("/search", response_model=ClaimsSearchResponse)
+def search_claims(
+    q: str,
+    limit: int = Query(50, ge=1, le=1000),
+    offset: int = Query(0, ge=0, le=100000),
+    group_by_cluster: bool = Query(False),
+    user_id: Optional[int] = None,
+    current_user: User = Depends(get_request_user),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+) -> Dict[str, Any]:
+    """Search claims using the FTS index."""
+    return claims_service.search_claims(
+        query=q,
+        limit=limit,
+        offset=offset,
+        group_by_cluster=group_by_cluster,
+        user_id=user_id,
         current_user=current_user,
         db=db,
     )

@@ -262,8 +262,15 @@ def test_transcribe_batch_external_normalizes_artifact(monkeypatch, tmp_path):
     # Stub external provider module to avoid real HTTP calls
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_External_Provider as ext_mod
 
-    def fake_transcribe_with_external_provider(path, provider_name="default", language=None, sample_rate=None):
+    def fake_transcribe_with_external_provider(
+        path,
+        provider_name="default",
+        language=None,
+        sample_rate=None,
+        base_dir=None,
+    ):
         assert str(path) == str(audio_file)
+        assert base_dir is None
         return "external transcript"
 
     monkeypatch.setattr(
@@ -286,3 +293,47 @@ def test_transcribe_batch_external_normalizes_artifact(monkeypatch, tmp_path):
     assert artifact["metadata"]["provider"] == "external"
     assert artifact["metadata"]["external_provider_name"] == "myprovider"
     assert artifact["diarization"]["enabled"] is False
+
+
+@pytest.mark.unit
+def test_transcribe_batch_external_passes_base_dir(monkeypatch, tmp_path):
+    spa = _import_module()
+
+    audio_file = tmp_path / "external_base_dir.wav"
+    audio_file.write_bytes(b"\x00" * 2048)
+    base_dir = tmp_path / "base"
+    base_dir.mkdir()
+
+    captured = {}
+
+    def fake_transcribe_with_external_provider(
+        path,
+        provider_name="default",
+        language=None,
+        sample_rate=None,
+        base_dir=None,
+    ):
+        captured["path"] = str(path)
+        captured["base_dir"] = base_dir
+        return "external ok"
+
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_External_Provider as ext_mod
+
+    monkeypatch.setattr(
+        ext_mod,
+        "transcribe_with_external_provider",
+        fake_transcribe_with_external_provider,
+        raising=True,
+    )
+
+    adapter = spa.ExternalAdapter()
+    artifact = adapter.transcribe_batch(
+        str(audio_file),
+        model="external:stub",
+        language=None,
+        base_dir=base_dir,
+    )
+
+    assert artifact["text"] == "external ok"
+    assert captured["path"] == str(audio_file)
+    assert captured["base_dir"] == base_dir

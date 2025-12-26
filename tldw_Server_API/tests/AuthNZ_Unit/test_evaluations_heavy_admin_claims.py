@@ -67,6 +67,7 @@ def _build_app_with_admin_cleanup(principal: AuthPrincipal) -> FastAPI:
         )
 
     app.dependency_overrides[udh.get_request_user] = _fake_get_request_user
+    app.dependency_overrides[eval_auth.get_eval_request_user] = _fake_get_request_user
 
     # Use a small in-memory DB path for the cleanup helper
     from pathlib import Path
@@ -125,7 +126,10 @@ def test_admin_cleanup_idempotency_forbidden_without_admin_role(monkeypatch):
     monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "true")
 
     with TestClient(app) as client:
-        resp = client.post("/api/v1/evaluations/admin/idempotency/cleanup")
+        resp = client.post(
+            "/api/v1/evaluations/admin/idempotency/cleanup",
+            headers={"Authorization": "Bearer test"},
+        )
     assert resp.status_code == 403
 
 
@@ -136,7 +140,10 @@ def test_admin_cleanup_idempotency_allowed_for_admin(monkeypatch):
     monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "true")
 
     with TestClient(app) as client:
-        resp = client.post("/api/v1/evaluations/admin/idempotency/cleanup")
+        resp = client.post(
+            "/api/v1/evaluations/admin/idempotency/cleanup",
+            headers={"Authorization": "Bearer test"},
+        )
     assert resp.status_code == 200
     body = resp.json()
     # In a fresh test environment there may be zero stale keys; the important
@@ -156,5 +163,8 @@ def test_admin_cleanup_idempotency_allows_roles_admin_without_is_admin(monkeypat
     monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "true")
 
     with TestClient(app) as client:
-        resp = client.post("/api/v1/evaluations/admin/idempotency/cleanup")
+        resp = client.post(
+            "/api/v1/evaluations/admin/idempotency/cleanup",
+            headers={"Authorization": "Bearer test"},
+        )
     assert resp.status_code == 200

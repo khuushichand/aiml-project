@@ -4,6 +4,7 @@ import pytest
 from tldw_Server_API.app.core.AuthNZ.settings import Settings
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.api.v1.endpoints import admin as admin_module
 from tldw_Server_API.app.api.v1.schemas.admin_schemas import RateLimitResetRequest
 
@@ -44,7 +45,20 @@ async def test_admin_reset_specific_endpoint_sqlite(tmp_path, monkeypatch):
 
     # Call endpoint: specific endpoint reset
     req = RateLimitResetRequest(kind="ip", ip="1.2.3.4", endpoint=endpoint)
-    resp = await admin_module.admin_reset_rate_limit(req)
+    principal = AuthPrincipal(
+        kind="user",
+        user_id=1,
+        api_key_id=None,
+        subject=None,
+        token_type="access",
+        jti=None,
+        roles=["owner"],
+        permissions=["system.configure"],
+        is_admin=True,
+        org_ids=[],
+        team_ids=[],
+    )
+    resp = await admin_module.admin_reset_rate_limit(req, principal=principal)
     assert resp.ok is True
     assert resp.identifier == ident
     assert resp.endpoint == endpoint
@@ -98,7 +112,20 @@ async def test_admin_reset_all_endpoints_sqlite(tmp_path, monkeypatch):
     monkeypatch.setattr(admin_module, "is_postgres_backend", _fake_is_pg2, raising=False)
 
     req = RateLimitResetRequest(kind="raw", identifier=ident)
-    resp = await admin_module.admin_reset_rate_limit(req)
+    principal = AuthPrincipal(
+        kind="user",
+        user_id=1,
+        api_key_id=None,
+        subject=None,
+        token_type="access",
+        jti=None,
+        roles=["owner"],
+        permissions=["system.configure"],
+        is_admin=True,
+        org_ids=[],
+        team_ids=[],
+    )
+    resp = await admin_module.admin_reset_rate_limit(req, principal=principal)
     assert resp.ok is True
     assert resp.identifier == ident
     assert resp.endpoint is None
@@ -150,7 +177,20 @@ async def test_admin_reset_dry_run_sqlite(tmp_path, monkeypatch):
 
     # Call with dry_run; ensure rows remain, counts reported
     req = RateLimitResetRequest(kind="raw", identifier=ident, dry_run=True)
-    resp = await admin_module.admin_reset_rate_limit(req)
+    principal = AuthPrincipal(
+        kind="user",
+        user_id=1,
+        api_key_id=None,
+        subject=None,
+        token_type="access",
+        jti=None,
+        roles=["owner"],
+        permissions=["system.configure"],
+        is_admin=True,
+        org_ids=[],
+        team_ids=[],
+    )
+    resp = await admin_module.admin_reset_rate_limit(req, principal=principal)
     assert resp.ok is True
     assert resp.note and "dry_run" in resp.note
     # dry_run reports what WOULD be deleted (1 record since rate limiter now creates records)

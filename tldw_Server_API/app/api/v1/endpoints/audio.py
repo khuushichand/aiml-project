@@ -1014,6 +1014,7 @@ async def create_transcription(
         except Exception as e:
             logger.debug(f"convert_to_wav failed; using original temp file: path={temp_audio_path}, error={e}")
             canonical_path = temp_audio_path
+        base_dir = PathLib(canonical_path).parent
 
         # Load canonical audio
         audio_data, sample_rate = sf.read(canonical_path)
@@ -1166,6 +1167,7 @@ async def create_transcription(
                         task=task_normalized,
                         word_timestamps=("word" in granularity_tokens),
                         prompt=prompt,
+                        base_dir=base_dir,
                     )
                     detected_language = artifact.get("language")
                     segments_for_timing = artifact.get("segments") or []
@@ -1188,6 +1190,7 @@ async def create_transcription(
                         task=task_normalized,
                         word_timestamps=("word" in granularity_tokens),
                         prompt=prompt,
+                        base_dir=base_dir,
                     )
                     detected_language = artifact.get("language")
                     segments_for_timing = artifact.get("segments") or []

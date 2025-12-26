@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from datetime import datetime, timezone
 from queue import Queue, Empty
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
@@ -10,6 +11,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.Chunking import chunk_for_embedding
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 from tldw_Server_API.app.core.Claims_Extraction.ingestion_claims import (
     extract_claims_for_chunks,
     store_claims,
@@ -26,6 +28,22 @@ class ClaimsRebuildTask:
     db_path: str
 
 
+def _claims_monitoring_system_user_id() -> int:
+    try:
+        return int(settings.get("CLAIMS_MONITORING_SYSTEM_USER_ID", 0))
+    except Exception:
+        return 0
+
+
+def _format_timestamp(ts: Optional[float]) -> Optional[str]:
+    if not ts:
+        return None
+    try:
+        return datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+    except Exception:
+        return None
+
+
 class ClaimsRebuildService:
     """Background service to rebuild claims for media items."""
 
@@ -40,6 +58,9 @@ class ClaimsRebuildService:
         self._last_heartbeat_ts = 0.0
         self._last_processed_ts = 0.0
         self._last_failure: Optional[Dict[str, Any]] = None
+        self._last_health_persist_ts = 0.0
+        self._last_health_persist_queue: Optional[int] = None
+        self._health_db_initialized = False
 
     def start(self) -> None:
         if self._threads:
@@ -75,6 +96,60 @@ class ClaimsRebuildService:
         with self._stats_lock:
             self._stats["enqueued"] += 1
         record_claims_rebuild_metrics(queue_size=self._queue.qsize())
+        self._persist_health()
+
+    def _persist_health(self, *, force: bool = False) -> None:
+        now = time.time()
+        queue_size = self._queue.qsize()
+        if not force:
+            if self._last_health_persist_queue == queue_size and (now - self._last_health_persist_ts) < 5.0:
+                return
+        self._last_health_persist_ts = now
+        self._last_health_persist_queue = queue_size
+        user_id = _claims_monitoring_system_user_id()
+        db_path = None
+        try:
+            db_path = get_user_media_db_path(user_id)
+        except Exception as exc:
+            logger.debug("Claims rebuild health persistence skipped: %s", exc)
+            return
+        try:
+            db = create_media_database(
+                client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
+                db_path=db_path,
+            )
+        except Exception as exc:
+            logger.debug("Claims rebuild health persistence DB init failed: %s", exc)
+            return
+        try:
+            if not self._health_db_initialized:
+                try:
+                    db.initialize_db()
+                    self._health_db_initialized = True
+                except Exception as exc:
+                    logger.debug("Claims rebuild health persistence DB setup failed: %s", exc)
+                    return
+            last_failure_reason = None
+            last_failure_at = None
+            if self._last_failure:
+                last_failure_reason = self._last_failure.get("error")
+                last_failure_at = _format_timestamp(self._last_failure.get("timestamp"))
+            db.upsert_claims_monitoring_health(
+                user_id=str(user_id),
+                queue_size=queue_size,
+                worker_count=self.get_worker_count(),
+                last_worker_heartbeat=_format_timestamp(self._last_heartbeat_ts),
+                last_processed_at=_format_timestamp(self._last_processed_ts) if self._last_processed_ts else None,
+                last_failure_at=last_failure_at,
+                last_failure_reason=last_failure_reason,
+            )
+        except Exception as exc:
+            logger.debug("Claims rebuild health persistence failed: %s", exc)
+        finally:
+            try:
+                db.close_connection()
+            except Exception:
+                pass
 
     def _worker_loop(self) -> None:
         while not self._stop.is_set():
@@ -102,6 +177,7 @@ class ClaimsRebuildService:
                     duration_s=time.time() - start_time,
                     queue_size=self._queue.qsize(),
                 )
+                self._persist_health()
             except Exception as e:
                 logger.error(f"Claims rebuild failed for media_id={task.media_id}: {e}")
                 with self._stats_lock:
@@ -116,6 +192,7 @@ class ClaimsRebuildService:
                     duration_s=time.time() - start_time,
                     queue_size=self._queue.qsize(),
                 )
+                self._persist_health(force=True)
             finally:
                 self._queue.task_done()
 
@@ -178,6 +255,7 @@ class ClaimsRebuildService:
     def _touch_heartbeat(self) -> None:
         self._last_heartbeat_ts = time.time()
         record_claims_rebuild_metrics(heartbeat_ts=self._last_heartbeat_ts)
+        self._persist_health()
 
 
 # Module-level singleton for convenience

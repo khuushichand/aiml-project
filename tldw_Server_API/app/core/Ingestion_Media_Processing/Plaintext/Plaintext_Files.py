@@ -27,7 +27,10 @@ from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_his
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
 from tldw_Server_API.app.core.Utils.Utils import logging
-from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import (
+    open_safe_local_path,
+    resolve_safe_local_path,
+)
 #
 #######################################################################################################################
 #
@@ -46,24 +49,36 @@ def _ensure_secure_xml_support() -> None:
         )
 
 
-def _read_text(path: Path) -> str:
+def _read_text(path: Path, base_dir: Optional[Path] = None) -> str:
     """Read file content as UTF-8, fallback to latin-1 if needed."""
+    base_dir_for_open = base_dir or path.parent
+    handle = open_safe_local_path(path, base_dir_for_open, mode="rb")
+    if handle is None:
+        raise ValueError(f"Path rejected outside allowed base directory: {path}")
     try:
-        return path.read_text(encoding="utf-8") # Corrected encoding name
-    except UnicodeDecodeError:
-        logging.warning(f"UTF-8 decode failed for {path}, trying latin-1.")
-        return path.read_text(encoding="latin-1") # Corrected encoding name
+        with handle:
+            data = handle.read()
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError:
+            logging.warning(f"UTF-8 decode failed for {path}, trying latin-1.")
+            return data.decode("latin-1")
     except Exception as e:
         logging.error(f"Failed to read text file {path}: {e}")
-        raise # Re-raise other read errors
+        raise
 
 
-def convert_to_plain_text(file_path: Path) -> str:
+def convert_to_plain_text(file_path: Path, base_dir: Optional[Path] = None) -> str:
     """
     Converts various document formats (.docx, .rtf) to plain text.
     Returns original content for .txt/.md.
     Raises ValueError for unsupported types.
     """
+    if base_dir is not None:
+        safe_path = resolve_safe_local_path(file_path, base_dir)
+        if safe_path is None:
+            raise ValueError("Document path rejected outside allowed base directory.")
+        file_path = safe_path
     extension = file_path.suffix.lower()
     content = ""
     try:
@@ -84,7 +99,7 @@ def convert_to_plain_text(file_path: Path) -> str:
                 logging.error(f"Pandoc conversion error for {file_path}: {e_rtf}")
                 raise ValueError(f"Failed to convert {extension} with Pandoc: {e_rtf}") from e_rtf
         elif extension in ['.txt', '.md']:
-            content = _read_text(file_path) # Use robust reader
+            content = _read_text(file_path, base_dir) # Use robust reader
         else:
             raise ValueError(f"Unsupported file type for plain text conversion: {extension}")
     except ImportError as ie:
@@ -111,7 +126,10 @@ def _xml_to_text_simple(element):
 
 # ───────────────────────────  Conversion Function ───────────────────────────
 
-def convert_document_to_text(file_path: Path) -> Tuple[str, str, Dict[str, Any]]:
+def convert_document_to_text(
+    file_path: Path,
+    base_dir: Optional[Path] = None,
+) -> Tuple[str, str, Dict[str, Any]]:
     """
     Converts various document formats to plain text and extracts basic metadata.
 
@@ -123,6 +141,11 @@ def convert_document_to_text(file_path: Path) -> Tuple[str, str, Dict[str, Any]]
           Returns empty string and raises ValueError on critical failure.
           raw_metadata might contain format-specific info like original title.
     """
+    if base_dir is not None:
+        safe_path = resolve_safe_local_path(file_path, base_dir)
+        if safe_path is None:
+            raise ValueError("Document path rejected outside allowed base directory.")
+        file_path = safe_path
     extension = file_path.suffix.lower()
     content = ""
     source_format_used = extension.lstrip('.')
@@ -169,10 +192,10 @@ def convert_document_to_text(file_path: Path) -> Tuple[str, str, Dict[str, Any]]
                     logging.error(f"Unexpected Pandoc conversion error for RTF {file_path}: {e_rtf}", exc_info=True)
                     raise ValueError(f"Unexpected RTF conversion error: {str(e_rtf)}") from e_rtf
         elif extension in ['.txt', '.md']:
-            content = _read_text(file_path) # Use robust reader
+            content = _read_text(file_path, base_dir) # Use robust reader
         elif extension == '.json':
             source_format_used = 'json'
-            raw_text = _read_text(file_path)
+            raw_text = _read_text(file_path, base_dir)
             try:
                 obj = json.loads(raw_text)
                 content = json.dumps(obj, ensure_ascii=False, indent=2)
@@ -193,7 +216,7 @@ def convert_document_to_text(file_path: Path) -> Tuple[str, str, Dict[str, Any]]
             h = html2text.HTML2Text()
             h.ignore_links = False # Keep links as text
             h.body_width = 0 # Don't wrap lines
-            html_content = _read_text(file_path)
+            html_content = _read_text(file_path, base_dir)
             # Defense-in-depth: strip script/style/noscript tags and comments before conversion
             try:
                 soup = BeautifulSoup(html_content, 'html.parser')
@@ -229,7 +252,17 @@ def convert_document_to_text(file_path: Path) -> Tuple[str, str, Dict[str, Any]]
             # Simple text extraction from XML - may need refinement based on XML structure
             try:
                 _ensure_secure_xml_support()
-                tree = DET.parse(str(file_path))  # type: ignore[union-attr]
+                handle = open_safe_local_path(
+                    file_path,
+                    base_dir or file_path.parent,
+                    mode="rb",
+                )
+                if handle is None:
+                    raise ValueError(
+                        "XML path rejected outside allowed base directory.",
+                    )
+                with handle:
+                    tree = DET.parse(handle)  # type: ignore[union-attr]
                 root = tree.getroot()
                 # Basic text concatenation - consider xml_to_markdown if structure is important
                 content = _xml_to_text_simple(root)
@@ -367,7 +400,10 @@ def process_document_content( # Renamed from _process_single_document for clarit
 
     try:
         # 1. Read/Convert Content & Get Initial Metadata
-        text_content, source_format_used, raw_metadata = convert_document_to_text(doc_path_obj)
+        text_content, source_format_used, raw_metadata = convert_document_to_text(
+            doc_path_obj,
+            base_dir,
+        )
         result["content"] = text_content
         result["source_format"] = source_format_used
         result["analysis_details"]["parser_used"] = source_format_used
