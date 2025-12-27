@@ -17,6 +17,7 @@ import {
   UserCog,
   ListChecks,
   BarChart3,
+  Wallet,
   Menu,
   X,
 } from 'lucide-react';
@@ -40,6 +41,7 @@ const navigation = [
   { name: 'Monitoring', href: '/monitoring', icon: Activity, role: ['admin', 'super_admin', 'owner'] },
   { name: 'Jobs', href: '/jobs', icon: ListChecks, role: ['admin', 'super_admin', 'owner'] },
   { name: 'Usage', href: '/usage', icon: BarChart3, role: ['admin', 'super_admin', 'owner'] },
+  { name: 'Budgets', href: '/budgets', icon: Wallet, role: ['admin', 'super_admin', 'owner'] },
   { name: 'Configuration', href: '/config', icon: Settings, role: ['super_admin', 'owner'] },
 ];
 

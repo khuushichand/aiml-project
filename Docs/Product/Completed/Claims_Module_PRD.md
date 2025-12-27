@@ -93,3 +93,7 @@ Analysts and downstream automations need grounded, inspectable factual statement
 3. Expand extractor catalog (multilingual heuristics, lightweight local LLMs) and scheduling heuristics.
 4. Add per-job budget guardrails and provider latency/cost dashboards with adaptive throttling.
 5. Improve evidence span alignment and correction workflows.
+
+## 14. References
+- Reviewer Workflow PRD (`Docs/Product/Completed/Claims_Reviewer_Workflow_PRD.md`) for review workflow APIs and audit trails.
+- Claims Monitoring PRD (`Docs/Product/Completed/Claims_Monitoring_PRD.md`) for metrics, alerting, and monitoring config.

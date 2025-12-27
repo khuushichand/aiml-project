@@ -53,17 +53,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
 
     checkAuth();
-  }, []);
+  }, [router]);
 
   const login = async (username: string, password: string) => {
-    try {
-      await authService.login({ username, password });
-      const loggedInUser = authService.getUser();
-      setUser(loggedInUser);
-      router.push('/');
-    } catch (error) {
-      throw error;
-    }
+    await authService.login({ username, password });
+    const loggedInUser = authService.getUser();
+    setUser(loggedInUser);
+    router.push('/');
   };
 
   const logout = () => {

@@ -100,10 +100,9 @@ function AuditPageContent() {
       setLoading(true);
       setError('');
 
-      const offsetValue = Math.max(0, (currentPage - 1) * pageSize);
       const params: Record<string, string> = {
-        limit: String(Math.min(1000, Math.max(1, pageSize))),
-        offset: String(offsetValue),
+        limit: '1000',
+        offset: '0',
       };
       if (selectedOrg) {
         params.org_id = String(selectedOrg.id);
@@ -129,7 +128,7 @@ function AuditPageContent() {
     } finally {
       setLoading(false);
     }
-  }, [currentPage, pageSize, selectedOrg]);
+  }, [selectedOrg]);
 
   useEffect(() => {
     void loadLogs(debouncedFilters);
@@ -164,8 +163,9 @@ function AuditPageContent() {
     if (filters.end) {
       const end = parseDateInput(filters.end);
       if (end) {
-        end.setHours(23, 59, 59, 999);
-        filtered = filtered.filter((log) => new Date(log.timestamp) <= end);
+        const endOfDay = new Date(end);
+        endOfDay.setHours(23, 59, 59, 999);
+        filtered = filtered.filter((log) => new Date(log.timestamp) <= endOfDay);
       }
     }
 

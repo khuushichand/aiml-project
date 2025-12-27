@@ -21,8 +21,12 @@ This document is a working log for assessing and improving the `tldw-frontend` a
 - **Node/npm version used**:
 - **Install status** (`npm install` / `npm ci`):
 - **Core scripts** (`npm run dev`, `build`, `start`, `smoke`) – working? Notes:
-- **Lint / typecheck scripts present?** If yes, status and typical warnings:
-- **Dev server URL / port used**:
+  - `dev`: Next dev server (pages router).
+  - `build`: Next production build.
+  - `start`: Next production server.
+  - `smoke`: Connectivity check against backend providers + core APIs.
+- **Lint / typecheck / test scripts present?** (`npm run lint`, `npm run test`, etc.) If yes, status and typical warnings:
+- **Dev server URL / port used** (default: `http://localhost:8080`):
 
 Notes / issues:
 
@@ -61,7 +65,7 @@ Risks / questions:
   - Audio (STT/TTS):
   - Evaluations:
   - MCP:
-  - Admin / Auth:
+  - Admin / Auth (e.g., `/auth/login`, `/users/me`, `/admin/*`):
   - Other:
 
 Drift from backend (missing endpoints, outdated payloads, assumptions that no longer hold):

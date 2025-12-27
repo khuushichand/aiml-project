@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/Input';
 import { useToast } from '@/components/ui/ToastProvider';
 import { apiClient } from '@/lib/api';
 import { useDebounce } from '@/hooks/useDebounce';
+import { useIsAdmin } from '@/hooks/useIsAdmin';
 
 interface Organization {
   id: number;
@@ -26,6 +27,7 @@ interface OrganizationListResponse {
 
 export default function AdminOrgsPage() {
   const { show } = useToast();
+  const isAdmin = useIsAdmin();
   const [orgs, setOrgs] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState<number>(1);
@@ -70,6 +72,19 @@ export default function AdminOrgsPage() {
       show({ title: 'Copy failed', description: message, variant: 'danger' });
     }
   };
+
+  if (!isAdmin) {
+    return (
+      <Layout>
+        <div className="mx-auto max-w-3xl">
+          <h1 className="mb-4 text-2xl font-bold text-gray-900">Organizations (Admin)</h1>
+          <div className="rounded-md border bg-white p-4 text-sm text-gray-700">
+            Admin access required to view organizations.
+          </div>
+        </div>
+      </Layout>
+    );
+  }
 
   return (
     <Layout>

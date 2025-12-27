@@ -47,6 +47,9 @@ export function ReattachSourceModal({
                 </Button>
               </Dialog.Close>
             </div>
+            <Dialog.Description className="mt-2 text-sm text-gray-600">
+              Attach the original file or URL to enable commit actions.
+            </Dialog.Description>
             <div className="mt-4 flex gap-2">
               <Button
                 variant={tab === 'file' ? 'primary' : 'secondary'}

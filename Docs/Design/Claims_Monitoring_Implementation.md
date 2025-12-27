@@ -52,6 +52,8 @@ Register in a dedicated claims monitoring module:
 - `DELETE /api/v1/claims/alerts/{alert_id}`
 - `GET /api/v1/claims/rebuild/health`
 - `POST /api/v1/claims/analytics/export`
+- `GET /api/v1/claims/analytics/export/{export_id}`
+- `GET /api/v1/claims/analytics/exports`
 
 The monitoring config and alerts are stored in Media DB for now.
 
@@ -63,7 +65,7 @@ responses include `created_at`/`updated_at` timestamps (ISO 8601).
 Returns the single config row for the current workspace.
 
 Response schema:
-```
+```json
 {
   "id": "string",
   "workspace_id": "string",
@@ -82,7 +84,7 @@ Response schema:
 Creates or updates the single config row for the current workspace.
 
 Request schema (all optional; patchable fields):
-```
+```json
 {
   "threshold_ratio": 0.0,
   "baseline_ratio": 0.0,
@@ -99,8 +101,18 @@ Response schema: same as GET `/claims/monitoring/config`.
 #### GET /api/v1/claims/alerts
 Lists alert rules for the current workspace.
 
-Response schema:
+Query params:
+```json
+{
+  "limit": 100,                     // optional, max 1000
+  "offset": 0,                      // optional
+  "sort_by": "created_at|name|alert_type", // optional
+  "sort_order": "asc|desc"          // optional
+}
 ```
+
+Response schema:
+```json
 {
   "items": [
     {
@@ -119,7 +131,10 @@ Response schema:
       "created_at": "string",
       "updated_at": "string"
     }
-  ]
+  ],
+  "total": 0,
+  "limit": 100,
+  "offset": 0
 }
 ```
 
@@ -128,7 +143,7 @@ Creates an alert rule (not an event record). Events are written by the monitorin
 pipeline into `ClaimsMonitoringEvents`.
 
 Request schema (required fields: `name`, `alert_type`, `channels`):
-```
+```json
 {
   "name": "string",                   // non-empty
   "alert_type": "string",
@@ -142,7 +157,8 @@ Request schema (required fields: `name`, `alert_type`, `channels`):
   "enabled": true
 }
 ```
-Constraints: `baseline_ratio <= threshold_ratio` when both provided; ratios >= 0.0.
+Constraints: `baseline_ratio <= threshold_ratio` when both provided; ratios >= 0.0;
+at least one channel must be true (otherwise 400 `invalid_channels`).
 
 Response schema: single alert rule (same shape as GET list item).
 
@@ -150,7 +166,7 @@ Response schema: single alert rule (same shape as GET list item).
 Updates an alert rule.
 
 Request schema (patchable fields):
-```
+```json
 {
   "name": "string",
   "alert_type": "string",
@@ -160,13 +176,15 @@ Request schema (patchable fields):
   "enabled": true
 }
 ```
+Constraints: `baseline_ratio <= threshold_ratio` when both provided; ratios >= 0.0;
+at least one channel must be true (otherwise 400 `invalid_channels`).
 Response schema: single alert rule.
 
 #### DELETE /api/v1/claims/alerts/{alert_id}
 Deletes an alert rule.
 
 Response schema:
-```
+```json
 { "deleted": true }
 ```
 
@@ -174,7 +192,7 @@ Response schema:
 Returns persisted service health for claims rebuild workers.
 
 Response schema:
-```
+```json
 {
   "workspace_id": "string",
   "queue_size": 0,                    // integer, >= 0
@@ -189,7 +207,7 @@ Response schema:
 Creates an export for claims monitoring analytics.
 
 Request schema:
-```
+```json
 {
   "format": "csv|json",               // required
   "filters": {
@@ -209,7 +227,7 @@ Request schema:
 ```
 
 Response schema:
-```
+```json
 {
   "export_id": "string",
   "format": "csv|json",
@@ -224,7 +242,7 @@ Download endpoint: `GET /api/v1/claims/analytics/export/{export_id}` returns the
 Lists stored analytics exports.
 
 Query params:
-```
+```json
 {
   "limit": 100,                       // optional, max 1000
   "offset": 0,                        // optional
@@ -235,7 +253,7 @@ Query params:
 ```
 
 Response schema:
-```
+```json
 {
   "exports": [
     {
@@ -256,12 +274,28 @@ Response schema:
 }
 ```
 
-Retention: exports older than `CLAIMS_ANALYTICS_EXPORT_RETENTION_HOURS` (default 24)
-are deleted during new export creation.
+### Export Status Lifecycle
+- **queued**: export request accepted and queued for async processing.
+- **ready**: export payload stored; `download_url` populated.
+- **failed**: processing error; `error_message` populated.
+
+State transitions:
+- queued -> ready: backend completes payload generation (typical: < 30s for < 100k records).
+- queued -> failed: validation, timeout, or storage error.
+
+Client guidance:
+- Poll `GET /api/v1/claims/analytics/export/{export_id}` with exponential backoff
+  (e.g., 2s, 5s, 10s, 30s) until `status` is `ready` or `failed`.
+- No webhook callback is provided; `export_id` is the tracking identifier.
+
+Cleanup:
+- Exports older than `CLAIMS_ANALYTICS_EXPORT_RETENTION_HOURS` (default 24) are deleted
+  by a scheduled cleanup job (e.g., every 6 hours).
+- Clients should download before expiry.
 
 ### Error Handling
 All endpoints return consistent error payloads:
-```
+```json
 {
   "error": {
     "code": "string",
@@ -272,6 +306,7 @@ All endpoints return consistent error payloads:
 ```
 Status codes: 400 for validation failures, 401/403 for auth/permissions, 404 for
 missing resources, 409 for conflicts, 429 for rate limits, 500 for unexpected errors.
+Error code guidance: `invalid_channels` when all alert channels are false (400).
 
 Webhook delivery:
 - Retry strategy: exponential backoff with jitter.

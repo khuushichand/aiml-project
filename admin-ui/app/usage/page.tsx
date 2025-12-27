@@ -12,9 +12,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { RefreshCw, BarChart3, Calendar } from 'lucide-react';
+import { RefreshCw, BarChart3, Calendar, Download } from 'lucide-react';
 import { api } from '@/lib/api-client';
+import { getAuthHeaders } from '@/lib/auth';
 import { useOrgContext } from '@/components/OrgContextSwitcher';
+import { useToast } from '@/components/ui/toast';
 
 interface UsageDailyRow {
   user_id: number;
@@ -51,6 +53,12 @@ interface LlmTopSpenderRow {
   total_cost_usd: number;
   requests: number;
 }
+
+type ExportKey = 'daily' | 'top' | 'llm';
+
+const API_HOST = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_VERSION = process.env.NEXT_PUBLIC_API_VERSION || 'v1';
+const API_URL = `${API_HOST.replace(/\/$/, '')}/api/${API_VERSION}`;
 
 const toDateInput = (date: Date) => date.toISOString().slice(0, 10);
 
@@ -90,8 +98,41 @@ const getErrorMessage = (reason: unknown, fallback: string) => {
   return fallback;
 };
 
+const getFilenameFromDisposition = (disposition: string | null): string | null => {
+  if (!disposition) return null;
+  const match = disposition.match(/filename="?([^"]+)"?/i);
+  return match ? match[1] : null;
+};
+
+const downloadCsv = async (
+  endpoint: string,
+  params: Record<string, string>,
+  fallbackFilename: string
+) => {
+  const query = new URLSearchParams(params).toString();
+  const response = await fetch(`${API_URL}${endpoint}${query ? `?${query}` : ''}`, {
+    headers: getAuthHeaders(),
+    credentials: 'include',
+  });
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || 'Failed to download CSV');
+  }
+  const blob = await response.blob();
+  const filename = getFilenameFromDisposition(response.headers.get('content-disposition')) || fallbackFilename;
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+};
+
 export default function UsagePage() {
   const { selectedOrg } = useOrgContext();
+  const { success, error: showError } = useToast();
   const [usageDaily, setUsageDaily] = useState<UsageDailyRow[]>([]);
   const [usageTop, setUsageTop] = useState<UsageTopRow[]>([]);
   const [llmSummary, setLlmSummary] = useState<LlmSummaryRow[]>([]);
@@ -99,11 +140,17 @@ export default function UsagePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [exporting, setExporting] = useState<Record<ExportKey, boolean>>({
+    daily: false,
+    top: false,
+    llm: false,
+  });
 
   const [startDate, setStartDate] = useState(defaultStart());
   const [endDate, setEndDate] = useState(defaultEnd());
   const [topMetric, setTopMetric] = useState('requests');
   const [groupBy, setGroupBy] = useState('provider');
+  const dateSuffix = `${startDate || 'all'}_${endDate || 'all'}`;
 
   const toIsoStart = (value: string) => (value ? `${value}T00:00:00Z` : undefined);
   const toIsoEnd = (value: string) => (value ? `${value}T23:59:59Z` : undefined);
@@ -123,6 +170,32 @@ export default function UsagePage() {
     if (selectedOrg) params.org_id = String(selectedOrg.id);
     return params;
   }, [startDate, endDate, groupBy, selectedOrg]);
+
+  const llmExportParams = useMemo(() => {
+    const params: Record<string, string> = {};
+    if (startDate) params.start = toIsoStart(startDate) as string;
+    if (endDate) params.end = toIsoEnd(endDate) as string;
+    if (selectedOrg) params.org_id = String(selectedOrg.id);
+    return params;
+  }, [startDate, endDate, selectedOrg]);
+
+  const handleExport = useCallback(async (
+    key: ExportKey,
+    endpoint: string,
+    params: Record<string, string>,
+    fallbackFilename: string
+  ) => {
+    setExporting((prev) => ({ ...prev, [key]: true }));
+    try {
+      await downloadCsv(endpoint, params, fallbackFilename);
+      success('Export ready', 'CSV download started.');
+    } catch (err: unknown) {
+      const message = err instanceof Error && err.message ? err.message : 'Failed to export CSV';
+      showError('Export failed', message);
+    } finally {
+      setExporting((prev) => ({ ...prev, [key]: false }));
+    }
+  }, [success, showError]);
 
   const loadData = useCallback(async () => {
     try {
@@ -296,12 +369,28 @@ export default function UsagePage() {
 
             <TabsContent value="api" className="space-y-6">
               <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <BarChart3 className="h-5 w-5" />
-                    Daily usage
-                  </CardTitle>
-                  <CardDescription>Requests, errors, and bandwidth by day.</CardDescription>
+                <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="space-y-1">
+                    <CardTitle className="flex items-center gap-2">
+                      <BarChart3 className="h-5 w-5" />
+                      Daily usage
+                    </CardTitle>
+                    <CardDescription>Requests, errors, and bandwidth by day.</CardDescription>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleExport(
+                      'daily',
+                      '/admin/usage/daily/export.csv',
+                      { ...usageParams, limit: '1000' },
+                      `usage_daily_${dateSuffix}.csv`
+                    )}
+                    disabled={loading || exporting.daily}
+                  >
+                    <Download className="mr-2 h-4 w-4" />
+                    Export CSV
+                  </Button>
                 </CardHeader>
                 <CardContent>
                   {loading ? (
@@ -344,9 +433,25 @@ export default function UsagePage() {
               </Card>
 
               <Card>
-                <CardHeader>
-                  <CardTitle>Top users</CardTitle>
-                  <CardDescription>Top consumers for the selected metric.</CardDescription>
+                <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="space-y-1">
+                    <CardTitle>Top users</CardTitle>
+                    <CardDescription>Top consumers for the selected metric.</CardDescription>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleExport(
+                      'top',
+                      '/admin/usage/top/export.csv',
+                      { ...usageParams, metric: topMetric, limit: '100' },
+                      `usage_top_${topMetric}_${dateSuffix}.csv`
+                    )}
+                    disabled={loading || exporting.top}
+                  >
+                    <Download className="mr-2 h-4 w-4" />
+                    Export CSV
+                  </Button>
                 </CardHeader>
                 <CardContent>
                   {loading ? (
@@ -389,9 +494,25 @@ export default function UsagePage() {
 
             <TabsContent value="llm" className="space-y-6">
               <Card>
-                <CardHeader>
-                  <CardTitle>LLM usage summary</CardTitle>
-                  <CardDescription>Grouped usage for the selected dimension.</CardDescription>
+                <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="space-y-1">
+                    <CardTitle>LLM usage summary</CardTitle>
+                    <CardDescription>Grouped usage for the selected dimension.</CardDescription>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleExport(
+                      'llm',
+                      '/admin/llm-usage/export.csv',
+                      { ...llmExportParams, limit: '1000' },
+                      `llm_usage_${dateSuffix}.csv`
+                    )}
+                    disabled={loading || exporting.llm}
+                  >
+                    <Download className="mr-2 h-4 w-4" />
+                    Export CSV
+                  </Button>
                 </CardHeader>
                 <CardContent>
                   {loading ? (

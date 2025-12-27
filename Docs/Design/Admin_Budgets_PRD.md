@@ -21,8 +21,8 @@ Platform admins need a first-class way to define per-organization budgets, alert
 
 ## User Stories
 - As an admin, I can view all org budgets and plan context in one list.
-- As an admin, I can update daily/monthly USD and token budgets for an org.
-- As an admin, I can configure alert thresholds and enforcement mode.
+- Platform admins can update daily/monthly USD and token budgets for an org.
+- Admins can configure alert thresholds and enforcement mode.
 - As a reviewer, I can see who changed budgets and when.
 
 ## Functional Requirements
@@ -77,6 +77,9 @@ Platform admins need a first-class way to define per-organization budgets, alert
     - Result:
       `{alert_thresholds: {global: [80], per_metric: {}},
         enforcement_mode: {global: "soft", per_metric: {budget_month_usd: "hard"}}}`
+  - Example (alert thresholds normalization):
+    - POST `{org_id: 1, budgets: {alert_thresholds: {global: [95, 80, 80]}}}`
+    - Result: `{alert_thresholds: {global: [80, 95]}}`
   - Response: `OrgBudgetItem`
   - Errors:
     - `404 org_not_found` when the org does not exist.
@@ -95,6 +98,7 @@ Platform admins need a first-class way to define per-organization budgets, alert
     - `global`: list of percent ints (1-100). Applied to all budgets.
     - `per_metric`: map of budget field name -> list of percent ints.
     - Lists are normalized (de-duplicated and stored in ascending order).
+    - Unknown per-metric keys are rejected with `invalid_budget_update`.
   - `enforcement_mode`:
     - `global`: "none" | "soft" | "hard"
     - `per_metric`: map of budget field name -> "none" | "soft" | "hard"

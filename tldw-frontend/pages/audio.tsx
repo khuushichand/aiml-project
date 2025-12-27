@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Layout } from '@/components/layout/Layout';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -60,7 +60,7 @@ function TTSSection() {
   const [respInfo, setRespInfo] = // eslint-disable-next-line @typescript-eslint/no-explicit-any
   useState<any>(null);
 
-  const fetchVoices = async () => {
+  const fetchVoices = useCallback(async () => {
     try {
       const resp = await fetch(`${getApiBaseUrl()}/audio/voices`, { headers: buildAuthHeaders('GET') });
       if (!resp.ok) return;
@@ -72,8 +72,8 @@ function TTSSection() {
       console.warn('Failed to fetch voices:', message);
       show({ title: 'Voices unavailable', description: message, variant: 'warning' });
     }
-  };
-  useEffect(() => { fetchVoices(); }, []);
+  }, [show]);
+  useEffect(() => { fetchVoices(); }, [fetchVoices]);
 
   useEffect(() => {
     return () => {

@@ -15,6 +15,8 @@ import {
   Activity,
   Cpu,
   UserCog,
+  BarChart3,
+  Wallet,
   Keyboard,
 } from 'lucide-react';
 import { logout, getCurrentUser, type AdminUser } from '@/lib/auth';
@@ -37,6 +39,8 @@ const navigation = [
   { name: 'LLM Providers', href: '/providers', icon: Cpu, permission: 'read:config' },
   { name: 'Audit Logs', href: '/audit', icon: FileText, permission: 'read:audit' },
   { name: 'Monitoring', href: '/monitoring', icon: Activity, role: ['admin', 'super_admin', 'owner'] },
+  { name: 'Usage', href: '/usage', icon: BarChart3, role: ['admin', 'super_admin', 'owner'] },
+  { name: 'Budgets', href: '/budgets', icon: Wallet, role: ['admin', 'super_admin', 'owner'] },
   { name: 'Configuration', href: '/config', icon: Settings, role: ['super_admin', 'owner'] },
 ];
 

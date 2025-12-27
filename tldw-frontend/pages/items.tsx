@@ -68,7 +68,7 @@ export default function ItemsPage() {
     setStatus(getStr('status', 'all'));
     setFavoriteOnly(favRaw === '1' || favRaw === 'true');
     setPage(Number(getStr('page', '1')) || 1);
-  }, [router.isReady]);
+  }, [router.isReady, router.query]);
 
   const loadItems = useCallback(async () => {
     setLoading(true);

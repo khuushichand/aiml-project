@@ -36,9 +36,9 @@ export interface AuthUser {
   is_admin?: boolean;
   isAdmin?: boolean;
   role?: string;
-  roles?: string[];
-  permissions?: string[];
-  scopes?: string[];
+  roles?: string[] | string;
+  permissions?: string[] | string;
+  scopes?: string[] | string;
 }
 
 // ========================================

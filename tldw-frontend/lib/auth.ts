@@ -35,6 +35,30 @@ export interface User {
 
 export type AuthMode = 'env_single_user' | 'env_bearer' | 'jwt' | 'none';
 
+type ApiErrorLike = {
+  status?: number;
+  statusCode?: number;
+  detail?: string;
+  retryAfter?: number;
+};
+
+const getApiErrorInfo = (error: unknown): ApiErrorLike => {
+  if (!error || typeof error !== 'object') {
+    return {};
+  }
+  const data = error as Record<string, unknown>;
+  const status = typeof data.status === 'number' ? data.status : undefined;
+  const statusCode = typeof data.statusCode === 'number' ? data.statusCode : undefined;
+  const detail = typeof data.detail === 'string' ? data.detail : undefined;
+  const retryAfter = typeof data.retryAfter === 'number' ? data.retryAfter : undefined;
+  return {
+    status,
+    statusCode,
+    detail,
+    retryAfter,
+  };
+};
+
 export function getAuthMode(): AuthMode {
   const hasApiKey = !!process.env.NEXT_PUBLIC_X_API_KEY;
   const hasBearer = !!process.env.NEXT_PUBLIC_API_BEARER;
@@ -117,10 +141,10 @@ class AuthService {
     } catch (error: unknown) {
       // Map known AuthNZ error patterns (rate limiting, lockout, server errors) into clearer messages
       if (error instanceof Error) {
-        const anyErr = error as any;
-        const status: number | undefined = anyErr.status ?? anyErr.statusCode;
-        const detail: string | undefined = anyErr.detail || error.message;
-        const retryAfter: number | undefined = anyErr.retryAfter;
+        const info = getApiErrorInfo(error);
+        const status: number | undefined = info.status ?? info.statusCode;
+        const detail: string | undefined = info.detail || error.message;
+        const retryAfter: number | undefined = info.retryAfter;
         const lowerDetail = (detail || '').toLowerCase();
 
         // 423: account locked
@@ -134,7 +158,7 @@ class AuthService {
           if (retryAfter && Number.isFinite(retryAfter) && retryAfter > 0) {
             throw new Error(`Too many login attempts. Please wait ${retryAfter} seconds and try again.`);
           }
-          throw new Error(detail || 'Too many login attempts. Please wait and try again.');
+          throw new Error('Too many login attempts. Please wait and try again.');
         }
 
         // 401: invalid credentials or MFA required

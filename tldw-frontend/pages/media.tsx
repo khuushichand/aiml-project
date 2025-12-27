@@ -96,7 +96,7 @@ export default function MediaPage() {
         Object.entries(opts).forEach(([k, v]) => {
           if (v !== undefined && v !== null) fd.append(k, typeof v === 'string' ? v : JSON.stringify(v));
         });
-      } catch (err) {
+      } catch {
         show({
           title: 'Invalid advanced options JSON',
           description: 'Using defaults instead.',

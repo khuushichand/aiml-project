@@ -169,6 +169,7 @@ export default function ContentReviewPage() {
   const draftsRef = useRef(state.drafts);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const pendingSelectionRef = useRef<string | null>(null);
+  const selectedDraftRef = useRef<Draft | null>(null);
 
   const {
     drafts,
@@ -190,6 +191,10 @@ export default function ContentReviewPage() {
     () => drafts.find((d) => d.id === selectedId) || null,
     [drafts, selectedId]
   );
+
+  useEffect(() => {
+    selectedDraftRef.current = selectedDraft;
+  }, [selectedDraft]);
 
   useEffect(() => {
     dirtyRef.current = dirty;
@@ -230,7 +235,7 @@ export default function ContentReviewPage() {
   };
 
   useEffect(() => {
-    dispatch({ type: 'SYNC_EDITOR_FROM_DRAFT', draft: selectedDraft });
+    dispatch({ type: 'SYNC_EDITOR_FROM_DRAFT', draft: selectedDraftRef.current });
   }, [selectedDraft?.id]); // Reset editor only when switching drafts, not on content changes
 
   useEffect(() => {

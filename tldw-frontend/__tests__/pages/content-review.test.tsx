@@ -57,7 +57,7 @@ const {
   getDraftFileForUpload,
 } = mocks;
 
-import ContentReviewPage from '../content-review';
+import ContentReviewPage from '@/pages/content-review';
 
 const setNavigatorOnline = (value: boolean) => {
   Object.defineProperty(window.navigator, 'onLine', {
