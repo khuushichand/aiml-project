@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Pagination } from '@/components/ui/pagination';
 import { FileText, RefreshCw, Filter, Eye, Clipboard } from 'lucide-react';
@@ -31,6 +31,8 @@ type AuditFilters = {
   end: string;
 };
 
+const MAX_AUDIT_RESULTS = 1000;
+
 const parseDateInput = (value: string) => {
   if (!value) return null;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
@@ -38,8 +40,25 @@ const parseDateInput = (value: string) => {
   return Number.isNaN(date.getTime()) ? null : date;
 };
 
+const getDateRangeError = (start: string, end: string) => {
+  if (!start && !end) return '';
+  const startDate = parseDateInput(start);
+  const endDate = parseDateInput(end);
+  if (start && !startDate) return 'Start date is invalid.';
+  if (end && !endDate) return 'End date is invalid.';
+  if (startDate && endDate && startDate > endDate) {
+    return 'Start date must be on or before end date.';
+  }
+  return '';
+};
+
 const getDaysParam = (start: string, end: string) => {
-  const anchor = parseDateInput(start) ?? parseDateInput(end);
+  const startDate = parseDateInput(start);
+  const endDate = parseDateInput(end);
+  if (start && !startDate) return undefined;
+  if (end && !endDate) return undefined;
+  if (startDate && endDate && startDate > endDate) return undefined;
+  const anchor = startDate ?? endDate;
   if (!anchor) return undefined;
   const now = new Date();
   const diffMs = now.getTime() - anchor.getTime();
@@ -60,6 +79,7 @@ function AuditPageContent() {
   const { selectedOrg } = useOrgContext();
   const { success, error: showError } = useToast();
   const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [lastFetchCount, setLastFetchCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedLog, setSelectedLog] = useState<AuditLog | null>(null);
@@ -101,7 +121,7 @@ function AuditPageContent() {
       setError('');
 
       const params: Record<string, string> = {
-        limit: '1000',
+        limit: String(MAX_AUDIT_RESULTS),
         offset: '0',
       };
       if (selectedOrg) {
@@ -120,11 +140,14 @@ function AuditPageContent() {
         params.days = daysParam;
       }
       const data = await api.getAuditLogs(params);
-      setLogs(Array.isArray(data) ? data : []);
+      const items = Array.isArray(data) ? data : [];
+      setLogs(items);
+      setLastFetchCount(items.length);
     } catch (err: unknown) {
       console.error('Failed to load audit logs:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to load audit logs');
       setLogs([]);
+      setLastFetchCount(0);
     } finally {
       setLoading(false);
     }
@@ -144,6 +167,7 @@ function AuditPageContent() {
     resetPagination();
   };
 
+  const dateRangeError = useMemo(() => getDateRangeError(filters.start, filters.end), [filters.end, filters.start]);
   const filteredLogs = useMemo(() => {
     let filtered = [...logs];
 
@@ -153,14 +177,14 @@ function AuditPageContent() {
       );
     }
 
-    if (filters.start) {
+    if (!dateRangeError && filters.start) {
       const start = parseDateInput(filters.start);
       if (start) {
         filtered = filtered.filter((log) => new Date(log.timestamp) >= start);
       }
     }
 
-    if (filters.end) {
+    if (!dateRangeError && filters.end) {
       const end = parseDateInput(filters.end);
       if (end) {
         const endOfDay = new Date(end);
@@ -170,7 +194,9 @@ function AuditPageContent() {
     }
 
     return filtered;
-  }, [filters.end, filters.resource, filters.start, logs]);
+  }, [dateRangeError, filters.end, filters.resource, filters.start, logs]);
+  const usesClientFilters = Boolean(filters.resource.trim() || filters.start.trim() || filters.end.trim());
+  const resultsMayBeTruncated = lastFetchCount >= MAX_AUDIT_RESULTS;
 
   const handleExport = (format: ExportFormat) => {
     exportAuditLogs(filteredLogs, format);
@@ -231,7 +257,11 @@ function AuditPageContent() {
                 </p>
               </div>
               <div className="flex gap-2">
-                <Button variant="outline" onClick={() => loadLogs(debouncedFilters)} disabled={loading}>
+                <Button
+                  variant="outline"
+                  onClick={() => loadLogs(debouncedFilters)}
+                  disabled={loading || Boolean(dateRangeError)}
+                >
                   <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
                   Refresh
                 </Button>
@@ -320,6 +350,22 @@ function AuditPageContent() {
                     />
                   </div>
                 </div>
+                {dateRangeError && (
+                  <Alert variant="destructive" className="mt-4">
+                    <AlertTitle>Invalid date range</AlertTitle>
+                    <AlertDescription>{dateRangeError}</AlertDescription>
+                  </Alert>
+                )}
+                {(usesClientFilters || resultsMayBeTruncated) && (
+                  <Alert className="mt-4">
+                    <AlertTitle>Filter coverage notice</AlertTitle>
+                    <AlertDescription>
+                      Resource and exact date range filters run client-side after fetching the most recent
+                      {` ${MAX_AUDIT_RESULTS}`} records using a server day-based window. Results may be incomplete
+                      if more than {MAX_AUDIT_RESULTS} entries exist in that window.
+                    </AlertDescription>
+                  </Alert>
+                )}
                 <div className="flex gap-2 mt-4">
                   <Button variant="outline" onClick={handleClearFilters}>
                     Clear Filters

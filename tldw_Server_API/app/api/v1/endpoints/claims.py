@@ -23,6 +23,7 @@ from tldw_Server_API.app.api.v1.schemas.claims_schemas import (
     ClaimsAnalyticsExportRequest,
     ClaimsAnalyticsExportResponse,
     ClaimsAnalyticsExportListResponse,
+    ClaimsReviewExtractorMetricsResponse,
     ClaimsClusterLinkCreate,
     ClaimsClusterLinkResponse,
     ClaimsSearchResponse,
@@ -500,6 +501,34 @@ def review_analytics(
 ) -> Dict[str, Any]:
     """Return summary review analytics."""
     return claims_service.review_analytics(principal, db)
+
+
+@router.get("/review/metrics", response_model=ClaimsReviewExtractorMetricsResponse)
+def list_review_metrics(
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
+    extractor: Optional[str] = None,
+    extractor_version: Optional[str] = None,
+    user_id: Optional[int] = None,
+    limit: int = Query(500, ge=1, le=5000),
+    offset: int = Query(0, ge=0, le=100000),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    current_user: User = Depends(get_request_user),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+) -> Dict[str, Any]:
+    """Return daily review metrics grouped by extractor."""
+    return claims_service.list_claims_review_metrics(
+        start_date=start_date,
+        end_date=end_date,
+        extractor=extractor,
+        extractor_version=extractor_version,
+        user_id=user_id,
+        limit=limit,
+        offset=offset,
+        principal=principal,
+        current_user=current_user,
+        db=db,
+    )
 
 
 @router.get("/analytics/dashboard", response_model=ClaimsAnalyticsDashboardResponse)

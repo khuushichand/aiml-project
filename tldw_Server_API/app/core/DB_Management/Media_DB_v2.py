@@ -742,6 +742,27 @@ class MediaDatabase:
     CREATE INDEX IF NOT EXISTS idx_claims_review_log_reviewer ON claims_review_log(reviewer_id);
     CREATE INDEX IF NOT EXISTS idx_claims_review_log_created ON claims_review_log(created_at);
 
+    CREATE TABLE IF NOT EXISTS claims_review_extractor_metrics_daily (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        report_date TEXT NOT NULL,
+        extractor TEXT NOT NULL,
+        extractor_version TEXT NOT NULL DEFAULT '',
+        total_reviewed INTEGER NOT NULL DEFAULT 0,
+        approved_count INTEGER NOT NULL DEFAULT 0,
+        rejected_count INTEGER NOT NULL DEFAULT 0,
+        flagged_count INTEGER NOT NULL DEFAULT 0,
+        reassigned_count INTEGER NOT NULL DEFAULT 0,
+        edited_count INTEGER NOT NULL DEFAULT 0,
+        reason_code_counts_json TEXT,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, report_date, extractor, extractor_version)
+    );
+    CREATE INDEX IF NOT EXISTS idx_claims_review_metrics_user ON claims_review_extractor_metrics_daily(user_id);
+    CREATE INDEX IF NOT EXISTS idx_claims_review_metrics_date ON claims_review_extractor_metrics_daily(report_date);
+    CREATE INDEX IF NOT EXISTS idx_claims_review_metrics_extractor ON claims_review_extractor_metrics_daily(extractor);
+
     CREATE TABLE IF NOT EXISTS claims_review_rules (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
@@ -762,10 +783,12 @@ class MediaDatabase:
         event_type TEXT NOT NULL,
         severity TEXT,
         payload_json TEXT,
-        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        delivered_at DATETIME
     );
     CREATE INDEX IF NOT EXISTS idx_claims_monitoring_events_user ON claims_monitoring_events(user_id);
     CREATE INDEX IF NOT EXISTS idx_claims_monitoring_events_type ON claims_monitoring_events(event_type);
+    CREATE INDEX IF NOT EXISTS idx_claims_monitoring_events_delivered ON claims_monitoring_events(delivered_at);
 
     CREATE TABLE IF NOT EXISTS claims_monitoring_settings (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3185,6 +3208,23 @@ class MediaDatabase:
         except sqlite3.Error as exc:
             logger.warning(f"Could not ensure Claims extension tables/indexes: {exc}")
 
+        try:
+            events_cursor = conn.execute("PRAGMA table_info(claims_monitoring_events)")
+            events_columns = {row[1] for row in events_cursor.fetchall()}
+            events_statements: list[str] = []
+            if "delivered_at" not in events_columns:
+                events_statements.append(
+                    "ALTER TABLE claims_monitoring_events ADD COLUMN delivered_at DATETIME;"
+                )
+            if events_statements:
+                conn.executescript("\n".join(events_statements))
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_claims_monitoring_events_delivered "
+                "ON claims_monitoring_events(delivered_at);"
+            )
+        except sqlite3.Error as exc:
+            logger.warning(f"Could not ensure delivered_at for claims_monitoring_events: {exc}")
+
     def _ensure_postgres_fts(self, conn) -> None:
         backend = self.backend
         backend.create_fts_table(
@@ -3336,6 +3376,43 @@ class MediaDatabase:
 
             backend.execute(
                 (
+                    f"CREATE TABLE IF NOT EXISTS {ident('claims_review_extractor_metrics_daily')} ("
+                    "id BIGSERIAL PRIMARY KEY, "
+                    "user_id TEXT NOT NULL, "
+                    "report_date DATE NOT NULL, "
+                    "extractor TEXT NOT NULL, "
+                    "extractor_version TEXT NOT NULL DEFAULT '', "
+                    "total_reviewed INTEGER NOT NULL DEFAULT 0, "
+                    "approved_count INTEGER NOT NULL DEFAULT 0, "
+                    "rejected_count INTEGER NOT NULL DEFAULT 0, "
+                    "flagged_count INTEGER NOT NULL DEFAULT 0, "
+                    "reassigned_count INTEGER NOT NULL DEFAULT 0, "
+                    "edited_count INTEGER NOT NULL DEFAULT 0, "
+                    "reason_code_counts_json TEXT, "
+                    "created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+                    "updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+                    "UNIQUE (user_id, report_date, extractor, extractor_version))"
+                ),
+                connection=conn,
+            )
+            backend.execute(
+                f"CREATE INDEX IF NOT EXISTS {ident('idx_claims_review_metrics_user')} "
+                f"ON {ident('claims_review_extractor_metrics_daily')} ({ident('user_id')})",
+                connection=conn,
+            )
+            backend.execute(
+                f"CREATE INDEX IF NOT EXISTS {ident('idx_claims_review_metrics_date')} "
+                f"ON {ident('claims_review_extractor_metrics_daily')} ({ident('report_date')})",
+                connection=conn,
+            )
+            backend.execute(
+                f"CREATE INDEX IF NOT EXISTS {ident('idx_claims_review_metrics_extractor')} "
+                f"ON {ident('claims_review_extractor_metrics_daily')} ({ident('extractor')})",
+                connection=conn,
+            )
+
+            backend.execute(
+                (
                     f"CREATE TABLE IF NOT EXISTS {ident('claims_review_rules')} ("
                     "id BIGSERIAL PRIMARY KEY, "
                     "user_id TEXT NOT NULL, "
@@ -3437,8 +3514,14 @@ class MediaDatabase:
                     "event_type TEXT NOT NULL, "
                     "severity TEXT, "
                     "payload_json TEXT, "
-                    "created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+                    "created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+                    "delivered_at TIMESTAMPTZ)"
                 ),
+                connection=conn,
+            )
+            backend.execute(
+                f"ALTER TABLE {ident('claims_monitoring_events')} "
+                f"ADD COLUMN IF NOT EXISTS {ident('delivered_at')} TIMESTAMPTZ",
                 connection=conn,
             )
             backend.execute(
@@ -3449,6 +3532,11 @@ class MediaDatabase:
             backend.execute(
                 f"CREATE INDEX IF NOT EXISTS {ident('idx_claims_monitoring_events_type')} "
                 f"ON {ident('claims_monitoring_events')} ({ident('event_type')})",
+                connection=conn,
+            )
+            backend.execute(
+                f"CREATE INDEX IF NOT EXISTS {ident('idx_claims_monitoring_events_delivered')} "
+                f"ON {ident('claims_monitoring_events')} ({ident('delivered_at')})",
                 connection=conn,
             )
 
@@ -4199,6 +4287,176 @@ class MediaDatabase:
             (int(claim_id),),
         )
         rows = cur.fetchall()
+        return [dict(row) for row in rows]
+
+    def get_claims_review_extractor_metrics_daily(
+        self,
+        *,
+        user_id: str,
+        report_date: str,
+        extractor: str,
+        extractor_version: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        version = "" if extractor_version is None else str(extractor_version)
+        row = self.execute_query(
+            (
+                "SELECT id, user_id, report_date, extractor, extractor_version, total_reviewed, "
+                "approved_count, rejected_count, flagged_count, reassigned_count, edited_count, "
+                "reason_code_counts_json, created_at, updated_at "
+                "FROM claims_review_extractor_metrics_daily "
+                "WHERE user_id = ? AND report_date = ? AND extractor = ? AND extractor_version = ?"
+            ),
+            (
+                str(user_id),
+                str(report_date),
+                str(extractor),
+                version,
+            ),
+        ).fetchone()
+        return dict(row) if row else {}
+
+    def upsert_claims_review_extractor_metrics_daily(
+        self,
+        *,
+        user_id: str,
+        report_date: str,
+        extractor: str,
+        extractor_version: Optional[str] = None,
+        total_reviewed: int = 0,
+        approved_count: int = 0,
+        rejected_count: int = 0,
+        flagged_count: int = 0,
+        reassigned_count: int = 0,
+        edited_count: int = 0,
+        reason_code_counts_json: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        version = "" if extractor_version is None else str(extractor_version)
+        now = self._get_current_utc_timestamp_str()
+        existing = self.execute_query(
+            "SELECT id FROM claims_review_extractor_metrics_daily "
+            "WHERE user_id = ? AND report_date = ? AND extractor = ? AND extractor_version = ?",
+            (
+                str(user_id),
+                str(report_date),
+                str(extractor),
+                version,
+            ),
+        ).fetchone()
+        existing_id: Optional[int] = None
+        if existing is not None:
+            try:
+                existing_id = int(existing["id"])
+            except Exception:
+                try:
+                    existing_id = int(existing[0])
+                except Exception:
+                    existing_id = None
+
+        if existing_id is None:
+            insert_sql = (
+                "INSERT INTO claims_review_extractor_metrics_daily "
+                "(user_id, report_date, extractor, extractor_version, total_reviewed, approved_count, "
+                "rejected_count, flagged_count, reassigned_count, edited_count, reason_code_counts_json, "
+                "created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            self.execute_query(
+                insert_sql,
+                (
+                    str(user_id),
+                    str(report_date),
+                    str(extractor),
+                    version,
+                    int(total_reviewed),
+                    int(approved_count),
+                    int(rejected_count),
+                    int(flagged_count),
+                    int(reassigned_count),
+                    int(edited_count),
+                    reason_code_counts_json,
+                    now,
+                    now,
+                ),
+                commit=True,
+            )
+            return self.get_claims_review_extractor_metrics_daily(
+                user_id=str(user_id),
+                report_date=str(report_date),
+                extractor=str(extractor),
+                extractor_version=version,
+            )
+
+        self.execute_query(
+            (
+                "UPDATE claims_review_extractor_metrics_daily SET "
+                "total_reviewed = ?, approved_count = ?, rejected_count = ?, flagged_count = ?, "
+                "reassigned_count = ?, edited_count = ?, reason_code_counts_json = ?, updated_at = ? "
+                "WHERE id = ?"
+            ),
+            (
+                int(total_reviewed),
+                int(approved_count),
+                int(rejected_count),
+                int(flagged_count),
+                int(reassigned_count),
+                int(edited_count),
+                reason_code_counts_json,
+                now,
+                int(existing_id),
+            ),
+            commit=True,
+        )
+        return self.get_claims_review_extractor_metrics_daily(
+            user_id=str(user_id),
+            report_date=str(report_date),
+            extractor=str(extractor),
+            extractor_version=version,
+        )
+
+    def list_claims_review_extractor_metrics_daily(
+        self,
+        *,
+        user_id: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        extractor: Optional[str] = None,
+        extractor_version: Optional[str] = None,
+        limit: int = 500,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        try:
+            limit = int(limit)
+            offset = int(offset)
+        except (TypeError, ValueError):
+            limit, offset = 500, 0
+        limit = max(1, min(5000, limit))
+        offset = max(0, offset)
+
+        conditions: List[str] = ["user_id = ?"]
+        params: List[Any] = [str(user_id)]
+        if start_date:
+            conditions.append("report_date >= ?")
+            params.append(str(start_date))
+        if end_date:
+            conditions.append("report_date <= ?")
+            params.append(str(end_date))
+        if extractor:
+            conditions.append("extractor = ?")
+            params.append(str(extractor))
+        if extractor_version is not None:
+            conditions.append("extractor_version = ?")
+            params.append(str(extractor_version))
+
+        sql = (
+            "SELECT id, user_id, report_date, extractor, extractor_version, total_reviewed, "
+            "approved_count, rejected_count, flagged_count, reassigned_count, edited_count, "
+            "reason_code_counts_json, created_at, updated_at "
+            "FROM claims_review_extractor_metrics_daily WHERE "
+            + " AND ".join(conditions)
+            + " ORDER BY report_date DESC, id DESC LIMIT ? OFFSET ?"
+        )
+        params.extend([limit, offset])
+        rows = self.execute_query(sql, tuple(params)).fetchall()
         return [dict(row) for row in rows]
 
     def list_review_queue(
@@ -5055,8 +5313,8 @@ class MediaDatabase:
         self.execute_query(
             (
                 "INSERT INTO claims_monitoring_events "
-                "(user_id, event_type, severity, payload_json, created_at) "
-                "VALUES (?, ?, ?, ?, ?)"
+                "(user_id, event_type, severity, payload_json, created_at, delivered_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)"
             ),
             (
                 str(user_id),
@@ -5064,6 +5322,7 @@ class MediaDatabase:
                 severity,
                 payload_json,
                 now,
+                None,
             ),
             commit=True,
         )
@@ -5094,7 +5353,7 @@ class MediaDatabase:
         where_clause = " AND ".join(conditions)
         rows = self.execute_query(
             (
-                "SELECT id, user_id, event_type, severity, payload_json, created_at "
+                "SELECT id, user_id, event_type, severity, payload_json, created_at, delivered_at "
                 "FROM claims_monitoring_events WHERE "
                 + where_clause
                 + " ORDER BY created_at ASC"
@@ -5102,6 +5361,74 @@ class MediaDatabase:
             tuple(params),
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def list_undelivered_claims_monitoring_events(
+        self,
+        *,
+        user_id: str,
+        event_type: Optional[str] = None,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            limit = 500
+        limit = max(1, min(5000, limit))
+        conditions: List[str] = ["user_id = ?", "delivered_at IS NULL"]
+        params: List[Any] = [str(user_id)]
+        if event_type:
+            conditions.append("event_type = ?")
+            params.append(str(event_type))
+        sql = (
+            "SELECT id, user_id, event_type, severity, payload_json, created_at, delivered_at "
+            "FROM claims_monitoring_events WHERE "
+            + " AND ".join(conditions)
+            + " ORDER BY created_at ASC LIMIT ?"
+        )
+        params.append(limit)
+        rows = self.execute_query(sql, tuple(params)).fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_claims_monitoring_events_delivered(self, ids: List[int]) -> int:
+        if not ids:
+            return 0
+        placeholders = ",".join("?" * len(ids))
+        now = self._get_current_utc_timestamp_str()
+        sql = f"UPDATE claims_monitoring_events SET delivered_at = ? WHERE id IN ({placeholders})"
+        params: List[Any] = [str(now)]
+        params.extend([int(i) for i in ids])
+        cursor = self.execute_query(sql, tuple(params), commit=True)
+        try:
+            return int(getattr(cursor, "rowcount", 0) or 0)
+        except Exception:
+            return 0
+
+    def get_latest_claims_monitoring_event_delivery(
+        self,
+        *,
+        user_id: str,
+        event_type: Optional[str] = None,
+    ) -> Optional[str]:
+        conditions: List[str] = ["user_id = ?", "delivered_at IS NOT NULL"]
+        params: List[Any] = [str(user_id)]
+        if event_type:
+            conditions.append("event_type = ?")
+            params.append(str(event_type))
+        sql = (
+            "SELECT MAX(delivered_at) AS delivered_at "
+            "FROM claims_monitoring_events WHERE "
+            + " AND ".join(conditions)
+        )
+        row = self.execute_query(sql, tuple(params)).fetchone()
+        if not row:
+            return None
+        try:
+            return row.get("delivered_at")
+        except Exception:
+            try:
+                return row[0]
+            except Exception:
+                return None
 
     def list_claims_monitoring_user_ids(self) -> List[str]:
         rows = self.execute_query(
@@ -5120,6 +5447,33 @@ class MediaDatabase:
                     user_ids.append(str(row[0]))
                 except Exception:
                     continue
+        return [uid for uid in user_ids if uid]
+
+    def list_claims_review_user_ids(self) -> List[str]:
+        """Return distinct user IDs with review log activity (Postgres only)."""
+        if self.backend_type != BackendType.POSTGRESQL:
+            return []
+        rows = self.execute_query(
+            (
+                "SELECT DISTINCT COALESCE(CAST(m.owner_user_id AS TEXT), m.client_id) AS user_id "
+                "FROM claims_review_log l "
+                "LEFT JOIN claims c ON c.id = l.claim_id "
+                "LEFT JOIN media m ON m.id = c.media_id"
+            ),
+            tuple(),
+        ).fetchall()
+        user_ids: List[str] = []
+        for row in rows:
+            try:
+                user_id = row["user_id"]
+            except Exception:
+                try:
+                    user_id = row[0]
+                except Exception:
+                    user_id = None
+            if user_id is None:
+                continue
+            user_ids.append(str(user_id))
         return [uid for uid in user_ids if uid]
 
     def get_claims_monitoring_health(self, user_id: str) -> Dict[str, Any]:

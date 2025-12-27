@@ -10,7 +10,7 @@ pytestmark = pytest.mark.unit
 
 
 def test_merge_budget_settings_clears_when_requested():
-    existing = {"budget_month_usd": 100.0, "alert_thresholds": [50, 80]}
+    existing = {"budget_month_usd": 100.0, "alert_thresholds": {"global": [50, 80]}}
     merged = merge_budget_settings(existing, updates={"budget_month_usd": 200.0}, clear=True)
     assert merged == {}
 
@@ -22,9 +22,17 @@ def test_merge_budget_settings_preserves_when_no_updates():
 
 
 def test_merge_budget_settings_removes_none_fields():
-    existing = {"budget_month_usd": 100.0, "budget_day_tokens": 1000}
-    merged = merge_budget_settings(existing, updates={"budget_day_tokens": None}, clear=False)
-    assert merged == {"budget_month_usd": 100.0}
+    existing = {
+        "budget_month_usd": 100.0,
+        "budget_day_tokens": 1000,
+        "alert_thresholds": {"global": [80], "per_metric": {"budget_day_tokens": [90]}},
+    }
+    merged = merge_budget_settings(
+        existing,
+        updates={"budget_day_tokens": None, "alert_thresholds": {"per_metric": {"budget_day_tokens": None}}},
+        clear=False,
+    )
+    assert merged == {"budget_month_usd": 100.0, "alert_thresholds": {"global": [80]}}
 
 
 def test_build_budget_change_log_tracks_updates_and_clears():
@@ -48,19 +56,21 @@ def test_build_budget_change_log_tracks_updates_and_clears():
     assert by_field["budgets.budget_day_tokens"]["new_value"] is None
     assert by_field["budgets.budget_day_tokens"]["data_type"] == "integer"
 
-    assert by_field["budgets.alert_thresholds"]["old_value"] is None
-    assert by_field["budgets.alert_thresholds"]["new_value"] == {
-        "global": [80, 95],
-        "per_metric": {"budget_month_usd": [90]},
-    }
-    assert by_field["budgets.alert_thresholds"]["data_type"] == "object"
+    assert by_field["budgets.alert_thresholds.global"]["old_value"] is None
+    assert by_field["budgets.alert_thresholds.global"]["new_value"] == [80, 95]
+    assert by_field["budgets.alert_thresholds.global"]["data_type"] == "array"
 
-    assert by_field["budgets.enforcement_mode"]["old_value"] is None
-    assert by_field["budgets.enforcement_mode"]["new_value"] == {
-        "global": "soft",
-        "per_metric": {"budget_month_usd": "hard"},
-    }
-    assert by_field["budgets.enforcement_mode"]["data_type"] == "object"
+    assert by_field["budgets.alert_thresholds.per_metric.budget_month_usd"]["old_value"] is None
+    assert by_field["budgets.alert_thresholds.per_metric.budget_month_usd"]["new_value"] == [90]
+    assert by_field["budgets.alert_thresholds.per_metric.budget_month_usd"]["data_type"] == "array"
+
+    assert by_field["budgets.enforcement_mode.global"]["old_value"] is None
+    assert by_field["budgets.enforcement_mode.global"]["new_value"] == "soft"
+    assert by_field["budgets.enforcement_mode.global"]["data_type"] == "string"
+
+    assert by_field["budgets.enforcement_mode.per_metric.budget_month_usd"]["old_value"] is None
+    assert by_field["budgets.enforcement_mode.per_metric.budget_month_usd"]["new_value"] == "hard"
+    assert by_field["budgets.enforcement_mode.per_metric.budget_month_usd"]["data_type"] == "string"
 
 
 def test_build_budget_change_log_handles_clear_budgets():
@@ -82,3 +92,13 @@ def test_build_budget_change_log_skips_when_no_updates():
     merged = merge_budget_settings(existing, updates=None, clear=False)
     changes = build_budget_change_log(existing, merged, None, clear_budgets=False)
     assert changes == []
+
+
+def test_merge_budget_settings_normalizes_thresholds():
+    existing = {}
+    merged = merge_budget_settings(
+        existing,
+        updates={"alert_thresholds": {"global": [95, 80, 80]}},
+        clear=False,
+    )
+    assert merged["alert_thresholds"]["global"] == [80, 95]

@@ -33,7 +33,24 @@ def _parse_json_payload(raw: Any) -> Dict[str, Any]:
     return {}
 
 
-def _normalize_alert_thresholds(value: Any) -> Optional[Dict[str, Any]]:
+def _normalize_threshold_list(values: Any) -> List[int]:
+    if not isinstance(values, list):
+        raise ValueError("Alert thresholds must be a list")
+    if not values:
+        raise ValueError("Alert thresholds must not be empty")
+    cleaned: List[int] = []
+    for val in values:
+        try:
+            num = int(val)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Alert thresholds must be integers") from exc
+        if num < 1 or num > 100:
+            raise ValueError("Alert thresholds must be between 1 and 100")
+        cleaned.append(num)
+    return sorted(set(cleaned))
+
+
+def _coerce_alert_thresholds(value: Any) -> Optional[Dict[str, Any]]:
     if value is None:
         return None
     if isinstance(value, list):
@@ -48,7 +65,7 @@ def _normalize_alert_thresholds(value: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _normalize_enforcement_mode(value: Any) -> Optional[Dict[str, Any]]:
+def _coerce_enforcement_mode(value: Any) -> Optional[Dict[str, Any]]:
     if value is None:
         return None
     if isinstance(value, str):
@@ -63,33 +80,130 @@ def _normalize_enforcement_mode(value: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _normalize_alert_thresholds_update(value: Any) -> Optional[Dict[str, Any]]:
+    payload = _coerce_alert_thresholds(value)
+    if payload is None:
+        return None
+    out: Dict[str, Any] = {}
+    if "global" in payload:
+        global_value = payload.get("global")
+        if global_value is None:
+            out["global"] = None
+        else:
+            out["global"] = _normalize_threshold_list(global_value)
+    if "per_metric" in payload:
+        per_metric = payload.get("per_metric")
+        if per_metric is None:
+            out["per_metric"] = None
+        elif not isinstance(per_metric, dict):
+            raise ValueError("Per-metric thresholds must be a mapping")
+        else:
+            cleaned: Dict[str, Any] = {}
+            for key, values in per_metric.items():
+                if key not in _BUDGET_KEYS:
+                    raise ValueError("Unknown per-metric budget key")
+                if values is None:
+                    cleaned[key] = None
+                else:
+                    cleaned[key] = _normalize_threshold_list(values)
+            out["per_metric"] = cleaned
+    return out or None
+
+
+def _normalize_enforcement_mode_update(value: Any) -> Optional[Dict[str, Any]]:
+    payload = _coerce_enforcement_mode(value)
+    if payload is None:
+        return None
+    out: Dict[str, Any] = {}
+    if "global" in payload:
+        global_value = payload.get("global")
+        if global_value is None:
+            out["global"] = None
+        elif global_value in {"none", "soft", "hard"}:
+            out["global"] = global_value
+        else:
+            raise ValueError("Enforcement mode must be none, soft, or hard")
+    if "per_metric" in payload:
+        per_metric = payload.get("per_metric")
+        if per_metric is None:
+            out["per_metric"] = None
+        elif not isinstance(per_metric, dict):
+            raise ValueError("Per-metric enforcement must be a mapping")
+        else:
+            cleaned: Dict[str, Any] = {}
+            for key, value in per_metric.items():
+                if key not in _BUDGET_KEYS:
+                    raise ValueError("Unknown per-metric budget key")
+                if value is None:
+                    cleaned[key] = None
+                elif value in {"none", "soft", "hard"}:
+                    cleaned[key] = value
+                else:
+                    raise ValueError("Enforcement mode must be none, soft, or hard")
+            out["per_metric"] = cleaned
+    return out or None
+
+
+def _normalize_alert_thresholds_payload(value: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(value, dict):
+        return None
+    out: Dict[str, Any] = {}
+    if "global" in value and value.get("global") is not None:
+        out["global"] = _normalize_threshold_list(value.get("global"))
+    if "per_metric" in value and isinstance(value.get("per_metric"), dict):
+        cleaned: Dict[str, Any] = {}
+        for key, values in value.get("per_metric", {}).items():
+            if key not in _BUDGET_KEYS:
+                raise ValueError("Unknown per-metric budget key")
+            if values is None:
+                continue
+            cleaned[key] = _normalize_threshold_list(values)
+        if cleaned:
+            out["per_metric"] = cleaned
+    return out or None
+
+
+def _normalize_enforcement_mode_payload(value: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(value, dict):
+        return None
+    out: Dict[str, Any] = {}
+    global_value = value.get("global")
+    if global_value is not None:
+        if global_value not in {"none", "soft", "hard"}:
+            raise ValueError("Enforcement mode must be none, soft, or hard")
+        out["global"] = global_value
+    per_metric = value.get("per_metric")
+    if isinstance(per_metric, dict):
+        cleaned: Dict[str, Any] = {}
+        for key, per_value in per_metric.items():
+            if key not in _BUDGET_KEYS:
+                raise ValueError("Unknown per-metric budget key")
+            if per_value is None:
+                continue
+            if per_value not in {"none", "soft", "hard"}:
+                raise ValueError("Enforcement mode must be none, soft, or hard")
+            cleaned[key] = per_value
+        if cleaned:
+            out["per_metric"] = cleaned
+    return out or None
+
+
 def _normalize_budget_payload(raw: Any) -> Dict[str, Any]:
     data = _parse_json_payload(raw)
     if not data:
         return {}
 
-    has_budget_shape = any(
-        key in data for key in ("budgets", "alert_thresholds", "enforcement_mode")
-    )
-    if has_budget_shape:
-        budgets = data.get("budgets") if isinstance(data.get("budgets"), dict) else {}
-        payload: Dict[str, Any] = {}
-        if budgets:
-            payload["budgets"] = dict(budgets)
-        thresholds = _normalize_alert_thresholds(data.get("alert_thresholds"))
-        if thresholds is not None:
-            payload["alert_thresholds"] = thresholds
-        enforcement = _normalize_enforcement_mode(data.get("enforcement_mode"))
-        if enforcement is not None:
-            payload["enforcement_mode"] = enforcement
-        return payload
-
-    budgets = {key: data[key] for key in _BUDGET_KEYS if key in data}
+    budgets: Dict[str, Any] = {}
+    if isinstance(data.get("budgets"), dict):
+        budgets.update(data.get("budgets") or {})
+    for key in _BUDGET_KEYS:
+        if key in data and key not in budgets:
+            budgets[key] = data[key]
     payload = {"budgets": budgets} if budgets else {}
-    thresholds = _normalize_alert_thresholds(data.get("alert_thresholds"))
+    thresholds = _coerce_alert_thresholds(data.get("alert_thresholds"))
     if thresholds is not None:
         payload["alert_thresholds"] = thresholds
-    enforcement = _normalize_enforcement_mode(data.get("enforcement_mode"))
+    enforcement = _coerce_enforcement_mode(data.get("enforcement_mode"))
     if enforcement is not None:
         payload["enforcement_mode"] = enforcement
     return payload
@@ -99,9 +213,12 @@ def _flatten_budget_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(payload, dict) or not payload:
         return {}
     flat: Dict[str, Any] = {}
-    budgets = payload.get("budgets")
-    if isinstance(budgets, dict):
-        flat.update(budgets)
+    if isinstance(payload.get("budgets"), dict):
+        flat.update(payload.get("budgets") or {})
+    else:
+        for key in _BUDGET_KEYS:
+            if key in payload:
+                flat[key] = payload[key]
     if "alert_thresholds" in payload:
         flat["alert_thresholds"] = payload.get("alert_thresholds")
     if "enforcement_mode" in payload:
@@ -113,9 +230,9 @@ def _inflate_budget_payload(flat: Dict[str, Any]) -> Dict[str, Any]:
     if not flat:
         return {}
     payload: Dict[str, Any] = {}
-    budgets = {key: flat[key] for key in _BUDGET_KEYS if key in flat}
-    if budgets:
-        payload["budgets"] = budgets
+    for key in _BUDGET_KEYS:
+        if key in flat:
+            payload[key] = flat[key]
     if "alert_thresholds" in flat:
         payload["alert_thresholds"] = flat.get("alert_thresholds")
     if "enforcement_mode" in flat:
@@ -142,8 +259,8 @@ def _build_budget_item(row: Dict[str, Any]) -> Dict[str, Any]:
     effective_limits = dict(plan_limits)
     if isinstance(custom_limits, dict) and custom_limits:
         effective_limits.update(custom_limits)
-    if budgets_payload:
-        effective_limits["budgets"] = budgets_payload
+    if budgets:
+        effective_limits["budgets"] = _inflate_budget_payload(budgets)
 
     return {
         "org_id": int(row.get("org_id")),
@@ -171,11 +288,104 @@ def merge_budget_settings(
         return dict(existing)
     merged = dict(existing)
     for key, value in updates.items():
-        if value is None:
-            merged.pop(key, None)
-        else:
-            merged[key] = value
+        if key in _BUDGET_KEYS:
+            if value is None:
+                merged.pop(key, None)
+            else:
+                merged[key] = value
+            continue
+        if key == "alert_thresholds":
+            merged_thresholds = _merge_alert_thresholds(merged.get(key), value)
+            if merged_thresholds is None:
+                merged.pop(key, None)
+            else:
+                merged[key] = merged_thresholds
+            continue
+        if key == "enforcement_mode":
+            merged_enforcement = _merge_enforcement_mode(merged.get(key), value)
+            if merged_enforcement is None:
+                merged.pop(key, None)
+            else:
+                merged[key] = merged_enforcement
+            continue
+        raise ValueError("invalid_budget_update")
     return merged
+
+
+def _merge_alert_thresholds(existing: Any, updates: Any) -> Optional[Dict[str, Any]]:
+    if updates is None:
+        return None
+    existing_payload = existing if isinstance(existing, dict) else {}
+    merged: Dict[str, Any] = {}
+    if "global" in existing_payload:
+        merged["global"] = existing_payload.get("global")
+    if isinstance(existing_payload.get("per_metric"), dict):
+        merged["per_metric"] = dict(existing_payload.get("per_metric") or {})
+
+    normalized_updates = _normalize_alert_thresholds_update(updates)
+    if not normalized_updates:
+        return _normalize_alert_thresholds_payload(merged)
+
+    if "global" in normalized_updates:
+        if normalized_updates["global"] is None:
+            merged.pop("global", None)
+        else:
+            merged["global"] = normalized_updates["global"]
+    if "per_metric" in normalized_updates:
+        if normalized_updates["per_metric"] is None:
+            merged.pop("per_metric", None)
+        else:
+            per_metric = merged.get("per_metric")
+            if not isinstance(per_metric, dict):
+                per_metric = {}
+            for key, values in normalized_updates["per_metric"].items():
+                if values is None:
+                    per_metric.pop(key, None)
+                else:
+                    per_metric[key] = values
+            if per_metric:
+                merged["per_metric"] = per_metric
+            else:
+                merged.pop("per_metric", None)
+    return _normalize_alert_thresholds_payload(merged)
+
+
+def _merge_enforcement_mode(existing: Any, updates: Any) -> Optional[Dict[str, Any]]:
+    if updates is None:
+        return None
+    existing_payload = existing if isinstance(existing, dict) else {}
+    merged: Dict[str, Any] = {}
+    if "global" in existing_payload:
+        merged["global"] = existing_payload.get("global")
+    if isinstance(existing_payload.get("per_metric"), dict):
+        merged["per_metric"] = dict(existing_payload.get("per_metric") or {})
+
+    normalized_updates = _normalize_enforcement_mode_update(updates)
+    if not normalized_updates:
+        return _normalize_enforcement_mode_payload(merged)
+
+    if "global" in normalized_updates:
+        if normalized_updates["global"] is None:
+            merged.pop("global", None)
+        else:
+            merged["global"] = normalized_updates["global"]
+    if "per_metric" in normalized_updates:
+        if normalized_updates["per_metric"] is None:
+            merged.pop("per_metric", None)
+        else:
+            per_metric = merged.get("per_metric")
+            if not isinstance(per_metric, dict):
+                per_metric = {}
+            for key, value in normalized_updates["per_metric"].items():
+                if value is None:
+                    per_metric.pop(key, None)
+                else:
+                    per_metric[key] = value
+            if per_metric:
+                merged["per_metric"] = per_metric
+            else:
+                merged.pop("per_metric", None)
+    return _normalize_enforcement_mode_payload(merged)
 
 
 def _infer_change_data_type(value: Any) -> str:
@@ -220,19 +430,120 @@ def build_budget_change_log(
 
     changes: List[Dict[str, Any]] = []
     for key, _ in budget_updates.items():
-        old_value = existing_budgets.get(key)
-        new_value = merged_budgets.get(key)
-        if old_value == new_value:
+        if key in _BUDGET_KEYS:
+            old_value = existing_budgets.get(key)
+            new_value = merged_budgets.get(key)
+            if old_value == new_value:
+                continue
+            data_type = _infer_change_data_type(new_value if new_value is not None else old_value)
+            changes.append(
+                {
+                    "field_name": f"budgets.{key}",
+                    "old_value": old_value,
+                    "new_value": new_value,
+                    "data_type": data_type,
+                }
+            )
             continue
-        data_type = _infer_change_data_type(new_value if new_value is not None else old_value)
-        changes.append(
+        if key == "alert_thresholds":
+            changes.extend(
+                _build_nested_changes(
+                    "alert_thresholds",
+                    existing_budgets.get("alert_thresholds"),
+                    merged_budgets.get("alert_thresholds"),
+                    budget_updates.get("alert_thresholds"),
+                )
+            )
+            continue
+        if key == "enforcement_mode":
+            changes.extend(
+                _build_nested_changes(
+                    "enforcement_mode",
+                    existing_budgets.get("enforcement_mode"),
+                    merged_budgets.get("enforcement_mode"),
+                    budget_updates.get("enforcement_mode"),
+                )
+            )
+            continue
+    return changes
+
+
+def _build_nested_changes(
+    field_name: str,
+    existing_value: Any,
+    merged_value: Any,
+    update_value: Any,
+) -> List[Dict[str, Any]]:
+    if update_value is None:
+        if existing_value is None:
+            return []
+        return [
             {
-                "field_name": f"budgets.{key}",
-                "old_value": old_value,
-                "new_value": new_value,
-                "data_type": data_type,
+                "field_name": f"budgets.{field_name}",
+                "old_value": existing_value,
+                "new_value": None,
+                "data_type": _infer_change_data_type(existing_value),
             }
-        )
+        ]
+
+    if field_name == "alert_thresholds":
+        update_payload = _coerce_alert_thresholds(update_value) or {}
+    elif field_name == "enforcement_mode":
+        update_payload = _coerce_enforcement_mode(update_value) or {}
+    else:
+        update_payload = {}
+
+    if not update_payload:
+        return []
+
+    existing_payload = existing_value if isinstance(existing_value, dict) else {}
+    merged_payload = merged_value if isinstance(merged_value, dict) else {}
+    changes: List[Dict[str, Any]] = []
+
+    if "global" in update_payload:
+        old_value = existing_payload.get("global")
+        new_value = merged_payload.get("global")
+        if old_value != new_value:
+            changes.append(
+                {
+                    "field_name": f"budgets.{field_name}.global",
+                    "old_value": old_value,
+                    "new_value": new_value,
+                    "data_type": _infer_change_data_type(new_value if new_value is not None else old_value),
+                }
+            )
+
+    if "per_metric" in update_payload:
+        per_metric_update = update_payload.get("per_metric")
+        if per_metric_update is None:
+            old_value = existing_payload.get("per_metric")
+            new_value = merged_payload.get("per_metric")
+            if old_value != new_value:
+                changes.append(
+                    {
+                        "field_name": f"budgets.{field_name}.per_metric",
+                        "old_value": old_value,
+                        "new_value": new_value,
+                        "data_type": _infer_change_data_type(new_value if new_value is not None else old_value),
+                    }
+                )
+        elif isinstance(per_metric_update, dict):
+            old_map = existing_payload.get("per_metric") if isinstance(existing_payload.get("per_metric"), dict) else {}
+            new_map = merged_payload.get("per_metric") if isinstance(merged_payload.get("per_metric"), dict) else {}
+            for metric_key in per_metric_update.keys():
+                old_value = old_map.get(metric_key)
+                new_value = new_map.get(metric_key)
+                if old_value == new_value:
+                    continue
+                changes.append(
+                    {
+                        "field_name": f"budgets.{field_name}.per_metric.{metric_key}",
+                        "old_value": old_value,
+                        "new_value": new_value,
+                        "data_type": _infer_change_data_type(new_value if new_value is not None else old_value),
+                    }
+                )
+
     return changes
 
 

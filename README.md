@@ -647,6 +647,21 @@ All limits are designed to be conservative by default and can be tuned using the
 
 </details>
 
+## Frontend Integration Testing
+
+Use the helper script to run frontend unit tests plus smoke checks against a live backend:
+
+```bash
+cd tldw-frontend
+npm run test:integration
+```
+
+Notes:
+- Starts the backend (uvicorn) by default and runs `pytest -m integration`, then `npm run test:run` + `npm run smoke`.
+- Set `TLDW_X_API_KEY=...` for single-user mode (a temporary key is generated if missing).
+- Use `--backend-docker` to start the backend via Docker Compose, or `--skip-backend` if you already have it running.
+- Use `--no-backend-tests` to skip backend integration tests.
+
 ## CI Status & Smoke Tests
 
 <details>

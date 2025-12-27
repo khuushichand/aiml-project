@@ -27,6 +27,7 @@ import { cn } from '@/lib/utils';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { OrgContextSwitcher } from '@/components/OrgContextSwitcher';
 import { usePermissions } from '@/components/PermissionGuard';
+import { useToast } from '@/components/ui/toast';
 
 // Navigation items with required permissions/roles
 const navigation = [
@@ -85,10 +86,16 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const router = useRouter();
   const user = getCurrentUser();
   const { hasPermission, hasRole, loading: permLoading } = usePermissions();
+  const { error: showError } = useToast();
 
   const handleLogout = async () => {
-    await logout();
-    router.push('/login');
+    try {
+      await logout();
+      router.push('/login');
+    } catch (error) {
+      console.error('Logout failed:', error);
+      showError('Logout failed', 'Please try again.');
+    }
   };
 
   const handleNavClick = () => {

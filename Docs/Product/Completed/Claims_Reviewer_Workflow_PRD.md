@@ -24,9 +24,8 @@ Teams need confidence that surfaced claims have been vetted, yet the platform pr
 - Audit coverage: every claim transition has reviewer, timestamp, and notes.
 
 ## Implementation Status (repo state)
-- Complete: review schema + audit log + rules tables; review queue/history/update/bulk/rules endpoints; rule evaluation on ingest; review metrics and basic analytics export; review assignment notifications recorded in `claims_notifications` with list/digest/ack APIs.
+- Complete: review schema + audit log + rules tables; review queue/history/update/bulk/rules endpoints; rule evaluation on ingest; review metrics and basic analytics export; review assignment notifications recorded in `claims_notifications` with list/digest/ack APIs; external delivery for review-event notifications (webhook/email); reviewer UI with batch tooling.
 - Partial: review analytics are basic aggregates only; no nightly extractor delta report or correction pipelines.
-- Pending: external delivery for review-event notifications (webhook/email); UI/batch tooling beyond API surface.
 
 ## 4. Out of Scope (v1)
 - Full-blown workflow builder or external ticketing integration.
@@ -81,7 +80,7 @@ Teams need confidence that surfaced claims have been vetted, yet the platform pr
 - Notification integration:
   - Emit events via existing notification subsystem (webhooks/Slack/email) when claims assigned to a reviewer or group.
   - Daily digest summarizing outstanding assignments per reviewer.
-  - Implementation note: assignment notifications are stored in `claims_notifications` and exposed via `/api/v1/claims/notifications` and `/api/v1/claims/notifications/digest`; external webhook/email delivery is still pending.
+  - Implementation note: assignment notifications are stored in `claims_notifications` and exposed via `/api/v1/claims/notifications` and `/api/v1/claims/notifications/digest`; webhook/email delivery uses the monitoring config channels.
 
 ### 6.4 Feedback Loop & Extractor Insight
 - Allow reviewers to optionally edit claim text or supply a corrected version; store delta in `ClaimsReviewLog`.

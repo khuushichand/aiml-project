@@ -165,17 +165,21 @@ export default function UsagePage() {
 
   const llmParams = useMemo(() => {
     const params: Record<string, string> = { group_by: groupBy };
-    if (startDate) params.start = toIsoStart(startDate) as string;
-    if (endDate) params.end = toIsoEnd(endDate) as string;
+    const isoStart = toIsoStart(startDate);
+    const isoEnd = toIsoEnd(endDate);
+    if (isoStart) params.start = isoStart;
+    if (isoEnd) params.end = isoEnd;
     if (selectedOrg) params.org_id = String(selectedOrg.id);
     return params;
   }, [startDate, endDate, groupBy, selectedOrg]);
 
   const llmExportParams = useMemo(() => {
     const params: Record<string, string> = {};
-    if (startDate) params.start = toIsoStart(startDate) as string;
-    if (endDate) params.end = toIsoEnd(endDate) as string;
-    if (selectedOrg) params.org_id = String(selectedOrg.id);
+    const isoStart = toIsoStart(startDate);
+    const isoEnd = toIsoEnd(endDate);
+    if (isoStart) params.start = isoStart;
+    if (isoEnd) params.end = isoEnd;
+    if (selectedOrg?.id) params.org_id = String(selectedOrg.id);
     return params;
   }, [startDate, endDate, selectedOrg]);
 

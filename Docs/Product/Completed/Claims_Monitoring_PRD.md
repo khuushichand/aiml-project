@@ -30,8 +30,7 @@ Operators lack actionable visibility into claim extraction health. Without granu
 - Reduction in unsupported claim incidents by 30% quarter-over-quarter due to early warning.
 
 ## Implementation Status (repo state)
-- Complete: provider/rebuild/review metrics; monitoring config + alerts CRUD and evaluate endpoints persisted in Media DB; rebuild health endpoint with persisted heartbeat; dashboard analytics + export handles (download + history listing); alert scheduler (interval-based); webhook delivery retries/backoff, delivery metrics, and event recording.
-- Partial: Alertmanager wiring/runbooks and email digest; notifications are webhook-only (Slack/webhook). Grafana dashboard template + Prometheus alert rules exist; full data quality dashboards still pending.
+- Complete: provider/rebuild/review metrics; monitoring config + alerts CRUD and evaluate endpoints persisted in Media DB; rebuild health endpoint with persisted heartbeat; dashboard analytics + export handles (download + history listing); alert scheduler (interval-based); webhook delivery retries/backoff, delivery metrics, and event recording; Alertmanager wiring/runbooks and email digest delivery.
 - Pending: hotspot index, richer data quality dashboards.
 
 ## 4. Out of Scope (v1)
@@ -73,7 +72,7 @@ Operators lack actionable visibility into claim extraction health. Without granu
 - Notification channels:
   - Slack webhook integration (configurable channel, severity).
   - Generic webhooks for automation (payload includes workspace, current ratio, baseline, top sources).
-  - Optional email digest (pending; recipients stored but delivery not implemented).
+  - Optional email digest (implemented; recipients stored in monitoring config and alert configs).
 - Alert suppression/exponential backoff to avoid flapping.
 - Provide dashboard card showing current ratio vs. threshold.
 

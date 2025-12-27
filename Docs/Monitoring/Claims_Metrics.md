@@ -18,6 +18,22 @@
 - `claims_review_processed_total`
 - `claims_review_latency_seconds`
 
+## Alert Delivery Metrics
+- `claims_alert_webhook_delivered_total{status}`
+- `claims_alert_webhook_failed_total{reason}`
+- `claims_alert_webhook_latency_seconds{status}`
+- `claims_alert_email_delivered_total{status}`
+- `claims_alert_email_failed_total{reason}`
+- `claims_alert_email_latency_seconds{status}`
+
+## Review Notification Metrics
+- `claims_review_webhook_delivered_total{status}`
+- `claims_review_webhook_failed_total{reason}`
+- `claims_review_webhook_latency_seconds{status}`
+- `claims_review_email_delivered_total{status}`
+- `claims_review_email_failed_total{reason}`
+- `claims_review_email_latency_seconds{status}`
+
 ## Post-Check Metrics
 - `rag_total_claims_checked_total`
 - `rag_unsupported_claims_total`
@@ -25,3 +41,4 @@
 ## Dashboards & Alerts
 - Grafana dashboard JSON: `Docs/Monitoring/claims_grafana_dashboard.json`
 - Prometheus alert rules: `Docs/Monitoring/claims_alerts_prometheus.yaml`
+- Claims alerts runbook: `Docs/Operations/Claims_Alerts_Runbook.md`

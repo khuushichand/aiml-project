@@ -256,7 +256,7 @@ RAG EVal
     https://arxiv.org/pdf/2502.07445
     https://arxiv.org/pdf/2502.12501
 
-
+https://arxiv.org/abs/2512.16041
 https://nicholas.carlini.com/writing/2024/my-benchmark-for-large-language-models.html
 https://github.com/cpldcpu/MisguidedAttention
 https://github.com/lechmazur/generalization

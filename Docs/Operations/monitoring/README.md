@@ -98,6 +98,8 @@ rule_files:
   - monitoring/alerts/*.yaml
 ```
 
+Claims monitoring alert rules live in `Docs/Monitoring/claims_alerts_prometheus.yaml`. Add the file to your Prometheus `rule_files` list and keep the runbook (`Docs/Operations/Claims_Alerts_Runbook.md`) alongside Alertmanager receiver routing so on-call responders have clear remediation steps.
+
 ## Metrics Primer
 
 Key embeddings orchestrator metrics exported by the API process:

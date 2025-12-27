@@ -197,6 +197,84 @@ def _register_claims_metrics() -> None:
     )
     reg.register_metric(
         MetricDefinition(
+            name="claims_alert_email_delivered_total",
+            type=MetricType.COUNTER,
+            description="Claims alert email deliveries",
+            labels=["status"],
+        )
+    )
+    reg.register_metric(
+        MetricDefinition(
+            name="claims_alert_email_failed_total",
+            type=MetricType.COUNTER,
+            description="Claims alert email failures",
+            labels=["reason"],
+        )
+    )
+    reg.register_metric(
+        MetricDefinition(
+            name="claims_alert_email_latency_seconds",
+            type=MetricType.HISTOGRAM,
+            description="Claims alert email delivery latency in seconds",
+            unit="s",
+            labels=["status"],
+            buckets=[0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10],
+        )
+    )
+    reg.register_metric(
+        MetricDefinition(
+            name="claims_review_webhook_delivered_total",
+            type=MetricType.COUNTER,
+            description="Claims review webhook deliveries",
+            labels=["status"],
+        )
+    )
+    reg.register_metric(
+        MetricDefinition(
+            name="claims_review_webhook_failed_total",
+            type=MetricType.COUNTER,
+            description="Claims review webhook failures",
+            labels=["reason"],
+        )
+    )
+    reg.register_metric(
+        MetricDefinition(
+            name="claims_review_webhook_latency_seconds",
+            type=MetricType.HISTOGRAM,
+            description="Claims review webhook latency in seconds",
+            unit="s",
+            labels=["status"],
+            buckets=[0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10],
+        )
+    )
+    reg.register_metric(
+        MetricDefinition(
+            name="claims_review_email_delivered_total",
+            type=MetricType.COUNTER,
+            description="Claims review email deliveries",
+            labels=["status"],
+        )
+    )
+    reg.register_metric(
+        MetricDefinition(
+            name="claims_review_email_failed_total",
+            type=MetricType.COUNTER,
+            description="Claims review email failures",
+            labels=["reason"],
+        )
+    )
+    reg.register_metric(
+        MetricDefinition(
+            name="claims_review_email_latency_seconds",
+            type=MetricType.HISTOGRAM,
+            description="Claims review email latency in seconds",
+            unit="s",
+            labels=["status"],
+            buckets=[0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10],
+        )
+    )
+    reg.register_metric(
+        MetricDefinition(
             name="rag_total_claims_checked_total",
             type=MetricType.COUNTER,
             description="Total number of claims checked during RAG post-check",
@@ -364,6 +442,111 @@ def record_claims_webhook_delivery(
     if latency_s is not None:
         observe_histogram(
             "claims_alert_webhook_latency_seconds",
+            float(latency_s),
+            labels={"status": str(status)},
+        )
+
+
+def record_claims_alert_email_delivery(
+    *,
+    status: str,
+    reason: Optional[str] = None,
+    latency_s: Optional[float] = None,
+) -> None:
+    if not _claims_monitoring_enabled():
+        return
+    _register_claims_metrics()
+    try:
+        from tldw_Server_API.app.core.Metrics.metrics_manager import (
+            increment_counter,
+            observe_histogram,
+        )
+    except Exception:
+        return
+    increment_counter(
+        "claims_alert_email_delivered_total",
+        1,
+        labels={"status": str(status)},
+    )
+    if reason:
+        increment_counter(
+            "claims_alert_email_failed_total",
+            1,
+            labels={"reason": str(reason)},
+        )
+    if latency_s is not None:
+        observe_histogram(
+            "claims_alert_email_latency_seconds",
+            float(latency_s),
+            labels={"status": str(status)},
+        )
+
+
+def record_claims_review_webhook_delivery(
+    *,
+    status: str,
+    reason: Optional[str] = None,
+    latency_s: Optional[float] = None,
+) -> None:
+    if not _claims_monitoring_enabled():
+        return
+    _register_claims_metrics()
+    try:
+        from tldw_Server_API.app.core.Metrics.metrics_manager import (
+            increment_counter,
+            observe_histogram,
+        )
+    except Exception:
+        return
+    increment_counter(
+        "claims_review_webhook_delivered_total",
+        1,
+        labels={"status": str(status)},
+    )
+    if reason:
+        increment_counter(
+            "claims_review_webhook_failed_total",
+            1,
+            labels={"reason": str(reason)},
+        )
+    if latency_s is not None:
+        observe_histogram(
+            "claims_review_webhook_latency_seconds",
+            float(latency_s),
+            labels={"status": str(status)},
+        )
+
+
+def record_claims_review_email_delivery(
+    *,
+    status: str,
+    reason: Optional[str] = None,
+    latency_s: Optional[float] = None,
+) -> None:
+    if not _claims_monitoring_enabled():
+        return
+    _register_claims_metrics()
+    try:
+        from tldw_Server_API.app.core.Metrics.metrics_manager import (
+            increment_counter,
+            observe_histogram,
+        )
+    except Exception:
+        return
+    increment_counter(
+        "claims_review_email_delivered_total",
+        1,
+        labels={"status": str(status)},
+    )
+    if reason:
+        increment_counter(
+            "claims_review_email_failed_total",
+            1,
+            labels={"reason": str(reason)},
+        )
+    if latency_s is not None:
+        observe_histogram(
+            "claims_review_email_latency_seconds",
             float(latency_s),
             labels={"status": str(status)},
         )

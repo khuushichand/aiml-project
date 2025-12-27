@@ -225,7 +225,7 @@ export default function BudgetsPage() {
             </CardHeader>
             <CardContent>
               {loading ? (
-                <div className="py-4">
+                <div className="py-4" data-testid="table-skeleton">
                   <TableSkeleton rows={5} columns={6} />
                 </div>
               ) : budgets.length === 0 ? (

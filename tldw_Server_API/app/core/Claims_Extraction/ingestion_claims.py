@@ -351,11 +351,20 @@ def store_claims(
                         client_id = None
             if owner_user_id is None:
                 owner_user_id = client_id or db.client_id
-            record_review_assignment_notifications(
+            notification_ids = record_review_assignment_notifications(
                 db=db,
                 owner_user_id=str(owner_user_id),
                 assignments=assignments,
             )
+            if notification_ids:
+                from tldw_Server_API.app.core.Claims_Extraction.claims_notifications import (
+                    dispatch_claim_review_notifications,
+                )
+                dispatch_claim_review_notifications(
+                    db_path=str(db.db_path_str),
+                    owner_user_id=str(owner_user_id),
+                    notification_ids=notification_ids,
+                )
         return inserted
     except Exception as e:  # pragma: no cover
         logger.error(f"Failed to store claims for media_id={media_id}: {e}")

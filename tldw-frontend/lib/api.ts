@@ -63,10 +63,12 @@ api.interceptors.request.use(
       const envApiKey = process.env.NEXT_PUBLIC_X_API_KEY;
       const envApiBearer = process.env.NEXT_PUBLIC_API_BEARER;
       const storedApiKey = localStorage.getItem('x_api_key');
+      const storedApiBearer = localStorage.getItem('tldw-api-bearer');
 
       // Prefer explicit API bearer if provided (for chat module API_BEARER)
-      if (envApiBearer && !config.headers.get('Authorization')) {
-        config.headers.set('Authorization', `Bearer ${envApiBearer}`);
+      const apiBearer = storedApiBearer || envApiBearer;
+      if (apiBearer && !config.headers.get('Authorization')) {
+        config.headers.set('Authorization', `Bearer ${apiBearer}`);
       }
 
       // X-API-KEY (single-user mode convenience)
@@ -145,7 +147,8 @@ api.interceptors.response.use(
         localStorage.removeItem('user');
         // Redirect to login only if not using env-based API auth
         const hasEnvAuth = !!(process.env.NEXT_PUBLIC_X_API_KEY || process.env.NEXT_PUBLIC_API_BEARER);
-        if (!hasEnvAuth) window.location.href = '/login';
+        const hasStoredAuth = !!(localStorage.getItem('x_api_key') || localStorage.getItem('tldw-api-bearer'));
+        if (!hasEnvAuth && !hasStoredAuth) window.location.href = '/login';
       }
     }
     if (status === 403) {
@@ -207,9 +210,11 @@ export function buildAuthHeaders(method: string = 'GET', contentType?: string): 
     const token = localStorage.getItem('access_token');
     if (token) headers['Authorization'] = `Bearer ${token}`;
 
+    const storedApiBearer = localStorage.getItem('tldw-api-bearer');
     const envApiBearer = process.env.NEXT_PUBLIC_API_BEARER;
-    if (envApiBearer && !headers['Authorization']) {
-      headers['Authorization'] = `Bearer ${envApiBearer}`;
+    const apiBearer = storedApiBearer || envApiBearer;
+    if (apiBearer && !headers['Authorization']) {
+      headers['Authorization'] = `Bearer ${apiBearer}`;
     }
 
     const storedApiKey = localStorage.getItem('x_api_key');

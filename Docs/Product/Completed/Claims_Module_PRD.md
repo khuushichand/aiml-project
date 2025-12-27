@@ -80,7 +80,6 @@ Analysts and downstream automations need grounded, inspectable factual statement
 - Future observability consideration: per-provider latency/cost tracking for claim-specific workloads.
 
 ## 12. Known Gaps & Risks
-- Reviewer UI/batch tooling and external review-event delivery (webhook/email) are not implemented yet.
 - Review analytics remain basic aggregates; no nightly extractor delta report or correction pipelines.
 - Trending dashboards and hotspot analytics for clustered claims are pending.
 - Multilingual support limited; spaCy default and prompts assume English.
@@ -88,7 +87,7 @@ Analysts and downstream automations need grounded, inspectable factual statement
 - Cost control is limited to concurrency/timeout knobs; no per-job budget guardrails.
 
 ## 13. Roadmap
-1. Deliver reviewer UI/batch tooling plus review-event webhooks/email and richer review analytics.
+1. Expand review analytics and nightly extractor delta reporting.
 2. Add trending dashboards and hotspot analytics for clustered claims.
 3. Expand extractor catalog (multilingual heuristics, lightweight local LLMs) and scheduling heuristics.
 4. Add per-job budget guardrails and provider latency/cost dashboards with adaptive throttling.

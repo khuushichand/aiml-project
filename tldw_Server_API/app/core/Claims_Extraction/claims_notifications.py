@@ -1,11 +1,24 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+import asyncio
+import random
+import socket
+import ssl
+import threading
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
+from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
+    record_claims_review_email_delivery,
+    record_claims_review_webhook_delivery,
+)
+from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.exceptions import EgressPolicyError, RetryExhaustedError
 
 
 def record_review_assignment_notifications(
@@ -13,15 +26,15 @@ def record_review_assignment_notifications(
     db: MediaDatabase,
     owner_user_id: str,
     assignments: List[Dict[str, Any]],
-) -> int:
+) -> List[int]:
     if not assignments:
-        return 0
+        return []
     uuids = [str(item.get("uuid")) for item in assignments if item.get("uuid")]
     if not uuids:
-        return 0
+        return []
     rows = db.get_claims_by_uuid(uuids)
     row_by_uuid = {str(row.get("uuid")): row for row in rows if row.get("uuid")}
-    inserted = 0
+    inserted_ids: List[int] = []
     for item in assignments:
         claim_uuid = str(item.get("uuid") or "")
         row = row_by_uuid.get(claim_uuid)
@@ -37,7 +50,7 @@ def record_review_assignment_notifications(
             "review_group": item.get("review_group"),
         }
         try:
-            db.insert_claim_notification(
+            created = db.insert_claim_notification(
                 user_id=str(owner_user_id),
                 kind="review_assignment",
                 target_user_id=str(item.get("reviewer_id")) if item.get("reviewer_id") is not None else None,
@@ -46,10 +59,12 @@ def record_review_assignment_notifications(
                 resource_id=str(row.get("id") or ""),
                 payload_json=json.dumps(payload),
             )
-            inserted += 1
+            notif_id = created.get("id")
+            if notif_id is not None:
+                inserted_ids.append(int(notif_id))
         except Exception as exc:
             logger.debug(f"Failed to insert review assignment notification: {exc}")
-    return inserted
+    return inserted_ids
 
 
 def record_watchlist_cluster_notifications(
@@ -105,3 +120,284 @@ def record_watchlist_cluster_notifications(
         except Exception as exc:
             logger.debug(f"Failed to insert watchlist cluster notification: {exc}")
     return inserted
+
+
+def _parse_email_recipients(raw_value: Optional[str]) -> List[str]:
+    if raw_value is None:
+        return []
+    text = str(raw_value).strip()
+    if not text:
+        return []
+    try:
+        payload = json.loads(text)
+        if isinstance(payload, list):
+            return [str(v).strip() for v in payload if str(v).strip()]
+    except Exception:
+        pass
+    return [item.strip() for item in text.split(",") if item.strip()]
+
+
+def _normalize_review_channels(config_row: Dict[str, Any]) -> Dict[str, bool]:
+    slack_url = config_row.get("slack_webhook_url")
+    webhook_url = config_row.get("webhook_url")
+    email_recipients = _parse_email_recipients(config_row.get("email_recipients"))
+    return {
+        "slack": bool(slack_url),
+        "webhook": bool(webhook_url),
+        "email": bool(email_recipients),
+    }
+
+
+def _normalize_notification_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(row)
+    raw = normalized.get("payload_json")
+    try:
+        normalized["payload"] = json.loads(raw) if raw else {}
+    except Exception:
+        normalized["payload"] = {}
+    normalized.pop("payload_json", None)
+    return normalized
+
+
+def _classify_webhook_exception(exc: Exception) -> str:
+    if isinstance(exc, EgressPolicyError):
+        return "invalid_url"
+    if isinstance(exc, RetryExhaustedError):
+        return "timeout"
+    msg = str(exc).lower()
+    if "timeout" in msg:
+        return "timeout"
+    if isinstance(exc, ssl.SSLError) or "ssl" in msg or "tls" in msg:
+        return "tls"
+    if isinstance(exc, socket.gaierror) or "name or service not known" in msg:
+        return "dns"
+    try:
+        import httpx
+    except Exception:
+        httpx = None  # type: ignore
+    if httpx is not None:
+        if isinstance(exc, getattr(httpx, "TimeoutException", Exception)):
+            return "timeout"
+        if isinstance(exc, getattr(httpx, "ConnectError", Exception)):
+            if isinstance(getattr(exc, "__cause__", None), ssl.SSLError):
+                return "tls"
+            if isinstance(getattr(exc, "__cause__", None), socket.gaierror):
+                return "dns"
+            if "name or service not known" in msg or "dns" in msg:
+                return "dns"
+    return "other"
+
+
+def _deliver_review_webhook(
+    *,
+    url: str,
+    payload: Dict[str, Any],
+    channel: str,
+) -> bool:
+    try:
+        from tldw_Server_API.app.core.http_client import create_client, fetch, RetryPolicy
+    except Exception:
+        return False
+    backoff_schedule = [5, 15, 45, 120, 300]
+    max_attempts = 5
+    for attempt in range(1, max_attempts + 1):
+        if attempt > 1:
+            base_delay = backoff_schedule[min(attempt - 2, len(backoff_schedule) - 1)]
+            jitter = random.uniform(0.8, 1.2)
+            time.sleep(max(0.0, base_delay * jitter))
+        start_ts = time.time()
+        try:
+            with create_client(timeout=5.0) as client:
+                response = fetch(
+                    method="POST",
+                    url=url,
+                    client=client,
+                    headers={"Content-Type": "application/json"},
+                    json=payload,
+                    timeout=5.0,
+                    retry=RetryPolicy(attempts=1, retry_on_unsafe=False),
+                )
+            status_code = int(getattr(response, "status_code", 0) or 0)
+            duration = time.time() - start_ts
+            if 200 <= status_code < 300:
+                record_claims_review_webhook_delivery(status="success", latency_s=duration)
+                return True
+            if 400 <= status_code < 500:
+                reason = "http_4xx"
+            elif 500 <= status_code < 600:
+                reason = "http_5xx"
+            else:
+                reason = "other"
+            record_claims_review_webhook_delivery(status="failure", reason=reason, latency_s=duration)
+        except Exception as exc:
+            reason = _classify_webhook_exception(exc)
+            duration = time.time() - start_ts
+            record_claims_review_webhook_delivery(status="failure", reason=reason, latency_s=duration)
+        if attempt >= max_attempts:
+            return False
+    return False
+
+
+async def _deliver_review_email(
+    *,
+    recipients: List[str],
+    subject: str,
+    html_body: str,
+    text_body: str,
+) -> bool:
+    if not recipients:
+        return False
+    try:
+        from tldw_Server_API.app.core.AuthNZ.email_service import get_email_service
+    except Exception:
+        return False
+    service = get_email_service()
+    deliveries: List[bool] = []
+    for addr in recipients:
+        try:
+            ok = await service.send_email(
+                to_email=addr,
+                subject=subject,
+                html_body=html_body,
+                text_body=text_body,
+            )
+            deliveries.append(bool(ok))
+        except Exception:
+            deliveries.append(False)
+    return any(deliveries)
+
+
+def _deliver_review_email_sync(
+    *,
+    recipients: List[str],
+    subject: str,
+    html_body: str,
+    text_body: str,
+) -> bool:
+    start_ts = time.time()
+    ok = False
+    try:
+        ok = asyncio.run(
+            _deliver_review_email(
+                recipients=recipients,
+                subject=subject,
+                html_body=html_body,
+                text_body=text_body,
+            )
+        )
+        return ok
+    except Exception as exc:
+        logger.debug(f"Claims review email delivery failed: {exc}")
+        return False
+    finally:
+        duration = time.time() - start_ts
+        status = "success" if ok else "failure"
+        record_claims_review_email_delivery(status=status, latency_s=duration)
+
+
+def _build_review_digest_payload(
+    *,
+    user_id: str,
+    notifications: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    return {
+        "event": "claims_review_notifications",
+        "user_id": str(user_id),
+        "count": len(notifications),
+        "notifications": notifications,
+    }
+
+
+def _build_review_email_bodies(notifications: List[Dict[str, Any]]) -> Tuple[str, str]:
+    lines: List[str] = []
+    html_lines: List[str] = []
+    for item in notifications:
+        kind = str(item.get("kind") or "notification")
+        payload = item.get("payload") or {}
+        claim_text = payload.get("claim_text")
+        status = payload.get("new_status") or payload.get("status")
+        created_at = item.get("created_at") or "unknown"
+        summary = f"{kind} | status={status or 'n/a'} | {created_at}"
+        if claim_text:
+            summary = f"{summary} | {claim_text}"
+        lines.append(f"- {summary}")
+        html_lines.append(f"<li>{summary}</li>")
+    text_body = "Claims review notifications:\n" + "\n".join(lines)
+    html_body = "<h2>Claims review notifications</h2><ul>" + "".join(html_lines) + "</ul>"
+    return html_body, text_body
+
+
+def dispatch_claim_review_notifications(
+    *,
+    db_path: str,
+    owner_user_id: str,
+    notification_ids: List[int],
+) -> None:
+    if not notification_ids:
+        return
+
+    def _deliver() -> None:
+        try:
+            db = create_media_database(
+                client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
+                db_path=db_path,
+            )
+        except Exception:
+            return
+        try:
+            try:
+                db.initialize_db()
+            except Exception:
+                pass
+            config_row = db.get_claims_monitoring_settings(str(owner_user_id)) or {}
+            if config_row and not bool(config_row.get("enabled", True)):
+                return
+            channels = _normalize_review_channels(config_row)
+            if not any(channels.values()):
+                return
+            rows = db.get_claim_notifications_by_ids(notification_ids)
+            if not rows:
+                return
+            notifications = [_normalize_notification_row(row) for row in rows]
+            payload = _build_review_digest_payload(user_id=str(owner_user_id), notifications=notifications)
+            delivered = False
+
+            slack_url = config_row.get("slack_webhook_url")
+            webhook_url = config_row.get("webhook_url")
+            recipients = _parse_email_recipients(config_row.get("email_recipients"))
+
+            if channels.get("slack") and slack_url:
+                slack_text = f"Claims review notifications: {len(notifications)} items"
+                delivered = _deliver_review_webhook(
+                    url=str(slack_url),
+                    payload={"text": slack_text},
+                    channel="slack",
+                ) or delivered
+
+            if channels.get("webhook") and webhook_url:
+                delivered = _deliver_review_webhook(
+                    url=str(webhook_url),
+                    payload=payload,
+                    channel="webhook",
+                ) or delivered
+
+            if channels.get("email") and recipients:
+                html_body, text_body = _build_review_email_bodies(notifications)
+                delivered = _deliver_review_email_sync(
+                    recipients=recipients,
+                    subject=f"Claims review notifications ({len(notifications)})",
+                    html_body=html_body,
+                    text_body=text_body,
+                ) or delivered
+
+            if delivered:
+                db.mark_claim_notifications_delivered(notification_ids)
+        except Exception as exc:
+            logger.debug(f"Claims review notification delivery failed: {exc}")
+        finally:
+            try:
+                db.close_connection()
+            except Exception:
+                pass
+
+    threading.Thread(target=_deliver, daemon=True).start()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import html
 import io
 import json
 import math
@@ -10,7 +11,7 @@ import time
 import socket
 import ssl
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
@@ -28,12 +29,14 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
 from tldw_Server_API.app.core.Claims_Extraction.claims_rebuild_service import get_claims_rebuild_service
 from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
+    record_claims_alert_email_delivery,
     record_claims_review_metrics,
     record_claims_webhook_delivery,
 )
 from tldw_Server_API.app.core.Claims_Extraction.claims_clustering import rebuild_claim_clusters_embeddings
 from tldw_Server_API.app.core.Claims_Extraction.claims_embeddings import claim_embedding_id
 from tldw_Server_API.app.core.Claims_Extraction.claims_notifications import (
+    dispatch_claim_review_notifications,
     record_watchlist_cluster_notifications,
 )
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
@@ -182,6 +185,26 @@ def _normalize_monitoring_event_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
+def _normalize_review_extractor_metrics_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(row)
+    raw = normalized.get("reason_code_counts_json")
+    reason_payload: Dict[str, int] = {}
+    if raw:
+        try:
+            parsed = json.loads(str(raw))
+            if isinstance(parsed, dict):
+                for key, value in parsed.items():
+                    try:
+                        reason_payload[str(key)] = int(value)
+                    except Exception:
+                        continue
+        except Exception:
+            reason_payload = {}
+    normalized["reason_code_counts"] = reason_payload
+    normalized.pop("reason_code_counts_json", None)
+    return normalized
+
+
 def _filter_monitoring_events_by_payload(
     events: List[Dict[str, Any]],
     *,
@@ -234,6 +257,21 @@ def _extract_request_metadata(request: Any) -> tuple[Optional[str], Optional[str
     except Exception:
         action_user_agent = None
     return action_ip, action_user_agent
+
+
+def _resolve_claim_owner_user_id(claim_row: Dict[str, Any], fallback_user_id: Optional[int]) -> str:
+    owner_user_id = claim_row.get("media_owner_user_id")
+    if owner_user_id is None:
+        owner_user_id = claim_row.get("media_client_id")
+    if owner_user_id is None:
+        owner_user_id = fallback_user_id
+    return str(owner_user_id) if owner_user_id is not None else ""
+
+
+def _get_email_service():
+    from tldw_Server_API.app.core.AuthNZ.email_service import get_email_service
+
+    return get_email_service()
 
 
 def _enqueue_claim_rebuild_if_needed(*, media_id: int, db_path: str) -> None:
@@ -595,6 +633,198 @@ def _dispatch_claims_alert_notifications(
             },
             daemon=True,
         ).start()
+
+
+async def _send_claims_alert_email_digest(
+    *,
+    recipients: List[str],
+    subject: str,
+    html_body: str,
+    text_body: str,
+    email_service: Optional[Any] = None,
+) -> bool:
+    if not recipients:
+        return False
+    service = email_service or _get_email_service()
+    deliveries: List[bool] = []
+    for addr in recipients:
+        try:
+            ok = await service.send_email(
+                to_email=addr,
+                subject=subject,
+                html_body=html_body,
+                text_body=text_body,
+            )
+            deliveries.append(bool(ok))
+        except Exception:
+            deliveries.append(False)
+    return any(deliveries)
+
+
+def _format_alert_digest_entry(event: Dict[str, Any], alert_name: str) -> tuple[str, str]:
+    payload = event.get("payload") or {}
+    created_at = event.get("created_at") or "unknown"
+    window_ratio = _format_ratio(payload.get("window_ratio"))
+    baseline_ratio = _format_ratio(payload.get("baseline_ratio"))
+    threshold = _format_ratio(payload.get("threshold"))
+    drift_val = payload.get("drift")
+    drift_str = _format_ratio(drift_val) if drift_val is not None else "n/a"
+    text = (
+        f"- {created_at} | alert={alert_name} | window={window_ratio} | "
+        f"baseline={baseline_ratio} | threshold={threshold} | drift={drift_str}"
+    )
+    html_line = (
+        "<li>"
+        f"<strong>{html.escape(alert_name)}</strong> "
+        f"({html.escape(str(created_at))}) "
+        f"window {html.escape(window_ratio)}, baseline {html.escape(baseline_ratio)}, "
+        f"threshold {html.escape(threshold)}, drift {html.escape(drift_str)}"
+        "</li>"
+    )
+    return text, html_line
+
+
+async def send_claims_alert_email_digest_for_scheduler(
+    *,
+    target_user_id: str,
+    db: MediaDatabase,
+    interval_sec: Optional[int] = None,
+    max_events: Optional[int] = None,
+    email_service: Optional[Any] = None,
+) -> Dict[str, Any]:
+    if not bool(settings.get("CLAIMS_ALERT_EMAIL_DIGEST_ENABLED", False)):
+        return {"sent": 0, "events": 0, "skipped": "disabled"}
+
+    try:
+        interval_val = int(interval_sec or settings.get("CLAIMS_ALERT_EMAIL_DIGEST_INTERVAL_SEC", 86400))
+    except Exception:
+        interval_val = 86400
+    try:
+        limit_val = int(max_events or settings.get("CLAIMS_ALERT_EMAIL_DIGEST_MAX_EVENTS", 500))
+    except Exception:
+        limit_val = 500
+    limit_val = max(1, min(5000, limit_val))
+
+    last_delivered = db.get_latest_claims_monitoring_event_delivery(
+        user_id=str(target_user_id),
+        event_type="unsupported_ratio",
+    )
+    if last_delivered:
+        last_ts = _parse_iso_timestamp(str(last_delivered))
+        if last_ts is not None:
+            age_sec = datetime.utcnow().timestamp() - last_ts
+            if age_sec < interval_val:
+                return {"sent": 0, "events": 0, "skipped": "interval"}
+
+    raw_events = db.list_undelivered_claims_monitoring_events(
+        user_id=str(target_user_id),
+        event_type="unsupported_ratio",
+        limit=limit_val,
+    )
+    if not raw_events:
+        return {"sent": 0, "events": 0, "skipped": "no_events"}
+
+    defaults = db.get_claims_monitoring_settings(str(target_user_id)) or {}
+    if defaults and not bool(defaults.get("enabled", True)):
+        return {"sent": 0, "events": 0, "skipped": "monitoring_disabled"}
+
+    configs = db.list_claims_monitoring_alerts(str(target_user_id))
+    config_by_id = {int(row.get("id")): dict(row) for row in configs if row.get("id") is not None}
+
+    normalized_events = [_normalize_monitoring_event_row(row) for row in raw_events]
+    grouped: Dict[Tuple[str, ...], List[Dict[str, Any]]] = {}
+    group_alert_names: Dict[Tuple[str, ...], Dict[int, str]] = {}
+    undelivered_ids: List[int] = []
+
+    for event in normalized_events:
+        payload = event.get("payload") or {}
+        alert_id = payload.get("alert_id")
+        alert_name = str(payload.get("alert_name") or "Claims alert")
+        config_row = None
+        try:
+            if alert_id is not None:
+                config_row = config_by_id.get(int(alert_id))
+        except Exception:
+            config_row = None
+
+        channels = _normalize_channels(
+            (config_row or {}).get("channels_json") or (config_row or {}).get("channels")
+        )
+        recipients = _parse_email_recipients((config_row or {}).get("email_recipients"))
+        if not recipients:
+            recipients = _parse_email_recipients(defaults.get("email_recipients"))
+        if recipients and not any(channels.values()):
+            channels["email"] = True
+
+        if not recipients or not channels.get("email"):
+            continue
+
+        key = tuple(sorted(set(str(r) for r in recipients if r)))
+        grouped.setdefault(key, []).append(event)
+        names = group_alert_names.setdefault(key, {})
+        if alert_id is not None:
+            try:
+                names[int(alert_id)] = config_row.get("name") if config_row else alert_name
+            except Exception:
+                names[int(alert_id)] = alert_name
+        else:
+            names[-1] = alert_name
+
+    sent_groups = 0
+    for recipients, events in grouped.items():
+        if not events:
+            continue
+        lines: List[str] = []
+        html_lines: List[str] = []
+        name_map = group_alert_names.get(recipients, {})
+        for event in events:
+            payload = event.get("payload") or {}
+            alert_id = payload.get("alert_id")
+            if alert_id is not None and int(alert_id) in name_map:
+                alert_name = str(name_map[int(alert_id)])
+            else:
+                alert_name = str(payload.get("alert_name") or "Claims alert")
+            text_line, html_line = _format_alert_digest_entry(event, alert_name)
+            lines.append(text_line)
+            html_lines.append(html_line)
+
+        subject = f"Claims alert digest ({len(events)} events)"
+        text_body = "Claims alert digest:\n" + "\n".join(lines)
+        html_body = (
+            "<h2>Claims alert digest</h2>"
+            f"<p>{len(events)} events.</p>"
+            "<ul>"
+            + "".join(html_lines)
+            + "</ul>"
+        )
+        start_ts = time.time()
+        ok = await _send_claims_alert_email_digest(
+            recipients=list(recipients),
+            subject=subject,
+            html_body=html_body,
+            text_body=text_body,
+            email_service=email_service,
+        )
+        duration = time.time() - start_ts
+        if ok:
+            sent_groups += 1
+            for event in events:
+                try:
+                    undelivered_ids.append(int(event.get("id")))
+                except Exception:
+                    continue
+            record_claims_alert_email_delivery(status="success", latency_s=duration)
+        else:
+            record_claims_alert_email_delivery(status="failure", latency_s=duration)
+
+    if undelivered_ids:
+        db.mark_claims_monitoring_events_delivered(undelivered_ids)
+
+    return {
+        "sent": sent_groups,
+        "events": len(undelivered_ids),
+        "skipped": None if sent_groups else "no_recipients",
+    }
 
 
 def _refresh_claim_embedding(
@@ -1716,6 +1946,9 @@ def _evaluate_claims_alerts_for_user(
         )
         if triggered:
             payload = {
+                "alert_id": cfg.get("id"),
+                "alert_name": cfg.get("name"),
+                "alert_type": cfg.get("alert_type"),
                 "window_ratio": window_ratio,
                 "baseline_ratio": baseline_ratio,
                 "threshold": threshold_val,
@@ -1946,6 +2179,44 @@ async def review_claim(
                 new_text=str(payload.get("corrected_text")),
                 user_id=target_user_id,
             )
+        owner_user_id = _resolve_claim_owner_user_id(
+            claim_row,
+            int(user_id) if user_id is not None else int(current_user.id),
+        )
+        if owner_user_id:
+            try:
+                notif_payload = {
+                    "claim_id": int(claim_id),
+                    "claim_uuid": claim_row.get("uuid"),
+                    "media_id": claim_row.get("media_id"),
+                    "chunk_index": claim_row.get("chunk_index"),
+                    "claim_text": updated.get("claim_text") if isinstance(updated, dict) else claim_row.get("claim_text"),
+                    "old_status": current_status,
+                    "new_status": new_status,
+                    "reviewer_id": reviewer_id,
+                    "review_group": payload.get("review_group"),
+                    "notes": payload.get("notes"),
+                    "reason_code": payload.get("reason_code"),
+                    "reviewed_at": updated.get("reviewed_at") if isinstance(updated, dict) else None,
+                }
+                created = target_db.insert_claim_notification(
+                    user_id=str(owner_user_id),
+                    kind="review_update",
+                    target_user_id=str(reviewer_id) if reviewer_id is not None else None,
+                    target_review_group=str(payload.get("review_group")) if payload.get("review_group") else None,
+                    resource_type="claim",
+                    resource_id=str(claim_id),
+                    payload_json=json.dumps(notif_payload),
+                )
+                notif_id = created.get("id") if isinstance(created, dict) else None
+                if notif_id is not None:
+                    dispatch_claim_review_notifications(
+                        db_path=str(target_db.db_path_str),
+                        owner_user_id=str(owner_user_id),
+                        notification_ids=[int(notif_id)],
+                    )
+            except Exception as exc:
+                logger.debug("Failed to emit claims review notification: %s", exc)
         return _normalize_claim_row(dict(updated))
 
 
@@ -2042,6 +2313,35 @@ def bulk_review_claims(
                         media_id=media_id,
                         db_path=str(target_db.db_path_str),
                     )
+        if updated_ids:
+            owner_user_id = str(user_id) if user_id is not None else str(current_user.id)
+            try:
+                notif_payload = {
+                    "claim_ids": updated_ids,
+                    "status": desired_status,
+                    "reviewer_id": payload.get("reviewer_id"),
+                    "review_group": payload.get("review_group"),
+                    "notes": payload.get("notes"),
+                    "reason_code": payload.get("reason_code"),
+                }
+                created = target_db.insert_claim_notification(
+                    user_id=str(owner_user_id),
+                    kind="review_bulk_update",
+                    target_user_id=str(payload.get("reviewer_id")) if payload.get("reviewer_id") is not None else None,
+                    target_review_group=str(payload.get("review_group")) if payload.get("review_group") else None,
+                    resource_type="claim",
+                    resource_id="bulk",
+                    payload_json=json.dumps(notif_payload),
+                )
+                notif_id = created.get("id") if isinstance(created, dict) else None
+                if notif_id is not None:
+                    dispatch_claim_review_notifications(
+                        db_path=str(target_db.db_path_str),
+                        owner_user_id=str(owner_user_id),
+                        notification_ids=[int(notif_id)],
+                    )
+            except Exception as exc:
+                logger.debug("Failed to emit claims bulk review notification: %s", exc)
         return {
             "updated": updated_ids,
             "conflicts": conflicts,
@@ -2165,7 +2465,226 @@ def claims_dashboard_analytics(
         payload["rebuild_health"] = claims_rebuild_health(principal, summary=True)
     except Exception:
         payload["rebuild_health"] = None
+    try:
+        metrics_user_id = owner_user_id or str(settings.get("SINGLE_USER_FIXED_ID", "1"))
+        today = datetime.utcnow().date()
+        start_date = (today - timedelta(days=max(1, int(window_days)) - 1)).isoformat()
+        end_date = today.isoformat()
+        metrics_rows = db.list_claims_review_extractor_metrics_daily(
+            user_id=metrics_user_id,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        payload["review_extractor_metrics"] = [
+            _normalize_review_extractor_metrics_row(row) for row in metrics_rows
+        ]
+    except Exception:
+        payload["review_extractor_metrics"] = []
     return payload
+
+
+def _parse_iso_date(value: Optional[str]) -> Optional[date]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value)).date()
+    except Exception:
+        return None
+
+
+def aggregate_claims_review_extractor_metrics_daily(
+    *,
+    db: MediaDatabase,
+    target_user_id: Optional[str] = None,
+    report_date: Optional[str] = None,
+    lookback_days: Optional[int] = None,
+) -> int:
+    if db.backend_type == BackendType.POSTGRESQL and not target_user_id:
+        logger.debug("Claims review metrics aggregation skipped: missing target_user_id for Postgres")
+        return 0
+
+    user_id_value = str(target_user_id or settings.get("SINGLE_USER_FIXED_ID", "1"))
+    start_date = _parse_iso_date(report_date)
+    if start_date is None:
+        try:
+            lookback_val = int(
+                lookback_days if lookback_days is not None else settings.get("CLAIMS_REVIEW_METRICS_LOOKBACK_DAYS", 2)
+            )
+        except Exception:
+            lookback_val = 2
+        lookback_val = max(1, lookback_val)
+        today = datetime.utcnow().date()
+        start_date = today - timedelta(days=lookback_val - 1)
+        end_date = today
+    else:
+        end_date = start_date
+
+    if start_date is None:
+        return 0
+
+    start_dt = datetime.combine(start_date, datetime.min.time())
+    end_dt = datetime.combine(end_date + timedelta(days=1), datetime.min.time())
+
+    if db.backend_type == BackendType.POSTGRESQL:
+        placeholder = "%s"
+        start_param = start_dt
+        end_param = end_dt
+        claims_table = "claims"
+        media_table = "media"
+    else:
+        placeholder = "?"
+        start_param = start_dt.strftime("%Y-%m-%d %H:%M:%S")
+        end_param = end_dt.strftime("%Y-%m-%d %H:%M:%S")
+        claims_table = "Claims"
+        media_table = "Media"
+
+    owner_filter_sql = ""
+    params: List[Any] = [start_param, end_param]
+    if db.backend_type == BackendType.POSTGRESQL and target_user_id:
+        owner_filter_sql = (
+            f" AND COALESCE(CAST(m.owner_user_id AS TEXT), m.client_id) = {placeholder}"
+        )
+        params.append(str(target_user_id))
+
+    date_expr = "DATE(l.created_at)"
+    metrics_sql = (
+        "SELECT "
+        + date_expr
+        + " AS day, "
+        "COALESCE(c.extractor, 'unknown') AS extractor, "
+        "COALESCE(c.extractor_version, '') AS extractor_version, "
+        "COUNT(*) AS total_reviewed, "
+        "SUM(CASE WHEN lower(l.new_status) = 'approved' THEN 1 ELSE 0 END) AS approved_count, "
+        "SUM(CASE WHEN lower(l.new_status) = 'rejected' THEN 1 ELSE 0 END) AS rejected_count, "
+        "SUM(CASE WHEN lower(l.new_status) = 'flagged' THEN 1 ELSE 0 END) AS flagged_count, "
+        "SUM(CASE WHEN lower(l.new_status) = 'reassigned' THEN 1 ELSE 0 END) AS reassigned_count, "
+        "SUM(CASE WHEN l.old_text IS NOT NULL AND l.new_text IS NOT NULL AND l.old_text <> l.new_text "
+        "THEN 1 ELSE 0 END) AS edited_count "
+        "FROM claims_review_log l "
+        f"LEFT JOIN {claims_table} c ON c.id = l.claim_id "
+        f"LEFT JOIN {media_table} m ON m.id = c.media_id "
+        f"WHERE l.created_at >= {placeholder} AND l.created_at < {placeholder}"
+        + owner_filter_sql
+        + " GROUP BY day, extractor, extractor_version ORDER BY day ASC"
+    )
+
+    reason_sql = (
+        "SELECT "
+        + date_expr
+        + " AS day, "
+        "COALESCE(c.extractor, 'unknown') AS extractor, "
+        "COALESCE(c.extractor_version, '') AS extractor_version, "
+        "l.reason_code, COUNT(*) AS count "
+        "FROM claims_review_log l "
+        f"LEFT JOIN {claims_table} c ON c.id = l.claim_id "
+        f"LEFT JOIN {media_table} m ON m.id = c.media_id "
+        f"WHERE l.created_at >= {placeholder} AND l.created_at < {placeholder}"
+        + owner_filter_sql
+        + " GROUP BY day, extractor, extractor_version, l.reason_code"
+    )
+
+    metrics_rows = db.execute_query(metrics_sql, tuple(params)).fetchall()
+    if not metrics_rows:
+        return 0
+
+    reason_rows = db.execute_query(reason_sql, tuple(params)).fetchall()
+    reason_counts: Dict[Tuple[str, str, str], Dict[str, int]] = {}
+    for row in reason_rows:
+        try:
+            day_val = row[0]
+            extractor_val = row[1]
+            version_val = row[2]
+            reason_val = row[3]
+            count_val = row[4]
+        except Exception:
+            continue
+        if reason_val is None:
+            continue
+        reason_key = str(reason_val).strip()
+        if not reason_key:
+            continue
+        day_str = day_val.isoformat() if hasattr(day_val, "isoformat") else str(day_val)
+        extractor_key = str(extractor_val or "unknown")
+        version_key = str(version_val or "")
+        key = (day_str, extractor_key, version_key)
+        counts_for_key = reason_counts.setdefault(key, {})
+        counts_for_key[reason_key] = counts_for_key.get(reason_key, 0) + int(count_val or 0)
+
+    written = 0
+    for row in metrics_rows:
+        try:
+            day_val = row[0]
+            extractor_val = row[1]
+            version_val = row[2]
+            total_reviewed = row[3]
+            approved_count = row[4]
+            rejected_count = row[5]
+            flagged_count = row[6]
+            reassigned_count = row[7]
+            edited_count = row[8]
+        except Exception:
+            continue
+        day_str = day_val.isoformat() if hasattr(day_val, "isoformat") else str(day_val)
+        extractor_key = str(extractor_val or "unknown")
+        version_key = str(version_val or "")
+        reason_payload = reason_counts.get((day_str, extractor_key, version_key))
+        db.upsert_claims_review_extractor_metrics_daily(
+            user_id=user_id_value,
+            report_date=day_str,
+            extractor=extractor_key,
+            extractor_version=version_key,
+            total_reviewed=int(total_reviewed or 0),
+            approved_count=int(approved_count or 0),
+            rejected_count=int(rejected_count or 0),
+            flagged_count=int(flagged_count or 0),
+            reassigned_count=int(reassigned_count or 0),
+            edited_count=int(edited_count or 0),
+            reason_code_counts_json=json.dumps(reason_payload) if reason_payload else None,
+        )
+        written += 1
+
+    return written
+
+
+def list_claims_review_metrics(
+    *,
+    start_date: Optional[str],
+    end_date: Optional[str],
+    extractor: Optional[str],
+    extractor_version: Optional[str],
+    user_id: Optional[int],
+    limit: int,
+    offset: int,
+    principal: AuthPrincipal,
+    current_user: User,
+    db: MediaDatabase,
+) -> Dict[str, Any]:
+    _ensure_claims_admin(principal)
+    target_user_id = str(getattr(current_user, "id", None) or settings.get("SINGLE_USER_FIXED_ID", "1"))
+    if user_id is not None:
+        if not principal.is_admin:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
+        target_user_id = str(int(user_id))
+
+    resolve_user_id = int(user_id) if user_id is not None else None
+    with _resolve_media_db(
+        db=db,
+        current_user=current_user,
+        user_id=resolve_user_id,
+        admin_required=True,
+        owner_filter=False,
+    ) as (target_db, _):
+        rows = target_db.list_claims_review_extractor_metrics_daily(
+            user_id=target_user_id,
+            start_date=start_date,
+            end_date=end_date,
+            extractor=extractor,
+            extractor_version=extractor_version,
+            limit=limit,
+            offset=offset,
+        )
+    normalized = [_normalize_review_extractor_metrics_row(row) for row in rows]
+    return {"items": normalized, "total": len(normalized)}
 
 
 def export_claims_analytics(

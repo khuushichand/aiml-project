@@ -18,7 +18,10 @@ from typing import Callable, List, Optional
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Claims_Extraction.claims_service import evaluate_claims_alerts_for_scheduler
+from tldw_Server_API.app.core.Claims_Extraction.claims_service import (
+    evaluate_claims_alerts_for_scheduler,
+    send_claims_alert_email_digest_for_scheduler,
+)
 from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     create_media_database,
     content_db_settings,
@@ -100,6 +103,10 @@ async def run_claims_alerts_once(
                         baseline_sec=baseline_val,
                         db=db,
                     )
+                    await send_claims_alert_email_digest_for_scheduler(
+                        target_user_id=str(user_id),
+                        db=db,
+                    )
                     processed += 1
                 except Exception as exc:
                     logger.warning(f"claims_alerts: evaluation failed for user {user_id}: {exc}")
@@ -129,6 +136,10 @@ async def run_claims_alerts_once(
                     target_user_id=str(user_id),
                     window_sec=window_val,
                     baseline_sec=baseline_val,
+                    db=user_db,
+                )
+                await send_claims_alert_email_digest_for_scheduler(
+                    target_user_id=str(user_id),
                     db=user_db,
                 )
                 processed += 1

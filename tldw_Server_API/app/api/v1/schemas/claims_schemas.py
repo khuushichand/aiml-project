@@ -417,6 +417,36 @@ class ClaimsAnalyticsReviewThroughput(BaseModel):
     daily: List[ClaimsAnalyticsReviewThroughputPoint] = Field(default_factory=list)
 
 
+class ClaimsReviewExtractorMetricsDaily(BaseModel):
+    """Daily review metrics grouped by extractor."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: Optional[int] = None
+    user_id: str
+    report_date: str
+    extractor: str
+    extractor_version: str
+    total_reviewed: int
+    approved_count: int
+    rejected_count: int
+    flagged_count: int
+    reassigned_count: int
+    edited_count: int
+    reason_code_counts: Dict[str, int] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class ClaimsReviewExtractorMetricsResponse(BaseModel):
+    """Review extractor metrics response payload."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    items: List[ClaimsReviewExtractorMetricsDaily] = Field(default_factory=list)
+    total: int
+
+
 class ClaimsAnalyticsClusterSummary(BaseModel):
     """Summary view for a claim cluster."""
 
@@ -483,6 +513,7 @@ class ClaimsAnalyticsDashboardResponse(BaseModel):
     claims_per_media_top: List[ClaimsAnalyticsPerMediaCount] = Field(default_factory=list)
     claims_per_media_stats: ClaimsAnalyticsPerMediaStats
     review_throughput: ClaimsAnalyticsReviewThroughput
+    review_extractor_metrics: Optional[List[ClaimsReviewExtractorMetricsDaily]] = None
     clusters: ClaimsAnalyticsClusterStats
     unsupported_ratios: ClaimsAnalyticsUnsupportedRatios
     rebuild_health: Optional[ClaimsAnalyticsRebuildHealth] = None

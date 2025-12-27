@@ -8,13 +8,21 @@ at startup on Postgres backends. They complement the SQLite migrations in
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 import json
 
 from loguru import logger
 
 from .database import get_db_pool, DatabasePool
+
+
+_BUDGET_FIELD_KEYS = {
+    "budget_day_usd",
+    "budget_month_usd",
+    "budget_day_tokens",
+    "budget_month_tokens",
+}
 
 
 _CREATE_TOOL_CATALOGS = [
@@ -772,6 +780,235 @@ async def ensure_authnz_core_tables_pg(pool: Optional[DatabasePool] = None) -> b
         return False
 
 
+def _parse_json_payload_pg(raw: Any) -> Dict[str, Any]:
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, str):
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.debug(f"PG budgets: invalid JSON payload: {exc}")
+            return {}
+        return data if isinstance(data, dict) else {}
+    return {}
+
+
+def _normalize_threshold_list_pg(values: Any) -> Optional[List[int]]:
+    if not isinstance(values, list):
+        return None
+    if not values:
+        return None
+    cleaned: List[int] = []
+    for val in values:
+        try:
+            num = int(val)
+        except (TypeError, ValueError):
+            continue
+        if num < 1 or num > 100:
+            continue
+        cleaned.append(num)
+    if not cleaned:
+        return None
+    return sorted(set(cleaned))
+
+
+def _coerce_alert_thresholds_pg(value: Any) -> Optional[Dict[str, Any]]:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return {"global": value}
+    if isinstance(value, dict):
+        out: Dict[str, Any] = {}
+        if "global" in value:
+            out["global"] = value.get("global")
+        if "per_metric" in value:
+            out["per_metric"] = value.get("per_metric")
+        return out or None
+    return None
+
+
+def _coerce_enforcement_mode_pg(value: Any) -> Optional[Dict[str, Any]]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return {"global": value}
+    if isinstance(value, dict):
+        out: Dict[str, Any] = {}
+        if "global" in value:
+            out["global"] = value.get("global")
+        if "per_metric" in value:
+            out["per_metric"] = value.get("per_metric")
+        return out or None
+    return None
+
+
+def _normalize_alert_thresholds_pg(value: Any) -> Optional[Dict[str, Any]]:
+    payload = _coerce_alert_thresholds_pg(value)
+    if payload is None:
+        return None
+    out: Dict[str, Any] = {}
+    global_values = payload.get("global")
+    if global_values is not None:
+        normalized = _normalize_threshold_list_pg(global_values)
+        if normalized:
+            out["global"] = normalized
+    per_metric = payload.get("per_metric")
+    if isinstance(per_metric, dict):
+        cleaned: Dict[str, Any] = {}
+        for key, values in per_metric.items():
+            if key not in _BUDGET_FIELD_KEYS:
+                continue
+            normalized = _normalize_threshold_list_pg(values)
+            if normalized:
+                cleaned[key] = normalized
+        if cleaned:
+            out["per_metric"] = cleaned
+    return out or None
+
+
+def _normalize_enforcement_mode_pg(value: Any) -> Optional[Dict[str, Any]]:
+    payload = _coerce_enforcement_mode_pg(value)
+    if payload is None:
+        return None
+    out: Dict[str, Any] = {}
+    global_value = payload.get("global")
+    if isinstance(global_value, str) and global_value in {"none", "soft", "hard"}:
+        out["global"] = global_value
+    per_metric = payload.get("per_metric")
+    if isinstance(per_metric, dict):
+        cleaned: Dict[str, Any] = {}
+        for key, val in per_metric.items():
+            if key not in _BUDGET_FIELD_KEYS:
+                continue
+            if isinstance(val, str) and val in {"none", "soft", "hard"}:
+                cleaned[key] = val
+        if cleaned:
+            out["per_metric"] = cleaned
+    return out or None
+
+
+def _normalize_budget_payload_pg(raw: Any) -> Dict[str, Any]:
+    data = _parse_json_payload_pg(raw)
+    if not data:
+        return {}
+    budgets: Dict[str, Any] = {}
+    if isinstance(data.get("budgets"), dict):
+        budgets.update(data.get("budgets") or {})
+    for key in _BUDGET_FIELD_KEYS:
+        if key in data and key not in budgets:
+            budgets[key] = data[key]
+    payload: Dict[str, Any] = {}
+    for key in _BUDGET_FIELD_KEYS:
+        if key in budgets:
+            payload[key] = budgets[key]
+    thresholds = _normalize_alert_thresholds_pg(data.get("alert_thresholds"))
+    if thresholds:
+        payload["alert_thresholds"] = thresholds
+    enforcement = _normalize_enforcement_mode_pg(data.get("enforcement_mode"))
+    if enforcement:
+        payload["enforcement_mode"] = enforcement
+    return payload
+
+
+async def _backfill_org_budgets_pg(db_pool: DatabasePool) -> None:
+    try:
+        rows = await db_pool.fetch(
+            """
+            SELECT os.org_id, os.custom_limits_json, ob.budgets_json
+            FROM org_subscriptions os
+            LEFT JOIN org_budgets ob ON ob.org_id = os.org_id
+            WHERE os.custom_limits_json IS NOT NULL
+            """
+        )
+    except Exception as exc:
+        logger.debug(f"PG budgets backfill fetch failed: {exc}")
+        return
+
+    for row in rows:
+        org_id = row.get("org_id") if isinstance(row, dict) else None
+        if org_id is None:
+            continue
+        custom_limits = _parse_json_payload_pg(row.get("custom_limits_json"))
+        if not isinstance(custom_limits, dict) or "budgets" not in custom_limits:
+            continue
+        legacy_budgets = custom_limits.get("budgets")
+        normalized_payload = _normalize_budget_payload_pg(legacy_budgets)
+        existing_payload = _normalize_budget_payload_pg(row.get("budgets_json"))
+
+        if normalized_payload and not existing_payload:
+            try:
+                await db_pool.execute(
+                    """
+                    INSERT INTO org_budgets (org_id, budgets_json, updated_at)
+                    VALUES ($1, $2::jsonb, CURRENT_TIMESTAMP)
+                    ON CONFLICT (org_id)
+                    DO UPDATE SET budgets_json = EXCLUDED.budgets_json, updated_at = EXCLUDED.updated_at
+                    """,
+                    org_id,
+                    json.dumps(normalized_payload),
+                )
+            except Exception as exc:
+                logger.debug(f"PG budgets backfill insert failed for org_id={org_id}: {exc}")
+                continue
+
+        should_strip = bool(normalized_payload or existing_payload)
+        if should_strip:
+            cleaned_limits = dict(custom_limits)
+            cleaned_limits.pop("budgets", None)
+            payload = json.dumps(cleaned_limits) if cleaned_limits else None
+            try:
+                await db_pool.execute(
+                    """
+                    UPDATE org_subscriptions
+                    SET custom_limits_json = $2::jsonb
+                    WHERE org_id = $1
+                    """,
+                    org_id,
+                    payload,
+                )
+            except Exception as exc:
+                logger.debug(f"PG budgets backfill cleanup failed for org_id={org_id}: {exc}")
+
+
+async def _normalize_org_budgets_pg(db_pool: DatabasePool) -> None:
+    try:
+        rows = await db_pool.fetch(
+            "SELECT org_id, budgets_json FROM org_budgets WHERE budgets_json IS NOT NULL"
+        )
+    except Exception as exc:
+        logger.debug(f"PG budgets normalize fetch failed: {exc}")
+        return
+
+    for row in rows:
+        org_id = row.get("org_id") if isinstance(row, dict) else None
+        if org_id is None:
+            continue
+        raw_payload = row.get("budgets_json")
+        normalized = _normalize_budget_payload_pg(raw_payload)
+        if not normalized:
+            continue
+        try:
+            current = _parse_json_payload_pg(raw_payload)
+        except Exception:
+            current = {}
+        if json.dumps(current, sort_keys=True) == json.dumps(normalized, sort_keys=True):
+            continue
+        try:
+            await db_pool.execute(
+                """
+                UPDATE org_budgets
+                SET budgets_json = $2::jsonb, updated_at = CURRENT_TIMESTAMP
+                WHERE org_id = $1
+                """,
+                org_id,
+                json.dumps(normalized),
+            )
+        except Exception as exc:
+            logger.debug(f"PG budgets normalize update failed for org_id={org_id}: {exc}")
+
+
 async def ensure_billing_tables_pg(pool: Optional[DatabasePool] = None) -> bool:
     """Ensure billing-related tables exist for PostgreSQL backends."""
     try:
@@ -877,6 +1114,16 @@ async def ensure_billing_tables_pg(pool: Optional[DatabasePool] = None) -> bool:
                 )
             except Exception as exc:
                 logger.debug(f"PG ensure billing seed failed: {exc}")
+
+        try:
+            await _backfill_org_budgets_pg(db_pool)
+        except Exception as exc:
+            logger.debug(f"PG budgets backfill skipped/failed: {exc}")
+
+        try:
+            await _normalize_org_budgets_pg(db_pool)
+        except Exception as exc:
+            logger.debug(f"PG budgets normalize skipped/failed: {exc}")
 
         logger.info("Ensured PostgreSQL billing tables (subscription_plans, org_subscriptions)")
         return True

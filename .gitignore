@@ -31,6 +31,10 @@ tldw-server.egg-info/
 embedding_models_data/
 postgresql:/
 
+# Allow frontend source lib directories.
+!admin-ui/lib/
+!admin-ui/lib/**
+
 # PyInstaller
 *.manifest
 *.spec

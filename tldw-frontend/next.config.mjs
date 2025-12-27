@@ -10,6 +10,8 @@ const nextConfig = {
   experimental: {
     reactCompiler: false,
   },
+  // Ensure Next resolves the correct monorepo root when multiple lockfiles exist.
+  outputFileTracingRoot: path.resolve(__dirname, '..'),
   eslint: {
     // Enforce ESLint during builds so lint failures block deployments.
     ignoreDuringBuilds: false,

@@ -383,6 +383,21 @@ Notes:
 - Monitoring alerts do not block or modify content; they create reviewable signals for admins.
 - Webhook/email delivery is best-effort and runs in background threads with small timeouts and retries.
 
+- Claims monitoring (alerts + digests):
+  - `CLAIMS_MONITORING_ENABLED`: Master toggle for claims monitoring.
+  - `CLAIMS_ALERT_THRESHOLD_DEFAULT`: Default unsupported ratio threshold.
+  - `CLAIMS_ALERTS_SCHEDULER_ENABLED`: Enable periodic alert evaluation.
+  - `CLAIMS_ALERTS_EVAL_INTERVAL_SEC`: Scheduler interval (seconds).
+  - `CLAIMS_ALERTS_WINDOW_SEC`: Window for ratio calculations (seconds).
+  - `CLAIMS_ALERTS_BASELINE_SEC`: Baseline window (seconds).
+  - `CLAIMS_ALERT_EMAIL_DIGEST_ENABLED`: Enable email digest delivery for claims alerts.
+  - `CLAIMS_ALERT_EMAIL_DIGEST_INTERVAL_SEC`: Minimum interval between digests per user.
+  - `CLAIMS_ALERT_EMAIL_DIGEST_MAX_EVENTS`: Max events per digest batch.
+  - `CLAIMS_REBUILD_MAX_QUEUE_ALERT`: Queue size threshold for rebuild alerts.
+  - `CLAIMS_REBUILD_HEARTBEAT_WARN_SEC`: Heartbeat staleness threshold.
+  - `CLAIMS_PROVIDER_COST_MULTIPLIERS`: Cost map for provider metrics.
+  - Email delivery uses `EMAIL_PROVIDER` (default `mock`) and SMTP settings when enabled.
+
 ## Watchlists Module
 - `WATCHLIST_OUTPUT_DEFAULT_TTL_SECONDS`: Default retention (seconds) applied to persisted outputs. `0` keeps outputs indefinitely. Defaults to `0`.
 - `WATCHLIST_OUTPUT_TEMP_TTL_SECONDS`: Retention (seconds) for temporary outputs (`temporary=true`). Defaults to `86400` (24h).

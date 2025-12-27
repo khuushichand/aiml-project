@@ -1079,6 +1079,21 @@ def load_settings():
                                 int(_cp.get('ClaimsMonitoring', 'CLAIMS_ALERTS_BASELINE_SEC', fallback='86400')) if _cp else 86400
                             )
                         ),
+                        "CLAIMS_ALERT_EMAIL_DIGEST_ENABLED": (
+                            (_env.get("CLAIMS_ALERT_EMAIL_DIGEST_ENABLED").lower() == "true") if _env.get("CLAIMS_ALERT_EMAIL_DIGEST_ENABLED") is not None else (
+                                _cp.getboolean('ClaimsMonitoring', 'CLAIMS_ALERT_EMAIL_DIGEST_ENABLED', fallback=False) if _cp else False
+                            )
+                        ),
+                        "CLAIMS_ALERT_EMAIL_DIGEST_INTERVAL_SEC": (
+                            int(_env.get("CLAIMS_ALERT_EMAIL_DIGEST_INTERVAL_SEC")) if _env.get("CLAIMS_ALERT_EMAIL_DIGEST_INTERVAL_SEC") is not None else (
+                                int(_cp.get('ClaimsMonitoring', 'CLAIMS_ALERT_EMAIL_DIGEST_INTERVAL_SEC', fallback='86400')) if _cp else 86400
+                            )
+                        ),
+                        "CLAIMS_ALERT_EMAIL_DIGEST_MAX_EVENTS": (
+                            int(_env.get("CLAIMS_ALERT_EMAIL_DIGEST_MAX_EVENTS")) if _env.get("CLAIMS_ALERT_EMAIL_DIGEST_MAX_EVENTS") is not None else (
+                                int(_cp.get('ClaimsMonitoring', 'CLAIMS_ALERT_EMAIL_DIGEST_MAX_EVENTS', fallback='500')) if _cp else 500
+                            )
+                        ),
                         "CLAIMS_PROVIDER_COST_MULTIPLIERS": _safe_json_dict(raw_cost),
                     }
                 ))(
@@ -1096,6 +1111,9 @@ def load_settings():
                     "CLAIMS_ALERTS_EVAL_INTERVAL_SEC",
                     "CLAIMS_ALERTS_WINDOW_SEC",
                     "CLAIMS_ALERTS_BASELINE_SEC",
+                    "CLAIMS_ALERT_EMAIL_DIGEST_ENABLED",
+                    "CLAIMS_ALERT_EMAIL_DIGEST_INTERVAL_SEC",
+                    "CLAIMS_ALERT_EMAIL_DIGEST_MAX_EVENTS",
                     "CLAIMS_PROVIDER_COST_MULTIPLIERS",
                 ]
             })

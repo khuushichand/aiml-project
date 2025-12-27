@@ -42,6 +42,24 @@ type ApiErrorLike = {
   retryAfter?: number;
 };
 
+const getStoredApiKey = (): string | null => {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem('x_api_key');
+};
+
+const getStoredApiBearer = (): string | null => {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem('tldw-api-bearer');
+};
+
+const hasStoredApiKey = (): boolean => !!getStoredApiKey();
+const hasStoredApiBearer = (): boolean => !!getStoredApiBearer();
+
+const hasJwtToken = (): boolean => {
+  if (typeof window === 'undefined') return false;
+  return !!localStorage.getItem('access_token');
+};
+
 const getApiErrorInfo = (error: unknown): ApiErrorLike => {
   if (!error || typeof error !== 'object') {
     return {};
@@ -66,10 +84,9 @@ export function getAuthMode(): AuthMode {
   if (hasApiKey) return 'env_single_user';
   if (hasBearer) return 'env_bearer';
 
-  if (typeof window !== 'undefined') {
-    const token = localStorage.getItem('access_token');
-    if (token) return 'jwt';
-  }
+  if (hasJwtToken()) return 'jwt';
+  if (hasStoredApiKey()) return 'env_single_user';
+  if (hasStoredApiBearer()) return 'env_bearer';
 
   return 'none';
 }
@@ -87,12 +104,12 @@ class AuthService {
   }
 
   private hasEnvAuth(): boolean {
-    // Either X-API-KEY or API_BEARER provided via env
-    return !!(process.env.NEXT_PUBLIC_X_API_KEY || process.env.NEXT_PUBLIC_API_BEARER);
+    // Either X-API-KEY or API_BEARER provided via env or local storage config
+    return !!(process.env.NEXT_PUBLIC_X_API_KEY || process.env.NEXT_PUBLIC_API_BEARER || hasStoredApiKey() || hasStoredApiBearer());
   }
 
   private hasApiBearer(): boolean {
-    return !!process.env.NEXT_PUBLIC_API_BEARER;
+    return !!(process.env.NEXT_PUBLIC_API_BEARER || hasStoredApiBearer());
   }
 
   private getEnvUser(): User {
@@ -183,6 +200,11 @@ class AuthService {
   }
 
   logout(): void {
+    const mode = getAuthMode();
+    const token = this.getToken();
+    if (mode === 'jwt' && token) {
+      void apiClient.post('/auth/logout').catch(() => undefined);
+    }
     if (typeof window !== 'undefined') {
       localStorage.removeItem('access_token');
       localStorage.removeItem('user');
@@ -204,8 +226,8 @@ class AuthService {
 
   getUser(): User | null {
     if (typeof window !== 'undefined') {
-      // Env-based auth returns a synthetic user (no local storage)
-      if (this.hasEnvAuth()) {
+      // Env or config-based auth returns a synthetic user (no local storage)
+      if (!hasJwtToken() && this.hasEnvAuth()) {
         return this.getEnvUser();
       }
       const userStr = localStorage.getItem('user');

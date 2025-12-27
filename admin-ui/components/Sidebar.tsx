@@ -67,8 +67,8 @@ export default function Sidebar() {
     // Always show items without permission requirements
     if (!item.permission && !item.role) return true;
 
-    // While loading permissions, show all items (will be hidden if unauthorized)
-    if (permLoading) return true;
+    // While loading permissions, hide protected items (safer default)
+    if (permLoading) return false;
 
     // Check permission if specified
     if (item.permission && hasPermission(item.permission)) return true;

@@ -25,6 +25,22 @@
 For v1, `workspace_id` maps to the current user id (string). Multi-tenant org/team
 extensions should add org/team identifiers in later iterations.
 
+## Alert Evaluation Semantics
+The monitoring pipeline computes two ratios for alert evaluation:
+- `window_ratio`: unsupported claims ratio over the evaluation window.
+- `baseline_ratio`: unsupported claims ratio over the baseline window.
+
+Alert configuration fields map to those ratios as follows:
+- `threshold_ratio` is an absolute ceiling for `window_ratio`. Alerts fire when
+  `window_ratio > threshold_ratio`.
+- `baseline_ratio` (config) is a drift threshold. If set, alerts also fire when
+  `window_ratio - baseline_ratio(computed) > baseline_ratio(config)`.
+
+`threshold_ratio` is required for threshold-based alert types; `baseline_ratio`
+is optional and only enables drift checks. Example: if `baseline_ratio(computed)
+= 0.08`, `threshold_ratio = 0.20`, and `baseline_ratio(config) = 0.05`, the
+alert triggers when `window_ratio > 0.20` or `window_ratio - 0.08 > 0.05`.
+
 ## Metrics
 Register in a dedicated claims monitoring module:
 - `claims_provider_requests_total` (counter) labels: provider, model, mode.
@@ -58,8 +74,12 @@ Register in a dedicated claims monitoring module:
 The monitoring config and alerts are stored in Media DB for now.
 
 ### Endpoint Semantics + Schemas
-All endpoints are scoped to the current workspace (v1: user id). Unless noted,
-responses include `created_at`/`updated_at` timestamps (ISO 8601).
+All endpoints are scoped to the current workspace (v1: user id). Non-admin users
+are restricted to their own `workspace_id` and receive a 403 if they attempt to
+access another workspace's data. Admin users may query any `workspace_id` for
+multi-tenant access; an admin's own `workspace_id` still maps to their user id
+unless they explicitly request another workspace. Unless noted, responses
+include `created_at`/`updated_at` timestamps (ISO 8601).
 
 #### GET /api/v1/claims/monitoring/config
 Returns the single config row for the current workspace.
@@ -95,8 +115,25 @@ Request schema (all optional; patchable fields):
 }
 ```
 Constraints: `baseline_ratio <= threshold_ratio`, ratios >= 0.0; webhook URLs must be https.
+`threshold_ratio` is the absolute `window_ratio` ceiling; `baseline_ratio` is an
+optional drift threshold (delta above computed baseline).
 
 Response schema: same as GET `/claims/monitoring/config`.
+
+Example: configure email recipients + enable digests (no SMTP required):
+```json
+{
+  "email_recipients": ["alerts@example.com"],
+  "enabled": true
+}
+```
+Digest delivery is controlled via environment variables:
+- `CLAIMS_ALERT_EMAIL_DIGEST_ENABLED=true`
+- `CLAIMS_ALERT_EMAIL_DIGEST_INTERVAL_SEC=86400`
+- `CLAIMS_ALERT_EMAIL_DIGEST_MAX_EVENTS=500`
+
+If you do not have SMTP configured, keep `EMAIL_PROVIDER=mock` to log or write
+emails locally (`EMAIL_MOCK_OUTPUT=console|file|both`).
 
 #### GET /api/v1/claims/alerts
 Lists alert rules for the current workspace.
@@ -157,7 +194,9 @@ Request schema (required fields: `name`, `alert_type`, `channels`):
   "enabled": true
 }
 ```
-Constraints: `baseline_ratio <= threshold_ratio` when both provided; ratios >= 0.0;
+Constraints: `baseline_ratio <= threshold_ratio` when both provided; ratios >= 0.0.
+`threshold_ratio` is the absolute `window_ratio` ceiling; `baseline_ratio` is an
+optional drift threshold (delta above computed baseline).
 at least one channel must be true (otherwise 400 `invalid_channels`).
 
 Response schema: single alert rule (same shape as GET list item).
@@ -176,7 +215,9 @@ Request schema (patchable fields):
   "enabled": true
 }
 ```
-Constraints: `baseline_ratio <= threshold_ratio` when both provided; ratios >= 0.0;
+Constraints: `baseline_ratio <= threshold_ratio` when both provided; ratios >= 0.0.
+`threshold_ratio` is the absolute `window_ratio` ceiling; `baseline_ratio` is an
+optional drift threshold (delta above computed baseline).
 at least one channel must be true (otherwise 400 `invalid_channels`).
 Response schema: single alert rule.
 
@@ -211,7 +252,7 @@ Request schema:
 {
   "format": "csv|json",               // required
   "filters": {
-    "workspace_id": "string|null",
+    "workspace_id": "string|null",    // admin-only; non-admins should omit (ignored if provided); 403 on other workspace
     "event_type": "string|null",
     "severity": "string|null",
     "provider": "string|null",
@@ -248,9 +289,11 @@ Query params:
   "offset": 0,                        // optional
   "status": "queued|ready|failed",    // optional
   "format": "csv|json",               // optional
-  "workspace_id": "string|null"       // optional, admin only
+  "workspace_id": "string|null"       // optional, admin-only filter; non-admins are scoped to their workspace_id
 }
 ```
+Non-admin users are always scoped to their own workspace and receive a 403 if
+they attempt to query another workspace via `workspace_id`.
 
 Response schema:
 ```json

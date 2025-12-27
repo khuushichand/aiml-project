@@ -11,6 +11,7 @@ groups:
           description: >
             The unsupported claims ratio exceeded 0.3 for 10 minutes.
             Check recent provider changes or claims monitoring events.
+          runbook_url: "Docs/Operations/Claims_Alerts_Runbook.md#claimsunsupportedratiohigh"
 
       - alert: ClaimsRebuildQueueHigh
         expr: claims_rebuild_queue_size > 1000
@@ -22,6 +23,7 @@ groups:
           description: >
             Claims rebuild queue size has exceeded 1000 for 10 minutes.
             Consider scaling workers or adjusting rebuild policy.
+          runbook_url: "Docs/Operations/Claims_Alerts_Runbook.md#claimsrebuildqueuehigh"
 
       - alert: ClaimsRebuildHeartbeatStale
         expr: time() - claims_rebuild_worker_heartbeat_timestamp > 900
@@ -33,6 +35,7 @@ groups:
           description: >
             Claims rebuild worker heartbeat is older than 15 minutes.
             Verify the rebuild service is running.
+          runbook_url: "Docs/Operations/Claims_Alerts_Runbook.md#claimsrebuildheartbeatstale"
 
       - alert: ClaimsProviderErrorsSpike
         expr: sum(rate(claims_provider_errors_total[5m])) > 1
@@ -44,6 +47,7 @@ groups:
           description: >
             Claims provider errors exceeded 1 error/sec for 5 minutes.
             Check provider availability or credentials.
+          runbook_url: "Docs/Operations/Claims_Alerts_Runbook.md#claimsprovidererrorsspike"
 
       - alert: ClaimsAlertWebhookFailures
         expr: increase(claims_alert_webhook_failed_total[10m]) > 0
@@ -55,3 +59,4 @@ groups:
           description: >
             Claims alert webhook failures occurred in the last 10 minutes.
             Review webhook endpoints and network policy.
+          runbook_url: "Docs/Operations/Claims_Alerts_Runbook.md#claimsalertwebhookfailures"

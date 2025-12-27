@@ -1774,6 +1774,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start claims alerts scheduler: {e}")
 
+    # Claims review metrics scheduler (periodic)
+    try:
+        from tldw_Server_API.app.services.claims_review_metrics_scheduler import (
+            start_claims_review_metrics_scheduler,
+        )
+
+        _claims_review_metrics_task = await start_claims_review_metrics_scheduler()
+        if _claims_review_metrics_task:
+            logger.info("Claims review metrics scheduler started")
+    except Exception as e:
+        logger.warning(f"Failed to start claims review metrics scheduler: {e}")
+
     # Start usage aggregator (if enabled, and not disabled via env or test-mode)
     try:
         _disable_usage_agg = _env_os.getenv("DISABLE_USAGE_AGGREGATOR", "").lower() in {"1", "true", "yes", "on"}
