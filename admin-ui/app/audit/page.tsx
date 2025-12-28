@@ -31,8 +31,6 @@ type AuditFilters = {
   end: string;
 };
 
-const MAX_AUDIT_RESULTS = 1000;
-
 const parseDateInput = (value: string) => {
   if (!value) return null;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
@@ -52,21 +50,6 @@ const getDateRangeError = (start: string, end: string) => {
   return '';
 };
 
-const getDaysParam = (start: string, end: string) => {
-  const startDate = parseDateInput(start);
-  const endDate = parseDateInput(end);
-  if (start && !startDate) return undefined;
-  if (end && !endDate) return undefined;
-  if (startDate && endDate && startDate > endDate) return undefined;
-  const anchor = startDate ?? endDate;
-  if (!anchor) return undefined;
-  const now = new Date();
-  const diffMs = now.getTime() - anchor.getTime();
-  if (!Number.isFinite(diffMs)) return undefined;
-  const days = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
-  return String(Math.min(90, Math.max(1, days)));
-};
-
 const parseUserFilter = (value: string) => {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -79,7 +62,7 @@ function AuditPageContent() {
   const { selectedOrg } = useOrgContext();
   const { success, error: showError } = useToast();
   const [logs, setLogs] = useState<AuditLog[]>([]);
-  const [lastFetchCount, setLastFetchCount] = useState(0);
+  const [totalItems, setTotalItems] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedLog, setSelectedLog] = useState<AuditLog | null>(null);
@@ -115,14 +98,21 @@ function AuditPageContent() {
     return () => window.clearTimeout(handle);
   }, [filters]);
 
-  const loadLogs = useCallback(async (activeFilters: AuditFilters) => {
+  const loadLogs = useCallback(async (activeFilters: AuditFilters, page: number, size: number) => {
     try {
       setLoading(true);
       setError('');
 
+      const rangeError = getDateRangeError(activeFilters.start, activeFilters.end);
+      if (rangeError) {
+        setLogs([]);
+        setTotalItems(0);
+        return;
+      }
+
       const params: Record<string, string> = {
-        limit: String(MAX_AUDIT_RESULTS),
-        offset: '0',
+        limit: String(size),
+        offset: String((page - 1) * size),
       };
       if (selectedOrg) {
         params.org_id = String(selectedOrg.id);
@@ -135,27 +125,35 @@ function AuditPageContent() {
       if (actionFilter) {
         params.action = actionFilter;
       }
-      const daysParam = getDaysParam(activeFilters.start, activeFilters.end);
-      if (daysParam) {
-        params.days = daysParam;
+      const resourceFilter = activeFilters.resource.trim();
+      if (resourceFilter) {
+        params.resource = resourceFilter;
+      }
+      const startFilter = activeFilters.start.trim();
+      if (startFilter) {
+        params.start = startFilter;
+      }
+      const endFilter = activeFilters.end.trim();
+      if (endFilter) {
+        params.end = endFilter;
       }
       const data = await api.getAuditLogs(params);
-      const items = Array.isArray(data) ? data : [];
+      const items = Array.isArray(data) ? data : data.entries ?? [];
       setLogs(items);
-      setLastFetchCount(items.length);
+      setTotalItems(Number(data.total ?? items.length ?? 0));
     } catch (err: unknown) {
       console.error('Failed to load audit logs:', err);
       setError(err instanceof Error && err.message ? err.message : 'Failed to load audit logs');
       setLogs([]);
-      setLastFetchCount(0);
+      setTotalItems(0);
     } finally {
       setLoading(false);
     }
   }, [selectedOrg]);
 
   useEffect(() => {
-    void loadLogs(debouncedFilters);
-  }, [debouncedFilters, loadLogs]);
+    void loadLogs(debouncedFilters, currentPage, pageSize);
+  }, [currentPage, debouncedFilters, loadLogs, pageSize]);
 
   const handleFilterChange = (updates: Partial<AuditFilters>) => {
     setFilters(updates);
@@ -168,38 +166,9 @@ function AuditPageContent() {
   };
 
   const dateRangeError = useMemo(() => getDateRangeError(filters.start, filters.end), [filters.end, filters.start]);
-  const filteredLogs = useMemo(() => {
-    let filtered = [...logs];
-
-    if (filters.resource) {
-      filtered = filtered.filter((log) =>
-        log.resource.toLowerCase().includes(filters.resource.toLowerCase())
-      );
-    }
-
-    if (!dateRangeError && filters.start) {
-      const start = parseDateInput(filters.start);
-      if (start) {
-        filtered = filtered.filter((log) => new Date(log.timestamp) >= start);
-      }
-    }
-
-    if (!dateRangeError && filters.end) {
-      const end = parseDateInput(filters.end);
-      if (end) {
-        const endOfDay = new Date(end);
-        endOfDay.setHours(23, 59, 59, 999);
-        filtered = filtered.filter((log) => new Date(log.timestamp) <= endOfDay);
-      }
-    }
-
-    return filtered;
-  }, [dateRangeError, filters.end, filters.resource, filters.start, logs]);
-  const usesClientFilters = Boolean(filters.resource.trim() || filters.start.trim() || filters.end.trim());
-  const resultsMayBeTruncated = lastFetchCount >= MAX_AUDIT_RESULTS;
 
   const handleExport = (format: ExportFormat) => {
-    exportAuditLogs(filteredLogs, format);
+    exportAuditLogs(logs, format);
   };
 
   const handleCopyRaw = async () => {
@@ -228,10 +197,8 @@ function AuditPageContent() {
   };
 
   // Pagination
-  const totalItems = filteredLogs.length;
   const totalPages = Math.ceil(totalItems / pageSize);
-  const startIndex = (currentPage - 1) * pageSize;
-  const paginatedLogs = filteredLogs.slice(startIndex, startIndex + pageSize);
+  const paginatedLogs = logs;
 
   const formatTimestamp = (ts: string) => {
     return new Date(ts).toLocaleString();
@@ -259,7 +226,7 @@ function AuditPageContent() {
               <div className="flex gap-2">
                 <Button
                   variant="outline"
-                  onClick={() => loadLogs(debouncedFilters)}
+                  onClick={() => loadLogs(debouncedFilters, currentPage, pageSize)}
                   disabled={loading || Boolean(dateRangeError)}
                 >
                   <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
@@ -267,7 +234,7 @@ function AuditPageContent() {
                 </Button>
                 <ExportMenu
                   onExport={handleExport}
-                  disabled={filteredLogs.length === 0}
+                  disabled={logs.length === 0}
                 />
               </div>
             </div>
@@ -354,16 +321,6 @@ function AuditPageContent() {
                   <Alert variant="destructive" className="mt-4">
                     <AlertTitle>Invalid date range</AlertTitle>
                     <AlertDescription>{dateRangeError}</AlertDescription>
-                  </Alert>
-                )}
-                {(usesClientFilters || resultsMayBeTruncated) && (
-                  <Alert className="mt-4">
-                    <AlertTitle>Filter coverage notice</AlertTitle>
-                    <AlertDescription>
-                      Resource and exact date range filters run client-side after fetching the most recent
-                      {` ${MAX_AUDIT_RESULTS}`} records using a server day-based window. Results may be incomplete
-                      if more than {MAX_AUDIT_RESULTS} entries exist in that window.
-                    </AlertDescription>
                   </Alert>
                 )}
                 <div className="flex gap-2 mt-4">
@@ -460,7 +417,7 @@ function AuditPageContent() {
                   <div className="py-4">
                     <TableSkeleton rows={5} columns={5} />
                   </div>
-                ) : filteredLogs.length === 0 ? (
+                ) : logs.length === 0 ? (
                   <div className="text-center text-muted-foreground py-8">
                     No audit logs found for the selected filters.
                   </div>

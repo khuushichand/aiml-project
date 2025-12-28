@@ -381,7 +381,7 @@ export const api = {
         : (response && Array.isArray((response as { items?: unknown }).items))
           ? (response as { items: unknown[] }).items
           : [];
-    return items.map((entry) => {
+    const mapped = items.map((entry) => {
       const record = entry as Record<string, unknown>;
       const rawDetails = record.details;
       let details: Record<string, unknown> | undefined;
@@ -409,6 +409,16 @@ export const api = {
         raw: record,
       };
     });
+    const total = typeof (response as { total?: unknown })?.total === 'number'
+      ? Number((response as { total?: unknown }).total)
+      : mapped.length;
+    const limit = typeof (response as { limit?: unknown })?.limit === 'number'
+      ? Number((response as { limit?: unknown }).limit)
+      : undefined;
+    const offset = typeof (response as { offset?: unknown })?.offset === 'number'
+      ? Number((response as { offset?: unknown }).offset)
+      : undefined;
+    return { entries: mapped, total, limit, offset };
   },
 
   // ============================================

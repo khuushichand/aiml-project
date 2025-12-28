@@ -13,6 +13,7 @@ FRONTEND_DIR="${REPO_ROOT}/tldw-frontend"
 : "${TLDW_API_URL:=http://${TLDW_BACKEND_HOST}:${TLDW_BACKEND_PORT}}"
 : "${TLDW_API_VERSION:=v1}"
 : "${TLDW_AUTH_MODE:=single_user}"
+: "${TLDW_BACKEND_WAIT_SECS:=120}"
 
 KEEP_BACKEND=0
 SKIP_BACKEND=0
@@ -40,6 +41,7 @@ Environment overrides:
   TLDW_AUTH_MODE     (default: single_user)
   TLDW_X_API_KEY     (optional; used for smoke tests in single_user mode)
   TLDW_API_BEARER    (optional; used for smoke tests in multi_user mode)
+  TLDW_BACKEND_WAIT_SECS   (default: 60)
   TLDW_DOCKER_COMPOSE       (optional; compose file override)
   TLDW_DOCKER_COMPOSE_DEV=1 (optional; include docker-compose.dev.yml)
   TLDW_DOCKER_BUILD=1       (optional; build images, default: 1)
@@ -196,6 +198,7 @@ start_backend() {
 }
 
 wait_for_backend() {
+  local ready_url="${NEXT_PUBLIC_API_URL}/ready"
   local url="${NEXT_PUBLIC_API_URL}/api/${NEXT_PUBLIC_API_VERSION}/llm/providers"
   local headers=()
   if [[ -n "${NEXT_PUBLIC_API_BEARER}" ]]; then
@@ -205,9 +208,14 @@ wait_for_backend() {
     headers+=( -H "X-API-KEY: ${NEXT_PUBLIC_X_API_KEY}" )
   fi
 
-  echo "[+] Waiting for backend to be ready: ${url}"
-  for i in {1..30}; do
+  echo "[+] Waiting for backend to be ready: ${ready_url}"
+  for ((i=1; i<=TLDW_BACKEND_WAIT_SECS; i++)); do
     local code
+    code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 "${ready_url}" || true)
+    if [[ "${code}" != "000" ]]; then
+      echo "[+] Backend responded with HTTP ${code}"
+      return 0
+    fi
     code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 "${headers[@]}" "${url}" || true)
     if [[ "${code}" != "000" ]]; then
       echo "[+] Backend responded with HTTP ${code}"

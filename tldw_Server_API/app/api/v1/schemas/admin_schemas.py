@@ -328,6 +328,9 @@ class AuditLogEntry(BaseModel):
 class AuditLogResponse(BaseModel):
     """Response for audit log endpoint"""
     entries: List[AuditLogEntry]
+    total: int
+    limit: int
+    offset: int
 
     model_config = ConfigDict(from_attributes=True)
 

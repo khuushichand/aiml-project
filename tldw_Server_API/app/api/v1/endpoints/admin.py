@@ -11,6 +11,7 @@ import string
 import os
 import json
 import asyncio
+import re
 #
 # 3rd-party imports
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, Response
@@ -4404,6 +4405,9 @@ async def get_dashboard_activity(
 async def get_audit_log(
     user_id: Optional[int] = None,
     action: Optional[str] = None,
+    resource: Optional[str] = Query(None, description="Filter by resource type or type:id"),
+    start: Optional[str] = Query(None, description="ISO date or datetime (start)"),
+    end: Optional[str] = Query(None, description="ISO date or datetime (end)"),
     days: int = Query(7, ge=1, le=90),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
@@ -4429,6 +4433,31 @@ async def get_audit_log(
         conditions = []
         params = []
         param_count = 0
+        start_dt: Optional[datetime] = None
+        end_dt: Optional[datetime] = None
+
+        def _parse_date_param(value: Optional[str], label: str, end_of_day: bool = False) -> Optional[datetime]:
+            if value is None:
+                return None
+            raw = str(value).strip()
+            if not raw:
+                return None
+            raw = raw.replace("Z", "+00:00")
+            try:
+                if re.match(r"^\d{4}-\d{2}-\d{2}$", raw):
+                    dt = datetime.fromisoformat(raw)
+                    if end_of_day:
+                        dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+                    return dt
+                return datetime.fromisoformat(raw)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Invalid {label} date format")
+
+        start_dt = _parse_date_param(start, "start")
+        end_dt = _parse_date_param(end, "end", end_of_day=True)
+        if start_dt and end_dt and start_dt > end_dt:
+            raise HTTPException(status_code=400, detail="Start date must be on or before end date")
+
         org_ids = await _get_admin_org_ids(principal)
         if org_id is not None:
             if org_ids is None:
@@ -4436,25 +4465,59 @@ async def get_audit_log(
             else:
                 org_ids = [org_id] if org_id in org_ids else []
         if org_ids is not None and len(org_ids) == 0:
-            return AuditLogResponse(entries=[])
+            return AuditLogResponse(entries=[], total=0, limit=limit, offset=offset)
 
         if user_id:
             await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
             param_count += 1
-            conditions.append(f"user_id = ${param_count}" if is_pg else "user_id = ?")
+            conditions.append(f"a.user_id = ${param_count}" if is_pg else "a.user_id = ?")
             params.append(user_id)
 
         if action:
             param_count += 1
-            conditions.append(f"action = ${param_count}" if is_pg else "action = ?")
+            conditions.append(f"a.action = ${param_count}" if is_pg else "a.action = ?")
             params.append(action)
 
+        if resource:
+            resource_filter = resource.strip()
+            if resource_filter:
+                if ":" in resource_filter:
+                    resource_type, resource_id = resource_filter.split(":", 1)
+                    resource_type = resource_type.strip()
+                    resource_id = resource_id.strip()
+                    if resource_type:
+                        param_count += 1
+                        conditions.append(f"a.resource_type = ${param_count}" if is_pg else "a.resource_type = ?")
+                        params.append(resource_type)
+                    if resource_id.isdigit():
+                        param_count += 1
+                        conditions.append(f"a.resource_id = ${param_count}" if is_pg else "a.resource_id = ?")
+                        params.append(int(resource_id))
+                else:
+                    param_count += 1
+                    if is_pg:
+                        conditions.append(f"a.resource_type ILIKE ${param_count}")
+                        params.append(f"%{resource_filter}%")
+                    else:
+                        conditions.append("LOWER(a.resource_type) LIKE ?")
+                        params.append(f"%{resource_filter.lower()}%")
+
         # Date filter
-        if is_pg:
-            conditions.append(f"a.created_at > CURRENT_TIMESTAMP - INTERVAL '{days} days'")
+        if start_dt or end_dt:
+            if start_dt:
+                param_count += 1
+                conditions.append(f"a.created_at >= ${param_count}" if is_pg else "datetime(a.created_at) >= datetime(?)")
+                params.append(start_dt.isoformat())
+            if end_dt:
+                param_count += 1
+                conditions.append(f"a.created_at <= ${param_count}" if is_pg else "datetime(a.created_at) <= datetime(?)")
+                params.append(end_dt.isoformat())
         else:
-            conditions.append("datetime(a.created_at) > datetime('now', ? || ' days')")
-            params.append(f"-{days}")
+            if is_pg:
+                conditions.append(f"a.created_at > CURRENT_TIMESTAMP - INTERVAL '{days} days'")
+            else:
+                conditions.append("datetime(a.created_at) > datetime('now', ? || ' days')")
+                params.append(f"-{days}")
 
         join_clause = ""
         if org_ids is not None:
@@ -4481,6 +4544,13 @@ async def get_audit_log(
 
         if is_pg:
             # PostgreSQL
+            count_query = f"""
+                SELECT COUNT(*)
+                FROM audit_logs a
+                {join_clause}
+                {where_clause}
+            """
+            total = await db.fetchval(count_query, *params)
             query = f"""
                 SELECT a.id, a.user_id, u.username, a.action, a.resource_type, a.resource_id, a.details,
                        a.ip_address, a.created_at
@@ -4492,11 +4562,21 @@ async def get_audit_log(
                 LIMIT ${param_count + 1}
                 OFFSET ${param_count + 2}
             """
-            params.append(limit)
-            params.append(offset)
-            rows = await db.fetch(query, *params)
+            query_params = list(params)
+            query_params.append(limit)
+            query_params.append(offset)
+            rows = await db.fetch(query, *query_params)
         else:
             # SQLite
+            count_query = f"""
+                SELECT COUNT(*)
+                FROM audit_logs a
+                {join_clause}
+                {where_clause}
+            """
+            count_cursor = await db.execute(count_query, params)
+            count_row = await count_cursor.fetchone()
+            total = int(count_row[0]) if count_row and count_row[0] is not None else 0
             query = f"""
                 SELECT a.id, a.user_id, u.username, a.action, a.resource_type, a.resource_id, a.details,
                        a.ip_address, a.created_at
@@ -4508,9 +4588,10 @@ async def get_audit_log(
                 LIMIT ?
                 OFFSET ?
             """
-            params.append(limit)
-            params.append(offset)
-            cursor = await db.execute(query, params)
+            query_params = list(params)
+            query_params.append(limit)
+            query_params.append(offset)
+            cursor = await db.execute(query, query_params)
             rows = await cursor.fetchall()
 
         entries = []
@@ -4533,7 +4614,7 @@ async def get_audit_log(
                 }
                 entries.append(entry)
 
-        return AuditLogResponse(entries=entries)
+        return AuditLogResponse(entries=entries, total=int(total or 0), limit=limit, offset=offset)
 
     except Exception as e:
         logger.error(f"Failed to get audit log: {e}")

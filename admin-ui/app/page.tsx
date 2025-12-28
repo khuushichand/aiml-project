@@ -124,6 +124,10 @@ const processAuditLogs = (result: PromiseSettledResult<unknown>): AuditLog[] => 
   if (Array.isArray(result.value)) {
     return result.value;
   }
+  const entries = (result.value as { entries?: AuditLog[] } | null)?.entries;
+  if (Array.isArray(entries)) {
+    return entries;
+  }
   const items = (result.value as { items?: AuditLog[] } | null)?.items;
   return Array.isArray(items) ? items : [];
 };

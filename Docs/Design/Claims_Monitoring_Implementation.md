@@ -28,18 +28,21 @@ extensions should add org/team identifiers in later iterations.
 ## Alert Evaluation Semantics
 The monitoring pipeline computes two ratios for alert evaluation:
 - `window_ratio`: unsupported claims ratio over the evaluation window.
-- `baseline_ratio`: unsupported claims ratio over the baseline window.
+- `baseline_window_ratio`: unsupported claims ratio over the baseline window.
 
 Alert configuration fields map to those ratios as follows:
 - `threshold_ratio` is an absolute ceiling for `window_ratio`. Alerts fire when
   `window_ratio > threshold_ratio`.
-- `baseline_ratio` (config) is a drift threshold. If set, alerts also fire when
-  `window_ratio - baseline_ratio(computed) > baseline_ratio(config)`.
+- `baseline_ratio` (config) is a drift threshold (delta). If set (non-null or
+  > 0.0), alerts also fire when
+  `window_ratio - baseline_window_ratio > baseline_ratio`.
 
 `threshold_ratio` is required for threshold-based alert types; `baseline_ratio`
-is optional and only enables drift checks. Example: if `baseline_ratio(computed)
-= 0.08`, `threshold_ratio = 0.20`, and `baseline_ratio(config) = 0.05`, the
-alert triggers when `window_ratio > 0.20` or `window_ratio - 0.08 > 0.05`.
+is optional and only enables drift checks. Alert types may require one or both
+ratios; if a ratio is omitted (null), its check is skipped. Example: if
+`baseline_window_ratio = 0.08`, `threshold_ratio = 0.20`, and
+`baseline_ratio = 0.05`, the alert triggers when `window_ratio > 0.20` or
+`window_ratio - 0.08 > 0.05`.
 
 ## Metrics
 Register in a dedicated claims monitoring module:
@@ -89,8 +92,8 @@ Response schema:
 {
   "id": "string",
   "workspace_id": "string",
-  "threshold_ratio": 0.0,     // float, nullable: false, min: 0.0
-  "baseline_ratio": 0.0,      // float, nullable: false, min: 0.0, <= threshold_ratio
+  "threshold_ratio": 0.0,     // float, nullable: false, min: 0.0; alert when window_ratio > threshold_ratio
+  "baseline_ratio": 0.0,      // float, nullable: false, min: 0.0; drift delta, alert when window_ratio - baseline_window_ratio > baseline_ratio (0 disables drift)
   "slack_webhook_url": "string|null", // nullable: true, https URL
   "webhook_url": "string|null",       // nullable: true, https URL
   "email_recipients": ["string"],     // array of email strings, nullable: true
@@ -116,7 +119,8 @@ Request schema (all optional; patchable fields):
 ```
 Constraints: `baseline_ratio <= threshold_ratio`, ratios >= 0.0; webhook URLs must be https.
 `threshold_ratio` is the absolute `window_ratio` ceiling; `baseline_ratio` is an
-optional drift threshold (delta above computed baseline).
+optional drift threshold (delta above `baseline_window_ratio`). Use
+`baseline_ratio = 0.0` to disable drift checks for the workspace config.
 
 Response schema: same as GET `/claims/monitoring/config`.
 
@@ -157,8 +161,8 @@ Response schema:
       "workspace_id": "string",
       "name": "string",
       "alert_type": "string",          // e.g., "threshold_breach", "provider_error_rate"
-      "threshold_ratio": 0.0,          // nullable: true, min: 0.0
-      "baseline_ratio": 0.0,           // nullable: true, min: 0.0, <= threshold_ratio when both set
+      "threshold_ratio": 0.0,          // nullable: true, min: 0.0; alert when window_ratio > threshold_ratio
+      "baseline_ratio": 0.0,           // nullable: true, min: 0.0; drift delta, alert when window_ratio - baseline_window_ratio > baseline_ratio
       "channels": {
         "slack": true,
         "webhook": true,
@@ -184,8 +188,8 @@ Request schema (required fields: `name`, `alert_type`, `channels`):
 {
   "name": "string",                   // non-empty
   "alert_type": "string",
-  "threshold_ratio": 0.0,             // optional
-  "baseline_ratio": 0.0,              // optional
+  "threshold_ratio": 0.0,             // optional; alert when window_ratio > threshold_ratio
+  "baseline_ratio": 0.0,              // optional; drift delta, alert when window_ratio - baseline_window_ratio > baseline_ratio
   "channels": {
     "slack": true,
     "webhook": true,
@@ -196,7 +200,8 @@ Request schema (required fields: `name`, `alert_type`, `channels`):
 ```
 Constraints: `baseline_ratio <= threshold_ratio` when both provided; ratios >= 0.0.
 `threshold_ratio` is the absolute `window_ratio` ceiling; `baseline_ratio` is an
-optional drift threshold (delta above computed baseline).
+optional drift threshold (delta above `baseline_window_ratio`). If a ratio is
+null, its corresponding check is skipped.
 at least one channel must be true (otherwise 400 `invalid_channels`).
 
 Response schema: single alert rule (same shape as GET list item).
@@ -209,15 +214,16 @@ Request schema (patchable fields):
 {
   "name": "string",
   "alert_type": "string",
-  "threshold_ratio": 0.0,
-  "baseline_ratio": 0.0,
+  "threshold_ratio": 0.0,             // optional; alert when window_ratio > threshold_ratio
+  "baseline_ratio": 0.0,              // optional; drift delta, alert when window_ratio - baseline_window_ratio > baseline_ratio
   "channels": { "slack": true, "webhook": false, "email": true },
   "enabled": true
 }
 ```
 Constraints: `baseline_ratio <= threshold_ratio` when both provided; ratios >= 0.0.
 `threshold_ratio` is the absolute `window_ratio` ceiling; `baseline_ratio` is an
-optional drift threshold (delta above computed baseline).
+optional drift threshold (delta above `baseline_window_ratio`). If a ratio is
+null, its corresponding check is skipped.
 at least one channel must be true (otherwise 400 `invalid_channels`).
 Response schema: single alert rule.
 
