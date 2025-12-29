@@ -62,6 +62,14 @@ Register in a dedicated claims monitoring module:
 - `claims_alert_webhook_failed_total` (counter) labels: reason (`timeout`, `dns`, `tls`, `http_4xx`, `http_5xx`, `invalid_url`, `other`).
 - `claims_alert_webhook_latency_seconds` (histogram) labels: status (`success`, `failure`).
 
+## Review Metrics Aggregation
+- Persist nightly review deltas to `ClaimsReviewExtractorMetricsDaily` (workspace_id maps to user id).
+- Aggregates `claims_review_log` into per-extractor daily metrics with correction motifs.
+- Scheduler controls:
+  - `CLAIMS_REVIEW_METRICS_SCHEDULER_ENABLED`
+  - `CLAIMS_REVIEW_METRICS_INTERVAL_SEC`
+  - `CLAIMS_REVIEW_METRICS_LOOKBACK_DAYS`
+
 ## API Surface
 - `GET /api/v1/claims/monitoring/config`
 - `PATCH /api/v1/claims/monitoring/config`
@@ -70,6 +78,7 @@ Register in a dedicated claims monitoring module:
 - `PATCH /api/v1/claims/alerts/{alert_id}`
 - `DELETE /api/v1/claims/alerts/{alert_id}`
 - `GET /api/v1/claims/rebuild/health`
+- `GET /api/v1/claims/review/metrics`
 - `POST /api/v1/claims/analytics/export`
 - `GET /api/v1/claims/analytics/export/{export_id}`
 - `GET /api/v1/claims/analytics/exports`

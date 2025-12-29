@@ -3949,6 +3949,20 @@ elif _MINIMAL_TEST_APP:
         app.include_router(rag_health_router, tags=["rag-health"])
     except Exception as _rag_health_min_err:
         logger.debug(f"Skipping rag_health router in minimal test app: {_rag_health_min_err}")
+    # Billing endpoints (required by billing integration tests)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.billing import router as billing_router
+
+        app.include_router(billing_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
+    except Exception as _billing_min_err:
+        logger.debug(f"Skipping billing router in minimal test app: {_billing_min_err}")
+    # Billing webhooks (optional; keep consistent with full app)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.billing_webhooks import router as billing_webhooks_router
+
+        app.include_router(billing_webhooks_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
+    except Exception as _billing_webhooks_min_err:
+        logger.debug(f"Skipping billing webhooks router in minimal test app: {_billing_webhooks_min_err}")
     # Collections endpoints (treated as lightweight; always included in minimal app)
     try:
         from tldw_Server_API.app.api.v1.endpoints.outputs_templates import router as outputs_templates_router

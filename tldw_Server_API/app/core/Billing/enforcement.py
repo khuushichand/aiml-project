@@ -619,6 +619,12 @@ def get_billing_enforcer() -> BillingEnforcer:
     return _billing_enforcer
 
 
+def reset_billing_enforcer() -> None:
+    """Reset the billing enforcer singleton (primarily for tests)."""
+    global _billing_enforcer
+    _billing_enforcer = None
+
+
 # =============================================================================
 # Resource Governor Integration
 # =============================================================================

@@ -5,7 +5,7 @@
 import re
 import unicodedata
 from typing import Optional, List, Tuple
-from email_validator import validate_email, EmailNotValidError
+from email_validator import validate_email as _validate_email, EmailNotValidError
 #
 # 3rd-party imports
 from loguru import logger
@@ -140,7 +140,7 @@ class InputValidator:
         # Use email-validator library for comprehensive validation
         try:
             # This validates format, DNS, and deliverability
-            validation = validate_email(email, check_deliverability=False)
+            validation = _validate_email(email, check_deliverability=False)
             normalized_email = validation.email
 
             # Additional security checks

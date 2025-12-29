@@ -4,6 +4,7 @@ Provides PostgreSQL test database isolation with transaction rollback.
 """
 
 import os
+import json
 import shutil
 import subprocess
 import pytest
@@ -190,6 +191,9 @@ async def reset_singletons(request):
     from tldw_Server_API.app.core.AuthNZ.session_manager import reset_session_manager
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     from tldw_Server_API.app.services.registration_service import reset_registration_service
+    from tldw_Server_API.app.services.org_invite_service import reset_invite_service
+    from tldw_Server_API.app.core.Billing.enforcement import reset_billing_enforcer
+    from tldw_Server_API.app.core.Billing.subscription_service import reset_subscription_service
     from tldw_Server_API.app.core.Audit.unified_audit_service import shutdown_audit_service
     from tldw_Server_API.app.core.AuthNZ.jwt_service import reset_jwt_service
     from tldw_Server_API.app.core.AuthNZ.api_key_manager import reset_api_key_manager
@@ -210,6 +214,9 @@ async def reset_singletons(request):
     reset_settings()
     reset_jwt_service()
     await reset_registration_service()
+    await reset_invite_service()
+    await reset_subscription_service()
+    reset_billing_enforcer()
     await shutdown_audit_service()
     await reset_api_key_manager()
     await reset_users_db()
@@ -275,6 +282,9 @@ async def reset_singletons(request):
     reset_settings()
     reset_jwt_service()
     await reset_registration_service()
+    await reset_invite_service()
+    await reset_subscription_service()
+    reset_billing_enforcer()
     await shutdown_audit_service()
     await reset_api_key_manager()
     await reset_users_db()
@@ -818,12 +828,215 @@ async def isolated_test_environment(monkeypatch):
             "CREATE INDEX IF NOT EXISTS idx_billing_audit_created ON billing_audit_log(created_at)"
         )
 
+        # Core billing tables used by billing endpoints.
+        await test_conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS subscription_plans (
+                id SERIAL PRIMARY KEY,
+                name TEXT UNIQUE NOT NULL,
+                display_name TEXT NOT NULL,
+                description TEXT,
+                stripe_product_id TEXT,
+                stripe_price_id TEXT,
+                stripe_price_id_yearly TEXT,
+                price_usd_monthly DOUBLE PRECISION DEFAULT 0,
+                price_usd_yearly DOUBLE PRECISION DEFAULT 0,
+                limits_json JSONB NOT NULL,
+                is_active BOOLEAN DEFAULT TRUE,
+                is_public BOOLEAN DEFAULT TRUE,
+                sort_order INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await test_conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_subscription_plans_name ON subscription_plans(name)"
+        )
+        await test_conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_subscription_plans_active ON subscription_plans(is_active)"
+        )
+
+        default_plans = [
+            {
+                "name": "free",
+                "display_name": "Free",
+                "description": "Get started with basic features",
+                "price_usd_monthly": 0,
+                "price_usd_yearly": 0,
+                "sort_order": 0,
+                "limits": {
+                    "storage_mb": 1024,
+                    "api_calls_day": 100,
+                    "api_calls_month": 3000,
+                    "llm_tokens_day": 10000,
+                    "llm_tokens_month": 300000,
+                    "llm_cost_month_usd": 0,
+                    "transcription_minutes_month": 10,
+                    "rag_queries_day": 50,
+                    "concurrent_jobs": 1,
+                    "team_members": 1,
+                    "rate_limit_rpm": 10,
+                    "features": ["basic_search", "fts5_search", "basic_chat"],
+                },
+            },
+            {
+                "name": "pro",
+                "display_name": "Pro",
+                "description": "For power users and small teams",
+                "price_usd_monthly": 29,
+                "price_usd_yearly": 290,
+                "sort_order": 1,
+                "limits": {
+                    "storage_mb": 10240,
+                    "api_calls_day": 5000,
+                    "api_calls_month": 150000,
+                    "llm_tokens_day": 500000,
+                    "llm_tokens_month": 15000000,
+                    "llm_cost_month_usd": 50,
+                    "transcription_minutes_month": 300,
+                    "rag_queries_day": 500,
+                    "concurrent_jobs": 5,
+                    "team_members": 5,
+                    "rate_limit_rpm": 120,
+                    "features": ["*", "rag_advanced", "vector_search", "priority_support"],
+                },
+            },
+            {
+                "name": "enterprise",
+                "display_name": "Enterprise",
+                "description": "For organizations with advanced needs",
+                "price_usd_monthly": 199,
+                "price_usd_yearly": 1990,
+                "sort_order": 2,
+                "limits": {
+                    "storage_mb": 102400,
+                    "api_calls_day": 50000,
+                    "api_calls_month": 1500000,
+                    "llm_tokens_day": 5000000,
+                    "llm_tokens_month": 150000000,
+                    "llm_cost_month_usd": 500,
+                    "transcription_minutes_month": 3000,
+                    "rag_queries_day": 5000,
+                    "concurrent_jobs": 20,
+                    "team_members": -1,
+                    "rate_limit_rpm": 600,
+                    "features": ["*", "sso", "audit_logs", "dedicated_support", "custom_models"],
+                },
+            },
+        ]
+
+        for plan in default_plans:
+            await test_conn.execute(
+                """
+                INSERT INTO subscription_plans
+                (name, display_name, description, price_usd_monthly, price_usd_yearly, limits_json, sort_order)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT (name) DO NOTHING
+                """,
+                plan["name"],
+                plan["display_name"],
+                plan["description"],
+                plan["price_usd_monthly"],
+                plan["price_usd_yearly"],
+                json.dumps(plan["limits"]),
+                plan["sort_order"],
+            )
+
+        await test_conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS org_subscriptions (
+                id SERIAL PRIMARY KEY,
+                org_id INTEGER NOT NULL UNIQUE REFERENCES organizations(id) ON DELETE CASCADE,
+                plan_id INTEGER NOT NULL REFERENCES subscription_plans(id) ON DELETE RESTRICT,
+                stripe_customer_id TEXT,
+                stripe_subscription_id TEXT,
+                stripe_subscription_status TEXT,
+                billing_cycle TEXT DEFAULT 'monthly',
+                current_period_start TIMESTAMP,
+                current_period_end TIMESTAMP,
+                status TEXT DEFAULT 'active',
+                trial_start TIMESTAMP,
+                trial_end TIMESTAMP,
+                canceled_at TIMESTAMP,
+                cancel_at_period_end BOOLEAN DEFAULT FALSE,
+                custom_limits_json JSONB,
+                metadata JSONB,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await test_conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_org_subs_org ON org_subscriptions(org_id)"
+        )
+        await test_conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_org_subs_stripe_customer ON org_subscriptions(stripe_customer_id)"
+        )
+        await test_conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_org_subs_stripe_sub ON org_subscriptions(stripe_subscription_id)"
+        )
+        await test_conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_org_subs_status ON org_subscriptions(status)"
+        )
+
+        # Org invites tables used by org invite endpoints.
+        await test_conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS org_invites (
+                id SERIAL PRIMARY KEY,
+                code TEXT UNIQUE NOT NULL,
+                org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+                team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
+                role_to_grant TEXT DEFAULT 'member',
+                created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMPTZ NOT NULL,
+                max_uses INTEGER DEFAULT 1,
+                uses_count INTEGER DEFAULT 0,
+                is_active BOOLEAN DEFAULT TRUE,
+                description TEXT,
+                metadata JSONB
+            )
+            """
+        )
+        await test_conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_org_invites_code ON org_invites(code)"
+        )
+        await test_conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_org_invites_org_active ON org_invites(org_id, is_active)"
+        )
+        await test_conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_org_invites_expires ON org_invites(expires_at)"
+        )
+
+        await test_conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS org_invite_redemptions (
+                id SERIAL PRIMARY KEY,
+                invite_id INTEGER NOT NULL REFERENCES org_invites(id) ON DELETE CASCADE,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                redeemed_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                ip_address TEXT,
+                user_agent TEXT,
+                UNIQUE(invite_id, user_id)
+            )
+            """
+        )
+        await test_conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_invite_redemptions_invite ON org_invite_redemptions(invite_id)"
+        )
+        await test_conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_invite_redemptions_user ON org_invite_redemptions(user_id)"
+        )
+
         logger.info(f"Created schema in test database: {db_name}")
     finally:
         await test_conn.close()
 
     # 4. Set environment variables for this test
     db_url = f"postgresql://{TEST_DB_USER}:{TEST_DB_PASSWORD}@{TEST_DB_HOST}:{TEST_DB_PORT}/{db_name}"
+    monkeypatch.setenv("TEST_DATABASE_URL", db_url)
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     monkeypatch.setenv("DATABASE_URL", db_url)
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key-for-testing-only")

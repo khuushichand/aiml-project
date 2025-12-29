@@ -30,7 +30,7 @@ Operators lack actionable visibility into claim extraction health. Without granu
 - Reduction in unsupported claim incidents by 30% quarter-over-quarter due to early warning.
 
 ## Implementation Status (repo state)
-- Complete: provider/rebuild/review metrics; monitoring config + alerts CRUD and evaluate endpoints persisted in Media DB; rebuild health endpoint with persisted heartbeat; dashboard analytics + export handles (download + history listing); alert scheduler (interval-based); webhook delivery retries/backoff, delivery metrics, and event recording; Alertmanager wiring/runbooks and email digest delivery.
+- Complete: provider/rebuild/review metrics; monitoring config + alerts CRUD and evaluate endpoints persisted in Media DB; rebuild health endpoint with persisted heartbeat; dashboard analytics + export handles (download + history listing); alert scheduler (interval-based); webhook delivery retries/backoff, delivery metrics, and event recording; Alertmanager wiring/runbooks and email digest delivery; nightly review extractor metrics aggregation with `/api/v1/claims/review/metrics`.
 - Pending: hotspot index, richer data quality dashboards.
 
 ## 4. Out of Scope (v1)
@@ -95,6 +95,7 @@ Operators lack actionable visibility into claim extraction health. Without granu
 - Aggregate metrics:
   - Claims per media (mean, P95), broken down by source/provider.
   - Reviewer approval rate, average review latency, backlog size.
+  - Daily per-extractor review deltas (approval/edit rates, correction motifs).
   - Stale claims age distribution (time since extraction vs. review).
   - Unsupported ratio trends, segmented by extractor/verifier mode.
   - Source metadata overlays (language, ingestion mode).
@@ -112,6 +113,8 @@ Operators lack actionable visibility into claim extraction health. Without granu
   - `CLAIMS_PROVIDER_COST_MULTIPLIERS`.
   - `CLAIMS_ALERT_THRESHOLD_DEFAULT`, per-workspace overrides.
   - `CLAIMS_REBUILD_MAX_QUEUE_ALERT`, `CLAIMS_REBUILD_HEARTBEAT_WARN_SEC`.
+  - `CLAIMS_REVIEW_METRICS_SCHEDULER_ENABLED`, `CLAIMS_REVIEW_METRICS_INTERVAL_SEC`,
+    `CLAIMS_REVIEW_METRICS_LOOKBACK_DAYS`.
 - Admin API for runtime updates (`PATCH /api/v1/claims/monitoring/config`).
 
 ## 7. Non-Functional Requirements

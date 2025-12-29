@@ -396,6 +396,9 @@ Notes:
   - `CLAIMS_REBUILD_MAX_QUEUE_ALERT`: Queue size threshold for rebuild alerts.
   - `CLAIMS_REBUILD_HEARTBEAT_WARN_SEC`: Heartbeat staleness threshold.
   - `CLAIMS_PROVIDER_COST_MULTIPLIERS`: Cost map for provider metrics.
+  - `CLAIMS_REVIEW_METRICS_SCHEDULER_ENABLED`: Enable nightly review metrics aggregation.
+  - `CLAIMS_REVIEW_METRICS_INTERVAL_SEC`: Review metrics scheduler interval (seconds).
+  - `CLAIMS_REVIEW_METRICS_LOOKBACK_DAYS`: Days of review log to aggregate per run.
   - Email delivery uses `EMAIL_PROVIDER` (default `mock`) and SMTP settings when enabled.
 
 ## Watchlists Module

@@ -1151,6 +1151,54 @@ def _build_review_throughput(db: MediaDatabase, window_days: int) -> Dict[str, A
     return {"window_days": window_days, "total": total, "daily": series}
 
 
+def _build_review_status_trends(db: MediaDatabase, window_days: int) -> Dict[str, Any]:
+    window_days = max(1, int(window_days))
+    today = datetime.utcnow().date()
+    start_date = today - timedelta(days=window_days - 1)
+    since_dt = datetime.combine(start_date, datetime.min.time())
+
+    if db.backend_type == BackendType.POSTGRESQL:
+        sql = (
+            "SELECT DATE(created_at) AS day, new_status, COUNT(*) AS count "
+            "FROM claims_review_log WHERE created_at >= %s "
+            "GROUP BY day, new_status ORDER BY day"
+        )
+        rows = db.execute_query(sql, (since_dt,)).fetchall()
+    else:
+        sql = (
+            "SELECT DATE(created_at) AS day, new_status, COUNT(*) AS count "
+            "FROM claims_review_log WHERE created_at >= ? "
+            "GROUP BY day, new_status ORDER BY day"
+        )
+        rows = db.execute_query(sql, (since_dt.strftime("%Y-%m-%d %H:%M:%S"),)).fetchall()
+
+    counts_by_day: Dict[str, Dict[str, int]] = {}
+    for row in rows:
+        day_val = row.get("day") if hasattr(row, "get") else row[0]
+        status_val = row.get("new_status") if hasattr(row, "get") else row[1]
+        count_val = row.get("count") if hasattr(row, "get") else row[2]
+        if day_val is None:
+            continue
+        day_str = str(day_val)
+        status_key = str(status_val or "unknown")
+        try:
+            count_int = int(count_val) if count_val is not None else 0
+        except Exception:
+            count_int = 0
+        if day_str not in counts_by_day:
+            counts_by_day[day_str] = {}
+        counts_by_day[day_str][status_key] = count_int
+
+    series: List[Dict[str, Any]] = []
+    for i in range(window_days):
+        day = start_date + timedelta(days=i)
+        day_str = day.isoformat()
+        status_counts = dict(counts_by_day.get(day_str, {}))
+        total = sum(status_counts.values())
+        series.append({"date": day_str, "total": total, "status_counts": status_counts})
+    return {"window_days": window_days, "daily": series}
+
+
 def _build_claims_per_media_stats(db: MediaDatabase) -> Tuple[List[Dict[str, int]], Dict[str, Optional[float]]]:
     media_rows = db.execute_query(
         "SELECT media_id, COUNT(*) AS count FROM Claims WHERE deleted = 0 GROUP BY media_id"
@@ -1211,6 +1259,48 @@ def _build_cluster_stats(db: MediaDatabase, owner_user_id: Optional[str]) -> Dic
             }
         )
 
+    hotspot_conditions: List[str] = ["COALESCE(i.issue_count, 0) > 0"]
+    hotspot_params: List[Any] = []
+    if owner_user_id:
+        hotspot_conditions.append("c.user_id = ?")
+        hotspot_params.append(str(owner_user_id))
+    hotspot_where = f"WHERE {' AND '.join(hotspot_conditions)}" if hotspot_conditions else ""
+    hotspot_sql = (
+        "SELECT c.id, c.canonical_claim_text, c.watchlist_count, c.updated_at, "
+        "COALESCE(m.member_count, 0) AS member_count, "
+        "COALESCE(i.issue_count, 0) AS issue_count "
+        "FROM claim_clusters c "
+        "LEFT JOIN (SELECT cluster_id, COUNT(*) AS member_count "
+        "FROM claim_cluster_membership GROUP BY cluster_id) m "
+        "ON m.cluster_id = c.id "
+        "LEFT JOIN (SELECT claim_cluster_id AS cluster_id, COUNT(*) AS issue_count "
+        "FROM Claims WHERE deleted = 0 AND claim_cluster_id IS NOT NULL "
+        "AND review_status IN ('flagged', 'rejected') "
+        "GROUP BY claim_cluster_id) i "
+        "ON i.cluster_id = c.id "
+        f"{hotspot_where} "
+        "ORDER BY issue_count DESC, member_count DESC LIMIT 20"
+    )
+    hotspot_rows = db.execute_query(hotspot_sql, tuple(hotspot_params)).fetchall()
+    hotspots: List[Dict[str, Any]] = []
+    for row in hotspot_rows:
+        member_count = int(row.get("member_count") or 0)
+        issue_count = int(row.get("issue_count") or 0)
+        issue_ratio = None
+        if member_count > 0:
+            issue_ratio = issue_count / float(member_count)
+        hotspots.append(
+            {
+                "cluster_id": int(row.get("id") or 0),
+                "member_count": member_count,
+                "issue_count": issue_count,
+                "issue_ratio": issue_ratio,
+                "watchlist_count": int(row.get("watchlist_count") or 0),
+                "canonical_claim_text": row.get("canonical_claim_text"),
+                "updated_at": row.get("updated_at"),
+            }
+        )
+
     return {
         "total_clusters": total_clusters,
         "clusters_with_members": clusters_with_members,
@@ -1220,6 +1310,7 @@ def _build_cluster_stats(db: MediaDatabase, owner_user_id: Optional[str]) -> Dic
         "max_member_count": max_member_count,
         "orphan_claims": orphan_claims,
         "top_clusters": top_payload,
+        "hotspots": hotspots,
     }
 
 
@@ -1234,6 +1325,7 @@ def _build_claims_analytics(db: MediaDatabase, owner_user_id: Optional[str], win
     latency_stats = _build_review_latency_stats(db)
     top_media, media_stats = _build_claims_per_media_stats(db)
     review_throughput = _build_review_throughput(db, window_days)
+    review_status_trends = _build_review_status_trends(db, window_days)
     cluster_stats = _build_cluster_stats(db, owner_user_id)
 
     return {
@@ -1245,6 +1337,7 @@ def _build_claims_analytics(db: MediaDatabase, owner_user_id: Optional[str], win
         "claims_per_media_top": top_media,
         "claims_per_media_stats": media_stats,
         "review_throughput": review_throughput,
+        "review_status_trends": review_status_trends,
         "clusters": cluster_stats,
     }
 

@@ -66,7 +66,7 @@ async def test_get_rag_usage_debug_uses_enforcer(monkeypatch) -> None:
         return {"role": "owner", "status": "active"}
 
     monkeypatch.setattr(
-        __import__("tldw_Server_API.app.api.v1.API_Deps.org_deps", fromlist=["_get_user_org_membership"]),
+        billing_endpoint,
         "_get_user_org_membership",
         _fake_membership,
         raising=False,
@@ -92,7 +92,7 @@ async def test_get_rag_usage_debug_uses_enforcer(monkeypatch) -> None:
     fake_enforcer = _FakeEnforcerForRag()
 
     monkeypatch.setattr(
-        enforcement_module,
+        billing_endpoint,
         "get_billing_enforcer",
         lambda: fake_enforcer,
         raising=False,
@@ -146,7 +146,7 @@ async def test_get_usage_maps_usage_summary_to_current_usage(monkeypatch) -> Non
     )
 
     monkeypatch.setattr(
-        enforcement_module,
+        billing_endpoint,
         "get_billing_enforcer",
         lambda: fake_enforcer,
         raising=False,
@@ -192,7 +192,7 @@ async def test_get_usage_propagates_limit_flags_and_checks(monkeypatch) -> None:
     fake_enforcer = _FakeEnforcer(summary)
 
     monkeypatch.setattr(
-        enforcement_module,
+        billing_endpoint,
         "get_billing_enforcer",
         lambda: fake_enforcer,
         raising=False,

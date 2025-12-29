@@ -803,3 +803,9 @@ async def get_subscription_service() -> SubscriptionService:
             if _subscription_service is None:
                 _subscription_service = SubscriptionService()
     return _subscription_service
+
+
+async def reset_subscription_service() -> None:
+    """Reset the subscription service singleton (primarily for tests)."""
+    global _subscription_service
+    _subscription_service = None

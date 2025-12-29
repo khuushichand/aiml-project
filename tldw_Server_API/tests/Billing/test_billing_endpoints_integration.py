@@ -77,6 +77,7 @@ class TestBillingPlansEndpoint:
         client, db_name = isolated_test_environment
         self.client = client
         self.db_name = db_name
+        yield
 
     def test_list_plans_no_auth_required(self):
         """Plans endpoint should work without authentication."""
@@ -199,6 +200,7 @@ class TestBillingSubscriptionEndpoint:
 
         finally:
             await conn.close()
+        yield
 
     def _get_auth_token(self):
         """Get auth token for test user."""
@@ -348,6 +350,7 @@ class TestBillingUsageEndpoint:
 
         finally:
             await conn.close()
+        yield
 
     def _get_auth_token(self):
         """Get auth token for test user."""
@@ -470,6 +473,25 @@ class TestBillingCheckoutAndPortal:
                 "owner",
             )
 
+            plan_id = await conn.fetchval(
+                "SELECT id FROM subscription_plans WHERE name = $1",
+                "pro",
+            )
+            if plan_id:
+                await conn.execute(
+                    """
+                    INSERT INTO org_subscriptions
+                    (org_id, plan_id, stripe_customer_id, billing_cycle, status)
+                    VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (org_id) DO NOTHING
+                    """,
+                    org_id,
+                    plan_id,
+                    "cus_int_123",
+                    "monthly",
+                    "active",
+                )
+
             self.client = client
             self.user_id = user_id
             self.org_id = org_id
@@ -528,11 +550,17 @@ class TestBillingCheckoutAndPortal:
             raising=False,
         )
         monkeypatch.setattr(
+            "tldw_Server_API.app.core.Billing.subscription_service.get_stripe_client",
+            lambda: _FakeStripeClient(),
+            raising=False,
+        )
+        monkeypatch.setattr(
             stripe_client_module,
             "STRIPE_AVAILABLE",
             True,
             raising=False,
         )
+        yield
 
     def _get_auth_token(self):
         """Get auth token for test user."""
@@ -649,6 +677,7 @@ class TestOrgInviteEndpoints:
 
         finally:
             await conn.close()
+        yield
 
     def _get_auth_token(self):
         """Get auth token for test user."""
@@ -700,7 +729,7 @@ class TestOrgInviteEndpoints:
         assert response.status_code in [200, 403, 404]
         if response.status_code == 200:
             data = response.json()
-            assert "invites" in data or isinstance(data, list)
+            assert "invites" in data or "items" in data or isinstance(data, list)
 
     def test_create_invite_requires_owner_or_admin(self):
         """Creating invites should require owner/admin role."""
@@ -768,6 +797,7 @@ class TestSelfServiceOrgEndpoints:
 
         finally:
             await conn.close()
+        yield
 
     def _get_auth_token(self):
         """Get auth token for test user."""
@@ -803,7 +833,7 @@ class TestSelfServiceOrgEndpoints:
         assert response.status_code == 200
         data = response.json()
         # New user should have no orgs initially
-        assert "orgs" in data or isinstance(data, list)
+        assert "items" in data or "orgs" in data or isinstance(data, list)
 
     def test_create_org_requires_auth(self):
         """Creating an org should require authentication."""

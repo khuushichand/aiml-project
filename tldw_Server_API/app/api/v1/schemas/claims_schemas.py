@@ -417,6 +417,25 @@ class ClaimsAnalyticsReviewThroughput(BaseModel):
     daily: List[ClaimsAnalyticsReviewThroughputPoint] = Field(default_factory=list)
 
 
+class ClaimsAnalyticsReviewStatusTrendPoint(BaseModel):
+    """Daily review status trend point."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    date: str
+    total: int
+    status_counts: Dict[str, int] = Field(default_factory=dict)
+
+
+class ClaimsAnalyticsReviewStatusTrends(BaseModel):
+    """Windowed review status trend summary."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    window_days: int
+    daily: List[ClaimsAnalyticsReviewStatusTrendPoint] = Field(default_factory=list)
+
+
 class ClaimsReviewExtractorMetricsDaily(BaseModel):
     """Daily review metrics grouped by extractor."""
 
@@ -459,6 +478,20 @@ class ClaimsAnalyticsClusterSummary(BaseModel):
     updated_at: Optional[str] = None
 
 
+class ClaimsAnalyticsClusterHotspot(BaseModel):
+    """Cluster hotspot summary."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    cluster_id: int
+    member_count: int
+    issue_count: int
+    issue_ratio: Optional[float] = None
+    watchlist_count: int
+    canonical_claim_text: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
 class ClaimsAnalyticsClusterStats(BaseModel):
     """Aggregate cluster statistics."""
 
@@ -472,6 +505,7 @@ class ClaimsAnalyticsClusterStats(BaseModel):
     max_member_count: Optional[int] = None
     orphan_claims: int
     top_clusters: List[ClaimsAnalyticsClusterSummary] = Field(default_factory=list)
+    hotspots: List[ClaimsAnalyticsClusterHotspot] = Field(default_factory=list)
 
 
 class ClaimsAnalyticsUnsupportedRatios(BaseModel):
@@ -513,6 +547,7 @@ class ClaimsAnalyticsDashboardResponse(BaseModel):
     claims_per_media_top: List[ClaimsAnalyticsPerMediaCount] = Field(default_factory=list)
     claims_per_media_stats: ClaimsAnalyticsPerMediaStats
     review_throughput: ClaimsAnalyticsReviewThroughput
+    review_status_trends: ClaimsAnalyticsReviewStatusTrends
     review_extractor_metrics: Optional[List[ClaimsReviewExtractorMetricsDaily]] = None
     clusters: ClaimsAnalyticsClusterStats
     unsupported_ratios: ClaimsAnalyticsUnsupportedRatios

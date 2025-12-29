@@ -275,12 +275,12 @@ class AuthnzOrgInvitesRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 # Build WHERE clause
-                conditions = ["org_id = $1" if self._is_postgres(conn) else "org_id = ?"]
+                conditions = ["i.org_id = $1" if self._is_postgres(conn) else "i.org_id = ?"]
                 params: List[Any] = [org_id]
 
                 if not include_inactive:
                     if self._is_postgres(conn):
-                        conditions.append("is_active = TRUE")
+                        conditions.append("i.is_active = TRUE")
                     else:
                         conditions.append("is_active = 1")
 
@@ -297,7 +297,7 @@ class AuthnzOrgInvitesRepo:
                 if self._is_postgres(conn):
                     # Get total count
                     count_row = await conn.fetchrow(
-                        f"SELECT COUNT(*) FROM org_invites WHERE {where_clause}",
+                        f"SELECT COUNT(*) FROM org_invites i WHERE {where_clause}",
                         *params
                     )
                     total = count_row[0] if count_row else 0
@@ -327,7 +327,7 @@ class AuthnzOrgInvitesRepo:
                 else:
                     # SQLite path
                     cur = await conn.execute(
-                        f"SELECT COUNT(*) FROM org_invites WHERE {where_clause}",
+                        f"SELECT COUNT(*) FROM org_invites i WHERE {where_clause}",
                         tuple(params)
                     )
                     count_row = await cur.fetchone()

@@ -25,7 +25,7 @@ Teams need confidence that surfaced claims have been vetted, yet the platform pr
 
 ## Implementation Status (repo state)
 - Complete: review schema + audit log + rules tables; review queue/history/update/bulk/rules endpoints; rule evaluation on ingest; review metrics and basic analytics export; review assignment notifications recorded in `claims_notifications` with list/digest/ack APIs; external delivery for review-event notifications (webhook/email); reviewer UI with batch tooling.
-- Partial: review analytics are basic aggregates only; no nightly extractor delta report or correction pipelines.
+- Complete: nightly extractor delta reporting + correction motif aggregates via scheduled job, exposed through review analytics/export endpoints and `/api/v1/claims/review/metrics`.
 
 ## 4. Out of Scope (v1)
 - Full-blown workflow builder or external ticketing integration.
@@ -87,8 +87,10 @@ Teams need confidence that surfaced claims have been vetted, yet the platform pr
 - Nightly job aggregates corrections:
   - Compute per-extractor metrics (approval rate, edit rate, frequent correction motifs).
   - Surface results via metrics endpoints and dashboards.
+- Scheduler controls: `CLAIMS_REVIEW_METRICS_SCHEDULER_ENABLED`, `CLAIMS_REVIEW_METRICS_INTERVAL_SEC`, `CLAIMS_REVIEW_METRICS_LOOKBACK_DAYS`.
 - Trigger re-embedding when text changes and update any dependent indexes (Chroma, FTS).
 - Provide a `GET /api/v1/claims/review/analytics` endpoint summarizing accuracy trends.
+- Provide a `GET /api/v1/claims/review/metrics` endpoint for daily per-extractor metrics.
 - Optional hook to schedule targeted re-ingestion/rebuild for media with high correction rates.
 
 ### 6.5 Authorization & Security
@@ -124,6 +126,7 @@ Teams need confidence that surfaced claims have been vetted, yet the platform pr
 | `/api/v1/claims/review/bulk` | POST | Bulk approve/flag/reassign claims | claims_admin |
 | `/api/v1/claims/review/rules` | GET/POST/PATCH/DELETE | Manage assignment rules | claims_admin |
 | `/api/v1/claims/review/analytics` | GET | Summary metrics for extractor feedback | claims_admin |
+| `/api/v1/claims/review/metrics` | GET | Daily per-extractor review deltas | claims_admin |
 
 ## 10. UX Considerations
 - Lightweight Kanban view: columns for `pending`, `flagged`, `reassigned`.

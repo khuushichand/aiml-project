@@ -54,6 +54,14 @@ class AuthPrincipal(BaseModel):
         default=None,
         description="Numeric API key identifier when the principal is authenticated via API key.",
     )
+    username: Optional[str] = Field(
+        default=None,
+        description="Username for user principals when available.",
+    )
+    email: Optional[str] = Field(
+        default=None,
+        description="Email for user principals when available.",
+    )
     subject: Optional[str] = Field(
         default=None,
         description=(

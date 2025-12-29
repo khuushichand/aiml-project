@@ -153,10 +153,18 @@ def test_claims_dashboard_analytics_and_export():
             assert data["total_claims"] == 3
             assert "clusters" in data
             assert data["clusters"]["total_clusters"] >= 1
+            assert "hotspots" in data["clusters"]
+            assert isinstance(data["clusters"]["hotspots"], list)
             assert "review_throughput" in data
             today = datetime.utcnow().date().isoformat()
             daily_counts = {item["date"]: item["count"] for item in data["review_throughput"]["daily"]}
             assert daily_counts.get(today, 0) >= 2
+            assert "review_status_trends" in data
+            trend = data["review_status_trends"]
+            trend_daily = {item["date"]: item for item in trend.get("daily", [])}
+            today_trend = trend_daily.get(today)
+            assert today_trend is not None
+            assert today_trend["total"] >= 2
             assert "unsupported_ratios" in data
             rebuild = data.get("rebuild_health")
             assert rebuild is None or rebuild.get("status") == "ok"

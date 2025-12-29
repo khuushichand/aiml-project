@@ -80,14 +80,14 @@ Analysts and downstream automations need grounded, inspectable factual statement
 - Future observability consideration: per-provider latency/cost tracking for claim-specific workloads.
 
 ## 12. Known Gaps & Risks
-- Review analytics remain basic aggregates; no nightly extractor delta report or correction pipelines.
+- Review analytics include nightly extractor delta reporting and correction motif aggregates.
 - Trending dashboards and hotspot analytics for clustered claims are pending.
 - Multilingual support limited; spaCy default and prompts assume English.
 - Evidence spans rely on heuristic matching and can misalign in longer documents.
 - Cost control is limited to concurrency/timeout knobs; no per-job budget guardrails.
 
 ## 13. Roadmap
-1. Expand review analytics and nightly extractor delta reporting.
+1. Expand review analytics beyond nightly delta reporting (trend dashboards, hotspot analytics).
 2. Add trending dashboards and hotspot analytics for clustered claims.
 3. Expand extractor catalog (multilingual heuristics, lightweight local LLMs) and scheduling heuristics.
 4. Add per-job budget guardrails and provider latency/cost dashboards with adaptive throttling.

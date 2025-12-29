@@ -121,11 +121,27 @@ def _build_principal_from_user(
     roles = list(getattr(user, "roles", []) or [])
     permissions = list(getattr(user, "permissions", []) or [])
     is_admin = bool(getattr(user, "is_admin", False) or ("admin" in roles))
+    username = None
+    email = None
+    try:
+        raw_username = getattr(user, "username", None)
+        if raw_username:
+            username = str(raw_username)
+    except Exception:
+        username = None
+    try:
+        raw_email = getattr(user, "email", None)
+        if raw_email:
+            email = str(raw_email)
+    except Exception:
+        email = None
 
     principal = AuthPrincipal(
         kind=kind,
         user_id=user_id_int,
         api_key_id=api_key_id,
+        username=username,
+        email=email,
         subject=subject,
         token_type=token_type,
         jti=jti,
