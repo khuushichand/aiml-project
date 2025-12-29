@@ -14,6 +14,16 @@ export const loginSchema = z.object({
 
 export type LoginFormData = z.infer<typeof loginSchema>;
 
+// API key login validation
+export const apiKeySchema = z.object({
+  apiKey: z
+    .string()
+    .min(1, 'API key is required')
+    .min(10, 'API key seems too short'),
+});
+
+export type ApiKeyFormData = z.infer<typeof apiKeySchema>;
+
 // Create role validation
 export const createRoleSchema = z.object({
   name: z

@@ -152,7 +152,21 @@ Query params:
 - `privilege_snapshots` -> `PRIVILEGE_SNAPSHOT_RETENTION_DAYS`
 - `privilege_snapshots_weekly` -> `PRIVILEGE_SNAPSHOT_WEEKLY_RETENTION_DAYS`
 
-Updates adjust in-memory settings immediately. Persistence across restarts is out of scope for Stage 5.2.
+Updates persist in the AuthNZ database and load on boot; UI changes override default env/config values.
+
+Defaults (deploy-time):
+- Set the corresponding environment variables in your deployment config (.env, systemd unit, Docker compose, or k8s env) to seed defaults when no override exists.
+- Example:
+  ```bash
+  export AUDIT_LOG_RETENTION_DAYS=365
+  export USAGE_LOG_RETENTION_DAYS=180
+  export LLM_USAGE_LOG_RETENTION_DAYS=90
+  ```
+
+Resetting overrides:
+- Delete rows from `retention_policy_overrides` in the AuthNZ database to fall back to env defaults.
+
+Roadmap: Stage 5.3 retention persistence is implemented; follow-up work includes adding a UI "reset to defaults" action.
 
 ## UI Notes
 - Data Ops page provides:
@@ -160,3 +174,4 @@ Updates adjust in-memory settings immediately. Persistence across restarts is ou
   - Retention policy table with inline edits.
   - Export buttons for audit logs and users (CSV/JSON).
 - Destructive actions require confirmation and emit audit events.
+- Retention policy edits should require confirmation because they persist across restarts and affect cleanup windows.

@@ -4961,7 +4961,7 @@ async def list_retention_policies(
 ) -> RetentionPoliciesResponse:
     try:
         del principal
-        policies = [RetentionPolicy(**item) for item in svc_list_retention_policies()]
+        policies = [RetentionPolicy(**item) for item in await svc_list_retention_policies()]
         return RetentionPoliciesResponse(policies=policies)
     except Exception as exc:
         logger.error(f"Failed to list retention policies: {exc}")
@@ -4976,7 +4976,7 @@ async def update_retention_policy(
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> RetentionPolicy:
     try:
-        updated = svc_update_retention_policy(policy_key, payload.days)
+        updated = await svc_update_retention_policy(policy_key, payload.days)
         await _emit_admin_audit_event(
             request,
             principal,

@@ -1,32 +1,22 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useForm, FormProvider } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { z } from 'zod';
 import { loginWithPassword, loginWithApiKey } from '@/lib/auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { loginSchema, LoginFormData } from '@/lib/validations';
-
-// API key validation schema
-const apiKeySchema = z.object({
-  apiKey: z
-    .string()
-    .min(1, 'API key is required')
-    .min(10, 'API key seems too short'),
-});
-
-type ApiKeyFormData = z.infer<typeof apiKeySchema>;
+import { apiKeySchema, ApiKeyFormData, loginSchema, LoginFormData } from '@/lib/validations';
 
 type AuthMode = 'password' | 'apikey';
 
 const DEFAULT_AUTH_MODE: AuthMode =
   process.env.NEXT_PUBLIC_DEFAULT_AUTH_MODE === 'apikey' ? 'apikey' : 'password';
+const APIKEY_MODE_VALUES = new Set(['apikey', 'api_key', 'api-key']);
 
 export default function LoginPage() {
   const router = useRouter();
@@ -92,6 +82,16 @@ export default function LoginPage() {
     setServerError('');
   };
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    document.body.dataset.loginHydrated = 'true';
+    const params = new URLSearchParams(window.location.search);
+    const modeParam = params.get('mode') || params.get('auth');
+    if (modeParam && APIKEY_MODE_VALUES.has(modeParam.toLowerCase())) {
+      setAuthMode('apikey');
+    }
+  }, []);
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-background">
       <Card className="w-full max-w-md">
@@ -103,9 +103,13 @@ export default function LoginPage() {
         </CardHeader>
         <CardContent>
           {/* Auth mode tabs */}
-          <div className="flex mb-6 border-b">
+          <div className="flex mb-6 border-b" role="tablist">
             <button
               type="button"
+              id="password-tab"
+              role="tab"
+              aria-selected={authMode === 'password'}
+              aria-controls="password-panel"
               onClick={() => handleModeChange('password')}
               className={`flex-1 pb-2 text-sm font-medium ${
                 authMode === 'password'
@@ -117,6 +121,10 @@ export default function LoginPage() {
             </button>
             <button
               type="button"
+              id="apikey-tab"
+              role="tab"
+              aria-selected={authMode === 'apikey'}
+              aria-controls="apikey-panel"
               onClick={() => handleModeChange('apikey')}
               className={`flex-1 pb-2 text-sm font-medium ${
                 authMode === 'apikey'
@@ -130,7 +138,13 @@ export default function LoginPage() {
 
           {authMode === 'password' ? (
             <FormProvider {...passwordForm}>
-              <form onSubmit={passwordForm.handleSubmit(handlePasswordLogin)} className="space-y-4">
+              <form
+                id="password-panel"
+                role="tabpanel"
+                aria-labelledby="password-tab"
+                onSubmit={passwordForm.handleSubmit(handlePasswordLogin)}
+                className="space-y-4"
+              >
                 <div className="space-y-2">
                   <Label htmlFor="username">Username or Email</Label>
                   <Input
@@ -180,7 +194,13 @@ export default function LoginPage() {
             </FormProvider>
           ) : (
             <FormProvider {...apiKeyForm}>
-              <form onSubmit={apiKeyForm.handleSubmit(handleApiKeyLogin)} className="space-y-4">
+              <form
+                id="apikey-panel"
+                role="tabpanel"
+                aria-labelledby="apikey-tab"
+                onSubmit={apiKeyForm.handleSubmit(handleApiKeyLogin)}
+                className="space-y-4"
+              >
                 <Alert className="mb-4">
                   <AlertDescription>
                     Use an API key for single-user mode authentication. The key will be stored locally.

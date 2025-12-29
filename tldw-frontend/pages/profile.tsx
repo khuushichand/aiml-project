@@ -1,26 +1,89 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Layout } from '@/components/layout/Layout';
 import { useAuth } from '@/hooks/useAuth';
 import { useIsAdmin } from '@/hooks/useIsAdmin';
 import { apiClient } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
+import { useToast } from '@/components/ui/ToastProvider';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import type { User } from '@/lib/auth';
+
+type ByokKeyItem = {
+  provider: string;
+  has_key: boolean;
+  source: 'user' | 'team' | 'org' | 'server_default' | 'none' | 'disabled';
+  key_hint?: string | null;
+  last_used_at?: string | null;
+};
+
+type ByokKeysResponse = {
+  items: ByokKeyItem[];
+};
 
 export default function ProfilePage() {
   const { user: authUser, isAuthenticated } = useAuth();
   const isAdmin = useIsAdmin();
+  const { show } = useToast();
   const [profile, setProfile] = useState<User | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const placeholderKeys = [
-    { provider: 'OpenAI', source: 'Your key', status: 'Stored' },
-    { provider: 'Anthropic', source: 'Org shared', status: 'Available' },
-    { provider: 'OpenRouter', source: 'Team shared', status: 'Available' },
-  ];
-  const placeholderShared = [
-    { scope: 'Org', name: 'Primary org key', status: 'Enabled' },
-    { scope: 'Team', name: 'Research pod', status: 'Enabled' },
-  ];
+  const [byokItems, setByokItems] = useState<ByokKeyItem[]>([]);
+  const [byokLoading, setByokLoading] = useState(false);
+  const [byokError, setByokError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [provider, setProvider] = useState('');
+  const [customProvider, setCustomProvider] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [orgId, setOrgId] = useState('');
+  const [projectId, setProjectId] = useState('');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [testModel, setTestModel] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const providerOptions = useMemo(() => {
+    const options = byokItems.map((item) => item.provider).filter(Boolean);
+    return Array.from(new Set(options)).sort((a, b) => a.localeCompare(b));
+  }, [byokItems]);
+
+  const selectedProvider = providerOptions.length > 0 ? provider : customProvider;
+  const selectedItem = useMemo(
+    () => byokItems.find((item) => item.provider === selectedProvider),
+    [byokItems, selectedProvider]
+  );
+
+  const canDelete = !!selectedItem?.has_key;
+
+  const formatLastUsed = (value?: string | null) => {
+    if (!value) return '—';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return value;
+    return parsed.toLocaleString();
+  };
+
+  const getErrorMessage = (err: unknown, fallback: string) => {
+    if (err instanceof Error && err.message) return err.message;
+    if (typeof err === 'string' && err.trim().length > 0) return err;
+    return fallback;
+  };
+
+  const fetchByokKeys = useCallback(async () => {
+    if (!isAuthenticated) return;
+    setByokLoading(true);
+    setByokError(null);
+    try {
+      const data = await apiClient.get<ByokKeysResponse>('/users/keys');
+      const items = Array.isArray(data.items) ? data.items : [];
+      setByokItems(items);
+    } catch (err) {
+      setByokError(getErrorMessage(err, 'Failed to load BYOK keys.'));
+    } finally {
+      setByokLoading(false);
+    }
+  }, [isAuthenticated]);
 
   useEffect(() => {
     const fetchProfile = async () => {
@@ -40,6 +103,99 @@ export default function ProfilePage() {
 
     fetchProfile();
   }, [isAuthenticated]);
+
+  useEffect(() => {
+    fetchByokKeys();
+  }, [fetchByokKeys]);
+
+  useEffect(() => {
+    if (!provider && providerOptions.length > 0) {
+      setProvider(providerOptions[0]);
+    }
+  }, [provider, providerOptions]);
+
+  const buildCredentialFields = () => {
+    const fields: Record<string, string> = {};
+    if (orgId.trim()) fields.org_id = orgId.trim();
+    if (projectId.trim()) fields.project_id = projectId.trim();
+    if (baseUrl.trim()) fields.base_url = baseUrl.trim();
+    return fields;
+  };
+
+  const handleSaveKey = async () => {
+    const activeProvider = selectedProvider?.trim();
+    if (!activeProvider) {
+      setFormError('Provider is required.');
+      return;
+    }
+    if (!apiKey.trim()) {
+      setFormError('API key is required.');
+      return;
+    }
+    setFormError(null);
+    setSaving(true);
+    try {
+      const credentialFields = buildCredentialFields();
+      await apiClient.post('/users/keys', {
+        provider: activeProvider,
+        api_key: apiKey.trim(),
+        credential_fields: Object.keys(credentialFields).length ? credentialFields : undefined,
+      });
+      setApiKey('');
+      show({ title: 'BYOK key saved', description: `${activeProvider} key stored and validated.`, variant: 'success' });
+      fetchByokKeys();
+    } catch (err) {
+      const message = getErrorMessage(err, 'Failed to save key.');
+      setFormError(message);
+      show({ title: 'Save failed', description: message, variant: 'danger' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleTestKey = async () => {
+    const activeProvider = selectedProvider?.trim();
+    if (!activeProvider) {
+      setFormError('Provider is required.');
+      return;
+    }
+    setFormError(null);
+    setTesting(true);
+    try {
+      const payload: { provider: string; model?: string } = { provider: activeProvider };
+      if (testModel.trim()) payload.model = testModel.trim();
+      await apiClient.post('/users/keys/test', payload);
+      show({ title: 'Key valid', description: `${activeProvider} stored key validated.`, variant: 'success' });
+      fetchByokKeys();
+    } catch (err) {
+      const message = getErrorMessage(err, 'Failed to validate key.');
+      setFormError(message);
+      show({ title: 'Validation failed', description: message, variant: 'danger' });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const handleDeleteKey = async () => {
+    const activeProvider = selectedProvider?.trim();
+    if (!activeProvider) {
+      setFormError('Provider is required.');
+      return;
+    }
+    setDeleting(true);
+    try {
+      await apiClient.delete(`/users/keys/${encodeURIComponent(activeProvider)}`);
+      show({ title: 'Key deleted', description: `${activeProvider} key removed.`, variant: 'success' });
+      fetchByokKeys();
+    } catch (err) {
+      const message = getErrorMessage(err, 'Failed to delete key.');
+      setFormError(message);
+      show({ title: 'Delete failed', description: message, variant: 'danger' });
+    } finally {
+      setDeleting(false);
+      setConfirmDelete(false);
+    }
+  };
 
   const effectiveUser = profile || authUser;
 
@@ -220,82 +376,190 @@ export default function ProfilePage() {
                 <div className="space-y-3 rounded-lg border border-gray-200 bg-white p-4">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
-                      <h2 className="text-sm font-semibold text-gray-800">BYOK: Provider Keys (Preview)</h2>
+                      <h2 className="text-sm font-semibold text-gray-800">BYOK: Provider Keys</h2>
                       <p className="text-xs text-gray-500">
-                        Placeholder UI for upcoming BYOK key management and validation workflows.
+                        Manage your provider keys. Keys are validated on save and never displayed after storage.
                       </p>
                     </div>
-                    <span className="inline-flex items-center rounded-full bg-yellow-50 px-3 py-1 text-xs font-medium text-yellow-800">
-                      Coming soon
-                    </span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button size="sm" variant="secondary" onClick={fetchByokKeys} disabled={byokLoading}>
+                        {byokLoading ? 'Refreshing…' : 'Refresh'}
+                      </Button>
+                    </div>
                   </div>
+
+                  {byokError && (
+                    <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                      {byokError}
+                    </div>
+                  )}
 
                   <div className="grid gap-4 lg:grid-cols-3">
                     <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-                      <div className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Your Keys</div>
-                      <ul className="mt-2 space-y-2 text-sm">
-                        {placeholderKeys.map((entry) => (
-                          <li key={entry.provider} className="flex items-center justify-between gap-2 rounded border border-gray-200 bg-white px-2 py-1">
-                            <div>
-                              <div className="text-gray-900 font-medium">{entry.provider}</div>
-                              <div className="text-xs text-gray-500">{entry.source}</div>
-                            </div>
-                            <span className="text-xs font-medium text-green-700">{entry.status}</span>
-                          </li>
-                        ))}
-                      </ul>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <Button size="sm" disabled>Add key</Button>
-                        <Button size="sm" variant="secondary" disabled>Update</Button>
-                        <Button size="sm" variant="danger" disabled>Delete</Button>
-                      </div>
-                    </div>
-
-                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-                      <div className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Shared Keys</div>
-                      <div className="mt-1 text-xs text-gray-500">Active scope: Org/Team (from token claims)</div>
-                      <ul className="mt-2 space-y-2 text-sm">
-                        {placeholderShared.map((entry) => (
-                          <li key={`${entry.scope}-${entry.name}`} className="flex items-center justify-between gap-2 rounded border border-gray-200 bg-white px-2 py-1">
-                            <div>
-                              <div className="text-gray-900 font-medium">{entry.name}</div>
-                              <div className="text-xs text-gray-500">{entry.scope} shared</div>
-                            </div>
-                            <span className="text-xs font-medium text-blue-700">{entry.status}</span>
-                          </li>
-                        ))}
-                      </ul>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <Button size="sm" variant="secondary" disabled>Request access</Button>
-                        <Button size="sm" variant="secondary" disabled>View policies</Button>
-                      </div>
-                    </div>
-
-                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-                      <div className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Validate & Save</div>
+                      <div className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Key Status</div>
                       <div className="mt-2 space-y-2 text-sm">
-                        <label className="block text-xs text-gray-500">
-                          Provider
-                          <select className="mt-1 w-full rounded border border-gray-200 bg-white px-2 py-1 text-sm" disabled>
-                            <option>OpenAI</option>
-                          </select>
-                        </label>
-                        <label className="block text-xs text-gray-500">
-                          API key
-                          <input className="mt-1 w-full rounded border border-gray-200 bg-white px-2 py-1 text-sm" placeholder="sk-..." disabled />
-                        </label>
-                        <label className="block text-xs text-gray-500">
-                          Credential fields
-                          <input className="mt-1 w-full rounded border border-gray-200 bg-white px-2 py-1 text-sm" placeholder="org_id, project_id" disabled />
-                        </label>
+                        {byokLoading && (
+                          <div className="rounded border border-gray-200 bg-white px-2 py-1 text-gray-500">
+                            Loading BYOK keys…
+                          </div>
+                        )}
+                        {!byokLoading && byokItems.length === 0 && (
+                          <div className="rounded border border-gray-200 bg-white px-2 py-1 text-gray-500">
+                            No providers available yet.
+                          </div>
+                        )}
+                        {byokItems.map((entry) => {
+                          const isActive = entry.provider === selectedProvider;
+                          const sourceLabel = {
+                            user: 'Your key',
+                            team: 'Team shared',
+                            org: 'Org shared',
+                            server_default: 'Server default',
+                            none: 'No key',
+                            disabled: 'Disabled',
+                          }[entry.source];
+                          const sourceClass = {
+                            user: 'text-green-700',
+                            team: 'text-blue-700',
+                            org: 'text-blue-700',
+                            server_default: 'text-gray-600',
+                            none: 'text-gray-500',
+                            disabled: 'text-red-700',
+                          }[entry.source];
+                          return (
+                            <button
+                              type="button"
+                              key={entry.provider}
+                              className={`w-full rounded border px-2 py-1 text-left ${
+                                isActive ? 'border-blue-300 bg-white' : 'border-gray-200 bg-white hover:bg-gray-50'
+                              }`}
+                              onClick={() => setProvider(entry.provider)}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <div>
+                                  <div className="text-gray-900 font-medium">{entry.provider}</div>
+                                  <div className={`text-xs ${sourceClass}`}>{sourceLabel}</div>
+                                </div>
+                                <div className="text-xs text-gray-500">
+                                  {entry.has_key ? 'Stored' : 'No key'}
+                                </div>
+                              </div>
+                              <div className="mt-1 flex items-center justify-between text-xs text-gray-500">
+                                <span>{entry.key_hint ? `•••• ${entry.key_hint}` : '—'}</span>
+                                <span>Last used: {formatLastUsed(entry.last_used_at)}</span>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                      <div className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Save or Update</div>
+                      <div className="mt-2 space-y-2 text-sm">
+                        {providerOptions.length > 0 ? (
+                          <label className="block text-xs text-gray-500">
+                            Provider
+                            <select
+                              className="mt-1 w-full rounded border border-gray-200 bg-white px-2 py-1 text-sm"
+                              value={provider}
+                              onChange={(e) => setProvider(e.target.value)}
+                            >
+                              {providerOptions.map((opt) => (
+                                <option key={opt} value={opt}>{opt}</option>
+                              ))}
+                            </select>
+                          </label>
+                        ) : (
+                          <Input
+                            label="Provider"
+                            placeholder="openai"
+                            value={customProvider}
+                            onChange={(e) => setCustomProvider(e.target.value)}
+                          />
+                        )}
+                        <Input
+                          label="API key"
+                          type="password"
+                          placeholder="sk-..."
+                          value={apiKey}
+                          onChange={(e) => setApiKey(e.target.value)}
+                        />
+                        <Input
+                          label="Org ID (optional)"
+                          placeholder="org_123"
+                          value={orgId}
+                          onChange={(e) => setOrgId(e.target.value)}
+                        />
+                        <Input
+                          label="Project ID (optional)"
+                          placeholder="proj_456"
+                          value={projectId}
+                          onChange={(e) => setProjectId(e.target.value)}
+                        />
+                        <Input
+                          label="Base URL (optional, allowlisted providers only)"
+                          placeholder="https://api.example.com"
+                          value={baseUrl}
+                          onChange={(e) => setBaseUrl(e.target.value)}
+                        />
+                        {formError && (
+                          <div className="rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700">
+                            {formError}
+                          </div>
+                        )}
                       </div>
                       <div className="mt-3 flex flex-wrap gap-2">
-                        <Button size="sm" disabled>Validate key</Button>
-                        <Button size="sm" variant="secondary" disabled>Save</Button>
+                        <Button size="sm" onClick={handleSaveKey} disabled={saving || !selectedProvider}>
+                          {saving ? 'Saving…' : 'Save key'}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="danger"
+                          onClick={() => setConfirmDelete(true)}
+                          disabled={!canDelete || deleting || !selectedProvider}
+                        >
+                          Delete key
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                      <div className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Test Stored Key</div>
+                      <div className="mt-2 space-y-2 text-sm">
+                        <div className="text-xs text-gray-500">
+                          Tests the stored key for the selected provider. Save first if no key is stored.
+                        </div>
+                        <Input
+                          label="Model (optional)"
+                          placeholder="gpt-4o-mini"
+                          value={testModel}
+                          onChange={(e) => setTestModel(e.target.value)}
+                        />
+                        {selectedItem && (
+                          <div className="rounded border border-gray-200 bg-white px-2 py-1 text-xs text-gray-600">
+                            Current source: {selectedItem.source}
+                          </div>
+                        )}
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button size="sm" variant="secondary" onClick={handleTestKey} disabled={testing || !selectedProvider}>
+                          {testing ? 'Testing…' : 'Test stored key'}
+                        </Button>
                       </div>
                     </div>
                   </div>
                 </div>
+
+                <ConfirmDialog
+                  open={confirmDelete}
+                  title="Delete BYOK key?"
+                  message="This removes your stored key for the selected provider. Requests will fall back to shared or server defaults."
+                  confirmText={deleting ? 'Deleting…' : 'Delete'}
+                  destructive
+                  onCancel={() => setConfirmDelete(false)}
+                  onConfirm={handleDeleteKey}
+                />
 
                 {/* Debug panel with raw /users/me JSON to aid troubleshooting */}
                 {profile && (

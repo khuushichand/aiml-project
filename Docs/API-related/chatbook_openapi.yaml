@@ -880,7 +880,7 @@ components:
             detail: Invalid content selection format
             error_type: ValidationError
             suggestions:
-              - Use format {"conversation": ["id1", "id2"]}
+              - 'Use format {"conversation": ["id1", "id2"]}'
               - Leave empty to export all content
 
     Unauthorized:

@@ -27,6 +27,7 @@ type MaintenanceState = {
 };
 
 type FeatureFlagItem = {
+  id?: number | string | null;
   key: string;
   scope: 'global' | 'org' | 'user';
   enabled: boolean;
@@ -43,19 +44,66 @@ type FeatureFlagItem = {
   }[];
 };
 
+type FlagsResponse = {
+  items?: FeatureFlagItem[];
+};
+
 const FLAG_SCOPES = ['global', 'org', 'user'] as const;
 
-const toNumberList = (value: string) =>
-  value
-    .split(',')
-    .map((item) => Number(item.trim()))
-    .filter((item) => Number.isFinite(item));
+type ParsedList<T> = {
+  values: T[];
+  invalid: string[];
+};
 
-const toEmailList = (value: string) =>
-  value
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean);
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const formatInvalidValues = (values: string[]) => {
+  const sample = values.slice(0, 5).join(', ');
+  return values.length > 5 ? `${sample} (+${values.length - 5} more)` : sample;
+};
+
+const parsePositiveInt = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  if (!Number.isInteger(parsed) || parsed <= 0) return null;
+  return parsed;
+};
+
+const parsePositiveIntList = (value: string): ParsedList<number> => {
+  const values: number[] = [];
+  const invalid: string[] = [];
+
+  value.split(',').forEach((item) => {
+    const trimmed = item.trim();
+    if (!trimmed) return;
+    const parsed = Number(trimmed);
+    if (Number.isInteger(parsed) && parsed > 0) {
+      values.push(parsed);
+    } else {
+      invalid.push(trimmed);
+    }
+  });
+
+  return { values, invalid };
+};
+
+const parseEmailList = (value: string): ParsedList<string> => {
+  const values: string[] = [];
+  const invalid: string[] = [];
+
+  value.split(',').forEach((item) => {
+    const trimmed = item.trim();
+    if (!trimmed) return;
+    if (EMAIL_REGEX.test(trimmed)) {
+      values.push(trimmed);
+    } else {
+      invalid.push(trimmed);
+    }
+  });
+
+  return { values, invalid };
+};
 
 const formatDate = (value?: string | null) => {
   if (!value) return '—';
@@ -66,7 +114,7 @@ const formatDate = (value?: string | null) => {
 
 export default function FlagsPage() {
   const confirm = useConfirm();
-  const { success, error: showError } = useToast();
+  const { success, error: showError, warning } = useToast();
 
   const [maintenance, setMaintenance] = useState<MaintenanceState | null>(null);
   const [maintenanceEnabled, setMaintenanceEnabled] = useState(false);
@@ -100,16 +148,17 @@ export default function FlagsPage() {
     return params;
   }, [flagOrgFilter, flagScopeFilter, flagUserFilter]);
 
-  const loadMaintenance = useCallback(async () => {
+  const loadMaintenance = useCallback(async (signal?: AbortSignal) => {
     try {
       setMaintenanceLoading(true);
-      const data = (await api.getMaintenanceMode()) as MaintenanceState;
+      const data = (await api.getMaintenanceMode({ signal })) as MaintenanceState;
       setMaintenance(data);
       setMaintenanceEnabled(Boolean(data?.enabled));
       setMaintenanceMessage(data?.message || '');
       setMaintenanceAllowUserIds((data?.allowlist_user_ids || []).join(', '));
       setMaintenanceAllowEmails((data?.allowlist_emails || []).join(', '));
     } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') return;
       const message = err instanceof Error && err.message ? err.message : 'Failed to load maintenance mode';
       showError(message);
     } finally {
@@ -117,16 +166,15 @@ export default function FlagsPage() {
     }
   }, [showError]);
 
-  const loadFlags = useCallback(async () => {
+  const loadFlags = useCallback(async (signal?: AbortSignal) => {
     try {
       setFlagLoading(true);
       setFlagError('');
-      const data = await api.getFeatureFlags(flagParams);
-      const items = Array.isArray((data as { items?: unknown }).items)
-        ? ((data as { items: FeatureFlagItem[] }).items)
-        : [];
+      const data = (await api.getFeatureFlags(flagParams, { signal })) as FlagsResponse;
+      const items = Array.isArray(data.items) ? data.items : [];
       setFlags(items);
     } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') return;
       const message = err instanceof Error && err.message ? err.message : 'Failed to load feature flags';
       setFlagError(message);
       setFlags([]);
@@ -136,12 +184,20 @@ export default function FlagsPage() {
   }, [flagParams]);
 
   useEffect(() => {
-    void loadMaintenance();
+    const controller = new AbortController();
+    void loadMaintenance(controller.signal);
+    return () => controller.abort();
   }, [loadMaintenance]);
 
   useEffect(() => {
-    void loadFlags();
+    const controller = new AbortController();
+    void loadFlags(controller.signal);
+    return () => controller.abort();
   }, [loadFlags]);
+
+  const handleRefresh = useCallback(() => {
+    void Promise.allSettled([loadMaintenance(), loadFlags()]);
+  }, [loadFlags, loadMaintenance]);
 
   const handleSaveMaintenance = async () => {
     if (!maintenance) return;
@@ -159,11 +215,25 @@ export default function FlagsPage() {
     }
     try {
       setMaintenanceSaving(true);
+      const allowlistUserIds = parsePositiveIntList(maintenanceAllowUserIds);
+      const allowlistEmails = parseEmailList(maintenanceAllowEmails);
+      if (allowlistUserIds.invalid.length > 0) {
+        warning(
+          'Some allowlist user IDs were ignored',
+          `Invalid values: ${formatInvalidValues(allowlistUserIds.invalid)}`
+        );
+      }
+      if (allowlistEmails.invalid.length > 0) {
+        warning(
+          'Some allowlist emails were ignored',
+          `Invalid values: ${formatInvalidValues(allowlistEmails.invalid)}`
+        );
+      }
       const payload = {
         enabled: maintenanceEnabled,
         message: maintenanceMessage,
-        allowlist_user_ids: toNumberList(maintenanceAllowUserIds),
-        allowlist_emails: toEmailList(maintenanceAllowEmails),
+        allowlist_user_ids: allowlistUserIds.values,
+        allowlist_emails: allowlistEmails.values,
       };
       const updated = await api.updateMaintenanceMode(payload);
       const updatedState = updated as MaintenanceState;
@@ -195,14 +265,14 @@ export default function FlagsPage() {
       showError('User ID is required for user-scoped flags');
       return;
     }
-    const parsedOrgId = flagOrgId.trim() ? Number(flagOrgId) : undefined;
-    const parsedUserId = flagUserId.trim() ? Number(flagUserId) : undefined;
-    if (flagScope === 'org' && !Number.isFinite(parsedOrgId)) {
-      showError('Org ID must be a number');
+    const parsedOrgId = flagOrgId.trim() ? parsePositiveInt(flagOrgId) : undefined;
+    const parsedUserId = flagUserId.trim() ? parsePositiveInt(flagUserId) : undefined;
+    if (flagScope === 'org' && !parsedOrgId) {
+      showError('Org ID must be a positive integer');
       return;
     }
-    if (flagScope === 'user' && !Number.isFinite(parsedUserId)) {
-      showError('User ID must be a number');
+    if (flagScope === 'user' && !parsedUserId) {
+      showError('User ID must be a positive integer');
       return;
     }
     try {
@@ -255,6 +325,8 @@ export default function FlagsPage() {
     }
   };
 
+  const isRefreshing = maintenanceLoading || flagLoading;
+
   return (
     <ProtectedRoute>
       <ResponsiveLayout>
@@ -264,8 +336,8 @@ export default function FlagsPage() {
               <h1 className="text-2xl font-bold">Flags & Maintenance</h1>
               <p className="text-muted-foreground">Control runtime switches and maintenance mode.</p>
             </div>
-            <Button variant="outline" onClick={loadMaintenance} disabled={maintenanceLoading}>
-              <RefreshCw className={`mr-2 h-4 w-4 ${maintenanceLoading ? 'animate-spin' : ''}`} />
+            <Button variant="outline" onClick={handleRefresh} disabled={isRefreshing}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
               Refresh
             </Button>
           </div>
@@ -468,55 +540,73 @@ export default function FlagsPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {flags.map((flag) => (
-                      <TableRow key={`${flag.key}-${flag.scope}-${flag.org_id || 'global'}-${flag.user_id || 'none'}`}>
-                        <TableCell className="font-medium">{flag.key}</TableCell>
-                        <TableCell>{flag.scope}</TableCell>
-                        <TableCell>
-                          <Badge variant={flag.enabled ? 'default' : 'outline'}>
-                            {flag.enabled ? 'Enabled' : 'Disabled'}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          {flag.scope === 'global'
-                            ? 'Global'
-                            : flag.scope === 'org'
-                              ? `Org ${flag.org_id}`
-                              : `User ${flag.user_id}`}
-                        </TableCell>
-                        <TableCell>{formatDate(flag.updated_at)}</TableCell>
-                        <TableCell>
-                          <details className="text-xs text-muted-foreground">
-                            <summary className="cursor-pointer">
-                              {flag.history?.length || 0} changes
-                            </summary>
-                            <div className="mt-2 space-y-2">
-                              {(flag.history || []).map((entry, index) => (
-                                <div key={`${flag.key}-history-${index}`}>
-                                  <div className="font-medium text-foreground">
-                                    {entry.enabled ? 'Enabled' : 'Disabled'}
+                    {flags.map((flag, index) => {
+                      const hasStableFields =
+                        Boolean(flag.key) ||
+                        Boolean(flag.scope) ||
+                        flag.org_id !== undefined ||
+                        flag.user_id !== undefined;
+                      const rowKey =
+                        flag.id !== null && flag.id !== undefined
+                          ? `flag-${flag.id}`
+                          : hasStableFields
+                            ? JSON.stringify([
+                                flag.key,
+                                flag.scope,
+                                flag.org_id ?? 'NULL',
+                                flag.user_id ?? 'NULL',
+                              ])
+                            : `flag-index-${index}`;
+                      return (
+                        <TableRow key={rowKey}>
+                          <TableCell className="font-medium">{flag.key}</TableCell>
+                          <TableCell>{flag.scope}</TableCell>
+                          <TableCell>
+                            <Badge variant={flag.enabled ? 'default' : 'outline'}>
+                              {flag.enabled ? 'Enabled' : 'Disabled'}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            {flag.scope === 'global'
+                              ? 'Global'
+                              : flag.scope === 'org'
+                                ? `Org ${flag.org_id}`
+                                : `User ${flag.user_id}`}
+                          </TableCell>
+                          <TableCell>{formatDate(flag.updated_at)}</TableCell>
+                          <TableCell>
+                            <details className="text-xs text-muted-foreground">
+                              <summary className="cursor-pointer">
+                                {flag.history?.length || 0} changes
+                              </summary>
+                              <div className="mt-2 space-y-2">
+                                {(flag.history || []).map((entry, entryIndex) => (
+                                  <div key={`${flag.key}-history-${entryIndex}`}>
+                                    <div className="font-medium text-foreground">
+                                      {entry.enabled ? 'Enabled' : 'Disabled'}
+                                    </div>
+                                    <div>
+                                      {formatDate(entry.timestamp)}{' '}
+                                      {entry.actor ? `· ${entry.actor}` : ''}
+                                    </div>
+                                    {entry.note ? <div>Note: {entry.note}</div> : null}
                                   </div>
-                                  <div>
-                                    {formatDate(entry.timestamp)}{' '}
-                                    {entry.actor ? `· ${entry.actor}` : ''}
-                                  </div>
-                                  {entry.note ? <div>Note: {entry.note}</div> : null}
-                                </div>
-                              ))}
-                            </div>
-                          </details>
-                        </TableCell>
-                        <TableCell>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handleDeleteFlag(flag)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                                ))}
+                              </div>
+                            </details>
+                          </TableCell>
+                          <TableCell>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleDeleteFlag(flag)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               )}

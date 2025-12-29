@@ -41,7 +41,7 @@ Environment overrides:
   TLDW_AUTH_MODE     (default: single_user)
   TLDW_X_API_KEY     (optional; used for smoke tests in single_user mode)
   TLDW_API_BEARER    (optional; used for smoke tests in multi_user mode)
-  TLDW_BACKEND_WAIT_SECS   (default: 60)
+  TLDW_BACKEND_WAIT_SECS   (default: 120)
   TLDW_DOCKER_COMPOSE       (optional; compose file override)
   TLDW_DOCKER_COMPOSE_DEV=1 (optional; include docker-compose.dev.yml)
   TLDW_DOCKER_BUILD=1       (optional; build images, default: 1)
@@ -212,7 +212,7 @@ wait_for_backend() {
   for ((i=1; i<=TLDW_BACKEND_WAIT_SECS; i++)); do
     local code
     code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 "${ready_url}" || true)
-    if [[ "${code}" != "000" ]]; then
+    if [[ "${code}" =~ ^2[0-9][0-9]$ ]]; then
       echo "[+] Backend responded with HTTP ${code}"
       return 0
     fi
@@ -221,7 +221,7 @@ wait_for_backend() {
     else
       code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 "${url}" || true)
     fi
-    if [[ "${code}" != "000" ]]; then
+    if [[ "${code}" =~ ^2[0-9][0-9]$ ]]; then
       echo "[+] Backend responded with HTTP ${code}"
       return 0
     fi

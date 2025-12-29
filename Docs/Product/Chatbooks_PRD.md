@@ -1,5 +1,18 @@
 # Chatbooks Product Requirements Document
 
+Remaining Items:
+- Large media payload export is still metadata-only; add large-artifact bundling with streaming + quota awareness.
+- Explicit embedding exports beyond media vectors.
+- Evaluation exports still capped; add resumable continuation tokens that append to the same chatbook.
+- Conversation citation metadata once ChaChaNotes storage lands.
+- Import parity for prompts, media, evaluations, and derived embeddings (conflicts, quota, validation).
+- Import warnings UX (toasts vs detail views vs inline diffs).
+- Checksum verification across instances and its granularity (per-file vs per-chatbook).
+- Client-provided encryption UX/API and key management.
+- Stakeholder review (backend, security, product) and publish to internal knowledge base once approved.
+- Track/prioritize open questions as backlog issues.
+- Post-GA enhancements: collaborative chatbooks, delta exports, scheduled backups, analytics dashboards, third-party packaging.
+
 - **Document Owner:** tldw_server core team (product + backend)
 - **Last Updated:** 2025-12-29
 - **Status:** In progress (v1 metadata-complete exports live; v2 large-binary bundling planned)

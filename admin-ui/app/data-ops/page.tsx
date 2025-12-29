@@ -18,22 +18,8 @@ import { api } from '@/lib/api-client';
 import { useUrlPagination } from '@/lib/use-url-state';
 import { useOrgContext } from '@/components/OrgContextSwitcher';
 import { getAuthHeaders } from '@/lib/auth';
-import { Download, RefreshCw, Database, ShieldCheck } from 'lucide-react';
-
-type BackupItem = {
-  id: string;
-  dataset: string;
-  user_id?: number | null;
-  status: string;
-  size_bytes: number;
-  created_at: string;
-};
-
-type RetentionPolicy = {
-  key: string;
-  days?: number | null;
-  description?: string | null;
-};
+import type { BackupItem, RetentionPolicy } from '@/types';
+import { Download, RefreshCw, Database, ShieldCheck, AlertTriangle } from 'lucide-react';
 
 const DATASET_OPTIONS = [
   { value: 'media', label: 'Media DB' },
@@ -57,9 +43,6 @@ const EXPORT_FORMATS = [
 const API_HOST = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const API_VERSION = process.env.NEXT_PUBLIC_API_VERSION || 'v1';
 const API_URL = `${API_HOST.replace(/\/$/, '')}/api/${API_VERSION}`;
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null;
 
 const Field = ({ id, label, children }: { id: string; label: string; children: ReactNode }) => (
   <div className="space-y-1">
@@ -89,10 +72,68 @@ const formatDate = (value?: string | null) => {
   return parsed.toLocaleString();
 };
 
+const splitDispositionParts = (value: string) => {
+  const parts: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < value.length; i += 1) {
+    const char = value[i];
+    if (char === '"' && value[i - 1] !== '\\') {
+      inQuotes = !inQuotes;
+    }
+    if (char === ';' && !inQuotes) {
+      const trimmed = current.trim();
+      if (trimmed) {
+        parts.push(trimmed);
+      }
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  const trimmed = current.trim();
+  if (trimmed) {
+    parts.push(trimmed);
+  }
+  return parts;
+};
+
+const unquoteHeaderValue = (value: string) => {
+  if (value.startsWith('"') && value.endsWith('"')) {
+    return value.slice(1, -1).replace(/\\(.)/g, '$1');
+  }
+  return value;
+};
+
+const decode5987Value = (value: string) => {
+  const raw = unquoteHeaderValue(value);
+  const match = raw.match(/^([^']*)'[^']*'(.*)$/);
+  const encoded = match ? match[2] : raw;
+  try {
+    return decodeURIComponent(encoded);
+  } catch {
+    return encoded;
+  }
+};
+
 const getFilenameFromDisposition = (disposition: string | null): string | null => {
   if (!disposition) return null;
-  const match = disposition.match(/filename="?([^"]+)"?/i);
-  return match ? match[1] : null;
+  const parts = splitDispositionParts(disposition);
+  const params: Record<string, string> = {};
+  for (const part of parts.slice(1)) {
+    const eqIndex = part.indexOf('=');
+    if (eqIndex === -1) continue;
+    const key = part.slice(0, eqIndex).trim().toLowerCase();
+    if (!key) continue;
+    const rawValue = part.slice(eqIndex + 1).trim();
+    if (!rawValue) continue;
+    params[key] = unquoteHeaderValue(rawValue);
+  }
+  if (params['filename*']) {
+    const decoded = decode5987Value(params['filename*']);
+    if (decoded) return decoded;
+  }
+  return params.filename || null;
 };
 
 const downloadExport = async (
@@ -177,14 +218,8 @@ export default function DataOpsPage() {
       setBackupLoading(true);
       setBackupError('');
       const data = await api.getBackups(backupParams);
-      if (isRecord(data)) {
-        const items = Array.isArray(data.items) ? (data.items as BackupItem[]) : [];
-        setBackups(items);
-        setBackupTotal(Number(data.total || 0));
-      } else {
-        setBackups([]);
-        setBackupTotal(0);
-      }
+      setBackups(data.items);
+      setBackupTotal(data.total);
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to load backups';
       setBackupError(message);
@@ -200,12 +235,7 @@ export default function DataOpsPage() {
       setPolicyLoading(true);
       setPolicyError('');
       const data = await api.getRetentionPolicies();
-      if (isRecord(data)) {
-        const items = Array.isArray(data.policies) ? (data.policies as RetentionPolicy[]) : [];
-        setPolicies(items);
-      } else {
-        setPolicies([]);
-      }
+      setPolicies(data.policies);
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to load retention policies';
       setPolicyError(message);
@@ -296,11 +326,23 @@ export default function DataOpsPage() {
 
   const handlePolicyUpdate = async (policy: RetentionPolicy) => {
     const raw = policyEdits[policy.key] ?? '';
-    const value = raw.trim() ? Number(raw) : policy.days;
-    if (value === undefined || value === null || !Number.isFinite(value)) {
-      showError('Invalid value', 'Retention days must be numeric.');
+    if (!raw.trim()) {
+      showError('Invalid value', 'Retention days cannot be empty.');
       return;
     }
+    const value = Number(raw.trim());
+    if (!Number.isFinite(value) || value < 1) {
+      showError('Invalid value', 'Retention days must be a positive number.');
+      return;
+    }
+    const accepted = await confirm({
+      title: 'Apply retention policy change?',
+      message: 'This update applies immediately and persists across restarts. Review retention windows before saving.',
+      confirmText: 'Apply',
+      variant: 'warning',
+      icon: 'warning',
+    });
+    if (!accepted) return;
     setPolicySaving((prev) => ({ ...prev, [policy.key]: true }));
     try {
       await api.updateRetentionPolicy(policy.key, { days: Number(value) });
@@ -498,7 +540,7 @@ export default function DataOpsPage() {
                     </TableRow>
                   ) : (
                     backups.map((backup) => (
-                      <TableRow key={`${backup.dataset}-${backup.id}`}>
+                      <TableRow key={backup.id}>
                         <TableCell className="font-mono text-xs">{backup.id}</TableCell>
                         <TableCell>{backup.dataset}</TableCell>
                         <TableCell>{backup.user_id ?? '—'}</TableCell>
@@ -550,6 +592,13 @@ export default function DataOpsPage() {
                   <AlertDescription>{policyError}</AlertDescription>
                 </Alert>
               )}
+              <Alert className="bg-yellow-50 border-yellow-200">
+                <AlertTriangle className="h-4 w-4 text-yellow-600" />
+                <AlertDescription className="text-yellow-800">
+                  Retention policy changes apply immediately and persist across restarts. Lower values can delete data
+                  sooner than expected, so review carefully before saving.
+                </AlertDescription>
+              </Alert>
 
               <Table>
                 <TableHeader>
@@ -624,10 +673,20 @@ export default function DataOpsPage() {
                   </div>
                   <div className="grid gap-2 md:grid-cols-2">
                     <Field id="audit-start" label="Start (YYYY-MM-DD)">
-                      <Input id="audit-start" value={auditStart} onChange={(e) => setAuditStart(e.target.value)} />
+                      <Input
+                        id="audit-start"
+                        type="date"
+                        value={auditStart}
+                        onChange={(e) => setAuditStart(e.target.value)}
+                      />
                     </Field>
                     <Field id="audit-end" label="End (YYYY-MM-DD)">
-                      <Input id="audit-end" value={auditEnd} onChange={(e) => setAuditEnd(e.target.value)} />
+                      <Input
+                        id="audit-end"
+                        type="date"
+                        value={auditEnd}
+                        onChange={(e) => setAuditEnd(e.target.value)}
+                      />
                     </Field>
                     <Field id="audit-action" label="Action">
                       <Input id="audit-action" value={auditAction} onChange={(e) => setAuditAction(e.target.value)} />
@@ -669,8 +728,16 @@ export default function DataOpsPage() {
                     <Field id="users-role" label="Role">
                       <Input id="users-role" value={userRole} onChange={(e) => setUserRole(e.target.value)} />
                     </Field>
-                    <Field id="users-active" label="Active (true/false)">
-                      <Input id="users-active" value={userStatus} onChange={(e) => setUserStatus(e.target.value)} />
+                    <Field id="users-active" label="Active">
+                      <Select
+                        id="users-active"
+                        value={userStatus}
+                        onChange={(event) => setUserStatus(event.target.value)}
+                      >
+                        <option value="">All</option>
+                        <option value="true">Active</option>
+                        <option value="false">Inactive</option>
+                      </Select>
                     </Field>
                     <Field id="users-format" label="Format">
                       <Select

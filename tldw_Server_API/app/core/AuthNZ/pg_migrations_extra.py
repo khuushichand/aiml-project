@@ -119,6 +119,17 @@ _CREATE_AUTHNZ_CORE_TABLES = [
     ("CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at)", ()),
+    # retention policy overrides
+    (
+        """
+        CREATE TABLE IF NOT EXISTS retention_policy_overrides (
+            policy_key TEXT PRIMARY KEY,
+            days INTEGER NOT NULL,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        (),
+    ),
     # sessions (core columns + additive columns/indexes)
     (
         """

@@ -106,6 +106,32 @@ export interface AuditLog {
   raw?: Record<string, unknown>;
 }
 
+export interface BackupItem {
+  id: string;
+  dataset: string;
+  user_id?: number | null;
+  status: string;
+  size_bytes: number;
+  created_at: string;
+}
+
+export interface BackupsResponse {
+  items: BackupItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface RetentionPolicy {
+  key: string;
+  days?: number | null;
+  description?: string | null;
+}
+
+export interface RetentionPoliciesResponse {
+  policies: RetentionPolicy[];
+}
+
 export interface ProviderSecret {
   provider: string;
   created_at: string;
@@ -147,3 +173,5 @@ export interface AuthContextType {
   logout: () => void;
   isAuthenticated: boolean;
 }
+
+export type { IncidentEvent, IncidentItem, IncidentsResponse } from './incidents';

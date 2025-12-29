@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -15,27 +15,8 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import { api } from '@/lib/api-client';
 import { useUrlPagination } from '@/lib/use-url-state';
+import type { IncidentItem } from '@/types/incidents';
 import { RefreshCw, Trash2 } from 'lucide-react';
-
-type IncidentEvent = {
-  id: string;
-  message: string;
-  created_at: string;
-  actor?: string | null;
-};
-
-type IncidentItem = {
-  id: string;
-  title: string;
-  status: 'open' | 'investigating' | 'mitigating' | 'resolved';
-  severity: 'low' | 'medium' | 'high' | 'critical';
-  summary?: string | null;
-  tags?: string[];
-  created_at: string;
-  updated_at: string;
-  resolved_at?: string | null;
-  timeline?: IncidentEvent[];
-};
 
 const STATUSES = ['open', 'investigating', 'mitigating', 'resolved'] as const;
 const SEVERITIES = ['low', 'medium', 'high', 'critical'] as const;
@@ -59,7 +40,8 @@ export default function IncidentsPage() {
 
   const [statusFilter, setStatusFilter] = useState('');
   const [severityFilter, setSeverityFilter] = useState('');
-  const [tagFilter, setTagFilter] = useState('');
+  const [tagFilterInput, setTagFilterInput] = useState('');
+  const deferredTagFilter = useDeferredValue(tagFilterInput);
 
   const [title, setTitle] = useState('');
   const [status, setStatus] = useState<typeof STATUSES[number]>('open');
@@ -69,6 +51,7 @@ export default function IncidentsPage() {
   const [creating, setCreating] = useState(false);
 
   const [updateNotes, setUpdateNotes] = useState<Record<string, string>>({});
+  const [updatingIncidents, setUpdatingIncidents] = useState<Set<string>>(new Set());
 
   const params = useMemo(() => {
     const offset = Math.max(0, (page - 1) * pageSize);
@@ -78,21 +61,19 @@ export default function IncidentsPage() {
     };
     if (statusFilter) payload.status = statusFilter;
     if (severityFilter) payload.severity = severityFilter;
-    if (tagFilter) payload.tag = tagFilter;
+    if (deferredTagFilter) payload.tag = deferredTagFilter;
     return payload;
-  }, [page, pageSize, severityFilter, statusFilter, tagFilter]);
+  }, [deferredTagFilter, page, pageSize, severityFilter, statusFilter]);
 
-  const loadIncidents = useCallback(async () => {
+  const loadIncidents = useCallback(async (signal?: AbortSignal) => {
     try {
       setLoading(true);
       setError('');
-      const data = await api.getIncidents(params);
-      const items = Array.isArray((data as { items?: unknown }).items)
-        ? ((data as { items: IncidentItem[] }).items)
-        : [];
-      setIncidents(items);
-      setTotal(Number((data as { total?: number }).total || items.length));
+      const data = await api.getIncidents(params, signal ? { signal } : undefined);
+      setIncidents(data.items);
+      setTotal(data.total);
     } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') return;
       const message = err instanceof Error && err.message ? err.message : 'Failed to load incidents';
       setError(message);
       setIncidents([]);
@@ -103,8 +84,26 @@ export default function IncidentsPage() {
   }, [params]);
 
   useEffect(() => {
-    void loadIncidents();
+    const controller = new AbortController();
+    void loadIncidents(controller.signal);
+    return () => controller.abort();
   }, [loadIncidents]);
+
+  useEffect(() => {
+    resetPagination();
+  }, [deferredTagFilter, resetPagination]);
+
+  const setIncidentUpdating = useCallback((incidentId: string, isUpdating: boolean) => {
+    setUpdatingIncidents((prev) => {
+      const next = new Set(prev);
+      if (isUpdating) {
+        next.add(incidentId);
+      } else {
+        next.delete(incidentId);
+      }
+      return next;
+    });
+  }, []);
 
   const handleCreateIncident = async () => {
     if (!title.trim()) {
@@ -136,6 +135,7 @@ export default function IncidentsPage() {
 
   const handleStatusChange = async (incidentId: string, nextStatus: IncidentItem['status']) => {
     try {
+      setIncidentUpdating(incidentId, true);
       await api.updateIncident(incidentId, {
         status: nextStatus,
         update_message: `Status changed to ${nextStatus}`,
@@ -144,11 +144,14 @@ export default function IncidentsPage() {
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to update status';
       showError(message);
+    } finally {
+      setIncidentUpdating(incidentId, false);
     }
   };
 
   const handleSeverityChange = async (incidentId: string, nextSeverity: IncidentItem['severity']) => {
     try {
+      setIncidentUpdating(incidentId, true);
       await api.updateIncident(incidentId, {
         severity: nextSeverity,
         update_message: `Severity set to ${nextSeverity}`,
@@ -157,6 +160,8 @@ export default function IncidentsPage() {
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to update severity';
       showError(message);
+    } finally {
+      setIncidentUpdating(incidentId, false);
     }
   };
 
@@ -167,12 +172,15 @@ export default function IncidentsPage() {
       return;
     }
     try {
+      setIncidentUpdating(incidentId, true);
       await api.addIncidentEvent(incidentId, { message: note });
       setUpdateNotes((prev) => ({ ...prev, [incidentId]: '' }));
       await loadIncidents();
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to add update';
       showError(message);
+    } finally {
+      setIncidentUpdating(incidentId, false);
     }
   };
 
@@ -185,12 +193,15 @@ export default function IncidentsPage() {
     });
     if (!confirmed) return;
     try {
+      setIncidentUpdating(incidentId, true);
       await api.deleteIncident(incidentId);
       success('Incident deleted');
       await loadIncidents();
     } catch (err: unknown) {
       const message = err instanceof Error && err.message ? err.message : 'Failed to delete incident';
       showError(message);
+    } finally {
+      setIncidentUpdating(incidentId, false);
     }
   };
 
@@ -205,7 +216,13 @@ export default function IncidentsPage() {
               <h1 className="text-2xl font-bold">Incidents</h1>
               <p className="text-muted-foreground">Track operational events and updates.</p>
             </div>
-            <Button variant="outline" onClick={loadIncidents} disabled={loading}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                void loadIncidents();
+              }}
+              disabled={loading}
+            >
               <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
               Refresh
             </Button>
@@ -273,7 +290,12 @@ export default function IncidentsPage() {
                 />
               </div>
               <div>
-                <Button onClick={handleCreateIncident} disabled={creating}>
+                <Button
+                  onClick={() => {
+                    void handleCreateIncident();
+                  }}
+                  disabled={creating}
+                >
                   {creating ? 'Creating...' : 'Create Incident'}
                 </Button>
               </div>
@@ -326,10 +348,9 @@ export default function IncidentsPage() {
                 <Input
                   id="filter-tag"
                   placeholder="tag"
-                  value={tagFilter}
+                  value={tagFilterInput}
                   onChange={(e) => {
-                    setTagFilter(e.target.value);
-                    resetPagination();
+                    setTagFilterInput(e.target.value);
                   }}
                 />
               </div>
@@ -348,8 +369,10 @@ export default function IncidentsPage() {
             <div className="py-10 text-center text-muted-foreground">No incidents found.</div>
           ) : (
             <div className="grid gap-4">
-              {incidents.map((incident) => (
-                <Card key={incident.id}>
+              {incidents.map((incident) => {
+                const isUpdating = updatingIncidents.has(incident.id);
+                return (
+                  <Card key={incident.id}>
                   <CardHeader className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                     <div>
                       <CardTitle className="flex items-center gap-2">
@@ -368,7 +391,12 @@ export default function IncidentsPage() {
                     <Button
                       variant="ghost"
                       size="icon"
-                      onClick={() => handleDeleteIncident(incident.id)}
+                      onClick={() => {
+                        void handleDeleteIncident(incident.id);
+                      }}
+                      aria-label={`Delete incident ${incident.id}`}
+                      title={`Delete incident ${incident.id}`}
+                      disabled={isUpdating}
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
@@ -378,18 +406,22 @@ export default function IncidentsPage() {
                       {incident.summary || 'No summary provided.'}
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      {(incident.tags || []).map((tag) => (
-                        <Badge key={tag} variant="outline">
+                      {(incident.tags || []).map((tag, index) => (
+                        <Badge key={`${tag}-${index}`} variant="outline">
                           {tag}
                         </Badge>
                       ))}
                     </div>
                     <div className="grid gap-3 md:grid-cols-3">
                       <div className="space-y-1">
-                        <Label>Status</Label>
+                        <Label htmlFor={`status-${incident.id}`}>Status</Label>
                         <Select
+                          id={`status-${incident.id}`}
                           value={incident.status}
-                          onChange={(e) => handleStatusChange(incident.id, e.target.value as IncidentItem['status'])}
+                          onChange={(e) => {
+                            void handleStatusChange(incident.id, e.target.value as IncidentItem['status']);
+                          }}
+                          disabled={isUpdating}
                         >
                           {STATUSES.map((value) => (
                             <option key={value} value={value}>
@@ -399,12 +431,14 @@ export default function IncidentsPage() {
                         </Select>
                       </div>
                       <div className="space-y-1">
-                        <Label>Severity</Label>
+                        <Label htmlFor={`severity-${incident.id}`}>Severity</Label>
                         <Select
+                          id={`severity-${incident.id}`}
                           value={incident.severity}
-                          onChange={(e) =>
-                            handleSeverityChange(incident.id, e.target.value as IncidentItem['severity'])
-                          }
+                          onChange={(e) => {
+                            void handleSeverityChange(incident.id, e.target.value as IncidentItem['severity']);
+                          }}
+                          disabled={isUpdating}
                         >
                           {SEVERITIES.map((value) => (
                             <option key={value} value={value}>
@@ -414,8 +448,8 @@ export default function IncidentsPage() {
                         </Select>
                       </div>
                       <div className="space-y-1">
-                        <Label>Resolved</Label>
-                        <div className="text-sm text-muted-foreground">
+                        <Label htmlFor={`resolved-${incident.id}`}>Resolved</Label>
+                        <div id={`resolved-${incident.id}`} className="text-sm text-muted-foreground">
                           {incident.resolved_at ? formatDate(incident.resolved_at) : 'Not resolved'}
                         </div>
                       </div>
@@ -427,8 +461,16 @@ export default function IncidentsPage() {
                         onChange={(e) =>
                           setUpdateNotes((prev) => ({ ...prev, [incident.id]: e.target.value }))
                         }
+                        disabled={isUpdating}
                       />
-                      <Button onClick={() => handleAddUpdate(incident.id)}>Add Update</Button>
+                      <Button
+                        onClick={() => {
+                          void handleAddUpdate(incident.id);
+                        }}
+                        disabled={isUpdating}
+                      >
+                        {isUpdating ? 'Updating...' : 'Add Update'}
+                      </Button>
                     </div>
                     <details className="text-sm text-muted-foreground">
                       <summary className="cursor-pointer">Timeline ({incident.timeline?.length || 0})</summary>
@@ -444,8 +486,9 @@ export default function IncidentsPage() {
                       </div>
                     </details>
                   </CardContent>
-                </Card>
-              ))}
+                  </Card>
+                );
+              })}
             </div>
           )}
 

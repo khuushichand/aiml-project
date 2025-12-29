@@ -41,25 +41,25 @@
 - Existing chat completion/streaming APIs remain unchanged; new metadata is optional on conversation create/update and conversation search now also returns `bm25_norm` alongside ordering (no change to message response payloads).
 - Create/update conversations with `state`, `topic_label`, `source`, `external_ref`, `cluster_id`; defaults are backward compatible.
 - Auto-tag metadata fields (`topic_label_source`, `topic_last_tagged_at`, `topic_last_tagged_message_id`) are server-managed and not required in client requests.
-- State validation: v0 enforces allowed set `{in-progress, resolved, backlog, non-viable}` on create/update; migration backfills all existing conversations with null/empty `state` to `in-progress` and sets a server-side default of `in-progress` for legacy clients that omit the field. Future v1.2 enables per-tenant state definitions but keeps the allowed set consistent until then.
+- State validation: v0 enforces allowed set `{in-progress, resolved, backlog, non-viable}` on create/update; migration backfills all existing conversations with null/empty `state` to `in-progress` and sets a server-side default of `in-progress` for legacy clients that omit the field. During rollout, list/filter endpoints treat null/empty `state` as `in-progress` to avoid gaps. The default remains supported through v0.x; after that, missing `state` may produce warnings and eventually 400s (to be announced in release notes and API docs).
 - Filter/list by date range (default `last_modified`, fallback `created_at`), state, topic/keyword, cluster, character; order by BM25, recency, hybrid (bm25+recency), or topic. Optional `date_field=last_modified|created_at` can be added later.
 - Ranking semantics:
   - bm25: `bm25_norm = bm25_score / max_bm25_in_resultset` (cap at 1.0; if max=0 → 0); tie-breakers: higher `bm25_norm`, newer `last_modified`, then lower `conversation_id`/UUID lexical. Max BM25 is computed over the full filtered result set (pre-pagination) via a CTE/subquery to keep ordering stable across pages.
   - recency: `recency = exp(-age_days / half_life_days)`; defaults `half_life_days=14`; age uses `last_modified` (fallback `created_at`); tie-breakers: newer `last_modified`, then lower `conversation_id`.
   - hybrid: `hybrid = w_bm25 * bm25_norm + w_recency * recency`; defaults `w_bm25=0.65`, `w_recency=0.35` (normalize weights if unset); tie-breakers same as bm25.
   - topic: sort by `topic_label` (casefold/locale-aware), nulls last, then `bm25_norm`, then recency, then ID.
-  - Fallbacks: if bm25 unavailable, treat `bm25_norm=0` so hybrid collapses to recency; if `last_modified` missing use `created_at`, else recency=0.
-- Tree view endpoint returning conversation messages with parent/child structure; paginate by root thread (root messages as the unit). Each page includes full subtrees for the returned roots, with server-side caps (default page 200 messages, max 500) and optional depth limit for safety. If a cap truncates a subtree, include a `truncated=true` indicator and never return children without their parents.
-- Analytics endpoint returning histogram buckets by date/topic/state with daily or weekly bucket granularity; `date` is based on `last_modified` (fallback `created_at`); requires `start_date`/`end_date` and enforces a maximum range (default 180 days) plus server-side pagination for buckets; buckets are computed in UTC.
+  - Fallbacks: if bm25 unavailable, treat `bm25_norm=0` so hybrid collapses to recency; if all bm25 scores are zero, ordering is fully determined by recency tie-breakers (then ID) to keep pagination stable; if `last_modified` missing use `created_at`, else recency=0.
+- Tree view endpoint returning conversation messages with parent/child structure; paginate by root thread (root messages as the unit). Each page includes full subtrees for the returned roots, with server-side caps (default page 200 messages, max 500) and optional depth limit for safety. If a cap truncates a subtree, include `truncated=true` on the message node where descendants were omitted (root or child); clients can re-fetch with a higher `max_depth` or smaller `limit` to retrieve deeper nodes. Never return children without their parents; see the API Surface examples for the `root_threads` + nested `children` response shape.
+- Analytics endpoint returning histogram buckets by date/topic/state with daily or weekly bucket granularity; `date` is based on `last_modified` (fallback `created_at`); requires `start_date`/`end_date` and enforces a maximum range (default 180 days) plus server-side pagination for buckets. Bucket pagination uses `limit`/`offset` (default 100, max 1000) applied within the requested date range after bucket generation; buckets are computed in UTC.
 - Auto-tag: best-effort background job that sets topic keywords and `topic_label`; must be idempotent and skippable (see auto-tag metadata fields).
 - Clustering: periodic job; write `cluster_id` on conversations; allow opt-out.
-- Knowledge bank: save message/snippet to Note (and optional Flashcard) with backlinks to `conversation_id`/`message_id` on both Notes and Flashcards.
+- Knowledge bank: save message/snippet to Note (and optional Flashcard) with backlinks to `conversation_id`/`message_id` on both Notes and Flashcards. A Note and a Flashcard can point to the same conversation/message; backlinks are separate per record and used for UI navigation and RAG filters.
 - Integrations (v2; reuse existing connector modules):
   - Email: ingest threads as conversations; map Message-ID to `external_ref`; preserve subject → title; allow “send reply” that also appends a message.
   - Issue tracker (GitHub/GitLab/Jira-lite): webhook/poll to create/link conversations; sync `state` from issue status; allow posting a chat comment back. **Moved to v2.**
   - Notion/wiki: export summary or note; ingest selected pages into Notes for RAG; store page URL in `external_ref`. **Moved to v2.**
   - Connector tenant/user mapping and credential storage are deferred to v2; will rely on workflow-based instrumentation to bind inbound events to the correct tenant/user; v1 connectors stay feature-flagged and off until binding is configured.
-- Connector idempotency: `external_ref` uniqueness is scoped per tenant/user; duplicates should merge into the existing conversation.
+- Connector idempotency: `external_ref` uniqueness is scoped per tenant/user; duplicates should merge into the existing conversation. Pick the existing record by oldest `created_at` (tie-breaker: lowest `conversation_id`), preserve existing non-null fields (`title`, `state`, `source`) unless incoming payload explicitly overrides them, and append only new messages (dedupe by provider message ID if present, else by `(timestamp, sender, content_hash)`).
 - Permissions/auth: respect existing AuthNZ modes; per-user ChaChaNotes isolation; no cross-tenant leakage.
 
 ### Non-Functional
@@ -76,7 +76,7 @@
 - Continue to use `keywords` + `conversation_keywords` for topics/tags; no new table required.
 - Keep `parent_conversation_id` and `parent_message_id` for tree rendering.
 - Cluster metadata (title/centroid/stats) is persisted in ChaChaNotes (e.g., `conversation_clusters` table with columns: `cluster_id` [PK], `title`, `centroid` [JSON], `size`, `created_at`, `updated_at`). This makes cluster filters and navigation stable across sessions.
-- Backlinks for knowledge bank: Notes and Flashcards currently lack `conversation_id`/`message_id`; add both columns (with indexes) via migration so knowledge-save can write backlinks, and wire to conversation/message IDs for navigation.
+- Backlinks for knowledge bank: Notes and Flashcards currently lack `conversation_id`/`message_id`; add both columns (with indexes) via migration so knowledge-save can write backlinks, and wire to conversation/message IDs for navigation. Example: a saved snippet creates Note `N1` with `(conversation_id=C1, message_id=M1)`; if `make_flashcard=true`, Flashcard `F1` is created with the same backlinks. UI can deep-link back to the message; RAG filters can scope by `conversation_id`.
 
 ## API Surface (proposed)
 - `GET /api/v1/chat/conversations`: filters (`query` search term, date range using `last_modified` by default, state, cluster_id, `topic_label`, `keywords`, character_id), `order_by` (`bm25|recency|hybrid|topic`), pagination. Optional `date_field=last_modified|created_at` and `include_null_topic=true|false` can be added later.
@@ -94,12 +94,236 @@
 - Connector endpoints remain disabled until v2; they are gated by `CHAT_CONNECTORS_V2_ENABLED` (default: false) and tenant-binding readiness.
 - MCP: mirror state/filter/search in `chats_module.py`; expose analytics summary.
 
+### Examples
+
+#### GET /api/v1/chat/conversations
+Request (query params; shown as JSON for test fixtures):
+```json
+{
+  "query": "onboarding",
+  "state": "in-progress",
+  "order_by": "bm25",
+  "limit": 2,
+  "offset": 0
+}
+```
+
+Response:
+```json
+{
+  "items": [
+    {
+      "id": "C_01HZA1J9XQ7Q9QW3J8PZ6H3A5K",
+      "title": "Onboarding blockers",
+      "state": "in-progress",
+      "topic_label": "Customer onboarding",
+      "bm25_norm": 0.82,
+      "last_modified": "2024-03-01T16:42:10Z",
+      "created_at": "2024-02-20T12:11:02Z",
+      "message_count": 14,
+      "keywords": [
+        "triage",
+        "onboarding"
+      ],
+      "cluster_id": "CL_01HZA1K2P7P0V2M8D0Y7B5C8T",
+      "source": "webui",
+      "external_ref": null,
+      "version": 7
+    },
+    {
+      "id": "C_01HZA2K4N4W5X6Y7Z8A9B0C1D",
+      "title": "Doc gaps for setup",
+      "state": "backlog",
+      "topic_label": null,
+      "bm25_norm": 0.41,
+      "last_modified": "2024-02-28T10:03:44Z",
+      "created_at": "2024-02-10T08:20:31Z",
+      "message_count": 9,
+      "keywords": [],
+      "cluster_id": null,
+      "source": "email",
+      "external_ref": "msg-9a2f",
+      "version": 3
+    }
+  ],
+  "pagination": {
+    "limit": 2,
+    "offset": 0,
+    "total": 142,
+    "has_more": true
+  }
+}
+```
+
+Notes:
+- `bm25_norm` is included when `order_by=bm25|hybrid`; otherwise it is omitted or null.
+- `topic_label` is null when no tag exists; `keywords` defaults to `[]`.
+- `state` is always returned as a string; legacy nulls are normalized to `in-progress` on read.
+
+#### PATCH /api/v1/chat/conversations/{id}
+Request (body):
+```json
+{
+  "version": 7,
+  "state": "resolved",
+  "topic_label": "Customer onboarding",
+  "keywords": [
+    "triage",
+    "onboarding"
+  ],
+  "external_ref": "jira-123"
+}
+```
+
+Response:
+```json
+{
+  "id": "C_01HZA1J9XQ7Q9QW3J8PZ6H3A5K",
+  "state": "resolved",
+  "topic_label": "Customer onboarding",
+  "keywords": [
+    "triage",
+    "onboarding"
+  ],
+  "cluster_id": "CL_01HZA1K2P7P0V2M8D0Y7B5C8T",
+  "source": "webui",
+  "external_ref": "jira-123",
+  "version": 8,
+  "last_modified": "2024-03-02T09:21:18Z"
+}
+```
+
+Notes:
+- Required field: `version`. If it does not match the current version, return 409 with the latest version.
+- Optional fields: `state`, `topic_label`, `keywords`, `cluster_id`, `external_ref`, `source`. Omitted fields are left unchanged.
+- `keywords` replaces the full set; send `[]` to clear. Send `null` to clear nullable fields like `topic_label`, `cluster_id`, or `external_ref`.
+
+#### GET /api/v1/chat/conversations/{id}/tree
+Request (query params; shown as JSON for test fixtures):
+```json
+{
+  "limit": 2,
+  "offset": 0,
+  "max_depth": 3
+}
+```
+
+Response:
+```json
+{
+  "conversation": {
+    "id": "C_01HZA1J9XQ7Q9QW3J8PZ6H3A5K",
+    "title": "Onboarding blockers",
+    "state": "in-progress",
+    "topic_label": "Customer onboarding",
+    "last_modified": "2024-03-01T16:42:10Z"
+  },
+  "root_threads": [
+    {
+      "id": "M_01HZA1M7Z1C2D3E4F5G6H7J8K",
+      "role": "user",
+      "content": "We are stuck at SSO setup.",
+      "created_at": "2024-02-20T12:11:02Z",
+      "children": [
+        {
+          "id": "M_01HZA1N8L2M3N4P5Q6R7S8T9U",
+          "role": "assistant",
+          "content": "Try the new SAML template.",
+          "created_at": "2024-02-20T12:12:10Z",
+          "children": [],
+          "truncated": false
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "M_01HZA1P9V1W2X3Y4Z5A6B7C8D",
+      "role": "user",
+      "content": "We need a rollback plan.",
+      "created_at": "2024-02-21T08:05:44Z",
+      "children": [
+        {
+          "id": "M_01HZA1Q0E1F2G3H4J5K6L7M8N",
+          "role": "assistant",
+          "content": "Drafting now...",
+          "created_at": "2024-02-21T08:06:12Z",
+          "children": [
+            {
+              "id": "M_01HZA1R1P2Q3R4S5T6U7V8W9X",
+              "role": "user",
+              "content": "Add RTO numbers.",
+              "created_at": "2024-02-21T08:07:01Z",
+              "children": [],
+              "truncated": true
+            }
+          ],
+          "truncated": true
+        }
+      ],
+      "truncated": true
+    }
+  ],
+  "pagination": {
+    "limit": 2,
+    "offset": 0,
+    "total_root_threads": 5,
+    "has_more": true
+  },
+  "depth_cap": 3
+}
+```
+
+Notes:
+- Pagination applies to root threads only; each root includes nested `children`.
+- `max_depth` defaults to 4 when omitted; the server echoes the applied cap as `depth_cap`.
+- `truncated=true` means deeper descendants exist but were omitted due to the depth cap.
+
+#### POST /api/v1/chat/knowledge/save
+Request (body):
+```json
+{
+  "conversation_id": "C_01HZA1J9XQ7Q9QW3J8PZ6H3A5K",
+  "message_id": "M_01HZA1N8L2M3N4P5Q6R7S8T9U",
+  "snippet": "Try the new SAML template.",
+  "tags": [
+    "sso",
+    "onboarding"
+  ],
+  "make_flashcard": true,
+  "export_to": "notion"
+}
+```
+
+Response:
+```json
+{
+  "note_id": "N_01HZA9K2D3E4F5G6H7J8K9L0",
+  "flashcard_id": "F_01HZA9M1N2P3Q4R5S6T7U8V9",
+  "export_status": "skipped_disabled",
+  "export_job_id": null
+}
+```
+
+Notes:
+- Required: `conversation_id`, `message_id`, `snippet`. Optional: `tags` (default `[]`), `make_flashcard` (default `false`), `export_to` (default `none`).
+- `flashcard_id` is null when `make_flashcard=false`.
+- `export_status` values: `not_requested` when `export_to=none` or omitted, `skipped_disabled` when connectors are disabled, `queued` when an async export job is created (with `export_job_id`), or `completed` when a synchronous export finishes.
+
+### Feature Flags
+- Flags are supported via environment variables and `Config_Files/config.txt` (env wins). The connector gate is `CHAT_CONNECTORS_V2_ENABLED=false` by default.
+- Document flags in `Config_Files/config.txt` (and the template/.env example if present) using the same uppercase names to keep parity with runtime behavior.
+
 ### API Parameter Glossary (proposed)
 - `query`: search term for BM25/FTS; named consistently with existing chat message and character search endpoints.
 - `date_field`: `last_modified|created_at`; default `last_modified`; if `last_modified` is null fallback to `created_at`.
-- `topic_label`: filters by conversation `topic_label` (casefold; exact or prefix match); nulls excluded unless `include_null_topic=true`.
+- `topic_label`: filters by conversation `topic_label` (casefold; exact match unless it ends with `*`, which indicates a prefix match). Nulls excluded unless `include_null_topic=true`.
 - `include_null_topic`: include conversations with empty or null `topic_label` (default false).
-- `keywords`: repeatable query parameter (`?keywords=foo&keywords=bar`) aligned with existing tag filters; uses existing `conversation_keywords` semantics.
+- `keywords`: repeatable query parameter (`?keywords=foo&keywords=bar`) aligned with existing tag filters; uses existing `conversation_keywords` semantics (AND across repeated values).
+
+Example queries:
+- `GET /api/v1/chat/conversations?query=bug&topic_label=customer*&include_null_topic=true&order_by=recency`
+- `GET /api/v1/chat/conversations?keywords=triage&keywords=oncall&state=in-progress&order_by=hybrid`
+- `GET /api/v1/chat/analytics?start_date=2024-01-01&end_date=2024-03-01&bucket_granularity=week&limit=50&offset=0`
 
 ## UX Notes (WebUI/Next)
 - Conversation list: chips for state/topic; toggle ranking (bm25/recency/hybrid); quick filters for “needs attention” (in-progress/backlog).
@@ -134,12 +358,14 @@
 - Data leakage: ensure per-user DB scoping; never fetch cross-tenant even in analytics; enforce AuthNZ in connectors.
 - Topic/cluster quality: best-effort; allow manual overrides; expose “clear cluster/topic” to users.
 
-## Rollout Plan
+## Rollout Summary (3 Phases)
 - Phase 1 (MVP): schema migration (including backfill to `in-progress` state and note/flashcard backlinks), listing filters/order, state changes, tree endpoint, analytics buckets (UTC), knowledge-save to Notes/Flashcards (local only); docs + tests.
 - Phase 2: auto-tagging job; clustering job; cluster filter; UI badges.
 - Phase 3 (v2): connectors (email, issue, Notion/wiki) behind feature flags; reply/comment flows; RAG ingest toggle.
+Stage mapping: Phase 1 (MVP) = Stages 1-2; Phase 2 = Stage 3; Phase 3 (v2) = Stage 4.
 
-## Implementation Plan (added detail)
+## Implementation Plan Summary (Checklist)
+This checklist is a quick reference and maps directly to the detailed stages below.
 - Migration plan (ChaChaNotes):
   - SQLite: add columns if missing (including `topic_label_source`, `topic_last_tagged_at`, `topic_last_tagged_message_id`), backfill `state` where null/'' to `in-progress`, set default `in-progress` on `conversations.state`, add `conversation_id`/`message_id` to `notes` and `flashcards` with indexes, create `conversation_clusters`, and add covering indexes on `state`, `cluster_id`, `last_modified`, `topic_label`, plus `(source, external_ref)` for idempotent connector lookups (per-user DB; include tenant/user scope if stored).
   - Postgres (if used): same columns/defaults/backfill; ensure concurrent index creation to avoid locks.
@@ -151,7 +377,8 @@
 ## Open Questions
 - None (current set resolved; revisit after Phase 1 validation).
 
-## Implementation Plan
+## Implementation Plan (Detailed, 4 Stages)
+This is the authoritative execution plan; the summary above is a quick checklist.
 ## Stage 1: Schema & Data Model
 **Goal**: Add required ChaChaNotes schema changes and indexes with safe defaults and backfills.
 - Conversations: add `state`, `topic_label`, `cluster_id`, `source`, `external_ref`, `topic_label_source`, `topic_last_tagged_at`, `topic_last_tagged_message_id`.
@@ -170,7 +397,7 @@
 - `GET /api/v1/chat/conversations/{id}/tree`: paginate by root threads, enforce depth cap, message caps (default 200, max 500), return `truncated` when caps apply.
 - `GET /api/v1/chat/analytics`: UTC buckets (day/week), max range, date based on `last_modified` fallback to `created_at`.
 - `POST /api/v1/chat/knowledge/save`: write backlinks to Notes/Flashcards; return `export_status=skipped_disabled` when connectors are off.
-**Success Criteria**: BM25 normalization uses full filtered set pre-pagination; ordering stable across pages; recency uses `last_modified` fallback to `created_at`; tree never returns orphaned children; analytics buckets respect UTC and max-range limits; `bm25_norm` returned without changing chat completion payloads.
+**Success Criteria**: BM25 normalization uses full filtered set pre-pagination; ordering stable across pages; recency uses `last_modified` fallback to `created_at`; tree never returns orphaned children; analytics buckets respect UTC and max-range limits; `bm25_norm` returned without changing chat completion payloads; OpenAPI/schema examples validate (bm25_norm in list response, tree `truncated` structure, analytics bucket limits).
 **Tests**: BM25 ordering + pagination stability test; recency fallback test; tree integrity + truncation test; analytics bucket range test; knowledge-save backlink test (notes + flashcards) including `export_status` when connectors disabled.
 **Status**: Not Started
 

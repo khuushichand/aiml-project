@@ -130,3 +130,11 @@ async def test_admin_retention_policy_update(tmp_path):
         payload = update_resp.json()
         assert payload["key"] == target
         assert payload["days"] == 180
+
+        reset_settings()
+        list_resp = client.get("/api/v1/admin/retention-policies")
+        assert list_resp.status_code == 200, list_resp.text
+        policies = list_resp.json()["policies"]
+        refreshed = next((policy for policy in policies if policy.get("key") == target), None)
+        assert refreshed is not None
+        assert refreshed["days"] == 180

@@ -23,6 +23,11 @@ from tldw_Server_API.app.core.DB_Management.DB_Backups import (
 )
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.retention_policies import (
+    RETENTION_POLICIES,
+    apply_retention_overrides,
+    upsert_retention_override,
+)
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
 from tldw_Server_API.app.core.Utils.Utils import get_project_relative_path
 
@@ -233,60 +238,10 @@ def restore_backup_snapshot(
     return result
 
 
-RETENTION_POLICIES: Dict[str, Dict[str, Any]] = {
-    "audit_logs": {
-        "attr": "AUDIT_LOG_RETENTION_DAYS",
-        "min": 30,
-        "max": 3650,
-        "description": "AuthNZ audit log retention",
-    },
-    "usage_logs": {
-        "attr": "USAGE_LOG_RETENTION_DAYS",
-        "min": 1,
-        "max": 3650,
-        "description": "Usage log retention",
-    },
-    "llm_usage_logs": {
-        "attr": "LLM_USAGE_LOG_RETENTION_DAYS",
-        "min": 1,
-        "max": 3650,
-        "description": "LLM usage log retention",
-    },
-    "usage_daily": {
-        "attr": "USAGE_DAILY_RETENTION_DAYS",
-        "min": 1,
-        "max": 3650,
-        "description": "Daily usage aggregates retention",
-    },
-    "llm_usage_daily": {
-        "attr": "LLM_USAGE_DAILY_RETENTION_DAYS",
-        "min": 1,
-        "max": 3650,
-        "description": "Daily LLM usage aggregates retention",
-    },
-    "sessions": {
-        "attr": "SESSION_LOG_RETENTION_DAYS",
-        "min": 7,
-        "max": 3650,
-        "description": "Session log retention",
-    },
-    "privilege_snapshots": {
-        "attr": "PRIVILEGE_SNAPSHOT_RETENTION_DAYS",
-        "min": 7,
-        "max": 3650,
-        "description": "Privilege snapshot retention",
-    },
-    "privilege_snapshots_weekly": {
-        "attr": "PRIVILEGE_SNAPSHOT_WEEKLY_RETENTION_DAYS",
-        "min": 30,
-        "max": 3650,
-        "description": "Weekly privilege snapshot retention",
-    },
-}
 
-
-def list_retention_policies() -> List[Dict[str, Any]]:
+async def list_retention_policies() -> List[Dict[str, Any]]:
     settings = get_settings()
+    await apply_retention_overrides(settings)
     policies = []
     for key, meta in RETENTION_POLICIES.items():
         attr = meta["attr"]
@@ -299,7 +254,7 @@ def list_retention_policies() -> List[Dict[str, Any]]:
     return policies
 
 
-def update_retention_policy(policy_key: str, days: int) -> Dict[str, Any]:
+async def update_retention_policy(policy_key: str, days: int) -> Dict[str, Any]:
     meta = RETENTION_POLICIES.get(policy_key)
     if not meta:
         raise ValueError("unknown_policy")
@@ -309,18 +264,20 @@ def update_retention_policy(policy_key: str, days: int) -> Dict[str, Any]:
         raise ValueError("invalid_range")
 
     settings = get_settings()
-    setattr(settings, meta["attr"], int(days))
+    effective_days = int(days)
     if policy_key == "privilege_snapshots_weekly":
         try:
             primary = int(getattr(settings, RETENTION_POLICIES["privilege_snapshots"]["attr"]))
-            if days < primary:
-                setattr(settings, meta["attr"], primary)
+            if effective_days < primary:
+                effective_days = primary
         except Exception:
             pass
+    await upsert_retention_override(policy_key, effective_days)
+    setattr(settings, meta["attr"], effective_days)
 
     return {
         "key": policy_key,
-        "days": int(getattr(settings, meta["attr"], days)),
+        "days": effective_days,
         "description": meta.get("description"),
     }
 

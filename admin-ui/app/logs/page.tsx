@@ -29,6 +29,21 @@ type SystemLogEntry = {
   user_id?: number | null;
 };
 
+type SystemLogsResponse = {
+  items?: SystemLogEntry[];
+  total?: number;
+};
+
+type LogFilters = {
+  start: string;
+  end: string;
+  level: string;
+  service: string;
+  query: string;
+  orgId: string;
+  userId: string;
+};
+
 const LOG_LEVELS = ['', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'];
 
 const formatDateTime = (value?: string | null) => {
@@ -45,12 +60,24 @@ const toIsoIfSet = (value: string) => {
   return parsed.toISOString();
 };
 
+const parsePositiveInt = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  if (!Number.isInteger(parsed) || parsed <= 0) return null;
+  return parsed;
+};
+
 export default function LogsPage() {
   const { page, pageSize, setPage, setPageSize, resetPagination } = useUrlPagination();
   const [logs, setLogs] = useState<SystemLogEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const timezoneLabel =
+    typeof Intl !== 'undefined'
+      ? Intl.DateTimeFormat().resolvedOptions().timeZone || 'local time'
+      : 'local time';
 
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
@@ -60,40 +87,80 @@ export default function LogsPage() {
   const [orgId, setOrgId] = useState('');
   const [userId, setUserId] = useState('');
 
+  const filters = useMemo<LogFilters>(() => ({
+    start,
+    end,
+    level,
+    service,
+    query,
+    orgId,
+    userId,
+  }), [end, level, orgId, query, service, start, userId]);
+  const [debouncedFilters, setDebouncedFilters] = useState<LogFilters>(filters);
+
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      setDebouncedFilters((prev) => {
+        if (
+          prev.start === filters.start
+          && prev.end === filters.end
+          && prev.level === filters.level
+          && prev.service === filters.service
+          && prev.query === filters.query
+          && prev.orgId === filters.orgId
+          && prev.userId === filters.userId
+        ) {
+          return prev;
+        }
+        return filters;
+      });
+    }, 300);
+    return () => window.clearTimeout(handle);
+  }, [filters]);
+
+  const validationError = useMemo(() => {
+    const issues: string[] = [];
+    if (debouncedFilters.orgId.trim() && parsePositiveInt(debouncedFilters.orgId) === null) {
+      issues.push('Org ID must be a positive integer.');
+    }
+    if (debouncedFilters.userId.trim() && parsePositiveInt(debouncedFilters.userId) === null) {
+      issues.push('User ID must be a positive integer.');
+    }
+    return issues.join(' ');
+  }, [debouncedFilters.orgId, debouncedFilters.userId]);
+
   const params = useMemo(() => {
     const offset = Math.max(0, (page - 1) * pageSize);
     const payload: Record<string, string> = {
       limit: String(pageSize),
       offset: String(offset),
     };
-    const isoStart = toIsoIfSet(start);
-    const isoEnd = toIsoIfSet(end);
+    const isoStart = toIsoIfSet(debouncedFilters.start);
+    const isoEnd = toIsoIfSet(debouncedFilters.end);
     if (isoStart) payload.start = isoStart;
     if (isoEnd) payload.end = isoEnd;
-    if (level) payload.level = level;
-    if (service) payload.service = service;
-    if (query) payload.query = query;
-    if (orgId) payload.org_id = orgId;
-    if (userId) payload.user_id = userId;
+    if (debouncedFilters.level) payload.level = debouncedFilters.level;
+    if (debouncedFilters.service) payload.service = debouncedFilters.service;
+    if (debouncedFilters.query) payload.query = debouncedFilters.query;
+    if (debouncedFilters.orgId) payload.org_id = debouncedFilters.orgId;
+    if (debouncedFilters.userId) payload.user_id = debouncedFilters.userId;
     return payload;
-  }, [end, level, orgId, page, pageSize, query, service, start, userId]);
+  }, [debouncedFilters, page, pageSize]);
 
-  const loadLogs = useCallback(async () => {
+  const loadLogs = useCallback(async (signal?: AbortSignal) => {
     try {
       setLoading(true);
       setError('');
-      const data = await api.getSystemLogs(params);
-      if (data && typeof data === 'object') {
-        const items = Array.isArray((data as { items?: unknown }).items)
-          ? ((data as { items: SystemLogEntry[] }).items)
-          : [];
-        setLogs(items);
-        setTotal(Number((data as { total?: number }).total || items.length));
-      } else {
-        setLogs([]);
-        setTotal(0);
+      if (validationError) {
+        setError(validationError);
+        return;
       }
+      const data = (await api.getSystemLogs(params, { signal })) as SystemLogsResponse;
+      const items = Array.isArray(data?.items) ? data.items : [];
+      setLogs(items);
+      setTotal(typeof data?.total === 'number' ? data.total : items.length);
     } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') return;
       const message = err instanceof Error && err.message ? err.message : 'Failed to load logs';
       setError(message);
       setLogs([]);
@@ -101,10 +168,12 @@ export default function LogsPage() {
     } finally {
       setLoading(false);
     }
-  }, [params]);
+  }, [params, validationError]);
 
   useEffect(() => {
-    void loadLogs();
+    const controller = new AbortController();
+    void loadLogs(controller.signal);
+    return () => controller.abort();
   }, [loadLogs]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -122,7 +191,13 @@ export default function LogsPage() {
               <h1 className="text-2xl font-bold">System Logs</h1>
               <p className="text-muted-foreground">Query recent logs captured in memory.</p>
             </div>
-            <Button variant="outline" onClick={loadLogs} disabled={loading}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                void loadLogs();
+              }}
+              disabled={loading}
+            >
               <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
               Refresh
             </Button>
@@ -131,7 +206,10 @@ export default function LogsPage() {
           <Card>
             <CardHeader>
               <CardTitle>Filters</CardTitle>
-              <CardDescription>Restrict logs by time range, level, or metadata.</CardDescription>
+              <CardDescription>
+                Restrict logs by time range, level, or metadata. Times use {timezoneLabel} and
+                filters are sent to the server as UTC.
+              </CardDescription>
             </CardHeader>
             <CardContent className="grid gap-4 md:grid-cols-3">
               <div className="space-y-1">
@@ -255,7 +333,14 @@ export default function LogsPage() {
                   </TableHeader>
                   <TableBody>
                     {logs.map((entry, idx) => (
-                      <TableRow key={`${entry.timestamp || 'log'}-${idx}`}>
+                      <TableRow
+                        key={
+                          entry.request_id ||
+                          `${entry.timestamp || 'log'}-${entry.logger || 'unknown'}-${
+                            entry.org_id || 'org'
+                          }-${entry.user_id || 'user'}-${idx}`
+                        }
+                      >
                         <TableCell className="whitespace-nowrap">
                           {formatDateTime(entry.timestamp)}
                         </TableCell>

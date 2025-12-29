@@ -13,7 +13,7 @@ import { TableSkeleton } from '@/components/ui/skeleton';
 import { RefreshCw, Wallet } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { useOrgContext } from '@/components/OrgContextSwitcher';
-import { useUrlPagination } from '@/lib/use-url-state';
+import { useUrlMultiState } from '@/lib/use-url-state';
 
 type BudgetAlertThresholds = {
   global?: number[];
@@ -167,7 +167,20 @@ const renderBudgetCaps = (item: OrgBudgetItem) => {
 
 export default function BudgetsPage() {
   const { selectedOrg } = useOrgContext();
-  const { page, pageSize, setPage, setPageSize, resetPagination } = useUrlPagination();
+  const defaultPage = 1;
+  const defaultPageSize = 20;
+  const [{ page: rawPage, pageSize: rawPageSize }, setPaginationValues] = useUrlMultiState({
+    page: defaultPage,
+    pageSize: defaultPageSize,
+  });
+  const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : defaultPage;
+  const pageSize = Number.isFinite(rawPageSize) && rawPageSize > 0 ? rawPageSize : defaultPageSize;
+  const setPage = useCallback((nextPage: number) => {
+    setPaginationValues({ page: nextPage });
+  }, [setPaginationValues]);
+  const resetPagination = useCallback(() => {
+    setPaginationValues({ page: defaultPage });
+  }, [defaultPage, setPaginationValues]);
   const [budgets, setBudgets] = useState<OrgBudgetItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -320,8 +333,7 @@ export default function BudgetsPage() {
                     pageSize={pageSize}
                     onPageChange={setPage}
                     onPageSizeChange={(size) => {
-                      setPageSize(size);
-                      resetPagination();
+                      setPaginationValues({ pageSize: size, page: defaultPage });
                     }}
                   />
                 </>

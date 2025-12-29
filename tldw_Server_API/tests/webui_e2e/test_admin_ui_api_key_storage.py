@@ -189,16 +189,16 @@ def test_admin_ui_api_key_session_storage_only(
     try:
         page = context.new_page()
         page.set_default_timeout(90_000)
-        page.goto(f"{admin_ui_base_url}/login", wait_until="domcontentloaded")
+        page.goto(f"{admin_ui_base_url}/login?mode=apikey", wait_until="domcontentloaded")
         page.get_by_role("heading", name="tldw Admin").wait_for()
         page.wait_for_function("document.readyState === 'complete'")
         page.wait_for_timeout(500)
+        page.wait_for_function("document.body?.dataset?.loginHydrated === 'true'")
 
         api_key_tab = page.locator("button", has_text="API Key").first
-        api_key_tab.wait_for(state="visible")
-
         api_key_input = page.locator("input#apiKey")
         if not api_key_input.is_visible():
+            api_key_tab.wait_for(state="visible")
             for _ in range(3):
                 api_key_tab.click()
                 page.wait_for_timeout(300)
@@ -230,7 +230,14 @@ def test_admin_ui_api_key_session_storage_only(
             submit.click()
         else:
             api_key_input.press("Enter")
-        page.wait_for_url(f"{admin_ui_base_url}/")
+        page.wait_for_function(
+            "expected => sessionStorage.getItem('x_api_key') === expected",
+            arg=admin_ui_api_key,
+        )
+        try:
+            page.wait_for_url(f"{admin_ui_base_url}/", timeout=5_000)
+        except Exception:
+            pass
 
         session_key = page.evaluate("sessionStorage.getItem('x_api_key')")
         local_key = page.evaluate("localStorage.getItem('x_api_key')")

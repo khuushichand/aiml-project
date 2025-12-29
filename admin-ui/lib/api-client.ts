@@ -1,6 +1,7 @@
 'use client';
 
 import { getJWTToken, getApiKey, logout } from './auth';
+import type { BackupsResponse, IncidentsResponse, RetentionPoliciesResponse } from '@/types';
 
 // API configuration
 const API_HOST = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -93,7 +94,9 @@ async function request<T = unknown>(
     // Handle unauthorized - clear credentials and redirect
     if (response.status === 401 && typeof window !== 'undefined') {
       await logout();
-      window.location.href = '/login';
+      if (!window.location.pathname.startsWith('/login')) {
+        window.location.href = '/login';
+      }
     }
 
     // Handle CSRF errors
@@ -117,6 +120,53 @@ async function request<T = unknown>(
   if (!text) return {} as T;
 
   return JSON.parse(text);
+}
+
+/**
+ * Request helper that returns raw text (for Prometheus metrics).
+ */
+async function requestText(
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<string> {
+  const method = options.method || 'GET';
+  const headers = {
+    ...getAuthHeaders(method),
+    ...options.headers,
+  };
+
+  const response = await fetch(`${API_URL}${endpoint}`, {
+    ...options,
+    headers,
+    credentials: 'include',
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Request failed' }));
+
+    if (response.status === 401 && typeof window !== 'undefined') {
+      await logout();
+      if (!window.location.pathname.startsWith('/login')) {
+        window.location.href = '/login';
+      }
+    }
+
+    if (response.status === 403) {
+      const detail = error.detail || '';
+      if (typeof detail === 'string' && detail.toLowerCase().includes('csrf')) {
+        throw new ApiError(
+          response.status,
+          'CSRF validation failed. Please refresh the page and try again.',
+          error
+        );
+      }
+    }
+
+    const message = String(error.detail || error.message || 'Request failed');
+    throw new ApiError(response.status, message, error);
+  }
+
+  return response.text();
 }
 
 function normalizeTeamMemberInput(member: AddTeamMemberInput): Record<string, unknown> {
@@ -373,7 +423,7 @@ export const api = {
   // ============================================
   getBackups: (params?: Record<string, string>) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
-    return request(`/admin/backups${queryParams ? `?${queryParams}` : ''}`);
+    return request<BackupsResponse>(`/admin/backups${queryParams ? `?${queryParams}` : ''}`);
   },
   createBackup: (data: Record<string, unknown>) => request('/admin/backups', {
     method: 'POST',
@@ -384,7 +434,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
-  getRetentionPolicies: () => request('/admin/retention-policies'),
+  getRetentionPolicies: () => request<RetentionPoliciesResponse>('/admin/retention-policies'),
   updateRetentionPolicy: (policyKey: string, data: Record<string, unknown>) =>
     request(`/admin/retention-policies/${encodeURIComponent(policyKey)}`, {
       method: 'PUT',
@@ -394,18 +444,18 @@ export const api = {
   // ============================================
   // System Ops
   // ============================================
-  getSystemLogs: (params?: Record<string, string>) => {
+  getSystemLogs: (params?: Record<string, string>, options?: RequestInit) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
-    return request(`/admin/system/logs${queryParams ? `?${queryParams}` : ''}`);
+    return request(`/admin/system/logs${queryParams ? `?${queryParams}` : ''}`, options);
   },
-  getMaintenanceMode: () => request('/admin/maintenance'),
+  getMaintenanceMode: (options?: RequestInit) => request('/admin/maintenance', options),
   updateMaintenanceMode: (data: Record<string, unknown>) => request('/admin/maintenance', {
     method: 'PUT',
     body: JSON.stringify(data),
   }),
-  getFeatureFlags: (params?: Record<string, string>) => {
+  getFeatureFlags: (params?: Record<string, string>, options?: RequestInit) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
-    return request(`/admin/feature-flags${queryParams ? `?${queryParams}` : ''}`);
+    return request(`/admin/feature-flags${queryParams ? `?${queryParams}` : ''}`, options);
   },
   upsertFeatureFlag: (flagKey: string, data: Record<string, unknown>) =>
     request(`/admin/feature-flags/${encodeURIComponent(flagKey)}`, {
@@ -418,9 +468,12 @@ export const api = {
       method: 'DELETE',
     });
   },
-  getIncidents: (params?: Record<string, string>) => {
+  getIncidents: (params?: Record<string, string>, options?: RequestInit) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
-    return request(`/admin/incidents${queryParams ? `?${queryParams}` : ''}`);
+    return request<IncidentsResponse>(
+      `/admin/incidents${queryParams ? `?${queryParams}` : ''}`,
+      options
+    );
   },
   createIncident: (data: Record<string, unknown>) => request('/admin/incidents', {
     method: 'POST',
@@ -548,6 +601,7 @@ export const api = {
   getHealthMetrics: () => request('/health/metrics'),
   getLlmHealth: () => request('/llm/health'),
   getMetrics: () => request('/metrics'),
+  getMetricsText: () => requestText('/metrics/text'),
   getRagHealth: () => request('/rag/health'),
 
   // ============================================

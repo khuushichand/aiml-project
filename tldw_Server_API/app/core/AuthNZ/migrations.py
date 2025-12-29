@@ -1996,6 +1996,29 @@ def rollback_042_drop_org_budgets(conn: sqlite3.Connection) -> None:
     logger.info("Rollback 042: Dropped org_budgets table")
 
 
+def migration_043_create_retention_policy_overrides(conn: sqlite3.Connection) -> None:
+    """Create retention_policy_overrides table for persisted retention settings."""
+    logger.info("Migration 043: START retention_policy_overrides table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS retention_policy_overrides (
+            policy_key TEXT PRIMARY KEY,
+            days INTEGER NOT NULL,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.commit()
+    logger.info("Migration 043: Created retention_policy_overrides table")
+
+
+def rollback_043_drop_retention_policy_overrides(conn: sqlite3.Connection) -> None:
+    """Rollback migration 043 by dropping retention_policy_overrides table."""
+    conn.execute("DROP TABLE IF EXISTS retention_policy_overrides")
+    conn.commit()
+    logger.info("Rollback 043: Dropped retention_policy_overrides table")
+
+
 #######################################################################################################################
 #
 # Migration Registry
@@ -2121,6 +2144,12 @@ def get_authnz_migrations() -> List[Migration]:
             "Create org_budgets table",
             migration_042_create_org_budgets,
             rollback_042_drop_org_budgets,
+        ),
+        Migration(
+            43,
+            "Create retention_policy_overrides table",
+            migration_043_create_retention_policy_overrides,
+            rollback_043_drop_retention_policy_overrides,
         ),
     ]
 
