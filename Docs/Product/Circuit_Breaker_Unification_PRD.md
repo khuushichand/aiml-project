@@ -78,9 +78,14 @@ Circuit Breaker Unification PRD
       - Decorator @circuit_breaker(name=..., category=..., config=...) auto-detects sync/async.
       - Registry: get_or_create(name, category, config_overrides); status(); reset().
   - Metrics:
-      - Registered via Metrics subsystem (Metrics manager) as the single registry.
-      - Canonical labels: category, service (name), operation (optional), outcome (where applicable); trips include reason.
-      - Compatibility shim exports legacy label sets for one release (e.g., service="category:name").
+      - Registered via Metrics subsystem (MetricsRegistry) as the single registry.
+      - Metrics names/labels:
+          - circuit_breaker_state{category,service,operation}
+          - circuit_breaker_failures_total{category,service,operation,outcome}
+          - circuit_breaker_successes_total{category,service,operation}
+          - circuit_breaker_rejections_total{category,service,operation}
+          - circuit_breaker_trips_total{category,service,reason}
+      - Legacy shim: for one release, MetricsRegistry also emits circuit breaker metrics with legacy label values (e.g., service="category:name") to keep existing dashboards working.
 
   Non-Functional Requirements
 
@@ -101,11 +106,14 @@ Circuit Breaker Unification PRD
       - Decorator factory circuit_breaker(...) (sync/async support).
   - Configuration resolution:
       - Accept explicit config from call site; otherwise resolve via per-category sources:
-          - Embeddings: tldw_Server_API/Config_Files/embeddings_production_config.yaml (retry.circuit_breaker block)
-          - Evaluations: tldw_Server_API/Config_Files/evaluations_config.yaml (circuit_breakers.providers)
-          - MCP: tldw_Server_API/Config_Files/mcp_modules.yaml (circuit_breaker_* keys)
+          - Embeddings: tldw_Server_API/Config_Files/embeddings_production_config.yaml:161 (retry.circuit_breaker block)
+          - Evaluations: tldw_Server_API/Config_Files/evaluations_config.yaml:87 (circuit_breakers.providers)
+          - MCP: tldw_Server_API/Config_Files/mcp_modules.yaml:12 (circuit_breaker_* keys)
           - RAG: defaults from RAG resilience, mapped to unified config
-          - TTS: tldw_Server_API/Config_Files/config.txt [TTS-Settings] circuit_* keys and per-provider {provider}_circuit_*; add circuit_breaker block to tldw_Server_API/Config_Files/tts_providers_config.yaml
+          - TTS: tldw_Server_API/Config_Files/tts_providers_config.yaml (planned; add a circuit_breaker block for providers)
+      - Decision (required): choose one TTS config source before implementation:
+          - Option A: add circuit_* keys to tldw_Server_API/Config_Files/config.txt [TTS-Settings]
+          - Option B: implement TTS circuit settings exclusively in the new tldw_Server_API/Config_Files/tts_providers_config.yaml block
       - Override order: kwargs > env vars > category config > sensible defaults.
       - Key mapping table:
           - circuit_breaker_threshold -> failure_threshold

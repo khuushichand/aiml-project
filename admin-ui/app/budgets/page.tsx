@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -47,6 +47,86 @@ type OrgBudgetItem = {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
 
+const isNumberArray = (value: unknown): value is number[] =>
+  Array.isArray(value) && value.every((item) => typeof item === 'number');
+
+const parseAlertThresholds = (value: unknown): BudgetAlertThresholds | null | undefined => {
+  if (value === null) return null;
+  if (!isRecord(value)) return undefined;
+
+  const global = isNumberArray(value.global) ? value.global : undefined;
+  let perMetric: Record<string, number[]> | undefined;
+  if (isRecord(value.per_metric)) {
+    const entries = Object.entries(value.per_metric).reduce<Record<string, number[]>>((acc, [key, entry]) => {
+      if (isNumberArray(entry)) {
+        acc[key] = entry;
+      }
+      return acc;
+    }, {});
+    if (Object.keys(entries).length > 0) {
+      perMetric = entries;
+    }
+  }
+
+  if (!global && !perMetric) return undefined;
+  return {
+    ...(global ? { global } : {}),
+    ...(perMetric ? { per_metric: perMetric } : {}),
+  };
+};
+
+const isEnforcementModeValue = (value: unknown): value is 'none' | 'soft' | 'hard' =>
+  value === 'none' || value === 'soft' || value === 'hard';
+
+const parseEnforcementMode = (value: unknown): BudgetEnforcementMode | null | undefined => {
+  if (value === null) return null;
+  if (!isRecord(value)) return undefined;
+
+  const global = isEnforcementModeValue(value.global) ? value.global : undefined;
+  let perMetric: Record<string, 'none' | 'soft' | 'hard'> | undefined;
+  if (isRecord(value.per_metric)) {
+    const entries = Object.entries(value.per_metric).reduce<Record<string, 'none' | 'soft' | 'hard'>>(
+      (acc, [key, entry]) => {
+        if (isEnforcementModeValue(entry)) {
+          acc[key] = entry;
+        }
+        return acc;
+      },
+      {},
+    );
+    if (Object.keys(entries).length > 0) {
+      perMetric = entries;
+    }
+  }
+
+  if (!global && !perMetric) return undefined;
+  return {
+    ...(global ? { global } : {}),
+    ...(perMetric ? { per_metric: perMetric } : {}),
+  };
+};
+
+const parseBudgetSettings = (value: unknown): BudgetSettings => {
+  if (!isRecord(value)) return {};
+
+  return {
+    budget_day_usd: typeof value.budget_day_usd === 'number' || value.budget_day_usd === null
+      ? value.budget_day_usd
+      : undefined,
+    budget_month_usd: typeof value.budget_month_usd === 'number' || value.budget_month_usd === null
+      ? value.budget_month_usd
+      : undefined,
+    budget_day_tokens: typeof value.budget_day_tokens === 'number' || value.budget_day_tokens === null
+      ? value.budget_day_tokens
+      : undefined,
+    budget_month_tokens: typeof value.budget_month_tokens === 'number' || value.budget_month_tokens === null
+      ? value.budget_month_tokens
+      : undefined,
+    alert_thresholds: parseAlertThresholds(value.alert_thresholds),
+    enforcement_mode: parseEnforcementMode(value.enforcement_mode),
+  };
+};
+
 const parseOrgBudgetItems = (value: unknown): OrgBudgetItem[] => {
   if (!Array.isArray(value)) return [];
 
@@ -69,7 +149,7 @@ const parseOrgBudgetItems = (value: unknown): OrgBudgetItem[] => {
 
     const orgSlug = typeof item.org_slug === 'string' || item.org_slug === null ? item.org_slug : undefined;
     const updatedAt = typeof item.updated_at === 'string' || item.updated_at === null ? item.updated_at : undefined;
-    const budgets = isRecord(item.budgets) ? (item.budgets as BudgetSettings) : {};
+    const budgets = parseBudgetSettings(item.budgets);
 
     acc.push({
       org_id: orgId,
@@ -173,14 +253,15 @@ export default function BudgetsPage() {
     page: defaultPage,
     pageSize: defaultPageSize,
   });
+  const setPaginationValuesRef = useRef(setPaginationValues);
+  useEffect(() => {
+    setPaginationValuesRef.current = setPaginationValues;
+  }, [setPaginationValues]);
   const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : defaultPage;
   const pageSize = Number.isFinite(rawPageSize) && rawPageSize > 0 ? rawPageSize : defaultPageSize;
   const setPage = useCallback((nextPage: number) => {
     setPaginationValues({ page: nextPage });
   }, [setPaginationValues]);
-  const resetPagination = useCallback(() => {
-    setPaginationValues({ page: defaultPage });
-  }, [defaultPage, setPaginationValues]);
   const [budgets, setBudgets] = useState<OrgBudgetItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -226,8 +307,8 @@ export default function BudgetsPage() {
   }, [loadBudgets]);
 
   useEffect(() => {
-    resetPagination();
-  }, [selectedOrg, resetPagination]);
+    setPaginationValuesRef.current({ page: defaultPage });
+  }, [selectedOrg, defaultPage]);
 
   const totalItems = total || budgets.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));

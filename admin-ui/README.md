@@ -78,7 +78,16 @@ Then update `.env.local`:
 
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:8000
+NEXT_PUBLIC_DEFAULT_AUTH_MODE=password
 # SERVER_X_API_KEY=your-api-key-here
+```
+
+`NEXT_PUBLIC_DEFAULT_AUTH_MODE` sets the default login mode for the UI. Valid
+values are `password` or `apikey`; if omitted, the login page defaults to
+`password`. Example:
+
+```env
+NEXT_PUBLIC_DEFAULT_AUTH_MODE=apikey
 ```
 
 Keep API keys server-side only. Do not use `NEXT_PUBLIC_` variables for secrets.

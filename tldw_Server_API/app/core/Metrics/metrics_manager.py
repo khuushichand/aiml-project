@@ -69,6 +69,13 @@ class MetricsRegistry:
         # Rolling window of metric samples; size configurable via METRICS_RING_BUFFER_MAXLEN.
         self.values: Dict[str, deque] = defaultdict(lambda: deque(maxlen=buffer_maxlen))
         self.callbacks: Dict[str, List[Callable]] = defaultdict(list)
+        self._legacy_cb_alias_metrics = {
+            "circuit_breaker_state",
+            "circuit_breaker_failures_total",
+            "circuit_breaker_successes_total",
+            "circuit_breaker_rejections_total",
+            "circuit_breaker_trips_total",
+        }
 
         # Initialize with telemetry manager
         self.telemetry = get_telemetry_manager()
@@ -1097,16 +1104,40 @@ class MetricsRegistry:
                 name="circuit_breaker_state",
                 type=MetricType.GAUGE,
                 description="Circuit breaker state (0=closed, 1=open, 2=half-open)",
-                labels=["service"]
+                labels=["category", "service", "operation"]
             )
         )
 
         self.register_metric(
             MetricDefinition(
+                name="circuit_breaker_failures_total",
+                type=MetricType.COUNTER,
+                description="Total circuit breaker failures",
+                labels=["category", "service", "operation", "outcome"]
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="circuit_breaker_successes_total",
+                type=MetricType.COUNTER,
+                description="Total circuit breaker successes",
+                labels=["category", "service", "operation"]
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="circuit_breaker_rejections_total",
+                type=MetricType.COUNTER,
+                description="Total circuit breaker rejections",
+                labels=["category", "service", "operation"]
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
                 name="circuit_breaker_trips_total",
                 type=MetricType.COUNTER,
                 description="Total circuit breaker trips",
-                labels=["service", "reason"]
+                labels=["category", "service", "reason"]
             )
         )
 
@@ -1291,7 +1322,13 @@ class MetricsRegistry:
             logger.debug(f"Gauge callback error for {metric_name}: {e}")
         return observations
 
-    def record(self, metric_name: str, value: float, labels: Optional[Dict[str, str]] = None):
+    def record(
+        self,
+        metric_name: str,
+        value: float,
+        labels: Optional[Dict[str, str]] = None,
+        _emit_legacy_alias: bool = True,
+    ):
         """
         Record a metric value.
 
@@ -1336,6 +1373,22 @@ class MetricsRegistry:
                 callback(metric_name, value, labels)
             except Exception as e:
                 logger.error(f"Metric callback error: {e}")
+
+        if _emit_legacy_alias:
+            self._emit_circuit_breaker_alias(metric_name, value, labels)
+
+    def _emit_circuit_breaker_alias(self, metric_name: str, value: float, labels: Dict[str, str]):
+        if metric_name not in self._legacy_cb_alias_metrics:
+            return
+        category = labels.get("category")
+        service = labels.get("service")
+        if not category or not service:
+            return
+        if service.startswith(f"{category}:"):
+            return
+        legacy_labels = labels.copy()
+        legacy_labels["service"] = f"{category}:{service}"
+        self.record(metric_name, value, legacy_labels, _emit_legacy_alias=False)
 
     def increment(self, metric_name: str, value: float = 1, labels: Optional[Dict[str, str]] = None):
         """

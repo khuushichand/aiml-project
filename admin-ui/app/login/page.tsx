@@ -52,7 +52,8 @@ export default function LoginPage() {
       } else {
         setServerError('Invalid username or password.');
       }
-    } catch {
+    } catch (error) {
+      console.error('Password authentication failed:', error);
       setServerError('Authentication failed. Please try again.');
     } finally {
       setIsLoading(false);
@@ -70,10 +71,17 @@ export default function LoginPage() {
       } else {
         setServerError('Invalid API key.');
       }
-    } catch {
+    } catch (error) {
+      console.error('API key authentication failed:', error);
       setServerError('Authentication failed. Please try again.');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const clearServerError = () => {
+    if (serverError) {
+      setServerError('');
     }
   };
 
@@ -153,7 +161,9 @@ export default function LoginPage() {
                     placeholder="admin"
                     disabled={isLoading}
                     autoComplete="username"
-                    {...passwordForm.register('username')}
+                    {...passwordForm.register('username', {
+                      onChange: clearServerError,
+                    })}
                     className={passwordForm.formState.errors.username ? 'border-destructive' : ''}
                   />
                   {passwordForm.formState.errors.username && (
@@ -171,7 +181,9 @@ export default function LoginPage() {
                     placeholder="Enter your password"
                     disabled={isLoading}
                     autoComplete="current-password"
-                    {...passwordForm.register('password')}
+                    {...passwordForm.register('password', {
+                      onChange: clearServerError,
+                    })}
                     className={passwordForm.formState.errors.password ? 'border-destructive' : ''}
                   />
                   {passwordForm.formState.errors.password && (
@@ -215,7 +227,9 @@ export default function LoginPage() {
                     placeholder="Enter your API key"
                     disabled={isLoading}
                     autoComplete="off"
-                    {...apiKeyForm.register('apiKey')}
+                    {...apiKeyForm.register('apiKey', {
+                      onChange: clearServerError,
+                    })}
                     className={apiKeyForm.formState.errors.apiKey ? 'border-destructive' : ''}
                   />
                   {apiKeyForm.formState.errors.apiKey && (

@@ -22,6 +22,7 @@ except ImportError:
     PROMETHEUS_AVAILABLE = False
 
 from loguru import logger
+from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter, set_gauge
 
 
 class EvaluationMetrics:
@@ -90,25 +91,6 @@ class EvaluationMetrics:
             )
         except ValueError:
             self.evaluation_score = REGISTRY._names_to_collectors['evaluation_scores']
-
-        # Circuit breaker metrics
-        try:
-            self.circuit_breaker_state = Gauge(
-                'circuit_breaker_state',
-                'Circuit breaker state (0=closed, 1=open, 2=half-open)',
-                ['provider']
-            )
-        except ValueError:
-            self.circuit_breaker_state = REGISTRY._names_to_collectors['circuit_breaker_state']
-
-        try:
-            self.circuit_breaker_failures = Counter(
-                'circuit_breaker_failures_total',
-                'Total circuit breaker failures',
-                ['provider', 'error_type']
-            )
-        except ValueError:
-            self.circuit_breaker_failures = REGISTRY._names_to_collectors['circuit_breaker_failures_total']
 
         # Resource metrics
         try:
@@ -319,16 +301,26 @@ class EvaluationMetrics:
 
     def update_circuit_breaker(self, provider: str, state: int, error_type: Optional[str] = None):
         """Update circuit breaker metrics"""
-        if not self.enabled:
-            return
-
-        self.circuit_breaker_state.labels(provider=provider).set(state)
+        set_gauge(
+            "circuit_breaker_state",
+            state,
+            labels={
+                "category": "evaluations",
+                "service": provider,
+                "operation": "state_change",
+            },
+        )
 
         if error_type:
-            self.circuit_breaker_failures.labels(
-                provider=provider,
-                error_type=error_type
-            ).inc()
+            increment_counter(
+                "circuit_breaker_failures_total",
+                labels={
+                    "category": "evaluations",
+                    "service": provider,
+                    "operation": "call",
+                    "outcome": error_type,
+                },
+            )
 
     def record_cache_access(self, provider: str, hit: bool):
         """Record embedding cache access"""

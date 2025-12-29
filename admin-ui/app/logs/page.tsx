@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -68,6 +68,16 @@ const parsePositiveInt = (value: string) => {
   return parsed;
 };
 
+const areFiltersEqual = (left: LogFilters, right: LogFilters) => (
+  left.start === right.start
+  && left.end === right.end
+  && left.level === right.level
+  && left.service === right.service
+  && left.query === right.query
+  && left.orgId === right.orgId
+  && left.userId === right.userId
+);
+
 export default function LogsPage() {
   const { page, pageSize, setPage, setPageSize, resetPagination } = useUrlPagination();
   const [logs, setLogs] = useState<SystemLogEntry[]>([]);
@@ -97,26 +107,19 @@ export default function LogsPage() {
     userId,
   }), [end, level, orgId, query, service, start, userId]);
   const [debouncedFilters, setDebouncedFilters] = useState<LogFilters>(filters);
+  const debouncedFiltersRef = useRef<LogFilters>(filters);
 
   useEffect(() => {
     const handle = window.setTimeout(() => {
-      setDebouncedFilters((prev) => {
-        if (
-          prev.start === filters.start
-          && prev.end === filters.end
-          && prev.level === filters.level
-          && prev.service === filters.service
-          && prev.query === filters.query
-          && prev.orgId === filters.orgId
-          && prev.userId === filters.userId
-        ) {
-          return prev;
-        }
-        return filters;
-      });
+      if (areFiltersEqual(debouncedFiltersRef.current, filters)) {
+        return;
+      }
+      debouncedFiltersRef.current = filters;
+      setDebouncedFilters(filters);
+      resetPagination();
     }, 300);
     return () => window.clearTimeout(handle);
-  }, [filters]);
+  }, [filters, resetPagination]);
 
   const validationError = useMemo(() => {
     const issues: string[] = [];
@@ -178,10 +181,6 @@ export default function LogsPage() {
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
-  const handleFilterChange = () => {
-    resetPagination();
-  };
-
   return (
     <ProtectedRoute>
       <ResponsiveLayout>
@@ -220,7 +219,6 @@ export default function LogsPage() {
                   value={start}
                   onChange={(e) => {
                     setStart(e.target.value);
-                    handleFilterChange();
                   }}
                 />
               </div>
@@ -232,7 +230,6 @@ export default function LogsPage() {
                   value={end}
                   onChange={(e) => {
                     setEnd(e.target.value);
-                    handleFilterChange();
                   }}
                 />
               </div>
@@ -243,7 +240,6 @@ export default function LogsPage() {
                   value={level}
                   onChange={(e) => {
                     setLevel(e.target.value);
-                    handleFilterChange();
                   }}
                 >
                   {LOG_LEVELS.map((item) => (
@@ -261,7 +257,6 @@ export default function LogsPage() {
                   value={service}
                   onChange={(e) => {
                     setService(e.target.value);
-                    handleFilterChange();
                   }}
                 />
               </div>
@@ -273,7 +268,6 @@ export default function LogsPage() {
                   value={query}
                   onChange={(e) => {
                     setQuery(e.target.value);
-                    handleFilterChange();
                   }}
                 />
               </div>
@@ -285,7 +279,6 @@ export default function LogsPage() {
                   value={orgId}
                   onChange={(e) => {
                     setOrgId(e.target.value);
-                    handleFilterChange();
                   }}
                 />
               </div>
@@ -297,7 +290,6 @@ export default function LogsPage() {
                   value={userId}
                   onChange={(e) => {
                     setUserId(e.target.value);
-                    handleFilterChange();
                   }}
                 />
               </div>

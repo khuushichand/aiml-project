@@ -441,9 +441,14 @@ export default function DashboardPage() {
   };
 
   const isRegistrationCodeActive = (code: RegistrationCode) => {
+    if (!code.expires_at) {
+      return code.times_used < code.max_uses;
+    }
     const expiresAt = new Date(code.expires_at);
-    const expired = Number.isNaN(expiresAt.getTime()) ? false : expiresAt < new Date();
-    return !expired && code.times_used < code.max_uses;
+    if (Number.isNaN(expiresAt.getTime())) {
+      return code.times_used < code.max_uses;
+    }
+    return expiresAt >= new Date() && code.times_used < code.max_uses;
   };
 
   const handleRegistrationSubmit = async (event: React.FormEvent) => {
@@ -704,10 +709,13 @@ export default function DashboardPage() {
                         id="registration-enabled"
                         checked={registrationEnabled}
                         disabled={!registrationSettings || savingRegistrationSettings}
-                        onCheckedChange={(checked) => handleRegistrationSettingsUpdate(
-                          { enable_registration: checked },
-                          checked ? 'Self-registration enabled.' : 'Self-registration disabled.'
-                        )}
+                        onCheckedChange={(checked) => {
+                          const enabled = Boolean(checked);
+                          handleRegistrationSettingsUpdate(
+                            { enable_registration: enabled },
+                            enabled ? 'Self-registration enabled.' : 'Self-registration disabled.'
+                          );
+                        }}
                       />
                     </div>
                     <div className="flex items-center justify-between gap-3">
@@ -719,10 +727,13 @@ export default function DashboardPage() {
                         id="registration-requires-code"
                         checked={registrationRequiresCode}
                         disabled={!registrationSettings || savingRegistrationSettings}
-                        onCheckedChange={(checked) => handleRegistrationSettingsUpdate(
-                          { require_registration_code: checked },
-                          checked ? 'Registration codes required.' : 'Registration codes optional.'
-                        )}
+                        onCheckedChange={(checked) => {
+                          const required = Boolean(checked);
+                          handleRegistrationSettingsUpdate(
+                            { require_registration_code: required },
+                            required ? 'Registration codes required.' : 'Registration codes optional.'
+                          );
+                        }}
                       />
                     </div>
                     {registrationBlocked && (

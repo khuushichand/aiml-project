@@ -60,6 +60,9 @@ class ConnectionPool:
             failure_threshold=5,
             recovery_timeout=60,
             expected_exception=Exception,
+            category="embeddings",
+            service=self.provider,
+            operation="api_request",
         )
 
         logger.info(

@@ -121,6 +121,7 @@ fi
 
 BACKEND_PID=""
 BACKEND_LOG="${REPO_ROOT}/tmp/frontend-backend.log"
+BACKEND_CONTAINER="${BACKEND_CONTAINER:-tldw-app}"
 DOCKER_STARTED=0
 DCMD=""
 COMPOSE_ARGS=()
@@ -189,11 +190,13 @@ start_backend() {
 
   mkdir -p "${REPO_ROOT}/tmp"
   echo "[+] Starting backend on ${TLDW_BACKEND_HOST}:${TLDW_BACKEND_PORT} (AUTH_MODE=${AUTH_MODE})"
+  pushd "${REPO_ROOT}" >/dev/null
   python -m uvicorn tldw_Server_API.app.main:app \
     --host "${TLDW_BACKEND_HOST}" \
     --port "${TLDW_BACKEND_PORT}" \
     --log-level info \
     >"${BACKEND_LOG}" 2>&1 &
+  popd >/dev/null
   BACKEND_PID=$!
 }
 
@@ -228,7 +231,13 @@ wait_for_backend() {
     sleep 1
   done
 
-  echo "ERROR: Backend did not respond in time. Check ${BACKEND_LOG}." >&2
+  if [[ ${USE_DOCKER} -eq 1 || ${BACKEND_DOCKER:-0} -eq 1 || ${TLDW_BACKEND_DOCKER:-0} -eq 1 ]]; then
+    echo "ERROR: Backend did not respond in time. Check Docker container logs: docker logs ${BACKEND_CONTAINER}." >&2
+  elif [[ -n "${BACKEND_LOG}" && -f "${BACKEND_LOG}" ]]; then
+    echo "ERROR: Backend did not respond in time. Check ${BACKEND_LOG}." >&2
+  else
+    echo "ERROR: Backend did not respond in time. Check Docker logs or ${BACKEND_LOG}." >&2
+  fi
   return 1
 }
 
