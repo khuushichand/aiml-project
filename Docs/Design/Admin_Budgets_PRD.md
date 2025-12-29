@@ -10,7 +10,7 @@ Platform admins need a first-class way to define per-organization budgets, alert
 - Emit audit events for every budget update.
 
 ## Non-Goals
-- Real-time enforcement or billing interruption logic.
+- Real-time enforcement or billing interruption logic (enforcement modes are stored for future use only).
 - Full billing portal or subscription management UX.
 - Alert delivery mechanisms (email/webhooks).
 
@@ -20,10 +20,10 @@ Platform admins need a first-class way to define per-organization budgets, alert
 - Ops: adjust budgets for incidents or cost control events.
 
 ## User Stories
-- As an admin, I can view all org budgets and plan context in one list.
+- Admins can view all org budgets and plan context in one list.
 - Platform admins can update daily/monthly USD and token budgets for an org.
-- Admins can configure alert thresholds and enforcement mode.
-- As a reviewer, I can see who changed budgets and when.
+- Org admins can configure alert thresholds and enforcement mode (stored for future enforcement).
+- Reviewers can see who changed budgets and when.
 
 ## Functional Requirements
 ### Admin Budgets API
@@ -131,7 +131,7 @@ Platform admins need a first-class way to define per-organization budgets, alert
   - Order is not significant; the service should de-duplicate and store values
     in ascending order.
   - Empty arrays are rejected; use `null` to clear.
-- `enforcement_mode` rules:
+- `enforcement_mode` rules (intended future behavior; currently stored only):
   - `none`: no enforcement or alerting actions are triggered.
   - `soft`: record and warn on threshold/overage but allow usage to continue.
   - `hard`: block further usage when a budget is exceeded.
@@ -153,9 +153,9 @@ Platform admins need a first-class way to define per-organization budgets, alert
 - Budget fields included in `effective_limits.budgets` when set:
   `budget_day_usd`, `budget_month_usd`, `budget_day_tokens`, `budget_month_tokens`,
   `alert_thresholds`, `enforcement_mode`.
-- Validation/rounding: values must be >= 0; token budgets are integers; alert
-  thresholds are integer percentages between 1 and 100; no rounding is applied
-  beyond these validations.
+- Validation/rounding: values must be >= 0 (or `null` to clear); token budgets are
+  integers; alert thresholds are integer percentages between 1 and 100; no rounding
+  is applied beyond these validations.
 
 ## Audit and Observability
 - Budget updates emit unified audit events using `AuditEventType.CONFIG_CHANGED`

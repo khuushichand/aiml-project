@@ -760,6 +760,17 @@ except Exception as _e:
     except Exception:
         pass
 
+# Best-effort: capture recent logs in an in-memory ring buffer for admin queries.
+try:
+    from tldw_Server_API.app.core.Logging.system_log_buffer import ensure_system_log_buffer
+
+    ensure_system_log_buffer()
+except Exception as _e:
+    try:
+        logger.debug(f"Failed to enable system log buffer: {_e}")
+    except Exception:
+        pass
+
 
 BASE_DIR = Path(__file__).resolve().parent
 FAVICON_PATH = BASE_DIR / "static" / "favicon.ico"
@@ -1405,8 +1416,10 @@ async def lifespan(app: FastAPI):
 
     # Start background workers: ephemeral collections cleanup, core Jobs (chatbooks), audio Jobs (MVP), claims rebuild
     cleanup_task = None
+    chatbooks_cleanup_task = None
     core_jobs_task = None
     audio_jobs_task = None
+    chatbooks_cleanup_stop_event = None
     claims_task = None
     jobs_metrics_task = None
     reembed_task = None
@@ -1466,6 +1479,22 @@ async def lifespan(app: FastAPI):
             logger.info("Ephemeral cleanup worker disabled by settings")
     except Exception as e:
         logger.warning(f"Failed to start ephemeral cleanup worker: {e}")
+
+    # Chatbooks cleanup worker (scheduled retention cleanup)
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.services.chatbooks_cleanup_service import run_chatbooks_cleanup_loop as _run_chatbooks_cleanup
+
+        _interval_sec = int(_os.getenv("CHATBOOKS_CLEANUP_INTERVAL_SEC", "0") or "0")
+        if _interval_sec > 0:
+            chatbooks_cleanup_stop_event = _asyncio.Event()
+            chatbooks_cleanup_task = _asyncio.create_task(_run_chatbooks_cleanup(chatbooks_cleanup_stop_event))
+            logger.info("Chatbooks cleanup worker started")
+        else:
+            logger.info("Chatbooks cleanup worker disabled by settings")
+    except Exception as e:
+        logger.warning(f"Failed to start chatbooks cleanup worker: {e}")
 
     # Core Jobs worker (Chatbooks, if backend=core)
     try:
@@ -2101,6 +2130,10 @@ async def lifespan(app: FastAPI):
     try:
         if "cleanup_task" in locals() and cleanup_task:
             cleanup_task.cancel()
+        if "chatbooks_cleanup_stop_event" in locals() and chatbooks_cleanup_stop_event:
+            chatbooks_cleanup_stop_event.set()
+        if "chatbooks_cleanup_task" in locals() and chatbooks_cleanup_task:
+            chatbooks_cleanup_task.cancel()
         if "core_jobs_task" in locals() and core_jobs_task:
             # Prefer graceful stop via explicit stop_event
             if "core_jobs_stop_event" in locals() and core_jobs_stop_event:

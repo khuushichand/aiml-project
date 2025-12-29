@@ -174,6 +174,27 @@ class TestPIIDetection:
         meta = json.loads(meta_raw) if isinstance(meta_raw, str) else meta_raw
         assert meta["person"]["email"] == "[EMAIL_REDACTED]"
 
+    @pytest.mark.asyncio
+    async def test_export_events_json_decodes_metadata_and_flags(self, audit_service):
+        """JSON export should return structured metadata/compliance flags."""
+        ctx = AuditContext(user_id="export_user")
+        await audit_service.log_event(
+            event_type=AuditEventType.DATA_WRITE,
+            context=ctx,
+            metadata={"email": "user@example.com"},
+        )
+        await audit_service.flush()
+
+        content = await audit_service.export_events(format="json", stream=False, max_rows=10)
+        data = json.loads(content)
+
+        assert isinstance(data, list)
+        assert data, "Expected at least one exported audit event"
+        row = data[0]
+        assert isinstance(row.get("metadata"), dict)
+        assert isinstance(row.get("compliance_flags"), list)
+        assert "pii_detected" in row.get("compliance_flags", [])
+
 
 # ============================================================================
 # Test Risk Scoring

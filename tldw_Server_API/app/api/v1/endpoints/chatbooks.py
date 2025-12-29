@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import hashlib
+from datetime import datetime, timezone
 from typing import Optional
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, BackgroundTasks, Request
@@ -291,10 +292,10 @@ async def create_chatbook(
                     pass
 
                 # Expiry and signed download URL per configuration
-                ttl_seconds = int(os.getenv("CHATBOOKS_URL_TTL_SECONDS", "86400") or "86400")
                 now_utc = datetime.now(timezone.utc)
-                expires_at = now_utc + timedelta(seconds=ttl_seconds)
-                download_url = service._build_download_url(job_id, expires_at)
+                expires_at = service._get_export_expiry(now_utc)
+                download_expires_at = service._get_download_expiry(now_utc, expires_at)
+                download_url = service._build_download_url(job_id, download_expires_at)
 
                 # Persist the completed job so the download endpoint can serve it
                 job = ExportJob(
@@ -640,6 +641,9 @@ async def preview_chatbook(
             ver_str = getattr(manifest.version, 'value', str(manifest.version))
             if ver_str == "1.0":
                 ver_str = "1.0.0"
+            metadata_payload = dict(manifest.metadata or {})
+            if manifest.binary_limits:
+                metadata_payload.setdefault("binary_limits", manifest.binary_limits)
             manifest_response = ChatbookManifestResponse(
                 version=SchemaChatbookVersion(ver_str),
                 name=manifest.name,
@@ -665,7 +669,9 @@ async def preview_chatbook(
                 tags=manifest.tags,
                 categories=manifest.categories,
                 language=manifest.language,
-                license=manifest.license
+                license=manifest.license,
+                metadata=metadata_payload,
+                truncation=manifest.truncation or {}
             )
             # Audit successful preview
             try:
@@ -730,9 +736,14 @@ async def list_export_jobs(
 
         # Convert to response models
         job_responses = []
+        now_utc = datetime.now(timezone.utc)
         for job in jobs:
             # Generate secure download URL based on job_id
-            secure_download_url = f"/api/v1/chatbooks/download/{job.job_id}" if job.status == ExportStatus.COMPLETED else None
+            secure_download_url = None
+            if job.status == ExportStatus.COMPLETED:
+                export_expires_at = job.expires_at or service._get_export_expiry(now_utc)
+                download_expires_at = service._get_download_expiry(now_utc, export_expires_at)
+                secure_download_url = service._build_download_url(job.job_id, download_expires_at)
 
             job_responses.append(ExportJobResponse(
                 job_id=job.job_id,
@@ -787,7 +798,12 @@ async def get_export_job(
             raise HTTPException(status_code=404, detail="Export job not found")
 
         # Generate secure download URL based on job_id
-        secure_download_url = f"/api/v1/chatbooks/download/{job.job_id}" if job.status == ExportStatus.COMPLETED else None
+        secure_download_url = None
+        if job.status == ExportStatus.COMPLETED:
+            now_utc = datetime.now(timezone.utc)
+            export_expires_at = job.expires_at or service._get_export_expiry(now_utc)
+            download_expires_at = service._get_download_expiry(now_utc, export_expires_at)
+            secure_download_url = service._build_download_url(job.job_id, download_expires_at)
 
         return ExportJobResponse(
             job_id=job.job_id,

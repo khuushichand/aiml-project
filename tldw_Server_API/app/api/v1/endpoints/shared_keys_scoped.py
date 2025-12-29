@@ -136,6 +136,20 @@ async def upsert_org_shared_key(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    try:
+        await test_provider_credentials(
+            provider=provider_norm,
+            api_key=api_key,
+            credential_fields=credential_fields,
+            model=None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ChatAPIError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Provider test call failed") from exc
+
     secret_payload = build_secret_payload(api_key, credential_fields or None)
     try:
         envelope = encrypt_byok_payload(secret_payload)
@@ -201,12 +215,27 @@ async def test_org_shared_key(
     if not is_provider_allowlisted(provider_norm):
         raise HTTPException(status_code=403, detail="Provider not allowed for BYOK")
 
-    api_key = (payload.api_key or "").strip()
+    repo = await _get_shared_byok_repo()
+    row = await repo.fetch_secret("org", org_id, provider_norm)
+    if not row:
+        raise HTTPException(status_code=404, detail="Key not found")
+    encrypted_blob = row.get("encrypted_blob")
+    if not encrypted_blob:
+        raise HTTPException(status_code=404, detail="Key not found")
+    try:
+        stored_payload = decrypt_byok_payload(loads_envelope(encrypted_blob))
+    except Exception:
+        raise HTTPException(status_code=404, detail="Key not found")
+
+    api_key = (stored_payload.get("api_key") or "").strip()
     if not api_key:
-        raise HTTPException(status_code=400, detail="api_key is required")
+        raise HTTPException(status_code=404, detail="Key not found")
 
     try:
-        credential_fields = validate_credential_fields(provider_norm, payload.credential_fields)
+        credential_fields = validate_credential_fields(
+            provider_norm,
+            stored_payload.get("credential_fields") or {},
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -224,7 +253,6 @@ async def test_org_shared_key(
     except Exception as exc:
         raise HTTPException(status_code=502, detail="Provider test call failed") from exc
 
-    repo = await _get_shared_byok_repo()
     await _touch_shared_last_used_if_match(
         repo,
         scope_type="org",
@@ -283,6 +311,20 @@ async def upsert_team_shared_key(
         credential_fields = validate_credential_fields(provider_norm, payload.credential_fields)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        await test_provider_credentials(
+            provider=provider_norm,
+            api_key=api_key,
+            credential_fields=credential_fields,
+            model=None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ChatAPIError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Provider test call failed") from exc
 
     secret_payload = build_secret_payload(api_key, credential_fields or None)
     try:
@@ -349,12 +391,27 @@ async def test_team_shared_key(
     if not is_provider_allowlisted(provider_norm):
         raise HTTPException(status_code=403, detail="Provider not allowed for BYOK")
 
-    api_key = (payload.api_key or "").strip()
+    repo = await _get_shared_byok_repo()
+    row = await repo.fetch_secret("team", team_id, provider_norm)
+    if not row:
+        raise HTTPException(status_code=404, detail="Key not found")
+    encrypted_blob = row.get("encrypted_blob")
+    if not encrypted_blob:
+        raise HTTPException(status_code=404, detail="Key not found")
+    try:
+        stored_payload = decrypt_byok_payload(loads_envelope(encrypted_blob))
+    except Exception:
+        raise HTTPException(status_code=404, detail="Key not found")
+
+    api_key = (stored_payload.get("api_key") or "").strip()
     if not api_key:
-        raise HTTPException(status_code=400, detail="api_key is required")
+        raise HTTPException(status_code=404, detail="Key not found")
 
     try:
-        credential_fields = validate_credential_fields(provider_norm, payload.credential_fields)
+        credential_fields = validate_credential_fields(
+            provider_norm,
+            stored_payload.get("credential_fields") or {},
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -372,7 +429,6 @@ async def test_team_shared_key(
     except Exception as exc:
         raise HTTPException(status_code=502, detail="Provider test call failed") from exc
 
-    repo = await _get_shared_byok_repo()
     await _touch_shared_last_used_if_match(
         repo,
         scope_type="team",

@@ -233,8 +233,14 @@ except ImportError:
 # Claims extraction/verification
 try:
     from .claims import ClaimsEngine
+    from tldw_Server_API.app.core.Claims_Extraction.budget_guard import (
+        ClaimsJobContext,
+        resolve_claims_job_budget,
+    )
 except ImportError:
     ClaimsEngine = None
+    ClaimsJobContext = None  # type: ignore
+    resolve_claims_job_budget = None  # type: ignore
 
 
 @dataclass
@@ -2668,6 +2674,43 @@ async def unified_rag_pipeline(
                     if not nli_model:
                         import os
                         nli_model = os.environ.get("RAG_NLI_MODEL") or os.environ.get("RAG_NLI_MODEL_PATH")
+                    job_context = None
+                    if ClaimsJobContext is not None:
+                        user_id_val = None
+                        try:
+                            user_id_val = int(user_id) if user_id is not None else None
+                        except Exception:
+                            user_id_val = None
+                        job_context = ClaimsJobContext(
+                            user_id=user_id_val,
+                            request_id=trace_id,
+                            endpoint="rag_claims",
+                        )
+                    job_budget = None
+                    if resolve_claims_job_budget is not None:
+                        try:
+                            from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
+                        except Exception:
+                            _settings = {}
+                        budget_usd = kwargs.get("claims_budget_usd")
+                        budget_tokens = kwargs.get("claims_budget_tokens")
+                        budget_strict = kwargs.get("claims_budget_strict")
+                        try:
+                            budget_usd = float(budget_usd) if budget_usd is not None else None
+                        except Exception:
+                            budget_usd = None
+                        try:
+                            budget_tokens = int(budget_tokens) if budget_tokens is not None else None
+                        except Exception:
+                            budget_tokens = None
+                        if isinstance(budget_strict, str):
+                            budget_strict = budget_strict.strip().lower() in {"1", "true", "yes", "on"}
+                        job_budget = resolve_claims_job_budget(
+                            settings=_settings,
+                            max_cost_usd=budget_usd,
+                            max_tokens=budget_tokens,
+                            strict=budget_strict if isinstance(budget_strict, bool) else None,
+                        )
                     # Build a per-claim retrieval that uses MultiDatabaseRetriever and hybrid search when available
                     async def _retrieve_for_claim(c_text: str, top_k: int = 5):
                         try:
@@ -2777,6 +2820,8 @@ async def unified_rag_pipeline(
                                     top_k=claims_top_k,
                                     conf_threshold=claims_conf_threshold,
                                     mode=(claim_verifier or "hybrid").strip().lower(),
+                                    budget=job_budget,
+                                    job_context=job_context,
                                 )
                                 verifications.append(cv)
                             supported = sum(1 for v in verifications if v.label == "supported")
@@ -2819,6 +2864,8 @@ async def unified_rag_pipeline(
                                 retrieve_fn=_retrieve_for_claim,
                                 nli_model=nli_model,
                                 claims_concurrency=claims_concurrency,
+                                job_budget=job_budget,
+                                job_context=job_context,
                             )
                             claims_payload = claims_run.get("claims")
                             factuality_payload = claims_run.get("summary")
@@ -2836,6 +2883,8 @@ async def unified_rag_pipeline(
                             retrieve_fn=_retrieve_for_claim,
                             nli_model=nli_model,
                             claims_concurrency=claims_concurrency,
+                            job_budget=job_budget,
+                            job_context=job_context,
                         )
                         claims_payload = claims_run.get("claims")
                         factuality_payload = claims_run.get("summary")

@@ -23,6 +23,7 @@ from tldw_Server_API.app.api.v1.schemas.claims_schemas import (
     ClaimsAnalyticsExportRequest,
     ClaimsAnalyticsExportResponse,
     ClaimsAnalyticsExportListResponse,
+    ClaimsExtractorCatalogResponse,
     ClaimsReviewExtractorMetricsResponse,
     ClaimsClusterLinkCreate,
     ClaimsClusterLinkResponse,
@@ -501,6 +502,14 @@ def review_analytics(
 ) -> Dict[str, Any]:
     """Return summary review analytics."""
     return claims_service.review_analytics(principal, db)
+
+
+@router.get("/extractors", response_model=ClaimsExtractorCatalogResponse)
+def list_claims_extractors(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> Dict[str, Any]:
+    """Return the available claims extractor catalog."""
+    return claims_service.list_claims_extractors(principal)
 
 
 @router.get("/review/metrics", response_model=ClaimsReviewExtractorMetricsResponse)

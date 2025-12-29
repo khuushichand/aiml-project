@@ -4167,6 +4167,8 @@ class MediaDatabase:
         review_notes: Optional[str] = None,
         review_reason_code: Optional[str] = None,
         corrected_text: Optional[str] = None,
+        span_start: Optional[int] = None,
+        span_end: Optional[int] = None,
         expected_version: Optional[int] = None,
         action_ip: Optional[str] = None,
         action_user_agent: Optional[str] = None,
@@ -4209,6 +4211,12 @@ class MediaDatabase:
             if review_reason_code is not None:
                 update_parts.append("review_reason_code = ?")
                 params.append(str(review_reason_code))
+            if span_start is not None:
+                update_parts.append("span_start = ?")
+                params.append(int(span_start))
+            if span_end is not None:
+                update_parts.append("span_end = ?")
+                params.append(int(span_end))
 
             if corrected_text is not None:
                 update_parts.append("claim_text = ?")
@@ -10817,6 +10825,25 @@ class MediaDatabase:
             return int(row["chunk_index"]) if isinstance(row, dict) else int(row[0])
         except sqlite3.Error as e:
             logger.error(f"Error fetching chunk_index by UUID for media {media_id}: {e}")
+            return None
+
+    def get_unvectorized_chunk_by_index(self, media_id: int, chunk_index: int) -> Optional[Dict[str, Any]]:
+        """Return a single unvectorized chunk row for a media_id/chunk_index."""
+        try:
+            cur = self.execute_query(
+                """
+                SELECT chunk_index, chunk_text, start_char, end_char, chunk_type
+                FROM UnvectorizedMediaChunks
+                WHERE media_id = ? AND chunk_index = ? AND deleted = 0
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (int(media_id), int(chunk_index)),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+        except sqlite3.Error as e:
+            logger.error(f"Error fetching chunk_index {chunk_index} for media {media_id}: {e}")
             return None
 
     def get_unvectorized_chunks_in_range(self, media_id: int, start_index: int, end_index: int) -> List[Dict[str, Any]]:

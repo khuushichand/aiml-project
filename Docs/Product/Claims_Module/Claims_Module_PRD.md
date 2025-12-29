@@ -15,7 +15,7 @@ Analysts and downstream automations need grounded, inspectable factual statement
 - Provide operators APIs and UI controls to inspect, rebuild, and configure claims without direct DB access.
 
 ## 4. Out of Scope (v1)
-- Reviewer UI/batch tooling beyond the API surface (workflow APIs/audit log are implemented; see Reviewer Workflow PRD).
+- Reviewer UI/batch tooling beyond the API surface (workflow APIs/audit log exist, but end-to-end tooling remains out of scope; see Reviewer Workflow PRD).
 - Automated veracity scoring beyond supported/refuted/NEI labels.
 - Multilingual extraction/verification beyond existing English-centric models.
 - External fact-check provider integrations.
@@ -80,19 +80,17 @@ Analysts and downstream automations need grounded, inspectable factual statement
 - Future observability consideration: per-provider latency/cost tracking for claim-specific workloads.
 
 ## 12. Known Gaps & Risks
-- Review analytics include nightly extractor delta reporting and correction motif aggregates.
-- Trending dashboards and hotspot analytics for clustered claims are pending.
 - Multilingual support limited; spaCy default and prompts assume English.
 - Evidence spans rely on heuristic matching and can misalign in longer documents.
 - Cost control is limited to concurrency/timeout knobs; no per-job budget guardrails.
 
 ## 13. Roadmap
-1. Expand review analytics beyond nightly delta reporting (trend dashboards, hotspot analytics).
-2. Add trending dashboards and hotspot analytics for clustered claims.
-3. Expand extractor catalog (multilingual heuristics, lightweight local LLMs) and scheduling heuristics.
-4. Add per-job budget guardrails and provider latency/cost dashboards with adaptive throttling.
-5. Improve evidence span alignment and correction workflows.
+1. In Progress: nightly extractor delta reporting and correction motif aggregates for review analytics.
+2. Planned: trend dashboards and hotspot analytics for clustered claims (expands review analytics beyond nightly delta reporting).
+3. Planned: expand extractor catalog (multilingual heuristics, lightweight local LLMs) and scheduling heuristics.
+4. Planned: add per-job budget guardrails and provider latency/cost dashboards with adaptive throttling.
+5. Planned: improve evidence span alignment and correction workflows.
 
 ## 14. References
-- Reviewer Workflow PRD (`Docs/Product/Completed/Claims_Reviewer_Workflow_PRD.md`) for review workflow APIs and audit trails.
-- Claims Monitoring PRD (`Docs/Product/Completed/Claims_Monitoring_PRD.md`) for metrics, alerting, and monitoring config.
+- Reviewer Workflow PRD (`Docs/Product/Claims_Module/Claims_Reviewer_Workflow_PRD.md`) for review workflow APIs and audit trails.
+- Claims Monitoring PRD (`Docs/Product/Claims_Module/Claims_Monitoring_PRD.md`) for metrics, alerting, and monitoring config.

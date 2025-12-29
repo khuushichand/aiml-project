@@ -8,10 +8,15 @@ import functools
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.Claims_Extraction.budget_guard import (
+    ClaimsJobBudget,
+    resolve_claims_job_budget,
+)
 from tldw_Server_API.app.core.Claims_Extraction.ingestion_claims import (
     extract_claims_for_chunks,
     store_claims,
 )
+from tldw_Server_API.app.core.Claims_Extraction.extractor_catalog import resolve_claims_extractor_mode
 from tldw_Server_API.app.core.config import settings
 
 
@@ -130,6 +135,10 @@ async def extract_claims_if_requested(
 
     prepared_chunks, chunk_text_map = prepare_claims_chunks(process_result)
     extractor_mode, max_per_chunk = resolve_claims_parameters(form_data)
+    detected_language = None
+    if extractor_mode.strip().lower() in {"auto", "detect"}:
+        combined_text = " ".join(ch.get("text", "") for ch in prepared_chunks if isinstance(ch, dict))
+        extractor_mode, detected_language = resolve_claims_extractor_mode(extractor_mode, combined_text)
 
     if not prepared_chunks:
         process_result["claims"] = None
@@ -147,11 +156,43 @@ async def extract_claims_if_requested(
             "max_per_chunk": max_per_chunk,
         }
 
+    budget: Optional[ClaimsJobBudget] = None
+    try:
+        budget_usd = getattr(form_data, "claims_budget_usd", None)
+    except Exception:
+        budget_usd = None
+    try:
+        budget_tokens = getattr(form_data, "claims_budget_tokens", None)
+    except Exception:
+        budget_tokens = None
+    try:
+        budget_strict = getattr(form_data, "claims_budget_strict", None)
+    except Exception:
+        budget_strict = None
+    try:
+        budget_usd = float(budget_usd) if budget_usd is not None else None
+    except Exception:
+        budget_usd = None
+    try:
+        budget_tokens = int(budget_tokens) if budget_tokens is not None else None
+    except Exception:
+        budget_tokens = None
+    if isinstance(budget_strict, str):
+        budget_strict = budget_strict.strip().lower() in {"1", "true", "yes", "on"}
+    budget = resolve_claims_job_budget(
+        settings=settings,
+        max_cost_usd=budget_usd,
+        max_tokens=budget_tokens,
+        strict=budget_strict if isinstance(budget_strict, bool) else None,
+    )
+
     extraction_callable: Callable[[], List[Dict[str, Any]]] = functools.partial(
         extract_claims_for_chunks,
         prepared_chunks,
         extractor_mode=extractor_mode,
         max_per_chunk=max_per_chunk,
+        language=detected_language,
+        budget=budget,
     )
 
     try:
@@ -185,6 +226,10 @@ async def extract_claims_if_requested(
             "max_per_chunk": max_per_chunk,
             "chunks_evaluated": len(prepared_chunks),
         }
+    if budget is not None:
+        process_result.setdefault("claims_details", {})["budget"] = budget.snapshot()
+    if detected_language:
+        process_result.setdefault("claims_details", {})["language"] = detected_language
 
     return {
         "claims": claims or [],

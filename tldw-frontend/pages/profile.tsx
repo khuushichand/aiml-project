@@ -3,6 +3,7 @@ import { Layout } from '@/components/layout/Layout';
 import { useAuth } from '@/hooks/useAuth';
 import { useIsAdmin } from '@/hooks/useIsAdmin';
 import { apiClient } from '@/lib/api';
+import { Button } from '@/components/ui/Button';
 import type { User } from '@/lib/auth';
 
 export default function ProfilePage() {
@@ -11,6 +12,15 @@ export default function ProfilePage() {
   const [profile, setProfile] = useState<User | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const placeholderKeys = [
+    { provider: 'OpenAI', source: 'Your key', status: 'Stored' },
+    { provider: 'Anthropic', source: 'Org shared', status: 'Available' },
+    { provider: 'OpenRouter', source: 'Team shared', status: 'Available' },
+  ];
+  const placeholderShared = [
+    { scope: 'Org', name: 'Primary org key', status: 'Enabled' },
+    { scope: 'Team', name: 'Research pod', status: 'Enabled' },
+  ];
 
   useEffect(() => {
     const fetchProfile = async () => {
@@ -205,6 +215,86 @@ export default function ProfilePage() {
                       })()}
                     </div>
                   </dl>
+                </div>
+
+                <div className="space-y-3 rounded-lg border border-gray-200 bg-white p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h2 className="text-sm font-semibold text-gray-800">BYOK: Provider Keys (Preview)</h2>
+                      <p className="text-xs text-gray-500">
+                        Placeholder UI for upcoming BYOK key management and validation workflows.
+                      </p>
+                    </div>
+                    <span className="inline-flex items-center rounded-full bg-yellow-50 px-3 py-1 text-xs font-medium text-yellow-800">
+                      Coming soon
+                    </span>
+                  </div>
+
+                  <div className="grid gap-4 lg:grid-cols-3">
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                      <div className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Your Keys</div>
+                      <ul className="mt-2 space-y-2 text-sm">
+                        {placeholderKeys.map((entry) => (
+                          <li key={entry.provider} className="flex items-center justify-between gap-2 rounded border border-gray-200 bg-white px-2 py-1">
+                            <div>
+                              <div className="text-gray-900 font-medium">{entry.provider}</div>
+                              <div className="text-xs text-gray-500">{entry.source}</div>
+                            </div>
+                            <span className="text-xs font-medium text-green-700">{entry.status}</span>
+                          </li>
+                        ))}
+                      </ul>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button size="sm" disabled>Add key</Button>
+                        <Button size="sm" variant="secondary" disabled>Update</Button>
+                        <Button size="sm" variant="danger" disabled>Delete</Button>
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                      <div className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Shared Keys</div>
+                      <div className="mt-1 text-xs text-gray-500">Active scope: Org/Team (from token claims)</div>
+                      <ul className="mt-2 space-y-2 text-sm">
+                        {placeholderShared.map((entry) => (
+                          <li key={`${entry.scope}-${entry.name}`} className="flex items-center justify-between gap-2 rounded border border-gray-200 bg-white px-2 py-1">
+                            <div>
+                              <div className="text-gray-900 font-medium">{entry.name}</div>
+                              <div className="text-xs text-gray-500">{entry.scope} shared</div>
+                            </div>
+                            <span className="text-xs font-medium text-blue-700">{entry.status}</span>
+                          </li>
+                        ))}
+                      </ul>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button size="sm" variant="secondary" disabled>Request access</Button>
+                        <Button size="sm" variant="secondary" disabled>View policies</Button>
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                      <div className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Validate & Save</div>
+                      <div className="mt-2 space-y-2 text-sm">
+                        <label className="block text-xs text-gray-500">
+                          Provider
+                          <select className="mt-1 w-full rounded border border-gray-200 bg-white px-2 py-1 text-sm" disabled>
+                            <option>OpenAI</option>
+                          </select>
+                        </label>
+                        <label className="block text-xs text-gray-500">
+                          API key
+                          <input className="mt-1 w-full rounded border border-gray-200 bg-white px-2 py-1 text-sm" placeholder="sk-..." disabled />
+                        </label>
+                        <label className="block text-xs text-gray-500">
+                          Credential fields
+                          <input className="mt-1 w-full rounded border border-gray-200 bg-white px-2 py-1 text-sm" placeholder="org_id, project_id" disabled />
+                        </label>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button size="sm" disabled>Validate key</Button>
+                        <Button size="sm" variant="secondary" disabled>Save</Button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Debug panel with raw /users/me JSON to aid troubleshooting */}

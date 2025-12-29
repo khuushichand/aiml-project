@@ -25,9 +25,12 @@ type ApiKeyFormData = z.infer<typeof apiKeySchema>;
 
 type AuthMode = 'password' | 'apikey';
 
+const DEFAULT_AUTH_MODE: AuthMode =
+  process.env.NEXT_PUBLIC_DEFAULT_AUTH_MODE === 'apikey' ? 'apikey' : 'password';
+
 export default function LoginPage() {
   const router = useRouter();
-  const [authMode, setAuthMode] = useState<AuthMode>('password');
+  const [authMode, setAuthMode] = useState<AuthMode>(DEFAULT_AUTH_MODE);
   const [isLoading, setIsLoading] = useState(false);
   const [serverError, setServerError] = useState('');
 

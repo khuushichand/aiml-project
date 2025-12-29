@@ -9,29 +9,31 @@ This plan tracks staged implementation for Chatbooks export/import as specified 
 
 **Success Criteria**:
 - `POST /api/v1/chatbooks/export` (sync + async) produces a ZIP containing a valid `manifest.json` conforming to `Docs/Schemas/chatbooks_manifest_v1.json`.
+- `GET /api/v1/chatbooks/download/{job_id}` returns a ZIP for completed async exports (direct download when signed URLs are not required).
 - Export pipeline covers the v1 scope: conversations (messages + image attachments), notes, characters, world books, dictionaries, generated docs, Prompt Studio prompts, media descriptors (including transcripts, media-linked prompts, optional media embeddings), and evaluation definitions with associated runs.
 - Jobs are persisted per user in ChaChaNotes with states `pending → in_progress → completed|failed|cancelled|expired|deleted`, and `GET /api/v1/chatbooks/*/jobs` returns consistent job metadata and scopes.
 
 **Tests**:
 - Unit: manifest builder (per-type mappers and statistics), JSON Schema validation against `Docs/Schemas/chatbooks_manifest_v1.json`, job model/state transitions, per-user storage path construction (`TLDW_USER_DATA_PATH`).
-- Integration: end-to-end export for a user with mixed content types; verification of manifest counts and identities; retry/export of large-but-metadata-only archives; listing jobs by user and (for admins) by team/org.
+- Integration: end-to-end export for a user with mixed content types; verification of manifest counts and identities; retry/export of large-but-metadata-only archives; download completed exports; listing jobs by user and (for admins) by team/org.
 
 **Status**: Completed (per “What’s working now” in the PRD)
 
 ---
 
-## Stage 2: Export Coverage Gaps (Embeddings, Evaluations, Citations)
-**Goal**: Close outstanding export TODOs for embeddings, evaluation runs, and conversation citation metadata.
+## Stage 2: Export Coverage Gaps & Bundling Policy (Embeddings, Evaluations, Citations)
+**Goal**: Close outstanding export TODOs for embeddings, evaluation runs, conversation citation metadata, and per content-type bundling policy transparency.
 
 **Success Criteria**:
-- Embedding exports support explicit embedding sets beyond media-linked vectors, with stable `embedding_set_id` and `embedding_id` semantics preserved across export/import.
-- Evaluation exports add pagination/continuation support when `CHATBOOKS_EVAL_EXPORT_MAX_ROWS` is exceeded; continuation tokens are surfaced via API and captured in the manifest to allow multi-part exports of long-running experiments.
+- Embedding exports support explicit embedding sets beyond media-linked vectors, with stable `embedding_set_id` and `embedding_id` semantics preserved across export/import, and a defined `source_hash` based on normalized source payload, embedding model identifier, and chunking parameters.
+- Evaluation exports add pagination/continuation support when `CHATBOOKS_EVAL_EXPORT_MAX_ROWS` is exceeded; continuation tokens are surfaced via API and captured in the manifest so clients can resume the same chatbook export instead of generating multiple chatbooks.
 - Conversation citation metadata is exported once upstream storage lands in ChaChaNotes; manifest entries include citation references in line with the v1 schema.
 - Manifest flags `truncated` and `max_rows` are populated consistently for any capped evaluation exports and are reflected both in manifest entries and API responses.
+- Per content-type binary bundling limits are enforced during export and recorded in the manifest (for example, `metadata.binary_limits`) so clients can see the thresholds applied.
 
 **Tests**:
-- Unit: embedding-set selection and dedupe by `embedding_id`; evaluation run pagination and continuation token generation; citation serialization and schema validation.
-- Integration: exports from users with large evaluation histories and multiple embedding sets; reconstruction of evaluation subsets from multi-part exports; verification that truncated exports are correctly marked and discoverable to clients.
+- Unit: embedding-set selection and dedupe by `embedding_id`; evaluation run pagination and continuation token generation; per content-type bundling limit enforcement and manifest recording; citation serialization and schema validation.
+- Integration: exports from users with large evaluation histories and multiple embedding sets; resumable evaluation exports appended to the same chatbook; verification that truncated exports are correctly marked and discoverable to clients.
 
 **Status**: Not Started (open items listed under PRD “To-Do items surfaced during implementation”)
 
@@ -50,13 +52,29 @@ This plan tracks staged implementation for Chatbooks export/import as specified 
 
 **Tests**:
 - Unit: conflict-resolution functions for each content type; ChatbookValidator scenarios (zip bombs, traversal attempts, missing references); quota checks with mocked tiers; content-type policy flag handling; dictionary validator wiring and strict/non-strict behavior.
-- Integration: import + preview of valid and invalid archives; conflict-strategy matrix across conversations/notes/prompts/characters/media/evaluations/embeddings; org/team-scope imports with correct ownership and audit logging; enforcement of disabled content types in exports/imports; rate limits under load (SlowAPI configuration).
+- Integration: import + preview of valid and invalid archives; conflict-strategy matrix across conversations/notes/prompts/characters/media/evaluations/embeddings; org/team-scope imports with correct ownership and audit logging; enforcement of disabled content types in exports/imports; rate limits under load (SlowAPI configuration); contract tests importing chatbooks generated by the previous minor version.
 
 **Status**: Not Started
 
 ---
 
-## Stage 4: Observability, Health & SLOs
+## Stage 4: Retention & Cleanup (Scheduled + Manual)
+**Goal**: Implement scheduled retention cleanup plus manual cleanup triggering with scoped access control.
+
+**Success Criteria**:
+- `POST /api/v1/chatbooks/cleanup` triggers cleanup for the caller's allowed scope, transitioning completed jobs to `expired` when archives are removed and to `deleted` when metadata is removed by privileged operations.
+- Scheduled cleanup runs via the Chatbooks worker on a configurable interval, respects `CHATBOOKS_EXPORT_RETENTION_DEFAULT_HOURS`, and avoids unbounded scans through batching and scope filters.
+- Cleanup emits audit events for cross-user operations and records per-job outcomes so operators can trace retention actions.
+
+**Tests**:
+- Unit: retention cutoff calculations; scope filters for cleanup; state transitions (`completed → expired`, `expired → deleted`).
+- Integration: scheduled cleanup runs against test archives; manual cleanup endpoint for user/admin scopes; verification that expired archives are removed while metadata is retained unless explicitly deleted.
+
+**Status**: Not Started
+
+---
+
+## Stage 5: Observability, Health & SLOs
 **Goal**: Provide clear observability, health signals, and performance SLOs for Chatbooks jobs.
 
 **Success Criteria**:
@@ -74,7 +92,7 @@ This plan tracks staged implementation for Chatbooks export/import as specified 
 
 ---
 
-## Stage 5: Large Binary Bundling (v2)
+## Stage 6: Large Binary Bundling (v2)
 **Goal**: Add optional large-binary packaging for media artifacts while preserving v1 compatibility.
 
 **Success Criteria**:
@@ -91,7 +109,7 @@ This plan tracks staged implementation for Chatbooks export/import as specified 
 
 ---
 
-## Stage 6: Optional Client-Side Encryption (TBD)
+## Stage 7: Optional Client-Side Encryption (TBD)
 **Goal**: Track potential client-side/password-protected Chatbooks encryption without changing the server-managed encryption stance.
 
 **Success Criteria**:

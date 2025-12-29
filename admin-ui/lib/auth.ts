@@ -29,8 +29,8 @@ export interface LoginResponse {
  * Check if we're in single-user mode (X-API-KEY auth)
  */
 export function isSingleUserMode(): boolean {
-  if (typeof window === 'undefined') return false;
-  const storedApiKey = localStorage.getItem('x_api_key');
+  if (typeof window === 'undefined' || typeof sessionStorage === 'undefined') return false;
+  const storedApiKey = sessionStorage.getItem('x_api_key');
   return !!storedApiKey;
 }
 
@@ -38,16 +38,16 @@ export function isSingleUserMode(): boolean {
  * Get X-API-KEY for single-user mode
  */
 export function getApiKey(): string | null {
-  if (typeof window === 'undefined') return null;
-  return localStorage.getItem('x_api_key') || null;
+  if (typeof window === 'undefined' || typeof sessionStorage === 'undefined') return null;
+  return sessionStorage.getItem('x_api_key') || null;
 }
 
 /**
  * Set X-API-KEY for single-user mode
  */
 export function setApiKey(key: string): void {
-  if (typeof window !== 'undefined') {
-    localStorage.setItem('x_api_key', key);
+  if (typeof window !== 'undefined' && typeof sessionStorage !== 'undefined') {
+    sessionStorage.setItem('x_api_key', key);
   }
 }
 
@@ -114,7 +114,7 @@ export async function loginWithApiKey(apiKey: string): Promise<boolean> {
 
     if (response.ok) {
       const user = await response.json();
-      localStorage.setItem('x_api_key', apiKey);
+      setApiKey(apiKey);
       localStorage.setItem('user', JSON.stringify(user));
       return true;
     }
@@ -171,6 +171,9 @@ export async function logout(): Promise<void> {
     localStorage.removeItem('user');
     localStorage.removeItem('access_token');
     localStorage.removeItem('x_api_key');
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.removeItem('x_api_key');
+    }
   }
 }
 

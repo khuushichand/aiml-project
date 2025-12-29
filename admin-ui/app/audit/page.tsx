@@ -198,7 +198,6 @@ function AuditPageContent() {
 
   // Pagination
   const totalPages = Math.ceil(totalItems / pageSize);
-  const paginatedLogs = logs;
 
   const formatTimestamp = (ts: string) => {
     return new Date(ts).toLocaleString();
@@ -436,7 +435,7 @@ function AuditPageContent() {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {paginatedLogs.map((log) => (
+                          {logs.map((log) => (
                             <TableRow key={log.id}>
                               <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
                                 {formatTimestamp(log.timestamp)}

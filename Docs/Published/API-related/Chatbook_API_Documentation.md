@@ -26,7 +26,7 @@ A Chatbook is a portable archive format (`.chatbook` file) that contains:
 - World books and lore
 - Dictionaries for text replacement
 - Generated documents
-- Media files (optional)
+- Media files and attachments (optional; small binaries bundled per content-type limits, large media referenced via metadata)
 - Embeddings (optional)
 
 ### Key Features
@@ -95,6 +95,7 @@ Authorization: Bearer <your-jwt-token>
 Implementation notes:
 - Sync mode persists a completed export job and returns its `job_id` plus a `download_url` that uses this UUID.
 - For robust automation, prefer async mode and then poll job status to obtain the canonical `download_url` by `job_id`.
+- When evaluation exports exceed row caps, export job metadata can include continuation tokens and the manifest can include `truncation.evaluations.continuations` so clients can resume the same chatbook export.
 
 **Response (Asynchronous)**:
 ```json
@@ -278,7 +279,7 @@ Supported options (as query parameters or structured by clients that map to quer
 
 **Endpoint**: `POST /api/v1/chatbooks/cleanup`
 
-**Description**: Remove expired export files to free storage.
+**Description**: Remove expired export files to free storage. Scheduled cleanup runs via the Chatbooks worker; use this endpoint to trigger a manual sweep.
 
 **Response**:
 ```json
@@ -327,6 +328,7 @@ Lightweight liveness check for the Chatbooks subsystem.
 - Chatbook archives include a versioned manifest (`version`) that describes exported content, relationships, and provenance.
 - The canonical JSON Schema for manifest version `1.0` lives in the repository at `Docs/Schemas/chatbooks_manifest_v1.json` and aligns with the Chatbooks PRD (`Docs/Product/Chatbooks_PRD.md`).
 - Client integrations that need strict validation can reference this schema in addition to the OpenAPI document (`API-related/chatbook_openapi.yaml`).
+- Manifest metadata includes per content-type bundling limits (`metadata.binary_limits`) and continuation tokens for resumable evaluation exports (`truncation.evaluations.continuations`).
 
 ### ConflictResolution Enum
 ```

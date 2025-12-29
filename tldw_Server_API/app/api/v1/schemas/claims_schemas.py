@@ -52,6 +52,30 @@ class ClaimsSettingsUpdate(BaseModel):
     persist: Optional[bool] = Field(default=None, description="Persist updates to config.txt.")
 
 
+class ClaimsExtractorCatalogItem(BaseModel):
+    """Claims extractor catalog entry."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: str
+    label: str
+    description: str
+    execution: str
+    supports_languages: Optional[List[str]] = None
+    providers: Optional[List[str]] = None
+    auto_selectable: Optional[bool] = None
+
+
+class ClaimsExtractorCatalogResponse(BaseModel):
+    """Claims extractor catalog response."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    extractors: List[ClaimsExtractorCatalogItem] = Field(default_factory=list)
+    default_mode: str
+    auto_mode: str
+
+
 class ClaimUpdateRequest(BaseModel):
     """Update fields for a claim entry."""
 
@@ -519,6 +543,22 @@ class ClaimsAnalyticsUnsupportedRatios(BaseModel):
     baseline_ratio: Optional[float] = None
 
 
+class ClaimsAnalyticsProviderUsage(BaseModel):
+    """Provider usage summary for claims LLM operations."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str
+    model: str
+    operation: str
+    requests: int
+    errors: int
+    total_tokens: int
+    total_cost_usd: float
+    latency_avg_ms: Optional[float] = None
+    latency_p95_ms: Optional[float] = None
+
+
 class ClaimsAnalyticsRebuildHealth(BaseModel):
     """Rebuild worker health summary."""
 
@@ -551,4 +591,5 @@ class ClaimsAnalyticsDashboardResponse(BaseModel):
     review_extractor_metrics: Optional[List[ClaimsReviewExtractorMetricsDaily]] = None
     clusters: ClaimsAnalyticsClusterStats
     unsupported_ratios: ClaimsAnalyticsUnsupportedRatios
+    provider_usage: List[ClaimsAnalyticsProviderUsage] = Field(default_factory=list)
     rebuild_health: Optional[ClaimsAnalyticsRebuildHealth] = None

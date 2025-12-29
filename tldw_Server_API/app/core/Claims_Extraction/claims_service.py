@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import csv
 import html
 import io
@@ -19,7 +20,7 @@ from fastapi import HTTPException, status
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, is_postgres_backend
 from tldw_Server_API.app.core.AuthNZ.permissions import (
     CLAIMS_ADMIN,
     CLAIMS_REVIEW,
@@ -39,6 +40,7 @@ from tldw_Server_API.app.core.Claims_Extraction.claims_notifications import (
     dispatch_claim_review_notifications,
     record_watchlist_cluster_notifications,
 )
+from tldw_Server_API.app.core.Claims_Extraction.span_alignment import find_text_span
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
@@ -266,6 +268,39 @@ def _resolve_claim_owner_user_id(claim_row: Dict[str, Any], fallback_user_id: Op
     if owner_user_id is None:
         owner_user_id = fallback_user_id
     return str(owner_user_id) if owner_user_id is not None else ""
+
+
+def _resolve_corrected_claim_span(
+    target_db: MediaDatabase,
+    claim_row: Dict[str, Any],
+    corrected_text: str,
+) -> tuple[Optional[int], Optional[int]]:
+    try:
+        media_id = int(claim_row.get("media_id") or 0)
+        chunk_index = int(claim_row.get("chunk_index") or 0)
+    except Exception:
+        return (None, None)
+    if media_id <= 0:
+        return (None, None)
+    chunk_row = target_db.get_unvectorized_chunk_by_index(media_id, chunk_index)
+    if not chunk_row:
+        return (None, None)
+    chunk_text = chunk_row.get("chunk_text")
+    if not chunk_text:
+        return (None, None)
+    span = find_text_span(str(chunk_text), str(corrected_text))
+    if span is None:
+        return (None, None)
+    span_start, span_end = span
+    start_char = chunk_row.get("start_char")
+    if start_char is not None:
+        try:
+            offset = int(start_char)
+            span_start += offset
+            span_end += offset
+        except Exception:
+            pass
+    return (span_start, span_end)
 
 
 def _get_email_service():
@@ -1056,6 +1091,134 @@ def _percentile_value(values: List[int], percentile: float) -> Optional[int]:
     return int(ordered[idx])
 
 
+def _percentile_float(values: List[float], percentile: float) -> Optional[float]:
+    if not values:
+        return None
+    ordered = sorted(values)
+    idx = int(math.ceil(percentile * len(ordered))) - 1
+    idx = max(0, min(idx, len(ordered) - 1))
+    return float(ordered[idx])
+
+
+async def _fetch_claims_provider_usage_async(
+    owner_user_id: Optional[str],
+) -> List[Dict[str, Any]]:
+    db_pool = await get_db_pool()
+    pg = await is_postgres_backend()
+    operations = ["claims_extract", "claims_verify", "claims_ingestion"]
+    user_id_val = None
+    if owner_user_id:
+        try:
+            user_id_val = int(owner_user_id)
+        except Exception:
+            user_id_val = None
+
+    if pg:
+        where = ["operation = ANY(?)"]
+        params: List[Any] = [operations]
+        if user_id_val is not None:
+            where.append("user_id = ?")
+            params.append(user_id_val)
+        where_clause = " AND ".join(where)
+        sql = (
+            "SELECT provider, model, operation, "
+            "COUNT(*) AS requests, "
+            "SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) AS errors, "
+            "SUM(COALESCE(total_tokens,0)) AS total_tokens, "
+            "SUM(COALESCE(total_cost_usd,0)) AS total_cost_usd, "
+            "AVG(latency_ms)::float AS latency_avg_ms, "
+            "percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms)::float AS latency_p95_ms "
+            "FROM llm_usage_log "
+            f"WHERE {where_clause} "
+            "GROUP BY provider, model, operation "
+            "ORDER BY total_cost_usd DESC"
+        )
+        rows = await db_pool.fetch(sql, params)
+        return [
+            {
+                "provider": str(r.get("provider") or ""),
+                "model": str(r.get("model") or ""),
+                "operation": str(r.get("operation") or ""),
+                "requests": int(r.get("requests") or 0),
+                "errors": int(r.get("errors") or 0),
+                "total_tokens": int(r.get("total_tokens") or 0),
+                "total_cost_usd": float(r.get("total_cost_usd") or 0.0),
+                "latency_avg_ms": (float(r.get("latency_avg_ms")) if r.get("latency_avg_ms") is not None else None),
+                "latency_p95_ms": (float(r.get("latency_p95_ms")) if r.get("latency_p95_ms") is not None else None),
+            }
+            for r in rows
+        ]
+
+    placeholders = ",".join("?" for _ in operations)
+    where = [f"operation IN ({placeholders})"]
+    params = list(operations)
+    if user_id_val is not None:
+        where.append("user_id = ?")
+        params.append(user_id_val)
+    sql = (
+        "SELECT provider, model, operation, status, latency_ms, total_tokens, total_cost_usd "
+        "FROM llm_usage_log WHERE " + " AND ".join(where)
+    )
+    rows = await db_pool.fetchall(sql, params)
+    grouped: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    for row in rows:
+        provider = str(row["provider"] if isinstance(row, dict) else row[0])
+        model = str(row["model"] if isinstance(row, dict) else row[1])
+        operation = str(row["operation"] if isinstance(row, dict) else row[2])
+        status = row["status"] if isinstance(row, dict) else row[3]
+        latency_ms = row["latency_ms"] if isinstance(row, dict) else row[4]
+        total_tokens = row["total_tokens"] if isinstance(row, dict) else row[5]
+        total_cost_usd = row["total_cost_usd"] if isinstance(row, dict) else row[6]
+        key = (provider, model, operation)
+        bucket = grouped.setdefault(
+            key,
+            {
+                "provider": provider,
+                "model": model,
+                "operation": operation,
+                "requests": 0,
+                "errors": 0,
+                "total_tokens": 0,
+                "total_cost_usd": 0.0,
+                "latencies": [],
+            },
+        )
+        bucket["requests"] += 1
+        if status is not None and int(status) >= 400:
+            bucket["errors"] += 1
+        if total_tokens is not None:
+            bucket["total_tokens"] += int(total_tokens or 0)
+        if total_cost_usd is not None:
+            bucket["total_cost_usd"] += float(total_cost_usd or 0.0)
+        if latency_ms is not None:
+            try:
+                bucket["latencies"].append(float(latency_ms))
+            except Exception:
+                pass
+    out: List[Dict[str, Any]] = []
+    for bucket in grouped.values():
+        latencies = bucket.pop("latencies", [])
+        latency_avg = None
+        latency_p95 = None
+        if latencies:
+            latency_avg = sum(latencies) / float(len(latencies))
+            latency_p95 = _percentile_float(latencies, 0.95)
+        bucket["latency_avg_ms"] = latency_avg
+        bucket["latency_p95_ms"] = latency_p95
+        out.append(bucket)
+    out.sort(key=lambda r: float(r.get("total_cost_usd") or 0.0), reverse=True)
+    return out
+
+
+def _fetch_claims_provider_usage(owner_user_id: Optional[str]) -> List[Dict[str, Any]]:
+    try:
+        return asyncio.run(_fetch_claims_provider_usage_async(owner_user_id))
+    except RuntimeError:
+        return []
+    except Exception:
+        return []
+
+
 def _build_review_latency_stats(db: MediaDatabase) -> Dict[str, Optional[float]]:
     avg_latency_sec = None
     if db.backend_type == BackendType.POSTGRESQL:
@@ -1668,6 +1831,17 @@ def get_claims_settings(principal: AuthPrincipal) -> Dict[str, Any]:
     return _claims_settings_snapshot()
 
 
+def list_claims_extractors(principal: AuthPrincipal) -> Dict[str, Any]:
+    _ensure_claims_admin(principal)
+    from tldw_Server_API.app.core.Claims_Extraction.extractor_catalog import get_claims_extractor_catalog
+
+    return {
+        "extractors": get_claims_extractor_catalog(),
+        "default_mode": str(settings.get("CLAIM_EXTRACTOR_MODE", "heuristic")),
+        "auto_mode": "auto",
+    }
+
+
 def update_claims_settings(
     *,
     payload: Dict[str, Any],
@@ -2226,6 +2400,21 @@ async def review_claim(
 
         action_ip, action_user_agent = _extract_request_metadata(request)
 
+        corrected_text = payload.get("corrected_text")
+        if corrected_text is not None:
+            corrected_text = str(corrected_text)
+            if not corrected_text.strip():
+                corrected_text = None
+
+        span_start = None
+        span_end = None
+        if corrected_text is not None:
+            span_start, span_end = _resolve_corrected_claim_span(
+                target_db=target_db,
+                claim_row=dict(claim_row),
+                corrected_text=corrected_text,
+            )
+
         updated = target_db.update_claim_review(
             int(claim_id),
             review_status=new_status,
@@ -2233,7 +2422,9 @@ async def review_claim(
             review_group=payload.get("review_group"),
             review_notes=payload.get("notes"),
             review_reason_code=payload.get("reason_code"),
-            corrected_text=payload.get("corrected_text"),
+            corrected_text=corrected_text,
+            span_start=span_start,
+            span_end=span_end,
             expected_version=int(payload.get("review_version")),
             action_ip=action_ip,
             action_user_agent=action_user_agent,
@@ -2262,14 +2453,14 @@ async def review_claim(
                 media_id=int(claim_row.get("media_id") or 0),
                 db_path=str(target_db.db_path_str),
             )
-        if payload.get("corrected_text"):
+        if corrected_text is not None:
             target_user_id = str(user_id) if user_id is not None else str(current_user.id)
             _refresh_claim_embedding(
                 claim_id=int(claim_id),
                 media_id=int(claim_row.get("media_id") or 0),
                 chunk_index=int(claim_row.get("chunk_index") or 0),
                 old_text=str(claim_row.get("claim_text") or ""),
-                new_text=str(payload.get("corrected_text")),
+                new_text=str(corrected_text),
                 user_id=target_user_id,
             )
         owner_user_id = _resolve_claim_owner_user_id(
@@ -2573,6 +2764,10 @@ def claims_dashboard_analytics(
         ]
     except Exception:
         payload["review_extractor_metrics"] = []
+    try:
+        payload["provider_usage"] = _fetch_claims_provider_usage(owner_user_id)
+    except Exception:
+        payload["provider_usage"] = []
     return payload
 
 

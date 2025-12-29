@@ -337,6 +337,259 @@ class AuditLogResponse(BaseModel):
 
 #######################################################################################################################
 #
+# Data Ops Schemas (Backups, Retention, Exports)
+
+class BackupItem(BaseModel):
+    """Metadata for a backup artifact."""
+    id: str
+    dataset: str
+    user_id: Optional[int] = None
+    status: str = "ready"
+    size_bytes: int
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BackupListResponse(BaseModel):
+    """Response for backup listing."""
+    items: List[BackupItem]
+    total: int
+    limit: int
+    offset: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BackupCreateRequest(BaseModel):
+    """Request to create a backup snapshot."""
+    dataset: str
+    user_id: Optional[int] = None
+    backup_type: Optional[str] = Field("full", pattern="^(full|incremental)$")
+    max_backups: Optional[int] = Field(None, ge=1, le=1000)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BackupCreateResponse(BaseModel):
+    """Response for backup creation."""
+    item: BackupItem
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BackupRestoreRequest(BaseModel):
+    """Request to restore a backup snapshot."""
+    dataset: str
+    user_id: Optional[int] = None
+    confirm: bool = False
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BackupRestoreResponse(BaseModel):
+    """Response for backup restore."""
+    status: str
+    message: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RetentionPolicy(BaseModel):
+    """Retention policy descriptor."""
+    key: str
+    days: Optional[int] = None
+    description: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RetentionPoliciesResponse(BaseModel):
+    """Response for retention policy listing."""
+    policies: List[RetentionPolicy]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RetentionPolicyUpdateRequest(BaseModel):
+    """Request to update a retention policy."""
+    days: int = Field(..., ge=1, le=3650)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
+# System Ops Schemas (Logs, Incidents, Maintenance, Feature Flags)
+
+class SystemLogEntry(BaseModel):
+    """Single system log entry."""
+    timestamp: Optional[datetime] = None
+    level: Optional[str] = None
+    message: Optional[str] = None
+    logger: Optional[str] = None
+    module: Optional[str] = None
+    function: Optional[str] = None
+    line: Optional[int] = None
+    request_id: Optional[str] = None
+    org_id: Optional[int] = None
+    user_id: Optional[int] = None
+    trace_id: Optional[str] = None
+    span_id: Optional[str] = None
+    correlation_id: Optional[str] = None
+    event: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SystemLogsResponse(BaseModel):
+    """Response for system log listing."""
+    items: List[SystemLogEntry]
+    total: int
+    limit: int
+    offset: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MaintenanceState(BaseModel):
+    """Maintenance mode state."""
+    enabled: bool
+    message: str = ""
+    allowlist_user_ids: List[int] = []
+    allowlist_emails: List[str] = []
+    updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MaintenanceUpdateRequest(BaseModel):
+    """Request to update maintenance mode."""
+    enabled: bool
+    message: Optional[str] = None
+    allowlist_user_ids: Optional[List[int]] = None
+    allowlist_emails: Optional[List[str]] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class FeatureFlagHistoryEntry(BaseModel):
+    """Feature flag change history entry."""
+    timestamp: datetime
+    enabled: bool
+    actor: Optional[str] = None
+    note: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class FeatureFlagItem(BaseModel):
+    """Feature flag descriptor."""
+    key: str
+    scope: Literal["global", "org", "user"]
+    enabled: bool
+    description: Optional[str] = None
+    org_id: Optional[int] = None
+    user_id: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
+    history: List[FeatureFlagHistoryEntry] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class FeatureFlagsResponse(BaseModel):
+    """Response for feature flag listing."""
+    items: List[FeatureFlagItem]
+    total: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class FeatureFlagUpsertRequest(BaseModel):
+    """Request to upsert a feature flag."""
+    scope: Literal["global", "org", "user"]
+    enabled: bool
+    description: Optional[str] = None
+    org_id: Optional[int] = None
+    user_id: Optional[int] = None
+    note: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class IncidentEvent(BaseModel):
+    """Incident timeline entry."""
+    id: str
+    message: str
+    created_at: datetime
+    actor: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class IncidentItem(BaseModel):
+    """Incident summary with timeline."""
+    id: str
+    title: str
+    status: Literal["open", "investigating", "mitigating", "resolved"]
+    severity: Literal["low", "medium", "high", "critical"]
+    summary: Optional[str] = None
+    tags: List[str] = []
+    created_at: datetime
+    updated_at: datetime
+    resolved_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+    updated_by: Optional[str] = None
+    timeline: List[IncidentEvent] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class IncidentListResponse(BaseModel):
+    """Response for incident listing."""
+    items: List[IncidentItem]
+    total: int
+    limit: int
+    offset: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class IncidentCreateRequest(BaseModel):
+    """Request to create an incident."""
+    title: str
+    status: Optional[Literal["open", "investigating", "mitigating", "resolved"]] = None
+    severity: Optional[Literal["low", "medium", "high", "critical"]] = None
+    summary: Optional[str] = None
+    tags: Optional[List[str]] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class IncidentUpdateRequest(BaseModel):
+    """Request to update an incident."""
+    title: Optional[str] = None
+    status: Optional[Literal["open", "investigating", "mitigating", "resolved"]] = None
+    severity: Optional[Literal["low", "medium", "high", "critical"]] = None
+    summary: Optional[str] = None
+    tags: Optional[List[str]] = None
+    update_message: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class IncidentEventCreateRequest(BaseModel):
+    """Request to append a timeline entry."""
+    message: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+#######################################################################################################################
+#
 # Batch Operation Schemas
 
 class BatchUserOperation(BaseModel):

@@ -161,6 +161,30 @@ def _enrich_user_with_rbac(
 
     return roles, perms, is_admin_flag
 
+
+def _coerce_int_list(raw: Any) -> List[int]:
+    if not isinstance(raw, (list, tuple, set)):
+        return []
+    out: List[int] = []
+    for value in raw:
+        try:
+            out.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _normalize_active_id(raw: Any, ids: List[int]) -> Optional[int]:
+    if raw is None:
+        return ids[0] if len(ids) == 1 else None
+    try:
+        active = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if active in ids:
+        return active
+    return None
+
 # --- User Model ---
 # Standardized User object, used even for the dummy single user.
 class User(BaseModel):
@@ -361,6 +385,10 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         else:
             # Leave as-is; downstream lookups will attempt to resolve
             user_id_int = None
+        token_org_ids = _coerce_int_list(payload.get("org_ids"))
+        token_team_ids = _coerce_int_list(payload.get("team_ids"))
+        token_active_org_id = payload.get("active_org_id")
+        token_active_team_id = payload.get("active_team_id")
     except (InvalidTokenError, TokenExpiredError) as e:
         logger.warning(f"Token validation failed: {e}")
         raise credentials_exception
@@ -531,16 +559,31 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
 
     team_ids: List[int] = []
     org_ids: List[int] = []
+    active_team_id: Optional[int] = None
+    active_org_id: Optional[int] = None
     try:
         membership_lookup_id = user.id_int
         if membership_lookup_id is None:
             raise ValueError("User ID is non-numeric; skipping membership lookup.")
-        memberships = await list_memberships_for_user(membership_lookup_id)
-        team_ids = [m.get("team_id") for m in memberships if m.get("team_id") is not None]
-        org_ids = sorted({m.get("org_id") for m in memberships if m.get("org_id") is not None})
+        if token_team_ids or token_org_ids:
+            team_ids = token_team_ids or []
+            org_ids = token_org_ids or []
+        memberships = []
+        if not team_ids or not org_ids:
+            memberships = await list_memberships_for_user(membership_lookup_id)
+        if not team_ids:
+            team_ids = [m.get("team_id") for m in memberships if m.get("team_id") is not None]
+        if not org_ids:
+            org_ids = sorted({m.get("org_id") for m in memberships if m.get("org_id") is not None})
+        active_team_id = _normalize_active_id(token_active_team_id, team_ids)
+        active_org_id = _normalize_active_id(token_active_org_id, org_ids)
         try:
             request.state.team_ids = team_ids
             request.state.org_ids = org_ids
+            if active_team_id is not None:
+                request.state.active_team_id = active_team_id
+            if active_org_id is not None:
+                request.state.active_org_id = active_org_id
         except Exception:
             pass
     except Exception:
@@ -555,6 +598,8 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
             user_id=user.id_int,
             org_ids=org_ids,
             team_ids=team_ids,
+            active_org_id=active_org_id,
+            active_team_id=active_team_id,
             is_admin=bool(user.is_admin),
         )
     except Exception as scope_exc:
@@ -579,6 +624,8 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
             is_admin=bool(user.is_admin),
             org_ids=org_ids,
             team_ids=team_ids,
+            active_org_id=active_org_id,
+            active_team_id=active_team_id,
         )
         ip = request.client.host if getattr(request, "client", None) else None
         user_agent = request.headers.get("User-Agent") if getattr(request, "headers", None) else None
@@ -809,6 +856,8 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
 
         team_ids: List[int] = []
         org_ids: List[int] = []
+        active_team_id: Optional[int] = None
+        active_org_id: Optional[int] = None
         try:
             memberships = await list_memberships_for_user(int(user_id))
             team_ids = [
@@ -819,9 +868,15 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
             org_ids = sorted(
                 {m.get("org_id") for m in memberships if m.get("org_id") is not None}
             )
+            active_team_id = _normalize_active_id(None, team_ids)
+            active_org_id = _normalize_active_id(None, org_ids)
             try:
                 request.state.team_ids = team_ids
                 request.state.org_ids = org_ids
+                if active_team_id is not None:
+                    request.state.active_team_id = active_team_id
+                if active_org_id is not None:
+                    request.state.active_org_id = active_org_id
             except Exception as team_ctx_exc:
                 logger.debug(f"Unable to attach team/org ids to request.state: {team_ctx_exc}")
         except Exception as memberships_exc:
@@ -837,6 +892,8 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
                 user_id=user_obj.id_int,
                 org_ids=org_ids,
                 team_ids=team_ids,
+                active_org_id=active_org_id,
+                active_team_id=active_team_id,
                 is_admin=bool(user_obj.is_admin),
             )
         except Exception as scope_exc:
@@ -877,6 +934,8 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
                 is_admin=bool(user_obj.is_admin),
                 org_ids=org_ids,
                 team_ids=team_ids,
+                active_org_id=active_org_id,
+                active_team_id=active_team_id,
             )
             ip = request.client.host if getattr(request, "client", None) else None
             user_agent = (

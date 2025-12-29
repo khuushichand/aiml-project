@@ -77,7 +77,7 @@ Great for:
 - Building research workflows with RAG, evaluation, and prompt tooling.
 
 New here? Start with the Quickstart section below.
-If you're looking for a one line non-jargon explanation: Modular monolithic FastAPI application, exposes different functionality via REST endpoints for access to each core module, each module following loose coupling, aiming towards atomicity of each where/when possible. 
+If you're looking for a one line non-jargon explanation: Modular monolithic FastAPI application, exposes different functionality via REST endpoints for access to each core module, each module following loose coupling, aiming towards atomicity of each where/when possible.
 
 
 ## Current Status

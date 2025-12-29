@@ -161,7 +161,7 @@ start_backend() {
       echo "ERROR: Docker and docker compose not found. Install Docker Desktop or docker-compose." >&2
       exit 1
     fi
-    DCMD=(${compose_cmd})
+    read -r -a DCMD <<< "${compose_cmd}"
     COMPOSE_ARGS=()
     if [[ -n "${TLDW_DOCKER_COMPOSE:-}" ]]; then
       COMPOSE_ARGS+=(-f "${TLDW_DOCKER_COMPOSE}")
@@ -216,7 +216,11 @@ wait_for_backend() {
       echo "[+] Backend responded with HTTP ${code}"
       return 0
     fi
-    code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 "${headers[@]}" "${url}" || true)
+    if [[ ${#headers[@]} -gt 0 ]]; then
+      code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 "${headers[@]}" "${url}" || true)
+    else
+      code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 "${url}" || true)
+    fi
     if [[ "${code}" != "000" ]]; then
       echo "[+] Backend responded with HTTP ${code}"
       return 0

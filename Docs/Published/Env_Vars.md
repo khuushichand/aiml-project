@@ -73,6 +73,19 @@ Egress & Outbound Policy (global + Workflows)
 - `JOBS_*`: Lease/renew/metrics settings (see repo `Env_Vars.md`).
   - Common toggles include `JOBS_WEBHOOKS_*`, `JOBS_INTEGRITY_SWEEP_*`, `JOBS_METRICS_*`.
 
+## Chatbooks
+- `CHATBOOKS_JOBS_BACKEND`: Selects Chatbooks jobs backend (`core` default, `prompt_studio` via adapter).
+- `CHATBOOKS_CORE_WORKER_ENABLED`: Enable shared Chatbooks worker when backend=core (default `true`).
+- `CHATBOOKS_SIGNED_URLS`: Require HMAC-signed download URLs (`true|false`, default `false`).
+- `CHATBOOKS_SIGNING_SECRET`: Secret key used for download URL signing (required when signed URLs are enabled).
+- `CHATBOOKS_ENFORCE_EXPIRY`: Enforce job `expires_at` on download (`true|false`, default `true`).
+- `CHATBOOKS_URL_TTL_SECONDS`: Default expiry TTL for generated download links (default `86400`).
+- `CHATBOOKS_EXPORT_RETENTION_DEFAULT_HOURS`: Retention window for completed exports before expiry (default `24`).
+- `CHATBOOKS_CLEANUP_INTERVAL_SEC`: Scheduled cleanup cadence in seconds (set `0` to disable scheduling).
+- `CHATBOOKS_EVAL_EXPORT_MAX_ROWS`: Max rows exported per evaluation run (default `200`).
+- `CHATBOOKS_BINARY_LIMITS_MB`: JSON map of content type to max bundled size in MB (for example, `{"media": 0, "conversations": 10, "generated_docs": 25}`).
+- `CHATBOOKS_IMPORT_DICT_STRICT`: When true, skip dictionaries with fatal validation errors instead of importing with warnings.
+
 ## Audio Quotas & Workers
 - `AUDIO_JOBS_WORKER_ENABLED`: Start the in-process Audio Jobs worker on app startup (`true|false`).
 - `AUDIO_JOBS_OWNER_STRICT`: Enable owner-aware acquisition heuristic for fair scheduling (`true|false`).

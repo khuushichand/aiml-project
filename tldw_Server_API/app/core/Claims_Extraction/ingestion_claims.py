@@ -16,9 +16,25 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 from tldw_Server_API.app.core.config import settings as _settings
 from tldw_Server_API.app.core.Claims_Extraction.review_assignment import apply_review_rules
+from tldw_Server_API.app.core.Claims_Extraction.extractor_catalog import (
+    LLM_PROVIDER_MODES,
+    detect_claims_language,
+    get_spacy_pipeline,
+    resolve_claims_extractor_mode,
+    resolve_ner_model_name,
+    split_claims_sentences,
+)
+from tldw_Server_API.app.core.Claims_Extraction.budget_guard import (
+    ClaimsJobBudget,
+    ClaimsJobContext,
+    estimate_claims_tokens,
+)
 from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
     estimate_claims_cost,
+    record_claims_budget_exhausted,
     record_claims_provider_request,
+    record_claims_throttle,
+    should_throttle_claims_provider,
 )
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
@@ -36,6 +52,9 @@ def extract_claims_for_chunks(
     *,
     extractor_mode: str = "heuristic",
     max_per_chunk: int = 3,
+    language: Optional[str] = None,
+    budget: Optional[ClaimsJobBudget] = None,
+    job_context: Optional[ClaimsJobContext] = None,
 ) -> List[Dict[str, Any]]:
     """
     Extract a small set of candidate factual statements per chunk.
@@ -43,39 +62,34 @@ def extract_claims_for_chunks(
     Returns items with: chunk_index, claim_text.
     """
     claims: List[Dict[str, Any]] = []
+    resolved_mode = (extractor_mode or "heuristic").strip().lower()
+    resolved_language = (language or "").strip().lower() if language else None
+    if resolved_mode in {"auto", "detect"}:
+        combined_text = " ".join(
+            str((ch or {}).get("text") or (ch or {}).get("content") or "").strip()
+            for ch in (chunks or [])[:5]
+        )
+        resolved_mode, resolved_language = resolve_claims_extractor_mode(resolved_mode, combined_text)
+
     for ch in chunks or []:
         txt = (ch or {}).get("text") or (ch or {}).get("content") or ""
         meta = (ch or {}).get("metadata", {}) or {}
         idx = int(meta.get("chunk_index") or meta.get("index") or 0)
-        mode = (extractor_mode or "heuristic").strip().lower()
+        mode = resolved_mode
+        lang_hint = resolved_language or detect_claims_language(txt)
 
         # Heuristic (default)
         if mode in {"heuristic", "simple"}:
-            # Deterministic sync path: replicate heuristic sentence splitting without asyncio
-            sents: List[str] = []
-            parts = re.split(r"(?<=[\.!?])\s+", (txt or "").strip())
-            for p in parts:
-                t = (p or "").strip()
-                if len(t) >= 12:
-                    sents.append(t)
-                if len(sents) >= max_per_chunk:
-                    break
+            # Deterministic sync path with language-aware sentence splitting
+            sents = split_claims_sentences(txt, lang_hint, max_sentences=max_per_chunk)
         elif mode == "ner":
             # NER-assisted selection: keep sentences with named entities
             sents = []
             try:
-                import spacy  # type: ignore
-                model_name = None
-                try:
-                    model_name = str(_settings.get("CLAIMS_LOCAL_NER_MODEL", "en_core_web_sm") or "en_core_web_sm")
-                except Exception:
-                    model_name = "en_core_web_sm"
-                try:
-                    nlp = spacy.load(model_name)
-                except Exception:
-                    nlp = spacy.blank("en")
-                    if not nlp.has_pipe("sentencizer"):
-                        nlp.add_pipe("sentencizer")
+                model_name = resolve_ner_model_name(lang_hint)
+                nlp = get_spacy_pipeline(model_name, lang_hint)
+                if nlp is None or not nlp.has_pipe("ner"):
+                    raise RuntimeError("spaCy NER pipeline unavailable")
                 doc = nlp(txt)
                 for sent in getattr(doc, "sents", [doc]):
                     has_ent = any(getattr(ent, "label_", "") for ent in getattr(sent, "ents", []))
@@ -87,23 +101,10 @@ def extract_claims_for_chunks(
                         break
                 if not sents:
                     # fallback to heuristic
-                    parts = re.split(r"(?<=[\.!?])\s+", (txt or "").strip())
-                    for p in parts:
-                        t = (p or "").strip()
-                        if len(t) >= 12:
-                            sents.append(t)
-                        if len(sents) >= max_per_chunk:
-                            break
+                    sents = split_claims_sentences(txt, lang_hint, max_sentences=max_per_chunk)
             except Exception as e:
                 logger.debug(f"NER-assisted extraction failed: {e}; falling back to heuristic")
-                sents = []
-                parts = re.split(r"(?<=[\.!?])\s+", (txt or "").strip())
-                for p in parts:
-                    t = (p or "").strip()
-                    if len(t) >= 12:
-                        sents.append(t)
-                    if len(sents) >= max_per_chunk:
-                        break
+                sents = split_claims_sentences(txt, lang_hint, max_sentences=max_per_chunk)
 
         # LLM-based extractor via unified chat API (LLM_Calls)
         else:
@@ -122,11 +123,7 @@ def extract_claims_for_chunks(
                     return _cac
 
                 # Determine provider: explicit mode may be a provider name; otherwise use config
-                provider = mode if mode in {
-                    "openai", "anthropic", "cohere", "google", "groq", "huggingface",
-                    "openrouter", "deepseek", "mistral", "ollama", "kobold", "ooba",
-                    "tabbyapi", "vllm", "custom-openai-api", "custom-openai-api-2", "local-llm", "llama.cpp"
-                } else str(_settings.get("CLAIMS_LLM_PROVIDER", "openai")).lower()
+                provider = mode if mode in LLM_PROVIDER_MODES else str(_settings.get("CLAIMS_LLM_PROVIDER", "openai")).lower()
 
                 model_override = str(_settings.get("CLAIMS_LLM_MODEL", "") or "") or None
                 try:
@@ -176,85 +173,110 @@ def extract_claims_for_chunks(
                     model=model_override or "",
                     text=prompt,
                 )
-                start_time = time.time()
-                with _futures.ThreadPoolExecutor(max_workers=1) as _exec:
-                    fut = _exec.submit(_call_provider)
-                    try:
-                        resp = fut.result(timeout=timeout_sec)
-                        record_claims_provider_request(
+                skip_llm = False
+                budget_ratio = budget.remaining_ratio() if budget is not None else None
+                throttle, reason = should_throttle_claims_provider(
+                    provider=provider,
+                    model=model_override or "",
+                    budget_ratio=budget_ratio,
+                )
+                if throttle:
+                    record_claims_throttle(
+                        provider=provider,
+                        model=model_override or "",
+                        mode="ingestion",
+                        reason=reason or "throttle",
+                    )
+                    skip_llm = True
+                if not skip_llm and budget is not None:
+                    prompt_tokens = estimate_claims_tokens(prompt)
+                    if not budget.reserve(cost_usd=cost_estimate, tokens=prompt_tokens):
+                        record_claims_budget_exhausted(
                             provider=provider,
                             model=model_override or "",
                             mode="ingestion",
-                            latency_s=time.time() - start_time,
-                            estimated_cost=cost_estimate,
+                            reason=budget.exhausted_reason or "budget",
                         )
-                    except _futures.TimeoutError:
-                        try:
-                            fut.cancel()
-                        except Exception:
-                            pass
-                        record_claims_provider_request(
-                            provider=provider,
-                            model=model_override or "",
-                            mode="ingestion",
-                            latency_s=None,
-                            error="timeout",
-                            estimated_cost=cost_estimate,
-                        )
-                        raise TimeoutError(
-                            f"LLM extraction timed out after {timeout_sec:.1f}s for provider '{provider}'."
-                        )
-
-                # Normalize response to string
-                if isinstance(resp, str):
-                    text = resp
-                elif isinstance(resp, dict):
-                    try:
-                        choices = resp.get("choices") or []
-                        if choices:
-                            msg = choices[0].get("message") or {}
-                            content = msg.get("content")
-                            text = content if isinstance(content, str) else str(resp)
-                        else:
-                            text = str(resp)
-                    except Exception:
-                        text = str(resp)
+                        skip_llm = True
+                if skip_llm:
+                    sents = split_claims_sentences(txt, lang_hint, max_sentences=max_per_chunk)
                 else:
-                    try:
-                        text = "".join(list(resp))
-                    except Exception:
-                        text = str(resp)
+                    start_time = time.time()
+                    with _futures.ThreadPoolExecutor(max_workers=1) as _exec:
+                        fut = _exec.submit(_call_provider)
+                        try:
+                            resp = fut.result(timeout=timeout_sec)
+                            record_claims_provider_request(
+                                provider=provider,
+                                model=model_override or "",
+                                mode="ingestion",
+                                latency_s=time.time() - start_time,
+                                estimated_cost=cost_estimate,
+                            )
+                        except _futures.TimeoutError:
+                            try:
+                                fut.cancel()
+                            except Exception:
+                                pass
+                            record_claims_provider_request(
+                                provider=provider,
+                                model=model_override or "",
+                                mode="ingestion",
+                                latency_s=None,
+                                error="timeout",
+                                estimated_cost=cost_estimate,
+                            )
+                            raise TimeoutError(
+                                f"LLM extraction timed out after {timeout_sec:.1f}s for provider '{provider}'."
+                            )
 
-                # Extract JSON block (supports fenced code blocks and trailing text)
-                import json as _json
-                jtxt = None
-                # Prefer fenced blocks marked as json
-                fence_json = re.findall(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE)
-                for block in fence_json or []:
-                    try:
-                        _ = _json.loads(block)
-                        jtxt = block
-                        break
-                    except Exception:
-                        continue
-                if jtxt is None:
-                    # Fallback: last JSON-looking object in text
-                    m = re.search(r"\{[\s\S]*\}\s*$", text)
-                    jtxt = m.group(0) if m else text
-                data = _json.loads(jtxt)
-                for c in (data.get("claims") or [])[:max_per_chunk]:
-                    t = (c or {}).get("text")
-                    if isinstance(t, str) and t.strip():
-                        sents.append(t.strip())
-                if not sents:
-                    # fallback to heuristic
-                    parts = re.split(r"(?<=[\.!?])\s+", (txt or "").strip())
-                    for p in parts:
-                        t = (p or "").strip()
-                        if len(t) >= 12:
-                            sents.append(t)
-                        if len(sents) >= max_per_chunk:
+                    # Normalize response to string
+                    if isinstance(resp, str):
+                        text = resp
+                    elif isinstance(resp, dict):
+                        try:
+                            choices = resp.get("choices") or []
+                            if choices:
+                                msg = choices[0].get("message") or {}
+                                content = msg.get("content")
+                                text = content if isinstance(content, str) else str(resp)
+                            else:
+                                text = str(resp)
+                        except Exception:
+                            text = str(resp)
+                    else:
+                        try:
+                            text = "".join(list(resp))
+                        except Exception:
+                            text = str(resp)
+                    if budget is not None:
+                        budget.add_usage(tokens=estimate_claims_tokens(text))
+
+                if not skip_llm:
+                    # Extract JSON block (supports fenced code blocks and trailing text)
+                    import json as _json
+                    jtxt = None
+                    # Prefer fenced blocks marked as json
+                    fence_json = re.findall(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE)
+                    for block in fence_json or []:
+                        try:
+                            _ = _json.loads(block)
+                            jtxt = block
                             break
+                        except Exception:
+                            continue
+                    if jtxt is None:
+                        # Fallback: last JSON-looking object in text
+                        m = re.search(r"\{[\s\S]*\}\s*$", text)
+                        jtxt = m.group(0) if m else text
+                    data = _json.loads(jtxt)
+                    for c in (data.get("claims") or [])[:max_per_chunk]:
+                        t = (c or {}).get("text")
+                        if isinstance(t, str) and t.strip():
+                            sents.append(t.strip())
+                    if not sents:
+                        # fallback to heuristic
+                        sents = split_claims_sentences(txt, lang_hint, max_sentences=max_per_chunk)
             except Exception as e:
                 record_claims_provider_request(
                     provider=provider,
@@ -265,14 +287,7 @@ def extract_claims_for_chunks(
                     estimated_cost=cost_estimate,
                 )
                 logger.debug(f"LLM-based claim extraction failed ({mode}): {e}; falling back to heuristic")
-                sents = []
-                parts = re.split(r"(?<=[\.!?])\s+", (txt or "").strip())
-                for p in parts:
-                    t = (p or "").strip()
-                    if len(t) >= 12:
-                        sents.append(t)
-                    if len(sents) >= max_per_chunk:
-                        break
+                sents = split_claims_sentences(txt, lang_hint, max_sentences=max_per_chunk)
         for s in sents:
             claims.append({"chunk_index": idx, "claim_text": s})
     return claims

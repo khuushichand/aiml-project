@@ -181,7 +181,7 @@ Without claim clustering and deduplication:
 - How to manage cluster lifecycle (archival, deletion)?
 
 ## 16. References
-- Claims Module PRD (`Docs/Product/Completed/Claims_Module_PRD.md`).
-- Reviewer Workflow PRD (`Docs/Product/Completed/Claims_Reviewer_Workflow_PRD.md`).
-- Monitoring PRD (`Docs/Product/Completed/Claims_Monitoring_PRD.md`).
+- Claims Module PRD (`Docs/Product/Claims_Module/Claims_Module_PRD.md`).
+- Reviewer Workflow PRD (`Docs/Product/Claims_Module/Claims_Reviewer_Workflow_PRD.md`).
+- Monitoring PRD (`Docs/Product/Claims_Module/Claims_Monitoring_PRD.md`).
 - Embeddings infrastructure (`tldw_Server_API/app/core/Embeddings`).

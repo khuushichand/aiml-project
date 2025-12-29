@@ -99,6 +99,14 @@ class AuthPrincipal(BaseModel):
         default_factory=list,
         description="Team identifiers this principal is a member of.",
     )
+    active_org_id: Optional[int] = Field(
+        default=None,
+        description="Active organization identifier for the current token scope.",
+    )
+    active_team_id: Optional[int] = Field(
+        default=None,
+        description="Active team identifier for the current token scope.",
+    )
 
     model_config = ConfigDict(frozen=False)
 

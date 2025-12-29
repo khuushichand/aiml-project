@@ -28,7 +28,14 @@ DEFAULT_BYOK_ALLOWED_PROVIDERS: Set[str] = {
     "zai",
 }
 
-DEFAULT_ALLOWED_CREDENTIAL_FIELDS: Set[str] = {"base_url", "org_id", "project_id"}
+DEFAULT_ALLOWED_CREDENTIAL_FIELDS: Set[str] = {"org_id", "project_id"}
+
+
+def resolve_byok_base_url_allowlist() -> Set[str]:
+    settings = get_settings()
+    raw = getattr(settings, "BYOK_ALLOWED_BASE_URL_PROVIDERS", []) or []
+    allowed = {normalize_provider_name(p) for p in raw if str(p).strip()}
+    return allowed
 
 
 def is_byok_enabled() -> bool:
@@ -57,7 +64,10 @@ def validate_credential_fields(
     if not isinstance(credential_fields, dict):
         raise ValueError("credential_fields must be an object")
 
-    allowed_keys = DEFAULT_ALLOWED_CREDENTIAL_FIELDS
+    provider_norm = normalize_provider_name(provider)
+    allowed_keys = set(DEFAULT_ALLOWED_CREDENTIAL_FIELDS)
+    if provider_norm in resolve_byok_base_url_allowlist():
+        allowed_keys.add("base_url")
     cleaned: Dict[str, Any] = {}
     for key, value in credential_fields.items():
         if key not in allowed_keys:

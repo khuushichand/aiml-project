@@ -323,7 +323,11 @@ class SubscriptionService:
             price_id=price_id,
             success_url=success_url,
             cancel_url=cancel_url,
-            metadata={"org_id": str(org_id), "plan_name": plan_name},
+            metadata={
+                "org_id": str(org_id),
+                "plan_name": plan_name,
+                "billing_cycle": billing_cycle,
+            },
         )
 
         # Log the action
@@ -536,6 +540,7 @@ class SubscriptionService:
 
         handlers = {
             "checkout.session.completed": self._handle_checkout_completed,
+            "customer.subscription.created": self._handle_subscription_updated,
             "customer.subscription.updated": self._handle_subscription_updated,
             "customer.subscription.deleted": self._handle_subscription_deleted,
             "invoice.paid": self._handle_invoice_paid,
@@ -571,12 +576,33 @@ class SubscriptionService:
         subscription_id = session.get("subscription")
         customer_id = session.get("customer")
 
+        plan_updates: Dict[str, Any] = {}
+        plan_name = metadata.get("plan_name")
+        if plan_name:
+            try:
+                plan = await repo.get_plan_by_name(str(plan_name))
+                if plan:
+                    plan_updates["plan_id"] = plan["id"]
+                else:
+                    logger.warning(f"Checkout completed with unknown plan_name: {plan_name}")
+            except Exception as exc:
+                logger.warning(
+                    f"Checkout completed: failed to resolve plan_name {plan_name}: {exc}"
+                )
+
+        billing_cycle = metadata.get("billing_cycle")
+        if billing_cycle:
+            cycle_norm = str(billing_cycle).strip().lower()
+            if cycle_norm in {"monthly", "yearly"}:
+                plan_updates["billing_cycle"] = cycle_norm
+
         # Update subscription record
         await repo.update_org_subscription(
             org_id,
             stripe_subscription_id=subscription_id,
             stripe_customer_id=customer_id,
             status="active",
+            **plan_updates,
         )
 
         await repo.log_billing_action(

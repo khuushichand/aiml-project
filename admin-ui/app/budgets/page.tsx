@@ -47,6 +47,44 @@ type OrgBudgetItem = {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
 
+const parseOrgBudgetItems = (value: unknown): OrgBudgetItem[] => {
+  if (!Array.isArray(value)) return [];
+
+  return value.reduce<OrgBudgetItem[]>((acc, item) => {
+    if (!isRecord(item)) return acc;
+
+    const orgId = item.org_id;
+    const orgName = item.org_name;
+    const planName = item.plan_name;
+    const planDisplayName = item.plan_display_name;
+
+    if (
+      typeof orgId !== 'number'
+      || typeof orgName !== 'string'
+      || typeof planName !== 'string'
+      || typeof planDisplayName !== 'string'
+    ) {
+      return acc;
+    }
+
+    const orgSlug = typeof item.org_slug === 'string' || item.org_slug === null ? item.org_slug : undefined;
+    const updatedAt = typeof item.updated_at === 'string' || item.updated_at === null ? item.updated_at : undefined;
+    const budgets = isRecord(item.budgets) ? (item.budgets as BudgetSettings) : {};
+
+    acc.push({
+      org_id: orgId,
+      org_name: orgName,
+      org_slug: orgSlug,
+      plan_name: planName,
+      plan_display_name: planDisplayName,
+      budgets,
+      updated_at: updatedAt,
+    });
+
+    return acc;
+  }, []);
+};
+
 const formatCurrency = (value?: number | null) => {
   if (value === null || value === undefined) return '—';
   return `$${value.toFixed(2)}`;
@@ -59,7 +97,10 @@ const formatTokens = (value?: number | null) => {
 
 const formatDate = (value?: string | null) => {
   if (!value) return '—';
-  return new Date(value).toLocaleString();
+  return new Date(value).toLocaleString('en-US', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
 };
 
 const formatPercentList = (values: number[]) =>
@@ -91,6 +132,39 @@ const formatEnforcement = (mode?: BudgetEnforcementMode | null) => {
   return parts.length > 0 ? parts.join(' | ') : '—';
 };
 
+const renderBudgetCaps = (item: OrgBudgetItem) => {
+  const settings = item.budgets || {};
+  const hasAny = [
+    settings.budget_day_usd,
+    settings.budget_month_usd,
+    settings.budget_day_tokens,
+    settings.budget_month_tokens,
+  ].some((value) => value !== null && value !== undefined);
+  if (!hasAny) {
+    return <span className="text-muted-foreground text-sm">No caps set</span>;
+  }
+  return (
+    <div className="space-y-1 text-xs">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-muted-foreground">Daily USD</span>
+        <span className="font-mono">{formatCurrency(settings.budget_day_usd)}</span>
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-muted-foreground">Monthly USD</span>
+        <span className="font-mono">{formatCurrency(settings.budget_month_usd)}</span>
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-muted-foreground">Daily tokens</span>
+        <span className="font-mono">{formatTokens(settings.budget_day_tokens)}</span>
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-muted-foreground">Monthly tokens</span>
+        <span className="font-mono">{formatTokens(settings.budget_month_tokens)}</span>
+      </div>
+    </div>
+  );
+};
+
 export default function BudgetsPage() {
   const { selectedOrg } = useOrgContext();
   const { page, pageSize, setPage, setPageSize, resetPagination } = useUrlPagination();
@@ -116,7 +190,7 @@ export default function BudgetsPage() {
       setError('');
       const data = await api.getBudgets(budgetParams);
       if (isRecord(data)) {
-        const items = Array.isArray(data.items) ? (data.items as OrgBudgetItem[]) : [];
+        const items = parseOrgBudgetItems(data.items);
         setBudgets(items);
         const totalValue = typeof data.total === 'number' ? data.total : items.length;
         setTotal(totalValue);
@@ -144,39 +218,6 @@ export default function BudgetsPage() {
 
   const totalItems = total || budgets.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
-
-  const renderBudgetCaps = (item: OrgBudgetItem) => {
-    const settings = item.budgets || {};
-    const hasAny = [
-      settings.budget_day_usd,
-      settings.budget_month_usd,
-      settings.budget_day_tokens,
-      settings.budget_month_tokens,
-    ].some((value) => value !== null && value !== undefined);
-    if (!hasAny) {
-      return <span className="text-muted-foreground text-sm">No caps set</span>;
-    }
-    return (
-      <div className="space-y-1 text-xs">
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-muted-foreground">Daily USD</span>
-          <span className="font-mono">{formatCurrency(settings.budget_day_usd)}</span>
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-muted-foreground">Monthly USD</span>
-          <span className="font-mono">{formatCurrency(settings.budget_month_usd)}</span>
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-muted-foreground">Daily tokens</span>
-          <span className="font-mono">{formatTokens(settings.budget_day_tokens)}</span>
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-muted-foreground">Monthly tokens</span>
-          <span className="font-mono">{formatTokens(settings.budget_month_tokens)}</span>
-        </div>
-      </div>
-    );
-  };
 
   return (
     <ProtectedRoute>

@@ -30,8 +30,7 @@ Operators lack actionable visibility into claim extraction health. Without granu
 - Reduction in unsupported claim incidents by 30% quarter-over-quarter due to early warning.
 
 ## Implementation Status (repo state)
-- Complete: provider/rebuild/review metrics; monitoring config + alerts CRUD and evaluate endpoints persisted in Media DB; rebuild health endpoint with persisted heartbeat; dashboard analytics + export handles (download + history listing); alert scheduler (interval-based); webhook delivery retries/backoff, delivery metrics, and event recording; Alertmanager wiring/runbooks and email digest delivery; nightly review extractor metrics aggregation with `/api/v1/claims/review/metrics`.
-- Pending: hotspot index, richer data quality dashboards.
+Core monitoring (provider/rebuild/review metrics), alerting (config CRUD, scheduler, delivery retries, Alertmanager/email digest), and analytics/export (dashboard analytics, export + history, rebuild health, review metrics endpoint) are complete. Remaining gaps: hotspot index, richer data quality dashboards, and summary card UI wiring for Grafana links.
 
 ## 4. Out of Scope (v1)
 - Automated remediation (e.g., auto-switching providers) beyond alerts.
@@ -59,7 +58,7 @@ Operators lack actionable visibility into claim extraction health. Without granu
   - `claims_provider_estimated_cost_usd_total{provider, model}` (rough estimate, configurable multipliers).
   - `claims_turnaround_seconds{stage}` histogram capturing ingestion → review → approval timelines.
 - Instrument both ingestion-time extractors and answer-time verifiers.
-- Include tags for `workspace_id` or `client_id` when multi-tenant metrics required.
+- Include tags for `org_id`/`client_id` (workspace identifier) when multi-tenant metrics required.
 - Provide `mcp` metrics integration if available.
 - Document metric names in `Docs/Monitoring`.
 
@@ -177,7 +176,7 @@ Operators lack actionable visibility into claim extraction health. Without granu
 - Should alerts support escalation policies (pager duty integration)?
 
 ## 15. References
-- Claims Module PRD (`Docs/Product/Completed/Claims_Module_PRD.md`).
-- Reviewer Workflow PRD (`Docs/Product/Completed/Claims_Reviewer_Workflow_PRD.md`).
+- Claims Module PRD (`Docs/Product/Claims_Module/Claims_Module_PRD.md`).
+- Reviewer Workflow PRD (`Docs/Product/Claims_Module/Claims_Reviewer_Workflow_PRD.md`).
 - Metrics subsystem (`tldw_Server_API/app/core/Metrics`).
 - Rebuild service (`tldw_Server_API/app/core/Claims_Extraction/claims_rebuild_service.py`).

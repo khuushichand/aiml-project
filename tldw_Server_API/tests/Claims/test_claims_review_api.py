@@ -13,7 +13,7 @@ from tldw_Server_API.app.core.AuthNZ.permissions import CLAIMS_ADMIN, CLAIMS_REV
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 
-def _seed_review_db() -> tuple[str, int]:
+def _seed_review_db() -> tuple[str, int, int]:
     tmpdir = tempfile.mkdtemp(prefix="claims_review_")
     db_path = os.path.join(tmpdir, "media.db")
     db = MediaDatabase(db_path=db_path, client_id="1")
@@ -42,7 +42,7 @@ def _seed_review_db() -> tuple[str, int]:
         commit=True,
     )
     db.close_connection()
-    return db_path, claim_id
+    return db_path, claim_id, media_id
 
 
 def _principal_override():
@@ -87,7 +87,7 @@ def test_claims_review_flow():
     async def _override_user():
         return _User()
 
-    db_path, claim_id = _seed_review_db()
+    db_path, claim_id, _media_id = _seed_review_db()
 
     async def _override_db() -> AsyncGenerator[MediaDatabase, None]:
         override_db = MediaDatabase(db_path=db_path, client_id="1")
@@ -138,6 +138,74 @@ def test_claims_review_flow():
             assert r5.status_code == 200, r5.text
             rules = r5.json()
             assert any(int(item["id"]) == int(rule["id"]) for item in rules)
+    finally:
+        fastapi_app.dependency_overrides.pop(get_auth_principal, None)
+        fastapi_app.dependency_overrides.pop(get_request_user, None)
+        fastapi_app.dependency_overrides.pop(get_media_db_for_user, None)
+
+
+def test_claims_review_corrected_text_updates_span():
+    from tldw_Server_API.app.main import app as fastapi_app
+
+    class _User:
+        def __init__(self) -> None:
+            self.id = 1
+            self.username = "reviewer"
+            self.is_admin = False
+
+    async def _override_user():
+        return _User()
+
+    db_path, claim_id, media_id = _seed_review_db()
+
+    seed_db = MediaDatabase(db_path=db_path, client_id="1")
+    try:
+        seed_db.process_unvectorized_chunks(
+            media_id=media_id,
+            chunks=[
+                {
+                    "chunk_text": "A1. B. C.",
+                    "chunk_index": 0,
+                    "start_char": 0,
+                    "end_char": len("A1. B. C."),
+                    "chunk_type": "text",
+                }
+            ],
+        )
+    finally:
+        try:
+            seed_db.close_connection()
+        except Exception:
+            pass
+
+    async def _override_db() -> AsyncGenerator[MediaDatabase, None]:
+        override_db = MediaDatabase(db_path=db_path, client_id="1")
+        try:
+            yield override_db
+        finally:
+            try:
+                override_db.close_connection()
+            except Exception:
+                pass
+
+    fastapi_app.dependency_overrides[get_auth_principal] = _principal_override()
+    fastapi_app.dependency_overrides[get_request_user] = _override_user
+    fastapi_app.dependency_overrides[get_media_db_for_user] = _override_db
+
+    try:
+        with TestClient(fastapi_app) as client:
+            payload = {
+                "status": "approved",
+                "review_version": 1,
+                "notes": "Corrected",
+                "corrected_text": "A1.",
+            }
+            r = client.patch(f"/api/v1/claims/{claim_id}/review", json=payload)
+            assert r.status_code == 200, r.text
+            data = r.json()
+            assert data.get("claim_text") == "A1."
+            assert data.get("span_start") == 0
+            assert data.get("span_end") == 3
     finally:
         fastapi_app.dependency_overrides.pop(get_auth_principal, None)
         fastapi_app.dependency_overrides.pop(get_request_user, None)

@@ -2,10 +2,29 @@
 
 from __future__ import annotations
 
-from typing import Optional, Dict, Any
+from dataclasses import dataclass
+import threading
+import time
+from typing import Optional, Dict, Any, Tuple
 
 
 _CLAIMS_METRICS_REGISTERED = False
+_CLAIMS_PROVIDER_STATS: Dict[Tuple[str, str], "ClaimsProviderStats"] = {}
+_CLAIMS_PROVIDER_STATS_LOCK = threading.Lock()
+
+
+@dataclass
+class ClaimsProviderStats:
+    requests: int = 0
+    errors: int = 0
+    latency_ewma_ms: Optional[float] = None
+    cost_ewma_usd: Optional[float] = None
+    last_error_ts: Optional[float] = None
+
+    def error_rate(self) -> float:
+        if self.requests <= 0:
+            return 0.0
+        return float(self.errors) / float(self.requests)
 
 
 def _claims_monitoring_enabled() -> bool:
@@ -106,6 +125,22 @@ def _register_claims_metrics() -> None:
             description="Estimated claim extraction cost",
             unit="usd",
             labels=["provider", "model"],
+        )
+    )
+    reg.register_metric(
+        MetricDefinition(
+            name="claims_provider_budget_exhausted_total",
+            type=MetricType.COUNTER,
+            description="Claims provider budget guardrail hits",
+            labels=["provider", "model", "mode", "reason"],
+        )
+    )
+    reg.register_metric(
+        MetricDefinition(
+            name="claims_provider_throttled_total",
+            type=MetricType.COUNTER,
+            description="Claims provider throttling applied",
+            labels=["provider", "model", "mode", "reason"],
         )
     )
     reg.register_metric(
@@ -354,6 +389,186 @@ def record_claims_provider_request(
             float(estimated_cost),
             labels={"provider": str(provider), "model": str(model or "")},
         )
+    _update_claims_provider_stats(
+        provider=str(provider or ""),
+        model=str(model or ""),
+        latency_s=latency_s,
+        error=error,
+        estimated_cost=estimated_cost,
+    )
+
+
+def record_claims_budget_exhausted(
+    *,
+    provider: str,
+    model: str,
+    mode: str,
+    reason: str,
+) -> None:
+    if not _claims_monitoring_enabled():
+        return
+    _register_claims_metrics()
+    try:
+        from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
+    except Exception:
+        return
+    increment_counter(
+        "claims_provider_budget_exhausted_total",
+        1,
+        labels={
+            "provider": str(provider or ""),
+            "model": str(model or ""),
+            "mode": str(mode or ""),
+            "reason": str(reason or "unknown"),
+        },
+    )
+
+
+def record_claims_throttle(
+    *,
+    provider: str,
+    model: str,
+    mode: str,
+    reason: str,
+) -> None:
+    if not _claims_monitoring_enabled():
+        return
+    _register_claims_metrics()
+    try:
+        from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
+    except Exception:
+        return
+    increment_counter(
+        "claims_provider_throttled_total",
+        1,
+        labels={
+            "provider": str(provider or ""),
+            "model": str(model or ""),
+            "mode": str(mode or ""),
+            "reason": str(reason or "unknown"),
+        },
+    )
+
+
+def _update_claims_provider_stats(
+    *,
+    provider: str,
+    model: str,
+    latency_s: Optional[float],
+    error: Optional[str],
+    estimated_cost: Optional[float],
+) -> None:
+    key = (str(provider or ""), str(model or ""))
+    with _CLAIMS_PROVIDER_STATS_LOCK:
+        stats = _CLAIMS_PROVIDER_STATS.get(key)
+        if stats is None:
+            stats = ClaimsProviderStats()
+            _CLAIMS_PROVIDER_STATS[key] = stats
+        stats.requests += 1
+        if error:
+            stats.errors += 1
+            stats.last_error_ts = time.time()
+        if latency_s is not None:
+            latency_ms = float(latency_s) * 1000.0
+            if stats.latency_ewma_ms is None:
+                stats.latency_ewma_ms = latency_ms
+            else:
+                stats.latency_ewma_ms = (stats.latency_ewma_ms * 0.8) + (latency_ms * 0.2)
+        if estimated_cost is not None:
+            cost_val = float(estimated_cost)
+            if stats.cost_ewma_usd is None:
+                stats.cost_ewma_usd = cost_val
+            else:
+                stats.cost_ewma_usd = (stats.cost_ewma_usd * 0.8) + (cost_val * 0.2)
+
+
+def get_claims_provider_stats(provider: str, model: str) -> ClaimsProviderStats:
+    key = (str(provider or ""), str(model or ""))
+    with _CLAIMS_PROVIDER_STATS_LOCK:
+        stats = _CLAIMS_PROVIDER_STATS.get(key)
+        if stats is None:
+            return ClaimsProviderStats()
+        return ClaimsProviderStats(
+            requests=stats.requests,
+            errors=stats.errors,
+            latency_ewma_ms=stats.latency_ewma_ms,
+            cost_ewma_usd=stats.cost_ewma_usd,
+            last_error_ts=stats.last_error_ts,
+        )
+
+
+def should_throttle_claims_provider(
+    *,
+    provider: str,
+    model: str,
+    budget_ratio: Optional[float] = None,
+) -> Tuple[bool, Optional[str]]:
+    try:
+        from tldw_Server_API.app.core.config import settings
+    except Exception:
+        settings = {}
+    if not bool(settings.get("CLAIMS_ADAPTIVE_THROTTLE_ENABLED", False)):
+        return False, None
+
+    stats = get_claims_provider_stats(provider, model)
+    try:
+        latency_threshold = float(settings.get("CLAIMS_ADAPTIVE_THROTTLE_LATENCY_MS", 0) or 0)
+    except Exception:
+        latency_threshold = 0.0
+    try:
+        error_threshold = float(settings.get("CLAIMS_ADAPTIVE_THROTTLE_ERROR_RATE", 0) or 0)
+    except Exception:
+        error_threshold = 0.0
+    try:
+        budget_threshold = float(settings.get("CLAIMS_ADAPTIVE_THROTTLE_BUDGET_RATIO", 0) or 0)
+    except Exception:
+        budget_threshold = 0.0
+
+    if latency_threshold > 0 and stats.latency_ewma_ms is not None and stats.latency_ewma_ms > latency_threshold:
+        return True, "latency"
+    if error_threshold > 0 and stats.error_rate() > error_threshold:
+        return True, "error_rate"
+    if budget_threshold > 0 and budget_ratio is not None and budget_ratio <= budget_threshold:
+        return True, "budget_ratio"
+    return False, None
+
+
+def suggest_claims_concurrency(
+    *,
+    provider: str,
+    model: str,
+    requested: int,
+    budget_ratio: Optional[float] = None,
+) -> int:
+    try:
+        from tldw_Server_API.app.core.config import settings
+    except Exception:
+        settings = {}
+    if not bool(settings.get("CLAIMS_ADAPTIVE_THROTTLE_ENABLED", False)):
+        return requested
+
+    stats = get_claims_provider_stats(provider, model)
+    target = int(requested)
+    try:
+        latency_threshold = float(settings.get("CLAIMS_ADAPTIVE_THROTTLE_LATENCY_MS", 0) or 0)
+    except Exception:
+        latency_threshold = 0.0
+    try:
+        error_threshold = float(settings.get("CLAIMS_ADAPTIVE_THROTTLE_ERROR_RATE", 0) or 0)
+    except Exception:
+        error_threshold = 0.0
+    try:
+        budget_threshold = float(settings.get("CLAIMS_ADAPTIVE_THROTTLE_BUDGET_RATIO", 0) or 0)
+    except Exception:
+        budget_threshold = 0.0
+
+    if latency_threshold > 0 and stats.latency_ewma_ms is not None and stats.latency_ewma_ms > latency_threshold:
+        target = max(1, int(round(target / 2.0)))
+    if error_threshold > 0 and stats.error_rate() > error_threshold:
+        target = 1
+    if budget_threshold > 0 and budget_ratio is not None and budget_ratio <= budget_threshold:
+        target = min(target, 1)
+    return max(1, target)
 
 
 def record_claims_rebuild_metrics(

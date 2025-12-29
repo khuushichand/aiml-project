@@ -21,11 +21,6 @@ class UserProviderKeyUpsertRequest(BaseModel):
 
 class ProviderKeyTestRequest(BaseModel):
     provider: str = Field(..., description="Provider name (e.g., 'openai').")
-    api_key: str = Field(..., description="Provider API key.")
-    credential_fields: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="Optional provider-specific credential fields (e.g., base_url).",
-    )
     model: Optional[str] = Field(
         default=None,
         description="Optional model override for the test call.",
@@ -42,7 +37,7 @@ class UserProviderKeyResponse(BaseModel):
 class UserProviderKeyStatusItem(BaseModel):
     provider: str
     has_key: bool
-    source: Literal["user", "shared", "server_default", "none", "disabled"]
+    source: Literal["user", "team", "org", "server_default", "none", "disabled"]
     key_hint: Optional[str] = None
     last_used_at: Optional[datetime] = None
 
@@ -79,8 +74,6 @@ class SharedProviderKeyTestRequest(BaseModel):
     scope_type: Literal["org", "team"]
     scope_id: int
     provider: str
-    api_key: str
-    credential_fields: Optional[Dict[str, Any]] = None
     model: Optional[str] = None
 
 

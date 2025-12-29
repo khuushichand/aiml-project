@@ -228,6 +228,10 @@ class BillingEnforcer:
         This aggregates usage from both:
         - User-scoped calls (llm_usage_log.user_id joined via org_members)
         - API-key scoped calls (llm_usage_log.key_id joined via api_keys.org_id)
+
+        User-scoped calls are attributed to a user's primary org (earliest
+        org_members.added_at, tie-broken by lowest org_id) to avoid
+        double-counting when a user belongs to multiple orgs.
         """
         try:
             from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
@@ -241,12 +245,24 @@ class BillingEnforcer:
                     # PostgreSQL: sum tokens for all org members and org-scoped API keys
                     result = await conn.fetchval(
                         """
+                        WITH primary_org AS (
+                            SELECT user_id, org_id
+                            FROM (
+                                SELECT user_id, org_id,
+                                       ROW_NUMBER() OVER (
+                                           PARTITION BY user_id
+                                           ORDER BY added_at ASC, org_id ASC
+                                       ) AS rn
+                                FROM org_members
+                            ) ranked
+                            WHERE rn = 1
+                        )
                         SELECT COALESCE(SUM(sub.total_tokens), 0)
                         FROM (
                             SELECT l.total_tokens
                             FROM llm_usage_log AS l
-                            JOIN org_members AS om ON l.user_id = om.user_id
-                            WHERE om.org_id = $1 AND l.ts >= $2
+                            JOIN primary_org AS po ON l.user_id = po.user_id
+                            WHERE po.org_id = $1 AND l.ts >= $2
                             UNION ALL
                             SELECT l2.total_tokens
                             FROM llm_usage_log AS l2
@@ -260,12 +276,24 @@ class BillingEnforcer:
                     # SQLite: same aggregation using SQLite-compatible syntax
                     cur = await conn.execute(
                         """
+                        WITH primary_org AS (
+                            SELECT om.user_id, MIN(om.added_at) AS min_added
+                            FROM org_members om
+                            GROUP BY om.user_id
+                        ),
+                        primary_org_resolved AS (
+                            SELECT om.user_id, MIN(om.org_id) AS org_id
+                            FROM org_members om
+                            JOIN primary_org po
+                              ON po.user_id = om.user_id AND po.min_added = om.added_at
+                            GROUP BY om.user_id
+                        )
                         SELECT COALESCE(SUM(sub.total_tokens), 0)
                         FROM (
                             SELECT l.total_tokens
                             FROM llm_usage_log AS l
-                            JOIN org_members AS om ON l.user_id = om.user_id
-                            WHERE om.org_id = ? AND l.ts >= ?
+                            JOIN primary_org_resolved po ON l.user_id = po.user_id
+                            WHERE po.org_id = ? AND l.ts >= ?
                             UNION ALL
                             SELECT l2.total_tokens
                             FROM llm_usage_log AS l2
@@ -330,24 +358,37 @@ class BillingEnforcer:
 
             pool = await get_db_pool()
             repo = AuthnzOrgsTeamsRepo(db_pool=pool)
-            members = await repo.list_org_members(org_id=org_id, limit=1000)
-            if not members:
-                return 0
 
             db = EmbeddingsJobsDatabase()
             total_active = 0
-            for member in members:
-                user_id = member.get("user_id")
-                if user_id is None:
-                    continue
-                try:
-                    quota = db.get_or_create_user_quota(str(user_id))
-                    active = int(quota.get("concurrent_jobs_active", 0))
-                    if active > 0:
-                        total_active += active
-                except Exception:
-                    # Ignore per-user quota errors; continue best-effort aggregation
-                    continue
+            offset = 0
+            batch_size = 500
+
+            while True:
+                members = await repo.list_org_members(
+                    org_id=org_id,
+                    limit=batch_size,
+                    offset=offset,
+                )
+                if not members:
+                    break
+
+                for member in members:
+                    user_id = member.get("user_id")
+                    if user_id is None:
+                        continue
+                    try:
+                        quota = db.get_or_create_user_quota(str(user_id))
+                        active = int(quota.get("concurrent_jobs_active", 0))
+                        if active > 0:
+                            total_active += active
+                    except Exception:
+                        # Ignore per-user quota errors; continue best-effort aggregation
+                        continue
+
+                if len(members) < batch_size:
+                    break
+                offset += batch_size
 
             return int(total_active)
         except Exception as exc:
@@ -362,33 +403,49 @@ class BillingEnforcer:
 
             pool = await get_db_pool()
             repo = AuthnzOrgsTeamsRepo(db_pool=pool)
-            members = await repo.list_org_members(org_id=org_id, limit=1000)
-            if not members:
-                return 0
+            total_mb = 0
+            offset = 0
+            batch_size = 500  # keep below SQLite's max parameter count
 
-            user_ids = [m["user_id"] for m in members if m.get("user_id")]
-            if not user_ids:
-                return 0
+            def _chunks(values: List[int], size: int) -> List[List[int]]:
+                return [values[i:i + size] for i in range(0, len(values), size)]
 
-            async with pool.acquire() as conn:
-                if hasattr(conn, "fetchval"):
-                    # PostgreSQL
-                    result = await conn.fetchval(
-                        "SELECT COALESCE(SUM(storage_used_mb), 0) FROM users WHERE id = ANY($1)",
-                        user_ids
-                    )
-                else:
-                    # SQLite
-                    placeholders = ",".join("?" * len(user_ids))
-                    cur = await conn.execute(
-                        f"SELECT COALESCE(SUM(storage_used_mb), 0) FROM users WHERE id IN ({placeholders})",
-                        tuple(user_ids)
-                    )
-                    row = await cur.fetchone()
-                    result = row[0] if row else 0
+            while True:
+                members = await repo.list_org_members(
+                    org_id=org_id,
+                    limit=batch_size,
+                    offset=offset,
+                )
+                if not members:
+                    break
+
+                user_ids = [m["user_id"] for m in members if m.get("user_id")]
+                if user_ids:
+                    for chunk in _chunks(user_ids, batch_size):
+                        async with pool.acquire() as conn:
+                            if hasattr(conn, "fetchval"):
+                                # PostgreSQL
+                                result = await conn.fetchval(
+                                    "SELECT COALESCE(SUM(storage_used_mb), 0) FROM users WHERE id = ANY($1)",
+                                    chunk,
+                                )
+                            else:
+                                # SQLite
+                                placeholders = ",".join("?" * len(chunk))
+                                cur = await conn.execute(
+                                    f"SELECT COALESCE(SUM(storage_used_mb), 0) FROM users WHERE id IN ({placeholders})",
+                                    tuple(chunk),
+                                )
+                                row = await cur.fetchone()
+                                result = row[0] if row else 0
+                        total_mb += int(result or 0)
+
+                if len(members) < batch_size:
+                    break
+                offset += batch_size
 
             # Convert MB to bytes
-            return int((result or 0) * 1024 * 1024)
+            return int(total_mb * 1024 * 1024)
         except Exception as exc:
             logger.debug(f"Failed to get storage for org {org_id}: {exc}")
             return 0
@@ -479,7 +536,21 @@ class BillingEnforcer:
         }
 
         current = usage_map.get(category, 0)
-        limit_value = limits.get(category.value, -1)
+        limit_value_raw = limits.get(category.value, -1)
+        limit_value = -1
+        try:
+            if limit_value_raw is None or isinstance(limit_value_raw, bool):
+                raise TypeError("invalid limit value")
+            limit_value = int(limit_value_raw)
+        except Exception:
+            logger.warning(
+                f"Invalid limit value for {category.value} (org_id={org_id}): "
+                f"{limit_value_raw!r}; treating as unlimited"
+            )
+            limit_value = -1
+
+        if limit_value < -1:
+            limit_value = -1
 
         # Unlimited (-1)
         if limit_value == -1:

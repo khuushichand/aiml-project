@@ -166,6 +166,6 @@ Teams need confidence that surfaced claims have been vetted, yet the platform pr
 
 ## 15. Appendix
 - References:
-  - Existing Claims PRD (`Docs/Product/Completed/Claims_Module_PRD.md`).
+  - Existing Claims PRD (`Docs/Product/Claims_Module/Claims_Module_PRD.md`).
   - Claims endpoints (`tldw_Server_API/app/api/v1/endpoints/claims.py`).
   - Claims rebuild service (`tldw_Server_API/app/core/Claims_Extraction/claims_rebuild_service.py`).

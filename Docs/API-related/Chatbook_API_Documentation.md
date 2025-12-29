@@ -33,7 +33,7 @@ A Chatbook is a portable archive format (`.chatbook` file) that contains:
 - World books and lore
 - Dictionaries for text replacement
 - Generated documents
-- Media files (optional)
+- Media files and attachments (optional; small binaries bundled per content-type limits, large media referenced via metadata)
 - Embeddings (optional)
 
 ### Key Features
@@ -122,6 +122,7 @@ Authorization: Bearer <your-jwt-token>
 Implementation notes:
 - Sync mode persists a completed export job and returns its `job_id` plus a `download_url` that uses this UUID.
 - For robust automation, prefer async mode and then poll job status to obtain the canonical `download_url` by `job_id`.
+- When evaluation exports exceed row caps, export job metadata can include continuation tokens and the manifest can include `truncation.evaluations.continuations` so clients can resume the same chatbook export.
 
 **Response (Asynchronous)**:
 ```json
@@ -311,6 +312,7 @@ Signed URLs (optional):
 **Endpoint**: `POST /api/v1/chatbooks/cleanup`
 
 **Description**: Remove expired export files to free storage.
+Scheduled cleanup runs via the Chatbooks worker; use this endpoint to trigger a manual sweep.
 
 **Response**:
 ```json
@@ -380,6 +382,10 @@ Lightweight liveness check for the Chatbooks subsystem.
 - failed: Error occurred
 - cancelled: Manually stopped
 ```
+
+### Manifest Metadata (selected fields)
+- `metadata.binary_limits`: Per content-type max bundled bytes applied during export.
+- `truncation.evaluations.continuations`: Continuation tokens for resumable evaluation exports.
 
 ## Error Handling
 
@@ -637,7 +643,7 @@ When upgrading from the single-user version to multi-user with authentication:
 
 ---
 
-*Last updated: 2025-10-08*
+*Last updated: 2025-12-29*
 *API Version: 1.0.0*
 ## Configuration
 
@@ -648,9 +654,18 @@ Environment variables controlling Chatbooks job backends and downloads:
   - `prompt_studio`: Uses Prompt Studio’s JobManager via an adapter for status/cancellation.
 - `TLDW_JOBS_BACKEND`: Module-wide default backend for jobs. Domain overrides (like `CHATBOOKS_JOBS_BACKEND`) take precedence.
 - Deprecated: `TLDW_USE_PROMPT_STUDIO_QUEUE` (use `CHATBOOKS_JOBS_BACKEND=prompt_studio` instead).
+- `CHATBOOKS_CORE_WORKER_ENABLED`: `true|false` to start the Chatbooks worker when backend=`core`.
 
 Signed downloads:
 - `CHATBOOKS_SIGNED_URLS=true|false` - enable HMAC-signed download URLs.
 - `CHATBOOKS_SIGNING_SECRET` - shared secret for signing.
 - `CHATBOOKS_ENFORCE_EXPIRY=true|false` - enforce job `expires_at`.
 - `CHATBOOKS_URL_TTL_SECONDS` - default expiry TTL for generated links.
+
+Retention and cleanup:
+- `CHATBOOKS_EXPORT_RETENTION_DEFAULT_HOURS` - retention window for completed exports before expiry (default `24`).
+- `CHATBOOKS_CLEANUP_INTERVAL_SEC` - scheduled cleanup cadence in seconds (set to `0` to disable scheduling).
+
+Export limits:
+- `CHATBOOKS_EVAL_EXPORT_MAX_ROWS` - max rows exported per evaluation run (default `200`).
+- `CHATBOOKS_BINARY_LIMITS_MB` - JSON map of content type to max bundled size in MB (for example, `{"media": 0, "conversations": 10, "generated_docs": 25}`).

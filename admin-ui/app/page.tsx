@@ -8,17 +8,16 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Select } from '@/components/ui/select';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import { useOrgContext } from '@/components/OrgContextSwitcher';
+import { CreateOrganizationDialog } from '@/components/dashboard/CreateOrganizationDialog';
+import { CreateRegistrationCodeDialog } from '@/components/dashboard/CreateRegistrationCodeDialog';
+import { CreateUserDialog } from '@/components/dashboard/CreateUserDialog';
 import {
   Building2, Users, Key, Cpu, HardDrive, Activity, Shield, FileText,
   CheckCircle, AlertTriangle, Clock, TrendingUp, RefreshCw, ArrowRight,
-  Clipboard, Plus, Settings, Trash2, UserPlus
+  Clipboard, Settings, Trash2, UserPlus
 } from 'lucide-react';
 import { api } from '@/lib/api-client';
 import { AuditLog, LLMProvider, Organization, RegistrationCode, RegistrationSettings, User } from '@/types';
@@ -552,6 +551,25 @@ export default function DashboardPage() {
     setOrgForm({ name, slug });
   };
 
+  const handleOrgSlugChange = (slug: string) => {
+    setOrgForm((prev) => ({ ...prev, slug }));
+  };
+
+  const handleRegistrationDialogOpenChange = (open: boolean) => {
+    setShowRegistrationDialog(open);
+    if (!open) setRegistrationError('');
+  };
+
+  const handleCreateUserDialogOpenChange = (open: boolean) => {
+    setShowCreateUserDialog(open);
+    if (!open) setCreateUserError('');
+  };
+
+  const handleOrgDialogOpenChange = (open: boolean) => {
+    setShowOrgDialog(open);
+    if (!open) setOrgError('');
+  };
+
   const handleOrgSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     setOrgError('');
@@ -954,221 +972,25 @@ export default function DashboardPage() {
                       <p className="text-2xl font-bold">{activeRegistrationCount}</p>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      <Dialog
+                      <CreateRegistrationCodeDialog
                         open={showRegistrationDialog}
-                        onOpenChange={(open) => {
-                          setShowRegistrationDialog(open);
-                          if (!open) setRegistrationError('');
-                        }}
-                      >
-                        <DialogTrigger asChild>
-                          <Button size="sm">
-                            <Plus className="mr-2 h-4 w-4" />
-                            New Code
-                          </Button>
-                        </DialogTrigger>
-                        <DialogContent>
-                          <DialogHeader>
-                            <DialogTitle>Create registration code</DialogTitle>
-                            <DialogDescription>
-                              Share a code to allow new users to register with a predefined role.
-                            </DialogDescription>
-                          </DialogHeader>
-                          {registrationError && (
-                            <Alert variant="destructive">
-                              <AlertDescription>{registrationError}</AlertDescription>
-                            </Alert>
-                          )}
-                          <form onSubmit={handleRegistrationSubmit} className="space-y-4">
-                            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                              <div className="space-y-2">
-                                <Label htmlFor="reg-max-uses">Max uses</Label>
-                                <Input
-                                  id="reg-max-uses"
-                                  type="number"
-                                  min={1}
-                                  max={100}
-                                  value={registrationForm.max_uses}
-                                  onChange={(event) => setRegistrationForm((prev) => ({
-                                    ...prev,
-                                    max_uses: Number(event.target.value || 1),
-                                  }))}
-                                />
-                              </div>
-                              <div className="space-y-2">
-                                <Label htmlFor="reg-expiry-days">Expiry (days)</Label>
-                                <Input
-                                  id="reg-expiry-days"
-                                  type="number"
-                                  min={1}
-                                  max={365}
-                                  value={registrationForm.expiry_days}
-                                  onChange={(event) => setRegistrationForm((prev) => ({
-                                    ...prev,
-                                    expiry_days: Number(event.target.value || 1),
-                                  }))}
-                                />
-                              </div>
-                            </div>
-                            <div className="space-y-2">
-                              <Label htmlFor="reg-role">Role</Label>
-                              <Select
-                                id="reg-role"
-                                value={registrationForm.role_to_grant}
-                                onChange={(event) => setRegistrationForm((prev) => ({
-                                  ...prev,
-                                  role_to_grant: event.target.value,
-                                }))}
-                              >
-                                <option value="user">User</option>
-                                <option value="admin">Admin</option>
-                                <option value="service">Service</option>
-                              </Select>
-                            </div>
-                            <DialogFooter className="gap-2 sm:gap-0">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                onClick={() => setShowRegistrationDialog(false)}
-                                disabled={creatingRegistration}
-                              >
-                                Cancel
-                              </Button>
-                              <Button type="submit" disabled={creatingRegistration}>
-                                {creatingRegistration ? 'Creating…' : 'Create code'}
-                              </Button>
-                            </DialogFooter>
-                          </form>
-                        </DialogContent>
-                      </Dialog>
+                        onOpenChange={handleRegistrationDialogOpenChange}
+                        error={registrationError}
+                        form={registrationForm}
+                        setForm={setRegistrationForm}
+                        creating={creatingRegistration}
+                        onSubmit={handleRegistrationSubmit}
+                      />
 
-                      <Dialog
+                      <CreateUserDialog
                         open={showCreateUserDialog}
-                        onOpenChange={(open) => {
-                          setShowCreateUserDialog(open);
-                          if (!open) setCreateUserError('');
-                        }}
-                      >
-                        <DialogTrigger asChild>
-                          <Button size="sm" variant="outline">
-                            <UserPlus className="mr-2 h-4 w-4" />
-                            Create user
-                          </Button>
-                        </DialogTrigger>
-                        <DialogContent>
-                          <DialogHeader>
-                            <DialogTitle>Create user</DialogTitle>
-                            <DialogDescription>
-                              Create a user directly as an admin. Provide a temporary password.
-                            </DialogDescription>
-                          </DialogHeader>
-                          {createUserError && (
-                            <Alert variant="destructive">
-                              <AlertDescription>{createUserError}</AlertDescription>
-                            </Alert>
-                          )}
-                          <form onSubmit={handleCreateUserSubmit} className="space-y-4">
-                            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                              <div className="space-y-2">
-                                <Label htmlFor="create-user-username">Username</Label>
-                                <Input
-                                  id="create-user-username"
-                                  value={createUserForm.username}
-                                  onChange={(event) => setCreateUserForm((prev) => ({
-                                    ...prev,
-                                    username: event.target.value,
-                                  }))}
-                                  required
-                                />
-                              </div>
-                              <div className="space-y-2">
-                                <Label htmlFor="create-user-email">Email</Label>
-                                <Input
-                                  id="create-user-email"
-                                  type="email"
-                                  value={createUserForm.email}
-                                  onChange={(event) => setCreateUserForm((prev) => ({
-                                    ...prev,
-                                    email: event.target.value,
-                                  }))}
-                                  required
-                                />
-                              </div>
-                            </div>
-                            <div className="space-y-2">
-                              <Label htmlFor="create-user-password">Password</Label>
-                              <Input
-                                id="create-user-password"
-                                type="password"
-                                value={createUserForm.password}
-                                onChange={(event) => setCreateUserForm((prev) => ({
-                                  ...prev,
-                                  password: event.target.value,
-                                }))}
-                                required
-                              />
-                              <p className="text-xs text-muted-foreground">Minimum 10 characters.</p>
-                            </div>
-                            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                              <div className="space-y-2">
-                                <Label htmlFor="create-user-role">Role</Label>
-                                <Select
-                                  id="create-user-role"
-                                  value={createUserForm.role}
-                                  onChange={(event) => setCreateUserForm((prev) => ({
-                                    ...prev,
-                                    role: event.target.value,
-                                  }))}
-                                >
-                                  <option value="user">User</option>
-                                  <option value="admin">Admin</option>
-                                  <option value="service">Service</option>
-                                </Select>
-                              </div>
-                              <div className="space-y-2">
-                                <Label className="block">Status</Label>
-                                <div className="space-y-2">
-                                  <label className="flex items-center gap-2 text-sm">
-                                    <Checkbox
-                                      id="create-user-active"
-                                      checked={createUserForm.is_active}
-                                      onCheckedChange={(checked) => setCreateUserForm((prev) => ({
-                                        ...prev,
-                                        is_active: checked,
-                                      }))}
-                                    />
-                                    Active
-                                  </label>
-                                  <label className="flex items-center gap-2 text-sm">
-                                    <Checkbox
-                                      id="create-user-verified"
-                                      checked={createUserForm.is_verified}
-                                      onCheckedChange={(checked) => setCreateUserForm((prev) => ({
-                                        ...prev,
-                                        is_verified: checked,
-                                      }))}
-                                    />
-                                    Verified
-                                  </label>
-                                </div>
-                              </div>
-                            </div>
-                            <DialogFooter className="gap-2 sm:gap-0">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                onClick={() => setShowCreateUserDialog(false)}
-                                disabled={creatingUser}
-                              >
-                                Cancel
-                              </Button>
-                              <Button type="submit" disabled={creatingUser}>
-                                {creatingUser ? 'Creating…' : 'Create user'}
-                              </Button>
-                            </DialogFooter>
-                          </form>
-                        </DialogContent>
-                      </Dialog>
+                        onOpenChange={handleCreateUserDialogOpenChange}
+                        error={createUserError}
+                        form={createUserForm}
+                        setForm={setCreateUserForm}
+                        creating={creatingUser}
+                        onSubmit={handleCreateUserSubmit}
+                      />
                     </div>
                   </div>
 
@@ -1303,70 +1125,16 @@ export default function DashboardPage() {
                       <p className="text-sm text-muted-foreground">Organizations</p>
                       <p className="text-2xl font-bold">{stats.organizations}</p>
                     </div>
-                    <Dialog
+                    <CreateOrganizationDialog
                       open={showOrgDialog}
-                      onOpenChange={(open) => {
-                        setShowOrgDialog(open);
-                        if (!open) setOrgError('');
-                      }}
-                    >
-                      <DialogTrigger asChild>
-                        <Button size="sm">
-                          <Plus className="mr-2 h-4 w-4" />
-                          New Org
-                        </Button>
-                      </DialogTrigger>
-                      <DialogContent>
-                        <DialogHeader>
-                          <DialogTitle>Create organization</DialogTitle>
-                          <DialogDescription>Add a new organization to the system.</DialogDescription>
-                        </DialogHeader>
-                        {orgError && (
-                          <Alert variant="destructive">
-                            <AlertDescription>{orgError}</AlertDescription>
-                          </Alert>
-                        )}
-                        <form onSubmit={handleOrgSubmit} className="space-y-4">
-                          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                            <div className="space-y-2">
-                              <Label htmlFor="org-name">Organization name</Label>
-                              <Input
-                                id="org-name"
-                                value={orgForm.name}
-                                onChange={(event) => handleOrgNameChange(event.target.value)}
-                                required
-                              />
-                            </div>
-                            <div className="space-y-2">
-                              <Label htmlFor="org-slug">Slug</Label>
-                              <Input
-                                id="org-slug"
-                                value={orgForm.slug}
-                                onChange={(event) => setOrgForm((prev) => ({
-                                  ...prev,
-                                  slug: event.target.value,
-                                }))}
-                                required
-                              />
-                              <p className="text-xs text-muted-foreground">URL-friendly identifier</p>
-                            </div>
-                          </div>
-                          <DialogFooter className="gap-2 sm:gap-0">
-                            <Button
-                              type="button"
-                              variant="outline"
-                              onClick={() => setShowOrgDialog(false)}
-                              disabled={creatingOrg}
-                            >
-                              Cancel
-                            </Button>
-                            <Button type="submit" disabled={creatingOrg}>
-                              {creatingOrg ? 'Creating…' : 'Create organization'}
-                            </Button>
-                          </DialogFooter>
-                        </form>
-                      </DialogContent>
-                    </Dialog>
+                      onOpenChange={handleOrgDialogOpenChange}
+                      error={orgError}
+                      form={orgForm}
+                      onNameChange={handleOrgNameChange}
+                      onSlugChange={handleOrgSlugChange}
+                      creating={creatingOrg}
+                      onSubmit={handleOrgSubmit}
+                    />
                   </div>
 
                   <div className="mt-4 space-y-3">

@@ -114,7 +114,19 @@ Notes:
 - `JOBS_LEASE_RENEW_SECONDS`: Renewal cadence while a worker processes a job (default `30`).
 - `JOBS_LEASE_RENEW_JITTER_SECONDS`: Jitter (seconds) applied to renewals to avoid herd behavior (default `5`).
 - `JOBS_LEASE_MAX_SECONDS`: Cap for acquire/renew lease seconds (default `3600`).
+
+## Chatbooks
+- `CHATBOOKS_JOBS_BACKEND`: Selects Chatbooks jobs backend (`core` default, `prompt_studio` via adapter).
 - `CHATBOOKS_CORE_WORKER_ENABLED`: Enable shared Chatbooks worker when backend=core (default `true`).
+- `CHATBOOKS_SIGNED_URLS`: Require HMAC-signed download URLs (`true|false`, default `false`).
+- `CHATBOOKS_SIGNING_SECRET`: Secret key used for download URL signing (required when signed URLs are enabled).
+- `CHATBOOKS_ENFORCE_EXPIRY`: Enforce job `expires_at` on download (`true|false`, default `true`).
+- `CHATBOOKS_URL_TTL_SECONDS`: Default expiry TTL for generated download links (default `86400`).
+- `CHATBOOKS_EXPORT_RETENTION_DEFAULT_HOURS`: Retention window for completed exports before expiry (default `24`).
+- `CHATBOOKS_CLEANUP_INTERVAL_SEC`: Scheduled cleanup cadence in seconds (set `0` to disable scheduling).
+- `CHATBOOKS_EVAL_EXPORT_MAX_ROWS`: Max rows exported per evaluation run (default `200`).
+- `CHATBOOKS_BINARY_LIMITS_MB`: JSON map of content type to max bundled size in MB (for example, `{"media": 0, "conversations": 10, "generated_docs": 25}`).
+- `CHATBOOKS_IMPORT_DICT_STRICT`: When true, skip dictionaries with fatal validation errors instead of importing with warnings.
 
 ## Audio Jobs
 - `AUDIO_JOBS_WORKER_ENABLED`: Enable the in-process Audio Jobs worker (`true|false`, default `false`). When true, the worker starts at app startup and polls the Jobs backend for the `audio` domain pipeline stages.

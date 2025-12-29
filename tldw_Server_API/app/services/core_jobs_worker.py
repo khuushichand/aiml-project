@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -183,9 +183,10 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
                                 )
                             except Exception:
                                 logger.debug("metrics increment failed for export_stat_failed")
-                        ttl_seconds = int(os.getenv("CHATBOOKS_URL_TTL_SECONDS", "86400") or "86400")
-                        ej.expires_at = datetime.utcnow() + timedelta(seconds=ttl_seconds)
-                        ej.download_url = svc._build_download_url(ej.job_id, ej.expires_at)
+                        now_utc = datetime.now(timezone.utc)
+                        ej.expires_at = svc._get_export_expiry(now_utc)
+                        download_expires_at = svc._get_download_expiry(now_utc, ej.expires_at)
+                        ej.download_url = svc._build_download_url(ej.job_id, download_expires_at)
                         svc._save_export_job(ej)
                     jm.complete_job(int(job["id"]), result={"path": file_path}, worker_id=worker_id, lease_id=str(lease_id), completion_token=str(lease_id))
                 else:

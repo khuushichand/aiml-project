@@ -34,6 +34,27 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     SecurityAlertStatusResponse,
     SecurityAlertSinkStatus,
     AuditLogResponse,
+    BackupItem,
+    BackupListResponse,
+    BackupCreateRequest,
+    BackupCreateResponse,
+    BackupRestoreRequest,
+    BackupRestoreResponse,
+    RetentionPolicy,
+    RetentionPoliciesResponse,
+    RetentionPolicyUpdateRequest,
+    SystemLogEntry,
+    SystemLogsResponse,
+    MaintenanceState,
+    MaintenanceUpdateRequest,
+    FeatureFlagsResponse,
+    FeatureFlagItem,
+    FeatureFlagUpsertRequest,
+    IncidentItem,
+    IncidentListResponse,
+    IncidentCreateRequest,
+    IncidentUpdateRequest,
+    IncidentEventCreateRequest,
     UserQuotaUpdateRequest,
     UsageDailyResponse,
     UsageTopResponse,
@@ -233,6 +254,30 @@ from tldw_Server_API.app.services.admin_budgets_service import (
     list_org_budgets as svc_list_org_budgets,
     upsert_org_budget as svc_upsert_org_budget,
 )
+from tldw_Server_API.app.services.admin_data_ops_service import (
+    list_backup_items as svc_list_backup_items,
+    create_backup_snapshot as svc_create_backup_snapshot,
+    restore_backup_snapshot as svc_restore_backup_snapshot,
+    list_retention_policies as svc_list_retention_policies,
+    update_retention_policy as svc_update_retention_policy,
+    build_audit_log_csv as svc_build_audit_log_csv,
+    build_audit_log_json as svc_build_audit_log_json,
+    build_users_csv as svc_build_users_csv,
+    build_users_json as svc_build_users_json,
+)
+from tldw_Server_API.app.services.admin_system_ops_service import (
+    get_maintenance_state as svc_get_maintenance_state,
+    update_maintenance_state as svc_update_maintenance_state,
+    list_feature_flags as svc_list_feature_flags,
+    upsert_feature_flag as svc_upsert_feature_flag,
+    delete_feature_flag as svc_delete_feature_flag,
+    list_incidents as svc_list_incidents,
+    create_incident as svc_create_incident,
+    update_incident as svc_update_incident,
+    add_incident_event as svc_add_incident_event,
+    delete_incident as svc_delete_incident,
+)
+from tldw_Server_API.app.core.Logging.system_log_buffer import query_system_logs
 from tldw_Server_API.app.services.admin_service import update_api_key_metadata
 from tldw_Server_API.app.core.Security.webui_access_guard import (
     webui_remote_access_enabled,
@@ -334,6 +379,66 @@ async def _ensure_sqlite_authnz_ready_if_test_mode() -> None:
         logger.debug(f"AuthNZ test ensure skipped/failed: {_e}")
 
 
+async def _emit_admin_audit_event(
+    request: Request,
+    principal: AuthPrincipal,
+    *,
+    event_type: str,
+    category: str,
+    resource_type: str,
+    resource_id: Optional[str],
+    action: str,
+    metadata: Dict[str, Any],
+) -> None:
+    """Best-effort audit emission for admin actions."""
+    try:
+        actor_id_raw = getattr(request.state, "user_id", None) or principal.user_id
+        try:
+            actor_id = int(actor_id_raw) if actor_id_raw is not None else None
+        except (TypeError, ValueError):
+            actor_id = None
+        if actor_id is None:
+            return
+        from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+            get_or_create_audit_service_for_user_id,
+        )
+        from tldw_Server_API.app.core.Audit.unified_audit_service import (
+            AuditContext,
+            AuditEventType,
+            AuditEventCategory,
+        )
+        audit_service = await get_or_create_audit_service_for_user_id(actor_id)
+        correlation_id = (
+            request.headers.get("X-Correlation-ID")
+            or getattr(request.state, "correlation_id", None)
+        )
+        request_id = (
+            request.headers.get("X-Request-ID")
+            or getattr(request.state, "request_id", None)
+            or ""
+        )
+        ctx = AuditContext(
+            user_id=str(actor_id),
+            correlation_id=correlation_id,
+            request_id=request_id,
+            ip_address=(request.client.host if request.client else None),
+            user_agent=request.headers.get("user-agent"),
+            endpoint=str(request.url.path),
+            method=request.method,
+        )
+        await audit_service.log_event(
+            event_type=AuditEventType(event_type),
+            category=AuditEventCategory(category),
+            context=ctx,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            action=action,
+            metadata=metadata,
+        )
+    except Exception as exc:
+        logger.debug("Admin audit emission skipped: {}", exc)
+
+
 def _role_rank(role: Optional[str]) -> int:
     """Map a role string to its numeric rank using ROLE_HIERARCHY."""
     if role is None:
@@ -398,6 +503,15 @@ def _is_platform_admin(principal: AuthPrincipal) -> bool:
         return True
     roles = {str(role).strip().lower() for role in (principal.roles or [])}
     return bool(roles & PLATFORM_ADMIN_ROLES)
+
+
+def _require_platform_admin(principal: AuthPrincipal) -> None:
+    if _is_platform_admin(principal):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Platform admin role required",
+    )
 
 
 async def _get_admin_org_ids(principal: AuthPrincipal) -> Optional[List[int]]:
@@ -593,6 +707,53 @@ async def list_users(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve users",
         )
+
+
+@router.get("/users/export")
+async def export_users(
+    role: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    search: Optional[str] = None,
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    limit: int = Query(10000, ge=1, le=50000),
+    offset: int = Query(0, ge=0),
+    format: str = Query("csv", pattern="^(csv|json)$"),
+    filename: Optional[str] = Query(None, description="Optional filename for Content-Disposition"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> Response:
+    try:
+        org_ids = await _get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
+        repo = await AuthnzUsersRepo.from_pool()
+        users, total = await repo.list_users(
+            offset=offset,
+            limit=limit,
+            role=role,
+            is_active=is_active,
+            search=search,
+            org_ids=org_ids,
+        )
+        if format == "json":
+            content = svc_build_users_json(users, total=total, limit=limit, offset=offset)
+            resp = Response(content=content, media_type="application/json")
+            if not filename:
+                filename = "users.json"
+        else:
+            content = svc_build_users_csv(users)
+            resp = PlainTextResponse(content=content, media_type="text/csv")
+            if not filename:
+                filename = "users.csv"
+        if filename:
+            safe = filename.replace("\n", " ").replace("\r", " ").replace("\"", "_")
+            resp.headers["Content-Disposition"] = f"attachment; filename=\"{safe}\""
+        return resp
+    except Exception as exc:
+        logger.error(f"Failed to export users: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to export users")
 
 
 #######################################################################################################################
@@ -884,6 +1045,20 @@ async def admin_upsert_shared_byok_key(payload: SharedProviderKeyUpsertRequest) 
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    try:
+        await test_provider_credentials(
+            provider=provider_norm,
+            api_key=api_key,
+            credential_fields=credential_fields,
+            model=None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ChatAPIError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Provider test call failed") from exc
+
     secret_payload = build_secret_payload(api_key, credential_fields or None)
     try:
         envelope = encrypt_byok_payload(secret_payload)
@@ -931,12 +1106,27 @@ async def admin_test_shared_byok_key(payload: SharedProviderKeyTestRequest) -> S
     if not is_provider_allowlisted(provider_norm):
         raise HTTPException(status_code=403, detail="Provider not allowed for BYOK")
 
-    api_key = (payload.api_key or "").strip()
+    repo = await _get_shared_byok_repo()
+    row = await repo.fetch_secret(payload.scope_type, payload.scope_id, provider_norm)
+    if not row:
+        raise HTTPException(status_code=404, detail="Key not found")
+    encrypted_blob = row.get("encrypted_blob")
+    if not encrypted_blob:
+        raise HTTPException(status_code=404, detail="Key not found")
+    try:
+        stored_payload = decrypt_byok_payload(loads_envelope(encrypted_blob))
+    except Exception:
+        raise HTTPException(status_code=404, detail="Key not found")
+
+    api_key = (stored_payload.get("api_key") or "").strip()
     if not api_key:
-        raise HTTPException(status_code=400, detail="api_key is required")
+        raise HTTPException(status_code=404, detail="Key not found")
 
     try:
-        credential_fields = validate_credential_fields(provider_norm, payload.credential_fields)
+        credential_fields = validate_credential_fields(
+            provider_norm,
+            stored_payload.get("credential_fields") or {},
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -954,7 +1144,6 @@ async def admin_test_shared_byok_key(payload: SharedProviderKeyTestRequest) -> S
     except Exception as exc:
         raise HTTPException(status_code=502, detail="Provider test call failed") from exc
 
-    repo = await _get_shared_byok_repo()
     await _touch_shared_last_used_if_match(
         repo,
         scope_type=payload.scope_type,
@@ -4622,6 +4811,603 @@ async def get_audit_log(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve audit log"
         )
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Data Ops Endpoints (Backups, Retention, Exports)
+
+_BACKUP_DATASETS = {"media", "chacha", "prompts", "evaluations", "audit", "authnz"}
+
+
+@router.get("/backups", response_model=BackupListResponse)
+async def list_backups(
+    dataset: Optional[str] = Query(None, description="Dataset key to filter"),
+    user_id: Optional[int] = Query(None, description="User ID for per-user datasets"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> BackupListResponse:
+    try:
+        if dataset and dataset not in _BACKUP_DATASETS:
+            raise HTTPException(status_code=400, detail="unknown_dataset")
+        if user_id is not None:
+            await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
+        items, total = svc_list_backup_items(
+            dataset=dataset,
+            user_id=user_id,
+            limit=limit,
+            offset=offset,
+        )
+        payload = [
+            BackupItem(
+                id=item.filename,
+                dataset=item.dataset,
+                user_id=item.user_id,
+                status="ready",
+                size_bytes=item.size_bytes,
+                created_at=item.created_at,
+            )
+            for item in items
+        ]
+        return BackupListResponse(items=payload, total=total, limit=limit, offset=offset)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to list backups: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to list backups")
+
+
+@router.post("/backups", response_model=BackupCreateResponse)
+async def create_backup(
+    payload: BackupCreateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> BackupCreateResponse:
+    try:
+        dataset = payload.dataset.strip().lower()
+        if dataset not in _BACKUP_DATASETS:
+            raise HTTPException(status_code=400, detail="unknown_dataset")
+        if payload.user_id is not None:
+            await _enforce_admin_user_scope(principal, payload.user_id, require_hierarchy=False)
+        item = svc_create_backup_snapshot(
+            dataset=dataset,
+            user_id=payload.user_id,
+            backup_type=payload.backup_type or "full",
+            max_backups=payload.max_backups,
+        )
+        await _emit_admin_audit_event(
+            request,
+            principal,
+            event_type="data.write",
+            category="system",
+            resource_type="backup",
+            resource_id=item.filename,
+            action="backup.create",
+            metadata={
+                "dataset": dataset,
+                "user_id": item.user_id,
+                "size_bytes": item.size_bytes,
+            },
+        )
+        return BackupCreateResponse(
+            item=BackupItem(
+                id=item.filename,
+                dataset=item.dataset,
+                user_id=item.user_id,
+                status="ready",
+                size_bytes=item.size_bytes,
+                created_at=item.created_at,
+            )
+        )
+    except ValueError as exc:
+        if str(exc) == "unknown_dataset":
+            raise HTTPException(status_code=400, detail="unknown_dataset") from exc
+        raise HTTPException(status_code=400, detail="invalid_backup_request") from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to create backup: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to create backup")
+
+
+@router.post("/backups/{backup_id}/restore", response_model=BackupRestoreResponse)
+async def restore_backup(
+    backup_id: str,
+    payload: BackupRestoreRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> BackupRestoreResponse:
+    if not payload.confirm:
+        raise HTTPException(status_code=400, detail="confirm_required")
+    try:
+        dataset = payload.dataset.strip().lower()
+        if dataset not in _BACKUP_DATASETS:
+            raise HTTPException(status_code=400, detail="unknown_dataset")
+        if payload.user_id is not None:
+            await _enforce_admin_user_scope(principal, payload.user_id, require_hierarchy=False)
+        result = svc_restore_backup_snapshot(
+            dataset=dataset,
+            user_id=payload.user_id,
+            backup_id=backup_id,
+        )
+        await _emit_admin_audit_event(
+            request,
+            principal,
+            event_type="data.import",
+            category="system",
+            resource_type="backup",
+            resource_id=backup_id,
+            action="backup.restore",
+            metadata={
+                "dataset": dataset,
+                "user_id": payload.user_id,
+            },
+        )
+        return BackupRestoreResponse(status="restored", message=result)
+    except ValueError as exc:
+        if str(exc) == "unknown_dataset":
+            raise HTTPException(status_code=400, detail="unknown_dataset") from exc
+        raise HTTPException(status_code=400, detail="invalid_restore_request") from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to restore backup: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to restore backup")
+
+
+@router.get("/retention-policies", response_model=RetentionPoliciesResponse)
+async def list_retention_policies(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> RetentionPoliciesResponse:
+    try:
+        del principal
+        policies = [RetentionPolicy(**item) for item in svc_list_retention_policies()]
+        return RetentionPoliciesResponse(policies=policies)
+    except Exception as exc:
+        logger.error(f"Failed to list retention policies: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to list retention policies")
+
+
+@router.put("/retention-policies/{policy_key}", response_model=RetentionPolicy)
+async def update_retention_policy(
+    policy_key: str,
+    payload: RetentionPolicyUpdateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> RetentionPolicy:
+    try:
+        updated = svc_update_retention_policy(policy_key, payload.days)
+        await _emit_admin_audit_event(
+            request,
+            principal,
+            event_type="config.changed",
+            category="system",
+            resource_type="retention_policy",
+            resource_id=policy_key,
+            action="retention.update",
+            metadata={"days": payload.days},
+        )
+        return RetentionPolicy(**updated)
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "unknown_policy":
+            raise HTTPException(status_code=404, detail="unknown_policy") from exc
+        if detail == "invalid_range":
+            raise HTTPException(status_code=400, detail="invalid_range") from exc
+        raise HTTPException(status_code=400, detail="invalid_retention_update") from exc
+    except Exception as exc:
+        logger.error(f"Failed to update retention policy: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to update retention policy")
+
+
+@router.get("/audit-log/export")
+async def export_audit_log(
+    user_id: Optional[int] = None,
+    action: Optional[str] = None,
+    resource: Optional[str] = Query(None, description="Filter by resource type or type:id"),
+    start: Optional[str] = Query(None, description="ISO date or datetime (start)"),
+    end: Optional[str] = Query(None, description="ISO date or datetime (end)"),
+    days: int = Query(30, ge=1, le=365),
+    limit: int = Query(10000, ge=1, le=50000),
+    offset: int = Query(0, ge=0),
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    format: str = Query("csv", pattern="^(csv|json)$"),
+    filename: Optional[str] = Query(None, description="Optional filename for Content-Disposition"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> Response:
+    audit = await get_audit_log(
+        user_id=user_id,
+        action=action,
+        resource=resource,
+        start=start,
+        end=end,
+        days=days,
+        limit=limit,
+        offset=offset,
+        org_id=org_id,
+        principal=principal,
+        db=db,
+    )
+    if format == "json":
+        content = svc_build_audit_log_json(audit.entries, total=audit.total, limit=limit, offset=offset)
+        resp = Response(content=content, media_type="application/json")
+        if not filename:
+            filename = "audit_log.json"
+    else:
+        content = svc_build_audit_log_csv(audit.entries)
+        resp = PlainTextResponse(content=content, media_type="text/csv")
+        if not filename:
+            filename = "audit_log.csv"
+    if filename:
+        safe = filename.replace("\n", " ").replace("\r", " ").replace("\"", "_")
+        resp.headers["Content-Disposition"] = f"attachment; filename=\"{safe}\""
+    return resp
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# System Ops Endpoints (Logs, Maintenance, Feature Flags, Incidents)
+
+@router.get("/system/logs", response_model=SystemLogsResponse)
+async def list_system_logs(
+    start: Optional[str] = Query(None, description="ISO date or datetime (start)"),
+    end: Optional[str] = Query(None, description="ISO date or datetime (end)"),
+    level: Optional[str] = Query(None, description="Log level (INFO, ERROR, etc.)"),
+    service: Optional[str] = Query(None, description="Logger or module filter"),
+    query: Optional[str] = Query(None, description="Substring search"),
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    user_id: Optional[int] = Query(None, description="Restrict to a specific user"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> SystemLogsResponse:
+    def _parse_date_param(value: Optional[str], label: str, end_of_day: bool = False) -> Optional[datetime]:
+        if value is None:
+            return None
+        raw = str(value).strip()
+        if not raw:
+            return None
+        raw = raw.replace("Z", "+00:00")
+        try:
+            if re.match(r"^\d{4}-\d{2}-\d{2}$", raw):
+                dt = datetime.fromisoformat(raw)
+                if end_of_day:
+                    dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+                return dt
+            return datetime.fromisoformat(raw)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid {label} date format") from exc
+
+    start_dt = _parse_date_param(start, "start")
+    end_dt = _parse_date_param(end, "end", end_of_day=True)
+    if start_dt and end_dt and start_dt > end_dt:
+        raise HTTPException(status_code=400, detail="Start date must be on or before end date")
+
+    org_ids = await _get_admin_org_ids(principal)
+    if org_id is not None:
+        if org_ids is None:
+            org_ids = [org_id]
+        else:
+            org_ids = [org_id] if org_id in org_ids else []
+    if org_ids is not None and len(org_ids) == 0:
+        return SystemLogsResponse(items=[], total=0, limit=limit, offset=offset)
+
+    items, total = query_system_logs(
+        start=start_dt,
+        end=end_dt,
+        level=level,
+        service=service,
+        query=query,
+        org_id=org_id if org_ids is None else None,
+        org_ids=org_ids,
+        user_id=user_id,
+        limit=limit,
+        offset=offset,
+    )
+    return SystemLogsResponse(
+        items=[SystemLogEntry(**item) for item in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/maintenance", response_model=MaintenanceState)
+async def get_maintenance_mode(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> MaintenanceState:
+    del principal
+    state = svc_get_maintenance_state()
+    return MaintenanceState(**state)
+
+
+@router.put("/maintenance", response_model=MaintenanceState)
+async def update_maintenance_mode(
+    payload: MaintenanceUpdateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> MaintenanceState:
+    _require_platform_admin(principal)
+    actor = principal.email or principal.username or (str(principal.user_id) if principal.user_id is not None else None)
+    state = svc_update_maintenance_state(
+        enabled=payload.enabled,
+        message=payload.message,
+        allowlist_user_ids=payload.allowlist_user_ids,
+        allowlist_emails=payload.allowlist_emails,
+        actor=actor,
+    )
+    await _emit_admin_audit_event(
+        request,
+        principal,
+        event_type="config.changed",
+        category="system",
+        resource_type="maintenance",
+        resource_id="maintenance_mode",
+        action="maintenance.update",
+        metadata={"enabled": payload.enabled},
+    )
+    return MaintenanceState(**state)
+
+
+@router.get("/feature-flags", response_model=FeatureFlagsResponse)
+async def list_feature_flags(
+    scope: Optional[str] = Query(None, description="global|org|user"),
+    org_id: Optional[int] = Query(None, description="Organization ID for org-scoped flags"),
+    user_id: Optional[int] = Query(None, description="User ID for user-scoped flags"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> FeatureFlagsResponse:
+    org_ids = await _get_admin_org_ids(principal)
+    if org_id is not None and org_ids is not None:
+        org_ids = [org_id] if org_id in org_ids else []
+    if org_ids is not None and len(org_ids) == 0:
+        return FeatureFlagsResponse(items=[], total=0)
+    try:
+        items = svc_list_feature_flags(
+            scope=scope,
+            org_id=org_id if org_ids is None else None,
+            user_id=user_id,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "invalid_scope":
+            raise HTTPException(status_code=400, detail="invalid_scope") from exc
+        raise HTTPException(status_code=400, detail="invalid_feature_flag") from exc
+    if org_ids is not None:
+        items = [item for item in items if item.get("org_id") in org_ids]
+    return FeatureFlagsResponse(items=[FeatureFlagItem(**item) for item in items], total=len(items))
+
+
+@router.put("/feature-flags/{flag_key}", response_model=FeatureFlagItem)
+async def upsert_feature_flag(
+    flag_key: str,
+    payload: FeatureFlagUpsertRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> FeatureFlagItem:
+    _require_platform_admin(principal)
+    actor = principal.email or principal.username or (str(principal.user_id) if principal.user_id is not None else None)
+    try:
+        flag = svc_upsert_feature_flag(
+            key=flag_key,
+            scope=payload.scope,
+            enabled=payload.enabled,
+            description=payload.description,
+            org_id=payload.org_id,
+            user_id=payload.user_id,
+            actor=actor,
+            note=payload.note,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail in {"invalid_scope", "missing_org_id", "missing_user_id", "invalid_key"}:
+            raise HTTPException(status_code=400, detail=detail) from exc
+        raise HTTPException(status_code=400, detail="invalid_feature_flag") from exc
+    await _emit_admin_audit_event(
+        request,
+        principal,
+        event_type="config.changed",
+        category="system",
+        resource_type="feature_flag",
+        resource_id=flag_key,
+        action="feature_flag.upsert",
+        metadata={"scope": payload.scope, "enabled": payload.enabled},
+    )
+    return FeatureFlagItem(**flag)
+
+
+@router.delete("/feature-flags/{flag_key}", response_model=MessageResponse)
+async def delete_feature_flag(
+    flag_key: str,
+    request: Request,
+    scope: str = Query(..., description="global|org|user"),
+    org_id: Optional[int] = Query(None),
+    user_id: Optional[int] = Query(None),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> MessageResponse:
+    _require_platform_admin(principal)
+    try:
+        svc_delete_feature_flag(key=flag_key, scope=scope, org_id=org_id, user_id=user_id)
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "invalid_scope":
+            raise HTTPException(status_code=400, detail="invalid_scope") from exc
+        if detail == "not_found":
+            raise HTTPException(status_code=404, detail="feature_flag_not_found") from exc
+        raise HTTPException(status_code=400, detail="invalid_feature_flag") from exc
+    if request is not None:
+        await _emit_admin_audit_event(
+            request,
+            principal,
+            event_type="config.changed",
+            category="system",
+            resource_type="feature_flag",
+            resource_id=flag_key,
+            action="feature_flag.delete",
+            metadata={"scope": scope, "org_id": org_id, "user_id": user_id},
+        )
+    return MessageResponse(message="feature_flag_deleted")
+
+
+@router.get("/incidents", response_model=IncidentListResponse)
+async def list_incidents(
+    status: Optional[str] = Query(None, description="Incident status"),
+    severity: Optional[str] = Query(None, description="Incident severity"),
+    tag: Optional[str] = Query(None, description="Filter by tag"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> IncidentListResponse:
+    del principal
+    items, total = svc_list_incidents(
+        status=status,
+        severity=severity,
+        tag=tag,
+        limit=limit,
+        offset=offset,
+    )
+    return IncidentListResponse(
+        items=[IncidentItem(**item) for item in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post("/incidents", response_model=IncidentItem)
+async def create_incident(
+    payload: IncidentCreateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> IncidentItem:
+    _require_platform_admin(principal)
+    actor = principal.email or principal.username or (str(principal.user_id) if principal.user_id is not None else None)
+    try:
+        incident = svc_create_incident(
+            title=payload.title,
+            status=payload.status,
+            severity=payload.severity,
+            summary=payload.summary,
+            tags=payload.tags,
+            actor=actor,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail in {"invalid_title", "invalid_status", "invalid_severity"}:
+            raise HTTPException(status_code=400, detail=detail) from exc
+        raise HTTPException(status_code=400, detail="invalid_incident") from exc
+    await _emit_admin_audit_event(
+        request,
+        principal,
+        event_type="ops.incident",
+        category="system",
+        resource_type="incident",
+        resource_id=incident.get("id"),
+        action="incident.create",
+        metadata={"status": incident.get("status"), "severity": incident.get("severity")},
+    )
+    return IncidentItem(**incident)
+
+
+@router.patch("/incidents/{incident_id}", response_model=IncidentItem)
+async def update_incident(
+    incident_id: str,
+    payload: IncidentUpdateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> IncidentItem:
+    _require_platform_admin(principal)
+    actor = principal.email or principal.username or (str(principal.user_id) if principal.user_id is not None else None)
+    try:
+        incident = svc_update_incident(
+            incident_id=incident_id,
+            title=payload.title,
+            status=payload.status,
+            severity=payload.severity,
+            summary=payload.summary,
+            tags=payload.tags,
+            update_message=payload.update_message,
+            actor=actor,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "not_found":
+            raise HTTPException(status_code=404, detail="incident_not_found") from exc
+        if detail in {"invalid_status", "invalid_severity"}:
+            raise HTTPException(status_code=400, detail=detail) from exc
+        raise HTTPException(status_code=400, detail="invalid_incident") from exc
+    await _emit_admin_audit_event(
+        request,
+        principal,
+        event_type="ops.incident",
+        category="system",
+        resource_type="incident",
+        resource_id=incident_id,
+        action="incident.update",
+        metadata={"status": incident.get("status"), "severity": incident.get("severity")},
+    )
+    return IncidentItem(**incident)
+
+
+@router.post("/incidents/{incident_id}/events", response_model=IncidentItem)
+async def add_incident_event(
+    incident_id: str,
+    payload: IncidentEventCreateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> IncidentItem:
+    _require_platform_admin(principal)
+    actor = principal.email or principal.username or (str(principal.user_id) if principal.user_id is not None else None)
+    try:
+        incident = svc_add_incident_event(
+            incident_id=incident_id,
+            message=payload.message,
+            actor=actor,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "invalid_message":
+            raise HTTPException(status_code=400, detail=detail) from exc
+        if detail == "not_found":
+            raise HTTPException(status_code=404, detail="incident_not_found") from exc
+        raise HTTPException(status_code=400, detail="invalid_incident") from exc
+    await _emit_admin_audit_event(
+        request,
+        principal,
+        event_type="ops.incident",
+        category="system",
+        resource_type="incident",
+        resource_id=incident_id,
+        action="incident.event",
+        metadata={"message": payload.message},
+    )
+    return IncidentItem(**incident)
+
+
+@router.delete("/incidents/{incident_id}", response_model=MessageResponse)
+async def delete_incident(
+    incident_id: str,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> MessageResponse:
+    _require_platform_admin(principal)
+    try:
+        svc_delete_incident(incident_id=incident_id)
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "not_found":
+            raise HTTPException(status_code=404, detail="incident_not_found") from exc
+        raise HTTPException(status_code=400, detail="invalid_incident") from exc
+    await _emit_admin_audit_event(
+        request,
+        principal,
+        event_type="ops.incident",
+        category="system",
+        resource_type="incident",
+        resource_id=incident_id,
+        action="incident.delete",
+        metadata={},
+    )
+    return MessageResponse(message="incident_deleted")
 
 
 # ---------------------------------------------------------------------------------------------------------------------

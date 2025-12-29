@@ -3,24 +3,7 @@
 import { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import {
-  Building2,
-  Users,
-  LayoutDashboard,
-  LogOut,
-  Key,
-  Shield,
-  Settings,
-  FileText,
-  Activity,
-  Cpu,
-  UserCog,
-  ListChecks,
-  BarChart3,
-  Wallet,
-  Menu,
-  X,
-} from 'lucide-react';
+import { LogOut, Menu, X } from 'lucide-react';
 import { logout, getCurrentUser } from '@/lib/auth';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -28,23 +11,7 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import { OrgContextSwitcher } from '@/components/OrgContextSwitcher';
 import { usePermissions } from '@/components/PermissionGuard';
 import { useToast } from '@/components/ui/toast';
-
-// Navigation items with required permissions/roles
-const navigation = [
-  { name: 'Dashboard', href: '/', icon: LayoutDashboard },
-  { name: 'Users', href: '/users', icon: Users, permission: 'read:users' },
-  { name: 'Organizations', href: '/organizations', icon: Building2, permission: 'read:orgs' },
-  { name: 'Teams', href: '/teams', icon: UserCog, permission: 'read:teams' },
-  { name: 'Roles & Permissions', href: '/roles', icon: Shield, role: ['admin', 'super_admin', 'owner'] },
-  { name: 'API Keys', href: '/api-keys', icon: Key, permission: 'read:api_keys' },
-  { name: 'LLM Providers', href: '/providers', icon: Cpu, permission: 'read:config' },
-  { name: 'Audit Logs', href: '/audit', icon: FileText, permission: 'read:audit' },
-  { name: 'Monitoring', href: '/monitoring', icon: Activity, role: ['admin', 'super_admin', 'owner'] },
-  { name: 'Jobs', href: '/jobs', icon: ListChecks, role: ['admin', 'super_admin', 'owner'] },
-  { name: 'Usage', href: '/usage', icon: BarChart3, role: ['admin', 'super_admin', 'owner'] },
-  { name: 'Budgets', href: '/budgets', icon: Wallet, role: ['admin', 'super_admin', 'owner'] },
-  { name: 'Configuration', href: '/config', icon: Settings, role: ['super_admin', 'owner'] },
-];
+import { navigation } from '@/lib/navigation';
 
 // Mobile menu context
 interface MobileMenuContextType {
@@ -84,13 +51,14 @@ function MobileHeader() {
 function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   const router = useRouter();
-  const user = getCurrentUser();
+  const [user, setUser] = useState(() => getCurrentUser());
   const { hasPermission, hasRole, loading: permLoading } = usePermissions();
   const { error: showError } = useToast();
 
   const handleLogout = async () => {
     try {
       await logout();
+      setUser(null);
       router.push('/login');
     } catch (error) {
       console.error('Logout failed:', error);

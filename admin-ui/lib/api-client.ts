@@ -369,6 +369,79 @@ export const api = {
   },
 
   // ============================================
+  // Data Ops
+  // ============================================
+  getBackups: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return request(`/admin/backups${queryParams ? `?${queryParams}` : ''}`);
+  },
+  createBackup: (data: Record<string, unknown>) => request('/admin/backups', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  restoreBackup: (backupId: string, data: Record<string, unknown>) =>
+    request(`/admin/backups/${encodeURIComponent(backupId)}/restore`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  getRetentionPolicies: () => request('/admin/retention-policies'),
+  updateRetentionPolicy: (policyKey: string, data: Record<string, unknown>) =>
+    request(`/admin/retention-policies/${encodeURIComponent(policyKey)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  // ============================================
+  // System Ops
+  // ============================================
+  getSystemLogs: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return request(`/admin/system/logs${queryParams ? `?${queryParams}` : ''}`);
+  },
+  getMaintenanceMode: () => request('/admin/maintenance'),
+  updateMaintenanceMode: (data: Record<string, unknown>) => request('/admin/maintenance', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  }),
+  getFeatureFlags: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return request(`/admin/feature-flags${queryParams ? `?${queryParams}` : ''}`);
+  },
+  upsertFeatureFlag: (flagKey: string, data: Record<string, unknown>) =>
+    request(`/admin/feature-flags/${encodeURIComponent(flagKey)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteFeatureFlag: (flagKey: string, params: Record<string, string>) => {
+    const queryParams = new URLSearchParams(params).toString();
+    return request(`/admin/feature-flags/${encodeURIComponent(flagKey)}?${queryParams}`, {
+      method: 'DELETE',
+    });
+  },
+  getIncidents: (params?: Record<string, string>) => {
+    const queryParams = params ? new URLSearchParams(params).toString() : '';
+    return request(`/admin/incidents${queryParams ? `?${queryParams}` : ''}`);
+  },
+  createIncident: (data: Record<string, unknown>) => request('/admin/incidents', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  updateIncident: (incidentId: string, data: Record<string, unknown>) =>
+    request(`/admin/incidents/${encodeURIComponent(incidentId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  addIncidentEvent: (incidentId: string, data: Record<string, unknown>) =>
+    request(`/admin/incidents/${encodeURIComponent(incidentId)}/events`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  deleteIncident: (incidentId: string) =>
+    request(`/admin/incidents/${encodeURIComponent(incidentId)}`, {
+      method: 'DELETE',
+    }),
+
+  // ============================================
   // Audit Logs
   // ============================================
   getAuditLogs: async (params?: Record<string, string>) => {

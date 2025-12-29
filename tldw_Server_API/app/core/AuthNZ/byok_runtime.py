@@ -8,7 +8,10 @@ import os
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.byok_config import merge_app_config_overrides
+from tldw_Server_API.app.core.AuthNZ.byok_config import (
+    PROVIDER_APP_CONFIG_KEYS,
+    merge_app_config_overrides,
+)
 from tldw_Server_API.app.core.AuthNZ.byok_helpers import (
     is_byok_enabled,
     is_provider_allowlisted,
@@ -70,6 +73,18 @@ def _bool_label(value: bool) -> str:
     return "true" if value else "false"
 
 
+def _apply_active_scope(ids: list[int], active_id: Any) -> list[int]:
+    if not ids:
+        return []
+    if active_id is None:
+        return ids if len(ids) == 1 else []
+    try:
+        active = int(active_id)
+    except (TypeError, ValueError):
+        return []
+    return [active] if active in ids else []
+
+
 @dataclass
 class ResolvedByokCredentials:
     provider: str
@@ -82,7 +97,7 @@ class ResolvedByokCredentials:
 
     @property
     def uses_byok(self) -> bool:
-        return self.source in {"user", "shared"}
+        return self.source in {"user", "team", "org"}
 
     async def touch_last_used(self) -> None:
         if not self._touch_cb:
@@ -187,7 +202,24 @@ def _build_app_config(provider: str, credential_fields: Dict[str, Any]) -> Optio
         base_cfg = loaded_config_data
     except Exception:
         base_cfg = None
-    merged = merge_app_config_overrides(base_cfg if base_cfg else None, provider, credential_fields)
+    provider_norm = normalize_provider_name(provider)
+    scrubbed_cfg: Optional[Dict[str, Any]] = None
+    if base_cfg:
+        try:
+            section = PROVIDER_APP_CONFIG_KEYS.get(provider_norm)
+            if section and isinstance(base_cfg.get(section), dict):
+                cleaned = {
+                    k: v
+                    for k, v in base_cfg.get(section, {}).items()
+                    if k not in {"api_base_url", "org_id", "project_id"}
+                }
+                scrubbed_cfg = dict(base_cfg)
+                scrubbed_cfg[section] = cleaned
+            else:
+                scrubbed_cfg = dict(base_cfg)
+        except Exception:
+            scrubbed_cfg = None
+    merged = merge_app_config_overrides(scrubbed_cfg if scrubbed_cfg else None, provider, credential_fields)
     return merged or None
 
 
@@ -285,6 +317,18 @@ async def resolve_byok_credentials(
                 )
 
     # Determine org/team scopes if not supplied
+    active_team_id = None
+    active_org_id = None
+    if request is not None and hasattr(request, "state"):
+        try:
+            active_team_id = getattr(request.state, "active_team_id", None)
+        except Exception:
+            active_team_id = None
+        try:
+            active_org_id = getattr(request.state, "active_org_id", None)
+        except Exception:
+            active_org_id = None
+
     if team_ids is None or org_ids is None:
         try:
             if request is not None and hasattr(request, "state"):
@@ -314,6 +358,8 @@ async def resolve_byok_credentials(
 
     team_ids = team_ids or []
     org_ids = org_ids or []
+    team_ids = _apply_active_scope(team_ids, active_team_id)
+    org_ids = _apply_active_scope(org_ids, active_org_id)
 
     try:
         shared_repo = await _get_org_repo()
@@ -344,14 +390,14 @@ async def resolve_byok_credentials(
                 ResolvedByokCredentials(
                     provider=provider_norm,
                     api_key=api_key,
-                    app_config=_build_app_config(provider_norm, credential_fields),
-                    credential_fields=credential_fields,
-                    source="shared",
-                    allowlisted=True,
-                    _touch_cb=_build_touch_cb(
-                        provider=provider_norm,
-                        last_used_at=last_used_at,
-                        repo=shared_repo,
+                        app_config=_build_app_config(provider_norm, credential_fields),
+                        credential_fields=credential_fields,
+                        source="team",
+                        allowlisted=True,
+                        _touch_cb=_build_touch_cb(
+                            provider=provider_norm,
+                            last_used_at=last_used_at,
+                            repo=shared_repo,
                         scope_type="team",
                         scope_id=int(team_id),
                     ),
@@ -382,7 +428,7 @@ async def resolve_byok_credentials(
                     api_key=api_key,
                     app_config=_build_app_config(provider_norm, credential_fields),
                     credential_fields=credential_fields,
-                    source="shared",
+                    source="org",
                     allowlisted=True,
                     _touch_cb=_build_touch_cb(
                         provider=provider_norm,

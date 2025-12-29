@@ -16,6 +16,7 @@ from tldw_Server_API.app.core.Claims_Extraction.ingestion_claims import (
     extract_claims_for_chunks,
     store_claims,
 )
+from tldw_Server_API.app.core.Claims_Extraction.budget_guard import resolve_claims_job_budget
 from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
     record_claims_rebuild_metrics,
 )
@@ -213,7 +214,13 @@ class ClaimsRebuildService:
             # Extract
             max_per = int(settings.get("CLAIMS_MAX_PER_CHUNK", 3))
             mode = str(settings.get("CLAIM_EXTRACTOR_MODE", "heuristic"))
-            claims = extract_claims_for_chunks(chunks, extractor_mode=mode, max_per_chunk=max_per)
+            budget = resolve_claims_job_budget(settings=settings)
+            claims = extract_claims_for_chunks(
+                chunks,
+                extractor_mode=mode,
+                max_per_chunk=max_per,
+                budget=budget,
+            )
             if not claims:
                 logger.info(f"Claims rebuild: no claims extracted for media_id={task.media_id}")
                 return

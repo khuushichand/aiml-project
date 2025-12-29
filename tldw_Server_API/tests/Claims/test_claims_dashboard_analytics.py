@@ -166,6 +166,8 @@ def test_claims_dashboard_analytics_and_export():
             assert today_trend is not None
             assert today_trend["total"] >= 2
             assert "unsupported_ratios" in data
+            assert "provider_usage" in data
+            assert isinstance(data["provider_usage"], list)
             rebuild = data.get("rebuild_health")
             assert rebuild is None or rebuild.get("status") == "ok"
 

@@ -17,10 +17,21 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from loguru import logger
+from tldw_Server_API.app.core.Claims_Extraction.budget_guard import (
+    ClaimsJobBudget,
+    ClaimsJobContext,
+    estimate_claims_tokens,
+    resolve_claims_job_budget,
+)
 from tldw_Server_API.app.core.Claims_Extraction.monitoring import (
     estimate_claims_cost,
+    record_claims_budget_exhausted,
     record_claims_provider_request,
+    record_claims_throttle,
+    should_throttle_claims_provider,
+    suggest_claims_concurrency,
 )
+from tldw_Server_API.app.core.Claims_Extraction.span_alignment import find_text_span
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
 # Prefer importing Document from RAG types to keep consistency in pipelines
@@ -65,7 +76,14 @@ class ClaimVerification:
 # --------------------------- Interfaces ---------------------------
 
 class ClaimExtractor(Protocol):
-    async def extract(self, answer: str, max_claims: int = 25) -> List[Claim]:
+    async def extract(
+        self,
+        answer: str,
+        max_claims: int = 25,
+        *,
+        budget: Optional[ClaimsJobBudget] = None,
+        job_context: Optional[ClaimsJobContext] = None,
+    ) -> List[Claim]:
         ...
 
 
@@ -79,6 +97,8 @@ class ClaimVerifier(Protocol):
         top_k: int = 5,
         conf_threshold: float = 0.7,
         mode: str = "hybrid",
+        budget: Optional[ClaimsJobBudget] = None,
+        job_context: Optional[ClaimsJobContext] = None,
     ) -> ClaimVerification:
         ...
 
@@ -113,40 +133,118 @@ def _find_offsets(doc_text: str, claim_text: str, snippet: str) -> Tuple[int, in
     """Best-effort exact offsets into the full document.
 
     Strategy:
-    1) Directly find claim_text in doc_text
-    2) Else, find snippet (without ellipsis) in doc_text
-    3) Else, sliding window over snippet (sizes 96, 64, 48, 32) to find a unique anchor
+    1) Exact match on claim_text/snippet
+    2) Normalized match (case/whitespace)
+    3) Anchored window match for long text
     4) Fallback to (0, min(len(doc_text), len(snippet)))
     """
     if not isinstance(doc_text, str) or not doc_text:
         return (0, 0)
-    # 1) claim_text exact
     ct = (claim_text or "").strip()
-    if ct:
-        i = doc_text.find(ct)
-        if i >= 0:
-            return (i, i + len(ct))
-
-    # 2) snippet without trailing ellipsis
-    snip = (snippet or "")
+    snip = (snippet or "").strip()
     if snip.endswith("..."):
         snip = snip[:-3]
-    if snip:
-        i = doc_text.find(snip)
-        if i >= 0:
-            return (i, i + len(snip))
+    if snip.endswith("…"):
+        snip = snip[:-1]
 
-    # 3) sliding window
-    for k in (96, 64, 48, 32):
-        if len(snip) >= k:
-            mid = max(0, (len(snip) - k) // 2)
-            window = snip[mid : mid + k]
-            j = doc_text.find(window)
-            if j >= 0:
-                return (j, j + k)
+    span = find_text_span(doc_text, ct, fallback_text=snip)
+    if span is not None:
+        return span
 
-    # 4) fallback
     return (0, min(len(doc_text), max(len(ct), len(snip))))
+
+
+def _resolve_claims_llm_config() -> Tuple[str, Optional[str], float]:
+    try:
+        from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
+    except Exception:
+        _settings = {}
+
+    provider = None
+    model_override = None
+    temperature = 0.1
+    try:
+        provider = str(_settings.get("CLAIMS_LLM_PROVIDER", "")).strip() or None
+    except Exception:
+        provider = None
+    try:
+        model_override = str(_settings.get("CLAIMS_LLM_MODEL", "")).strip() or None
+    except Exception:
+        model_override = None
+    try:
+        temperature = float(_settings.get("CLAIMS_LLM_TEMPERATURE", 0.1))
+    except Exception:
+        temperature = 0.1
+
+    if provider is None:
+        try:
+            rag_cfg = _settings.get("RAG", {}) or {}
+            provider = str(rag_cfg.get("default_llm_provider", "")).strip() or None
+        except Exception:
+            provider = None
+    if provider is None:
+        try:
+            provider = str(_settings.get("default_api", "openai")).strip() or "openai"
+        except Exception:
+            provider = "openai"
+    if model_override is None:
+        try:
+            rag_cfg = _settings.get("RAG", {}) or {}
+            model_override = str(rag_cfg.get("default_llm_model", "")).strip() or None
+        except Exception:
+            model_override = None
+
+    return provider or "openai", model_override, temperature
+
+
+async def _log_claims_llm_usage(
+    *,
+    job_context: Optional[ClaimsJobContext],
+    operation: str,
+    provider: str,
+    model: str,
+    prompt_text: str,
+    response_text: str,
+    latency_ms: int,
+    status: int,
+    estimated: bool = True,
+) -> None:
+    try:
+        from tldw_Server_API.app.core.Usage.usage_tracker import log_llm_usage
+    except Exception:
+        return
+    try:
+        user_id = job_context.user_id if job_context else None
+    except Exception:
+        user_id = None
+    try:
+        api_key_id = job_context.api_key_id if job_context else None
+    except Exception:
+        api_key_id = None
+    try:
+        request_id = job_context.request_id if job_context else None
+    except Exception:
+        request_id = None
+    endpoint = None
+    try:
+        endpoint = job_context.endpoint if job_context else None
+    except Exception:
+        endpoint = None
+    await log_llm_usage(
+        user_id=user_id,
+        key_id=api_key_id,
+        endpoint=endpoint or "claims_engine",
+        operation=operation,
+        provider=provider,
+        model=model or "",
+        status=int(status),
+        latency_ms=int(latency_ms),
+        prompt_tokens=estimate_claims_tokens(prompt_text),
+        completion_tokens=estimate_claims_tokens(response_text),
+        total_tokens=None,
+        request_id=request_id,
+        estimated=estimated,
+    )
 
 
 # --------------------------- Extractors ---------------------------
@@ -177,7 +275,14 @@ class LLMBasedClaimExtractor:
     def __init__(self, analyze_fn: Any):
         self._analyze = analyze_fn
 
-    async def extract(self, answer: str, max_claims: int = 25) -> List[Claim]:
+    async def extract(
+        self,
+        answer: str,
+        max_claims: int = 25,
+        *,
+        budget: Optional[ClaimsJobBudget] = None,
+        job_context: Optional[ClaimsJobContext] = None,
+    ) -> List[Claim]:
         if not answer:
             return []
         system = load_prompt("ingestion", "claims_extractor_system") or (
@@ -197,54 +302,39 @@ class LLMBasedClaimExtractor:
             _tmpl = _tmpl.replace('{{max_claims}}', '{max_claims}').replace('{{answer}}', '{answer}')
             prompt = _tmpl.format(max_claims=max_claims, answer=answer)
 
-        try:
-            cost_estimate = None
-            # Resolve provider/model/temperature from [Claims] with sensible fallbacks
-            try:
-                from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
-            except Exception:
-                _settings = {}
-
-            provider = None
-            model_override = None
-            temperature = 0.1
-            try:
-                provider = str(_settings.get("CLAIMS_LLM_PROVIDER", "")).strip() or None
-            except Exception:
-                provider = None
-            try:
-                model_override = str(_settings.get("CLAIMS_LLM_MODEL", "")).strip() or None
-            except Exception:
-                model_override = None
-            try:
-                temperature = float(_settings.get("CLAIMS_LLM_TEMPERATURE", 0.1))
-            except Exception:
-                temperature = 0.1
-
-            # Fallback to RAG defaults then global default_api
-            if provider is None:
-                try:
-                    rag_cfg = _settings.get("RAG", {}) or {}
-                    provider = str(rag_cfg.get("default_llm_provider", "")).strip() or None
-                except Exception:
-                    provider = None
-            if provider is None:
-                try:
-                    provider = str(_settings.get("default_api", "openai")).strip() or "openai"
-                except Exception:
-                    provider = "openai"
-            if model_override is None:
-                try:
-                    rag_cfg = _settings.get("RAG", {}) or {}
-                    model_override = str(rag_cfg.get("default_llm_model", "")).strip() or None
-                except Exception:
-                    model_override = None
-
-            cost_estimate = estimate_claims_cost(
+        provider, model_override, temperature = _resolve_claims_llm_config()
+        cost_estimate = estimate_claims_cost(
+            provider=provider or "openai",
+            model=model_override or "",
+            text=prompt,
+        )
+        budget_ratio = budget.remaining_ratio() if budget is not None else None
+        throttle, reason = should_throttle_claims_provider(
+            provider=provider or "openai",
+            model=model_override or "",
+            budget_ratio=budget_ratio,
+        )
+        if throttle:
+            record_claims_throttle(
                 provider=provider or "openai",
                 model=model_override or "",
-                text=prompt,
+                mode="extract",
+                reason=reason or "throttle",
             )
+            return await HeuristicSentenceExtractor().extract(answer, max_claims)
+        if budget is not None:
+            prompt_tokens = estimate_claims_tokens(prompt)
+            if not budget.reserve(cost_usd=cost_estimate, tokens=prompt_tokens):
+                record_claims_budget_exhausted(
+                    provider=provider or "openai",
+                    model=model_override or "",
+                    mode="extract",
+                    reason=budget.exhausted_reason or "budget",
+                )
+                if budget.strict:
+                    return []
+                return await HeuristicSentenceExtractor().extract(answer, max_claims)
+        try:
             start_time = time.time()
             raw = await asyncio.to_thread(
                 self._analyze,
@@ -260,14 +350,31 @@ class LLMBasedClaimExtractor:
                 chunk_options=None,
                 model_override=model_override,
             )
+            latency_s = time.time() - start_time
             record_claims_provider_request(
                 provider=provider or "openai",
                 model=model_override or "",
                 mode="extract",
-                latency_s=time.time() - start_time,
+                latency_s=latency_s,
                 estimated_cost=cost_estimate,
             )
             text = raw if isinstance(raw, str) else str(raw)
+            if budget is not None:
+                budget.add_usage(tokens=estimate_claims_tokens(text))
+            try:
+                await _log_claims_llm_usage(
+                    job_context=job_context,
+                    operation="claims_extract",
+                    provider=provider or "openai",
+                    model=model_override or "",
+                    prompt_text=prompt,
+                    response_text=text,
+                    latency_ms=int(latency_s * 1000),
+                    status=200,
+                    estimated=True,
+                )
+            except Exception:
+                pass
             # find JSON block (support fenced blocks)
             jtxt = None
             fence_json = re.findall(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE)
@@ -300,6 +407,20 @@ class LLMBasedClaimExtractor:
                 error=str(e),
                 estimated_cost=cost_estimate,
             )
+            try:
+                await _log_claims_llm_usage(
+                    job_context=job_context,
+                    operation="claims_extract",
+                    provider=provider or "openai",
+                    model=model_override or "",
+                    prompt_text=prompt,
+                    response_text="",
+                    latency_ms=0,
+                    status=500,
+                    estimated=True,
+                )
+            except Exception:
+                pass
             logger.warning(f"Claim extraction via LLM failed: {e}")
             return await HeuristicSentenceExtractor().extract(answer, max_claims)
 
@@ -352,6 +473,8 @@ class HybridClaimVerifier:
         top_k: int = 5,
         conf_threshold: float = 0.7,
         mode: str = "hybrid",
+        budget: Optional[ClaimsJobBudget] = None,
+        job_context: Optional[ClaimsJobContext] = None,
     ) -> ClaimVerification:
         claim_text = claim.text.strip()
         nums_dates = _extract_numbers_and_dates(claim_text)
@@ -447,53 +570,51 @@ class HybridClaimVerifier:
         label = "nei"
         confidence = 0.5
         rationale = None
-        try:
-            cost_estimate = None
-            # Resolve provider/model/temp from settings with sensible fallbacks (align with extractor)
-            try:
-                from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
-            except Exception:
-                _settings = {}
-
-            provider = None
-            model_override = None
-            temperature = 0.1
-            try:
-                provider = str(_settings.get("CLAIMS_LLM_PROVIDER", "")).strip() or None
-            except Exception:
-                provider = None
-            try:
-                model_override = str(_settings.get("CLAIMS_LLM_MODEL", "")).strip() or None
-            except Exception:
-                model_override = None
-            try:
-                temperature = float(_settings.get("CLAIMS_LLM_TEMPERATURE", 0.1))
-            except Exception:
-                temperature = 0.1
-
-            if provider is None:
-                try:
-                    rag_cfg = _settings.get("RAG", {}) or {}
-                    provider = str(rag_cfg.get("default_llm_provider", "")).strip() or None
-                except Exception:
-                    provider = None
-            if provider is None:
-                try:
-                    provider = str(_settings.get("default_api", "openai")).strip() or "openai"
-                except Exception:
-                    provider = "openai"
-            if model_override is None:
-                try:
-                    rag_cfg = _settings.get("RAG", {}) or {}
-                    model_override = str(rag_cfg.get("default_llm_model", "")).strip() or None
-                except Exception:
-                    model_override = None
-
-            cost_estimate = estimate_claims_cost(
+        provider, model_override, temperature = _resolve_claims_llm_config()
+        cost_estimate = estimate_claims_cost(
+            provider=provider or "openai",
+            model=model_override or "",
+            text=f"{system}\n{judge_prompt}",
+        )
+        budget_ratio = budget.remaining_ratio() if budget is not None else None
+        throttle, reason = should_throttle_claims_provider(
+            provider=provider or "openai",
+            model=model_override or "",
+            budget_ratio=budget_ratio,
+        )
+        if throttle:
+            record_claims_throttle(
                 provider=provider or "openai",
                 model=model_override or "",
-                text=f"{system}\n{judge_prompt}",
+                mode="verify",
+                reason=reason or "throttle",
             )
+            return ClaimVerification(
+                claim=claim,
+                label="nei",
+                confidence=0.0,
+                evidence=evidence_snips,
+                citations=[],
+                rationale="Throttled by provider health",
+            )
+        if budget is not None:
+            prompt_tokens = estimate_claims_tokens(judge_prompt)
+            if not budget.reserve(cost_usd=cost_estimate, tokens=prompt_tokens):
+                record_claims_budget_exhausted(
+                    provider=provider or "openai",
+                    model=model_override or "",
+                    mode="verify",
+                    reason=budget.exhausted_reason or "budget",
+                )
+                return ClaimVerification(
+                    claim=claim,
+                    label="nei",
+                    confidence=0.0,
+                    evidence=evidence_snips,
+                    citations=[],
+                    rationale="Budget exhausted",
+                )
+        try:
             start_time = time.time()
             raw = await asyncio.to_thread(
                 self._analyze,
@@ -505,14 +626,31 @@ class HybridClaimVerifier:
                 temperature,
                 model_override=model_override,
             )
+            latency_s = time.time() - start_time
             record_claims_provider_request(
                 provider=provider or "openai",
                 model=model_override or "",
                 mode="verify",
-                latency_s=time.time() - start_time,
+                latency_s=latency_s,
                 estimated_cost=cost_estimate,
             )
             text = raw if isinstance(raw, str) else str(raw)
+            if budget is not None:
+                budget.add_usage(tokens=estimate_claims_tokens(text))
+            try:
+                await _log_claims_llm_usage(
+                    job_context=job_context,
+                    operation="claims_verify",
+                    provider=provider or "openai",
+                    model=model_override or "",
+                    prompt_text=judge_prompt,
+                    response_text=text,
+                    latency_ms=int(latency_s * 1000),
+                    status=200,
+                    estimated=True,
+                )
+            except Exception:
+                pass
             # Parse fenced JSON if present
             jtxt = None
             fence_json = re.findall(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE)
@@ -541,6 +679,20 @@ class HybridClaimVerifier:
                 error=str(e),
                 estimated_cost=cost_estimate,
             )
+            try:
+                await _log_claims_llm_usage(
+                    job_context=job_context,
+                    operation="claims_verify",
+                    provider=provider or "openai",
+                    model=model_override or "",
+                    prompt_text=judge_prompt,
+                    response_text="",
+                    latency_ms=0,
+                    status=500,
+                    estimated=True,
+                )
+            except Exception:
+                pass
             logger.warning(f"LLM judge failed; defaulting to NEI: {e}")
         # Construct citations for traceability (doc IDs with snippet offsets)
         citations: List[Dict[str, Any]] = []
@@ -582,9 +734,19 @@ class ClaimsEngine:
         retrieve_fn: Optional[Any] = None,
         nli_model: Optional[str] = None,
         claims_concurrency: int = 8,
+        job_budget: Optional[ClaimsJobBudget] = None,
+        job_context: Optional[ClaimsJobContext] = None,
     ) -> Dict[str, Any]:
         if not answer or not isinstance(answer, str):
             return {"claims": [], "summary": {}}
+
+        budget = job_budget
+        if budget is None:
+            try:
+                from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
+            except Exception:
+                _settings = {}
+            budget = resolve_claims_job_budget(settings=_settings)
 
         # choose extractor
         claims: List[Claim] = []
@@ -624,10 +786,20 @@ class ClaimsEngine:
                 claims = [Claim(id=f"c{i+1}", text=t) for i, t in enumerate(sents_text[:claims_max])]
                 if not claims:
                     # If no entities detected, fall back to LLM extractor
-                    claims = await self.extractor_llm.extract(answer, max_claims=claims_max)
+                    claims = await self.extractor_llm.extract(
+                        answer,
+                        max_claims=claims_max,
+                        budget=budget,
+                        job_context=job_context,
+                    )
             except Exception as e:
                 logger.warning(f"NER extractor unavailable/failed: {e}; falling back to LLM extractor")
-                claims = await self.extractor_llm.extract(answer, max_claims=claims_max)
+                claims = await self.extractor_llm.extract(
+                    answer,
+                    max_claims=claims_max,
+                    budget=budget,
+                    job_context=job_context,
+                )
 
         elif extractor_mode == "aps":
             # APS-style proposition extraction via PropositionChunkingStrategy (LLM engine, gemma_aps prompt)
@@ -700,10 +872,20 @@ class ClaimsEngine:
                         claims.append(Claim(id=f"c{i+1}", text=ptxt.strip()))
             except Exception as e:
                 logger.warning(f"APS extractor failed, falling back to LLM extractor: {e}")
-                claims = await self.extractor_llm.extract(answer, max_claims=claims_max)
+                claims = await self.extractor_llm.extract(
+                    answer,
+                    max_claims=claims_max,
+                    budget=budget,
+                    job_context=job_context,
+                )
         else:
             # default to LLM-based claim extraction (claimify/generic)
-            claims = await self.extractor_llm.extract(answer, max_claims=claims_max)
+            claims = await self.extractor_llm.extract(
+                answer,
+                max_claims=claims_max,
+                budget=budget,
+                job_context=job_context,
+            )
         verifications: List[ClaimVerification] = []
 
         # Initialize verifier once if a specific NLI model is requested
@@ -719,6 +901,8 @@ class ClaimsEngine:
                 top_k=claims_top_k,
                 conf_threshold=claims_conf_threshold,
                 mode=(claim_verifier or "hybrid").strip().lower(),
+                budget=budget,
+                job_context=job_context,
             )
 
         # Concurrency cap to avoid over-parallelization of verifications
@@ -727,6 +911,17 @@ class ClaimsEngine:
         except Exception:
             max_conc = 8
         max_conc = max(1, min(32, max_conc))
+        try:
+            provider, model_override, _ = _resolve_claims_llm_config()
+            budget_ratio = budget.remaining_ratio() if budget is not None else None
+            max_conc = suggest_claims_concurrency(
+                provider=provider,
+                model=model_override or "",
+                requested=max_conc,
+                budget_ratio=budget_ratio,
+            )
+        except Exception:
+            pass
         sem = asyncio.Semaphore(max_conc)
 
         async def _bounded_verify(c: Claim) -> ClaimVerification:
@@ -771,5 +966,6 @@ class ClaimsEngine:
                 "coverage": coverage,
                 # claim_faithfulness: fraction of supported among all verified claims
                 "claim_faithfulness": (supported / total) if total else 0.0,
+                "budget": (budget.snapshot() if budget is not None else None),
             },
         }

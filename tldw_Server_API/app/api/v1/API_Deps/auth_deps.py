@@ -745,7 +745,42 @@ async def get_auth_principal(
     This delegates to the core auth_principal_resolver and reuses any existing
     AuthContext attached to request.state.auth when present.
     """
-    return await _resolve_auth_principal(request)
+    principal = await _resolve_auth_principal(request)
+    try:
+        from tldw_Server_API.app.services.admin_system_ops_service import (
+            get_maintenance_state as _get_maintenance_state,
+        )
+
+        state = _get_maintenance_state()
+        if state.get("enabled"):
+            if principal.is_admin:
+                return principal
+            allowlist_ids = set()
+            for val in state.get("allowlist_user_ids") or []:
+                try:
+                    if val is not None:
+                        allowlist_ids.add(int(val))
+                except (TypeError, ValueError):
+                    continue
+            allowlist_emails = {
+                str(val).strip().lower()
+                for val in (state.get("allowlist_emails") or [])
+                if val
+            }
+            if principal.user_id is not None and principal.user_id in allowlist_ids:
+                return principal
+            if principal.email and principal.email.lower() in allowlist_emails:
+                return principal
+            message = state.get("message") or "Service temporarily unavailable for maintenance."
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "maintenance_mode", "message": message},
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.debug("Maintenance guard skipped: {}", exc)
+    return principal
 
 
 def require_permissions(*permissions: str) -> Callable[[AuthPrincipal], Awaitable[AuthPrincipal]]:
