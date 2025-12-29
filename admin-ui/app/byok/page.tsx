@@ -34,6 +34,33 @@ const SOURCE_LABELS: Record<string, string> = {
   none: 'None',
 };
 
+const unescapeLabelValue = (s: string): string => {
+  let result = '';
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === '\\' && i + 1 < s.length) {
+      const next = s[i + 1];
+      if (next === '\\') {
+        result += '\\';
+        i++;
+      } else if (next === '"') {
+        result += '"';
+        i++;
+      } else if (next === 'n') {
+        result += '\n';
+        i++;
+      } else {
+        // Unknown escape, keep as-is
+        result += ch + next;
+        i++;
+      }
+    } else {
+      result += ch;
+    }
+  }
+  return result;
+};
+
 const parsePrometheusText = (text: string): MetricSample[] => {
   const samples: MetricSample[] = [];
   const lineRegex = /^([a-zA-Z_:][a-zA-Z0-9_:]*)(\{([^}]*)\})?\s+([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)$/;
@@ -49,10 +76,7 @@ const parsePrometheusText = (text: string): MetricSample[] => {
       let labelMatch: RegExpExecArray | null;
       while ((labelMatch = labelRegex.exec(labelBlob))) {
         const key = labelMatch[1];
-        const value = labelMatch[2]
-          .replace(/\\\\/g, '\\')
-          .replace(/\\"/g, '"')
-          .replace(/\\n/g, '\n');
+        const value = unescapeLabelValue(labelMatch[2]);
         labels[key] = value;
       }
     }
