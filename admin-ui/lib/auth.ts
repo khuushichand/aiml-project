@@ -5,6 +5,9 @@ const API_HOST = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const API_VERSION = process.env.NEXT_PUBLIC_API_VERSION || 'v1';
 const API_URL = `${API_HOST.replace(/\/$/, '')}/api/${API_VERSION}`;
 
+// In-memory storage for single-user API key to avoid clear-text persistence
+let inMemoryApiKey: string | null = null;
+
 export interface AdminUser {
   id: number;
   uuid: string;
@@ -29,25 +32,24 @@ export interface LoginResponse {
  * Check if we're in single-user mode (X-API-KEY auth)
  */
 export function isSingleUserMode(): boolean {
-  if (typeof window === 'undefined' || typeof sessionStorage === 'undefined') return false;
-  const storedApiKey = sessionStorage.getItem('x_api_key');
-  return !!storedApiKey;
+  if (typeof window === 'undefined') return false;
+  return !!inMemoryApiKey;
 }
 
 /**
  * Get X-API-KEY for single-user mode
  */
 export function getApiKey(): string | null {
-  if (typeof window === 'undefined' || typeof sessionStorage === 'undefined') return null;
-  return sessionStorage.getItem('x_api_key') || null;
+  if (typeof window === 'undefined') return null;
+  return inMemoryApiKey;
 }
 
 /**
  * Set X-API-KEY for single-user mode
  */
 export function setApiKey(key: string): void {
-  if (typeof window !== 'undefined' && typeof sessionStorage !== 'undefined') {
-    sessionStorage.setItem('x_api_key', key);
+  if (typeof window !== 'undefined') {
+    inMemoryApiKey = key;
   }
 }
 
