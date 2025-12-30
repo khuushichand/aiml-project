@@ -28,4 +28,3 @@ def changed_or_untracked_files(base: Path) -> List[str]:
         return files
     except (subprocess.CalledProcessError, OSError, FileNotFoundError):
         return []
-

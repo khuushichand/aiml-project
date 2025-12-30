@@ -43,6 +43,7 @@ from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
 from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
 from tldw_Server_API.app.core.AuthNZ.input_validation import get_input_validator
+from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
 from tldw_Server_API.app.services.registration_service import RegistrationService
 from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings, get_profile
@@ -87,6 +88,26 @@ router = APIRouter(
 #######################################################################################################################
 #
 # Register endpoint diagnostics (test-only)
+
+async def _build_scope_claims(user_id: int) -> Dict[str, Any]:
+    try:
+        memberships = await list_memberships_for_user(int(user_id))
+    except Exception:
+        return {}
+
+    team_ids = sorted({m.get("team_id") for m in memberships if m.get("team_id") is not None})
+    org_ids = sorted({m.get("org_id") for m in memberships if m.get("org_id") is not None})
+
+    claims: Dict[str, Any] = {}
+    if team_ids:
+        claims["team_ids"] = team_ids
+    if org_ids:
+        claims["org_ids"] = org_ids
+    if len(team_ids) == 1:
+        claims["active_team_id"] = team_ids[0]
+    if len(org_ids) == 1:
+        claims["active_org_id"] = org_ids[0]
+    return claims
 
 async def _register_runtime_diag(request: Request, response: Response):
     """Small request-time diagnostic for tests.
@@ -203,6 +224,9 @@ async def mint_self_virtual_key(
             add_claims["max_calls"] = int(body.max_calls)
         if body.max_runs is not None:
             add_claims["max_runs"] = int(body.max_runs)
+        scope_claims = await _build_scope_claims(int(current_user.get("id")))
+        if scope_claims:
+            add_claims.update(scope_claims)
         if body.not_before:
             # Store as standard JWT 'nbf' if parseable; otherwise ignore
             try:
@@ -518,17 +542,20 @@ async def login(
             session_id = temp_session_info['session_id']
 
             # Create JWT tokens with session_id
+            scope_claims = await _build_scope_claims(int(user["id"]))
+            add_claims = dict(scope_claims)
+            add_claims["session_id"] = session_id
             access_token = jwt_service.create_access_token(
                 user_id=user['id'],
                 username=user['username'],
                 role=user['role'],
-                additional_claims={"session_id": session_id}
+                additional_claims=add_claims
             )
 
             refresh_token = jwt_service.create_refresh_token(
                 user_id=user['id'],
                 username=user['username'],
-                additional_claims={"session_id": session_id}
+                additional_claims=add_claims
             )
 
             # Update session with actual tokens
@@ -784,7 +811,12 @@ async def refresh_token(
             new_refresh_token = request.refresh_token  # no rotation in single-user mode
         else:
             # Access token always refreshed; preserve session_id claim when available
-            add_claims = {"session_id": session_id} if session_id else None
+            scope_claims = await _build_scope_claims(int(user["id"]))
+            add_claims = dict(scope_claims)
+            if session_id:
+                add_claims["session_id"] = session_id
+            if not add_claims:
+                add_claims = None
             new_access_token = jwt_service.create_access_token(
                 user_id=user['id'],
                 username=user['username'],

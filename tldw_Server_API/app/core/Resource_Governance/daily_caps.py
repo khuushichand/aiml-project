@@ -105,4 +105,3 @@ async def check_daily_cap(
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug(f"RG daily caps: check failed for {entity_scope}:{entity_value}:{category}: {exc}")
         return True, 0, {}
-

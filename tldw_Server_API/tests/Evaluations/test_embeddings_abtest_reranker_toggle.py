@@ -8,7 +8,7 @@ from tldw_Server_API.app.main import app
 
 
 @pytest.mark.integration
-def test_reranker_toggle_controls_reranking(monkeypatch):
+def test_reranker_toggle_controls_reranking(monkeypatch, auth_headers):
     # Force admin-only off to avoid admin check failures in CI
     monkeypatch.setenv('EVALS_HEAVY_ADMIN_ONLY', 'false')
     # Enable test-mode synthetic embeddings
@@ -29,19 +29,27 @@ def test_reranker_toggle_controls_reranking(monkeypatch):
     }
 
     # Create test
-    resp = client.post("/api/v1/evaluations/embeddings/abtest", json={"name": "toggle-test", "config": config})
+    resp = client.post(
+        "/api/v1/evaluations/embeddings/abtest",
+        json={"name": "toggle-test", "config": config},
+        headers=auth_headers,
+    )
     assert resp.status_code == 200
     test_id = resp.json()["test_id"]
 
     # Run without reranker
     no_rr_cfg = config.copy()
     no_rr_cfg["retrieval"] = dict(config["retrieval"], apply_reranker=False)
-    resp = client.post(f"/api/v1/evaluations/embeddings/abtest/{test_id}/run", json={"config": no_rr_cfg})
+    resp = client.post(
+        f"/api/v1/evaluations/embeddings/abtest/{test_id}/run",
+        json={"config": no_rr_cfg},
+        headers=auth_headers,
+    )
     assert resp.status_code == 200
 
     # Poll summary
     def _get_status():
-        r = client.get(f"/api/v1/evaluations/embeddings/abtest/{test_id}")
+        r = client.get(f"/api/v1/evaluations/embeddings/abtest/{test_id}", headers=auth_headers)
         assert r.status_code == 200
         return r.json()
 
@@ -53,14 +61,22 @@ def test_reranker_toggle_controls_reranking(monkeypatch):
         asyncio.sleep(0.1)
 
     # Export JSON and capture baseline results
-    r = client.get(f"/api/v1/evaluations/embeddings/abtest/{test_id}/export", params={"format": "json"})
+    r = client.get(
+        f"/api/v1/evaluations/embeddings/abtest/{test_id}/export",
+        params={"format": "json"},
+        headers=auth_headers,
+    )
     assert r.status_code == 200
     baseline = r.json()
 
     # Run again with reranker ON; this will create new results appended in DB
     rr_cfg = config.copy()
     rr_cfg["retrieval"] = dict(config["retrieval"], apply_reranker=True)
-    resp = client.post(f"/api/v1/evaluations/embeddings/abtest/{test_id}/run", json={"config": rr_cfg})
+    resp = client.post(
+        f"/api/v1/evaluations/embeddings/abtest/{test_id}/run",
+        json={"config": rr_cfg},
+        headers=auth_headers,
+    )
     assert resp.status_code == 200
 
     for _ in range(50):
@@ -69,7 +85,11 @@ def test_reranker_toggle_controls_reranking(monkeypatch):
             break
         asyncio.sleep(0.1)
 
-    r = client.get(f"/api/v1/evaluations/embeddings/abtest/{test_id}/export", params={"format": "json"})
+    r = client.get(
+        f"/api/v1/evaluations/embeddings/abtest/{test_id}/export",
+        params={"format": "json"},
+        headers=auth_headers,
+    )
     assert r.status_code == 200
     after = r.json()
 

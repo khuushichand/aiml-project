@@ -79,18 +79,25 @@ def create_test_media(db: MediaDatabase, title: str, content: str, content_hash:
     """Inserts a test document media item."""
     # Now just insert:
     # Ensure all NOT NULL columns are provided (like content_hash)
-    db.execute_query(
-        "INSERT INTO Media (title, type, content, author, content_hash) VALUES (?, ?, ?, ?, ?)",
-        (title, "document", content, "Test Author", content_hash),
-        commit=True # Commit this specific insert
+    media_uuid = str(uuid.uuid4())
+    last_modified = db._get_current_utc_timestamp_str()
+    client_id = db.client_id or "test_client"
+    cursor = db.execute_query(
+        "INSERT INTO Media (title, type, content, author, content_hash, uuid, last_modified, client_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (title, "document", content, "Test Author", content_hash, media_uuid, last_modified, client_id),
+        commit=True,  # Commit this specific insert
     )
-    # Get the ID of the inserted row
-    cursor = db.execute_query("SELECT last_insert_rowid();")
-    result = cursor.fetchone()
+    media_id = getattr(cursor, "lastrowid", None)
+    if media_id:
+        return media_id
+    result = db.execute_query(
+        "SELECT id FROM Media WHERE uuid = ?",
+        (media_uuid,),
+    ).fetchone()
     if result:
-        return result[0]
-    else:
-        raise RuntimeError("Failed to retrieve last insert rowid after creating test media.")
+        return result["id"] if isinstance(result, dict) else result[0]
+    raise RuntimeError("Failed to retrieve media id after creating test media.")
 
 
 # End of test_utils.py

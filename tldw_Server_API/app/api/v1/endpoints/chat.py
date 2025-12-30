@@ -10,6 +10,14 @@ import os
 # Imports
 # ---------------------------------------------------------------------------
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.byok_config import merge_app_config_overrides
+from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
+    validate_provider_override,
+    get_override_default_model,
+    get_override_credentials,
+    get_llm_provider_override,
+    get_llm_provider_overrides_snapshot,
+)
 from tldw_Server_API.app.core.Utils.image_validation import (
     validate_image_url,
     get_max_base64_bytes,
@@ -116,6 +124,7 @@ from tldw_Server_API.app.core.Chat.chat_service import (
     execute_non_stream_call,
     queue_is_active,
 )
+from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.core.Chat.prompt_template_manager import (
     load_template,
     apply_template_to_string,
@@ -1404,12 +1413,7 @@ async def create_chat_completion(
                 rg_gov = None
                 rg_loader = None
 
-            if not rg_active:
-                try:
-                    if _is_test_mode and rg_gov is not None and rg_loader is not None:
-                        rg_active = True
-                except Exception:
-                    rg_active = False
+            # Avoid implicitly enabling RG in tests unless the global flag is set.
 
         rg_reserved = False
         if rate_limiter or (rg_active and rg_gov is not None and rg_loader is not None):
@@ -1662,6 +1666,10 @@ async def create_chat_completion(
         provider = selected_provider
         model = selected_model or model
 
+        override_error = validate_provider_override(provider, model)
+        if override_error:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=override_error)
+
         user_identifier_for_log = getattr(chat_db, 'client_id', 'unknown_client') # Example from original
         logger.info(
             f"Chat completion request. Provider={provider}, Model={request_data.model}, User={user_identifier_for_log}, "
@@ -1729,6 +1737,14 @@ async def create_chat_completion(
             byok_resolution = await _resolve_byok(target_api_provider)
             provider_api_key = byok_resolution.api_key
             app_config_override = byok_resolution.app_config
+            override_creds = get_override_credentials(target_api_provider)
+            if override_creds and override_creds.get("credential_fields") and not byok_resolution.uses_byok:
+                base_config = app_config_override or loaded_config_data
+                app_config_override = merge_app_config_overrides(
+                    base_config,
+                    target_api_provider,
+                    override_creds.get("credential_fields"),
+                )
 
             # Centralized provider capabilities
             try:
@@ -1785,6 +1801,12 @@ async def create_chat_completion(
             )
 
             def _get_default_model_for_provider_name(target_provider: str) -> Optional[str]:
+                override_default = get_override_default_model(target_provider)
+                if override_default:
+                    return override_default
+                override = get_llm_provider_override(target_provider)
+                if override and override.allowed_models:
+                    return override.allowed_models[0]
                 normalized = target_provider.replace(".", "_").replace("-", "_")
                 env_key = f"DEFAULT_MODEL_{normalized.upper()}"
                 env_val = os.getenv(env_key)
@@ -1861,6 +1883,10 @@ async def create_chat_completion(
             selected_provider = provider
 
             if provider_manager:
+                disabled_overrides = {
+                    name for name, override in get_llm_provider_overrides_snapshot().items()
+                    if override.is_enabled is False
+                }
                 # Check if the requested provider is healthy first
                 # Use the circuit breaker check if the provider is registered
                 if provider in provider_manager.circuit_breakers and \
@@ -1869,7 +1895,9 @@ async def create_chat_completion(
                     logger.info(f"Using requested provider {selected_provider} (health check passed)")
                 elif ENABLE_PROVIDER_FALLBACK:
                     # Only try alternative providers if fallback is enabled
-                    healthy_provider = provider_manager.get_available_provider(exclude=[provider])
+                    healthy_provider = provider_manager.get_available_provider(
+                        exclude=[provider, *sorted(disabled_overrides)]
+                    )
                     if healthy_provider:
                         selected_provider = healthy_provider
                         logger.warning(f"Requested provider {provider} is unhealthy or not registered, using {selected_provider} instead (fallback enabled)")
@@ -1888,6 +1916,9 @@ async def create_chat_completion(
             if selected_provider != provider:
                 try:
                     refreshed_args, refreshed_model = rebuild_call_params_for_provider(selected_provider)
+                    override_error = validate_provider_override(selected_provider, refreshed_model or model)
+                    if override_error:
+                        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=override_error)
                     cleaned_args = refreshed_args
                     model = refreshed_model or model
                 except HTTPException:

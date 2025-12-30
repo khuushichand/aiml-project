@@ -18,4 +18,3 @@ def maybe_format(paths: Iterable[str]) -> None:
         subprocess.run(["black", *paths], check=False)
     if _tool_available("ruff"):
         subprocess.run(["ruff", "--fix", *paths], check=False)
-

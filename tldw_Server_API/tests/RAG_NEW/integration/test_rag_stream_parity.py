@@ -17,7 +17,7 @@ def _set_test_mode_env(monkeypatch):
 
 
 @pytest.fixture()
-def client_with_stream_overrides(monkeypatch):
+def client_with_stream_overrides(monkeypatch, auth_headers):
     async def override_user():
         return User(id=1, username="tester", email=None, is_active=True)
 
@@ -46,7 +46,7 @@ def client_with_stream_overrides(monkeypatch):
     except Exception:
         pass
 
-    with TestClient(fastapi_app) as client:
+    with TestClient(fastapi_app, headers=auth_headers) as client:
         yield client
 
     fastapi_app.dependency_overrides.clear()
@@ -100,7 +100,7 @@ def test_rag_streaming_parity_generation_and_hybrid_sources(monkeypatch, client_
     }
 
     with client_with_stream_overrides.stream("POST", "/api/v1/rag/search/stream", json=payload) as resp:
-        assert resp.status_code == 200, resp.text
+        assert resp.status_code == 200
         next(resp.iter_lines(), None)
 
     retrieve_kwargs = captured["retrieve_kwargs"]

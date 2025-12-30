@@ -26,6 +26,15 @@ export function Header() {
   const showRunsEnv = (process.env.NEXT_PUBLIC_ENABLE_RUNS_LINK ?? '1').toString().toLowerCase() !== '0' && (process.env.NEXT_PUBLIC_ENABLE_RUNS_LINK ?? '1').toString().toLowerCase() !== 'false';
   const runsRequireAdmin = toBool(process.env.NEXT_PUBLIC_RUNS_REQUIRE_ADMIN);
   const userIsAdmin = useIsAdmin();
+  const canReviewClaims = (() => {
+    if (userIsAdmin) return true;
+    if (!user) return false;
+    const roles = Array.isArray(user.roles) ? user.roles : (user.roles ? [user.roles] : []);
+    const perms = Array.isArray(user.permissions) ? user.permissions : (user.permissions ? [user.permissions] : []);
+    const normalizedRoles = roles.map((r) => String(r).toLowerCase());
+    const normalizedPerms = perms.map((p) => String(p).toLowerCase());
+    return normalizedRoles.includes('reviewer') || normalizedPerms.includes('claims.review') || normalizedPerms.includes('claims.admin');
+  })();
   const showRuns = showRunsEnv && (!runsRequireAdmin || userIsAdmin);
   const navLinks = [
     { href: '/', label: 'Home' },
@@ -38,7 +47,9 @@ export function Header() {
     { href: '/search', label: 'Search' },
     { href: '/audio', label: 'Audio' },
     { href: '/evaluations', label: 'Evals' },
+    ...(canReviewClaims ? [{ href: '/claims-review', label: 'Claims Review' } as const] : []),
     ...(userIsAdmin ? [{ href: '/admin/maintenance', label: 'Admin' } as const] : []),
+    { href: '/profile', label: 'Profile' },
     { href: '/config', label: 'Config' },
   ];
 

@@ -1,0 +1,108 @@
+import io
+
+import numpy as np
+import pytest
+import soundfile as sf
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router
+
+TEST_API_KEY = "test-api-key-1234567890"
+
+
+def _make_wav_bytes(duration_sec: float = 0.1, sr: int = 16000) -> bytes:
+    buf = io.BytesIO()
+    data = np.zeros(int(sr * duration_sec), dtype=np.float32)
+    sf.write(buf, data, sr, format="WAV")
+    return buf.getvalue()
+
+
+def test_audio_transcriptions_uses_adapter_base_dir(
+    monkeypatch,
+    bypass_api_limits,
+):
+    monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", TEST_API_KEY)
+    monkeypatch.setenv("SINGLE_USER_FIXED_ID", "1")
+
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+    import tldw_Server_API.app.api.v1.endpoints.audio as audio_ep
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
+
+    async def _fake_get_request_user() -> User:
+        return User(id=1, username="single_user")
+
+    async def _allow_job(*_args, **_kwargs):
+        return True, None
+
+    async def _noop_async(*_args, **_kwargs):
+        return None
+
+    class _StubAdapter:
+        def transcribe_batch(
+            self,
+            audio_path,
+            *,
+            model=None,
+            language=None,
+            task="transcribe",
+            word_timestamps=False,
+            prompt=None,
+            base_dir=None,
+        ):
+            assert base_dir is not None
+            assert base_dir == audio_ep.PathLib(audio_path).parent
+            return {
+                "text": "stub transcript",
+                "language": language or "en",
+                "segments": [
+                    {
+                        "start_seconds": 0.0,
+                        "end_seconds": 0.0,
+                        "Text": "stub transcript",
+                    }
+                ],
+                "diarization": {"enabled": False, "speakers": None},
+                "usage": {"duration_ms": None, "tokens": None},
+                "metadata": {"provider": "external", "model": model or "external:stub"},
+            }
+
+    class _StubRegistry:
+        def resolve_provider_for_model(self, _model):
+            return "external", "external:stub", None
+
+        def get_adapter(self, _provider):
+            return _StubAdapter()
+
+    monkeypatch.setattr(audio_ep, "can_start_job", _allow_job)
+    monkeypatch.setattr(audio_ep, "increment_jobs_started", _noop_async)
+    monkeypatch.setattr(audio_ep, "finish_job", _noop_async)
+    monkeypatch.setattr(audio_ep, "check_daily_minutes_allow", _allow_job)
+    monkeypatch.setattr(audio_ep, "add_daily_minutes", _noop_async)
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter as stt_adapter
+
+    monkeypatch.setattr(stt_adapter, "get_stt_provider_registry", lambda: _StubRegistry())
+    monkeypatch.setattr(atlib, "convert_to_wav", lambda path, *args, **kwargs: path)
+
+    app = FastAPI()
+    app.dependency_overrides[get_request_user] = _fake_get_request_user
+    app.include_router(audio_router, prefix="/api/v1/audio")
+
+    with bypass_api_limits(app, limiters=(audio_ep.limiter,)), TestClient(app) as client:
+        wav_bytes = _make_wav_bytes()
+        headers = {"X-API-KEY": TEST_API_KEY}
+        files = {"file": ("sample.wav", io.BytesIO(wav_bytes), "audio/wav")}
+        data = {"model": "external:stub", "response_format": "json"}
+        resp = client.post(
+            "/api/v1/audio/transcriptions",
+            headers=headers,
+            files=files,
+            data=data,
+        )
+        if resp.status_code == 404:
+            pytest.skip("audio/transcriptions endpoint not mounted in this build")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["text"] == "stub transcript"

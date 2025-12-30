@@ -9,9 +9,11 @@ import { Tabs } from '@/components/ui/Tabs';
 import JsonEditor from '@/components/ui/JsonEditor';
 import JsonViewer from '@/components/ui/JsonViewer';
 import JsonTree from '@/components/ui/JsonTree';
+import { CardSkeleton, LineSkeleton } from '@/components/ui/Skeleton';
 import { useToast } from '@/components/ui/ToastProvider';
 import HotkeysOverlay from '@/components/ui/HotkeysOverlay';
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function buildCurl(url: string, method: string, headers: Record<string, string>, body?: any) {
   const parts: string[] = [
     `curl -X ${method.toUpperCase()} \\\n+  '${url}' \\\n+  -H 'Accept: application/json'`,
@@ -29,7 +31,9 @@ export default function SearchPage() {
   const [limit, setLimit] = useState<number>(10);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  useState<any>(null);
+  const [providers, _setProviders] = useState<Array<{name: string; display_name?: string; models?: string[]; is_configured?: boolean}>>([]);
   const [presets, setPresets] = useState<string[]>([]);
   const [selectedPreset, setSelectedPreset] = useState<string>('');
   // Advanced options (subset covering all categories)
@@ -99,9 +103,10 @@ export default function SearchPage() {
     setError(null);
     setResult(null);
     try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let payload: any = { query };
       // Sources
-      payload.sources = Object.entries(sources).filter(([k, v]) => v).map(([k]) => k);
+      payload.sources = Object.entries(sources).filter(([_k, v]) => v).map(([k]) => k);
       // Search config
       payload.search_mode = searchType === 'semantic' ? 'vector' : searchType === 'fulltext' ? 'fts' : 'hybrid';
       payload.hybrid_alpha = hybridAlpha;
@@ -176,14 +181,14 @@ export default function SearchPage() {
       if (sessionId.trim()) payload.session_id = sessionId.trim();
       // JSON tab overrides
       if (view === 'json') {
-        try { payload = JSON.parse(jsonBody || '{}'); } catch (e) { show({ title: 'Invalid JSON', description: 'Fix JSON before searching', variant: 'warning' }); setLoading(false); return; }
+        try { payload = JSON.parse(jsonBody || '{}'); } catch { show({ title: 'Invalid JSON', description: 'Fix JSON before searching', variant: 'warning' }); setLoading(false); return; }
       } else {
         // Apply simple preset tuning and merge extras
         if (preset === 'fast') { payload.enable_reranking = false; }
         if (preset === 'balanced') { payload.enable_reranking = true; payload.reranking_strategy = 'flashrank'; }
         if (preset === 'accurate') { payload.enable_reranking = true; payload.reranking_strategy = 'cross_encoder'; }
         if (payload.enable_generation) {
-          (payload as any).generation_temperature = preset === 'accurate' ? 0.2 : preset === 'fast' ? 0.8 : 0.7;
+          payload.generation_temperature = preset === 'accurate' ? 0.2 : preset === 'fast' ? 0.8 : 0.7;
         }
         try { const extraObj = JSON.parse(extras || '{}'); if (extraObj && typeof extraObj === 'object') payload = { ...payload, ...extraObj }; } catch {}
       }
@@ -193,13 +198,14 @@ export default function SearchPage() {
       show({ title: 'Search complete', variant: 'success' });
 
       // Update URL params to share current state
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const queryParams: Record<string, any> = {
         q: query,
         st: searchType,
         k: limit,
         ha: hybridAlpha,
         ms: minScore,
-        src: Object.entries(sources).filter(([k, v]) => v).map(([k]) => k).join(','),
+        src: Object.entries(sources).filter(([_k, v]) => v).map(([k]) => k).join(','),
         ex: expandQuery ? '1' : '0',
         exs: expansionStrategies,
         ce: enableCache ? '1' : '0',
@@ -213,7 +219,7 @@ export default function SearchPage() {
         cf: contentFilter ? '1' : '0',
         et: enableTable ? '1' : '0',
         tm: tableMethod,
-        cts: Object.entries(chunkTypes).filter(([k,v]) => v).map(([k]) => k).join(','),
+        cts: Object.entries(chunkTypes).filter(([_k,v]) => v).map(([k]) => k).join(','),
         pexp: parentExpansion ? '1' : '0',
         pctx: parentContext,
         sb: siblingChunks ? '1' : '0',
@@ -254,9 +260,10 @@ export default function SearchPage() {
         sid: sessionId,
       };
       router.replace({ pathname: '/search', query: queryParams }, undefined, { shallow: true });
-    } catch (e: any) {
-      setError(e.message || 'Search failed');
-      show({ title: 'Search failed', description: e.message || 'Search failed', variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      setError(message);
+      show({ title: 'Search failed', description: message, variant: 'danger' });
     } finally {
       setLoading(false);
     }
@@ -266,14 +273,15 @@ export default function SearchPage() {
   useEffect(() => {
     if (!router.isReady) return;
     const qp = router.query;
-    const get = (k: string, def?: any) => (qp[k] !== undefined ? qp[k] : def) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const get = (k: string, def?: any): any => (qp[k] !== undefined ? qp[k] : def);
     const getB = (k: string, def=false) => (get(k) === '1' ? true : def);
     try {
       setQuery(String(get('q', '')));
-      setSearchType((get('st', 'hybrid') as any));
+      setSearchType(get('st', 'hybrid'));
       setLimit(Number(get('k', 10)) || 10);
-      setHybridAlpha(parseFloat(get('ha', 0.7) as any) || 0.7);
-      setMinScore(parseFloat(get('ms', 0) as any) || 0);
+      setHybridAlpha(parseFloat(get('ha', 0.7)) || 0.7);
+      setMinScore(parseFloat(get('ms', 0)) || 0);
       const srcStr = String(get('src', 'media_db'));
       const srcSet = new Set(srcStr.split(',').filter(Boolean));
       setSources({ media_db: srcSet.has('media_db'), notes: srcSet.has('notes'), characters: srcSet.has('characters'), chats: srcSet.has('chats') });
@@ -281,15 +289,15 @@ export default function SearchPage() {
       setExpansionStrategies(String(get('exs', '')));
       setEnableCache(getB('ce', true));
       setAdaptiveCache(getB('ca', true));
-      setCacheThreshold(parseFloat(get('ct', 0.85) as any) || 0.85);
+      setCacheThreshold(parseFloat(get('ct', 0.85)) || 0.85);
       setKeywordFilter(String(get('kw', '')));
       setSecurityFilter(getB('sec', false));
       setDetectPII(getB('dpi', false));
       setRedactPII(getB('rpii', false));
-      setSensitivity((get('sens', 'public') as any));
+      setSensitivity(get('sens', 'public'));
       setContentFilter(getB('cf', false));
       setEnableTable(getB('et', false));
-      setTableMethod((get('tm', 'markdown') as any));
+      setTableMethod(get('tm', 'markdown'));
       const ctsStr = String(get('cts', 'text'));
       const ctsSet = new Set(ctsStr.split(',').filter(Boolean));
       setChunkTypes({ text: ctsSet.has('text'), code: ctsSet.has('code'), table: ctsSet.has('table'), list: ctsSet.has('list') });
@@ -300,20 +308,20 @@ export default function SearchPage() {
       setIncludeParentDoc(getB('ipd', false));
       setParentMaxTokens(Number(get('pmt', 1200)) || 1200);
       setEnableClaims(getB('ecl', false));
-      setClaimExtractor((get('cle', 'auto') as any));
-      setClaimVerifier((get('clv', 'hybrid') as any));
+      setClaimExtractor(get('cle', 'auto'));
+      setClaimVerifier(get('clv', 'hybrid'));
       setClaimsTopK(Number(get('ctk', 5)) || 5);
-      setClaimsConf(parseFloat(get('cconf', 0.7) as any) || 0.7);
+      setClaimsConf(parseFloat(get('cconf', 0.7)) || 0.7);
       setClaimsMax(Number(get('cmax', 25)) || 25);
       setNliModel(String(get('nli', '')));
       setEnableRerank(getB('err', true));
-      setRerankStrategy((get('rrs', 'flashrank') as any));
+      setRerankStrategy(get('rrs', 'flashrank'));
       const rtkVal = get('rtk', '');
       setRerankTopK(rtkVal === '' ? '' : Number(rtkVal));
       setEnableCitations(getB('ecit', false));
       setEnableChunkCitations(getB('echunk', true));
       setIncludePageNumbers(getB('ipn', false));
-      setCitationStyle((get('cstyle', 'apa') as any));
+      setCitationStyle(get('cstyle', 'apa'));
       setEnableGen(getB('egen', false));
       setGenModel(String(get('gmod', '')));
       setGenPrompt(String(get('gpr', '')));
@@ -343,10 +351,12 @@ export default function SearchPage() {
   useEffect(() => {
     (async () => {
       try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const resp = await apiClient.get<any>('/evaluations/rag/pipeline/presets');
         const items = Array.isArray(resp?.items) ? resp.items : [];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         setPresets(items.map((i: any) => i.name).filter(Boolean));
-      } catch (e) {
+      } catch {
         // ignore
       }
     })();
@@ -355,6 +365,7 @@ export default function SearchPage() {
   const applyPreset = async () => {
     if (!selectedPreset) return;
     try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const resp = await apiClient.get<any>(`/evaluations/rag/pipeline/presets/${encodeURIComponent(selectedPreset)}`);
       const cfg = resp?.config || {};
       const retr = cfg.retriever || {};
@@ -366,15 +377,16 @@ export default function SearchPage() {
         setLimit(retr.top_k);
       }
       show({ title: 'Preset applied', description: selectedPreset, variant: 'success' });
-    } catch (e) {
+    } catch {
       show({ title: 'Failed to apply preset', variant: 'warning' });
     }
   };
 
   // Keep a JSON body snapshot up to date from current basic form
   useEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const payload: any = { query };
-    payload.sources = Object.entries(sources).filter(([k, v]) => v).map(([k]) => k);
+    payload.sources = Object.entries(sources).filter(([_k, v]) => v).map(([k]) => k);
     payload.search_mode = searchType === 'semantic' ? 'vector' : searchType === 'fulltext' ? 'fts' : 'hybrid';
     payload.hybrid_alpha = hybridAlpha;
     payload.top_k = limit;
@@ -440,6 +452,7 @@ export default function SearchPage() {
   ]);
 
   const curl = useMemo(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let body: any = {};
     try { body = jsonBody ? JSON.parse(jsonBody) : {}; } catch { body = {}; }
     return buildCurl('/api/v1/rag/search', 'POST', { 'Content-Type': 'application/json' }, body);
@@ -450,13 +463,15 @@ export default function SearchPage() {
     try { return JSON.parse(extras || '{}'); } catch { return {}; }
   }, [extras]);
   const payloadDiff = useMemo(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const changes: Array<{ key: string; type: 'added'|'changed'|'unchanged'; from?: any; to?: any }> = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let base: any = {};
     try { base = jsonBody ? JSON.parse(jsonBody) : {}; } catch {}
     if (extrasObj && typeof extrasObj === 'object') {
       for (const k of Object.keys(extrasObj)) {
-        const to = (extrasObj as any)[k];
-        const from = (base as any)[k];
+        const to = extrasObj[k];
+        const from = base[k];
         if (typeof from === 'undefined') changes.push({ key: k, type: 'added', to });
         else if (JSON.stringify(from) !== JSON.stringify(to)) changes.push({ key: k, type: 'changed', from, to });
         else changes.push({ key: k, type: 'unchanged', from, to });
@@ -474,7 +489,8 @@ export default function SearchPage() {
     };
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
-  }, [curl, result]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [curl, result]); // show is stable from toast hook
 
   return (
     <Layout>
@@ -489,7 +505,7 @@ export default function SearchPage() {
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold text-gray-900">Unified RAG Search</h1>
           <div className="w-1/2">
-            <Tabs items={[{ key: 'basic', label: 'Basic' }, { key: 'json', label: 'JSON' }, { key: 'response', label: 'Response' }, { key: 'curl', label: 'cURL' }]} value={view} onChange={(k)=>setView(k as any)} />
+            <Tabs items={[{ key: 'basic', label: 'Basic' }, { key: 'json', label: 'JSON' }, { key: 'response', label: 'Response' }, { key: 'curl', label: 'cURL' }]} value={view} onChange={(k)=>setView(k as typeof view)} />
           </div>
         </div>
         <div className="rounded-md border bg-white p-4 transition-all duration-150">
@@ -499,7 +515,7 @@ export default function SearchPage() {
             </div>
             <div>
               <label className="mb-1 block text-sm font-medium text-gray-700">Search Type</label>
-              <select className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value={searchType} onChange={(e) => setSearchType(e.target.value as any)}>
+              <select className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value={searchType} onChange={(e) => setSearchType(e.target.value as typeof searchType)}>
                 <option value="hybrid">Hybrid</option>
                 <option value="semantic">Semantic</option>
                 <option value="fulltext">Full Text</option>
@@ -535,7 +551,7 @@ export default function SearchPage() {
                 <div className="mt-2">
                   {(['media_db','notes','characters','chats'] as const).map((s) => (
                     <label key={s} className="mr-3 inline-flex items-center space-x-2 text-sm">
-                      <input type="checkbox" checked={(sources as any)[s]} onChange={(e) => setSources({ ...sources, [s]: e.target.checked })} />
+                      <input type="checkbox" checked={sources[s as keyof typeof sources]} onChange={(e) => setSources({ ...sources, [s]: e.target.checked })} />
                       <span>{s}</span>
                     </label>
                   ))}
@@ -588,7 +604,7 @@ export default function SearchPage() {
                     <label key={i} className="block text-sm"><input type="checkbox" checked={x.val} onChange={(e)=>x.set(e.target.checked)} /> <span>{x.label}</span></label>
                   ))}
                   <label className="mt-2 block text-xs text-gray-700">Sensitivity</label>
-                  <select className="w-full rounded border p-1" value={sensitivity} onChange={(e)=>setSensitivity(e.target.value as any)}>
+                  <select className="w-full rounded border p-1" value={sensitivity} onChange={(e)=>setSensitivity(e.target.value as typeof sensitivity)}>
                     {['public','internal','confidential','restricted'].map((v)=> <option key={v} value={v}>{v}</option>)}
                   </select>
                 </div>
@@ -598,7 +614,7 @@ export default function SearchPage() {
                 <div className="mt-2">
                   <label className="block text-sm"><input type="checkbox" checked={enableTable} onChange={(e)=>setEnableTable(e.target.checked)} /> <span>Enable table processing</span></label>
                   <label className="mt-2 block text-xs text-gray-700">Method</label>
-                  <select className="w-full rounded border p-1" value={tableMethod} onChange={(e)=>setTableMethod(e.target.value as any)}>
+                  <select className="w-full rounded border p-1" value={tableMethod} onChange={(e)=>setTableMethod(e.target.value as typeof tableMethod)}>
                     {['markdown','html','hybrid'].map((v)=> <option key={v} value={v}>{v}</option>)}
                   </select>
                 </div>
@@ -608,7 +624,7 @@ export default function SearchPage() {
                 <div className="mt-2">
                   {(['text','code','table','list'] as const).map((t) => (
                     <label key={t} className="mr-3 inline-flex items-center space-x-2 text-sm">
-                      <input type="checkbox" checked={(chunkTypes as any)[t]} onChange={(e)=>setChunkTypes({ ...chunkTypes, [t]: e.target.checked })} /> <span>{t}</span>
+                      <input type="checkbox" checked={chunkTypes[t as keyof typeof chunkTypes]} onChange={(e)=>setChunkTypes({ ...chunkTypes, [t]: e.target.checked })} /> <span>{t}</span>
                     </label>
                   ))}
                   <div className="mt-2 space-y-2 text-sm">
@@ -630,13 +646,13 @@ export default function SearchPage() {
                   <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
                     <div>
                       <div>Extractor</div>
-                      <select className="w-full rounded border p-1" value={claimExtractor} onChange={(e)=>setClaimExtractor(e.target.value as any)}>
+                      <select className="w-full rounded border p-1" value={claimExtractor} onChange={(e)=>setClaimExtractor(e.target.value as typeof claimExtractor)}>
                         {['auto','aps','claimify'].map(v=> <option key={v} value={v}>{v}</option>)}
                       </select>
                     </div>
                     <div>
                       <div>Verifier</div>
-                      <select className="w-full rounded border p-1" value={claimVerifier} onChange={(e)=>setClaimVerifier(e.target.value as any)}>
+                      <select className="w-full rounded border p-1" value={claimVerifier} onChange={(e)=>setClaimVerifier(e.target.value as typeof claimVerifier)}>
                         {['hybrid','nli','llm'].map(v=> <option key={v} value={v}>{v}</option>)}
                       </select>
                     </div>
@@ -658,7 +674,7 @@ export default function SearchPage() {
                 <div className="mt-2">
                   <label className="block text-sm"><input type="checkbox" checked={enableRerank} onChange={(e)=>setEnableRerank(e.target.checked)} /> <span>Enable reranking</span></label>
                   <label className="mt-2 block text-xs">Strategy</label>
-                  <select className="w-full rounded border p-1" value={rerankStrategy} onChange={(e)=>setRerankStrategy(e.target.value as any)}>
+                  <select className="w-full rounded border p-1" value={rerankStrategy} onChange={(e)=>setRerankStrategy(e.target.value as typeof rerankStrategy)}>
                     {['flashrank','cross_encoder','hybrid','none'].map(v=> <option key={v} value={v}>{v}</option>)}
                   </select>
                   <label className="mt-2 block text-xs">Rerank top K</label>
@@ -676,7 +692,7 @@ export default function SearchPage() {
                     <label key={i} className="block text-sm"><input type="checkbox" checked={x.val} onChange={(e)=>x.set(e.target.checked)} /> <span>{x.label}</span></label>
                   ))}
                   <label className="mt-2 block text-xs">Style</label>
-                  <select className="w-full rounded border p-1" value={citationStyle} onChange={(e)=>setCitationStyle(e.target.value as any)}>
+                  <select className="w-full rounded border p-1" value={citationStyle} onChange={(e)=>setCitationStyle(e.target.value as typeof citationStyle)}>
                     {['apa','mla','chicago','harvard','ieee'].map(v=> <option key={v} value={v}>{v}</option>)}
                   </select>
                 </div>
@@ -749,6 +765,8 @@ export default function SearchPage() {
                   <input className="w-full rounded border p-1" value={userId} onChange={(e)=>setUserId(e.target.value)} />
                   <label className="mt-2 block text-xs">Session ID</label>
                   <input className="w-full rounded border p-1" value={sessionId} onChange={(e)=>setSessionId(e.target.value)} />
+                </div>
+              </details>
             </div>
           </details>
           )}
@@ -759,7 +777,7 @@ export default function SearchPage() {
               <div className="mt-2 grid grid-cols-1 gap-3 md:grid-cols-3">
                 <div>
                   <label className="mb-1 block text-sm font-medium text-gray-700">Preset</label>
-                  <select className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value={preset} onChange={(e)=>setPreset(e.target.value as any)}>
+                  <select className="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" value={preset} onChange={(e)=>setPreset(e.target.value as typeof preset)}>
                     <option value="fast">Fast (no rerank)</option>
                     <option value="balanced">Balanced (flashrank)</option>
                     <option value="accurate">Accurate (cross_encoder)</option>
@@ -815,7 +833,18 @@ export default function SearchPage() {
                 </div>
               </div>
               <div className="rounded border bg-gray-50 p-3">
-                {respView === 'pretty' ? <JsonViewer data={result} /> : <JsonTree data={result} />}
+                {loading ? (
+                  <div className="space-y-2">
+                    <LineSkeleton width="30%" height={12} />
+                    <LineSkeleton height={12} />
+                    <LineSkeleton width="80%" height={12} />
+                    <LineSkeleton width="65%" height={12} />
+                  </div>
+                ) : respView === 'pretty' ? (
+                  <JsonViewer data={result} />
+                ) : (
+                  <JsonTree data={result} />
+                )}
               </div>
             </div>
           )}
@@ -831,10 +860,28 @@ export default function SearchPage() {
               <pre className="overflow-auto whitespace-pre break-words rounded border bg-gray-50 p-3 font-mono text-xs text-gray-800">{curl}</pre>
             </div>
           )}
-        </div>
-          </details>
+
           {error && <div className="rounded bg-red-50 p-3 text-sm text-red-800">{error}</div>}
-          {result && (
+          {loading && !result && (
+            <div className="space-y-4">
+              <div>
+                <LineSkeleton width="25%" height={16} />
+                <div className="mt-2 space-y-2">
+                  <LineSkeleton height={12} />
+                  <LineSkeleton width="85%" height={12} />
+                </div>
+              </div>
+              <div>
+                <LineSkeleton width="30%" height={16} />
+                <div className="mt-2 space-y-2">
+                  {Array.from({ length: 3 }).map((_, i) => (
+                    <CardSkeleton key={`doc-skeleton-${i}`} />
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+          {result && !loading && (
             <div className="space-y-4">
               {result.generated_answer && (
                 <div>
@@ -845,6 +892,7 @@ export default function SearchPage() {
               <div>
                 <h2 className="text-lg font-semibold">Documents</h2>
                 <ul className="space-y-2 text-sm">
+                  {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                   {(result.documents || []).map((d: any, i: number) => (
                     <li key={i} className="rounded border p-3">
                       <div className="text-gray-800">{d.metadata?.title || d.id || `Doc ${i+1}`}</div>

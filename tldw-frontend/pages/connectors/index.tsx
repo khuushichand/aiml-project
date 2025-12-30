@@ -18,8 +18,9 @@ export default function ConnectorsHome() {
       setProviders(Array.isArray(p) ? p : [])
       const a = await apiClient.get<Account[]>('/connectors/accounts')
       setAccounts(Array.isArray(a) ? a : [])
-    } catch (e: any) {
-      setError(e?.message || 'Failed to load')
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to load';
+      setError(message);
     }
   }, [])
 
@@ -33,8 +34,9 @@ export default function ConnectorsHome() {
       if (j?.auth_url) {
         window.location.href = j.auth_url
       }
-    } catch (e: any) {
-      setError(e?.message || 'Authorize failed')
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Authorize failed';
+      setError(message);
     } finally { setBusy(false) }
   }
 

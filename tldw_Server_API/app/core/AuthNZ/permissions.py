@@ -348,10 +348,15 @@ FLASHCARDS_ADMIN = "flashcards.admin"
 # Embeddings permissions
 EMBEDDINGS_ADMIN = "embeddings.admin"
 
+# Claims permissions
+CLAIMS_REVIEW = "claims.review"
+CLAIMS_ADMIN = "claims.admin"
+
 # Role names
 ROLE_ADMIN = "admin"
 ROLE_USER = "user"
 ROLE_VIEWER = "viewer"
+ROLE_REVIEWER = "reviewer"
 ROLE_CUSTOM = "custom"
 
 #

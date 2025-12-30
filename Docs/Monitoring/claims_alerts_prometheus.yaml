@@ -1,0 +1,62 @@
+groups:
+  - name: tldw_server_claims
+    rules:
+      - alert: ClaimsUnsupportedRatioHigh
+        expr: sum(rate(rag_unsupported_claims_total[10m])) / clamp_min(sum(rate(rag_total_claims_checked_total[10m])), 1) > 0.3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High unsupported claims ratio"
+          description: >
+            The unsupported claims ratio exceeded 0.3 for 10 minutes.
+            Check recent provider changes or claims monitoring events.
+          runbook_url: "Docs/Operations/Claims_Alerts_Runbook.md#claimsunsupportedratiohigh"
+
+      - alert: ClaimsRebuildQueueHigh
+        expr: claims_rebuild_queue_size > 1000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Claims rebuild queue is large"
+          description: >
+            Claims rebuild queue size has exceeded 1000 for 10 minutes.
+            Consider scaling workers or adjusting rebuild policy.
+          runbook_url: "Docs/Operations/Claims_Alerts_Runbook.md#claimsrebuildqueuehigh"
+
+      - alert: ClaimsRebuildHeartbeatStale
+        expr: time() - claims_rebuild_worker_heartbeat_timestamp > 900
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Claims rebuild worker heartbeat stale"
+          description: >
+            Claims rebuild worker heartbeat is older than 15 minutes.
+            Verify the rebuild service is running.
+          runbook_url: "Docs/Operations/Claims_Alerts_Runbook.md#claimsrebuildheartbeatstale"
+
+      - alert: ClaimsProviderErrorsSpike
+        expr: sum(rate(claims_provider_errors_total[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Claims provider error spike"
+          description: >
+            Claims provider errors exceeded 1 error/sec for 5 minutes.
+            Check provider availability or credentials.
+          runbook_url: "Docs/Operations/Claims_Alerts_Runbook.md#claimsprovidererrorsspike"
+
+      - alert: ClaimsAlertWebhookFailures
+        expr: increase(claims_alert_webhook_failed_total[10m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Claims alert webhook failures detected"
+          description: >
+            Claims alert webhook failures occurred in the last 10 minutes.
+            Review webhook endpoints and network policy.
+          runbook_url: "Docs/Operations/Claims_Alerts_Runbook.md#claimsalertwebhookfailures"

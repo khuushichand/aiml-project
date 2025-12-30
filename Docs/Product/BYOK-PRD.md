@@ -8,7 +8,7 @@ In multi-user environments, all provider calls currently rely on server-level ke
 
 ## Goals
 - Allow authenticated users to create, update, list, and delete provider keys.
-- Support admin-managed org/team shared keys in v1.
+- Support admin-managed team/org shared keys in v1.
 - Resolve credentials per request with a clear precedence order.
 - Store secrets securely and prevent exposure in logs or responses.
 - Provide clear errors when a provider key is missing.
@@ -31,16 +31,18 @@ In multi-user environments, all provider calls currently rely on server-level ke
 
 ## Functional Requirements
 - **Credential resolution order**
-  - user BYOK -> org/team shared -> server default.
+  - user BYOK -> team shared -> org shared -> server default (scope from token claims).
   - Per-request override keys are not supported.
   - If no credential exists for a provider that requires auth, return a 400 with a clear message.
+- **Scope resolution**
+  - Resolve `team_ids` and `org_ids` from token claims. If multiple are present, use `active_team_id`/`active_org_id`; if no active scope is set, skip shared-key lookup.
 - **API endpoints**
   - `POST /api/v1/users/keys` create or update a key for a provider.
   - `GET /api/v1/users/keys` list providers and key status (masked).
   - `DELETE /api/v1/users/keys/{provider}` remove a key.
   - Optional: `POST /api/v1/users/keys/test` validate a key.
   - Admin endpoints for shared keys and user key revocation (see API and Schemas).
-  - Org/team scoped shared-key endpoints for org/team managers (see API and Schemas).
+  - Team/org scoped shared-key endpoints for team/org managers (see API and Schemas).
 - **Provider integration**
   - Provider call stack accepts resolved credentials at runtime.
   - Config-based keys remain supported as defaults.
@@ -49,8 +51,8 @@ In multi-user environments, all provider calls currently rely on server-level ke
   - Allowlist of providers for BYOK storage and runtime BYOK usage (server defaults remain usable).
   - If a provider is removed from the allowlist, stored BYOK keys are ignored at runtime and UI marks them disabled until re-allowed.
   - Admin tooling to revoke (delete) user or shared keys and force server defaults.
-- **Org/team shared keys**
-  - Admin-managed shared keys scoped to org/team membership.
+- **Team/org shared keys**
+  - Admin-managed shared keys scoped to team/org membership.
   - Stored and resolved using the same encryption and allowlist rules as user keys.
 
 ## Non-Functional Requirements
@@ -58,7 +60,7 @@ In multi-user environments, all provider calls currently rely on server-level ke
   - Encrypt secrets at rest using a master key from `.env`.
   - Never log secrets; redact in logs and exceptions.
 - **Auditability**
-  - Track `created_at`, `updated_at`, and `last_used_at`.
+  - Track `created_at`, `updated_at`, `last_used_at`, and actor fields for admin actions (`created_by`, `updated_by`, `revoked_by`, `revoked_at`).
   - Update `last_used_at` on successful provider calls or successful key tests; throttle updates to avoid hot writes.
 - **Performance**
   - Minimal overhead per request; cache decrypted key in request scope.
@@ -67,10 +69,12 @@ In multi-user environments, all provider calls currently rely on server-level ke
 New table in AuthNZ DB (name illustrative):
 - `user_provider_secrets`
   - `id`, `user_id`, `provider`, `encrypted_blob`, `key_hint`, `created_at`, `updated_at`, `last_used_at`, `metadata`
+  - `created_by`, `updated_by`, `revoked_by`, `revoked_at` (for admin actions when applicable)
   - Unique constraint on `(user_id, provider)`.
 Additional table for shared keys (name illustrative):
 - `org_provider_secrets` (or team-scoped equivalent)
   - `id`, `scope_type`, `scope_id`, `provider`, `encrypted_blob`, `key_hint`, `created_at`, `updated_at`, `last_used_at`, `metadata`
+  - `created_by`, `updated_by`, `revoked_by`, `revoked_at`
   - Unique constraint on `(scope_type, scope_id, provider)`.
 
 ## UX Requirements
@@ -105,12 +109,14 @@ Additional table for shared keys (name illustrative):
 
 ## Decisions
 - Eligible providers at launch: all commercial providers.
-- Org/team key sharing is in scope for v1.
+- Team/org key sharing is in scope for v1.
+- Scope resolution uses token claims with Personal -> Team -> Org -> Server default precedence.
+- BYOK credential fields never inherit server defaults; users must supply required account-scoped fields.
 
 # Design
 
 ## Architecture Overview
-- Store BYOK secrets (user and org/team shared) in the AuthNZ database alongside user records.
+- Store BYOK secrets (user and team/org shared) in the AuthNZ database alongside user records.
 - Add a credential resolver used by chat, embeddings, audio, and any provider-backed endpoint.
 - Encrypt secrets at rest with AES-GCM using existing crypto helpers.
 - Gate BYOK behavior with AuthNZ settings and a provider allowlist.
@@ -129,11 +135,12 @@ Additional table for shared keys (name illustrative):
   - `encrypted_blob` (AES-GCM JSON envelope with `api_key` and optional `credential_fields`)
   - `key_hint` (last 4 chars), `metadata` (JSON for non-sensitive tags)
   - `created_at`, `updated_at`, `last_used_at`
+  - `created_by`, `updated_by`, `revoked_by`, `revoked_at`
 - Unique index on `(user_id, provider)` and normalized lower-case provider names.
-- Shared keys store the same envelope and metadata with scope fields (`scope_type`, `scope_id`).
+- Shared keys store the same envelope, audit fields, and metadata with scope fields (`scope_type`, `scope_id`).
 - `credential_fields` validation strategy:
   - Use provider capability metadata to define allowed fields per provider.
-  - Default allowed keys for unknown providers: `base_url`, `org_id`, `project_id`.
+  - Default allowed keys for unknown providers: `org_id`, `project_id`. `base_url` requires explicit provider allowlist config to avoid SSRF.
   - Reject unknown keys unless explicitly allowlisted via config override.
   - For providers that require auth, user/shared keys must include `api_key`; do not merge server-default `api_key` into BYOK entries with custom `credential_fields`.
 
@@ -147,40 +154,50 @@ Additional table for shared keys (name illustrative):
 ## Credential Resolution Flow
 1. Resolve provider name from request or default config.
 2. If `AUTH_MODE=single_user` or BYOK is disabled, skip BYOK lookup.
-3. If BYOK is enabled and provider is allowlisted, load and decrypt user key (if present).
-4. If allowlisted and no user key, load and decrypt org/team shared key (if present).
-5. If a user key exists, use its `api_key` and merge its allowed `credential_fields` over server defaults; if no user key but a shared key exists, use its `api_key` and merge its fields over server defaults. Missing fields fall back, `null` means "use lower precedence", empty strings are invalid.
-6. Otherwise, use server default provider key.
-7. If no key is available and the provider requires auth, return a 400 with a clear message.
+3. Determine scope context from token claims (`team_ids`/`org_ids` and optional `active_team_id`/`active_org_id` when multiple). No request-supplied scope overrides.
+4. If BYOK is enabled and provider is allowlisted, load and decrypt user key (if present).
+5. If allowlisted and no user key, load and decrypt team shared key using the token scope context (if present).
+6. If allowlisted and no team key, load and decrypt org shared key using the token scope context (if present).
+7. If a user/team/org key exists, use its `api_key` and its `credential_fields` as-is. Do not inherit server-default `credential_fields` for BYOK entries to avoid cross-account coupling; missing required fields must fail validation. Empty strings are invalid.
+8. Otherwise, use server default provider key.
+9. If no key is available and the provider requires auth, return a 400 with a clear message.
 
 ## API and Schemas
 - `POST /api/v1/users/keys`
   - Request: `{ "provider": "openai", "api_key": "sk-...", "credential_fields": { "org_id": "...", "base_url": "..." }, "metadata": {...} }`
   - Response: `{ "provider": "openai", "status": "stored", "key_hint": "....1234", "updated_at": "..." }`
 - `GET /api/v1/users/keys`
-  - Response includes allowlisted providers and any stored-but-disallowed providers with status: `{ "items": [ { "provider": "openai", "has_key": true, "source": "user|shared|server_default|none|disabled", "key_hint": "....1234", "last_used_at": "..." } ] }`
+  - Response includes allowlisted providers and any stored-but-disallowed providers with status: `{ "items": [ { "provider": "openai", "has_key": true, "source": "user|team|org|server_default|none|disabled", "key_hint": "....1234", "last_used_at": "..." } ] }`
+  - `key_hint` is only included when `source=user`; otherwise it is omitted.
 - `DELETE /api/v1/users/keys/{provider}` -> 204
-- Optional `POST /api/v1/users/keys/test` validates the key with a lightweight provider call.
+- Optional `POST /api/v1/users/keys/test` validates the stored key for the provider with a lightweight provider call (no `api_key` in the request body).
+  - Request: `{ "provider": "openai", "model": "gpt-4o-mini" }`
+  - Response: `{ "provider": "openai", "status": "valid", "model": "gpt-4o-mini" }`
 - `POST /api/v1/admin/keys/shared`
   - Request: `{ "scope_type": "org|team", "scope_id": "org_123", "provider": "openai", "api_key": "sk-...", "credential_fields": { "org_id": "...", "base_url": "..." }, "metadata": {...} }`
   - Response: `{ "scope_type": "org", "scope_id": "org_123", "provider": "openai", "status": "stored", "key_hint": "....1234", "updated_at": "..." }`
 - `GET /api/v1/admin/keys/shared`
   - Query params: `scope_type`, `scope_id`, `provider` (optional filters).
   - Response: `{ "items": [ { "scope_type": "org", "scope_id": "org_123", "provider": "openai", "key_hint": "....1234", "last_used_at": "..." } ] }`
-- Optional `POST /api/v1/admin/keys/shared/test` validates a shared key with a lightweight provider call.
-  - Request: `{ "scope_type": "org|team", "scope_id": "org_123", "provider": "openai", "api_key": "sk-...", "credential_fields": { "org_id": "...", "base_url": "..." } }`
-  - Response: `{ "scope_type": "org", "scope_id": "org_123", "provider": "openai", "status": "valid" }`
+- Optional `POST /api/v1/admin/keys/shared/test` validates a stored shared key with a lightweight provider call (no `api_key` in the request body).
+  - Request: `{ "scope_type": "org|team", "scope_id": "org_123", "provider": "openai", "model": "gpt-4o-mini" }`
+  - Response: `{ "scope_type": "org", "scope_id": "org_123", "provider": "openai", "status": "valid", "model": "gpt-4o-mini" }`
 - `DELETE /api/v1/admin/keys/shared/{scope_type}/{scope_id}/{provider}` -> 204
 - `GET /api/v1/admin/keys/users/{user_id}`
   - Response: `{ "user_id": 123, "items": [ { "provider": "openai", "key_hint": "....1234", "last_used_at": "...", "allowed": true } ] }`
 - `DELETE /api/v1/admin/keys/users/{user_id}/{provider}` -> 204 (admin revoke user key)
-- Org/team scoped shared-key endpoints (same payloads/responses as admin shared endpoints):
+- Team/org scoped shared-key endpoints (same payloads/responses as admin shared endpoints):
   - `/api/v1/orgs/{org_id}/keys/shared` (POST/GET)
   - `/api/v1/orgs/{org_id}/keys/shared/{provider}` (DELETE)
   - Optional `/api/v1/orgs/{org_id}/keys/shared/test`
   - `/api/v1/teams/{team_id}/keys/shared` (POST/GET)
   - `/api/v1/teams/{team_id}/keys/shared/{provider}` (DELETE)
   - Optional `/api/v1/teams/{team_id}/keys/shared/test`
+
+## Validation Rules (BYOK)
+- BYOK requests must supply all account-scoped fields required by the provider (e.g., `org_id`, `project_id`, or `base_url` when allowed). No fallback to server defaults for these fields.
+- `api_key` is required for providers that require auth.
+- Unknown providers only allow `org_id` and `project_id` by default; `base_url` requires an explicit provider allowlist entry.
 
 ## Integration Points
 - Chat: inject resolved credentials into adapter request (`api_key` + allowed `credential_fields`).
@@ -191,13 +208,15 @@ Additional table for shared keys (name illustrative):
 ## RBAC and Auth
 - Endpoints require authenticated users (`get_current_active_user` or `get_auth_principal`).
 - Users can only manage their own keys in v1.
-- Admins can revoke user keys and manage shared org/team keys.
+- Admins can revoke user keys and manage shared team/org keys.
 - Global admin endpoints (`/api/v1/admin/keys/...`) require admin role.
-- Org/team scoped endpoints (`/api/v1/orgs/{org_id}/keys/shared`, `/api/v1/teams/{team_id}/keys/shared`) require org/team manager roles (owner/admin/lead) or global admin.
+- Team/org scoped endpoints (`/api/v1/orgs/{org_id}/keys/shared`, `/api/v1/teams/{team_id}/keys/shared`) require team/org manager roles (owner/admin/lead) or global admin.
+- Token claims must include `team_ids`/`org_ids` and optional `active_team_id`/`active_org_id` when multiple scopes exist, to select shared keys deterministically.
 
 ## Configuration
 - `BYOK_ENABLED` (default false; ignored in single-user mode).
 - `BYOK_ALLOWED_PROVIDERS` (comma-separated allowlist).
+- `BYOK_ALLOWED_BASE_URL_PROVIDERS` (comma-separated allowlist for providers that accept BYOK `base_url`).
 - Default allowlist: all commercial providers (can be overridden).
 - `BYOK_ENCRYPTION_KEY` and optional `BYOK_SECONDARY_ENCRYPTION_KEY`.
 
@@ -208,7 +227,7 @@ Additional table for shared keys (name illustrative):
 ## Error Handling
 - 400 for invalid providers, malformed payloads, or missing required provider credentials at runtime (`error_code=missing_provider_credentials`).
 - 403 when BYOK is disabled, provider is disallowed, or in single-user mode for key management endpoints.
-- 404 for delete requests when a user key does not exist.
+- 404 for delete requests when a user key does not exist, and for `/keys/test` when no stored key exists for the provider.
 - 401/403 for `/keys/test` when provider rejects credentials; 502 for provider outage/timeouts.
 
 ## UI Design Notes
@@ -230,16 +249,22 @@ Additional table for shared keys (name illustrative):
 **Goal**: Resolve credentials per request and expose CRUD endpoints.
 **Success Criteria**: Provider calls use resolved credentials; endpoints return masked status and proper errors.
 **Tests**: Integration tests for endpoints, resolution precedence, redaction, and request override rejection.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Web UI Settings
 **Goal**: Allow users to manage keys from the UI.
 **Success Criteria**: Add/edit/delete flows with validation and status display.
 **Tests**: Frontend tests for key management flows.
-**Status**: Not Started
+**Status**: In Progress
 
 ## Stage 4: Admin Controls and Metrics
 **Goal**: Allow BYOK gating and monitor adoption.
-**Success Criteria**: Config-based allow/deny list; shared org/team keys and admin revoke flow; metrics emitted for usage and errors.
+**Success Criteria**: Config-based allow/deny list; shared team/org keys and admin revoke flow; metrics emitted for usage and errors.
 **Tests**: Config-driven behavior tests; metrics emission checks.
-**Status**: Not Started
+**Status**: In Progress
+
+## Remaining Work (Summary)
+- Implement full BYOK key management UI (list, add/edit/delete, test) with API wiring and validation feedback.
+- Add BYOK-specific admin dashboards and wire to metrics endpoints (adoption, resolution sources, missing credentials, key activity).
+- Capture audit actor fields (`created_by`, `updated_by`, `revoked_by`) in BYOK tables and expose in admin views.
+- Formalize provider-specific required credential fields and validation metadata.

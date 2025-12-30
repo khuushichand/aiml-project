@@ -737,8 +737,9 @@ class AuthnzBillingRepo:
         """
         Atomically try to claim a webhook event for processing.
 
-        Uses UPDATE ... WHERE status = 'pending' to ensure only one processor
-        can claim the event, preventing race conditions.
+        Uses UPDATE ... WHERE status IN ('pending', 'failed') to ensure only one
+        processor can claim the event, preventing race conditions and allowing
+        manual retries of failed events.
 
         Returns True if successfully claimed, False if already claimed/processed.
         """
@@ -749,8 +750,10 @@ class AuthnzBillingRepo:
                     result = await conn.execute(
                         """
                         UPDATE stripe_webhook_events
-                        SET status = 'processing', processed_at = CURRENT_TIMESTAMP
-                        WHERE stripe_event_id = $1 AND status = 'pending'
+                        SET status = 'processing',
+                            processed_at = CURRENT_TIMESTAMP,
+                            error_message = NULL
+                        WHERE stripe_event_id = $1 AND status IN ('pending', 'failed')
                         """,
                         stripe_event_id,
                     )
@@ -760,14 +763,40 @@ class AuthnzBillingRepo:
                     cur = await conn.execute(
                         """
                         UPDATE stripe_webhook_events
-                        SET status = 'processing', processed_at = CURRENT_TIMESTAMP
-                        WHERE stripe_event_id = ? AND status = 'pending'
+                        SET status = 'processing',
+                            processed_at = CURRENT_TIMESTAMP,
+                            error_message = NULL
+                        WHERE stripe_event_id = ? AND status IN ('pending', 'failed')
                         """,
                         (stripe_event_id,),
                     )
                     return cur.rowcount > 0
         except Exception as exc:
             logger.error(f"AuthnzBillingRepo.try_claim_webhook_event failed: {exc}")
+            raise
+
+    async def get_webhook_event_status(
+        self,
+        stripe_event_id: str,
+    ) -> Optional[str]:
+        """Get the current status for a webhook event."""
+        try:
+            async with self.db_pool.acquire() as conn:
+                if self._is_postgres(conn):
+                    row = await conn.fetchrow(
+                        "SELECT status FROM stripe_webhook_events WHERE stripe_event_id = $1",
+                        stripe_event_id,
+                    )
+                    return row["status"] if row else None
+                else:
+                    cur = await conn.execute(
+                        "SELECT status FROM stripe_webhook_events WHERE stripe_event_id = ?",
+                        (stripe_event_id,),
+                    )
+                    row = await cur.fetchone()
+                    return row[0] if row else None
+        except Exception as exc:
+            logger.error(f"AuthnzBillingRepo.get_webhook_event_status failed: {exc}")
             raise
 
     async def mark_webhook_processed(
@@ -784,7 +813,13 @@ class AuthnzBillingRepo:
                     await conn.execute(
                         """
                         UPDATE stripe_webhook_events
-                        SET status = $2, processed_at = CURRENT_TIMESTAMP, error_message = $3
+                        SET status = $2,
+                            processed_at = CURRENT_TIMESTAMP,
+                            error_message = $3::text,
+                            retry_count = CASE
+                                WHEN $3::text IS NULL THEN retry_count
+                                ELSE COALESCE(retry_count, 0) + 1
+                            END
                         WHERE stripe_event_id = $1
                         """,
                         stripe_event_id, status, error_message,
@@ -793,10 +828,16 @@ class AuthnzBillingRepo:
                     await conn.execute(
                         """
                         UPDATE stripe_webhook_events
-                        SET status = ?, processed_at = CURRENT_TIMESTAMP, error_message = ?
+                        SET status = ?,
+                            processed_at = CURRENT_TIMESTAMP,
+                            error_message = ?,
+                            retry_count = CASE
+                                WHEN ? IS NULL THEN retry_count
+                                ELSE COALESCE(retry_count, 0) + 1
+                            END
                         WHERE stripe_event_id = ?
                         """,
-                        (status, error_message, stripe_event_id),
+                        (status, error_message, error_message, stripe_event_id),
                     )
         except Exception as exc:
             logger.error(f"AuthnzBillingRepo.mark_webhook_processed failed: {exc}")

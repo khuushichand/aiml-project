@@ -46,7 +46,13 @@ async def test_fetch_usage_daily_sqlite_roundtrip():
     from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
     pool = await get_db_pool()
     rows, total, has_in = await fetch_usage_daily(
-        pool, user_id=None, start="2024-01-01", end="2024-01-03", page=1, limit=10
+        pool,
+        user_id=None,
+        org_ids=None,
+        start="2024-01-01",
+        end="2024-01-03",
+        page=1,
+        limit=10,
     )
     assert total >= 1
     assert any(int(r["user_id"]) == 1 for r in rows)
@@ -63,6 +69,13 @@ async def test_export_usage_top_csv_text_smoke():
     await _seed_sqlite_usage_rows()
     from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
     pool = await get_db_pool()
-    csv_text = await export_usage_top_csv_text(pool, start="2024-01-01", end="2024-01-03", limit=5, metric="requests")
+    csv_text = await export_usage_top_csv_text(
+        pool,
+        start="2024-01-01",
+        end="2024-01-03",
+        limit=5,
+        metric="requests",
+        org_ids=None,
+    )
     assert csv_text.startswith("user_id,requests,errors,bytes_total,bytes_in_total,latency_avg_ms")
     assert "\n" in csv_text

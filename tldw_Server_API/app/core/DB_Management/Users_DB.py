@@ -135,6 +135,8 @@ class UsersDB:
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)")
                     await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS metadata JSONB")
                     await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS uuid UUID")
+                    await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS storage_quota_mb INTEGER DEFAULT 5120")
+                    await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS storage_used_mb INTEGER DEFAULT 0")
                     # Populate missing UUIDs using available function
                     try:
                         await conn.execute("UPDATE users SET uuid = gen_random_uuid() WHERE uuid IS NULL")
@@ -186,6 +188,10 @@ class UsersDB:
                         await conn.execute("ALTER TABLE users ADD COLUMN metadata TEXT")
                     if "uuid" not in columns:
                         await conn.execute("ALTER TABLE users ADD COLUMN uuid TEXT UNIQUE")
+                    if "storage_quota_mb" not in columns:
+                        await conn.execute("ALTER TABLE users ADD COLUMN storage_quota_mb INTEGER DEFAULT 5120")
+                    if "storage_used_mb" not in columns:
+                        await conn.execute("ALTER TABLE users ADD COLUMN storage_used_mb INTEGER DEFAULT 0")
                     await conn.execute(
                         "UPDATE users SET uuid = lower(hex(randomblob(16))) WHERE uuid IS NULL OR uuid = ''"
                     )
@@ -231,6 +237,7 @@ class UsersDB:
                 user_dict['is_active'] = bool(user_dict.get('is_active', 1))
                 user_dict['is_superuser'] = bool(user_dict.get('is_superuser', 0))
                 user_dict['email_verified'] = bool(user_dict.get('email_verified', 0))
+                user_dict['is_verified'] = bool(user_dict.get('is_verified', 0))
 
             return user_dict
 
@@ -270,6 +277,7 @@ class UsersDB:
                 user_dict['is_active'] = bool(user_dict.get('is_active', 1))
                 user_dict['is_superuser'] = bool(user_dict.get('is_superuser', 0))
                 user_dict['email_verified'] = bool(user_dict.get('email_verified', 0))
+                user_dict['is_verified'] = bool(user_dict.get('is_verified', 0))
 
             return user_dict
 
@@ -308,6 +316,7 @@ class UsersDB:
                 user_dict['is_active'] = bool(user_dict.get('is_active', 1))
                 user_dict['is_superuser'] = bool(user_dict.get('is_superuser', 0))
                 user_dict['email_verified'] = bool(user_dict.get('email_verified', 0))
+                user_dict['is_verified'] = bool(user_dict.get('is_verified', 0))
 
             return user_dict
 
@@ -345,6 +354,7 @@ class UsersDB:
                 user_dict['is_active'] = bool(user_dict.get('is_active', 1))
                 user_dict['is_superuser'] = bool(user_dict.get('is_superuser', 0))
                 user_dict['email_verified'] = bool(user_dict.get('email_verified', 0))
+                user_dict['is_verified'] = bool(user_dict.get('is_verified', 0))
 
             return user_dict
 
@@ -359,6 +369,7 @@ class UsersDB:
         password_hash: str,
         role: str = "user",
         is_active: bool = True,
+        is_verified: bool = False,
         is_superuser: bool = False,
         storage_quota_mb: int = 5120,
         uuid_value: Optional[uuid.UUID | str] = None,
@@ -372,6 +383,7 @@ class UsersDB:
             password_hash: Hashed password
             role: User role (default: "user")
             is_active: Whether user is active
+            is_verified: Whether user is verified
             is_superuser: Whether user is a superuser
             storage_quota_mb: Storage quota in MB
             uuid_value: Optional pre-assigned UUID for the user. When omitted,
@@ -406,13 +418,13 @@ class UsersDB:
                         """
                         INSERT INTO users (
                             uuid, username, email, password_hash, role,
-                            is_active, is_superuser, storage_quota_mb
+                            is_active, is_verified, is_superuser, storage_quota_mb
                         )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                         RETURNING id
                         """,
                         generated_uuid, username, email.lower(), password_hash, role,
-                        is_active, is_superuser, storage_quota_mb
+                        is_active, is_verified, is_superuser, storage_quota_mb
                     )
                 else:
                     # SQLite
@@ -441,9 +453,9 @@ class UsersDB:
                         """
                         INSERT INTO users (
                             uuid, username, email, password_hash, role,
-                            is_active, is_superuser, storage_quota_mb
+                            is_active, is_verified, is_superuser, storage_quota_mb
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             generated_uuid,
@@ -452,6 +464,7 @@ class UsersDB:
                             password_hash,
                             role,
                             int(is_active),
+                            int(is_verified),
                             int(is_superuser),
                             storage_quota_mb,
                         )
@@ -513,7 +526,7 @@ class UsersDB:
         # Filter allowed fields
         allowed_fields = {
             'email', 'password_hash', 'is_active', 'is_superuser',
-            'role', 'last_login', 'email_verified', 'storage_quota_mb',
+            'role', 'last_login', 'email_verified', 'is_verified', 'storage_quota_mb',
             'storage_used_mb'
         }
 
@@ -542,7 +555,7 @@ class UsersDB:
                     await conn.execute(query, *values)
                 else:
                     # SQLite - convert bools to ints and use '?' placeholders
-                    for key in ['is_active', 'is_superuser', 'email_verified']:
+                    for key in ['is_active', 'is_superuser', 'email_verified', 'is_verified']:
                         if key in updates:
                             updates[key] = int(bool(updates[key]))
                     set_clause = ", ".join(f"{k} = ?" for k in field_names)
@@ -642,6 +655,7 @@ class UsersDB:
                     user_dict['is_active'] = bool(user_dict.get('is_active', 1))
                     user_dict['is_superuser'] = bool(user_dict.get('is_superuser', 0))
                     user_dict['email_verified'] = bool(user_dict.get('email_verified', 0))
+                    user_dict['is_verified'] = bool(user_dict.get('is_verified', 0))
 
                 users.append(user_dict)
 

@@ -198,11 +198,11 @@ def evaluate_url_policy(
     # Ports policy (defaults 80/443; override via env)
     def _default_ports() -> list[int]:
         raw = os.getenv(ALLOWED_PORTS_ENV, "80,443")
+        tokens = [part.strip().lower() for part in (raw or "").split(",") if part.strip()]
+        if any(token in {"*", "any", "all"} for token in tokens):
+            return []
         out = []
-        for part in (raw or "").split(","):
-            p = part.strip()
-            if not p:
-                continue
+        for p in tokens:
             try:
                 out.append(int(p))
             except Exception:

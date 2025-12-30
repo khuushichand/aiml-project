@@ -365,7 +365,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 11  # Schema v11 allows NULL message content for image-only messages
+    _CURRENT_SCHEMA_VERSION = 12  # Schema v12 adds quizzes + quiz attempts
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: Tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
@@ -406,6 +406,11 @@ class CharactersRAGDB:
             "flashcards",
             ["front", "back", "notes"],
         ),
+        (
+            "quiz_questions_fts",
+            "quiz_questions",
+            ["question_text", "explanation"],
+        ),
     ]
 
     _POSTGRES_SEQUENCE_TABLES: Tuple[Tuple[str, str], ...] = (
@@ -416,6 +421,9 @@ class CharactersRAGDB:
         ("decks", "id"),
         ("flashcards", "id"),
         ("flashcard_reviews", "id"),
+        ("quizzes", "id"),
+        ("quiz_questions", "id"),
+        ("quiz_attempts", "id"),
     )
 
     _FULL_SCHEMA_SQL_V4 = """
@@ -1704,6 +1712,111 @@ UPDATE db_schema_version
    AND version < 11;
 """
 
+    # --- Migration: V11 -> V12 (Quizzes + attempts) ---
+    _MIGRATION_SQL_V11_TO_V12 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 12 - Quizzes (2025-12-01)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+/* Quizzes table */
+CREATE TABLE IF NOT EXISTS quizzes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  description TEXT,
+  media_id INTEGER,
+  total_questions INTEGER DEFAULT 0,
+  time_limit_seconds INTEGER,
+  passing_score INTEGER,
+  deleted BOOLEAN NOT NULL DEFAULT 0,
+  client_id TEXT NOT NULL DEFAULT 'unknown',
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_quizzes_media_id ON quizzes(media_id);
+CREATE INDEX IF NOT EXISTS idx_quizzes_deleted ON quizzes(deleted);
+CREATE INDEX IF NOT EXISTS idx_quizzes_last_modified ON quizzes(last_modified);
+
+/* Quiz questions */
+CREATE TABLE IF NOT EXISTS quiz_questions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  quiz_id INTEGER NOT NULL REFERENCES quizzes(id) ON DELETE CASCADE,
+  question_type TEXT NOT NULL CHECK(question_type IN ('multiple_choice', 'true_false', 'fill_blank')),
+  question_text TEXT NOT NULL,
+  options TEXT,
+  correct_answer TEXT NOT NULL,
+  explanation TEXT,
+  points INTEGER NOT NULL DEFAULT 1,
+  order_index INTEGER NOT NULL DEFAULT 0,
+  tags_json TEXT,
+  deleted BOOLEAN NOT NULL DEFAULT 0,
+  client_id TEXT NOT NULL DEFAULT 'unknown',
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_quiz_questions_quiz_id ON quiz_questions(quiz_id);
+CREATE INDEX IF NOT EXISTS idx_quiz_questions_deleted ON quiz_questions(deleted);
+CREATE INDEX IF NOT EXISTS idx_quiz_questions_order ON quiz_questions(quiz_id, order_index);
+
+/* FTS for quiz questions */
+CREATE VIRTUAL TABLE IF NOT EXISTS quiz_questions_fts
+USING fts5(
+  question_text, explanation,
+  content='quiz_questions',
+  content_rowid='id'
+);
+
+DROP TRIGGER IF EXISTS quiz_questions_ai;
+DROP TRIGGER IF EXISTS quiz_questions_au;
+DROP TRIGGER IF EXISTS quiz_questions_ad;
+
+CREATE TRIGGER quiz_questions_ai
+AFTER INSERT ON quiz_questions BEGIN
+  INSERT INTO quiz_questions_fts(rowid, question_text, explanation)
+  SELECT new.id, new.question_text, new.explanation
+  WHERE new.deleted = 0;
+END;
+
+CREATE TRIGGER quiz_questions_au
+AFTER UPDATE ON quiz_questions BEGIN
+  INSERT INTO quiz_questions_fts(quiz_questions_fts,rowid,question_text,explanation)
+  VALUES('delete',old.id,old.question_text,old.explanation);
+
+  INSERT INTO quiz_questions_fts(rowid, question_text, explanation)
+  SELECT new.id, new.question_text, new.explanation
+  WHERE new.deleted = 0;
+END;
+
+CREATE TRIGGER quiz_questions_ad
+AFTER DELETE ON quiz_questions BEGIN
+  INSERT INTO quiz_questions_fts(quiz_questions_fts,rowid,question_text,explanation)
+  VALUES('delete',old.id,old.question_text,old.explanation);
+END;
+
+/* Quiz attempts */
+CREATE TABLE IF NOT EXISTS quiz_attempts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  quiz_id INTEGER NOT NULL REFERENCES quizzes(id),
+  started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  completed_at DATETIME,
+  score INTEGER,
+  total_possible INTEGER NOT NULL,
+  time_spent_seconds INTEGER,
+  questions_snapshot TEXT,
+  answers TEXT,
+  client_id TEXT NOT NULL DEFAULT 'unknown'
+);
+CREATE INDEX IF NOT EXISTS idx_quiz_attempts_quiz_id ON quiz_attempts(quiz_id);
+CREATE INDEX IF NOT EXISTS idx_quiz_attempts_completed_at ON quiz_attempts(completed_at);
+
+UPDATE db_schema_version
+   SET version = 12
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 12;
+"""
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -2576,6 +2689,26 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V10->V11: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V11 for '{self._SCHEMA_NAME}': {e}") from e
 
+    def _migrate_from_v11_to_v12(self, conn: sqlite3.Connection):
+        """Migrates schema from V11 to V12 (quizzes + attempts)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V11 to V12 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V11_TO_V12)
+            final_version = self._get_db_version(conn)
+            if final_version != 12:
+                raise SchemaError(
+                    f"[{self._SCHEMA_NAME}] Migration V11->V12 failed version check. Expected 12, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V12 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V11->V12 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V11->V12 failed for '{self._SCHEMA_NAME}': {e}") from e
+        except SchemaError:
+            raise
+        except Exception as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V11->V12: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V12 for '{self._SCHEMA_NAME}': {e}") from e
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -2724,6 +2857,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if target_version >= 11 and current_db_version == 10:
                         self._migrate_from_v10_to_v11(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 12 and current_db_version == 11:
+                        self._migrate_from_v11_to_v12(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
@@ -2827,12 +2963,19 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     elif current_initial_version == 10 and target_version >= 11:
                         self._migrate_from_v10_to_v11(conn)
                         current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 11 and target_version >= 12:
+                        self._migrate_from_v11_to_v12(conn)
+                        current_db_version = self._get_db_version(conn)
                     else:
                         raise SchemaError(
                             f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
                             f"Manual migration or a new database may be required.")
                 else: # Should not be reached due to prior checks
                     raise SchemaError(f"Unexpected schema state: current {current_initial_version}, target {target_version}")
+
+                if target_version >= 12 and current_db_version == 11:
+                    self._migrate_from_v11_to_v12(conn)
+                    current_db_version = self._get_db_version(conn)
 
                 final_version_check = self._get_db_version(conn)
                 if final_version_check != target_version:
@@ -2920,6 +3063,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     expected_version=11,
                 )
                 current_version = 11
+            if current_version < 12:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V11_TO_V12, conn, expected_version=12)
+                current_version = 12
 
             if current_version > target_version:
                 raise SchemaError(
@@ -7887,6 +8033,656 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         # unlink extras
         for kid in cur_kw_ids - desired_kw_ids:
             conn.execute("DELETE FROM flashcard_keywords WHERE card_id = ? AND keyword_id = ?", (card_id, int(kid)))
+
+    # ==========================
+    # Quizzes (V12)
+    # ==========================
+    def _normalize_quiz_correct_answer(self, question_type: str, correct_answer: Any) -> str:
+        """Normalize correct_answer into a consistent stored string."""
+        if question_type == "multiple_choice":
+            try:
+                return str(int(correct_answer))
+            except (TypeError, ValueError):
+                return "0"
+        if question_type == "true_false":
+            val = str(correct_answer).strip().lower()
+            return "true" if val in {"true", "1", "yes", "y"} else "false"
+        return str(correct_answer or "").strip()
+
+    def _deserialize_quiz_question(self, row: Any) -> Optional[Dict[str, Any]]:
+        item = self._deserialize_row_fields(row, ["options", "tags_json"])
+        if not item:
+            return None
+        tags = item.pop("tags_json", None)
+        if tags is not None:
+            item["tags"] = tags
+        if item.get("question_type") == "multiple_choice" and item.get("correct_answer") is not None:
+            try:
+                item["correct_answer"] = int(item["correct_answer"])
+            except (TypeError, ValueError):
+                pass
+        return item
+
+    def _public_quiz_question(self, question: Dict[str, Any]) -> Dict[str, Any]:
+        payload = dict(question)
+        payload.pop("correct_answer", None)
+        payload.pop("explanation", None)
+        return payload
+
+    def _recount_quiz_questions(self, conn: Any, quiz_id: int) -> int:
+        deleted_clause = "deleted = FALSE" if self.backend_type == BackendType.POSTGRESQL else "deleted = 0"
+        row = conn.execute(
+            f"SELECT COUNT(*) AS count FROM quiz_questions WHERE quiz_id = ? AND {deleted_clause}",
+            (quiz_id,),
+        ).fetchone()
+        total = int(row["count"]) if row else 0
+        now = self._get_current_utc_timestamp_iso()
+        conn.execute(
+            "UPDATE quizzes SET total_questions = ?, last_modified = ?, version = version + 1, client_id = ? WHERE id = ?",
+            (total, now, self.client_id, quiz_id),
+        )
+        return total
+
+    def create_quiz(
+        self,
+        name: str,
+        description: Optional[str] = None,
+        media_id: Optional[int] = None,
+        time_limit_seconds: Optional[int] = None,
+        passing_score: Optional[int] = None,
+        client_id: str = "unknown",
+    ) -> int:
+        """Create a new quiz and return its ID."""
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                insert_sql = (
+                    "INSERT INTO quizzes(name, description, media_id, total_questions, time_limit_seconds, "
+                    "passing_score, deleted, client_id, version, created_at, last_modified) "
+                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                )
+                params = (
+                    name,
+                    description,
+                    media_id,
+                    0,
+                    time_limit_seconds,
+                    passing_score,
+                    False,
+                    client_id or self.client_id,
+                    1,
+                    now,
+                    now,
+                )
+                if self.backend_type == BackendType.POSTGRESQL:
+                    cursor = conn.execute(insert_sql + " RETURNING id", params)
+                    row = cursor.fetchone()
+                    quiz_id = int(row["id"]) if row else None
+                else:
+                    cursor = conn.execute(insert_sql, params)
+                    quiz_id = int(cursor.lastrowid)
+                if quiz_id is None:
+                    raise CharactersRAGDBError("Failed to determine quiz ID after insert")
+                return quiz_id
+        except sqlite3.Error as e:
+            raise CharactersRAGDBError(f"Failed to create quiz: {e}") from e
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to create quiz: {exc}") from exc
+
+    def get_quiz(self, quiz_id: int, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+        """Get quiz by ID, returns None if not found or deleted (unless include_deleted)."""
+        deleted_clause = "" if include_deleted else "AND deleted = 0"
+        query = (
+            "SELECT id, name, description, media_id, total_questions, time_limit_seconds, passing_score, "
+            "deleted, client_id, version, created_at, last_modified "
+            "FROM quizzes WHERE id = ? " + deleted_clause
+        )
+        try:
+            cursor = self.execute_query(query, (quiz_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except CharactersRAGDBError:
+            raise
+
+    def list_quizzes(
+        self,
+        q: Optional[str] = None,
+        media_id: Optional[int] = None,
+        include_deleted: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """List quizzes with pagination and optional filters."""
+        where_clauses = ["1=1"]
+        params: List[Any] = []
+        if not include_deleted:
+            where_clauses.append("deleted = FALSE" if self.backend_type == BackendType.POSTGRESQL else "deleted = 0")
+        if media_id is not None:
+            where_clauses.append("media_id = ?")
+            params.append(media_id)
+        if q:
+            where_clauses.append("(LOWER(name) LIKE ? OR LOWER(description) LIKE ?)")
+            q_like = f"%{q.lower()}%"
+            params.extend([q_like, q_like])
+
+        where_sql = " AND ".join(where_clauses)
+        query = (
+            "SELECT id, name, description, media_id, total_questions, time_limit_seconds, passing_score, "
+            "deleted, client_id, version, created_at, last_modified "
+            f"FROM quizzes WHERE {where_sql} ORDER BY last_modified DESC LIMIT ? OFFSET ?"
+        )
+        count_query = f"SELECT COUNT(*) AS count FROM quizzes WHERE {where_sql}"
+        try:
+            cursor = self.execute_query(query, tuple(params + [limit, offset]))
+            items = [dict(row) for row in cursor.fetchall()]
+            count_cursor = self.execute_query(count_query, tuple(params))
+            count_row = count_cursor.fetchone()
+            total = int(count_row["count"]) if count_row else 0
+            return {"items": items, "count": total}
+        except CharactersRAGDBError:
+            raise
+
+    def update_quiz(self, quiz_id: int, updates: Dict[str, Any], client_id: str = "unknown") -> bool:
+        """Update quiz fields, returns True if successful."""
+        expected_version = updates.pop("expected_version", None)
+        allowed = {"name", "description", "media_id", "time_limit_seconds", "passing_score"}
+        set_parts = []
+        params: List[Any] = []
+        for k, v in updates.items():
+            if k in allowed:
+                set_parts.append(f"{k} = ?")
+                params.append(v)
+        if not set_parts:
+            if expected_version is None:
+                return True
+            try:
+                with self.transaction() as conn:
+                    row = conn.execute("SELECT version FROM quizzes WHERE id = ? AND deleted = 0", (quiz_id,)).fetchone()
+                    if not row:
+                        return False
+                    if int(row["version"]) != expected_version:
+                        raise ConflictError("Version mismatch updating quiz", entity="quizzes", identifier=quiz_id)
+                return True
+            except sqlite3.Error as e:
+                raise CharactersRAGDBError(f"Failed to update quiz: {e}") from e
+        now = self._get_current_utc_timestamp_iso()
+        set_parts.extend(["last_modified = ?", "version = version + 1", "client_id = ?"])
+        params.extend([now, client_id or self.client_id])
+        try:
+            with self.transaction() as conn:
+                row = conn.execute("SELECT version FROM quizzes WHERE id = ? AND deleted = 0", (quiz_id,)).fetchone()
+                if not row:
+                    return False
+                current_version = int(row["version"])
+                if expected_version is not None and current_version != expected_version:
+                    raise ConflictError("Version mismatch updating quiz", entity="quizzes", identifier=quiz_id)
+                params_final = params + [quiz_id]
+                query = f"UPDATE quizzes SET {', '.join(set_parts)} WHERE id = ? AND deleted = 0"
+                rc = conn.execute(query, tuple(params_final)).rowcount
+                return rc > 0
+        except sqlite3.Error as e:
+            raise CharactersRAGDBError(f"Failed to update quiz: {e}") from e
+
+    def delete_quiz(self, quiz_id: int, expected_version: Optional[int] = None, hard_delete: bool = False) -> bool:
+        """Soft or hard delete a quiz."""
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                row = conn.execute("SELECT id, version, deleted FROM quizzes WHERE id = ?", (quiz_id,)).fetchone()
+                if not row:
+                    return False
+                cur_ver = int(row["version"])
+                deleted = int(row["deleted"])
+                if hard_delete:
+                    conn.execute("DELETE FROM quizzes WHERE id = ?", (quiz_id,))
+                    return True
+                if deleted:
+                    return True
+                if expected_version is not None and cur_ver != expected_version:
+                    raise ConflictError("Version mismatch deleting quiz", entity="quizzes", identifier=quiz_id)
+                rc = conn.execute(
+                    "UPDATE quizzes SET deleted = 1, last_modified = ?, version = ?, client_id = ? WHERE id = ? AND deleted = 0",
+                    (now, cur_ver + 1, self.client_id, quiz_id),
+                ).rowcount
+                if rc:
+                    conn.execute(
+                        "UPDATE quiz_questions SET deleted = 1, last_modified = ?, version = version + 1, client_id = ? "
+                        "WHERE quiz_id = ? AND deleted = 0",
+                        (now, self.client_id, quiz_id),
+                    )
+                return rc > 0
+        except sqlite3.Error as e:
+            raise CharactersRAGDBError(f"Failed to delete quiz: {e}") from e
+
+    def create_question(
+        self,
+        quiz_id: int,
+        question_type: str,
+        question_text: str,
+        correct_answer: int | str,
+        options: Optional[List[str]] = None,
+        explanation: Optional[str] = None,
+        points: int = 1,
+        order_index: int = 0,
+        tags: Optional[List[str]] = None,
+        client_id: str = "unknown",
+    ) -> int:
+        """Create a question for a quiz and increment total_questions."""
+        now = self._get_current_utc_timestamp_iso()
+        norm_correct = self._normalize_quiz_correct_answer(question_type, correct_answer)
+        options_json = self._ensure_json_string(options)
+        tags_json = self._ensure_json_string(tags)
+        try:
+            with self.transaction() as conn:
+                quiz_row = conn.execute("SELECT id FROM quizzes WHERE id = ? AND deleted = 0", (quiz_id,)).fetchone()
+                if not quiz_row:
+                    raise ConflictError("Quiz not found", entity="quizzes", identifier=quiz_id)
+                insert_sql = (
+                    "INSERT INTO quiz_questions(quiz_id, question_type, question_text, options, correct_answer, "
+                    "explanation, points, order_index, tags_json, deleted, client_id, version, created_at, last_modified) "
+                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                )
+                params = (
+                    quiz_id,
+                    question_type,
+                    question_text,
+                    options_json,
+                    norm_correct,
+                    explanation,
+                    points,
+                    order_index,
+                    tags_json,
+                    False,
+                    client_id or self.client_id,
+                    1,
+                    now,
+                    now,
+                )
+                if self.backend_type == BackendType.POSTGRESQL:
+                    cursor = conn.execute(insert_sql + " RETURNING id", params)
+                    row = cursor.fetchone()
+                    question_id = int(row["id"]) if row else None
+                else:
+                    cursor = conn.execute(insert_sql, params)
+                    question_id = int(cursor.lastrowid)
+                if question_id is None:
+                    raise CharactersRAGDBError("Failed to determine question ID after insert")
+                self._recount_quiz_questions(conn, quiz_id)
+                return question_id
+        except sqlite3.Error as e:
+            raise CharactersRAGDBError(f"Failed to create question: {e}") from e
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to create question: {exc}") from exc
+
+    def get_question(self, question_id: int, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+        """Get question by ID."""
+        deleted_clause = "" if include_deleted else "AND deleted = 0"
+        query = (
+            "SELECT id, quiz_id, question_type, question_text, options, correct_answer, explanation, points, "
+            "order_index, tags_json, deleted, client_id, version, created_at, last_modified "
+            "FROM quiz_questions WHERE id = ? " + deleted_clause
+        )
+        try:
+            cursor = self.execute_query(query, (question_id,))
+            row = cursor.fetchone()
+            return self._deserialize_quiz_question(row) if row else None
+        except CharactersRAGDBError:
+            raise
+
+    def list_questions(
+        self,
+        quiz_id: int,
+        q: Optional[str] = None,
+        include_answers: bool = False,
+        limit: Optional[int] = 50,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """List questions for a quiz with pagination."""
+        where_clauses = ["quiz_id = ?"]
+        params: List[Any] = [quiz_id]
+        where_clauses.append("deleted = FALSE" if self.backend_type == BackendType.POSTGRESQL else "deleted = 0")
+
+        fts_filter = ""
+        if q:
+            if self.backend_type == BackendType.POSTGRESQL:
+                tsquery = FTSQueryTranslator.normalize_query(q, 'postgresql')
+                if not tsquery:
+                    return []
+                fts_filter = "AND quiz_questions_fts_tsv @@ to_tsquery('english', ?)"
+                params.append(tsquery)
+            else:
+                norm_q = FTSQueryTranslator.normalize_query(q, 'sqlite')
+                fts_filter = "AND id IN (SELECT rowid FROM quiz_questions_fts WHERE quiz_questions_fts MATCH ?)"
+                params.append(norm_q)
+
+        where_sql = " AND ".join(where_clauses)
+        order_clause = "ORDER BY order_index ASC, id ASC"
+        limit_clause = ""
+        query_params = list(params)
+        if limit is not None:
+            limit_clause = "LIMIT ? OFFSET ?"
+            query_params.extend([int(limit), int(offset)])
+
+        query = (
+            "SELECT id, quiz_id, question_type, question_text, options, correct_answer, explanation, points, "
+            "order_index, tags_json, deleted, client_id, version, created_at, last_modified "
+            f"FROM quiz_questions WHERE {where_sql} {fts_filter} "
+            f"{order_clause} {limit_clause}"
+        )
+        count_query = f"SELECT COUNT(*) AS count FROM quiz_questions WHERE {where_sql} {fts_filter}"
+        try:
+            cursor = self.execute_query(query, tuple(query_params))
+            items: List[Dict[str, Any]] = []
+            for row in cursor.fetchall():
+                question = self._deserialize_quiz_question(row)
+                if not question:
+                    continue
+                if not include_answers:
+                    question = self._public_quiz_question(question)
+                items.append(question)
+            count_cursor = self.execute_query(count_query, tuple(params))
+            count_row = count_cursor.fetchone()
+            total = int(count_row["count"]) if count_row else 0
+            return {"items": items, "count": total}
+        except CharactersRAGDBError:
+            raise
+
+    def update_question(self, question_id: int, updates: Dict[str, Any], client_id: str = "unknown") -> bool:
+        """Update question fields."""
+        expected_version = updates.pop("expected_version", None)
+        allowed = {"question_type", "question_text", "options", "correct_answer", "explanation", "points", "order_index", "tags"}
+        set_parts = []
+        params: List[Any] = []
+        for k, v in updates.items():
+            if k not in allowed:
+                continue
+            if k == "options":
+                set_parts.append("options = ?")
+                params.append(self._ensure_json_string(v))
+            elif k == "tags":
+                set_parts.append("tags_json = ?")
+                params.append(self._ensure_json_string(v))
+            elif k == "correct_answer":
+                question_type = updates.get("question_type")
+                if not question_type:
+                    row = self.execute_query(
+                        "SELECT question_type FROM quiz_questions WHERE id = ? AND deleted = 0",
+                        (question_id,),
+                    ).fetchone()
+                    question_type = row["question_type"] if row else None
+                set_parts.append("correct_answer = ?")
+                params.append(self._normalize_quiz_correct_answer(str(question_type or "fill_blank"), v))
+            else:
+                set_parts.append(f"{k} = ?")
+                params.append(v)
+
+        if not set_parts:
+            if expected_version is None:
+                return True
+            try:
+                with self.transaction() as conn:
+                    row = conn.execute("SELECT version FROM quiz_questions WHERE id = ? AND deleted = 0", (question_id,)).fetchone()
+                    if not row:
+                        return False
+                    if int(row["version"]) != expected_version:
+                        raise ConflictError("Version mismatch updating question", entity="quiz_questions", identifier=question_id)
+                return True
+            except sqlite3.Error as e:
+                raise CharactersRAGDBError(f"Failed to update question: {e}") from e
+
+        now = self._get_current_utc_timestamp_iso()
+        set_parts.extend(["last_modified = ?", "version = version + 1", "client_id = ?"])
+        params.extend([now, client_id or self.client_id])
+
+        try:
+            with self.transaction() as conn:
+                row = conn.execute(
+                    "SELECT version FROM quiz_questions WHERE id = ? AND deleted = 0",
+                    (question_id,),
+                ).fetchone()
+                if not row:
+                    return False
+                current_version = int(row["version"])
+                if expected_version is not None and current_version != expected_version:
+                    raise ConflictError("Version mismatch updating question", entity="quiz_questions", identifier=question_id)
+                params_final = params + [question_id]
+                query = f"UPDATE quiz_questions SET {', '.join(set_parts)} WHERE id = ? AND deleted = 0"
+                rc = conn.execute(query, tuple(params_final)).rowcount
+                return rc > 0
+        except sqlite3.Error as e:
+            raise CharactersRAGDBError(f"Failed to update question: {e}") from e
+
+    def delete_question(self, question_id: int, expected_version: Optional[int] = None, hard_delete: bool = False) -> bool:
+        """Delete a question and decrement total_questions (or recompute)."""
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                row = conn.execute(
+                    "SELECT id, quiz_id, version, deleted FROM quiz_questions WHERE id = ?",
+                    (question_id,),
+                ).fetchone()
+                if not row:
+                    return False
+                quiz_id = int(row["quiz_id"])
+                cur_ver = int(row["version"])
+                deleted = int(row["deleted"])
+                if hard_delete:
+                    conn.execute("DELETE FROM quiz_questions WHERE id = ?", (question_id,))
+                    self._recount_quiz_questions(conn, quiz_id)
+                    return True
+                if deleted:
+                    return True
+                if expected_version is not None and cur_ver != expected_version:
+                    raise ConflictError("Version mismatch deleting question", entity="quiz_questions", identifier=question_id)
+                rc = conn.execute(
+                    "UPDATE quiz_questions SET deleted = 1, last_modified = ?, version = ?, client_id = ? "
+                    "WHERE id = ? AND deleted = 0",
+                    (now, cur_ver + 1, self.client_id, question_id),
+                ).rowcount
+                if rc:
+                    self._recount_quiz_questions(conn, quiz_id)
+                return rc > 0
+        except sqlite3.Error as e:
+            raise CharactersRAGDBError(f"Failed to delete question: {e}") from e
+
+    def start_attempt(self, quiz_id: int, client_id: str = "unknown") -> Dict[str, Any]:
+        """Start a new quiz attempt, snapshot questions, returns attempt dict."""
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                quiz_row = conn.execute("SELECT id FROM quizzes WHERE id = ? AND deleted = 0", (quiz_id,)).fetchone()
+                if not quiz_row:
+                    raise ConflictError("Quiz not found", entity="quizzes", identifier=quiz_id)
+                questions_payload = self.list_questions(quiz_id, include_answers=True, limit=None, offset=0)
+                questions = questions_payload.get("items", [])
+                total_possible = sum(int(q.get("points") or 0) for q in questions)
+                questions_snapshot = json.dumps(questions)
+                insert_sql = (
+                    "INSERT INTO quiz_attempts(quiz_id, started_at, total_possible, questions_snapshot, answers, client_id) "
+                    "VALUES(?, ?, ?, ?, ?, ?)"
+                )
+                params = (
+                    quiz_id,
+                    now,
+                    total_possible,
+                    questions_snapshot,
+                    json.dumps([]),
+                    client_id or self.client_id,
+                )
+                if self.backend_type == BackendType.POSTGRESQL:
+                    cursor = conn.execute(insert_sql + " RETURNING id", params)
+                    row = cursor.fetchone()
+                    attempt_id = int(row["id"]) if row else None
+                else:
+                    cursor = conn.execute(insert_sql, params)
+                    attempt_id = int(cursor.lastrowid)
+                if attempt_id is None:
+                    raise CharactersRAGDBError("Failed to determine attempt ID after insert")
+                return {
+                    "id": attempt_id,
+                    "quiz_id": quiz_id,
+                    "started_at": now,
+                    "completed_at": None,
+                    "score": None,
+                    "total_possible": total_possible,
+                    "time_spent_seconds": None,
+                    "answers": [],
+                    "questions": [self._public_quiz_question(q) for q in questions],
+                }
+        except sqlite3.Error as e:
+            raise CharactersRAGDBError(f"Failed to start attempt: {e}") from e
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to start attempt: {exc}") from exc
+
+    def submit_attempt(self, attempt_id: int, answers: List[Dict]) -> Dict[str, Any]:
+        """Submit answers for an attempt, grade and return results."""
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                row = conn.execute(
+                    "SELECT quiz_id, started_at, total_possible, questions_snapshot, answers FROM quiz_attempts WHERE id = ?",
+                    (attempt_id,),
+                ).fetchone()
+                if not row:
+                    raise ConflictError("Attempt not found", entity="quiz_attempts", identifier=attempt_id)
+                row_data = dict(row)
+                quiz_id = int(row_data["quiz_id"])
+                questions_snapshot = row_data.get("questions_snapshot") or "[]"
+                try:
+                    questions = json.loads(questions_snapshot)
+                except json.JSONDecodeError:
+                    questions = []
+                questions_by_id = {int(q.get("id")): q for q in questions if q.get("id") is not None}
+
+                graded_answers = []
+                total_possible = sum(int(q.get("points") or 0) for q in questions)
+                score = 0
+                total_time_ms = 0
+                for ans in answers:
+                    qid = ans.get("question_id")
+                    question = questions_by_id.get(int(qid)) if qid is not None else None
+                    user_answer = ans.get("user_answer")
+                    is_correct = False
+                    points_awarded = 0
+                    correct_answer = None
+                    explanation = None
+                    if question:
+                        is_correct = self._check_answer(question, user_answer)
+                        points_val = int(question.get("points") or 0)
+                        points_awarded = points_val if is_correct else 0
+                        score += points_awarded
+                        correct_answer = question.get("correct_answer")
+                        explanation = question.get("explanation")
+                    time_spent_ms = ans.get("time_spent_ms")
+                    if isinstance(time_spent_ms, (int, float)):
+                        total_time_ms += int(time_spent_ms)
+                    graded_answers.append({
+                        "question_id": qid,
+                        "user_answer": user_answer,
+                        "is_correct": is_correct,
+                        "correct_answer": correct_answer,
+                        "explanation": explanation,
+                        "points_awarded": points_awarded,
+                        "time_spent_ms": time_spent_ms,
+                    })
+
+                time_spent_seconds = int(total_time_ms / 1000) if total_time_ms else None
+                conn.execute(
+                    "UPDATE quiz_attempts SET completed_at = ?, score = ?, total_possible = ?, time_spent_seconds = ?, answers = ? "
+                    "WHERE id = ?",
+                    (now, score, total_possible, time_spent_seconds, json.dumps(graded_answers), attempt_id),
+                )
+
+                return {
+                    "id": attempt_id,
+                    "quiz_id": quiz_id,
+                    "started_at": row_data.get("started_at"),
+                    "completed_at": now,
+                    "score": score,
+                    "total_possible": total_possible,
+                    "time_spent_seconds": time_spent_seconds,
+                    "answers": graded_answers,
+                }
+        except sqlite3.Error as e:
+            raise CharactersRAGDBError(f"Failed to submit attempt: {e}") from e
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to submit attempt: {exc}") from exc
+
+    def get_attempt(
+        self,
+        attempt_id: int,
+        include_questions: bool = False,
+        include_answers: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Get attempt with full answer breakdown."""
+        query = (
+            "SELECT id, quiz_id, started_at, completed_at, score, total_possible, time_spent_seconds, "
+            "questions_snapshot, answers FROM quiz_attempts WHERE id = ?"
+        )
+        try:
+            cursor = self.execute_query(query, (attempt_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            item = self._deserialize_row_fields(row, ["questions_snapshot", "answers"])
+            if not item:
+                return None
+            questions = item.pop("questions_snapshot", None)
+            if include_questions and isinstance(questions, list):
+                if include_answers:
+                    item["questions"] = questions
+                else:
+                    item["questions"] = [self._public_quiz_question(q) for q in questions]
+            return item
+        except CharactersRAGDBError:
+            raise
+
+    def list_attempts(
+        self,
+        quiz_id: Optional[int] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """List attempts with optional quiz filter."""
+        where_clauses = ["1=1"]
+        params: List[Any] = []
+        if quiz_id is not None:
+            where_clauses.append("quiz_id = ?")
+            params.append(quiz_id)
+        where_sql = " AND ".join(where_clauses)
+        query = (
+            "SELECT id, quiz_id, started_at, completed_at, score, total_possible, time_spent_seconds "
+            f"FROM quiz_attempts WHERE {where_sql} ORDER BY started_at DESC LIMIT ? OFFSET ?"
+        )
+        count_query = f"SELECT COUNT(*) AS count FROM quiz_attempts WHERE {where_sql}"
+        try:
+            cursor = self.execute_query(query, tuple(params + [limit, offset]))
+            items = [dict(row) for row in cursor.fetchall()]
+            count_cursor = self.execute_query(count_query, tuple(params))
+            count_row = count_cursor.fetchone()
+            total = int(count_row["count"]) if count_row else 0
+            return {"items": items, "count": total}
+        except CharactersRAGDBError:
+            raise
+
+    def _check_answer(self, question: Dict[str, Any], user_answer: Any) -> bool:
+        """Grade a single answer based on question type."""
+        q_type = question.get("question_type")
+        correct = question.get("correct_answer")
+        if q_type == "multiple_choice":
+            try:
+                return int(user_answer) == int(correct)
+            except (TypeError, ValueError):
+                return False
+        if q_type == "true_false":
+            if user_answer is None or correct is None:
+                return False
+            return str(user_answer).strip().lower() == str(correct).strip().lower()
+        if q_type == "fill_blank":
+            if user_answer is None or correct is None:
+                return False
+            return str(user_answer).strip().lower() == str(correct).strip().lower()
+        return False
 
     # --- Sync Log Methods ---
     def get_sync_log_entries(self, since_change_id: int = 0, limit: Optional[int] = None,

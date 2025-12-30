@@ -12,4 +12,3 @@ def test_generate_note_title_entrypoint_fallback():
     # Ensure entrypoint returns something sane for empty content
     t = generate_note_title("", options=TitleGenOptions(max_len=30))
     assert t and len(t) <= 30
-

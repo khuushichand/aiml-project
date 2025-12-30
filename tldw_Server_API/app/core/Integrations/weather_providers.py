@@ -39,4 +39,3 @@ class NoKeyWeatherClient(WeatherClient):
 def get_weather_client() -> WeatherClient:
     # Stage 4: always return NoKey client; future stages may branch on env/API keys
     return NoKeyWeatherClient()
-

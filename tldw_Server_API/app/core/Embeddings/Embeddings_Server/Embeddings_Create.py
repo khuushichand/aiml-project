@@ -1225,7 +1225,7 @@ class ONNXEmbedder:
             # Guard against any unexpected attribute/state issues during GC
             pass
 
-    
+
 
 
 # Global limiter instance. Parameters (20 calls per 60s) are fixed.

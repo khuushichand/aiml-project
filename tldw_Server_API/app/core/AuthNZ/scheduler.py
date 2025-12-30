@@ -65,6 +65,13 @@ class AuthNZScheduler:
             self._loop = loop
 
         try:
+            try:
+                from tldw_Server_API.app.core.AuthNZ.retention_policies import apply_retention_overrides
+
+                await apply_retention_overrides(self.settings)
+            except Exception as exc:
+                logger.warning(f"AuthNZ scheduler: failed to apply retention overrides: {exc}")
+
             # Register cleanup jobs
             self._register_session_cleanup()
             self._register_api_key_cleanup()

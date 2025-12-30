@@ -87,4 +87,3 @@ tldw-setup init --non-interactive --yes --json --no-format
 - Add health endpoint probing and ephemeral server spawn with safe shutdown.
 - MCP client installers: dry-run diffs, per-OS path table, timestamped backups, removal confirmation.
 - Provider verification with offline/mocked checks gated by `--check-provider`.
-

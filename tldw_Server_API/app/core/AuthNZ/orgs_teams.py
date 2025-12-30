@@ -76,6 +76,7 @@ async def list_organizations(
     offset: int = 0,
     q: Optional[str] = None,
     *,
+    org_ids: Optional[List[int]] = None,
     with_total: bool = False,
 ) -> List[Dict[str, Any]] | tuple[List[Dict[str, Any]], int]:
     """List organizations with optional server-side filtering and total count.
@@ -83,7 +84,13 @@ async def list_organizations(
     When with_total=True, returns a tuple of (rows, total). Otherwise returns rows only.
     """
     repo = await _get_orgs_teams_repo()
-    rows, total = await repo.list_organizations(limit=limit, offset=offset, q=q, with_total=with_total)
+    rows, total = await repo.list_organizations(
+        limit=limit,
+        offset=offset,
+        q=q,
+        org_ids=org_ids,
+        with_total=with_total,
+    )
     return (rows, total) if with_total else rows
 
 
@@ -136,6 +143,21 @@ async def list_team_members(team_id: int) -> List[Dict[str, Any]]:
     """
     repo = await _get_orgs_teams_repo()
     return await repo.list_team_members(team_id)
+
+
+async def get_team(team_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Fetch a team by ID.
+
+    Parameters:
+        team_id: The unique identifier of the team to retrieve.
+
+    Returns:
+        A dict containing the team's fields (e.g. id, org_id, name, slug,
+        description, is_active, created_at, updated_at), or ``None`` if not found.
+    """
+    repo = await _get_orgs_teams_repo()
+    return await repo.get_team(team_id)
 
 
 async def list_memberships_for_user(user_id: int) -> List[Dict[str, Any]]:

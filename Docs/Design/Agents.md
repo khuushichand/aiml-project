@@ -7,3 +7,4 @@ https://medium.com/@idohlevi/accidentally-built-a-real-time-ai-enforcement-syste
 https://jatinganhotra.dev/blog/swe-agents/2025/06/05/swe-bench-verified-discriminative-subsets.html
 
 https://docs.google.com/document/u/0/d/1rsaK53T3Lg5KoGwvf8ukOUvbELRtH-V0LnOIFDxBryE/mobilebasic?pli=1
+https://github.com/always-further/deepfabric

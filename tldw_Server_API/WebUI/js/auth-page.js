@@ -95,4 +95,3 @@
     document.getElementById('copy-token-btn')?.addEventListener('click', handleCopyToken);
   });
 })();
-

@@ -217,4 +217,3 @@
     document.getElementById('neutts-rec-stop')?.addEventListener('click', stopNeuTTSRecording);
   });
 })();
-

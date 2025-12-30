@@ -6,7 +6,7 @@ export interface TabItem {
   label: string;
 }
 
-export function Tabs({ items, value, onChange, className }: { items: TabItem[]; value: string; onChange: (k: string) => void; className?: string }) {
+export function Tabs({ items, value, onChange, className }: { items: readonly TabItem[]; value: string; onChange: (k: string) => void; className?: string }) {
   return (
     <div className={cn('border-b border-gray-200', className)}>
       <nav className="-mb-px flex space-x-6" aria-label="Tabs">

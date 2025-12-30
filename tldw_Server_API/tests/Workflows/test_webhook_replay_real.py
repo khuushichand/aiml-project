@@ -56,7 +56,7 @@ def _start_test_server():
 
 
 @pytest.fixture()
-def admin_client(tmp_path):
+def admin_client(tmp_path, auth_headers):
     db = WorkflowsDatabase(str(tmp_path / "wf.db"))
 
     async def override_user():
@@ -68,7 +68,7 @@ def admin_client(tmp_path):
     app.dependency_overrides[get_request_user] = override_user
     app.dependency_overrides[wf_mod._get_db] = override_db
 
-    with TestClient(app) as client:
+    with TestClient(app, headers=auth_headers) as client:
         yield client, db
 
     app.dependency_overrides.clear()

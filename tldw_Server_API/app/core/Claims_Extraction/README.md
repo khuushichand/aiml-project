@@ -15,7 +15,10 @@
   - Claims API: `tldw_Server_API/app/api/v1/endpoints/claims.py:1` (status, list, rebuild, rebuild_fts)
   - RAG streaming (claims overlay): `tldw_Server_API/app/api/v1/endpoints/rag_unified.py:1176`, `tldw_Server_API/app/api/v1/endpoints/rag_unified.py:1348`
 - Related Engine/Libs:
-  - Core engine: `tldw_Server_API/app/core/Ingestion_Media_Processing/Claims/claims_engine.py:1`
+  - Core engine: `tldw_Server_API/app/core/Claims_Extraction/claims_engine.py:1`
+  - Ingestion helpers: `tldw_Server_API/app/core/Claims_Extraction/ingestion_claims.py:1`
+  - Rebuild service: `tldw_Server_API/app/core/Claims_Extraction/claims_rebuild_service.py:1`
+  - Monitoring helpers: `tldw_Server_API/app/core/Claims_Extraction/monitoring.py:1`
 
 ## 2. Technical Details of Features
 
@@ -43,7 +46,11 @@
 ## 3. Developer-Related/Relevant Information for Contributors
 
 - Folder Structure:
-  - Engine: `app/core/Ingestion_Media_Processing/Claims/claims_engine.py`
+  - Engine: `app/core/Claims_Extraction/claims_engine.py`
+  - Ingestion helpers: `app/core/Claims_Extraction/ingestion_claims.py`
+  - Ingestion utilities: `app/core/Claims_Extraction/claims_utils.py`
+  - Rebuild service: `app/core/Claims_Extraction/claims_rebuild_service.py`
+  - Monitoring helpers: `app/core/Claims_Extraction/monitoring.py`
   - API: `app/api/v1/endpoints/claims.py`
 - Extension Points:
   - Add a new extractor (Protocol `ClaimExtractor`) or verifier (Protocol `ClaimVerifier`) and register in `ClaimsEngine`
@@ -52,7 +59,7 @@
   - Use loguru for diagnostics; prefer async boundaries; avoid raw SQL (use DB_Management)
 - Related Tests:
   - `tldw_Server_API/app/api/v1/endpoints/claims.py:1` (integration tests should cover list/rebuild behaviors)
-  - `tldw_Server_API/app/core/Ingestion_Media_Processing/Claims/claims_engine.py:1` (unit tests for extraction/verifier; see tracker TODOs)
+  - `tldw_Server_API/app/core/Claims_Extraction/claims_engine.py:1` (unit tests for extraction/verifier; see tracker TODOs)
 - Local Dev Tips:
   - Enable claims in RAG requests, set `claims_top_k`/`claims_max` to small values while iterating
 - Pitfalls & Gotchas:

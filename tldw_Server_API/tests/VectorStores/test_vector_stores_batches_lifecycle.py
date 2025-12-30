@@ -5,6 +5,8 @@ from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
 
 @pytest.fixture(autouse=True)
@@ -21,7 +23,22 @@ def testing_env(monkeypatch, tmp_path):
 def client():
     async def override_user():
         return User(id=1, username='tester', email='e', is_active=True, is_admin=True)
+    async def override_principal():
+        return AuthPrincipal(
+            kind="user",
+            user_id=1,
+            api_key_id=None,
+            subject=None,
+            token_type="access",
+            jti=None,
+            roles=["admin"],
+            permissions=["*"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
     app.dependency_overrides[get_request_user] = override_user
+    app.dependency_overrides[auth_deps.get_auth_principal] = override_principal
     with TestClient(app) as c:
         yield c
 

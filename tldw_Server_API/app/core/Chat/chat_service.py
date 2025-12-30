@@ -286,7 +286,7 @@ def normalize_request_provider_and_model(
             if len(parts_for_alias) == 2:
                 inline_provider, inline_model_part = parts_for_alias[0].strip(), parts_for_alias[1].strip()
         provider_for_mapping = ((inline_provider or api_provider or default_provider) or "").strip().lower()
-        
+
 
         def _resolve_alias(provider: str, raw_model: str) -> Optional[str]:
             m = (raw_model or "").strip()
@@ -483,6 +483,7 @@ def resolve_provider_api_key(
         "raw_value_provided": False,
         "raw_value_was_empty": False,
         "dynamic_value_present": False,
+        "override_value_present": False,
     }
 
     try:
@@ -522,6 +523,16 @@ def resolve_provider_api_key(
         except Exception as _chat_err:
             logger.warning(f"resolve_provider_api_key skipped endpoint module keys: {_chat_err}")
 
+    try:
+        from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import get_llm_provider_override
+
+        override = get_llm_provider_override(provider_key)
+        override_value = override.api_key if override else None
+    except Exception:
+        override_value = None
+
+    debug_info["override_value_present"] = override_value is not None
+
     dynamic_value = dynamic_keys.get(provider_key)
     debug_info["dynamic_value_present"] = dynamic_value is not None
 
@@ -533,17 +544,22 @@ def resolve_provider_api_key(
         return value
 
     raw_value = dynamic_value
+    selected_override = False
+    if override_value is not None:
+        raw_value = override_value
+        selected_override = True
+        debug_info["selected_source"] = "override"
     if use_module_overrides and module_keys and provider_key in module_keys:
         raw_value = module_keys.get(provider_key)
         debug_info["selected_source"] = "module_override"
-    elif raw_value is not None:
+    elif raw_value is not None and not selected_override:
         env_var = (
             f"{provider_key.upper().replace('.', '_').replace('-', '_')}_API_KEY"
             if provider_key
             else None
         )
         debug_info["selected_source"] = "env" if env_var and os.getenv(env_var) is not None else "config"
-    else:
+    elif raw_value is None:
         debug_info["selected_source"] = "missing"
 
     debug_info["raw_value_provided"] = raw_value is not None

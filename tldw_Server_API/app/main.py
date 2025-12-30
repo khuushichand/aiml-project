@@ -675,6 +675,8 @@ else:
 
     # Flashcards Endpoint (V5 - ChaChaNotes)
     from tldw_Server_API.app.api.v1.endpoints.flashcards import router as flashcards_router
+    # Quizzes Endpoint (ChaChaNotes)
+    from tldw_Server_API.app.api.v1.endpoints.quizzes import router as quizzes_router
 
     # LLM Providers Endpoint
     from tldw_Server_API.app.api.v1.endpoints.llm_providers import router as llm_providers_router
@@ -755,6 +757,17 @@ try:
 except Exception as _e:
     try:
         logger.debug(f"Failed to enable JSON logs sink: {_e}")
+    except Exception:
+        pass
+
+# Best-effort: capture recent logs in an in-memory ring buffer for admin queries.
+try:
+    from tldw_Server_API.app.core.Logging.system_log_buffer import ensure_system_log_buffer
+
+    ensure_system_log_buffer()
+except Exception as _e:
+    try:
+        logger.debug(f"Failed to enable system log buffer: {_e}")
     except Exception:
         pass
 
@@ -893,6 +906,7 @@ async def lifespan(app: FastAPI):
                     ensure_api_keys_tables_pg,
                     ensure_usage_tables_pg,
                     ensure_virtual_key_counters_pg,
+                    ensure_llm_provider_overrides_pg,
                 )
 
                 ok_catalogs = await ensure_tool_catalogs_tables_pg(db_pool)
@@ -910,6 +924,9 @@ async def lifespan(app: FastAPI):
                 ok_vk_pg = await ensure_virtual_key_counters_pg(db_pool)
                 if ok_vk_pg:
                     logger.info("App Startup: Ensured PG virtual-key counters tables")
+                ok_overrides_pg = await ensure_llm_provider_overrides_pg(db_pool)
+                if ok_overrides_pg:
+                    logger.info("App Startup: Ensured PG llm_provider_overrides table")
         except Exception as _pg_e:
             logger.debug(f"App Startup: PG extras ensure failed/skipped: {_pg_e}")
         # Ensure RBAC seed exists in single-user mode (idempotent; both backends)
@@ -918,6 +935,17 @@ async def lifespan(app: FastAPI):
             logger.info("App Startup: Ensured single-user RBAC seed (baseline roles/permissions)")
         except Exception as _e:
             logger.debug(f"App Startup: RBAC single-user seed ensure skipped: {_e}")
+
+        # Load LLM provider overrides into memory for runtime enforcement.
+        try:
+            from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
+                refresh_llm_provider_overrides as _refresh_llm_provider_overrides,
+            )
+
+            await _refresh_llm_provider_overrides(db_pool)
+            logger.info("App Startup: Loaded LLM provider overrides")
+        except Exception as _e:
+            logger.debug(f"App Startup: LLM provider overrides load skipped: {_e}")
 
         # Initialize ResourceGovernor policy loader (file or DB store)
         try:
@@ -1388,8 +1416,10 @@ async def lifespan(app: FastAPI):
 
     # Start background workers: ephemeral collections cleanup, core Jobs (chatbooks), audio Jobs (MVP), claims rebuild
     cleanup_task = None
+    chatbooks_cleanup_task = None
     core_jobs_task = None
     audio_jobs_task = None
+    chatbooks_cleanup_stop_event = None
     claims_task = None
     jobs_metrics_task = None
     reembed_task = None
@@ -1449,6 +1479,22 @@ async def lifespan(app: FastAPI):
             logger.info("Ephemeral cleanup worker disabled by settings")
     except Exception as e:
         logger.warning(f"Failed to start ephemeral cleanup worker: {e}")
+
+    # Chatbooks cleanup worker (scheduled retention cleanup)
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.services.chatbooks_cleanup_service import run_chatbooks_cleanup_loop as _run_chatbooks_cleanup
+
+        _interval_sec = int(_os.getenv("CHATBOOKS_CLEANUP_INTERVAL_SEC", "0") or "0")
+        if _interval_sec > 0:
+            chatbooks_cleanup_stop_event = _asyncio.Event()
+            chatbooks_cleanup_task = _asyncio.create_task(_run_chatbooks_cleanup(chatbooks_cleanup_stop_event))
+            logger.info("Chatbooks cleanup worker started")
+        else:
+            logger.info("Chatbooks cleanup worker disabled by settings")
+    except Exception as e:
+        logger.warning(f"Failed to start chatbooks cleanup worker: {e}")
 
     # Core Jobs worker (Chatbooks, if backend=core)
     try:
@@ -1521,6 +1567,22 @@ async def lifespan(app: FastAPI):
             logger.info("Jobs metrics gauge worker disabled by flag")
     except Exception as e:
         logger.warning(f"Failed to start Jobs metrics gauge worker: {e}")
+
+    # Event loop lag watchdog (lightweight)
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.services.loop_lag_watchdog import run_loop_lag_watchdog as _run_loop_lag_watchdog
+
+        _enabled = _os.getenv("EVENT_LOOP_LAG_WATCHDOG_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}
+        if _enabled:
+            loop_lag_stop_event = _asyncio.Event()
+            loop_lag_task = _asyncio.create_task(_run_loop_lag_watchdog(loop_lag_stop_event))
+            logger.info("Event loop lag watchdog started")
+        else:
+            logger.info("Event loop lag watchdog disabled by flag")
+    except Exception as e:
+        logger.warning(f"Failed to start event loop lag watchdog: {e}")
 
     # Jobs metrics reconcile worker (job_counters/gauges amortized refresh)
     try:
@@ -1669,7 +1731,7 @@ async def lifespan(app: FastAPI):
         import asyncio as _asyncio
         from tldw_Server_API.app.core.config import settings as _app_settings
         from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path as _get_media_db_path
-        from tldw_Server_API.app.services.claims_rebuild_service import get_claims_rebuild_service as _get_claims_svc
+        from tldw_Server_API.app.core.Claims_Extraction.claims_rebuild_service import get_claims_rebuild_service as _get_claims_svc
         from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase as _MediaDB
 
         _claims_enabled = bool(_app_settings.get("CLAIMS_REBUILD_ENABLED", False))
@@ -1730,6 +1792,28 @@ async def lifespan(app: FastAPI):
             logger.info("Claims rebuild worker disabled by settings")
     except Exception as e:
         logger.warning(f"Failed to start claims rebuild worker: {e}")
+
+    # Claims alerts scheduler (periodic)
+    try:
+        from tldw_Server_API.app.services.claims_alerts_scheduler import start_claims_alerts_scheduler
+
+        _claims_alerts_task = await start_claims_alerts_scheduler()
+        if _claims_alerts_task:
+            logger.info("Claims alerts scheduler started")
+    except Exception as e:
+        logger.warning(f"Failed to start claims alerts scheduler: {e}")
+
+    # Claims review metrics scheduler (periodic)
+    try:
+        from tldw_Server_API.app.services.claims_review_metrics_scheduler import (
+            start_claims_review_metrics_scheduler,
+        )
+
+        _claims_review_metrics_task = await start_claims_review_metrics_scheduler()
+        if _claims_review_metrics_task:
+            logger.info("Claims review metrics scheduler started")
+    except Exception as e:
+        logger.warning(f"Failed to start claims review metrics scheduler: {e}")
 
     # Start usage aggregator (if enabled, and not disabled via env or test-mode)
     try:
@@ -2046,6 +2130,10 @@ async def lifespan(app: FastAPI):
     try:
         if "cleanup_task" in locals() and cleanup_task:
             cleanup_task.cancel()
+        if "chatbooks_cleanup_stop_event" in locals() and chatbooks_cleanup_stop_event:
+            chatbooks_cleanup_stop_event.set()
+        if "chatbooks_cleanup_task" in locals() and chatbooks_cleanup_task:
+            chatbooks_cleanup_task.cancel()
         if "core_jobs_task" in locals() and core_jobs_task:
             # Prefer graceful stop via explicit stop_event
             if "core_jobs_stop_event" in locals() and core_jobs_stop_event:
@@ -2127,6 +2215,21 @@ async def lifespan(app: FastAPI):
                     jobs_metrics_task.cancel()
                 except Exception:
                     pass
+
+        # Event loop lag watchdog shutdown
+        if "loop_lag_task" in locals() and loop_lag_task:
+            try:
+                if "loop_lag_stop_event" in locals() and loop_lag_stop_event:
+                    loop_lag_stop_event.set()
+                    await _asyncio.wait_for(loop_lag_task, timeout=2.0)
+                    logger.info("Event loop lag watchdog stopped via stop_event")
+                else:
+                    loop_lag_task.cancel()
+            except Exception:
+                try:
+                    loop_lag_task.cancel()
+                except Exception as _lag_cancel_err:
+                    logger.debug(f"Event loop lag watchdog cancel failed: {_lag_cancel_err}")
 
         # Personalization consolidation service shutdown
         try:
@@ -2715,6 +2818,7 @@ OPENAPI_TAGS = [
         },
     },
     {"name": "flashcards", "description": "Flashcards/Decks (ChaChaNotes)"},
+    {"name": "quizzes", "description": "Quizzes (ChaChaNotes)"},
     {
         "name": "chatbooks",
         "description": "Import/export chatbooks (backup/restore).",
@@ -3878,6 +3982,20 @@ elif _MINIMAL_TEST_APP:
         app.include_router(rag_health_router, tags=["rag-health"])
     except Exception as _rag_health_min_err:
         logger.debug(f"Skipping rag_health router in minimal test app: {_rag_health_min_err}")
+    # Billing endpoints (required by billing integration tests)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.billing import router as billing_router
+
+        app.include_router(billing_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
+    except Exception as _billing_min_err:
+        logger.debug(f"Skipping billing router in minimal test app: {_billing_min_err}")
+    # Billing webhooks (optional; keep consistent with full app)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.billing_webhooks import router as billing_webhooks_router
+
+        app.include_router(billing_webhooks_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
+    except Exception as _billing_webhooks_min_err:
+        logger.debug(f"Skipping billing webhooks router in minimal test app: {_billing_webhooks_min_err}")
     # Collections endpoints (treated as lightweight; always included in minimal app)
     try:
         from tldw_Server_API.app.api.v1.endpoints.outputs_templates import router as outputs_templates_router
@@ -4010,6 +4128,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(flashcards_router, prefix=f"{API_V1_PREFIX}", tags=["flashcards"])
     except Exception as _flash_min_err:
         logger.debug(f"Skipping flashcards router in minimal test app: {_flash_min_err}")
+    # Quizzes endpoints (ChaChaNotes-backed) for integration tests
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.quizzes import router as quizzes_router
+
+        app.include_router(quizzes_router, prefix=f"{API_V1_PREFIX}", tags=["quizzes"])
+    except Exception as _quiz_min_err:
+        logger.debug(f"Skipping quizzes router in minimal test app: {_quiz_min_err}")
     # Metrics endpoints (/api/v1/metrics/text)
     try:
         from tldw_Server_API.app.api.v1.endpoints.metrics import router as metrics_router
@@ -4068,6 +4193,25 @@ elif _MINIMAL_TEST_APP:
         app.include_router(admin_router, prefix=f"{API_V1_PREFIX}", tags=["admin"])
     except Exception as _adm_inc_err:  # noqa: BLE001
         logger.debug(f"Skipping admin router include in minimal test app: {_adm_inc_err}")
+    # Organization endpoints used by AuthNZ integration tests
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.orgs import router as orgs_router
+
+        app.include_router(orgs_router, prefix=f"{API_V1_PREFIX}", tags=["organizations"])
+        try:
+            from tldw_Server_API.app.api.v1.endpoints.shared_keys_scoped import router as shared_keys_scoped_router
+
+            app.include_router(shared_keys_scoped_router, prefix=f"{API_V1_PREFIX}", tags=["organizations"])
+        except Exception as _org_keys_min_err:  # noqa: BLE001
+            logger.debug(f"Skipping shared_keys_scoped router in minimal test app: {_org_keys_min_err}")
+    except Exception as _orgs_min_err:  # noqa: BLE001
+        logger.debug(f"Skipping orgs router in minimal test app: {_orgs_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.org_invites import router as org_invites_router
+
+        app.include_router(org_invites_router, prefix=f"{API_V1_PREFIX}", tags=["invites"])
+    except Exception as _org_inv_min_err:  # noqa: BLE001
+        logger.debug(f"Skipping org_invites router in minimal test app: {_org_inv_min_err}")
     # Resource Governor admin/diag endpoints are required for RG tests in minimal app
     try:
         from tldw_Server_API.app.api.v1.endpoints.resource_governor import router as resource_governor_router
@@ -4462,6 +4606,9 @@ else:
     # Flashcards are now considered stable; include by default unless disabled
     _include_if_enabled(
         "flashcards", flashcards_router, prefix=f"{API_V1_PREFIX}", tags=["flashcards"], default_stable=True
+    )
+    _include_if_enabled(
+        "quizzes", quizzes_router, prefix=f"{API_V1_PREFIX}", tags=["quizzes"], default_stable=True
     )
     from tldw_Server_API.app.api.v1.endpoints.personalization import (
         router as personalization_router,

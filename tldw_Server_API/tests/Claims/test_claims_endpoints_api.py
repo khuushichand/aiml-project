@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.services.claims_rebuild_service import get_claims_rebuild_service
+from tldw_Server_API.app.core.Claims_Extraction.claims_rebuild_service import get_claims_rebuild_service
 
 
 def _wait_for_claims_rebuild_completion(timeout: float = 5.0, poll_interval: float = 0.05) -> None:

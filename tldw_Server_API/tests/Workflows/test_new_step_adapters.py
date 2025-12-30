@@ -14,7 +14,7 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture()
-def client_with_wf(tmp_path, monkeypatch):
+def client_with_wf(tmp_path, monkeypatch, auth_headers):
     # Force test mode for adapters that check it
     monkeypatch.setenv("TEST_MODE", "1")
     # Provide a temporary USER_DB_BASE_DIR for embedding/chroma
@@ -36,7 +36,7 @@ def client_with_wf(tmp_path, monkeypatch):
     app.dependency_overrides[get_request_user] = override_user
     app.dependency_overrides[wf_mod._get_db] = override_db
 
-    with TestClient(app) as client:
+    with TestClient(app, headers=auth_headers) as client:
         yield client
 
     app.dependency_overrides.clear()

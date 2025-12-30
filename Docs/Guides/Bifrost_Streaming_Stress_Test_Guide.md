@@ -307,4 +307,3 @@ Quick checklist for running baseline streaming stress tests:
    - Compare HTTP/1.1 vs HTTP/2.
    - Compare Bifrost vs direct FastAPI.
    - Feed into the broader stress plan (long-context, churn, failures, semantic caching).
-

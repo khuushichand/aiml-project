@@ -229,10 +229,25 @@ class ChatbookManifest:
     categories: List[str] = field(default_factory=list)
     language: str = "en"
     license: Optional[str] = None
+    binary_limits: Dict[str, int] = field(default_factory=dict)
+    truncation: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """Convert manifest to dictionary for JSON serialization."""
-        return {
+        metadata: Dict[str, Any] = {
+            "tags": self.tags,
+            "categories": self.categories,
+            "language": self.language,
+            "license": self.license
+        }
+        extra_metadata = self.metadata or {}
+        for key, value in extra_metadata.items():
+            if key not in metadata:
+                metadata[key] = value
+        if self.binary_limits:
+            metadata["binary_limits"] = self.binary_limits
+
+        payload = {
             "version": self.version.value if hasattr(self.version, 'value') else str(self.version),
             "name": self.name,
             "description": self.description,
@@ -262,24 +277,29 @@ class ChatbookManifest:
                 "total_documents": self.total_documents,
                 "total_size_bytes": self.total_size_bytes
             },
-            "metadata": {
-                "tags": self.tags,
-                "categories": self.categories,
-                "language": self.language,
-                "license": self.license
-            },
+            "metadata": metadata,
             "user_info": {
                 "user_id": self.user_id
             }
         }
+        if self.truncation:
+            payload["truncation"] = self.truncation
+        return payload
 
     @classmethod
     def from_dict(cls, data: dict) -> 'ChatbookManifest':
         """Create ChatbookManifest from dictionary."""
         config = data.get("configuration", {})
         stats = data.get("statistics", {})
-        meta = data.get("metadata", {})
+        meta = data.get("metadata", {}) or {}
+        binary_limits = meta.get("binary_limits", {})
+        extra_metadata = {
+            key: value
+            for key, value in meta.items()
+            if key not in {"tags", "categories", "language", "license", "binary_limits"}
+        }
         user = data.get("user_info", {})
+        truncation = data.get("truncation", {}) or {}
 
         return cls(
             version=ChatbookVersion(data["version"]),
@@ -311,6 +331,9 @@ class ChatbookManifest:
             categories=meta.get("categories", []),
             language=meta.get("language", "en"),
             license=meta.get("license"),
+            metadata=extra_metadata,
+            binary_limits=binary_limits,
+            truncation=truncation,
             user_id=user.get("user_id")
         )
 

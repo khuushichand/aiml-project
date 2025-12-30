@@ -129,4 +129,3 @@ def test_download_hf_dir_raises_if_subdir_missing(tmp_path, monkeypatch):
     dest = tmp_path / "voices"
     with pytest.raises(FileNotFoundError):
         _download_hf_dir("repo/id", "voices", dest)
-

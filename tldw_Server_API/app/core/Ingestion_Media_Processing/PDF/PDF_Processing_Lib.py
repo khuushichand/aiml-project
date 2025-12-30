@@ -27,6 +27,7 @@ from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.registry import get_backend as _get_ocr_backend
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 try:
     # Optional VLM module (vision backends)
     from tldw_Server_API.app.core.Ingestion_Media_Processing.VLM.registry import (
@@ -226,6 +227,7 @@ def process_pdf(
     vlm_backend: Optional[str] = None,
     vlm_detect_tables_only: bool = True,
     vlm_max_pages: Optional[int] = None,
+    base_dir: Optional[Path] = None,
     # write_to_temp_file: bool = False # This param seems unused/obsolete now
 ) -> dict[str, Any] | None:
     """
@@ -247,6 +249,8 @@ def process_pdf(
       - custom_prompt (str, optional): Custom user prompt for summarization.
       - system_prompt (str, optional): System prompt for summarization.
       - summarize_recursively (bool): Whether to perform recursive summarization.
+      - base_dir (Optional[Path]): If provided, require file_input paths to resolve
+                                   within this directory before processing.
       - write_to_temp_file (bool): If True and input is bytes, write to a temp file
                                   (needed for parsers that only accept paths).
 
@@ -291,6 +295,17 @@ def process_pdf(
         }
     }
     log_counter("pdf_processing_attempt", labels={"file_name": filename, "parser": parser})
+
+    if base_dir is not None and isinstance(file_input, (str, Path)):
+        candidate_path = Path(file_input)
+        safe_path = resolve_safe_local_path(candidate_path, base_dir)
+        if safe_path is None:
+            err_msg = "PDF path rejected outside allowed base directory."
+            result["status"] = "Error"
+            result["error"] = err_msg
+            result["warnings"] = [err_msg]
+            return result
+        file_input = safe_path
 
     temp_dir_for_pdf: Optional[str] = None
     path_for_processing: Optional[str] = None

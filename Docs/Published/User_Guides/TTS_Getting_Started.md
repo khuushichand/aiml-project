@@ -92,7 +92,7 @@ Installer flags:
 > Tip: Keep cloud providers (`openai`, `elevenlabs`) high in `provider_priority` for instant results, and add local fallbacks underneath.
 
 ## Baseline Prerequisites
-1. **Install the project**  
+1. **Install the project**
    ```bash
    pip install -e .
    ```
@@ -100,10 +100,10 @@ Installer flags:
 2. **System packages**
    - FFmpeg (`brew install ffmpeg` or `apt-get install -y ffmpeg`)
    - eSpeak NG for phonemizer-backed models (`brew install espeak-ng` / `apt-get install -y espeak-ng`)
-3. **Model cache helpers**  
+3. **Model cache helpers**
    `pip install huggingface-hub` and log in if you need gated repos.
-4. **Runtime**  
-   Start the API:  
+4. **Runtime**
+   Start the API:
    ```bash
    python -m uvicorn tldw_Server_API.app.main:app --reload
    ```
@@ -112,8 +112,8 @@ Installer flags:
 ## Recommended Setup Flow
 1. **Pick providers** you care about and install their extras.
 2. **Download models** proactively (use `huggingface-cli download ... --local-dir ...` for offline hosts).
-3. **Edit `tts_providers_config.yaml`**  
-   - Enable providers, point to local paths, and adjust `device`, `sample_rate`, etc.  
+3. **Edit `tts_providers_config.yaml`**
+   - Enable providers, point to local paths, and adjust `device`, `sample_rate`, etc.
    - Adjust `provider_priority` so preferred backends run first.
    - Note: Local providers will not download models unless you explicitly set `auto_download: true` per provider (or export `TTS_AUTO_DOWNLOAD=1`).
 4. **Optional overrides** in `Config_Files/config.txt` (`[TTS-Settings]`) if you need environment-specific toggles.

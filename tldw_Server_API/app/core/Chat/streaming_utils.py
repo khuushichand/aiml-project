@@ -5,6 +5,8 @@
 import asyncio
 import json
 import time
+import threading
+import concurrent.futures
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Dict, Iterator, Optional, Union, Tuple, List
 from loguru import logger
@@ -59,6 +61,27 @@ MAX_RESPONSE_LIST_LENGTH = int(
     os.getenv('STREAMING_MAX_RESPONSE_LIST_LENGTH') or
     _chat_config.get('streaming_max_response_list_length', 100_000)
 )
+
+# Offload sync iterators to a background thread to avoid blocking the event loop
+try:
+    STREAMING_SYNC_BRIDGE_ENABLED = str(
+        os.getenv('STREAMING_SYNC_BRIDGE_ENABLED') or
+        _chat_config.get('streaming_sync_bridge_enabled', 'true')
+    ).lower() in {"1", "true", "yes", "y", "on"}
+except (ValueError, TypeError) as exc:
+    logger.debug(f"Failed to parse STREAMING_SYNC_BRIDGE_ENABLED, using default: {exc}")
+    STREAMING_SYNC_BRIDGE_ENABLED = True
+
+try:
+    STREAMING_SYNC_BRIDGE_MAX_QUEUE = int(
+        os.getenv('STREAMING_SYNC_BRIDGE_MAX_QUEUE') or
+        _chat_config.get('streaming_sync_bridge_max_queue', 32)
+    )
+except (ValueError, TypeError) as exc:
+    logger.debug(f"Failed to parse STREAMING_SYNC_BRIDGE_MAX_QUEUE, using default: {exc}")
+    STREAMING_SYNC_BRIDGE_MAX_QUEUE = 32
+if STREAMING_SYNC_BRIDGE_MAX_QUEUE <= 0:
+    STREAMING_SYNC_BRIDGE_MAX_QUEUE = 32
 
 #######################################################################################################################
 #
@@ -142,6 +165,91 @@ def _extract_text_from_upstream_sse(chunk_str: str) -> Tuple[Optional[str], Opti
 
     # Not an SSE frame; treat as plain text chunk
     return chunk_str, None, False
+
+
+async def _async_iter_sync_stream(
+    stream: Iterator[Any],
+    *,
+    queue_maxsize: int = STREAMING_SYNC_BRIDGE_MAX_QUEUE,
+) -> AsyncIterator[Any]:
+    """Bridge a sync iterator onto the event loop without blocking it.
+
+    Spawns a daemon thread to consume the sync iterator, passing chunks
+    through an asyncio.Queue for non-blocking async consumption.
+
+    Args:
+        stream: A synchronous iterator to bridge.
+        queue_maxsize: Maximum queue depth for backpressure (default: 32).
+
+    Yields:
+        Items from the sync iterator, now available asynchronously.
+
+    Raises:
+        Exception: Re-raises any exception that occurred in the sync iterator.
+    """
+    loop = asyncio.get_running_loop()
+    maxsize = max(int(queue_maxsize or 0), 1)
+    queue: asyncio.Queue[Tuple[str, Any]] = asyncio.Queue(maxsize=maxsize)
+    stop_event = threading.Event()
+
+    def _queue_put(item: Tuple[str, Any]) -> None:
+        if loop.is_closed():
+            return
+        try:
+            fut = asyncio.run_coroutine_threadsafe(queue.put(item), loop)
+        except (RuntimeError, asyncio.InvalidStateError) as exc:
+            logger.debug(f"Failed to schedule sync stream enqueue: {exc}")
+            return
+        while True:
+            try:
+                fut.result(timeout=1.0)
+            except (concurrent.futures.TimeoutError, TimeoutError):
+                if stop_event.is_set() or loop.is_closed():
+                    try:
+                        fut.cancel()
+                    except (RuntimeError, asyncio.InvalidStateError) as cancel_err:
+                        logger.debug(f"Failed to cancel sync stream enqueue: {cancel_err}")
+                    return
+            except (RuntimeError, concurrent.futures.CancelledError) as exc:
+                logger.debug(f"Failed to enqueue sync stream chunk: {exc}")
+                return
+            else:
+                return
+
+    def _worker() -> None:
+        try:
+            for chunk in stream:
+                if stop_event.is_set():
+                    break
+                _queue_put(("data", chunk))
+        except Exception as exc:
+            _queue_put(("error", exc))
+        finally:
+            _queue_put(("done", None))
+
+    thread = threading.Thread(target=_worker, name="sync-stream-bridge", daemon=True)
+    thread.start()
+
+    try:
+        while True:
+            kind, payload = await queue.get()
+            if kind == "data":
+                yield payload
+            elif kind == "error":
+                raise payload
+            elif kind == "done":
+                break
+    finally:
+        stop_event.set()
+        # Give worker thread a brief moment to notice stop_event before closing.
+        thread.join(timeout=0.5)
+        try:
+            if hasattr(stream, "close") and callable(stream.close):  # type: ignore[attr-defined]
+                stream.close()  # type: ignore[attr-defined]
+        except Exception as exc:
+            logger.debug(
+                f"Exception while closing bridged sync stream ({type(stream).__name__}): {exc}"
+            )
 
 class StreamingResponseHandler:
     """
@@ -500,9 +608,13 @@ class StreamingResponseHandler:
                 return outputs, False
 
             # Process the stream
-            if hasattr(stream, '__aiter__'):
-                # Async iterator
-                async for chunk in stream:
+            async_stream = stream if hasattr(stream, '__aiter__') else None
+            if async_stream is None and STREAMING_SYNC_BRIDGE_ENABLED:
+                async_stream = _async_iter_sync_stream(stream)
+
+            if async_stream is not None:
+                # Async iterator (native or bridged from sync)
+                async for chunk in async_stream:
                     if self.is_cancelled:
                         logger.info(f"Stream processing cancelled for {self.conversation_id}")
                         break
@@ -530,7 +642,11 @@ class StreamingResponseHandler:
                         yield f"data: {json.dumps({'error': {'message': f'Error processing chunk: {str(e)}'}})}\n\n"
                         break
             else:
-                # Sync iterator
+                # Sync iterator (legacy, blocks event loop) - deprecated path
+                logger.warning(
+                    f"Using blocking sync iterator for {self.conversation_id}. "
+                    "Set STREAMING_SYNC_BRIDGE_ENABLED=true for non-blocking behavior."
+                )
                 def sync_iterator():
                     try:
                         for chunk in stream:

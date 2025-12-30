@@ -42,4 +42,3 @@ def test_resolve_provider_and_model_inline_alias(monkeypatch):
     assert debug_info["raw"]["model"] == "anthropic/claude-sonnet"
     assert debug_info["normalized"]["provider"] == "anthropic"
     assert debug_info["normalized"]["model"] == selected_model
-

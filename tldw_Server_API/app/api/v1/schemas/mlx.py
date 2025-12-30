@@ -26,4 +26,3 @@ class MLXLoadRequest(BaseModel):
 
 class MLXUnloadRequest(BaseModel):
     reason: Optional[str] = Field(default=None, description="Optional reason for audit logs")
-

@@ -20,7 +20,7 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture()
-def client_with_db(tmp_path):
+def client_with_db(tmp_path, auth_headers):
     db = WorkflowsDatabase(str(tmp_path / "wf.db"))
 
     async def override_admin():
@@ -32,7 +32,7 @@ def client_with_db(tmp_path):
     app.dependency_overrides[get_request_user] = override_admin
     app.dependency_overrides[wf_mod._get_db] = override_db
 
-    with TestClient(app) as client:
+    with TestClient(app, headers=auth_headers) as client:
         yield client
 
     app.dependency_overrides.clear()

@@ -43,4 +43,3 @@ def parse_bool(value: Any, default: Optional[bool] = False) -> bool:
         return bool(default) if default is not None else False
     # Fallback for other types
     return bool(value) if default is None else bool(default)
-

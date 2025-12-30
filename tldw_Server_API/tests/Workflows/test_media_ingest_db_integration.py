@@ -13,7 +13,7 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture()
-def client_with_wf(tmp_path, monkeypatch):
+def client_with_wf(tmp_path, monkeypatch, auth_headers):
     db = WorkflowsDatabase(str(tmp_path / "wf.db"))
 
     async def override_user():
@@ -28,7 +28,7 @@ def client_with_wf(tmp_path, monkeypatch):
     # Ensure tests do not attempt network
     monkeypatch.setenv("TEST_MODE", "1")
 
-    with TestClient(app) as client:
+    with TestClient(app, headers=auth_headers) as client:
         yield client
 
     app.dependency_overrides.clear()

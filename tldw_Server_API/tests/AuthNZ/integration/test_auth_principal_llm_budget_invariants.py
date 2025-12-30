@@ -169,4 +169,3 @@ async def test_llm_budget_guard_overage_preserves_principal_state_alignment(tmp_
             pass
         await reset_db_pool()
         reset_settings()
-

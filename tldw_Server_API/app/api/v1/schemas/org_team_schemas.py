@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Optional, List
+from datetime import datetime
 from pydantic import BaseModel, Field
 
 
@@ -16,8 +17,8 @@ class OrganizationResponse(BaseModel):
     slug: Optional[str] = None
     owner_user_id: Optional[int] = None
     is_active: Optional[bool] = True
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 
 class OrganizationListResponse(BaseModel):
@@ -147,8 +148,8 @@ class OrgDetailResponse(BaseModel):
     slug: Optional[str] = None
     owner_user_id: Optional[int] = None
     is_active: bool = True
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     member_count: Optional[int] = None
     team_count: Optional[int] = None
     user_role: Optional[str] = None
@@ -240,5 +241,20 @@ class OrgInviteRedeemResponse(BaseModel):
     team_id: Optional[int] = None
     team_name: Optional[str] = None
     role: Optional[str] = None
+    was_already_member: bool = False
+    message: Optional[str] = None
+
+
+class OrgInviteAcceptRequest(BaseModel):
+    """Request to accept an org-scoped registration code."""
+    code: str = Field(..., min_length=8)
+
+
+class OrgInviteAcceptResponse(BaseModel):
+    """Result of accepting an org-scoped registration code."""
+    success: bool
+    org_id: Optional[int] = None
+    team_id: Optional[int] = None
+    org_role: Optional[str] = None
     was_already_member: bool = False
     message: Optional[str] = None

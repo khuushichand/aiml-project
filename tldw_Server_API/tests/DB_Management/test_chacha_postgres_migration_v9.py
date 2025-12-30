@@ -24,4 +24,3 @@ def test_postgres_statement_conversion_contains_note_edges(tmp_path):
     assert re.search(r"created_by\s+TEXT\s+NOT\s+NULL", full, flags=re.IGNORECASE)
     # Ensure the undirected unique index appears
     assert "uniq_note_edges_undirected" in full
-

@@ -98,10 +98,11 @@ def _build_app_with_overrides(
             domain: Optional[str] = None,
             queue: Optional[str] = None,
             job_type: Optional[str] = None,
+            job_id: Optional[int] = None,
             only_failed: bool = True,
             dry_run: bool = False,
         ) -> int:
-            _ = (domain, queue, job_type, only_failed, dry_run)
+            _ = (domain, queue, job_type, job_id, only_failed, dry_run)
             return 0
 
     jobs_mod.JobManager = _FakeJobManager  # type: ignore[assignment]

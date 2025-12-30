@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/router';
 import { Layout } from '@/components/layout/Layout';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Switch } from '@/components/ui/Switch';
+import { LineSkeleton } from '@/components/ui/Skeleton';
 import { useToast } from '@/components/ui/ToastProvider';
 import { apiClient } from '@/lib/api';
 
@@ -42,6 +44,7 @@ const statusOptions = [
 ];
 
 export default function ItemsPage() {
+  const router = useRouter();
   const { show } = useToast();
   const [items, setItems] = useState<ItemRecord[]>([]);
   const [loading, setLoading] = useState(false);
@@ -54,10 +57,23 @@ export default function ItemsPage() {
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / PAGE_SIZE)), [total]);
 
+  useEffect(() => {
+    if (!router.isReady) return;
+    const qp = router.query;
+    const get = (k: string, def = '') => (qp[k] !== undefined ? qp[k] : def);
+    const getStr = (k: string, def = '') => String(get(k, def));
+    const favRaw = getStr('fav', '0');
+    setQuery(getStr('q', ''));
+    setOrigin(getStr('origin', 'all'));
+    setStatus(getStr('status', 'all'));
+    setFavoriteOnly(favRaw === '1' || favRaw === 'true');
+    setPage(Number(getStr('page', '1')) || 1);
+  }, [router.isReady, router.query]);
+
   const loadItems = useCallback(async () => {
     setLoading(true);
     try {
-      const params: Record<string, any> = { page, size: PAGE_SIZE };
+      const params: Record<string, unknown> = { page, size: PAGE_SIZE };
       if (query.trim()) params.q = query.trim();
       if (origin !== 'all') params.origin = origin;
       if (status !== 'all') params.status_filter = [status];
@@ -66,10 +82,11 @@ export default function ItemsPage() {
       const data = await apiClient.get<ItemsResponse>('/items', { params });
       setItems(data.items || []);
       setTotal(data.total || 0);
-    } catch (error: any) {
+    } catch (error: unknown) {
       setItems([]);
       setTotal(0);
-      show({ title: 'Failed to load items', description: error?.message, variant: 'danger' });
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to load items', description: message, variant: 'danger' });
     } finally {
       setLoading(false);
     }
@@ -78,6 +95,17 @@ export default function ItemsPage() {
   useEffect(() => {
     loadItems();
   }, [loadItems]);
+
+  useEffect(() => {
+    if (!router.isReady) return;
+    const queryParams: Record<string, string> = {};
+    if (query.trim()) queryParams.q = query.trim();
+    if (origin !== 'all') queryParams.origin = origin;
+    if (status !== 'all') queryParams.status = status;
+    if (favoriteOnly) queryParams.fav = '1';
+    if (page !== 1) queryParams.page = String(page);
+    router.replace({ pathname: router.pathname, query: queryParams }, undefined, { shallow: true });
+  }, [favoriteOnly, origin, page, query, router, status]);
 
   const handleSearchSubmit = (event: React.FormEvent) => {
     event.preventDefault();
@@ -184,14 +212,38 @@ export default function ItemsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200 bg-white">
-              {items.length === 0 && (
+              {loading && (
+                Array.from({ length: 5 }).map((_, index) => (
+                  <tr key={`skeleton-${index}`}>
+                    <td className="px-4 py-3">
+                      <div className="space-y-2">
+                        <LineSkeleton width="70%" height={14} />
+                        <LineSkeleton width="90%" height={10} />
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <LineSkeleton width="60%" height={12} />
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap gap-2">
+                        <LineSkeleton width={52} height={10} />
+                        <LineSkeleton width={40} height={10} />
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <LineSkeleton width="50%" height={12} />
+                    </td>
+                  </tr>
+                ))
+              )}
+              {!loading && items.length === 0 && (
                 <tr>
                   <td colSpan={4} className="px-4 py-6 text-center text-sm text-gray-500">
-                    {loading ? 'Loading items…' : 'No items found for the selected filters.'}
+                    No items found for the selected filters.
                   </td>
                 </tr>
               )}
-              {items.map((item) => (
+              {!loading && items.map((item) => (
                 <tr key={`${item.type || 'item'}-${item.id}`}>
                   <td className="px-4 py-3">
                     <div className="space-y-1">

@@ -107,13 +107,15 @@ async def stripe_webhook(
     )
 
     if not is_new:
-        # Already processed this event
-        logger.debug(f"Webhook event {event_id} already processed")
-        return WebhookResponse(
-            received=True,
-            event_type=event_type,
-            handled=True,
-        )
+        event_status = await billing_repo.get_webhook_event_status(event_id)
+        if event_status in {"processed", "processing"}:
+            # Already processed this event (or currently in progress)
+            logger.debug(f"Webhook event {event_id} already handled (status={event_status})")
+            return WebhookResponse(
+                received=True,
+                event_type=event_type,
+                handled=True,
+            )
 
     # Atomically claim the event to prevent race conditions
     # This handles edge cases where multiple webhook deliveries arrive simultaneously

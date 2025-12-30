@@ -62,8 +62,10 @@ async def test_get_llm_tokens_month_aggregates_via_org_members_and_api_keys(monk
     assert fake_conn.calls, "Expected _get_llm_tokens_month to call fetchval"
     sql, args = fake_conn.calls[-1]
     flat_sql = " ".join(sql.split())
-    # Ensure the query aggregates via org_members and api_keys joins
-    assert "FROM llm_usage_log AS l JOIN org_members AS om ON l.user_id = om.user_id" in flat_sql
+    # Ensure the query aggregates via primary org attribution and api_keys joins
+    assert "WITH primary_org" in flat_sql
+    assert "FROM org_members" in flat_sql
+    assert "JOIN primary_org AS po ON l.user_id = po.user_id" in flat_sql
     assert "UNION ALL SELECT l2.total_tokens FROM llm_usage_log AS l2 JOIN api_keys AS ak ON l2.key_id = ak.id" in flat_sql
     # Org id and month_start should be passed as parameters
     assert args[0] == 42

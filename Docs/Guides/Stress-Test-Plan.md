@@ -417,4 +417,3 @@ Immediate next actions to start implementation:
 2. Stand up the Bifrost + tldw_server + LLM backend environment with basic observability enabled.
 3. Implement Scenario A (baseline streaming & protocol comparison) and record initial results.
 4. Iterate on OS and configuration tuning before moving to long-context and failure scenarios.
-

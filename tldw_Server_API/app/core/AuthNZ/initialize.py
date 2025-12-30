@@ -29,6 +29,7 @@ from tldw_Server_API.app.core.AuthNZ.migrations import (
     check_migration_status
 )
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.core.DB_Management.Users_DB import (
     get_users_db,
@@ -78,6 +79,23 @@ def _sanitize_db_url(url: Optional[str]) -> str:
         # Fall back to the original string if parsing fails; avoid raising during diagnostics.
         return url
 
+
+def _resolve_sqlite_db_path(db_url: str) -> Optional[Path]:
+    """Resolve a sqlite/file DATABASE_URL into a filesystem path, if applicable."""
+    try:
+        parsed = urlsplit(db_url)
+        scheme = (parsed.scheme or "").lower().split("+", 1)[0]
+    except Exception:
+        scheme = ""
+
+    if scheme not in {"sqlite", "file", ""}:
+        return None
+
+    _, _, fs_path = DatabasePool._resolve_sqlite_paths(db_url)
+    if not fs_path or fs_path == ":memory:":
+        return None
+
+    return Path(fs_path)
 
 def print_banner():
     """Print initialization banner"""
@@ -195,8 +213,8 @@ async def setup_database():
 
     # Extract database path
     db_url = settings.DATABASE_URL
-    if db_url.startswith("sqlite:///"):
-        db_path = Path(db_url.replace("sqlite:///", ""))
+    db_path = _resolve_sqlite_db_path(db_url)
+    if db_path is not None:
 
         # Ensure directory exists
         db_path.parent.mkdir(parents=True, exist_ok=True)

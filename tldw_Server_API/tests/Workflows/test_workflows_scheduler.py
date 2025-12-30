@@ -16,7 +16,7 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture()
-def client_admin(monkeypatch):
+def client_admin(monkeypatch, auth_headers):
     async def override_user():
         # Admin user for owner overrides
         u = User(id=1, username="admin", email=None, is_active=True)
@@ -30,7 +30,7 @@ def client_admin(monkeypatch):
     svc = get_workflows_scheduler()
     asyncio.run(svc.start())
 
-    with TestClient(fastapi_app) as client:
+    with TestClient(fastapi_app, headers=auth_headers) as client:
         yield client, svc
 
     # Teardown

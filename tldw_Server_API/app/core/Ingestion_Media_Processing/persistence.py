@@ -8,6 +8,7 @@ import logging
 import json
 import os
 import sqlite3
+import hashlib
 from pathlib import Path as FilePath
 
 import aiofiles
@@ -28,9 +29,14 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import
     prepare_chunking_options_dict,
     prepare_common_options,
 )
-from tldw_Server_API.app.core.Ingestion_Media_Processing.claims_utils import (
+from tldw_Server_API.app.core.Claims_Extraction.claims_utils import (
     extract_claims_if_requested,
     persist_claims_if_applicable,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import (
+    open_safe_local_path,
+    open_safe_local_path_async,
+    resolve_safe_local_path,
 )
 
 
@@ -38,6 +44,73 @@ try:  # Align HTTP 413 compatibility with legacy endpoint module
     HTTP_413_TOO_LARGE = status.HTTP_413_CONTENT_TOO_LARGE
 except AttributeError:  # Starlette < 0.27
     HTTP_413_TOO_LARGE = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+
+
+def _ensure_warnings_list(result: Dict[str, Any]) -> List[str]:
+    warnings = result.get("warnings")
+    if not isinstance(warnings, list):
+        warnings = []
+        result["warnings"] = warnings
+    return warnings
+
+
+def _compute_source_hash_safe(
+    file_path: FilePath,
+    base_dir: FilePath,
+    *,
+    chunk_size: int = 1024 * 1024,
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    Compute a hash only for a validated local path within ``base_dir``.
+
+    Returns (hash, warning_message). The warning is set only when the path is rejected.
+    """
+    safe_path = resolve_safe_local_path(file_path, base_dir)
+    if safe_path is None:
+        return None, "Source hash skipped: local path rejected outside allowed base directory."
+    if not safe_path.is_file():
+        logger.debug(
+            "Skipping source hash computation for non-file path: %s",
+            safe_path,
+        )
+        return None, None
+    try:
+        hasher = hashlib.sha256()
+        handle = open_safe_local_path(safe_path, base_dir, mode="rb")
+        if handle is None:
+            logger.warning("Source hash compute skipped for rejected path: %s", safe_path)
+            return None, None
+        with handle:
+            for chunk in iter(lambda: handle.read(chunk_size), b""):
+                hasher.update(chunk)
+        return hasher.hexdigest(), None
+    except Exception as exc:
+        try:
+            if safe_path.exists():
+                logger.warning(
+                    "Source hash compute failed for existing file %s: %s",
+                    safe_path,
+                    exc,
+                )
+            else:
+                logger.debug("Source hash compute failed for %s: %s", safe_path, exc)
+        except Exception:
+            logger.debug("Source hash compute failed for %s: %s", safe_path, exc)
+        return None, None
+
+
+def _media_has_source_hash_column(db: MediaDatabase) -> bool:
+    for table_name in ("Media", "media"):
+        try:
+            columns = {
+                col.get("name", "").lower()
+                for col in db.backend.get_table_info(table_name)
+            }
+            if columns:
+                return "source_hash" in columns
+        except Exception:
+            continue
+    return False
 
 
 def validate_add_media_inputs(
@@ -479,6 +552,131 @@ async def add_media_orchestrate(
                 individual_results = await asyncio.gather(*tasks)
                 results.extend(individual_results)
 
+            # --- 6a. Store Original Files if Requested ---
+            # For PDFs and documents, save originals to permanent storage when keep_original_file=True
+            if form_data.keep_original_file and form_data.media_type in ["pdf", "document"]:
+                try:
+                    from tldw_Server_API.app.core.Storage import get_storage_backend
+
+                    storage = get_storage_backend()
+                    user_id_str = str(current_user.id) if hasattr(current_user, "id") else "anonymous"
+
+                    for result in results:
+                        if result.get("status") != "Success" or not result.get("db_id"):
+                            continue
+
+                        media_id = result["db_id"]
+                        input_ref = result.get("input_ref")
+                        source_path = result.get("processing_source")
+
+                        # Only store uploaded files, not URLs
+                        if not source_path or input_ref in url_list:
+                            continue
+
+                        # Check if the source file exists and is within temp_dir
+                        safe_source = resolve_safe_local_path(
+                            FilePath(source_path),
+                            temp_dir_path,
+                        )
+                        if safe_source is None:
+                            logger.warning(
+                                "Original file path rejected outside temp dir: %s",
+                                source_path,
+                            )
+                            result.setdefault("warnings", []).append(
+                                "Original file not stored: unsafe local path"
+                            )
+                            continue
+                        source_file = safe_source
+                        if not source_file.exists():
+                            logger.warning(
+                                "Original file not found for storage: %s",
+                                source_path,
+                            )
+                            continue
+
+                        try:
+                            # Get file info
+                            file_size = source_file.stat().st_size
+                            original_filename = input_ref or source_file.name
+                            mime_type = "application/pdf" if form_data.media_type == "pdf" else "application/octet-stream"
+
+                            # Check storage quota before storing
+                            try:
+                                from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService
+                                quota_service = StorageQuotaService()
+                                await quota_service.initialize()
+
+                                has_quota, _info = await quota_service.check_quota(
+                                    user_id=int(current_user.id) if hasattr(current_user, "id") else 0,
+                                    new_bytes=file_size,
+                                    raise_on_exceed=False,
+                                )
+                                if not has_quota:
+                                    logger.warning(
+                                        f"Storage quota exceeded for user {user_id_str}, "
+                                        f"skipping original file storage for media_id={media_id}"
+                                    )
+                                    result.setdefault("warnings", []).append(
+                                        "Original file not stored: storage quota exceeded"
+                                    )
+                                    continue
+                            except ImportError:
+                                # Quota service not available, proceed without check
+                                pass
+                            except Exception as quota_err:
+                                # Non-fatal quota check failure - log and proceed
+                                logger.debug(f"Quota check failed, proceeding: {quota_err}")
+
+                            # Read file bytes
+                            handle = open_safe_local_path(source_file, temp_dir_path, mode="rb")
+                            if handle is None:
+                                raise InputError("Original file path rejected outside temp directory.")
+                            with handle:
+                                file_bytes = handle.read()
+
+                            # Compute checksum
+                            import hashlib
+                            checksum = hashlib.sha256(file_bytes).hexdigest()
+
+                            # Store in permanent storage
+                            storage_path = await storage.store(
+                                user_id=user_id_str,
+                                media_id=media_id,
+                                filename="original" + source_file.suffix,
+                                data=file_bytes,
+                                mime_type=mime_type,
+                            )
+
+                            # Insert database record
+                            db.insert_media_file(
+                                media_id=media_id,
+                                file_type="original",
+                                storage_path=storage_path,
+                                original_filename=original_filename,
+                                file_size=file_size,
+                                mime_type=mime_type,
+                                checksum=checksum,
+                            )
+
+                            logger.info(
+                                f"Stored original file for media_id={media_id}: {storage_path}"
+                            )
+                            result["original_file_stored"] = True
+
+                        except Exception as store_err:
+                            logger.error(
+                                f"Failed to store original file for media_id={media_id}: {store_err}"
+                            )
+                            # Non-fatal - don't fail the entire ingestion
+                            result["original_file_stored"] = False
+                            result.setdefault("warnings", []).append(
+                                f"Failed to store original file: {store_err}"
+                            )
+
+                except Exception as storage_init_err:
+                    logger.error(f"Failed to initialize storage backend: {storage_init_err}")
+
 
         # --- 7. Generate Embeddings if Requested ---
         logger.info("generate_embeddings flag: %s", form_data.generate_embeddings)
@@ -758,6 +956,7 @@ async def persist_primary_av_item(
                 "source",
                 "creators",
                 "rights",
+                "source_hash",
             }
             for k, v in metadata_for_db.items():
                 if k in allowed_keys and isinstance(v, (str, int, float, bool)):
@@ -788,6 +987,14 @@ async def persist_primary_av_item(
                 safe_metadata_json = json.dumps(safe_meta, ensure_ascii=False)
         except Exception:
             safe_metadata_json = None
+
+        source_hash_for_db = None
+        raw_source_hash = metadata_for_db.get("source_hash")
+        if raw_source_hash is None:
+            raw_source_hash = safe_meta.get("source_hash")
+        if raw_source_hash is not None:
+            raw_source_hash_str = str(raw_source_hash).strip()
+            source_hash_for_db = raw_source_hash_str if raw_source_hash_str else None
 
         # Build plaintext chunks for chunk-level FTS if chunking is requested.
         chunks_for_sql: Optional[List[Dict[str, Any]]] = None
@@ -867,6 +1074,7 @@ async def persist_primary_av_item(
             prompt=getattr(form_data, "custom_prompt", None),
             analysis_content=analysis_for_db,
             safe_metadata=safe_metadata_json,
+            source_hash=source_hash_for_db,
             transcription_model=transcription_model_used,
             author=author_for_db,
             overwrite=getattr(form_data, "overwrite_existing", False),
@@ -1007,7 +1215,9 @@ async def persist_primary_av_item(
         )
         process_result["status"] = "Warning"
         process_result["error"] = (process_result.get("error") or "") + f" | DB Error: {db_err}"
-        process_result.setdefault("warnings", []).append(f"Database operation failed: {db_err}")
+        _ensure_warnings_list(process_result).append(
+            f"Database operation failed: {db_err}",
+        )
         process_result["db_message"] = f"DB Error: {db_err}"
         process_result["db_id"] = None
         process_result["media_uuid"] = None
@@ -1029,7 +1239,7 @@ async def persist_primary_av_item(
         )
         process_result["status"] = "Warning"
         process_result["error"] = (process_result.get("error") or "")
-        process_result.setdefault("warnings", []).append(
+        _ensure_warnings_list(process_result).append(
             f"Unexpected persistence error: {exc}",
         )
         process_result["db_message"] = f"Persistence Error: {type(exc).__name__}"
@@ -1067,6 +1277,9 @@ async def process_batch_media(
     combined_results: List[Dict[str, Any]] = []
     all_processing_sources = urls + uploaded_file_paths
     items_to_process: List[str] = []
+    source_hash_by_ref: Dict[str, List[str]] = {}
+    source_hash_by_source: Dict[str, str] = {}
+    source_hash_column_available: Optional[bool] = None
 
     logger.debug(
         "Starting pre-check for %d %s items...",
@@ -1090,38 +1303,184 @@ async def process_batch_media(
         existing_id: Optional[int] = None
         reason = "Ready for processing."
         pre_check_warning: Optional[str] = None
+        source_hash: Optional[str] = None
+        is_url = isinstance(source_path_or_url, str) and source_path_or_url.startswith(
+            ("http://", "https://")
+        )
+
+        if is_url:
+            try:
+                from tldw_Server_API.app.core.Security.egress import (  # type: ignore
+                    evaluate_url_policy,
+                )
+
+                block_override: Optional[bool] = None
+                if (
+                    os.getenv("PYTEST_CURRENT_TEST")
+                    or os.getenv("TESTING")
+                    or str(os.getenv("TEST_MODE", "")).lower()
+                    in {"1", "true", "yes", "on"}
+                ):
+                    block_override = False
+
+                policy_result = evaluate_url_policy(
+                    str(source_path_or_url),
+                    block_private_override=block_override,
+                )
+                if not getattr(policy_result, "allowed", False):
+                    reason = policy_result.reason or "URL blocked by security policy"
+                    try:
+                        get_metrics_registry().increment(
+                            "security_ssrf_block_total",
+                            1,
+                        )
+                    except Exception:
+                        pass
+                    combined_results.append(
+                        {
+                            "status": "Error",
+                            "input_ref": input_ref,
+                            "processing_source": source_path_or_url,
+                            "media_type": media_type,
+                            "error": f"URL blocked by security policy: {reason}",
+                            "metadata": None,
+                            "content": None,
+                            "transcript": None,
+                            "segments": None,
+                            "chunks": None,
+                            "analysis": None,
+                            "summary": None,
+                            "analysis_details": None,
+                            "warnings": None,
+                            "db_id": None,
+                            "db_message": "URL blocked by security policy.",
+                        }
+                    )
+                    continue
+            except Exception as policy_err:
+                logger.warning(
+                    "URL policy check failed for %s: %s",
+                    source_path_or_url,
+                    policy_err,
+                )
+
+        if not is_url:
+            try:
+                source_hash, hash_warning = _compute_source_hash_safe(
+                    FilePath(source_path_or_url),
+                    temp_dir,
+                )
+                if hash_warning:
+                    pre_check_warning = (
+                        hash_warning
+                        if not pre_check_warning
+                        else f"{pre_check_warning}; {hash_warning}"
+                    )
+                if source_hash and input_ref:
+                    source_hash_by_ref.setdefault(str(input_ref), []).append(source_hash)
+                    source_hash_by_source[str(source_path_or_url)] = source_hash
+            except Exception as hash_err:
+                logger.debug(
+                    "Source hash computation failed for %s: %s",
+                    source_path_or_url,
+                    hash_err,
+                )
 
         if not getattr(form_data, "overwrite_existing", False) and str(media_type) in ["video", "audio"]:
             try:
-                temp_db_for_check = MediaDatabase(db_path=db_path, client_id=client_id)
                 model_for_check = getattr(form_data, "transcription_model", None)
-                pre_check_query = """
-                                  SELECT id \
-                                  FROM Media
-                                  WHERE url = ?
-                                    AND transcription_model = ?
-                                    AND is_trash = 0 \
-                                  """
-                cursor = temp_db_for_check.execute_query(
-                    pre_check_query,
-                    (identifier_for_check, model_for_check),
-                )
-                existing_record = cursor.fetchone()
-                temp_db_for_check.close_connection()
+                if source_hash and not is_url:
+                    temp_db_for_check = MediaDatabase(db_path=db_path, client_id=client_id)
+                    try:
+                        if source_hash_column_available is None:
+                            source_hash_column_available = _media_has_source_hash_column(
+                                temp_db_for_check
+                            )
+                        if source_hash_column_available:
+                            pre_check_query = """
+                                SELECT id
+                                FROM Media
+                                WHERE url = ?
+                                  AND transcription_model = ?
+                                  AND source_hash = ?
+                                  AND is_trash = 0
+                                  AND deleted = 0
+                                LIMIT 1
+                            """
+                            cursor = temp_db_for_check.execute_query(
+                                pre_check_query,
+                                (identifier_for_check, model_for_check, source_hash),
+                            )
+                        else:
+                            pre_check_query = """
+                                SELECT m.id
+                                FROM Media m
+                                JOIN DocumentVersions dv ON dv.media_id = m.id
+                                WHERE m.url = ?
+                                  AND m.transcription_model = ?
+                                  AND m.is_trash = 0
+                                  AND m.deleted = 0
+                                  AND dv.deleted = 0
+                                  AND dv.safe_metadata LIKE ?
+                                LIMIT 1
+                            """
+                            hash_fragment = f"%\"source_hash\":\"{source_hash}\"%"
+                            cursor = temp_db_for_check.execute_query(
+                                pre_check_query,
+                                (identifier_for_check, model_for_check, hash_fragment),
+                            )
+                        existing_record = cursor.fetchone()
+                    finally:
+                        temp_db_for_check.close_connection()
 
-                if existing_record:
-                    existing_id = existing_record["id"]
-                    should_process = False
-                    reason = (
-                        "Media exists (ID: {id}) with the same URL/identifier "
-                        "and transcription model ('{model}'). Overwrite is False."
-                    ).format(id=existing_id, model=model_for_check)
-                else:
+                    if existing_record:
+                        existing_id = existing_record["id"]
+                        should_process = False
+                        reason = (
+                            "Media exists (ID: {id}) with the same filename "
+                            "and source hash for transcription model ('{model}'). "
+                            "Overwrite is False."
+                        ).format(id=existing_id, model=model_for_check)
+                    else:
+                        should_process = True
+                        reason = (
+                            "Media not found with this filename and source hash "
+                            "for transcription model."
+                        )
+                elif not is_url and not source_hash:
                     should_process = True
                     reason = (
-                        "Media not found with this URL/identifier and "
-                        "transcription model."
+                        "Local file pre-check skipped (no source hash available)."
                     )
+                else:
+                    temp_db_for_check = MediaDatabase(db_path=db_path, client_id=client_id)
+                    pre_check_query = """
+                                      SELECT id \
+                                      FROM Media
+                                      WHERE url = ?
+                                        AND transcription_model = ?
+                                        AND is_trash = 0 \
+                                      """
+                    cursor = temp_db_for_check.execute_query(
+                        pre_check_query,
+                        (identifier_for_check, model_for_check),
+                    )
+                    existing_record = cursor.fetchone()
+                    temp_db_for_check.close_connection()
+
+                    if existing_record:
+                        existing_id = existing_record["id"]
+                        should_process = False
+                        reason = (
+                            "Media exists (ID: {id}) with the same URL/identifier "
+                            "and transcription model ('{model}'). Overwrite is False."
+                        ).format(id=existing_id, model=model_for_check)
+                    else:
+                        should_process = True
+                        reason = (
+                            "Media not found with this URL/identifier and "
+                            "transcription model."
+                        )
             except (DatabaseError, sqlite3.Error) as check_err:
                 logger.error(
                     "DB pre-check (custom query) failed for %s: %s",
@@ -1159,6 +1518,7 @@ async def process_batch_media(
 
         if not should_process:
             logger.info("Skipping processing for %s: %s", input_ref, reason)
+            skipped_warnings = [pre_check_warning] if pre_check_warning else None
             skipped_result = {
                 "status": "Skipped",
                 "input_ref": input_ref,
@@ -1175,7 +1535,7 @@ async def process_batch_media(
                 "summary": None,
                 "analysis_details": None,
                 "error": None,
-                "warnings": None,
+                "warnings": skipped_warnings,
                 "db_message": "Skipped processing, no DB action.",
             }
             combined_results.append(skipped_result)
@@ -1329,27 +1689,35 @@ async def process_batch_media(
             call_e,
             exc_info=True,
         )
-        failed_items_results = [
-            {
-                "status": "Error",
-                "input_ref": source_to_ref_map.get(item, (item, None))[0],
-                "processing_source": item,
-                "media_type": media_type,
-                "error": f"Failed to call processor: {type(call_e).__name__}",
-                "metadata": None,
-                "content": None,
-                "transcript": None,
-                "segments": None,
-                "chunks": None,
-                "analysis": None,
-                "summary": None,
-                "analysis_details": None,
-                "warnings": None,
-                "db_id": None,
-                "db_message": None,
-            }
-            for item in items_to_process
-        ]
+        failed_items_results = []
+        for item in items_to_process:
+            ref_info = source_to_ref_map.get(item)
+            if isinstance(ref_info, tuple):
+                err_input_ref = ref_info[0]
+            elif isinstance(ref_info, str):
+                err_input_ref = ref_info
+            else:
+                err_input_ref = item
+            failed_items_results.append(
+                {
+                    "status": "Error",
+                    "input_ref": err_input_ref,
+                    "processing_source": item,
+                    "media_type": media_type,
+                    "error": f"Failed to call processor: {type(call_e).__name__}",
+                    "metadata": None,
+                    "content": None,
+                    "transcript": None,
+                    "segments": None,
+                    "chunks": None,
+                    "analysis": None,
+                    "summary": None,
+                    "analysis_details": None,
+                    "warnings": None,
+                    "db_id": None,
+                    "db_message": None,
+                }
+            )
         combined_results.extend(failed_items_results)
         return combined_results
 
@@ -1432,7 +1800,21 @@ async def process_batch_media(
         if isinstance(pre_check_info, tuple):
             pre_check_warning_msg = pre_check_info[1]
         if pre_check_warning_msg:
-            process_result.setdefault("warnings", []).append(pre_check_warning_msg)
+            _ensure_warnings_list(process_result).append(pre_check_warning_msg)
+
+        source_hash = None
+        if processing_source:
+            source_hash = source_hash_by_source.get(str(processing_source))
+        if not source_hash and original_input_ref:
+            hash_list = source_hash_by_ref.get(str(original_input_ref))
+            if hash_list:
+                source_hash = hash_list.pop(0)
+        if source_hash:
+            metadata = process_result.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata.setdefault("source_hash", source_hash)
+            process_result["metadata"] = metadata
 
         claims_context: Optional[Dict[str, Any]] = None
         if process_result.get("status") in ("Success", "Warning"):
@@ -1466,13 +1848,16 @@ async def process_batch_media(
     combined_results.extend(final_batch_results)
 
     final_standardized_results: List[Dict[str, Any]] = []
-    processed_input_refs: set[str] = set()
+    processed_keys: set[tuple[str, str]] = set()
 
     for res in combined_results:
         input_ref = res.get("input_ref", "Unknown")
-        if input_ref in processed_input_refs and input_ref != "Unknown":
-            continue
-        processed_input_refs.add(input_ref)
+        processing_source = str(res.get("processing_source") or "")
+        if input_ref != "Unknown" and processing_source:
+            key = (input_ref, processing_source)
+            if key in processed_keys:
+                continue
+            processed_keys.add(key)
 
         standardized = {
             "status": res.get("status", "Error"),
@@ -1622,8 +2007,16 @@ async def process_document_like_item(
                 and isinstance(downloaded_path, FilePath)
                 and downloaded_path.exists()
             ):
-                processing_filepath = downloaded_path
-                processing_filename = downloaded_path.name
+                safe_downloaded_path = resolve_safe_local_path(
+                    downloaded_path,
+                    temp_dir,
+                )
+                if safe_downloaded_path is None:
+                    raise FileNotFoundError(
+                        "Downloaded file path rejected outside temp directory."
+                    )
+                processing_filepath = safe_downloaded_path
+                processing_filename = safe_downloaded_path.name
 
                 if user_id is not None:
                     try:
@@ -1680,7 +2073,15 @@ async def process_document_like_item(
 
                 # Read bytes for types that operate on raw content.
                 if str(media_type) in {"pdf", "email"}:
-                    async with aiofiles.open(processing_filepath, "rb") as file_obj:
+                    async with open_safe_local_path_async(
+                        processing_filepath,
+                        temp_dir,
+                        mode="rb",
+                    ) as file_obj:
+                        if file_obj is None:
+                            raise FileNotFoundError(
+                                "Downloaded file path rejected outside temp directory.",
+                            )
                         file_bytes = await file_obj.read()
 
                 final_result["processing_source"] = str(processing_filepath)
@@ -1690,15 +2091,28 @@ async def process_document_like_item(
                 )
         else:
             path_obj = FilePath(processing_source)
-            if not path_obj.is_file():
+            safe_path = resolve_safe_local_path(path_obj, temp_dir)
+            if safe_path is None:
+                raise FileNotFoundError(
+                    f"Uploaded file path rejected outside temp directory: {processing_source}",
+                )
+            if not safe_path.is_file():
                 raise FileNotFoundError(
                     f"Uploaded file path not found or is not a file: {processing_source}",
                 )
-            processing_filepath = path_obj
-            processing_filename = path_obj.name
+            processing_filepath = safe_path
+            processing_filename = safe_path.name
 
             if str(media_type) in {"pdf", "email"}:
-                async with aiofiles.open(processing_filepath, "rb") as file_obj:
+                async with open_safe_local_path_async(
+                    processing_filepath,
+                    temp_dir,
+                    mode="rb",
+                ) as file_obj:
+                    if file_obj is None:
+                        raise FileNotFoundError(
+                            "Uploaded file path rejected outside temp directory.",
+                        )
                     file_bytes = await file_obj.read()
 
             final_result["processing_source"] = processing_source
@@ -1795,7 +2209,10 @@ async def process_document_like_item(
             else:  # pragma: no cover - minimal profiles
                 processing_func = docs.process_document_content
 
-            specific_args = {"doc_path": processing_filepath}
+            specific_args = {
+                "doc_path": processing_filepath,
+                "base_dir": temp_dir,
+            }
 
         elif media_type_str == "json":
             if processing_filepath is None:
@@ -1814,7 +2231,10 @@ async def process_document_like_item(
             else:  # pragma: no cover
                 processing_func = docs.process_document_content
 
-            specific_args = {"doc_path": processing_filepath}
+            specific_args = {
+                "doc_path": processing_filepath,
+                "base_dir": temp_dir,
+            }
 
         elif media_type_str == "ebook":
             if processing_filepath is None:
@@ -1828,6 +2248,7 @@ async def process_document_like_item(
             specific_args = {
                 "file_path": str(processing_filepath),
                 "extraction_method": "filtered",
+                "base_dir": temp_dir,
             }
             custom_pattern = getattr(form_data, "custom_chapter_pattern", None)
             if custom_pattern:
@@ -1836,10 +2257,15 @@ async def process_document_like_item(
         elif media_type_str == "email":
             if file_bytes is None and processing_filepath is not None:
                 try:
-                    async with aiofiles.open(
+                    async with open_safe_local_path_async(
                         processing_filepath,
-                        "rb",
+                        temp_dir,
+                        mode="rb",
                     ) as file_obj:
+                        if file_obj is None:
+                            raise FileNotFoundError(
+                                "Email file path rejected outside temp directory.",
+                            )
                         file_bytes = await file_obj.read()
                 except Exception as read_err:
                     raise ValueError(
@@ -2259,6 +2685,7 @@ async def persist_doc_item_and_children(
                     "source",
                     "creators",
                     "rights",
+                    "source_hash",
                 }
                 for key, value in (metadata_for_db or {}).items():
                     if key in allowed_keys and isinstance(
@@ -2293,6 +2720,17 @@ async def persist_doc_item_and_children(
                     safe_metadata_json = json.dumps(safe_meta, ensure_ascii=False)
             except Exception:
                 safe_metadata_json = None
+
+            source_hash_for_db = None
+            try:
+                raw_source_hash = metadata_for_db.get("source_hash")
+                if raw_source_hash is None:
+                    raw_source_hash = safe_meta.get("source_hash")
+                if raw_source_hash is not None:
+                    raw_source_hash_str = str(raw_source_hash).strip()
+                    source_hash_for_db = raw_source_hash_str if raw_source_hash_str else None
+            except Exception:
+                source_hash_for_db = None
 
             chunks_for_sql: Optional[List[Dict[str, Any]]] = None
             try:
@@ -2350,6 +2788,7 @@ async def persist_doc_item_and_children(
                 prompt=getattr(form_data, "custom_prompt", None),
                 analysis_content=analysis_for_db,
                 safe_metadata=safe_metadata_json,
+                source_hash=source_hash_for_db,
                 transcription_model=model_used,
                 author=author_for_db,
                 overwrite=getattr(form_data, "overwrite_existing", False),

@@ -30,7 +30,15 @@ def test_create_run_uses_typed_model(evals_crud_client, monkeypatch):
 
     # Patch evaluation service with minimal stub
     class _SvcStub:
-        async def create_run(self, eval_id, target_model, config=None, webhook_url=None, created_by=None):
+        async def create_run(
+            self,
+            eval_id,
+            target_model,
+            config=None,
+            dataset_override=None,
+            webhook_url=None,
+            created_by=None,
+        ):
             return {
                 "id": "run_123",
                 "object": "run",
@@ -68,4 +76,3 @@ def test_create_run_forbids_extra_keys(evals_crud_client, monkeypatch):
     r = client.post("/api/v1/evaluations/e1/runs", json=payload, headers=headers)
     # Pydantic extra='forbid' should 422 on extra keys
     assert r.status_code == 422
-

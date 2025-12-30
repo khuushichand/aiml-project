@@ -67,6 +67,17 @@ This directory contains the end-to-end, integration, and unit tests for `tldw_se
 | `E2E_SERVER_STARTUP_TIMEOUT` | `30` | Seconds to wait for a server to boot before declaring a failure. | Helpful when bootstrapping against Docker. |
 | `E2E_ADMIN_BEARER` | unset | Bearer token used for admin-level E2E scenarios. | Required for multi-user onboarding tests. |
 
+### Admin UI Playwright Checks
+The `tests/webui_e2e/test_admin_ui_api_key_storage.py` test targets the Next.js admin UI login screen.
+
+- Required: the API server must be running in `single_user` mode with a valid `SINGLE_USER_API_KEY`.
+- Optional: the test can auto-start the admin UI with `npm run dev` if `ADMIN_UI_URL` is not reachable.
+  - Set `ADMIN_UI_URL` (default `http://127.0.0.1:3001`) if you run the admin UI on a different port.
+  - Set `ADMIN_UI_API_KEY` if you want to override the key resolution.
+  - If unset, the test will look in `.env`, `.env.local`, `tldw_Server_API/Config_Files/.env`,
+    and `admin-ui/.env.local` / `admin-ui/.env` for `SINGLE_USER_API_KEY` or `NEXT_PUBLIC_X_API_KEY`.
+  - The login flow supports `?mode=apikey` to force the API key form (useful when the UI is already running).
+
 ### Audio / LLM Provider Keys
 Many suites look for provider-specific credentials when the corresponding feature flags are set. Typical examples include:
 - `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `MISTRAL_API_KEY`, `GROQ_API_KEY`, `HF_TOKEN`

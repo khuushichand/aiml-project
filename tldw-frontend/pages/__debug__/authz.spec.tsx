@@ -1,15 +1,17 @@
 import { isAdmin } from '@/lib/authz';
+import type { AuthUser } from '@/types/common';
 
-type Case = { name: string; user: any; expected: boolean };
+type Case = { name: string; user: AuthUser | null | undefined; expected: boolean };
 
 const cases: Case[] = [
   { name: 'null user -> false', user: null, expected: false },
+  { name: 'undefined user -> false', user: undefined, expected: false },
   { name: 'is_admin true', user: { is_admin: true }, expected: true },
   { name: 'isAdmin true', user: { isAdmin: true }, expected: true },
   { name: 'role admin (string)', user: { role: 'admin' }, expected: true },
   { name: 'role ADMIN (case-insensitive)', user: { role: 'ADMIN' }, expected: true },
   { name: 'roles includes admin (array)', user: { roles: ['user', 'admin'] }, expected: true },
-  { name: 'roles single string value', user: { roles: 'admin' }, expected: true },
+  { name: 'roles single value in array', user: { roles: ['admin'] }, expected: true },
   { name: 'permissions includes admin', user: { permissions: ['read', 'admin'] }, expected: true },
   { name: 'scopes includes admin', user: { scopes: ['foo', 'admin'] }, expected: true },
   { name: 'non-admin user', user: { role: 'user', roles: ['member'], permissions: ['read'], scopes: [] }, expected: false },

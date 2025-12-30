@@ -156,7 +156,7 @@ make stt-golden STT_GOLDEN_AUDIO_DIR=/srv/tldw_stt_golden
 
 ## Helper Script: Generate Goldens from Current Adapters
 
-You can add a small helper script (suggested path):
+Helper script location:
 
 - `Helper_Scripts/Audio/generate_stt_golden.py`
 
@@ -254,5 +254,4 @@ Recommended scenarios:
 
 Because these tests are opt‑in and gated by env, they are safe to leave in the
 repo without impacting normal CI runs. You decide when and where to exercise
-them. 
-
+them.

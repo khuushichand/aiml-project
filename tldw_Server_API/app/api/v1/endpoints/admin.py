@@ -11,6 +11,7 @@ import string
 import os
 import json
 import asyncio
+import re
 #
 # 3rd-party imports
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, Response
@@ -21,13 +22,39 @@ from loguru import logger
 from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     UserListResponse,
     UserUpdateRequest,
+    AdminUserCreateRequest,
+    UserSummary,
     RegistrationCodeRequest,
     RegistrationCodeResponse,
     RegistrationCodeListResponse,
+    RegistrationSettingsResponse,
+    RegistrationSettingsUpdateRequest,
     SystemStatsResponse,
+    ActivitySummaryResponse,
     SecurityAlertStatusResponse,
     SecurityAlertSinkStatus,
     AuditLogResponse,
+    BackupItem,
+    BackupListResponse,
+    BackupCreateRequest,
+    BackupCreateResponse,
+    BackupRestoreRequest,
+    BackupRestoreResponse,
+    RetentionPolicy,
+    RetentionPoliciesResponse,
+    RetentionPolicyUpdateRequest,
+    SystemLogEntry,
+    SystemLogsResponse,
+    MaintenanceState,
+    MaintenanceUpdateRequest,
+    FeatureFlagsResponse,
+    FeatureFlagItem,
+    FeatureFlagUpsertRequest,
+    IncidentItem,
+    IncidentListResponse,
+    IncidentCreateRequest,
+    IncidentUpdateRequest,
+    IncidentEventCreateRequest,
     UserQuotaUpdateRequest,
     UsageDailyResponse,
     UsageTopResponse,
@@ -39,6 +66,9 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     LLMUsageSummaryRow,
     LLMTopSpendersResponse,
     LLMTopSpenderRow,
+    OrgBudgetItem,
+    OrgBudgetListResponse,
+    OrgBudgetUpdateRequest,
     ToolPermissionCreateRequest,
     ToolPermissionResponse,
     ToolPermissionGrantRequest,
@@ -53,7 +83,13 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
     NotesTitleSettingsUpdate,
     AdminCleanupSettingsUpdate,
     KanbanFtsMaintenanceResponse,
+    LLMProviderOverrideRequest,
+    LLMProviderOverrideResponse,
+    LLMProviderOverrideListResponse,
+    LLMProviderTestRequest,
+    LLMProviderTestResponse,
 )
+from tldw_Server_API.app.api.v1.schemas.auth_schemas import SessionResponse, MessageResponse
 from tldw_Server_API.app.api.v1.schemas.api_key_schemas import (
     APIKeyCreateRequest,
     APIKeyCreateResponse,
@@ -63,6 +99,7 @@ from tldw_Server_API.app.api.v1.schemas.api_key_schemas import (
     APIKeyAuditEntry,
     APIKeyAuditListResponse,
 )
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.api.v1.schemas.user_keys import (
     AdminUserKeysResponse,
     AdminUserKeyStatusItem,
@@ -95,12 +132,15 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     require_roles,
     get_db_transaction,
     get_storage_service_dep,
+    get_registration_service_dep,
     get_auth_principal,
     check_rate_limit,
+    get_session_manager_dep,
 )
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import get_rate_limiter as get_authnz_rate_limiter
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, is_postgres_backend
-from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings, get_profile, reset_settings
+from tldw_Server_API.app.core.AuthNZ.mfa_service import get_mfa_service
 from tldw_Server_API.app.core.AuthNZ.byok_helpers import (
     is_byok_enabled,
     is_provider_allowlisted,
@@ -112,6 +152,9 @@ from tldw_Server_API.app.services.storage_quota_service import StorageQuotaServi
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     UserNotFoundError,
     DuplicateUserError,
+    RegistrationError,
+    RegistrationDisabledError,
+    WeakPasswordError,
     QuotaExceededError
 )
 from tldw_Server_API.app.core.exceptions import ResourceNotFoundError
@@ -124,6 +167,7 @@ from tldw_Server_API.app.core.AuthNZ.alerting import get_security_alert_dispatch
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
     create_organization,
     list_organizations,
+    get_team,
     create_team,
     add_team_member,
     list_team_members,
@@ -141,6 +185,9 @@ from tldw_Server_API.app.core.AuthNZ.repos.user_provider_secrets_repo import (
 from tldw_Server_API.app.core.AuthNZ.repos.org_provider_secrets_repo import (
     AuthnzOrgProviderSecretsRepo,
 )
+from tldw_Server_API.app.core.AuthNZ.repos.llm_provider_overrides_repo import (
+    AuthnzLLMProviderOverridesRepo,
+)
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB, KanbanDBError, InputError
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.AuthNZ.exceptions import DuplicateOrganizationError, DuplicateTeamError, DuplicateRoleError
@@ -152,6 +199,11 @@ from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
     key_hint_for_api_key,
     loads_envelope,
     normalize_provider_name,
+)
+from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
+    refresh_llm_provider_overrides,
+    get_llm_provider_override,
+    get_llm_provider_overrides_snapshot,
 )
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
@@ -171,7 +223,8 @@ from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     OrganizationWatchlistsSettingsUpdate,
     OrganizationWatchlistsSettingsResponse,
 )
-from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, is_single_user_principal
+from tldw_Server_API.app.api.v1.API_Deps.org_deps import ROLE_HIERARCHY
 from tldw_Server_API.app.core.AuthNZ.repos.rbac_repo import AuthnzRbacRepo
 from tldw_Server_API.app.core.Usage.pricing_catalog import reset_pricing_catalog
 from tldw_Server_API.app.core.Chat.chat_service import (
@@ -195,14 +248,48 @@ from tldw_Server_API.app.services.admin_usage_service import (
     export_usage_top_csv_text as svc_export_usage_top_csv_text,
     fetch_llm_usage as svc_fetch_llm_usage,
     fetch_llm_usage_summary as svc_fetch_llm_usage_summary,
+    fetch_llm_top_spenders as svc_fetch_llm_top_spenders,
 )
+from tldw_Server_API.app.services.admin_budgets_service import (
+    list_org_budgets as svc_list_org_budgets,
+    upsert_org_budget as svc_upsert_org_budget,
+)
+from tldw_Server_API.app.services.admin_data_ops_service import (
+    list_backup_items as svc_list_backup_items,
+    create_backup_snapshot as svc_create_backup_snapshot,
+    restore_backup_snapshot as svc_restore_backup_snapshot,
+    list_retention_policies as svc_list_retention_policies,
+    update_retention_policy as svc_update_retention_policy,
+    build_audit_log_csv as svc_build_audit_log_csv,
+    build_audit_log_json as svc_build_audit_log_json,
+    build_users_csv as svc_build_users_csv,
+    build_users_json as svc_build_users_json,
+)
+from tldw_Server_API.app.services.admin_system_ops_service import (
+    get_maintenance_state as svc_get_maintenance_state,
+    update_maintenance_state as svc_update_maintenance_state,
+    list_feature_flags as svc_list_feature_flags,
+    upsert_feature_flag as svc_upsert_feature_flag,
+    delete_feature_flag as svc_delete_feature_flag,
+    list_incidents as svc_list_incidents,
+    create_incident as svc_create_incident,
+    update_incident as svc_update_incident,
+    add_incident_event as svc_add_incident_event,
+    delete_incident as svc_delete_incident,
+)
+from tldw_Server_API.app.core.Logging.system_log_buffer import query_system_logs
 from tldw_Server_API.app.services.admin_service import update_api_key_metadata
 from tldw_Server_API.app.core.Security.webui_access_guard import (
     webui_remote_access_enabled,
     setup_remote_access_enabled,
 )
 from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.Setup import setup_manager
+from tldw_Server_API.app.services.registration_service import reset_registration_service
 import ipaddress
+
+REQUIRED_ADMIN_RANK = ROLE_HIERARCHY.get("admin", 3)
+PLATFORM_ADMIN_ROLES = {"owner", "super_admin", "admin"}
 
 # Test shim: some tests expect a private helper `_is_postgres_backend` to monkeypatch.
 # Provide an alias to the public function for backward compatibility in tests.
@@ -291,19 +378,267 @@ async def _ensure_sqlite_authnz_ready_if_test_mode() -> None:
         # Best-effort only; do not interfere with request handling
         logger.debug(f"AuthNZ test ensure skipped/failed: {_e}")
 
+
+async def _emit_admin_audit_event(
+    request: Request,
+    principal: AuthPrincipal,
+    *,
+    event_type: str,
+    category: str,
+    resource_type: str,
+    resource_id: Optional[str],
+    action: str,
+    metadata: Dict[str, Any],
+) -> None:
+    """Best-effort audit emission for admin actions."""
+    try:
+        actor_id_raw = getattr(request.state, "user_id", None) or principal.user_id
+        try:
+            actor_id = int(actor_id_raw) if actor_id_raw is not None else None
+        except (TypeError, ValueError):
+            actor_id = None
+        if actor_id is None:
+            return
+        from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+            get_or_create_audit_service_for_user_id,
+        )
+        from tldw_Server_API.app.core.Audit.unified_audit_service import (
+            AuditContext,
+            AuditEventType,
+            AuditEventCategory,
+        )
+        audit_service = await get_or_create_audit_service_for_user_id(actor_id)
+        correlation_id = (
+            request.headers.get("X-Correlation-ID")
+            or getattr(request.state, "correlation_id", None)
+        )
+        request_id = (
+            request.headers.get("X-Request-ID")
+            or getattr(request.state, "request_id", None)
+            or ""
+        )
+        ctx = AuditContext(
+            user_id=str(actor_id),
+            correlation_id=correlation_id,
+            request_id=request_id,
+            ip_address=(request.client.host if request.client else None),
+            user_agent=request.headers.get("user-agent"),
+            endpoint=str(request.url.path),
+            method=request.method,
+        )
+        await audit_service.log_event(
+            event_type=AuditEventType(event_type),
+            category=AuditEventCategory(category),
+            context=ctx,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            action=action,
+            metadata=metadata,
+        )
+    except Exception as exc:
+        logger.debug("Admin audit emission skipped: {}", exc)
+
+
+def _role_rank(role: Optional[str]) -> int:
+    """Map a role string to its numeric rank using ROLE_HIERARCHY."""
+    if role is None:
+        return 0
+    return ROLE_HIERARCHY.get(str(role).strip().lower(), 0)
+
+
+async def _enforce_admin_user_scope(
+    principal: AuthPrincipal,
+    target_user_id: int,
+    *,
+    require_hierarchy: bool,
+) -> None:
+    """Enforce shared-org membership and optional role hierarchy for admin actions."""
+    if is_single_user_principal(principal) or _is_platform_admin(principal):
+        return
+
+    if principal.user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to manage users",
+        )
+
+    admin_memberships = await list_org_memberships_for_user(principal.user_id)
+    target_memberships = await list_org_memberships_for_user(target_user_id)
+
+    admin_org_roles = {
+        m.get("org_id"): str(m.get("role") or "member").strip().lower()
+        for m in admin_memberships
+        if m.get("org_id") is not None
+    }
+    target_org_roles = {
+        m.get("org_id"): str(m.get("role") or "member").strip().lower()
+        for m in target_memberships
+        if m.get("org_id") is not None
+    }
+
+    shared_orgs = set(admin_org_roles) & set(target_org_roles)
+    if not shared_orgs:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to manage users outside your organization",
+        )
+
+    if not require_hierarchy:
+        return
+
+    for org_id in shared_orgs:
+        admin_role = admin_org_roles.get(org_id)
+        target_role = target_org_roles.get(org_id)
+        if _role_rank(admin_role) >= REQUIRED_ADMIN_RANK and _role_rank(admin_role) >= _role_rank(target_role):
+            return
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Not authorized to update this user",
+    )
+
+
+def _is_platform_admin(principal: AuthPrincipal) -> bool:
+    if is_single_user_principal(principal):
+        return True
+    roles = {str(role).strip().lower() for role in (principal.roles or [])}
+    return bool(roles & PLATFORM_ADMIN_ROLES)
+
+
+def _require_platform_admin(principal: AuthPrincipal) -> None:
+    if _is_platform_admin(principal):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Platform admin role required",
+    )
+
+
+async def _get_admin_org_ids(principal: AuthPrincipal) -> Optional[List[int]]:
+    if is_single_user_principal(principal) or _is_platform_admin(principal):
+        return None
+    if principal.user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to access organization data",
+        )
+    memberships = await list_org_memberships_for_user(principal.user_id)
+    return [int(m.get("org_id")) for m in memberships if m.get("org_id") is not None]
+
+
+async def _enforce_admin_org_access(
+    principal: AuthPrincipal,
+    org_id: int,
+    *,
+    require_admin: bool = True,
+) -> None:
+    if is_single_user_principal(principal) or _is_platform_admin(principal):
+        return
+    if principal.user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to access this organization",
+        )
+    memberships = await list_org_memberships_for_user(principal.user_id)
+    membership = next((m for m in memberships if m.get("org_id") == org_id), None)
+    if not membership:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to access this organization",
+        )
+    if require_admin and _role_rank(membership.get("role")) < REQUIRED_ADMIN_RANK:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Organization admin role required",
+        )
+
+
+async def _get_scoped_team(
+    team_id: int,
+    principal: AuthPrincipal,
+    *,
+    require_admin: bool = True,
+) -> Dict[str, Any]:
+    team = await get_team(team_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="team_not_found")
+    await _enforce_admin_org_access(
+        principal,
+        int(team.get("org_id")),
+        require_admin=require_admin,
+    )
+    return team
+
 #######################################################################################################################
 #
 # User Management Endpoints
+
+@router.post("/users", response_model=UserSummary)
+async def admin_create_user(
+    payload: AdminUserCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    registration_service=Depends(get_registration_service_dep),
+) -> UserSummary:
+    """
+    Create a new user as an admin.
+    """
+    profile = get_profile()
+    if isinstance(profile, str) and profile.strip().lower() in {"local-single-user", "single_user"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User creation is not allowed in local-single-user profile",
+        )
+
+    created_by = int(principal.user_id) if principal.user_id is not None else None
+    try:
+        user_info = await registration_service.register_user(
+            username=payload.username,
+            email=payload.email,
+            password=payload.password,
+            created_by=created_by,
+            role_override=payload.role,
+            is_active_override=payload.is_active,
+            is_verified_override=payload.is_verified,
+            storage_quota_override=payload.storage_quota_mb,
+        )
+        repo = await AuthnzUsersRepo.from_pool()
+        user = await repo.get_user_by_id(int(user_info["user_id"]))
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to load created user",
+            )
+        logger.info("Admin created user {} (id={})", payload.username, user_info["user_id"])
+        return user
+    except DuplicateUserError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except WeakPasswordError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except RegistrationDisabledError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except RegistrationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to create user: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create user",
+        ) from exc
+
 
 @router.get("/users", response_model=UserListResponse)
 async def list_users(
     request: Request,
     response: Response,
+    principal: AuthPrincipal = Depends(get_auth_principal),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     role: Optional[str] = None,
     is_active: Optional[bool] = None,
     search: Optional[str] = None,
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
 ) -> UserListResponse:
     """
     List all users with pagination and filters
@@ -340,12 +675,19 @@ async def list_users(
     try:
         offset = (page - 1) * limit
         repo = await AuthnzUsersRepo.from_pool()
+        org_ids = await _get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
         users, total = await repo.list_users(
             offset=offset,
             limit=limit,
             role=role,
             is_active=is_active,
             search=search,
+            org_ids=org_ids,
         )
         return UserListResponse(
             users=users,
@@ -367,6 +709,53 @@ async def list_users(
         )
 
 
+@router.get("/users/export")
+async def export_users(
+    role: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    search: Optional[str] = None,
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    limit: int = Query(10000, ge=1, le=50000),
+    offset: int = Query(0, ge=0),
+    format: str = Query("csv", pattern="^(csv|json)$"),
+    filename: Optional[str] = Query(None, description="Optional filename for Content-Disposition"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> Response:
+    try:
+        org_ids = await _get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
+        repo = await AuthnzUsersRepo.from_pool()
+        users, total = await repo.list_users(
+            offset=offset,
+            limit=limit,
+            role=role,
+            is_active=is_active,
+            search=search,
+            org_ids=org_ids,
+        )
+        if format == "json":
+            content = svc_build_users_json(users, total=total, limit=limit, offset=offset)
+            resp = Response(content=content, media_type="application/json")
+            if not filename:
+                filename = "users.json"
+        else:
+            content = svc_build_users_csv(users)
+            resp = PlainTextResponse(content=content, media_type="text/csv")
+            if not filename:
+                filename = "users.csv"
+        if filename:
+            safe = filename.replace("\n", " ").replace("\r", " ").replace("\"", "_")
+            resp.headers["Content-Disposition"] = f"attachment; filename=\"{safe}\""
+        return resp
+    except Exception as exc:
+        logger.error(f"Failed to export users: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to export users")
+
+
 #######################################################################################################################
 #
 # Per-User API Key Management (Admin)
@@ -374,10 +763,12 @@ async def list_users(
 @router.get("/users/{user_id}/api-keys", response_model=List[APIKeyMetadata])
 async def admin_list_user_api_keys(
     user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
     include_revoked: bool = False,
 ) -> list[APIKeyMetadata]:
     """List API keys for a specific user (admin)."""
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
         api_mgr = await get_api_key_manager()
         rows = await api_mgr.list_user_keys(user_id=user_id, include_revoked=include_revoked)
         return [APIKeyMetadata(**row) for row in rows]
@@ -390,9 +781,11 @@ async def admin_list_user_api_keys(
 async def admin_create_user_api_key(
     user_id: int,
     request: APIKeyCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> APIKeyCreateResponse:
     """Create a new API key for the given user (admin)."""
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
         api_mgr = await get_api_key_manager()
         result = await api_mgr.create_api_key(
             user_id=user_id,
@@ -412,9 +805,11 @@ async def admin_rotate_user_api_key(
     user_id: int,
     key_id: int,
     request: APIKeyRotateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> APIKeyCreateResponse:
     """Rotate an API key for the given user and return the new key (admin)."""
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
         api_mgr = await get_api_key_manager()
         result = await api_mgr.rotate_api_key(
             key_id=key_id,
@@ -431,9 +826,11 @@ async def admin_rotate_user_api_key(
 async def admin_revoke_user_api_key(
     user_id: int,
     key_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> Dict[str, Any]:
     """Revoke an API key for the given user (admin)."""
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
         api_mgr = await get_api_key_manager()
         success = await api_mgr.revoke_api_key(key_id=key_id, user_id=user_id)
         if not success:
@@ -451,10 +848,12 @@ async def admin_update_user_api_key(
     user_id: int,
     key_id: int,
     request: APIKeyUpdateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction)
 ) -> APIKeyMetadata:
     """Update per-key limits like rate_limit and allowed_ips (admin)."""
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
         try:
             row = await update_api_key_metadata(
                 db,
@@ -513,6 +912,23 @@ async def _get_shared_byok_repo() -> AuthnzOrgProviderSecretsRepo:
         ) from exc
 
 
+async def _get_llm_provider_overrides_repo() -> AuthnzLLMProviderOverridesRepo:
+    """Initialize provider overrides repository and ensure schema exists."""
+    try:
+        pool = await get_db_pool()
+        repo = AuthnzLLMProviderOverridesRepo(pool)
+        await repo.ensure_tables()
+        return repo
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to initialize LLM provider overrides repository: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Provider overrides infrastructure is not available",
+        ) from exc
+
+
 def _require_byok_enabled() -> None:
     if not is_byok_enabled():
         raise HTTPException(
@@ -556,8 +972,12 @@ async def _touch_shared_last_used_if_match(
     response_model=AdminUserKeysResponse,
     dependencies=[Depends(check_rate_limit)],
 )
-async def admin_list_user_byok_keys(user_id: int) -> AdminUserKeysResponse:
+async def admin_list_user_byok_keys(
+    user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> AdminUserKeysResponse:
     _require_byok_enabled()
+    await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
     repo = await _get_user_byok_repo()
     try:
         rows = await repo.list_secrets_for_user(user_id)
@@ -582,8 +1002,13 @@ async def admin_list_user_byok_keys(user_id: int) -> AdminUserKeysResponse:
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(check_rate_limit)],
 )
-async def admin_revoke_user_byok_key(user_id: int, provider: str) -> None:
+async def admin_revoke_user_byok_key(
+    user_id: int,
+    provider: str,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> None:
     _require_byok_enabled()
+    await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
     repo = await _get_user_byok_repo()
     provider_norm = normalize_provider_name(provider)
     try:
@@ -619,6 +1044,20 @@ async def admin_upsert_shared_byok_key(payload: SharedProviderKeyUpsertRequest) 
         credential_fields = validate_credential_fields(provider_norm, payload.credential_fields)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        await test_provider_credentials(
+            provider=provider_norm,
+            api_key=api_key,
+            credential_fields=credential_fields,
+            model=None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ChatAPIError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Provider test call failed") from exc
 
     secret_payload = build_secret_payload(api_key, credential_fields or None)
     try:
@@ -667,12 +1106,27 @@ async def admin_test_shared_byok_key(payload: SharedProviderKeyTestRequest) -> S
     if not is_provider_allowlisted(provider_norm):
         raise HTTPException(status_code=403, detail="Provider not allowed for BYOK")
 
-    api_key = (payload.api_key or "").strip()
+    repo = await _get_shared_byok_repo()
+    row = await repo.fetch_secret(payload.scope_type, payload.scope_id, provider_norm)
+    if not row:
+        raise HTTPException(status_code=404, detail="Key not found")
+    encrypted_blob = row.get("encrypted_blob")
+    if not encrypted_blob:
+        raise HTTPException(status_code=404, detail="Key not found")
+    try:
+        stored_payload = decrypt_byok_payload(loads_envelope(encrypted_blob))
+    except Exception:
+        raise HTTPException(status_code=404, detail="Key not found")
+
+    api_key = (stored_payload.get("api_key") or "").strip()
     if not api_key:
-        raise HTTPException(status_code=400, detail="api_key is required")
+        raise HTTPException(status_code=404, detail="Key not found")
 
     try:
-        credential_fields = validate_credential_fields(provider_norm, payload.credential_fields)
+        credential_fields = validate_credential_fields(
+            provider_norm,
+            stored_payload.get("credential_fields") or {},
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -690,7 +1144,6 @@ async def admin_test_shared_byok_key(payload: SharedProviderKeyTestRequest) -> S
     except Exception as exc:
         raise HTTPException(status_code=502, detail="Provider test call failed") from exc
 
-    repo = await _get_shared_byok_repo()
     await _touch_shared_last_used_if_match(
         repo,
         scope_type=payload.scope_type,
@@ -774,6 +1227,253 @@ async def admin_delete_shared_byok_key(scope_type: str, scope_id: int, provider:
         raise HTTPException(status_code=404, detail="Key not found")
 
 
+#######################################################################################################################
+#
+# LLM Provider Overrides
+
+def _build_llm_provider_override_response(override: Any) -> LLMProviderOverrideResponse:
+    return LLMProviderOverrideResponse(
+        provider=override.provider,
+        is_enabled=override.is_enabled,
+        allowed_models=override.allowed_models,
+        config=override.config or None,
+        credential_fields=override.credential_fields or None,
+        has_api_key=bool(override.api_key or override.api_key_hint),
+        api_key_hint=override.api_key_hint,
+        created_at=override.created_at,
+        updated_at=override.updated_at,
+    )
+
+
+def _normalize_allowed_models(raw: Optional[List[str]]) -> Optional[List[str]]:
+    if raw is None:
+        return None
+    cleaned = [str(v).strip() for v in raw if isinstance(v, (str, int, float)) and str(v).strip()]
+    return cleaned or None
+
+
+@router.get(
+    "/llm/providers/overrides",
+    response_model=LLMProviderOverrideListResponse,
+    dependencies=[Depends(check_rate_limit)],
+)
+async def admin_list_llm_provider_overrides(
+    provider: Optional[str] = Query(None),
+) -> LLMProviderOverrideListResponse:
+    await _ensure_sqlite_authnz_ready_if_test_mode()
+    await refresh_llm_provider_overrides()
+    overrides = get_llm_provider_overrides_snapshot()
+    provider_norm = normalize_provider_name(provider) if provider else None
+
+    items: List[LLMProviderOverrideResponse] = []
+    for name in sorted(overrides.keys()):
+        if provider_norm and name != provider_norm:
+            continue
+        items.append(_build_llm_provider_override_response(overrides[name]))
+
+    return LLMProviderOverrideListResponse(items=items)
+
+
+@router.get(
+    "/llm/providers/overrides/{provider}",
+    response_model=LLMProviderOverrideResponse,
+    dependencies=[Depends(check_rate_limit)],
+)
+async def admin_get_llm_provider_override(provider: str) -> LLMProviderOverrideResponse:
+    await _ensure_sqlite_authnz_ready_if_test_mode()
+    await refresh_llm_provider_overrides()
+    override = get_llm_provider_override(provider)
+    if not override:
+        raise HTTPException(status_code=404, detail="Provider override not found")
+    return _build_llm_provider_override_response(override)
+
+
+@router.put(
+    "/llm/providers/overrides/{provider}",
+    response_model=LLMProviderOverrideResponse,
+    dependencies=[Depends(check_rate_limit)],
+)
+async def admin_upsert_llm_provider_override(
+    provider: str,
+    payload: LLMProviderOverrideRequest,
+) -> LLMProviderOverrideResponse:
+    await _ensure_sqlite_authnz_ready_if_test_mode()
+    provider_norm = normalize_provider_name(provider)
+
+    if (
+        payload.is_enabled is None
+        and payload.allowed_models is None
+        and payload.config is None
+        and payload.api_key is None
+        and payload.credential_fields is None
+        and not payload.clear_api_key
+    ):
+        raise HTTPException(status_code=400, detail="No override fields supplied")
+
+    repo = await _get_llm_provider_overrides_repo()
+    existing = await repo.fetch_override(provider_norm)
+    is_enabled = existing.get("is_enabled") if existing else None
+    allowed_models_json = existing.get("allowed_models") if existing else None
+    config_json = existing.get("config_json") if existing else None
+    secret_blob = existing.get("secret_blob") if existing else None
+    api_key_hint = existing.get("api_key_hint") if existing else None
+
+    if payload.is_enabled is not None:
+        is_enabled = payload.is_enabled
+
+    if payload.allowed_models is not None:
+        normalized_models = _normalize_allowed_models(payload.allowed_models)
+        allowed_models_json = json.dumps(normalized_models) if normalized_models else None
+
+    if payload.config is not None:
+        if not isinstance(payload.config, dict):
+            raise HTTPException(status_code=400, detail="config must be an object")
+        config_json = json.dumps(payload.config) if payload.config else None
+
+    credential_fields: Optional[Dict[str, Any]] = None
+    if payload.credential_fields is not None:
+        try:
+            credential_fields = validate_credential_fields(provider_norm, payload.credential_fields)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if payload.clear_api_key:
+        secret_blob = None
+        api_key_hint = None
+
+    if payload.api_key is not None:
+        api_key = payload.api_key.strip()
+        if not api_key:
+            raise HTTPException(status_code=400, detail="api_key cannot be empty")
+
+        if credential_fields is None and secret_blob:
+            try:
+                payload_existing = decrypt_byok_payload(loads_envelope(secret_blob))
+                existing_fields = payload_existing.get("credential_fields")
+                if isinstance(existing_fields, dict):
+                    credential_fields = existing_fields
+            except Exception:
+                credential_fields = credential_fields or None
+
+        secret_payload = build_secret_payload(api_key, credential_fields or None)
+        try:
+            envelope = encrypt_byok_payload(secret_payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail="BYOK encryption is not configured") from exc
+        secret_blob = dumps_envelope(envelope)
+        api_key_hint = key_hint_for_api_key(api_key)
+    elif credential_fields is not None:
+        if not secret_blob:
+            raise HTTPException(status_code=400, detail="credential_fields require an existing api_key")
+        try:
+            payload_existing = decrypt_byok_payload(loads_envelope(secret_blob))
+            existing_key = payload_existing.get("api_key")
+            if not existing_key:
+                raise ValueError("Existing api_key is missing")
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Failed to load existing api_key") from exc
+        secret_payload = build_secret_payload(existing_key, credential_fields or None)
+        try:
+            envelope = encrypt_byok_payload(secret_payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail="BYOK encryption is not configured") from exc
+        secret_blob = dumps_envelope(envelope)
+        api_key_hint = key_hint_for_api_key(existing_key)
+
+    now = datetime.now(timezone.utc)
+    try:
+        await repo.upsert_override(
+            provider=provider_norm,
+            is_enabled=is_enabled,
+            allowed_models=allowed_models_json,
+            config_json=config_json,
+            secret_blob=secret_blob,
+            api_key_hint=api_key_hint,
+            updated_at=now,
+        )
+    except Exception as exc:
+        logger.error("Provider override upsert failed for provider=%s: %s", provider_norm, exc)
+        raise HTTPException(status_code=500, detail="Failed to store provider override") from exc
+
+    await refresh_llm_provider_overrides()
+    override = get_llm_provider_override(provider_norm)
+    if not override:
+        raise HTTPException(status_code=500, detail="Failed to load provider override")
+    return _build_llm_provider_override_response(override)
+
+
+@router.delete(
+    "/llm/providers/overrides/{provider}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(check_rate_limit)],
+)
+async def admin_delete_llm_provider_override(provider: str) -> None:
+    await _ensure_sqlite_authnz_ready_if_test_mode()
+    repo = await _get_llm_provider_overrides_repo()
+    provider_norm = normalize_provider_name(provider)
+    try:
+        deleted = await repo.delete_override(provider_norm)
+    except Exception as exc:
+        logger.error("Provider override delete failed for provider=%s: %s", provider_norm, exc)
+        raise HTTPException(status_code=500, detail="Failed to delete provider override") from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Provider override not found")
+    await refresh_llm_provider_overrides()
+
+
+@router.post(
+    "/llm/providers/test",
+    response_model=LLMProviderTestResponse,
+    dependencies=[Depends(check_rate_limit)],
+)
+async def admin_test_llm_provider(payload: LLMProviderTestRequest) -> LLMProviderTestResponse:
+    provider_norm = normalize_provider_name(payload.provider)
+    await refresh_llm_provider_overrides()
+
+    api_key = (payload.api_key or "").strip()
+    credential_fields = payload.credential_fields
+    model = payload.model
+
+    if payload.use_override and (not api_key or credential_fields is None or model is None):
+        override = get_llm_provider_override(provider_norm)
+        if override:
+            if not api_key:
+                api_key = override.api_key or api_key
+            if credential_fields is None:
+                credential_fields = override.credential_fields or None
+            if model is None:
+                model = override.config.get("default_model")
+
+    if not api_key:
+        raise HTTPException(status_code=400, detail="api_key is required")
+
+    if credential_fields is not None:
+        try:
+            credential_fields = validate_credential_fields(provider_norm, credential_fields)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        model_used = await test_provider_credentials(
+            provider=provider_norm,
+            api_key=api_key,
+            credential_fields=credential_fields,
+            model=model,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ChatAPIError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Provider test call failed") from exc
+
+    return LLMProviderTestResponse(
+        provider=provider_norm,
+        status="valid",
+        model=model_used,
+    )
+
+
 def _get_kanban_db_for_user_id(user_id: int) -> KanbanDB:
     db_path = DatabasePaths.get_kanban_db_path(user_id)
     return KanbanDB(db_path=str(db_path), user_id=str(user_id))
@@ -787,8 +1487,10 @@ def _get_kanban_db_for_user_id(user_id: int) -> KanbanDB:
 async def admin_kanban_fts_maintenance(
     action: Literal["optimize", "rebuild"],
     user_id: int = Query(..., ge=1),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> KanbanFtsMaintenanceResponse:
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
         db = _get_kanban_db_for_user_id(user_id)
         if action == "rebuild":
             db.rebuild_fts()
@@ -827,9 +1529,11 @@ async def admin_create_org(payload: OrganizationCreateRequest) -> OrganizationRe
 @router.get("/orgs")
 async def admin_list_orgs(
     request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     q: Optional[str] = Query(None),
+    org_id: Optional[int] = Query(None),
 ) -> Any:
     """List organizations.
 
@@ -844,11 +1548,32 @@ async def admin_list_orgs(
         wants_wrapper = any(k in qp for k in ("limit", "offset", "q"))
 
         # Ask service for rows and optionally total
-        result = await list_organizations(limit=limit, offset=offset, q=q, with_total=wants_wrapper)  # type: ignore[assignment]
+        org_ids = await _get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
+
+        result = await list_organizations(
+            limit=limit,
+            offset=offset,
+            q=q,
+            org_ids=org_ids,
+            with_total=wants_wrapper,
+        )
         if wants_wrapper:
-            rows, total = result  # type: ignore[misc]
+            if not isinstance(result, tuple) or len(result) != 2:
+                logger.error(
+                    f"list_organizations returned unexpected format: {type(result).__name__}"
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to list organizations",
+                )
+            rows, total = result
         else:
-            rows = result  # type: ignore[assignment]
+            rows = result[0] if isinstance(result, tuple) else result
             total = 0
         items = [OrganizationResponse(**r).model_dump() for r in rows]
 
@@ -863,14 +1588,21 @@ async def admin_list_orgs(
             }
         # Raw list for legacy/simple callers
         return items
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to list organizations: {e}")
         raise HTTPException(status_code=500, detail="Failed to list organizations")
 
 
 @router.post("/orgs/{org_id}/teams", response_model=TeamResponse)
-async def admin_create_team(org_id: int, payload: TeamCreateRequest) -> TeamResponse:
+async def admin_create_team(
+    org_id: int,
+    payload: TeamCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> TeamResponse:
     try:
+        await _enforce_admin_org_access(principal, org_id, require_admin=True)
         # CI/pytest (SQLite) guard: ensure migrations before team creation
         await _ensure_sqlite_authnz_ready_if_test_mode()
         row = await create_team(org_id=org_id, name=payload.name, slug=payload.slug, description=payload.description)
@@ -883,8 +1615,15 @@ async def admin_create_team(org_id: int, payload: TeamCreateRequest) -> TeamResp
 
 
 @router.get("/orgs/{org_id}/teams", response_model=List[TeamResponse])
-async def admin_list_teams(org_id: int, limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0), db=Depends(get_db_transaction)) -> list[TeamResponse]:
+async def admin_list_teams(
+    org_id: int,
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> list[TeamResponse]:
     try:
+        await _enforce_admin_org_access(principal, org_id, require_admin=True)
         rows = await svc_list_teams_by_org(db, org_id, limit, offset)
         return [TeamResponse(**r) for r in rows]
     except Exception as e:
@@ -892,10 +1631,26 @@ async def admin_list_teams(org_id: int, limit: int = Query(100, ge=1, le=1000), 
         raise HTTPException(status_code=500, detail="Failed to list teams")
 
 
+@router.get("/teams/{team_id}", response_model=TeamResponse)
+async def admin_get_team(
+    team_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> TeamResponse:
+    try:
+        team = await _get_scoped_team(team_id, principal, require_admin=True)
+        return TeamResponse(**team)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch team {team_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch team") from e
+
+
 @router.patch("/orgs/{org_id}/watchlists/settings", response_model=OrganizationWatchlistsSettingsResponse)
 async def admin_update_org_watchlists_settings(
     org_id: int,
     payload: OrganizationWatchlistsSettingsUpdate,
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction),
 ):
     """Update watchlists-related organization settings (metadata).
@@ -904,6 +1659,7 @@ async def admin_update_org_watchlists_settings(
       - require_include_default: default include-only gating for jobs in this org
     """
     try:
+        await _enforce_admin_org_access(principal, org_id, require_admin=True)
         # Fetch existing metadata for this org (works for both backends)
         if hasattr(db, "fetchrow"):
             row = await db.fetchrow("SELECT metadata FROM organizations WHERE id = $1", org_id)
@@ -951,9 +1707,14 @@ async def admin_update_org_watchlists_settings(
 
 
 @router.get("/orgs/{org_id}/watchlists/settings", response_model=OrganizationWatchlistsSettingsResponse)
-async def admin_get_org_watchlists_settings(org_id: int, db=Depends(get_db_transaction)) -> OrganizationWatchlistsSettingsResponse:
+async def admin_get_org_watchlists_settings(
+    org_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> OrganizationWatchlistsSettingsResponse:
     """Fetch watchlists-related organization settings (from metadata)."""
     try:
+        await _enforce_admin_org_access(principal, org_id, require_admin=True)
         if hasattr(db, "fetchrow"):
             row = await db.fetchrow("SELECT metadata FROM organizations WHERE id = $1", org_id)
             meta_raw = row.get("metadata") if row else None
@@ -984,8 +1745,14 @@ async def admin_get_org_watchlists_settings(org_id: int, db=Depends(get_db_trans
 
 
 @router.post("/teams/{team_id}/members", response_model=TeamMemberResponse)
-async def admin_add_team_member(team_id: int, payload: TeamMemberAddRequest, request: Request) -> TeamMemberResponse:
+async def admin_add_team_member(
+    team_id: int,
+    payload: TeamMemberAddRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> TeamMemberResponse:
     try:
+        await _get_scoped_team(team_id, principal, require_admin=True)
         row = await add_team_member(team_id=team_id, user_id=payload.user_id, role=payload.role or 'member')
         # Best-effort audit
         try:
@@ -993,28 +1760,34 @@ async def admin_add_team_member(team_id: int, payload: TeamMemberAddRequest, req
             if isinstance(actor_id, int):
                 from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user
                 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User as _User
-                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+                    get_audit_service_for_user,
+                    get_or_create_audit_service_for_user_id,
+                )
                 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
                 _ud = await _get_user(actor_id)
+                _svc = None
                 if _ud:
                     _user = _User(**_ud)
                     _svc = await get_audit_service_for_user(_user)
-                    _ctx = AuditContext(
-                        user_id=str(actor_id),
-                        ip_address=(request.client.host if request.client else None),
-                        user_agent=request.headers.get('user-agent'),
-                        endpoint=str(request.url.path),
-                        method=request.method,
-                    )
-                    await _svc.log_event(
-                        event_type=AuditEventType.DATA_WRITE,
-                        category=AuditEventCategory.AUTHORIZATION,
-                        context=_ctx,
-                        resource_type='team',
-                        resource_id=str(team_id),
-                        action='team_member.add',
-                        metadata={'target_user_id': payload.user_id, 'role': payload.role or 'member'}
-                    )
+                if _svc is None:
+                    _svc = await get_or_create_audit_service_for_user_id(int(actor_id))
+                _ctx = AuditContext(
+                    user_id=str(actor_id),
+                    ip_address=(request.client.host if request.client else None),
+                    user_agent=request.headers.get('user-agent'),
+                    endpoint=str(request.url.path),
+                    method=request.method,
+                )
+                await _svc.log_event(
+                    event_type=AuditEventType.DATA_WRITE,
+                    category=AuditEventCategory.AUTHORIZATION,
+                    context=_ctx,
+                    resource_type='team',
+                    resource_id=str(team_id),
+                    action='team_member.add',
+                    metadata={'target_user_id': payload.user_id, 'role': payload.role or 'member'}
+                )
         except Exception as _e:
             logger.debug(f"Audit (team member add) skipped/failed: {_e}")
         return TeamMemberResponse(**row)
@@ -1024,8 +1797,12 @@ async def admin_add_team_member(team_id: int, payload: TeamMemberAddRequest, req
 
 
 @router.get("/teams/{team_id}/members", response_model=List[TeamMemberResponse])
-async def admin_list_team_members(team_id: int) -> list[TeamMemberResponse]:
+async def admin_list_team_members(
+    team_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> list[TeamMemberResponse]:
     try:
+        await _get_scoped_team(team_id, principal, require_admin=True)
         rows = await list_team_members(team_id)
         return [TeamMemberResponse(**r) for r in rows]
     except Exception as e:
@@ -1034,9 +1811,15 @@ async def admin_list_team_members(team_id: int) -> list[TeamMemberResponse]:
 
 
 @router.delete("/teams/{team_id}/members/{user_id}")
-async def admin_remove_team_member(team_id: int, user_id: int, request: Request) -> Dict[str, Any]:
+async def admin_remove_team_member(
+    team_id: int,
+    user_id: int,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> Dict[str, Any]:
     """Remove a user from a team (admin)."""
     try:
+        await _get_scoped_team(team_id, principal, require_admin=True)
         res = await remove_team_member(team_id=team_id, user_id=user_id)
         if not res.get("removed"):
             # Even if delete didn't error, treat as not found when no rows affected
@@ -1048,28 +1831,34 @@ async def admin_remove_team_member(team_id: int, user_id: int, request: Request)
             if isinstance(actor_id, int):
                 from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user
                 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User as _User
-                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+                    get_audit_service_for_user,
+                    get_or_create_audit_service_for_user_id,
+                )
                 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
                 _ud = await _get_user(actor_id)
+                _svc = None
                 if _ud:
                     _user = _User(**_ud)
                     _svc = await get_audit_service_for_user(_user)
-                    _ctx = AuditContext(
-                        user_id=str(actor_id),
-                        ip_address=(request.client.host if request.client else None),
-                        user_agent=request.headers.get('user-agent'),
-                        endpoint=str(request.url.path),
-                        method=request.method,
-                    )
-                    await _svc.log_event(
-                        event_type=AuditEventType.DATA_DELETE,
-                        category=AuditEventCategory.AUTHORIZATION,
-                        context=_ctx,
-                        resource_type='team',
-                        resource_id=str(team_id),
-                        action='team_member.remove',
-                        metadata={'target_user_id': user_id}
-                    )
+                if _svc is None:
+                    _svc = await get_or_create_audit_service_for_user_id(int(actor_id))
+                _ctx = AuditContext(
+                    user_id=str(actor_id),
+                    ip_address=(request.client.host if request.client else None),
+                    user_agent=request.headers.get('user-agent'),
+                    endpoint=str(request.url.path),
+                    method=request.method,
+                )
+                await _svc.log_event(
+                    event_type=AuditEventType.DATA_DELETE,
+                    category=AuditEventCategory.AUTHORIZATION,
+                    context=_ctx,
+                    resource_type='team',
+                    resource_id=str(team_id),
+                    action='team_member.remove',
+                    metadata={'target_user_id': user_id}
+                )
         except Exception as _e:
             logger.debug(f"Audit (team member remove) skipped/failed: {_e}")
         return {"message": "Team member removed", **res}
@@ -1083,8 +1872,14 @@ async def admin_remove_team_member(team_id: int, user_id: int, request: Request)
 # ============================
 
 @router.post("/orgs/{org_id}/members", response_model=OrgMemberResponse)
-async def admin_add_org_member(org_id: int, payload: OrgMemberAddRequest, request: Request) -> OrgMemberResponse:
+async def admin_add_org_member(
+    org_id: int,
+    payload: OrgMemberAddRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> OrgMemberResponse:
     try:
+        await _enforce_admin_org_access(principal, org_id, require_admin=True)
         row = await add_org_member(org_id=org_id, user_id=payload.user_id, role=payload.role or 'member')
         # Best-effort audit
         try:
@@ -1092,28 +1887,34 @@ async def admin_add_org_member(org_id: int, payload: OrgMemberAddRequest, reques
             if isinstance(actor_id, int):
                 from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user
                 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User as _User
-                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+                    get_audit_service_for_user,
+                    get_or_create_audit_service_for_user_id,
+                )
                 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
                 _ud = await _get_user(actor_id)
+                _svc = None
                 if _ud:
                     _user = _User(**_ud)
                     _svc = await get_audit_service_for_user(_user)
-                    _ctx = AuditContext(
-                        user_id=str(actor_id),
-                        ip_address=(request.client.host if request.client else None),
-                        user_agent=request.headers.get('user-agent'),
-                        endpoint=str(request.url.path),
-                        method=request.method,
-                    )
-                    await _svc.log_event(
-                        event_type=AuditEventType.DATA_WRITE,
-                        category=AuditEventCategory.AUTHORIZATION,
-                        context=_ctx,
-                        resource_type='organization',
-                        resource_id=str(org_id),
-                        action='org_member.add',
-                        metadata={'target_user_id': payload.user_id, 'role': payload.role or 'member'}
-                    )
+                if _svc is None:
+                    _svc = await get_or_create_audit_service_for_user_id(int(actor_id))
+                _ctx = AuditContext(
+                    user_id=str(actor_id),
+                    ip_address=(request.client.host if request.client else None),
+                    user_agent=request.headers.get('user-agent'),
+                    endpoint=str(request.url.path),
+                    method=request.method,
+                )
+                await _svc.log_event(
+                    event_type=AuditEventType.DATA_WRITE,
+                    category=AuditEventCategory.AUTHORIZATION,
+                    context=_ctx,
+                    resource_type='organization',
+                    resource_id=str(org_id),
+                    action='org_member.add',
+                    metadata={'target_user_id': payload.user_id, 'role': payload.role or 'member'}
+                )
         except Exception as _e:
             logger.debug(f"Audit (org member add) skipped/failed: {_e}")
         return OrgMemberResponse(**row)
@@ -1129,8 +1930,10 @@ async def admin_list_org_members(
     offset: int = Query(0, ge=0),
     role: Optional[str] = None,
     status: Optional[str] = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> list[OrgMemberListItem]:
     try:
+        await _enforce_admin_org_access(principal, org_id, require_admin=True)
         rows = await list_org_members(org_id=org_id, limit=limit, offset=offset, role=role, status=status)
         out: list[OrgMemberListItem] = []
         for r in rows:
@@ -1149,8 +1952,14 @@ async def admin_list_org_members(
 
 
 @router.delete("/orgs/{org_id}/members/{user_id}")
-async def admin_remove_org_member(org_id: int, user_id: int, request: Request) -> Dict[str, Any]:
+async def admin_remove_org_member(
+    org_id: int,
+    user_id: int,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> Dict[str, Any]:
     try:
+        await _enforce_admin_org_access(principal, org_id, require_admin=True)
         res = await remove_org_member(org_id=org_id, user_id=user_id)
         if res.get("error") == "owner_required":
             raise HTTPException(
@@ -1165,28 +1974,34 @@ async def admin_remove_org_member(org_id: int, user_id: int, request: Request) -
             if isinstance(actor_id, int):
                 from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user
                 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User as _User
-                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+                    get_audit_service_for_user,
+                    get_or_create_audit_service_for_user_id,
+                )
                 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
                 _ud = await _get_user(actor_id)
+                _svc = None
                 if _ud:
                     _user = _User(**_ud)
                     _svc = await get_audit_service_for_user(_user)
-                    _ctx = AuditContext(
-                        user_id=str(actor_id),
-                        ip_address=(request.client.host if request.client else None),
-                        user_agent=request.headers.get('user-agent'),
-                        endpoint=str(request.url.path),
-                        method=request.method,
-                    )
-                    await _svc.log_event(
-                        event_type=AuditEventType.DATA_DELETE,
-                        category=AuditEventCategory.AUTHORIZATION,
-                        context=_ctx,
-                        resource_type='organization',
-                        resource_id=str(org_id),
-                        action='org_member.remove',
-                        metadata={'target_user_id': user_id}
-                    )
+                if _svc is None:
+                    _svc = await get_or_create_audit_service_for_user_id(int(actor_id))
+                _ctx = AuditContext(
+                    user_id=str(actor_id),
+                    ip_address=(request.client.host if request.client else None),
+                    user_agent=request.headers.get('user-agent'),
+                    endpoint=str(request.url.path),
+                    method=request.method,
+                )
+                await _svc.log_event(
+                    event_type=AuditEventType.DATA_DELETE,
+                    category=AuditEventCategory.AUTHORIZATION,
+                    context=_ctx,
+                    resource_type='organization',
+                    resource_id=str(org_id),
+                    action='org_member.remove',
+                    metadata={'target_user_id': user_id}
+                )
         except Exception as _e:
             logger.debug(f"Audit (org member remove) skipped/failed: {_e}")
         return {"message": "Org member removed", **res}
@@ -1198,8 +2013,15 @@ async def admin_remove_org_member(org_id: int, user_id: int, request: Request) -
 
 
 @router.patch("/orgs/{org_id}/members/{user_id}", response_model=OrgMemberResponse)
-async def admin_update_org_member_role(org_id: int, user_id: int, payload: OrgMemberRoleUpdateRequest, request: Request) -> OrgMemberResponse:
+async def admin_update_org_member_role(
+    org_id: int,
+    user_id: int,
+    payload: OrgMemberRoleUpdateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> OrgMemberResponse:
     try:
+        await _enforce_admin_org_access(principal, org_id, require_admin=True)
         row = await update_org_member_role(org_id=org_id, user_id=user_id, role=payload.role)
         if not row:
             raise HTTPException(status_code=404, detail="Org membership not found")
@@ -1214,28 +2036,34 @@ async def admin_update_org_member_role(org_id: int, user_id: int, payload: OrgMe
             if isinstance(actor_id, int):
                 from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user
                 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User as _User
-                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+                from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+                    get_audit_service_for_user,
+                    get_or_create_audit_service_for_user_id,
+                )
                 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
                 _ud = await _get_user(actor_id)
+                _svc = None
                 if _ud:
                     _user = _User(**_ud)
                     _svc = await get_audit_service_for_user(_user)
-                    _ctx = AuditContext(
-                        user_id=str(actor_id),
-                        ip_address=(request.client.host if request.client else None),
-                        user_agent=request.headers.get('user-agent'),
-                        endpoint=str(request.url.path),
-                        method=request.method,
-                    )
-                    await _svc.log_event(
-                        event_type=AuditEventType.DATA_UPDATE,
-                        category=AuditEventCategory.AUTHORIZATION,
-                        context=_ctx,
-                        resource_type='organization',
-                        resource_id=str(org_id),
-                        action='org_member.update',
-                        metadata={'target_user_id': user_id, 'new_role': payload.role}
-                    )
+                if _svc is None:
+                    _svc = await get_or_create_audit_service_for_user_id(int(actor_id))
+                _ctx = AuditContext(
+                    user_id=str(actor_id),
+                    ip_address=(request.client.host if request.client else None),
+                    user_agent=request.headers.get('user-agent'),
+                    endpoint=str(request.url.path),
+                    method=request.method,
+                )
+                await _svc.log_event(
+                    event_type=AuditEventType.DATA_UPDATE,
+                    category=AuditEventCategory.AUTHORIZATION,
+                    context=_ctx,
+                    resource_type='organization',
+                    resource_id=str(org_id),
+                    action='org_member.update',
+                    metadata={'target_user_id': user_id, 'new_role': payload.role}
+                )
         except Exception as _e:
             logger.debug(f"Audit (org member role update) skipped/failed: {_e}")
         return OrgMemberResponse(**row)
@@ -1247,8 +2075,12 @@ async def admin_update_org_member_role(org_id: int, user_id: int, payload: OrgMe
 
 
 @router.get("/users/{user_id}/org-memberships", response_model=List[OrgMembershipItem])
-async def admin_list_user_org_memberships(user_id: int) -> list[OrgMembershipItem]:
+async def admin_list_user_org_memberships(
+    user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> list[OrgMembershipItem]:
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
         rows = await list_org_memberships_for_user(user_id)
         return [OrgMembershipItem(**r) for r in rows]
     except Exception as e:
@@ -1256,8 +2088,19 @@ async def admin_list_user_org_memberships(user_id: int) -> list[OrgMembershipIte
         raise HTTPException(status_code=500, detail="Failed to list org memberships")
 
 @router.post("/users/{user_id}/virtual-keys")
-async def admin_create_virtual_key(user_id: int, payload: VirtualKeyCreateRequest) -> Dict[str, Any]:
+async def admin_create_virtual_key(
+    user_id: int,
+    payload: VirtualKeyCreateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> Dict[str, Any]:
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
+        if payload.org_id is not None:
+            await _enforce_admin_org_access(principal, payload.org_id, require_admin=True)
+        if payload.team_id is not None:
+            team = await _get_scoped_team(payload.team_id, principal, require_admin=True)
+            if payload.org_id is not None and int(team.get("org_id")) != int(payload.org_id):
+                raise HTTPException(status_code=400, detail="team_id does not belong to org_id")
         api_mgr = await get_api_key_manager()
         result = await api_mgr.create_virtual_key(
             user_id=user_id,
@@ -1285,8 +2128,13 @@ async def admin_create_virtual_key(user_id: int, payload: VirtualKeyCreateReques
 
 
 @router.get("/users/{user_id}/virtual-keys", response_model=List[APIKeyMetadata])
-async def admin_list_virtual_keys(user_id: int, db=Depends(get_db_transaction)) -> list[APIKeyMetadata]:
+async def admin_list_virtual_keys(
+    user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> list[APIKeyMetadata]:
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
         wanted = {
             'id','key_prefix','name','description','scope','status','created_at','expires_at','usage_count','last_used_at','last_used_ip'
         }
@@ -1314,6 +2162,7 @@ async def admin_list_virtual_keys(user_id: int, db=Depends(get_db_transaction)) 
 @router.get("/api-keys/{key_id}/audit-log", response_model=APIKeyAuditListResponse)
 async def admin_get_api_key_audit_log(
     key_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db=Depends(get_db_transaction)
@@ -1321,6 +2170,15 @@ async def admin_get_api_key_audit_log(
     """Get audit log entries for a specific API key (admin)."""
     try:
         is_pg = await is_postgres_backend()
+        if is_pg:
+            key_owner = await db.fetchval("SELECT user_id FROM api_keys WHERE id = $1", key_id)
+        else:
+            cur = await db.execute("SELECT user_id FROM api_keys WHERE id = ?", (key_id,))
+            row = await cur.fetchone()
+            key_owner = row[0] if row else None
+        if key_owner is None:
+            raise HTTPException(status_code=404, detail="API key not found")
+        await _enforce_admin_user_scope(principal, int(key_owner), require_hierarchy=False)
         if is_pg:
             rows = await db.fetch(
                 """
@@ -1450,6 +2308,7 @@ async def set_notes_title_settings(payload: NotesTitleSettingsUpdate) -> Dict[st
 @router.get("/users/{user_id}")
 async def get_user_details(
     user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> Dict[str, Any]:
     """
     Get detailed information about a specific user.
@@ -1464,6 +2323,8 @@ async def get_user_details(
         User details excluding sensitive fields (e.g., password_hash)
     """
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
+
         repo = await AuthnzUsersRepo.from_pool()
         user = await repo.get_user_by_id(user_id)
         if not user:
@@ -1480,6 +2341,8 @@ async def get_user_details(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"User {user_id} not found",
         ) from err
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to get user {user_id}: {e}")
         raise HTTPException(
@@ -1492,6 +2355,7 @@ async def get_user_details(
 async def update_user(
     user_id: int,
     request: UserUpdateRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction)
 ) -> Dict[str, str]:
     """
@@ -1505,6 +2369,8 @@ async def update_user(
         Success message
     """
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
+
         is_pg = await is_postgres_backend()
         # Build update query dynamically
         updates = []
@@ -1567,15 +2433,27 @@ async def update_user(
 
         # Execute update
         if is_pg:
-            await db.execute(query, *params)
+            row = await db.fetchrow(query + " RETURNING id", *params)
+            if not row:
+                raise UserNotFoundError(f"User {user_id}")
         else:
-            await db.execute(query, params)
+            cursor = await db.execute(query, params)
+            affected = int(getattr(cursor, "rowcount", 0) or 0)
+            if affected == 0:
+                cursor = await db.execute("SELECT 1 FROM users WHERE id = ?", (user_id,))
+                if not await cursor.fetchone():
+                    raise UserNotFoundError(f"User {user_id}")
             await db.commit()
 
         logger.info(f"Admin updated user {user_id}")
 
         return {"message": f"User {user_id} updated successfully"}
 
+    except UserNotFoundError as err:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User {user_id} not found",
+        ) from err
     except HTTPException:
         raise
     except Exception as e:
@@ -1584,6 +2462,108 @@ async def update_user(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update user"
         )
+
+
+@router.get("/users/{user_id}/sessions", response_model=List[SessionResponse])
+async def admin_list_user_sessions(
+    user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    session_manager=Depends(get_session_manager_dep),
+) -> List[SessionResponse]:
+    """List active sessions for a user (admin scope)."""
+    try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
+        sessions = await session_manager.get_user_sessions(user_id)
+        return [
+            SessionResponse(
+                id=session["id"],
+                ip_address=session.get("ip_address"),
+                user_agent=session.get("user_agent"),
+                created_at=session["created_at"],
+                last_activity=session["last_activity"],
+                expires_at=session["expires_at"],
+            )
+            for session in sessions
+        ]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to list sessions for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list sessions")
+
+
+@router.delete("/users/{user_id}/sessions/{session_id}", response_model=MessageResponse)
+async def admin_revoke_user_session(
+    user_id: int,
+    session_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    session_manager=Depends(get_session_manager_dep),
+) -> MessageResponse:
+    """Revoke a specific session for a user (admin scope)."""
+    try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
+        await session_manager.revoke_session(session_id=session_id, revoked_by=principal.user_id)
+        return MessageResponse(message="Session revoked")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to revoke session {session_id} for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to revoke session")
+
+
+@router.post("/users/{user_id}/sessions/revoke-all", response_model=MessageResponse)
+async def admin_revoke_all_user_sessions(
+    user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    session_manager=Depends(get_session_manager_dep),
+) -> MessageResponse:
+    """Revoke all sessions for a user (admin scope)."""
+    try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
+        await session_manager.revoke_all_user_sessions(user_id=user_id)
+        return MessageResponse(message="All sessions revoked")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to revoke all sessions for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to revoke sessions")
+
+
+@router.get("/users/{user_id}/mfa", response_model=Dict[str, Any])
+async def admin_get_user_mfa_status(
+    user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> Dict[str, Any]:
+    """Fetch MFA status for a user (admin scope)."""
+    try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
+        mfa_service = get_mfa_service()
+        return await mfa_service.get_user_mfa_status(user_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch MFA status for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch MFA status")
+
+
+@router.post("/users/{user_id}/mfa/disable", response_model=MessageResponse)
+async def admin_disable_user_mfa(
+    user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> MessageResponse:
+    """Disable MFA for a user (admin scope)."""
+    try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
+        mfa_service = get_mfa_service()
+        success = await mfa_service.disable_mfa(user_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="MFA not enabled")
+        return MessageResponse(message="MFA disabled")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to disable MFA for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to disable MFA")
 
 
 #######################################################################################################################
@@ -2297,8 +3277,12 @@ async def revoke_permission_from_role(role_id: int, permission_id: int, db=Depen
 
 
 @router.get("/users/{user_id}/roles", response_model=UserRoleListResponse)
-async def get_user_roles_admin(user_id: int) -> UserRoleListResponse:
+async def get_user_roles_admin(
+    user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> UserRoleListResponse:
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
         repo = _get_rbac_repo()
         loop = asyncio.get_event_loop()
         rows = await loop.run_in_executor(None, repo.get_user_roles, int(user_id))
@@ -2318,8 +3302,14 @@ async def get_user_roles_admin(user_id: int) -> UserRoleListResponse:
 
 
 @router.post("/users/{user_id}/roles/{role_id}")
-async def add_role_to_user(user_id: int, role_id: int, db=Depends(get_db_transaction)) -> dict:
+async def add_role_to_user(
+    user_id: int,
+    role_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> dict:
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
         is_pg = await is_postgres_backend()
         if is_pg:
             await db.execute(
@@ -2339,8 +3329,14 @@ async def add_role_to_user(user_id: int, role_id: int, db=Depends(get_db_transac
 
 
 @router.delete("/users/{user_id}/roles/{role_id}")
-async def remove_role_from_user(user_id: int, role_id: int, db=Depends(get_db_transaction)) -> dict:
+async def remove_role_from_user(
+    user_id: int,
+    role_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> dict:
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
         is_pg = await is_postgres_backend()
         if is_pg:
             await db.execute("DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2", user_id, role_id)
@@ -2354,8 +3350,12 @@ async def remove_role_from_user(user_id: int, role_id: int, db=Depends(get_db_tr
 
 
 @router.get("/users/{user_id}/overrides", response_model=UserOverridesResponse)
-async def list_user_overrides(user_id: int) -> UserOverridesResponse:
+async def list_user_overrides(
+    user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> UserOverridesResponse:
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
         repo = _get_rbac_repo()
         rows = repo.get_user_overrides(user_id=int(user_id))
         entries = [
@@ -2374,8 +3374,14 @@ async def list_user_overrides(user_id: int) -> UserOverridesResponse:
 
 
 @router.post("/users/{user_id}/overrides")
-async def upsert_user_override(user_id: int, payload: UserOverrideUpsertRequest, db=Depends(get_db_transaction)) -> dict:
+async def upsert_user_override(
+    user_id: int,
+    payload: UserOverrideUpsertRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> dict:
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
         _settings = _get_settings()
         _is_pg = await is_postgres_backend()
@@ -2450,8 +3456,14 @@ async def upsert_user_override(user_id: int, payload: UserOverrideUpsertRequest,
 
 
 @router.delete("/users/{user_id}/overrides/{permission_id}")
-async def delete_user_override(user_id: int, permission_id: int, db=Depends(get_db_transaction)) -> dict:
+async def delete_user_override(
+    user_id: int,
+    permission_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> dict:
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
         _is_pg = await is_postgres_backend()
         if _is_pg:
             await db.execute("DELETE FROM user_permissions WHERE user_id = $1 AND permission_id = $2", user_id, permission_id)
@@ -2468,7 +3480,10 @@ async def delete_user_override(user_id: int, permission_id: int, db=Depends(get_
 
 
 @router.get("/users/{user_id}/effective-permissions", response_model=EffectivePermissionsResponse)
-async def get_effective_permissions_admin(user_id: int) -> EffectivePermissionsResponse:
+async def get_effective_permissions_admin(
+    user_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> EffectivePermissionsResponse:
     """Compute effective permissions for a user.
 
     Delegates to the central RBAC helper, which in turn uses the AuthNZ
@@ -2476,6 +3491,7 @@ async def get_effective_permissions_admin(user_id: int) -> EffectivePermissionsR
     SQLite and Postgres backends share the same logic.
     """
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
         loop = asyncio.get_event_loop()
         perms = await loop.run_in_executor(None, get_effective_permissions, user_id)
         return EffectivePermissionsResponse(user_id=user_id, permissions=sorted(perms))
@@ -2626,7 +3642,10 @@ async def get_role_effective_permissions(role_id: int) -> RoleEffectivePermissio
         }
     },
 )
-async def admin_reset_rate_limit(payload: RateLimitResetRequest) -> RateLimitResetResponse:
+async def admin_reset_rate_limit(
+    payload: RateLimitResetRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> RateLimitResetResponse:
     """Reset AuthNZ rate limiter counters for the given identifier.
 
     Parameters
@@ -2682,6 +3701,19 @@ async def admin_reset_rate_limit(payload: RateLimitResetRequest) -> RateLimitRes
                 identifier = f"api:{payload.api_key_hash[:16]}"
             else:
                 raise HTTPException(status_code=400, detail="Must provide identifier or one of ip, user_id, api_key_hash, or 'kind'")
+
+    # Enforce user scoping for user-based identifiers.
+    scoped_user_id: Optional[int] = None
+    if payload.user_id is not None:
+        scoped_user_id = int(payload.user_id)
+    elif identifier and identifier.startswith("user:"):
+        raw = identifier.split("user:", 1)[-1]
+        try:
+            scoped_user_id = int(raw)
+        except ValueError:
+            scoped_user_id = None
+    if scoped_user_id is not None:
+        await _enforce_admin_user_scope(principal, scoped_user_id, require_hierarchy=True)
 
     limiter = await get_authnz_rate_limiter()
 
@@ -2810,8 +3842,14 @@ async def upsert_role_rate_limit(role_id: int, payload: RateLimitUpsertRequest, 
 
 
 @router.post("/users/{user_id}/rate-limits", response_model=RateLimitResponse)
-async def upsert_user_rate_limit(user_id: int, payload: RateLimitUpsertRequest, db=Depends(get_db_transaction)) -> RateLimitResponse:
+async def upsert_user_rate_limit(
+    user_id: int,
+    payload: RateLimitUpsertRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> RateLimitResponse:
     try:
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
         is_pg = await is_postgres_backend()
         if is_pg:
             await db.execute(
@@ -2861,6 +3899,7 @@ async def delete_user(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot delete your own account"
             )
+        await _enforce_admin_user_scope(principal, user_id, require_hierarchy=True)
 
         # Soft delete - just mark as inactive
         is_pg = await is_postgres_backend()
@@ -2896,6 +3935,68 @@ async def delete_user(
 #
 # Registration Code Management
 
+@router.get("/registration-settings", response_model=RegistrationSettingsResponse)
+async def get_registration_settings() -> RegistrationSettingsResponse:
+    """Return current registration settings."""
+    settings = get_settings()
+    profile = get_profile()
+    self_allowed = bool(settings.ENABLE_REGISTRATION)
+    if isinstance(profile, str) and profile.strip().lower() in {"local-single-user", "single_user"}:
+        self_allowed = False
+
+    return RegistrationSettingsResponse(
+        enable_registration=bool(settings.ENABLE_REGISTRATION),
+        require_registration_code=bool(settings.REQUIRE_REGISTRATION_CODE),
+        auth_mode=str(settings.AUTH_MODE) if getattr(settings, "AUTH_MODE", None) is not None else None,
+        profile=str(profile) if profile is not None else None,
+        self_registration_allowed=self_allowed,
+    )
+
+
+@router.post("/registration-settings", response_model=RegistrationSettingsResponse)
+async def update_registration_settings(
+    payload: RegistrationSettingsUpdateRequest,
+) -> RegistrationSettingsResponse:
+    """Update registration settings and refresh cached config."""
+    updates: Dict[str, Any] = {}
+    if payload.enable_registration is not None:
+        updates["enable_registration"] = payload.enable_registration
+    if payload.require_registration_code is not None:
+        updates["require_registration_code"] = payload.require_registration_code
+
+    if not updates:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No registration settings provided")
+
+    try:
+        setup_manager.update_config({"AuthNZ": updates})
+        reset_settings()
+        try:
+            await reset_registration_service()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Registration service reset failed: {}", exc)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error(f"Failed to update registration settings: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update registration settings",
+        ) from exc
+
+    settings = get_settings()
+    profile = get_profile()
+    self_allowed = bool(settings.ENABLE_REGISTRATION)
+    if isinstance(profile, str) and profile.strip().lower() in {"local-single-user", "single_user"}:
+        self_allowed = False
+
+    return RegistrationSettingsResponse(
+        enable_registration=bool(settings.ENABLE_REGISTRATION),
+        require_registration_code=bool(settings.REQUIRE_REGISTRATION_CODE),
+        auth_mode=str(settings.AUTH_MODE) if getattr(settings, "AUTH_MODE", None) is not None else None,
+        profile=str(profile) if profile is not None else None,
+        self_registration_allowed=self_allowed,
+    )
+
 @router.post("/registration-codes", response_model=RegistrationCodeResponse)
 async def create_registration_code(
     request: RegistrationCodeRequest,
@@ -2920,13 +4021,61 @@ async def create_registration_code(
 
         is_pg = await is_postgres_backend()
         creator_id = int(principal.user_id) if principal.user_id is not None else None
+        org_id = request.org_id
+        org_role = request.org_role or ("member" if org_id is not None else None)
+        team_id = request.team_id
+
+        if team_id is not None and org_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="org_id is required when team_id is provided",
+            )
+
+        if org_id is not None:
+            if is_pg:
+                org_row = await db.fetchrow("SELECT id FROM organizations WHERE id = $1", org_id)
+            else:
+                cursor = await db.execute("SELECT id FROM organizations WHERE id = ?", (org_id,))
+                org_row = await cursor.fetchone()
+            if not org_row:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Organization not found",
+                )
+
+        if team_id is not None:
+            if is_pg:
+                team_row = await db.fetchrow(
+                    "SELECT id, org_id FROM teams WHERE id = $1",
+                    team_id,
+                )
+                team_org_id = team_row["org_id"] if team_row else None
+            else:
+                cursor = await db.execute(
+                    "SELECT id, org_id FROM teams WHERE id = ?",
+                    (team_id,),
+                )
+                team_row = await cursor.fetchone()
+                team_org_id = team_row[1] if team_row else None
+            if not team_row:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Team not found",
+                )
+            if org_id is not None and team_org_id != org_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Team does not belong to the specified organization",
+                )
+
         if is_pg:
             # PostgreSQL
             result = await db.fetchrow("""
                 INSERT INTO registration_codes
-                (code, max_uses, expires_at, created_by, role_to_grant, metadata)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                RETURNING id, code, max_uses, times_used, expires_at, created_at, role_to_grant
+                (code, max_uses, expires_at, created_by, role_to_grant, metadata, org_id, org_role, team_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                RETURNING id, code, max_uses, times_used, expires_at, created_at, role_to_grant,
+                          org_id, org_role, team_id, metadata
             """,
                 code,
                 request.max_uses,
@@ -2934,13 +4083,16 @@ async def create_registration_code(
                 creator_id,
                 request.role_to_grant,
                 json.dumps(request.metadata or {}),
+                org_id,
+                org_role,
+                team_id,
             )
         else:
             # SQLite
             cursor = await db.execute("""
                 INSERT INTO registration_codes
-                (code, max_uses, expires_at, created_by, role_to_grant, metadata)
-                VALUES (?, ?, ?, ?, ?, ?)
+                (code, max_uses, expires_at, created_by, role_to_grant, metadata, org_id, org_role, team_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     code,
@@ -2949,6 +4101,9 @@ async def create_registration_code(
                     creator_id,
                     request.role_to_grant,
                     json.dumps(request.metadata or {}),
+                    org_id,
+                    org_role,
+                    team_id,
                 ),
             )
 
@@ -2957,8 +4112,13 @@ async def create_registration_code(
 
             # Fetch the created code
             cursor = await db.execute(
-                "SELECT * FROM registration_codes WHERE id = ?",
-                (code_id,)
+                """
+                SELECT id, code, max_uses, times_used, expires_at, created_at, role_to_grant,
+                       org_id, org_role, team_id, metadata
+                FROM registration_codes
+                WHERE id = ?
+                """,
+                (code_id,),
             )
             result = await cursor.fetchone()
 
@@ -2966,10 +4126,18 @@ async def create_registration_code(
 
         if isinstance(result, tuple):
             created_at = result[5]
+            metadata_value = result[10]
         else:
             created_at = result["created_at"]
+            metadata_value = result["metadata"]
         if isinstance(created_at, str):
             created_at = datetime.fromisoformat(created_at)
+
+        if isinstance(metadata_value, str):
+            try:
+                metadata_value = json.loads(metadata_value)
+            except json.JSONDecodeError:
+                metadata_value = None
 
         return RegistrationCodeResponse(
             id=result[0] if isinstance(result, tuple) else result["id"],
@@ -2979,6 +4147,10 @@ async def create_registration_code(
             expires_at=expires_at,
             created_at=created_at,
             role_to_grant=request.role_to_grant,
+            org_id=result[7] if isinstance(result, tuple) else result["org_id"],
+            org_role=result[8] if isinstance(result, tuple) else result["org_role"],
+            team_id=result[9] if isinstance(result, tuple) else result["team_id"],
+            metadata=metadata_value if metadata_value is not None else request.metadata,
         )
 
     except Exception as e:
@@ -3010,14 +4182,16 @@ async def list_registration_codes(
             if include_expired:
                 query = """
                     SELECT id, code, max_uses, times_used, expires_at,
-                           created_at, created_by, role_to_grant
+                           created_at, created_by, role_to_grant,
+                           org_id, org_role, team_id, metadata
                     FROM registration_codes
                     ORDER BY created_at DESC
                 """
             else:
                 query = """
                     SELECT id, code, max_uses, times_used, expires_at,
-                           created_at, created_by, role_to_grant
+                           created_at, created_by, role_to_grant,
+                           org_id, org_role, team_id, metadata
                     FROM registration_codes
                     WHERE expires_at > CURRENT_TIMESTAMP
                     ORDER BY created_at DESC
@@ -3028,14 +4202,16 @@ async def list_registration_codes(
             if include_expired:
                 query = """
                     SELECT id, code, max_uses, times_used, expires_at,
-                           created_at, created_by, role_to_grant
+                           created_at, created_by, role_to_grant,
+                           org_id, org_role, team_id, metadata
                     FROM registration_codes
                     ORDER BY created_at DESC
                 """
             else:
                 query = """
                     SELECT id, code, max_uses, times_used, expires_at,
-                           created_at, created_by, role_to_grant
+                           created_at, created_by, role_to_grant,
+                           org_id, org_role, team_id, metadata
                     FROM registration_codes
                     WHERE datetime(expires_at) > datetime('now')
                     ORDER BY created_at DESC
@@ -3046,8 +4222,21 @@ async def list_registration_codes(
         codes = []
         for row in rows:
             if isinstance(row, dict):
+                metadata_value = row.get("metadata")
+                if isinstance(metadata_value, str):
+                    try:
+                        metadata_value = json.loads(metadata_value)
+                    except json.JSONDecodeError:
+                        metadata_value = None
+                row["metadata"] = metadata_value
                 codes.append(row)
             else:
+                metadata_value = row[11]
+                if isinstance(metadata_value, str):
+                    try:
+                        metadata_value = json.loads(metadata_value)
+                    except json.JSONDecodeError:
+                        metadata_value = None
                 code_dict = {
                     "id": row[0],
                     "code": row[1],
@@ -3057,10 +4246,14 @@ async def list_registration_codes(
                     "created_at": row[5],
                     "created_by": row[6],
                     "role_to_grant": row[7],
+                    "org_id": row[8],
+                    "org_role": row[9],
+                    "team_id": row[10],
+                    "metadata": metadata_value,
                     "is_valid": row[3] < row[2] and (
                         row[4] > datetime.utcnow() if isinstance(row[4], datetime)
                         else datetime.fromisoformat(row[4]) > datetime.utcnow()
-                    )
+                    ),
                 }
                 codes.append(code_dict)
 
@@ -3188,6 +4381,15 @@ async def get_system_stats(
     try:
         stats = {}
 
+        def _row_to_dict(row, keys: list[str]) -> dict:
+            if row is None:
+                return {}
+            if isinstance(row, dict):
+                return row
+            if hasattr(row, "keys"):
+                return {key: row[key] for key in row.keys()}
+            return {key: row[idx] if idx < len(row) else None for idx, key in enumerate(keys)}
+
         is_pg = await is_postgres_backend()
         if is_pg:
             # PostgreSQL
@@ -3254,52 +4456,32 @@ async def get_system_stats(
                 WHERE is_active = 1 AND datetime(expires_at) > datetime('now')
             """)
             session_stats = await cursor.fetchone()
-            # Normalize Postgres rows via dict for explicit key access and casting
-            us = dict(user_stats) if user_stats is not None else {}
-            ss = dict(storage_stats) if storage_stats is not None else {}
-            se = dict(session_stats) if session_stats is not None else {}
 
-            return SystemStatsResponse(
-                users={
-                    "total": int(us.get("total_users") or 0),
-                    "active": int(us.get("active_users") or 0),
-                    "verified": int(us.get("verified_users") or 0),
-                    "admins": int(us.get("admin_users") or 0),
-                    "new_last_30d": int(us.get("new_users_30d") or 0),
-                },
-                storage={
-                    "total_used_mb": float(ss.get("total_used_mb") or 0.0),
-                    "total_quota_mb": float(ss.get("total_quota_mb") or 0.0),
-                    "average_used_mb": float(ss.get("avg_used_mb") or 0.0),
-                    "max_used_mb": float(ss.get("max_used_mb") or 0.0),
-                },
-                sessions={
-                    "active": int(se.get("active_sessions") or 0),
-                    "unique_users": int(se.get("unique_users") or 0),
-                },
-            )
+        user_keys = ["total_users", "active_users", "verified_users", "admin_users", "new_users_30d"]
+        storage_keys = ["total_used_mb", "total_quota_mb", "avg_used_mb", "max_used_mb"]
+        session_keys = ["active_sessions", "unique_users"]
+        us = _row_to_dict(user_stats, user_keys)
+        ss = _row_to_dict(storage_stats, storage_keys)
+        se = _row_to_dict(session_stats, session_keys)
 
-        # SQLite fallback path already returns tuples; keep existing casting
-
-        # Convert to response model
         return SystemStatsResponse(
             users={
-                "total": user_stats[0] or 0,
-                "active": user_stats[1] or 0,
-                "verified": user_stats[2] or 0,
-                "admins": user_stats[3] or 0,
-                "new_last_30d": user_stats[4] or 0
+                "total": int(us.get("total_users") or 0),
+                "active": int(us.get("active_users") or 0),
+                "verified": int(us.get("verified_users") or 0),
+                "admins": int(us.get("admin_users") or 0),
+                "new_last_30d": int(us.get("new_users_30d") or 0),
             },
             storage={
-                "total_used_mb": float(storage_stats[0] or 0),
-                "total_quota_mb": float(storage_stats[1] or 0),
-                "average_used_mb": float(storage_stats[2] or 0),
-                "max_used_mb": float(storage_stats[3] or 0)
+                "total_used_mb": float(ss.get("total_used_mb") or 0.0),
+                "total_quota_mb": float(ss.get("total_quota_mb") or 0.0),
+                "average_used_mb": float(ss.get("avg_used_mb") or 0.0),
+                "max_used_mb": float(ss.get("max_used_mb") or 0.0),
             },
             sessions={
-                "active": session_stats[0] or 0,
-                "unique_users": session_stats[1] or 0
-            }
+                "active": int(se.get("active_sessions") or 0),
+                "unique_users": int(se.get("unique_users") or 0),
+            },
         )
 
     except Exception as e:
@@ -3321,12 +4503,105 @@ async def get_system_stats(
         )
 
 
+@router.get("/activity", response_model=ActivitySummaryResponse)
+async def get_dashboard_activity(
+    days: int = Query(7, ge=1, le=30),
+    db=Depends(get_db_transaction),
+) -> ActivitySummaryResponse:
+    """Return recent request/user activity for the admin dashboard."""
+    today = datetime.now(timezone.utc).date()
+    start_date = today - timedelta(days=days - 1)
+    date_range = [start_date + timedelta(days=idx) for idx in range(days)]
+    activity_by_date = {
+        day: {
+            "date": day.isoformat(),
+            "requests": 0,
+            "users": 0,
+        }
+        for day in date_range
+    }
+    warnings: list[str] = []
+
+    try:
+        registry = get_metrics_registry()
+        request_values = registry.values.get("http_requests_total", [])
+        for metric_value in list(request_values):
+            try:
+                metric_day = datetime.fromtimestamp(
+                    metric_value.timestamp,
+                    timezone.utc,
+                ).date()
+            except (OSError, OverflowError, ValueError):
+                continue
+            if metric_day in activity_by_date:
+                activity_by_date[metric_day]["requests"] += int(metric_value.value or 0)
+    except Exception as exc:
+        logger.warning("Admin activity request metrics unavailable: {}", exc)
+        warnings.append("request_metrics_unavailable")
+
+    try:
+        start_dt = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
+        is_pg = await is_postgres_backend()
+        if is_pg:
+            rows = await db.fetch(
+                """
+                SELECT DATE(created_at) as day,
+                       COUNT(DISTINCT user_id) as active_users
+                FROM sessions
+                WHERE created_at >= $1
+                GROUP BY day
+                ORDER BY day
+                """,
+                start_dt,
+            )
+        else:
+            cursor = await db.execute(
+                """
+                SELECT date(created_at) as day,
+                       COUNT(DISTINCT user_id) as active_users
+                FROM sessions
+                WHERE datetime(created_at) >= datetime(?)
+                GROUP BY date(created_at)
+                ORDER BY date(created_at)
+                """,
+                (start_dt.isoformat(),),
+            )
+            rows = await cursor.fetchall()
+        for row in rows:
+            if isinstance(row, dict):
+                day_str = row.get("day")
+                active_users = row.get("active_users")
+            else:
+                day_str = row[0] if len(row) > 0 else None
+                active_users = row[1] if len(row) > 1 else None
+            if not day_str:
+                continue
+            try:
+                metric_day = datetime.fromisoformat(str(day_str)).date()
+            except ValueError:
+                continue
+            if metric_day in activity_by_date:
+                activity_by_date[metric_day]["users"] = int(active_users or 0)
+    except Exception as exc:
+        logger.warning("Admin activity user metrics unavailable: {}", exc)
+        warnings.append("user_metrics_unavailable")
+
+    points = [activity_by_date[day] for day in date_range]
+    return ActivitySummaryResponse(days=days, points=points, warnings=warnings or None)
+
+
 @router.get("/audit-log", response_model=AuditLogResponse)
 async def get_audit_log(
     user_id: Optional[int] = None,
     action: Optional[str] = None,
+    resource: Optional[str] = Query(None, description="Filter by resource type or type:id"),
+    start: Optional[str] = Query(None, description="ISO date or datetime (start)"),
+    end: Optional[str] = Query(None, description="ISO date or datetime (end)"),
     days: int = Query(7, ge=1, le=90),
     limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction)
 ) -> AuditLogResponse:
     """
@@ -3337,6 +4612,7 @@ async def get_audit_log(
         action: Filter by action type
         days: Number of days to look back
         limit: Maximum entries to return
+        offset: Number of entries to skip
 
     Returns:
         Audit log entries
@@ -3346,71 +4622,188 @@ async def get_audit_log(
         conditions = []
         params = []
         param_count = 0
+        start_dt: Optional[datetime] = None
+        end_dt: Optional[datetime] = None
+
+        def _parse_date_param(value: Optional[str], label: str, end_of_day: bool = False) -> Optional[datetime]:
+            if value is None:
+                return None
+            raw = str(value).strip()
+            if not raw:
+                return None
+            raw = raw.replace("Z", "+00:00")
+            try:
+                if re.match(r"^\d{4}-\d{2}-\d{2}$", raw):
+                    dt = datetime.fromisoformat(raw)
+                    if end_of_day:
+                        dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+                    return dt
+                return datetime.fromisoformat(raw)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Invalid {label} date format")
+
+        start_dt = _parse_date_param(start, "start")
+        end_dt = _parse_date_param(end, "end", end_of_day=True)
+        if start_dt and end_dt and start_dt > end_dt:
+            raise HTTPException(status_code=400, detail="Start date must be on or before end date")
+
+        org_ids = await _get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
+        if org_ids is not None and len(org_ids) == 0:
+            return AuditLogResponse(entries=[], total=0, limit=limit, offset=offset)
 
         if user_id:
+            await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
             param_count += 1
-            conditions.append(f"user_id = ${param_count}" if is_pg else "user_id = ?")
+            conditions.append(f"a.user_id = ${param_count}" if is_pg else "a.user_id = ?")
             params.append(user_id)
 
         if action:
             param_count += 1
-            conditions.append(f"action = ${param_count}" if is_pg else "action = ?")
+            conditions.append(f"a.action = ${param_count}" if is_pg else "a.action = ?")
             params.append(action)
 
+        if resource:
+            resource_filter = resource.strip()
+            if resource_filter:
+                if ":" in resource_filter:
+                    resource_type, resource_id = resource_filter.split(":", 1)
+                    resource_type = resource_type.strip()
+                    resource_id = resource_id.strip()
+                    if resource_type:
+                        param_count += 1
+                        conditions.append(f"a.resource_type = ${param_count}" if is_pg else "a.resource_type = ?")
+                        params.append(resource_type)
+                    if resource_id.isdigit():
+                        param_count += 1
+                        conditions.append(f"a.resource_id = ${param_count}" if is_pg else "a.resource_id = ?")
+                        params.append(int(resource_id))
+                else:
+                    param_count += 1
+                    if is_pg:
+                        conditions.append(f"a.resource_type ILIKE ${param_count}")
+                        params.append(f"%{resource_filter}%")
+                    else:
+                        conditions.append("LOWER(a.resource_type) LIKE ?")
+                        params.append(f"%{resource_filter.lower()}%")
+
         # Date filter
-        if is_pg:
-            conditions.append(f"a.created_at > CURRENT_TIMESTAMP - INTERVAL '{days} days'")
+        if start_dt or end_dt:
+            if start_dt:
+                param_count += 1
+                conditions.append(f"a.created_at >= ${param_count}" if is_pg else "datetime(a.created_at) >= datetime(?)")
+                params.append(start_dt.isoformat())
+            if end_dt:
+                param_count += 1
+                conditions.append(f"a.created_at <= ${param_count}" if is_pg else "datetime(a.created_at) <= datetime(?)")
+                params.append(end_dt.isoformat())
         else:
-            conditions.append("datetime(a.created_at) > datetime('now', ? || ' days')")
-            params.append(f"-{days}")
+            if is_pg:
+                conditions.append(f"a.created_at > CURRENT_TIMESTAMP - INTERVAL '{days} days'")
+            else:
+                conditions.append("datetime(a.created_at) > datetime('now', ? || ' days')")
+                params.append(f"-{days}")
+
+        join_clause = ""
+        if org_ids is not None:
+            join_clause = " JOIN org_members om ON om.user_id = a.user_id"
+            if is_pg:
+                param_count += 1
+                conditions.append(f"om.org_id = ANY(${param_count})")
+                params.append(org_ids)
+            else:
+                placeholders = ",".join("?" for _ in org_ids)
+                conditions.append(f"om.org_id IN ({placeholders})")
+                params.extend(org_ids)
 
         where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
 
+        def _format_resource(resource_type: Optional[str], resource_id: Optional[int]) -> Optional[str]:
+            if not resource_type and resource_id is None:
+                return None
+            if resource_type and resource_id is not None:
+                return f"{resource_type}:{resource_id}"
+            if resource_type:
+                return str(resource_type)
+            return str(resource_id)
+
         if is_pg:
             # PostgreSQL
+            count_query = f"""
+                SELECT COUNT(*)
+                FROM audit_logs a
+                {join_clause}
+                {where_clause}
+            """
+            total = await db.fetchval(count_query, *params)
             query = f"""
-                SELECT a.id, a.user_id, u.username, a.action, a.details,
+                SELECT a.id, a.user_id, u.username, a.action, a.resource_type, a.resource_id, a.details,
                        a.ip_address, a.created_at
-                FROM audit_log a
+                FROM audit_logs a
                 LEFT JOIN users u ON a.user_id = u.id
+                {join_clause}
                 {where_clause}
                 ORDER BY a.created_at DESC
                 LIMIT ${param_count + 1}
+                OFFSET ${param_count + 2}
             """
-            params.append(limit)
-            rows = await db.fetch(query, *params)
+            query_params = list(params)
+            query_params.append(limit)
+            query_params.append(offset)
+            rows = await db.fetch(query, *query_params)
         else:
             # SQLite
+            count_query = f"""
+                SELECT COUNT(*)
+                FROM audit_logs a
+                {join_clause}
+                {where_clause}
+            """
+            count_cursor = await db.execute(count_query, params)
+            count_row = await count_cursor.fetchone()
+            total = int(count_row[0]) if count_row and count_row[0] is not None else 0
             query = f"""
-                SELECT a.id, a.user_id, u.username, a.action, a.details,
+                SELECT a.id, a.user_id, u.username, a.action, a.resource_type, a.resource_id, a.details,
                        a.ip_address, a.created_at
-                FROM audit_log a
+                FROM audit_logs a
                 LEFT JOIN users u ON a.user_id = u.id
+                {join_clause}
                 {where_clause}
                 ORDER BY a.created_at DESC
                 LIMIT ?
+                OFFSET ?
             """
-            params.append(limit)
-            cursor = await db.execute(query, params)
+            query_params = list(params)
+            query_params.append(limit)
+            query_params.append(offset)
+            cursor = await db.execute(query, query_params)
             rows = await cursor.fetchall()
 
         entries = []
         for row in rows:
             if isinstance(row, dict):
+                resource_value = _format_resource(row.get("resource_type"), row.get("resource_id"))
+                row["resource"] = resource_value
                 entries.append(row)
             else:
+                resource_value = _format_resource(row[4], row[5])
                 entry = {
                     "id": row[0],
                     "user_id": row[1],
                     "username": row[2],
                     "action": row[3],
-                    "details": row[4],
-                    "ip_address": row[5],
-                    "created_at": row[6]
+                    "resource": resource_value,
+                    "details": row[6],
+                    "ip_address": row[7],
+                    "created_at": row[8]
                 }
                 entries.append(entry)
 
-        return AuditLogResponse(entries=entries)
+        return AuditLogResponse(entries=entries, total=int(total or 0), limit=limit, offset=offset)
 
     except Exception as e:
         logger.error(f"Failed to get audit log: {e}")
@@ -3418,6 +4811,752 @@ async def get_audit_log(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve audit log"
         )
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Data Ops Endpoints (Backups, Retention, Exports)
+
+_BACKUP_DATASETS = {"media", "chacha", "prompts", "evaluations", "audit", "authnz"}
+
+
+@router.get("/backups", response_model=BackupListResponse)
+async def list_backups(
+    dataset: Optional[str] = Query(None, description="Dataset key to filter"),
+    user_id: Optional[int] = Query(None, description="User ID for per-user datasets"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> BackupListResponse:
+    try:
+        if dataset and dataset not in _BACKUP_DATASETS:
+            raise HTTPException(status_code=400, detail="unknown_dataset")
+        if user_id is not None:
+            await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
+        items, total = svc_list_backup_items(
+            dataset=dataset,
+            user_id=user_id,
+            limit=limit,
+            offset=offset,
+        )
+        payload = [
+            BackupItem(
+                id=item.filename,
+                dataset=item.dataset,
+                user_id=item.user_id,
+                status="ready",
+                size_bytes=item.size_bytes,
+                created_at=item.created_at,
+            )
+            for item in items
+        ]
+        return BackupListResponse(items=payload, total=total, limit=limit, offset=offset)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to list backups: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to list backups")
+
+
+@router.post("/backups", response_model=BackupCreateResponse)
+async def create_backup(
+    payload: BackupCreateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> BackupCreateResponse:
+    try:
+        dataset = payload.dataset.strip().lower()
+        if dataset not in _BACKUP_DATASETS:
+            raise HTTPException(status_code=400, detail="unknown_dataset")
+        if payload.user_id is not None:
+            await _enforce_admin_user_scope(principal, payload.user_id, require_hierarchy=False)
+        item = svc_create_backup_snapshot(
+            dataset=dataset,
+            user_id=payload.user_id,
+            backup_type=payload.backup_type or "full",
+            max_backups=payload.max_backups,
+        )
+        await _emit_admin_audit_event(
+            request,
+            principal,
+            event_type="data.write",
+            category="system",
+            resource_type="backup",
+            resource_id=item.filename,
+            action="backup.create",
+            metadata={
+                "dataset": dataset,
+                "user_id": item.user_id,
+                "size_bytes": item.size_bytes,
+            },
+        )
+        return BackupCreateResponse(
+            item=BackupItem(
+                id=item.filename,
+                dataset=item.dataset,
+                user_id=item.user_id,
+                status="ready",
+                size_bytes=item.size_bytes,
+                created_at=item.created_at,
+            )
+        )
+    except ValueError as exc:
+        if str(exc) == "unknown_dataset":
+            raise HTTPException(status_code=400, detail="unknown_dataset") from exc
+        raise HTTPException(status_code=400, detail="invalid_backup_request") from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to create backup: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to create backup")
+
+
+@router.post("/backups/{backup_id}/restore", response_model=BackupRestoreResponse)
+async def restore_backup(
+    backup_id: str,
+    payload: BackupRestoreRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> BackupRestoreResponse:
+    if not payload.confirm:
+        raise HTTPException(status_code=400, detail="confirm_required")
+    try:
+        dataset = payload.dataset.strip().lower()
+        if dataset not in _BACKUP_DATASETS:
+            raise HTTPException(status_code=400, detail="unknown_dataset")
+        if payload.user_id is not None:
+            await _enforce_admin_user_scope(principal, payload.user_id, require_hierarchy=False)
+        result = svc_restore_backup_snapshot(
+            dataset=dataset,
+            user_id=payload.user_id,
+            backup_id=backup_id,
+        )
+        await _emit_admin_audit_event(
+            request,
+            principal,
+            event_type="data.import",
+            category="system",
+            resource_type="backup",
+            resource_id=backup_id,
+            action="backup.restore",
+            metadata={
+                "dataset": dataset,
+                "user_id": payload.user_id,
+            },
+        )
+        return BackupRestoreResponse(status="restored", message=result)
+    except ValueError as exc:
+        if str(exc) == "unknown_dataset":
+            raise HTTPException(status_code=400, detail="unknown_dataset") from exc
+        raise HTTPException(status_code=400, detail="invalid_restore_request") from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to restore backup: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to restore backup")
+
+
+@router.get("/retention-policies", response_model=RetentionPoliciesResponse)
+async def list_retention_policies(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> RetentionPoliciesResponse:
+    try:
+        del principal
+        policies = [RetentionPolicy(**item) for item in await svc_list_retention_policies()]
+        return RetentionPoliciesResponse(policies=policies)
+    except Exception as exc:
+        logger.error(f"Failed to list retention policies: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to list retention policies")
+
+
+@router.put("/retention-policies/{policy_key}", response_model=RetentionPolicy)
+async def update_retention_policy(
+    policy_key: str,
+    payload: RetentionPolicyUpdateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> RetentionPolicy:
+    try:
+        updated = await svc_update_retention_policy(policy_key, payload.days)
+        await _emit_admin_audit_event(
+            request,
+            principal,
+            event_type="config.changed",
+            category="system",
+            resource_type="retention_policy",
+            resource_id=policy_key,
+            action="retention.update",
+            metadata={"days": payload.days},
+        )
+        return RetentionPolicy(**updated)
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "unknown_policy":
+            raise HTTPException(status_code=404, detail="unknown_policy") from exc
+        if detail == "invalid_range":
+            raise HTTPException(status_code=400, detail="invalid_range") from exc
+        raise HTTPException(status_code=400, detail="invalid_retention_update") from exc
+    except Exception as exc:
+        logger.error(f"Failed to update retention policy: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to update retention policy")
+
+
+@router.get("/audit-log/export")
+async def export_audit_log(
+    user_id: Optional[int] = None,
+    action: Optional[str] = None,
+    resource: Optional[str] = Query(None, description="Filter by resource type or type:id"),
+    start: Optional[str] = Query(None, description="ISO date or datetime (start)"),
+    end: Optional[str] = Query(None, description="ISO date or datetime (end)"),
+    days: int = Query(30, ge=1, le=365),
+    limit: int = Query(10000, ge=1, le=50000),
+    offset: int = Query(0, ge=0),
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    format: str = Query("csv", pattern="^(csv|json)$"),
+    filename: Optional[str] = Query(None, description="Optional filename for Content-Disposition"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> Response:
+    audit = await get_audit_log(
+        user_id=user_id,
+        action=action,
+        resource=resource,
+        start=start,
+        end=end,
+        days=days,
+        limit=limit,
+        offset=offset,
+        org_id=org_id,
+        principal=principal,
+        db=db,
+    )
+    if format == "json":
+        content = svc_build_audit_log_json(audit.entries, total=audit.total, limit=limit, offset=offset)
+        resp = Response(content=content, media_type="application/json")
+        if not filename:
+            filename = "audit_log.json"
+    else:
+        content = svc_build_audit_log_csv(audit.entries)
+        resp = PlainTextResponse(content=content, media_type="text/csv")
+        if not filename:
+            filename = "audit_log.csv"
+    if filename:
+        safe = filename.replace("\n", " ").replace("\r", " ").replace("\"", "_")
+        resp.headers["Content-Disposition"] = f"attachment; filename=\"{safe}\""
+    return resp
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# System Ops Endpoints (Logs, Maintenance, Feature Flags, Incidents)
+
+@router.get("/system/logs", response_model=SystemLogsResponse)
+async def list_system_logs(
+    start: Optional[str] = Query(None, description="ISO date or datetime (start)"),
+    end: Optional[str] = Query(None, description="ISO date or datetime (end)"),
+    level: Optional[str] = Query(None, description="Log level (INFO, ERROR, etc.)"),
+    service: Optional[str] = Query(None, description="Logger or module filter"),
+    query: Optional[str] = Query(None, description="Substring search"),
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    user_id: Optional[int] = Query(None, description="Restrict to a specific user"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> SystemLogsResponse:
+    def _parse_date_param(value: Optional[str], label: str, end_of_day: bool = False) -> Optional[datetime]:
+        if value is None:
+            return None
+        raw = str(value).strip()
+        if not raw:
+            return None
+        raw = raw.replace("Z", "+00:00")
+        try:
+            if re.match(r"^\d{4}-\d{2}-\d{2}$", raw):
+                dt = datetime.fromisoformat(raw)
+                if end_of_day:
+                    dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+                return dt
+            return datetime.fromisoformat(raw)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid {label} date format") from exc
+
+    start_dt = _parse_date_param(start, "start")
+    end_dt = _parse_date_param(end, "end", end_of_day=True)
+    if start_dt and end_dt and start_dt > end_dt:
+        raise HTTPException(status_code=400, detail="Start date must be on or before end date")
+
+    org_ids = await _get_admin_org_ids(principal)
+    if org_id is not None:
+        if org_ids is None:
+            org_ids = [org_id]
+        else:
+            org_ids = [org_id] if org_id in org_ids else []
+    if org_ids is not None and len(org_ids) == 0:
+        return SystemLogsResponse(items=[], total=0, limit=limit, offset=offset)
+
+    items, total = query_system_logs(
+        start=start_dt,
+        end=end_dt,
+        level=level,
+        service=service,
+        query=query,
+        org_id=org_id if org_ids is None else None,
+        org_ids=org_ids,
+        user_id=user_id,
+        limit=limit,
+        offset=offset,
+    )
+    return SystemLogsResponse(
+        items=[SystemLogEntry(**item) for item in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/maintenance", response_model=MaintenanceState)
+async def get_maintenance_mode(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> MaintenanceState:
+    del principal
+    state = svc_get_maintenance_state()
+    return MaintenanceState(**state)
+
+
+@router.put("/maintenance", response_model=MaintenanceState)
+async def update_maintenance_mode(
+    payload: MaintenanceUpdateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> MaintenanceState:
+    _require_platform_admin(principal)
+    actor = principal.email or principal.username or (str(principal.user_id) if principal.user_id is not None else None)
+    state = svc_update_maintenance_state(
+        enabled=payload.enabled,
+        message=payload.message,
+        allowlist_user_ids=payload.allowlist_user_ids,
+        allowlist_emails=payload.allowlist_emails,
+        actor=actor,
+    )
+    await _emit_admin_audit_event(
+        request,
+        principal,
+        event_type="config.changed",
+        category="system",
+        resource_type="maintenance",
+        resource_id="maintenance_mode",
+        action="maintenance.update",
+        metadata={"enabled": payload.enabled},
+    )
+    return MaintenanceState(**state)
+
+
+@router.get("/feature-flags", response_model=FeatureFlagsResponse)
+async def list_feature_flags(
+    scope: Optional[str] = Query(None, description="global|org|user"),
+    org_id: Optional[int] = Query(None, description="Organization ID for org-scoped flags"),
+    user_id: Optional[int] = Query(None, description="User ID for user-scoped flags"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> FeatureFlagsResponse:
+    org_ids = await _get_admin_org_ids(principal)
+    if org_id is not None and org_ids is not None:
+        org_ids = [org_id] if org_id in org_ids else []
+    if org_ids is not None and len(org_ids) == 0:
+        return FeatureFlagsResponse(items=[], total=0)
+    try:
+        items = svc_list_feature_flags(
+            scope=scope,
+            org_id=org_id if org_ids is None else None,
+            user_id=user_id,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "invalid_scope":
+            raise HTTPException(status_code=400, detail="invalid_scope") from exc
+        raise HTTPException(status_code=400, detail="invalid_feature_flag") from exc
+    if org_ids is not None:
+        items = [item for item in items if item.get("org_id") in org_ids]
+    return FeatureFlagsResponse(items=[FeatureFlagItem(**item) for item in items], total=len(items))
+
+
+@router.put("/feature-flags/{flag_key}", response_model=FeatureFlagItem)
+async def upsert_feature_flag(
+    flag_key: str,
+    payload: FeatureFlagUpsertRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> FeatureFlagItem:
+    _require_platform_admin(principal)
+    actor = principal.email or principal.username or (str(principal.user_id) if principal.user_id is not None else None)
+    try:
+        flag = svc_upsert_feature_flag(
+            key=flag_key,
+            scope=payload.scope,
+            enabled=payload.enabled,
+            description=payload.description,
+            org_id=payload.org_id,
+            user_id=payload.user_id,
+            actor=actor,
+            note=payload.note,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail in {"invalid_scope", "missing_org_id", "missing_user_id", "invalid_key"}:
+            raise HTTPException(status_code=400, detail=detail) from exc
+        raise HTTPException(status_code=400, detail="invalid_feature_flag") from exc
+    await _emit_admin_audit_event(
+        request,
+        principal,
+        event_type="config.changed",
+        category="system",
+        resource_type="feature_flag",
+        resource_id=flag_key,
+        action="feature_flag.upsert",
+        metadata={"scope": payload.scope, "enabled": payload.enabled},
+    )
+    return FeatureFlagItem(**flag)
+
+
+@router.delete("/feature-flags/{flag_key}", response_model=MessageResponse)
+async def delete_feature_flag(
+    flag_key: str,
+    request: Request,
+    scope: str = Query(..., description="global|org|user"),
+    org_id: Optional[int] = Query(None),
+    user_id: Optional[int] = Query(None),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> MessageResponse:
+    _require_platform_admin(principal)
+    try:
+        svc_delete_feature_flag(key=flag_key, scope=scope, org_id=org_id, user_id=user_id)
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "invalid_scope":
+            raise HTTPException(status_code=400, detail="invalid_scope") from exc
+        if detail == "not_found":
+            raise HTTPException(status_code=404, detail="feature_flag_not_found") from exc
+        raise HTTPException(status_code=400, detail="invalid_feature_flag") from exc
+    if request is not None:
+        await _emit_admin_audit_event(
+            request,
+            principal,
+            event_type="config.changed",
+            category="system",
+            resource_type="feature_flag",
+            resource_id=flag_key,
+            action="feature_flag.delete",
+            metadata={"scope": scope, "org_id": org_id, "user_id": user_id},
+        )
+    return MessageResponse(message="feature_flag_deleted")
+
+
+@router.get("/incidents", response_model=IncidentListResponse)
+async def list_incidents(
+    status: Optional[str] = Query(None, description="Incident status"),
+    severity: Optional[str] = Query(None, description="Incident severity"),
+    tag: Optional[str] = Query(None, description="Filter by tag"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> IncidentListResponse:
+    del principal
+    items, total = svc_list_incidents(
+        status=status,
+        severity=severity,
+        tag=tag,
+        limit=limit,
+        offset=offset,
+    )
+    return IncidentListResponse(
+        items=[IncidentItem(**item) for item in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post("/incidents", response_model=IncidentItem)
+async def create_incident(
+    payload: IncidentCreateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> IncidentItem:
+    _require_platform_admin(principal)
+    actor = principal.email or principal.username or (str(principal.user_id) if principal.user_id is not None else None)
+    try:
+        incident = svc_create_incident(
+            title=payload.title,
+            status=payload.status,
+            severity=payload.severity,
+            summary=payload.summary,
+            tags=payload.tags,
+            actor=actor,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail in {"invalid_title", "invalid_status", "invalid_severity"}:
+            raise HTTPException(status_code=400, detail=detail) from exc
+        raise HTTPException(status_code=400, detail="invalid_incident") from exc
+    await _emit_admin_audit_event(
+        request,
+        principal,
+        event_type="ops.incident",
+        category="system",
+        resource_type="incident",
+        resource_id=incident.get("id"),
+        action="incident.create",
+        metadata={"status": incident.get("status"), "severity": incident.get("severity")},
+    )
+    return IncidentItem(**incident)
+
+
+@router.patch("/incidents/{incident_id}", response_model=IncidentItem)
+async def update_incident(
+    incident_id: str,
+    payload: IncidentUpdateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> IncidentItem:
+    _require_platform_admin(principal)
+    actor = principal.email or principal.username or (str(principal.user_id) if principal.user_id is not None else None)
+    try:
+        incident = svc_update_incident(
+            incident_id=incident_id,
+            title=payload.title,
+            status=payload.status,
+            severity=payload.severity,
+            summary=payload.summary,
+            tags=payload.tags,
+            update_message=payload.update_message,
+            actor=actor,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "not_found":
+            raise HTTPException(status_code=404, detail="incident_not_found") from exc
+        if detail in {"invalid_status", "invalid_severity"}:
+            raise HTTPException(status_code=400, detail=detail) from exc
+        raise HTTPException(status_code=400, detail="invalid_incident") from exc
+    await _emit_admin_audit_event(
+        request,
+        principal,
+        event_type="ops.incident",
+        category="system",
+        resource_type="incident",
+        resource_id=incident_id,
+        action="incident.update",
+        metadata={"status": incident.get("status"), "severity": incident.get("severity")},
+    )
+    return IncidentItem(**incident)
+
+
+@router.post("/incidents/{incident_id}/events", response_model=IncidentItem)
+async def add_incident_event(
+    incident_id: str,
+    payload: IncidentEventCreateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> IncidentItem:
+    _require_platform_admin(principal)
+    actor = principal.email or principal.username or (str(principal.user_id) if principal.user_id is not None else None)
+    try:
+        incident = svc_add_incident_event(
+            incident_id=incident_id,
+            message=payload.message,
+            actor=actor,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "invalid_message":
+            raise HTTPException(status_code=400, detail=detail) from exc
+        if detail == "not_found":
+            raise HTTPException(status_code=404, detail="incident_not_found") from exc
+        raise HTTPException(status_code=400, detail="invalid_incident") from exc
+    await _emit_admin_audit_event(
+        request,
+        principal,
+        event_type="ops.incident",
+        category="system",
+        resource_type="incident",
+        resource_id=incident_id,
+        action="incident.event",
+        metadata={"message": payload.message},
+    )
+    return IncidentItem(**incident)
+
+
+@router.delete("/incidents/{incident_id}", response_model=MessageResponse)
+async def delete_incident(
+    incident_id: str,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> MessageResponse:
+    _require_platform_admin(principal)
+    try:
+        svc_delete_incident(incident_id=incident_id)
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "not_found":
+            raise HTTPException(status_code=404, detail="incident_not_found") from exc
+        raise HTTPException(status_code=400, detail="invalid_incident") from exc
+    await _emit_admin_audit_event(
+        request,
+        principal,
+        event_type="ops.incident",
+        category="system",
+        resource_type="incident",
+        resource_id=incident_id,
+        action="incident.delete",
+        metadata={},
+    )
+    return MessageResponse(message="incident_deleted")
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Budget Governance Endpoints
+
+@router.get("/budgets", response_model=OrgBudgetListResponse)
+async def admin_list_budgets(
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> OrgBudgetListResponse:
+    """List organization budgets and plan context."""
+    try:
+        del principal  # admin role already enforced by router dependency
+        if org_id is not None:
+            org_ids = [org_id]
+        else:
+            org_ids = None
+        items, total = await svc_list_org_budgets(
+            db,
+            org_ids=org_ids,
+            page=page,
+            limit=limit,
+        )
+        return OrgBudgetListResponse(
+            items=[OrgBudgetItem(**item) for item in items],
+            total=total,
+            page=page,
+            limit=limit,
+        )
+    except Exception as exc:
+        logger.error(f"Failed to list org budgets: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to list org budgets")
+
+
+@router.post("/budgets", response_model=OrgBudgetItem)
+async def admin_upsert_budget(
+    payload: OrgBudgetUpdateRequest,
+    request: Request,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> OrgBudgetItem:
+    """Upsert budget settings for an organization."""
+    budget_updates = None
+    if payload.budgets is not None:
+        budget_updates = payload.budgets.model_dump(exclude_unset=True, by_alias=True)
+    try:
+        item, audit_changes = await svc_upsert_org_budget(
+            db,
+            org_id=payload.org_id,
+            budget_updates=budget_updates,
+            clear_budgets=payload.clear_budgets,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "org_not_found":
+            raise HTTPException(status_code=404, detail="org_not_found") from exc
+        if detail == "plan_not_found":
+            raise HTTPException(status_code=500, detail="plan_not_found") from exc
+        if detail == "subscription_not_found":
+            raise HTTPException(status_code=500, detail="subscription_not_found") from exc
+        raise HTTPException(status_code=400, detail="invalid_budget_update") from exc
+    except Exception as exc:
+        logger.error(f"Failed to upsert org budget: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to upsert org budget") from exc
+
+    # Best-effort audit with detailed change log (always emit)
+    try:
+        actor_id_raw = getattr(request.state, "user_id", None) or principal.user_id
+        try:
+            actor_id = int(actor_id_raw) if actor_id_raw is not None else None
+        except (TypeError, ValueError):
+            actor_id = None
+        if isinstance(actor_id, int):
+            from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user
+            from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User as _User
+            from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+                get_audit_service_for_user,
+                get_or_create_audit_service_for_user_id,
+            )
+            from tldw_Server_API.app.core.Audit.unified_audit_service import (
+                AuditContext,
+                AuditEventType,
+                AuditEventCategory,
+            )
+
+            _ud = await _get_user(actor_id)
+            _svc = None
+            if _ud:
+                _user = _User(**_ud)
+                _svc = await get_audit_service_for_user(_user)
+            if _svc is None:
+                _svc = await get_or_create_audit_service_for_user_id(actor_id)
+            correlation_id = (
+                request.headers.get("X-Correlation-ID")
+                or getattr(request.state, "correlation_id", None)
+            )
+            request_id = (
+                request.headers.get("X-Request-ID")
+                or getattr(request.state, "request_id", None)
+            )
+            actor_role = None
+            try:
+                if principal.is_admin:
+                    actor_role = "admin"
+                elif principal.roles:
+                    actor_role = principal.roles[0]
+            except Exception:
+                actor_role = None
+            changes_payload = audit_changes or []
+            _ctx = AuditContext(
+                user_id=str(actor_id),
+                correlation_id=correlation_id,
+                request_id=request_id or "",
+                ip_address=(request.client.host if request.client else None),
+                user_agent=request.headers.get("user-agent"),
+                endpoint=str(request.url.path),
+                method=request.method,
+            )
+            await _svc.log_event(
+                event_type=AuditEventType.CONFIG_CHANGED,
+                category=AuditEventCategory.SYSTEM,
+                context=_ctx,
+                resource_type="org_budget",
+                resource_id=str(payload.org_id),
+                action="budget.update",
+                metadata={
+                    "org_id": payload.org_id,
+                    "actor_id": actor_id,
+                    "resource_type": "org_budget",
+                    "resource_id": str(payload.org_id),
+                    "correlation_id": correlation_id,
+                    "version": 1,
+                    "changes": changes_payload,
+                    "no_changes": len(changes_payload) == 0,
+                    "clear_budgets": payload.clear_budgets,
+                    "requested_updates": budget_updates or {},
+                    "actor_role": actor_role,
+                    "source_ip": request.client.host if request.client else None,
+                    "user_agent": request.headers.get("user-agent"),
+                    "request_id": request_id,
+                },
+            )
+    except Exception as _e:
+        logger.debug(f"Audit (org budget update) skipped/failed: {_e}")
+
+    return OrgBudgetItem(**item)
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -3430,11 +5569,29 @@ async def get_usage_daily(
     end: Optional[str] = Query(None, description="YYYY-MM-DD inclusive"),
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=500),
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction)
 ) -> UsageDailyResponse:
     """Query daily usage aggregates, optionally filtered by user and date range."""
     try:
-        rows, total, _ = await svc_fetch_usage_daily(db, user_id=user_id, start=start, end=end, page=page, limit=limit)
+        if user_id is not None:
+            await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
+        org_ids = await _get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
+        rows, total, _ = await svc_fetch_usage_daily(
+            db,
+            user_id=user_id,
+            org_ids=org_ids,
+            start=start,
+            end=end,
+            page=page,
+            limit=limit,
+        )
         items = [UsageDailyRow(**r) for r in rows]
         return UsageDailyResponse(items=items, total=int(total or 0), page=page, limit=limit)
     except Exception:
@@ -3448,11 +5605,26 @@ async def get_usage_top(
     end: Optional[str] = Query(None, description="YYYY-MM-DD inclusive"),
     limit: int = Query(10, ge=1, le=100),
     metric: str = Query("requests", pattern="^(requests|bytes_total|bytes_in_total|errors)$"),
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction)
 ) -> UsageTopResponse:
     """Top users by aggregate usage over a date range."""
     try:
-        rows = await svc_fetch_usage_top(db, start=start, end=end, limit=limit, metric=metric)
+        org_ids = await _get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
+        rows = await svc_fetch_usage_top(
+            db,
+            start=start,
+            end=end,
+            limit=limit,
+            metric=metric,
+            org_ids=org_ids,
+        )
         for r in rows:
             r.setdefault('bytes_in_total', None)
         return UsageTopResponse(items=[UsageTopRow(**r) for r in rows])
@@ -3467,10 +5639,10 @@ async def run_usage_aggregate(day: Optional[str] = Query(None, description="YYYY
     try:
         await aggregate_usage_daily(day=day)
         return {"status": "ok", "day": day}
-    except Exception as e:
-        logger.warning(f"Manual usage aggregation failed/skipped: {e}")
+    except Exception:
+        logger.exception("Manual usage aggregation failed/skipped")
         # Non-fatal: e.g., table absent in PG during partial setups
-        return {"status": "skipped", "reason": str(e), "day": day}
+        return {"status": "skipped", "reason": "aggregation failed or was skipped", "day": day}
 
 
 @router.get("/usage/daily/export.csv", response_class=PlainTextResponse)
@@ -3480,11 +5652,28 @@ async def export_usage_daily_csv(
     end: Optional[str] = Query(None, description="YYYY-MM-DD inclusive"),
     limit: int = Query(1000, ge=1, le=10000),
     filename: Optional[str] = Query(None, description="Optional filename for Content-Disposition"),
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction)
 ) -> PlainTextResponse:
     """Export usage_daily rows as CSV (includes bytes_in_total when available)."""
     try:
-        content = await svc_export_usage_daily_csv_text(db, user_id=user_id, start=start, end=end, limit=limit)
+        if user_id is not None:
+            await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
+        org_ids = await _get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
+        content = await svc_export_usage_daily_csv_text(
+            db,
+            user_id=user_id,
+            org_ids=org_ids,
+            start=start,
+            end=end,
+            limit=limit,
+        )
         resp = PlainTextResponse(content=content, media_type="text/csv")
         # Default filename when not provided
         if not filename:
@@ -3507,10 +5696,25 @@ async def export_usage_top_csv(
     limit: int = Query(100, ge=1, le=10000),
     metric: str = Query("requests", pattern="^(requests|bytes_total|bytes_in_total|errors)$"),
     filename: Optional[str] = Query(None, description="Optional filename for Content-Disposition"),
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction)
 ) -> PlainTextResponse:
     try:
-        content = await svc_export_usage_top_csv_text(db, start=start, end=end, limit=limit, metric=metric)
+        org_ids = await _get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
+        content = await svc_export_usage_top_csv_text(
+            db,
+            start=start,
+            end=end,
+            limit=limit,
+            metric=metric,
+            org_ids=org_ids,
+        )
         resp = PlainTextResponse(content=content, media_type="text/csv")
         # Default filename when not provided
         if not filename:
@@ -3534,7 +5738,12 @@ async def run_llm_usage_aggregate(day: Optional[str] = Query(None, description="
         return {"status": "ok", "day": day}
     except Exception as e:
         logger.warning(f"Manual LLM usage aggregation failed/skipped: {e}")
-        return {"status": "skipped", "reason": str(e), "day": day}
+        # Do not expose internal exception details to the client
+        return {
+            "status": "skipped",
+            "reason": "Manual LLM usage aggregation failed or was skipped",
+            "day": day,
+        }
 
 # ---------------------------------------------------------------------------------------------------------------------
 # LLM Usage Reporting Endpoints
@@ -3550,9 +5759,19 @@ async def get_llm_usage(
     end: Optional[str] = Query(None, description="ISO timestamp inclusive"),
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=500),
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction)
 ) -> LLMUsageLogResponse:
     try:
+        if user_id is not None:
+            await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
+        org_ids = await _get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
         rows, total = await svc_fetch_llm_usage(
             db,
             user_id=user_id,
@@ -3564,6 +5783,7 @@ async def get_llm_usage(
             end=end,
             page=page,
             limit=limit,
+            org_ids=org_ids,
         )
         items = [LLMUsageLogRow(**r) for r in rows]
         return LLMUsageLogResponse(items=items, total=int(total or 0), page=page, limit=limit)
@@ -3578,11 +5798,26 @@ async def get_llm_usage_summary(
     start: Optional[str] = Query(None, description="ISO timestamp inclusive"),
     end: Optional[str] = Query(None, description="ISO timestamp inclusive"),
     group_by: str = Query("user", pattern="^(user|provider|model|operation|day)$"),
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction)
 ) -> LLMUsageSummaryResponse:
     try:
+        org_ids = await _get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
         # Directly support 'user'|'operation'|'day'|'provider'|'model'
-        rows = await svc_fetch_llm_usage_summary(db, group_by=group_by, provider=None, start=start, end=end)
+        rows = await svc_fetch_llm_usage_summary(
+            db,
+            group_by=group_by,
+            provider=None,
+            start=start,
+            end=end,
+            org_ids=org_ids,
+        )
         return LLMUsageSummaryResponse(items=[LLMUsageSummaryRow(**r) for r in rows])
     except Exception as e:
         logger.error(f"Failed to summarize llm_usage_log: {e}")
@@ -3594,10 +5829,18 @@ async def get_llm_top_spenders(
     start: Optional[str] = Query(None, description="ISO timestamp inclusive"),
     end: Optional[str] = Query(None, description="ISO timestamp inclusive"),
     limit: int = Query(10, ge=1, le=500),
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction)
 ) -> LLMTopSpendersResponse:
     try:
-        rows = await svc_fetch_llm_top_spenders(db, start=start, end=end, limit=limit)
+        org_ids = await _get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
+        rows = await svc_fetch_llm_top_spenders(db, start=start, end=end, limit=limit, org_ids=org_ids)
         return LLMTopSpendersResponse(items=[LLMTopSpenderRow(**r) for r in rows])
     except Exception as e:
         logger.error(f"Failed to load llm top spenders: {e}")
@@ -3614,10 +5857,20 @@ async def export_llm_usage_csv(
     start: Optional[str] = Query(None, description="ISO timestamp inclusive"),
     end: Optional[str] = Query(None, description="ISO timestamp inclusive"),
     limit: int = Query(1000, ge=1, le=10000),
+    org_id: Optional[int] = Query(None, description="Restrict to a specific organization"),
+    principal: AuthPrincipal = Depends(get_auth_principal),
     db=Depends(get_db_transaction)
 ) -> PlainTextResponse:
     """Export filtered llm_usage_log rows as CSV."""
     try:
+        if user_id is not None:
+            await _enforce_admin_user_scope(principal, user_id, require_hierarchy=False)
+        org_ids = await _get_admin_org_ids(principal)
+        if org_id is not None:
+            if org_ids is None:
+                org_ids = [org_id]
+            else:
+                org_ids = [org_id] if org_id in org_ids else []
         is_pg = await is_postgres_backend()
         conditions: list[str] = []
         params: list = []
@@ -3640,6 +5893,16 @@ async def export_llm_usage_csv(
             add_cond("ts >= ?", start)
         if end:
             add_cond("ts <= ?", end)
+        join_clause = ""
+        if org_ids is not None:
+            join_clause = " JOIN org_members om ON om.user_id = llm_usage_log.user_id"
+            if is_pg:
+                conditions.append(f"om.org_id = ANY(${len(params) + 1})")
+                params.append(org_ids)
+            else:
+                placeholders = ",".join("?" for _ in org_ids)
+                conditions.append(f"om.org_id IN ({placeholders})")
+                params.extend(org_ids)
         where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
 
         if is_pg:
@@ -3647,7 +5910,7 @@ async def export_llm_usage_csv(
             sql = (
                 f"SELECT id, ts, COALESCE(user_id,0) as user_id, COALESCE(key_id,0) as key_id, endpoint, operation, provider, model, status, latency_ms, "
                 f"COALESCE(prompt_tokens,0), COALESCE(completion_tokens,0), COALESCE(total_tokens,0), COALESCE(total_cost_usd,0), currency, estimated, request_id "
-                f"FROM llm_usage_log{where_clause} ORDER BY ts DESC LIMIT {limit_placeholder}"
+                f"FROM llm_usage_log{join_clause}{where_clause} ORDER BY ts DESC LIMIT {limit_placeholder}"
             )
             rows = await db.fetch(sql, *params, limit)
             data = [(
@@ -3658,7 +5921,7 @@ async def export_llm_usage_csv(
             sql = (
                 f"SELECT id, ts, IFNULL(user_id,0), IFNULL(key_id,0), endpoint, operation, provider, model, status, latency_ms, "
                 f"IFNULL(prompt_tokens,0), IFNULL(completion_tokens,0), IFNULL(total_tokens,0), IFNULL(total_cost_usd,0), currency, estimated, request_id "
-                f"FROM llm_usage_log{where_clause} ORDER BY ts DESC LIMIT ?"
+                f"FROM llm_usage_log{join_clause}{where_clause} ORDER BY ts DESC LIMIT ?"
             )
             cur = await db.execute(sql, params + [limit])
             data = await cur.fetchall()
@@ -3756,7 +6019,13 @@ async def get_personalization_status():
     try:
         from tldw_Server_API.app.services.personalization_consolidation import get_consolidation_service
         svc = get_consolidation_service()
-        return svc.get_status()  # type: ignore[attr-defined]
+        status_fn = getattr(svc, "get_status", None)
+        if not callable(status_fn):
+            raise TypeError(
+                "Personalization service get_status is not callable: "
+                f"{status_fn!r} (type={type(status_fn).__name__})"
+            )
+        return status_fn()
     except Exception as e:
         logger.warning(f"Admin status fetch failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch status")

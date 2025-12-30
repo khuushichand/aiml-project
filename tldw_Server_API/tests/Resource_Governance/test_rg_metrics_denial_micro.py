@@ -46,4 +46,3 @@ async def test_rg_denials_counter_increments_on_reserve_denial(monkeypatch):
         assert after["count"] >= before["count"] + 1
     else:
         assert after["count"] >= 1
-

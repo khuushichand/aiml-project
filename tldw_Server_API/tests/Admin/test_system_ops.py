@@ -1,0 +1,108 @@
+from __future__ import annotations
+
+import os
+
+import pytest
+from fastapi.testclient import TestClient
+from loguru import logger
+
+from tldw_Server_API.app.main import app
+
+
+def _setup_env():
+    os.environ["AUTH_MODE"] = "single_user"
+    os.environ["SINGLE_USER_API_KEY"] = "unit-test-api-key"
+
+
+@pytest.mark.asyncio
+async def test_admin_system_ops_endpoints():
+    _setup_env()
+
+    from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.core.AuthNZ.session_manager import reset_session_manager
+    from tldw_Server_API.app.core.Logging.system_log_buffer import ensure_system_log_buffer
+
+    await reset_db_pool()
+    reset_settings()
+    await reset_session_manager()
+
+    headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
+
+    with TestClient(app, headers=headers) as client:
+        ensure_system_log_buffer()
+        logger.bind(org_id=1, user_id=1).info("System ops log test entry")
+        logs_resp = client.get("/api/v1/admin/system/logs", params={"level": "INFO"})
+        assert logs_resp.status_code == 200, logs_resp.text
+        payload = logs_resp.json()
+        assert "items" in payload
+        assert any("System ops log test entry" in (item.get("message") or "") for item in payload["items"])
+
+        maint_resp = client.put(
+            "/api/v1/admin/maintenance",
+            json={
+                "enabled": True,
+                "message": "Planned maintenance",
+                "allowlist_user_ids": [1],
+                "allowlist_emails": [],
+            },
+        )
+        assert maint_resp.status_code == 200, maint_resp.text
+        assert maint_resp.json()["enabled"] is True
+
+        maint_get = client.get("/api/v1/admin/maintenance")
+        assert maint_get.status_code == 200, maint_get.text
+        assert maint_get.json()["enabled"] is True
+
+        flag_resp = client.put(
+            "/api/v1/admin/feature-flags/ops-test",
+            json={"scope": "global", "enabled": True, "description": "test flag"},
+        )
+        assert flag_resp.status_code == 200, flag_resp.text
+        assert flag_resp.json()["enabled"] is True
+
+        flags_list = client.get("/api/v1/admin/feature-flags")
+        assert flags_list.status_code == 200, flags_list.text
+        assert any(item["key"] == "ops-test" for item in flags_list.json()["items"])
+
+        del_flag = client.delete("/api/v1/admin/feature-flags/ops-test", params={"scope": "global"})
+        assert del_flag.status_code == 200, del_flag.text
+
+        incident_resp = client.post(
+            "/api/v1/admin/incidents",
+            json={
+                "title": "Queue backlog",
+                "status": "investigating",
+                "severity": "high",
+                "summary": "Background jobs delayed",
+                "tags": ["queue", "jobs"],
+            },
+        )
+        assert incident_resp.status_code == 200, incident_resp.text
+        incident_id = incident_resp.json()["id"]
+
+        update_resp = client.patch(
+            f"/api/v1/admin/incidents/{incident_id}",
+            json={"status": "resolved", "update_message": "Recovered"},
+        )
+        assert update_resp.status_code == 200, update_resp.text
+        assert update_resp.json()["status"] == "resolved"
+
+        event_resp = client.post(
+            f"/api/v1/admin/incidents/{incident_id}/events",
+            json={"message": "Post-mortem scheduled"},
+        )
+        assert event_resp.status_code == 200, event_resp.text
+
+        list_resp = client.get("/api/v1/admin/incidents")
+        assert list_resp.status_code == 200, list_resp.text
+        assert list_resp.json()["total"] >= 1
+
+        delete_resp = client.delete(f"/api/v1/admin/incidents/{incident_id}")
+        assert delete_resp.status_code == 200, delete_resp.text
+
+        # Reset maintenance state for subsequent tests
+        client.put(
+            "/api/v1/admin/maintenance",
+            json={"enabled": False, "message": "", "allowlist_user_ids": [], "allowlist_emails": []},
+        )

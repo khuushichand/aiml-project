@@ -11,7 +11,7 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthC
 from starlette.requests import Request
 
 
-def test_dlq_list_and_replay_simulated(monkeypatch):
+def test_dlq_list_and_replay_simulated(monkeypatch, auth_headers):
     # Simulate admin user via single-user mode and enable test-mode replay short-circuit
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("WORKFLOWS_TEST_REPLAY_SUCCESS", "true")
@@ -19,7 +19,7 @@ def test_dlq_list_and_replay_simulated(monkeypatch):
     db_for_app = WorkflowsDatabase("Databases/test_wf_dlq.db")
     async def override_user():
         return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True)
-    async def override_principal(request: Request | None = None):  # type: ignore[override]
+    async def override_principal(request: Request):  # type: ignore[override]
         principal = AuthPrincipal(
             kind="user",
             user_id=1,
@@ -33,16 +33,15 @@ def test_dlq_list_and_replay_simulated(monkeypatch):
             org_ids=[],
             team_ids=[],
         )
-        if request is not None:
-            try:
-                request.state.auth = AuthContext(
-                    principal=principal,
-                    ip=None,
-                    user_agent=None,
-                    request_id=None,
-                )
-            except Exception:
-                pass
+        try:
+            request.state.auth = AuthContext(
+                principal=principal,
+                ip=None,
+                user_agent=None,
+                request_id=None,
+            )
+        except Exception:
+            pass
         return principal
     def override_db():
         return db_for_app
@@ -50,7 +49,7 @@ def test_dlq_list_and_replay_simulated(monkeypatch):
     app.dependency_overrides[get_auth_principal] = override_principal
     app.dependency_overrides[wf_mod._get_db] = override_db
 
-    with TestClient(app) as client:
+    with TestClient(app, headers=auth_headers) as client:
         # Seed a DLQ row into the same DB the app uses
         db_for_app.enqueue_webhook_dlq(tenant_id="default", run_id="r1", url="https://example.com/hook", body={"ok": True}, last_error="init")
         # List DLQ

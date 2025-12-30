@@ -240,6 +240,7 @@ class AuthnzOrgsTeamsRepo:
         limit: int = 100,
         offset: int = 0,
         q: Optional[str] = None,
+        org_ids: Optional[List[int]] = None,
         with_total: bool = False,
     ) -> Tuple[List[Dict[str, Any]], int]:
         """
@@ -248,55 +249,47 @@ class AuthnzOrgsTeamsRepo:
         Returns (rows, total).
         """
         try:
+            if org_ids is not None and len(org_ids) == 0:
+                return [], 0
             if self._is_postgres():
                 # Postgres path
+                conditions: list[str] = []
+                params: list[Any] = []
+                param_count = 0
+                if org_ids is not None:
+                    param_count += 1
+                    conditions.append(f"id = ANY(${param_count})")
+                    params.append(org_ids)
                 if q:
+                    param_count += 1
                     like = f"%{str(q).lower()}%"
-                    rows = await self.db_pool.fetchall(
-                        """
-                        SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at
-                        FROM organizations
-                        WHERE LOWER(name) LIKE $1
-                           OR LOWER(COALESCE(slug, '')) LIKE $1
-                           OR CAST(id AS TEXT) LIKE $1
-                        ORDER BY created_at DESC
-                        LIMIT $2 OFFSET $3
-                        """,
-                        like,
-                        limit,
-                        offset,
+                    conditions.append(
+                        f"(LOWER(name) LIKE ${param_count} OR LOWER(COALESCE(slug, '')) LIKE ${param_count} OR CAST(id AS TEXT) LIKE ${param_count})"
                     )
-                    total = (
-                        await self.db_pool.fetchval(
-                            """
-                            SELECT COUNT(*) FROM organizations
-                            WHERE LOWER(name) LIKE $1
-                               OR LOWER(COALESCE(slug, '')) LIKE $1
-                               OR CAST(id AS TEXT) LIKE $1
-                            """,
-                            like,
-                        )
-                        if with_total
-                        else 0
+                    params.append(like)
+
+                where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+                limit_param = param_count + 1
+                offset_param = param_count + 2
+                rows = await self.db_pool.fetchall(
+                    f"""
+                    SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at
+                    FROM organizations{where_clause}
+                    ORDER BY created_at DESC
+                    LIMIT ${limit_param} OFFSET ${offset_param}
+                    """,
+                    *params,
+                    limit,
+                    offset,
+                )
+                total = (
+                    await self.db_pool.fetchval(
+                        f"SELECT COUNT(*) FROM organizations{where_clause}",
+                        *params,
                     )
-                else:
-                    rows = await self.db_pool.fetchall(
-                        """
-                        SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at
-                        FROM organizations
-                        ORDER BY created_at DESC
-                        LIMIT $1 OFFSET $2
-                        """,
-                        limit,
-                        offset,
-                    )
-                    total = (
-                        await self.db_pool.fetchval(
-                            "SELECT COUNT(*) FROM organizations",
-                        )
-                        if with_total
-                        else 0
-                    )
+                    if with_total
+                    else 0
+                )
 
                 normalized: List[Dict[str, Any]] = []
                 for r in rows:
@@ -307,78 +300,53 @@ class AuthnzOrgsTeamsRepo:
 
             # SQLite / aiosqlite path
             async with self.db_pool.acquire() as conn:
+                conditions: list[str] = []
+                params: list[Any] = []
+                if org_ids is not None:
+                    placeholders = ", ".join(["?"] * len(org_ids))
+                    conditions.append(f"id IN ({placeholders})")
+                    params.extend(org_ids)
                 if q:
                     like = f"%{str(q).lower()}%"
-                    cursor = await conn.execute(
-                        """
-                        SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at
-                        FROM organizations
-                        WHERE LOWER(name) LIKE ?
-                           OR LOWER(COALESCE(slug, '')) LIKE ?
-                           OR CAST(id AS TEXT) LIKE ?
-                        ORDER BY created_at DESC
-                        LIMIT ? OFFSET ?
-                        """,
-                        (like, like, like, limit, offset),
+                    conditions.append(
+                        "(LOWER(name) LIKE ? OR LOWER(COALESCE(slug, '')) LIKE ? OR CAST(id AS TEXT) LIKE ?)"
                     )
-                    rows_raw = await cursor.fetchall()
-                    rows = [
-                        {
-                            "id": r[0],
-                            "name": r[1],
-                            "slug": r[2],
-                            "owner_user_id": r[3],
-                            "is_active": bool(r[4]),
-                            "created_at": r[5],
-                            "updated_at": r[6],
-                        }
-                        for r in rows_raw
-                    ]
-                    if with_total:
-                        cur2 = await conn.execute(
-                            """
-                            SELECT COUNT(*) FROM organizations
-                            WHERE LOWER(name) LIKE ?
-                               OR LOWER(COALESCE(slug, '')) LIKE ?
-                               OR CAST(id AS TEXT) LIKE ?
-                            """,
-                            (like, like, like),
-                        )
-                        total_row = await cur2.fetchone()
-                        total = int(total_row[0]) if total_row else 0
-                    else:
-                        total = 0
-                else:
-                    cursor = await conn.execute(
-                        """
-                        SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at
-                        FROM organizations
-                        ORDER BY created_at DESC
-                        LIMIT ? OFFSET ?
-                        """,
-                        (limit, offset),
-                    )
-                    rows_raw = await cursor.fetchall()
-                    rows = [
-                        {
-                            "id": r[0],
-                            "name": r[1],
-                            "slug": r[2],
-                            "owner_user_id": r[3],
-                            "is_active": bool(r[4]),
-                            "created_at": r[5],
-                            "updated_at": r[6],
-                        }
-                        for r in rows_raw
-                    ]
-                    if with_total:
-                        cur2 = await conn.execute("SELECT COUNT(*) FROM organizations")
-                        total_row = await cur2.fetchone()
-                        total = int(total_row[0]) if total_row else 0
-                    else:
-                        total = 0
+                    params.extend([like, like, like])
 
-                return rows, int(total or 0)
+                where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+                cursor = await conn.execute(
+                    f"""
+                    SELECT id, name, slug, owner_user_id, is_active, created_at, updated_at
+                    FROM organizations{where_clause}
+                    ORDER BY created_at DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (*params, limit, offset),
+                )
+                rows_raw = await cursor.fetchall()
+                rows = [
+                    {
+                        "id": r[0],
+                        "name": r[1],
+                        "slug": r[2],
+                        "owner_user_id": r[3],
+                        "is_active": bool(r[4]),
+                        "created_at": r[5],
+                        "updated_at": r[6],
+                    }
+                    for r in rows_raw
+                ]
+                if with_total:
+                    cur2 = await conn.execute(
+                        f"SELECT COUNT(*) FROM organizations{where_clause}",
+                        params,
+                    )
+                    total_row = await cur2.fetchone()
+                    total = int(total_row[0]) if total_row else 0
+                else:
+                    total = 0
+
+            return rows, int(total or 0)
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(f"AuthnzOrgsTeamsRepo.list_organizations failed: {exc}")
             raise

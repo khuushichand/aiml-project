@@ -311,6 +311,23 @@ class TestBillingEnforcer:
                 assert "exceeded" in result.message.lower()
 
     @pytest.mark.asyncio
+    async def test_check_limit_invalid_limit_value_fails_open(self, enforcer):
+        """Invalid limit values should be treated as unlimited to avoid crashes."""
+        with patch.object(enforcer, "get_org_limits", new_callable=AsyncMock) as mock_limits:
+            with patch.object(enforcer, "get_org_usage", new_callable=AsyncMock) as mock_usage:
+                mock_limits.return_value = {"api_calls_day": None}
+                mock_usage.return_value = UsageSummary(org_id=1, api_calls_today=1000)
+
+                result = await enforcer.check_limit(
+                    org_id=1,
+                    category=LimitCategory.API_CALLS_DAY,
+                    requested_units=1,
+                )
+
+                assert result.action == EnforcementAction.ALLOW
+                assert result.unlimited is True
+
+    @pytest.mark.asyncio
     async def test_check_feature_access_enabled(self, enforcer):
         """Feature access should return True when enabled."""
         with patch.object(enforcer, "get_org_limits", new_callable=AsyncMock) as mock_limits:

@@ -64,6 +64,7 @@ def _process_single_ebook(
     custom_prompt: Optional[str],
     system_prompt: Optional[str],
     extraction_method: str,
+    base_dir: Optional[Path],
 ) -> Dict[str, Any]:
     """Synchronous worker for EPUB processing (mirrors legacy helper)."""
     try:
@@ -81,6 +82,7 @@ def _process_single_ebook(
             system_prompt=system_prompt,
             summarize_recursively=summarize_recursively,
             extraction_method=extraction_method,
+            base_dir=base_dir,
         )
         result_dict["input_ref"] = original_ref
         # Ensure overrides and derived fields are present even if the library
@@ -353,6 +355,7 @@ async def process_ebooks_endpoint(
                         custom_prompt=form_data.custom_prompt,
                         system_prompt=form_data.system_prompt,
                         extraction_method=form_data.extraction_method,
+                        base_dir=temp_dir,
                     )
                     res = await loop.run_in_executor(None, partial_func)
                 except Exception as exc:  # pragma: no cover - defensive fallback

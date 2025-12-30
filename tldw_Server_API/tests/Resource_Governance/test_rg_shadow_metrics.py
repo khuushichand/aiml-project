@@ -31,4 +31,3 @@ def test_record_shadow_mismatch_increments_counter():
     after_count = int(after.get("count", 0) or 0)
 
     assert after_count == before_count + 1
-

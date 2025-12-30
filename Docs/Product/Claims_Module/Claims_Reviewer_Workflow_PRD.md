@@ -23,6 +23,10 @@ Teams need confidence that surfaced claims have been vetted, yet the platform pr
 - Extractor delta report shows measurable reduction in post-review corrections over release cycles.
 - Audit coverage: every claim transition has reviewer, timestamp, and notes.
 
+## Implementation Status (repo state)
+- Complete: review schema + audit log + rules tables; review queue/history/update/bulk/rules endpoints; rule evaluation on ingest; review metrics and basic analytics export; review assignment notifications recorded in `claims_notifications` with list/digest/ack APIs; external delivery for review-event notifications (webhook/email); reviewer UI with batch tooling.
+- Complete: nightly extractor delta reporting + correction motif aggregates via scheduled job, exposed through review analytics/export endpoints and `/api/v1/claims/review/metrics`.
+
 ## 4. Out of Scope (v1)
 - Full-blown workflow builder or external ticketing integration.
 - Automated truth scoring beyond reviewer decisions.
@@ -76,14 +80,17 @@ Teams need confidence that surfaced claims have been vetted, yet the platform pr
 - Notification integration:
   - Emit events via existing notification subsystem (webhooks/Slack/email) when claims assigned to a reviewer or group.
   - Daily digest summarizing outstanding assignments per reviewer.
+  - Implementation note: assignment notifications are stored in `claims_notifications` and exposed via `/api/v1/claims/notifications` and `/api/v1/claims/notifications/digest`; webhook/email delivery uses the monitoring config channels.
 
 ### 6.4 Feedback Loop & Extractor Insight
 - Allow reviewers to optionally edit claim text or supply a corrected version; store delta in `ClaimsReviewLog`.
 - Nightly job aggregates corrections:
   - Compute per-extractor metrics (approval rate, edit rate, frequent correction motifs).
   - Surface results via metrics endpoints and dashboards.
+- Scheduler controls: `CLAIMS_REVIEW_METRICS_SCHEDULER_ENABLED`, `CLAIMS_REVIEW_METRICS_INTERVAL_SEC`, `CLAIMS_REVIEW_METRICS_LOOKBACK_DAYS`.
 - Trigger re-embedding when text changes and update any dependent indexes (Chroma, FTS).
 - Provide a `GET /api/v1/claims/review/analytics` endpoint summarizing accuracy trends.
+- Provide a `GET /api/v1/claims/review/metrics` endpoint for daily per-extractor metrics.
 - Optional hook to schedule targeted re-ingestion/rebuild for media with high correction rates.
 
 ### 6.5 Authorization & Security
@@ -119,6 +126,7 @@ Teams need confidence that surfaced claims have been vetted, yet the platform pr
 | `/api/v1/claims/review/bulk` | POST | Bulk approve/flag/reassign claims | claims_admin |
 | `/api/v1/claims/review/rules` | GET/POST/PATCH/DELETE | Manage assignment rules | claims_admin |
 | `/api/v1/claims/review/analytics` | GET | Summary metrics for extractor feedback | claims_admin |
+| `/api/v1/claims/review/metrics` | GET | Daily per-extractor review deltas | claims_admin |
 
 ## 10. UX Considerations
 - Lightweight Kanban view: columns for `pending`, `flagged`, `reassigned`.
@@ -158,6 +166,6 @@ Teams need confidence that surfaced claims have been vetted, yet the platform pr
 
 ## 15. Appendix
 - References:
-  - Existing Claims PRD (`Docs/Product/Claims_Module_PRD.md`).
+  - Existing Claims PRD (`Docs/Product/Claims_Module/Claims_Module_PRD.md`).
   - Claims endpoints (`tldw_Server_API/app/api/v1/endpoints/claims.py`).
-  - Claims rebuild service (`tldw_Server_API/app/services/claims_rebuild_service.py`).
+  - Claims rebuild service (`tldw_Server_API/app/core/Claims_Extraction/claims_rebuild_service.py`).

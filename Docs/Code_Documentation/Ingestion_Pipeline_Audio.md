@@ -59,12 +59,12 @@ process_audio_files(
  Performance notes:
  - `convert_to_wav(...)` performs a preflight validation using `ffprobe` by default (via `validate_audio_file(...)`) and then runs the actual `ffmpeg` conversion. In high-throughput deployments you can disable this pre-validation by setting either:
    - `[STT-Settings] skip_audio_prevalidation = true` in `config.txt`, or
-   - `STT_SKIP_AUDIO_PREVALIDATION=1` in the environment.  
+   - `STT_SKIP_AUDIO_PREVALIDATION=1` in the environment.
    In that mode, invalid files are left for `ffmpeg` to handle directly.
  - Transcript cache pruning (`prune_transcript_cache(...)`) runs inline after successful STT when transcript persistence is enabled. To avoid any pruning work on the hot path (for example, when you manage cache directories via an external job), set:
    - `[STT-Settings] disable_transcript_cache_pruning = true`, or
-   - `STT_DISABLE_TRANSCRIPT_CACHE_PRUNING=1`.  
-   The server will continue to write transcripts but skip age/size-based cleanup.  
+   - `STT_DISABLE_TRANSCRIPT_CACHE_PRUNING=1`.
+   The server will continue to write transcripts but skip age/size-based cleanup.
    When pruning is enabled and no explicit limits are set, the server applies
    conservative defaults (max age ≈ 30 days, total cache size ≈ 512MB, and
    up to ≈ 32 transcript files per source). These defaults can be tuned via

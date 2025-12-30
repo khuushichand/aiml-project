@@ -74,4 +74,3 @@ def parse_timed_effects(value: Any) -> Optional[TimedEffects]:
         except Exception:
             return None
     return None
-

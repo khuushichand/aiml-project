@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_active_user
 from tldw_Server_API.app.api.v1.schemas.user_keys import (
@@ -118,6 +118,23 @@ async def upsert_user_provider_key(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+    try:
+        await test_provider_credentials(
+            provider=provider_norm,
+            api_key=api_key,
+            credential_fields=credential_fields,
+            model=None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except ChatAPIError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Provider test call failed",
+        ) from exc
+
     secret_payload = build_secret_payload(api_key, credential_fields or None)
     try:
         envelope = encrypt_byok_payload(secret_payload)
@@ -146,6 +163,7 @@ async def upsert_user_provider_key(
 
 @router.get("/keys", response_model=UserProviderKeysResponse)
 async def list_user_provider_keys(
+    request: Request,
     current_user: Dict[str, Any] = Depends(get_current_active_user),
 ) -> UserProviderKeysResponse:
     _require_byok_enabled()
@@ -162,19 +180,38 @@ async def list_user_provider_keys(
     team_ids = sorted({m.get("team_id") for m in memberships if m.get("team_id") is not None})
     org_ids = sorted({m.get("org_id") for m in memberships if m.get("org_id") is not None})
 
+    def _filter_scopes(ids: List[int], active_id: Any) -> List[int]:
+        if not ids:
+            return []
+        if active_id is None:
+            return ids if len(ids) == 1 else []
+        try:
+            active = int(active_id)
+        except (TypeError, ValueError):
+            return []
+        return [active] if active in ids else []
+
+    active_team_id = getattr(request.state, "active_team_id", None)
+    active_org_id = getattr(request.state, "active_org_id", None)
+    team_scope_ids = _filter_scopes(team_ids, active_team_id)
+    org_scope_ids = _filter_scopes(org_ids, active_org_id)
+
     shared_keys: Dict[str, Dict[str, Any]] = {}
-    for team_id in team_ids:
+    shared_sources: Dict[str, str] = {}
+    for team_id in team_scope_ids:
         rows = await org_repo.list_secrets(scope_type="team", scope_id=int(team_id))
         for row in rows:
             provider = row.get("provider")
             if provider and provider not in shared_keys:
                 shared_keys[provider] = row
-    for org_id in org_ids:
+                shared_sources[provider] = "team"
+    for org_id in org_scope_ids:
         rows = await org_repo.list_secrets(scope_type="org", scope_id=int(org_id))
         for row in rows:
             provider = row.get("provider")
             if provider and provider not in shared_keys:
                 shared_keys[provider] = row
+                shared_sources[provider] = "org"
 
     providers = sorted(set(allowlist) | set(user_keys.keys()) | set(shared_keys.keys()))
     items: List[UserProviderKeyStatusItem] = []
@@ -183,14 +220,12 @@ async def list_user_provider_keys(
         user_row = user_keys.get(provider)
         shared_row = shared_keys.get(provider)
         if not allowed and (user_row or shared_row):
-            row = user_row or shared_row or {}
             items.append(
                 UserProviderKeyStatusItem(
                     provider=provider,
                     has_key=bool(user_row),
                     source="disabled",
-                    key_hint=row.get("key_hint"),
-                    last_used_at=row.get("last_used_at"),
+                    last_used_at=(user_row or shared_row or {}).get("last_used_at"),
                 )
             )
             continue
@@ -212,8 +247,7 @@ async def list_user_provider_keys(
                 UserProviderKeyStatusItem(
                     provider=provider,
                     has_key=False,
-                    source="shared",
-                    key_hint=shared_row.get("key_hint"),
+                    source=shared_sources.get(provider, "org"),
                     last_used_at=shared_row.get("last_used_at"),
                 )
             )
@@ -253,15 +287,28 @@ async def test_user_provider_key(
             detail="Provider not allowed for BYOK",
         )
 
-    api_key = (payload.api_key or "").strip()
+    repo = await _get_user_repo()
+    row = await repo.fetch_secret_for_user(int(current_user["id"]), provider_norm)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")
+
+    encrypted_blob = row.get("encrypted_blob")
+    if not encrypted_blob:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")
+    try:
+        stored_payload = decrypt_byok_payload(loads_envelope(encrypted_blob))
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")
+
+    api_key = (stored_payload.get("api_key") or "").strip()
     if not api_key:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="api_key is required",
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")
 
     try:
-        credential_fields = validate_credential_fields(provider_norm, payload.credential_fields)
+        credential_fields = validate_credential_fields(
+            provider_norm,
+            stored_payload.get("credential_fields") or {},
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -282,7 +329,6 @@ async def test_user_provider_key(
             detail="Provider test call failed",
         ) from exc
 
-    repo = await _get_user_repo()
     await _touch_user_last_used_if_match(
         repo,
         user_id=int(current_user["id"]),

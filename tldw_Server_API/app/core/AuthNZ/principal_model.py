@@ -54,6 +54,14 @@ class AuthPrincipal(BaseModel):
         default=None,
         description="Numeric API key identifier when the principal is authenticated via API key.",
     )
+    username: Optional[str] = Field(
+        default=None,
+        description="Username for user principals when available.",
+    )
+    email: Optional[str] = Field(
+        default=None,
+        description="Email for user principals when available.",
+    )
     subject: Optional[str] = Field(
         default=None,
         description=(
@@ -90,6 +98,14 @@ class AuthPrincipal(BaseModel):
     team_ids: List[int] = Field(
         default_factory=list,
         description="Team identifiers this principal is a member of.",
+    )
+    active_org_id: Optional[int] = Field(
+        default=None,
+        description="Active organization identifier for the current token scope.",
+    )
+    active_team_id: Optional[int] = Field(
+        default=None,
+        description="Active team identifier for the current token scope.",
     )
 
     model_config = ConfigDict(frozen=False)

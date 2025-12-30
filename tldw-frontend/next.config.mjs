@@ -7,6 +7,15 @@ const __dirname = path.dirname(__filename);
 
 const nextConfig = {
   reactStrictMode: true,
+  experimental: {
+    reactCompiler: false,
+  },
+  // Ensure Next resolves the correct monorepo root when multiple lockfiles exist.
+  outputFileTracingRoot: path.resolve(__dirname, '..'),
+  eslint: {
+    // Enforce ESLint during builds so lint failures block deployments.
+    ignoreDuringBuilds: false,
+  },
   webpack: (config) => {
     // Support `@/...` imports (alias to project root)
     config.resolve.alias['@'] = path.resolve(__dirname);

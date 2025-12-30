@@ -178,4 +178,3 @@ async def test_workflows_artifact_download_reaches_handler_with_read_permission(
     # rather than failing with a 403 from require_permissions.
     assert resp.status_code in {200, 400, 404, 409}
     assert resp.status_code != 403
-

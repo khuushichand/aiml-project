@@ -2,7 +2,7 @@
 # Description: Database migrations for AuthNZ module tables
 #
 # Imports
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 import sqlite3
 import json
 from pathlib import Path
@@ -671,7 +671,8 @@ def migration_014_seed_roles_permissions(conn: sqlite3.Connection) -> None:
         VALUES
           ('admin', 'Administrator (full access)', 1),
           ('user', 'Standard user (baseline permissions)', 1),
-          ('moderator', 'Moderator (curated elevated access)', 1)
+          ('moderator', 'Moderator (curated elevated access)', 1),
+          ('reviewer', 'Claims reviewer', 1)
         """
     )
 
@@ -700,7 +701,10 @@ def migration_014_seed_roles_permissions(conn: sqlite3.Connection) -> None:
         # api
         ('api.generate_keys','Generate API keys','api'),
         ('api.manage_webhooks','Manage webhooks','api'),
-        ('api.rate_limit_override','Override rate limits','api')
+        ('api.rate_limit_override','Override rate limits','api'),
+        # claims
+        ('claims.review','Review claims','claims'),
+        ('claims.admin','Administer claims','claims')
     ]
     for name, description, category in perms:
         conn.execute(
@@ -717,6 +721,7 @@ def migration_014_seed_roles_permissions(conn: sqlite3.Connection) -> None:
     admin_id = _id('roles', 'admin')
     user_id = _id('roles', 'user')
     mod_id = _id('roles', 'moderator')
+    reviewer_id = _id('roles', 'reviewer')
 
     # Grant all permissions to admin
     cur = conn.execute("SELECT id FROM permissions")
@@ -748,6 +753,16 @@ def migration_014_seed_roles_permissions(conn: sqlite3.Connection) -> None:
             conn.execute(
                 "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
                 (mod_id, pid),
+            )
+
+    # Reviewer: read media + claims.review
+    reviewer_perms = ['media.read', 'claims.review']
+    for code in reviewer_perms:
+        pid = _id('permissions', code)
+        if pid is not None and reviewer_id is not None:
+            conn.execute(
+                "INSERT OR IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)",
+                (reviewer_id, pid),
             )
 
     conn.commit()
@@ -1790,6 +1805,220 @@ def rollback_038_drop_org_provider_secrets_cleanup_triggers(conn: sqlite3.Connec
     logger.info("Rollback 038: Dropped org_provider_secrets cleanup triggers")
 
 
+def migration_039_ensure_user_storage_columns(conn: sqlite3.Connection) -> None:
+    """Ensure legacy users tables include storage quota/usage columns."""
+    logger.info("Migration 039: START ensure storage columns on users table")
+    try:
+        cur = conn.execute("PRAGMA table_info(users)")
+        columns = {row[1] for row in cur.fetchall()}
+
+        if "storage_quota_mb" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN storage_quota_mb INTEGER DEFAULT 5120")
+            columns.add("storage_quota_mb")
+
+        if "storage_used_mb" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN storage_used_mb INTEGER DEFAULT 0")
+            columns.add("storage_used_mb")
+
+        conn.commit()
+        logger.info("Migration 039: storage columns ensured on users table")
+    except Exception as exc:
+        logger.error("Migration 039: failed to ensure storage columns: %s", exc)
+        raise
+
+
+def migration_040_extend_registration_codes_for_org_invites(conn: sqlite3.Connection) -> None:
+    """Add org-scoped invite columns and missing registration code fields."""
+    logger.info("Migration 040: START registration_codes org invite fields")
+    cur = conn.execute("PRAGMA table_info(registration_codes)")
+    columns = {row[1] for row in cur.fetchall()}
+
+    def add_col(name: str, decl: str) -> None:
+        if name not in columns:
+            conn.execute(f"ALTER TABLE registration_codes ADD COLUMN {decl}")
+            columns.add(name)
+
+    # Core fields expected by registration/admin flows
+    add_col("role_to_grant", "role_to_grant TEXT DEFAULT 'user'")
+    add_col("description", "description TEXT")
+    add_col("allowed_email_domain", "allowed_email_domain TEXT")
+    add_col("times_used", "times_used INTEGER DEFAULT 0")
+    add_col("is_active", "is_active INTEGER DEFAULT 1")
+    add_col("metadata", "metadata TEXT")
+
+    # Org-scoped invite extension
+    add_col("org_id", "org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL")
+    add_col("org_role", "org_role TEXT")
+    add_col("team_id", "team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL")
+
+    # Backfill times_used from legacy uses_count if present
+    if "uses_count" in columns and "times_used" in columns:
+        conn.execute(
+            """
+            UPDATE registration_codes
+            SET times_used = uses_count
+            WHERE (times_used IS NULL OR times_used = 0)
+              AND uses_count > 0
+            """
+        )
+
+    conn.commit()
+    logger.info("Migration 040: Updated registration_codes for org invites")
+
+
+def migration_041_add_llm_provider_overrides(conn: sqlite3.Connection) -> None:
+    """Add llm_provider_overrides table for runtime provider overrides."""
+    logger.info("Migration 041: START llm_provider_overrides table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS llm_provider_overrides (
+            provider TEXT PRIMARY KEY,
+            is_enabled INTEGER,
+            allowed_models TEXT,
+            config_json TEXT,
+            secret_blob TEXT,
+            api_key_hint TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_llm_provider_overrides_enabled ON llm_provider_overrides(is_enabled)"
+    )
+    conn.commit()
+    logger.info("Migration 041: Created llm_provider_overrides table")
+
+
+def rollback_041_drop_llm_provider_overrides(conn: sqlite3.Connection) -> None:
+    """Rollback migration 041 by dropping llm_provider_overrides table."""
+    conn.execute("DROP TABLE IF EXISTS llm_provider_overrides")
+    conn.commit()
+    logger.info("Rollback 041: Dropped llm_provider_overrides table")
+
+
+def migration_042_create_org_budgets(conn: sqlite3.Connection) -> None:
+    """Create org_budgets table and migrate legacy budget data."""
+    logger.info("Migration 042: START org_budgets table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS org_budgets (
+            org_id INTEGER PRIMARY KEY,
+            budgets_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_budgets_org ON org_budgets(org_id)")
+
+    def _normalize_alert_thresholds(value: Any) -> Optional[Dict[str, Any]]:
+        if value is None:
+            return None
+        if isinstance(value, list):
+            return {"global": value}
+        if isinstance(value, dict):
+            out: Dict[str, Any] = {}
+            if "global" in value:
+                out["global"] = value.get("global")
+            if "per_metric" in value:
+                out["per_metric"] = value.get("per_metric")
+            return out or None
+        return None
+
+    def _normalize_enforcement_mode(value: Any) -> Optional[Dict[str, Any]]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return {"global": value}
+        if isinstance(value, dict):
+            out: Dict[str, Any] = {}
+            if "global" in value:
+                out["global"] = value.get("global")
+            if "per_metric" in value:
+                out["per_metric"] = value.get("per_metric")
+            return out or None
+        return None
+
+    def _inflate_legacy_budgets(legacy: Dict[str, Any]) -> Dict[str, Any]:
+        budgets = {key: legacy[key] for key in ("budget_day_usd", "budget_month_usd", "budget_day_tokens", "budget_month_tokens") if key in legacy}
+        payload: Dict[str, Any] = {}
+        if budgets:
+            payload["budgets"] = budgets
+        thresholds = _normalize_alert_thresholds(legacy.get("alert_thresholds"))
+        if thresholds is not None:
+            payload["alert_thresholds"] = thresholds
+        enforcement = _normalize_enforcement_mode(legacy.get("enforcement_mode"))
+        if enforcement is not None:
+            payload["enforcement_mode"] = enforcement
+        return payload
+
+    cur = conn.execute(
+        "SELECT org_id, custom_limits_json FROM org_subscriptions WHERE custom_limits_json IS NOT NULL"
+    )
+    rows = cur.fetchall()
+    for org_id, custom_limits_json in rows:
+        if not custom_limits_json:
+            continue
+        try:
+            data = json.loads(custom_limits_json)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        legacy_budgets = data.get("budgets")
+        if not isinstance(legacy_budgets, dict):
+            continue
+        payload = _inflate_legacy_budgets(legacy_budgets)
+        if payload:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO org_budgets (org_id, budgets_json, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                """,
+                (org_id, json.dumps(payload)),
+            )
+        data.pop("budgets", None)
+        conn.execute(
+            "UPDATE org_subscriptions SET custom_limits_json = ? WHERE org_id = ?",
+            (json.dumps(data) if data else None, org_id),
+        )
+
+    conn.commit()
+    logger.info("Migration 042: Created org_budgets table and migrated legacy budgets")
+
+
+def rollback_042_drop_org_budgets(conn: sqlite3.Connection) -> None:
+    """Rollback migration 042 by dropping org_budgets table."""
+    conn.execute("DROP TABLE IF EXISTS org_budgets")
+    conn.commit()
+    logger.info("Rollback 042: Dropped org_budgets table")
+
+
+def migration_043_create_retention_policy_overrides(conn: sqlite3.Connection) -> None:
+    """Create retention_policy_overrides table for persisted retention settings."""
+    logger.info("Migration 043: START retention_policy_overrides table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS retention_policy_overrides (
+            policy_key TEXT PRIMARY KEY,
+            days INTEGER NOT NULL,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.commit()
+    logger.info("Migration 043: Created retention_policy_overrides table")
+
+
+def rollback_043_drop_retention_policy_overrides(conn: sqlite3.Connection) -> None:
+    """Rollback migration 043 by dropping retention_policy_overrides table."""
+    conn.execute("DROP TABLE IF EXISTS retention_policy_overrides")
+    conn.commit()
+    logger.info("Rollback 043: Dropped retention_policy_overrides table")
+
+
 #######################################################################################################################
 #
 # Migration Registry
@@ -1893,6 +2122,34 @@ def get_authnz_migrations() -> List[Migration]:
             "Add org_provider_secrets cleanup triggers",
             migration_038_add_org_provider_secrets_cleanup_triggers,
             rollback_038_drop_org_provider_secrets_cleanup_triggers,
+        ),
+        Migration(
+            39,
+            "Ensure users storage columns",
+            migration_039_ensure_user_storage_columns,
+        ),
+        Migration(
+            40,
+            "Extend registration_codes for org invites",
+            migration_040_extend_registration_codes_for_org_invites,
+        ),
+        Migration(
+            41,
+            "Add llm_provider_overrides table",
+            migration_041_add_llm_provider_overrides,
+            rollback_041_drop_llm_provider_overrides,
+        ),
+        Migration(
+            42,
+            "Create org_budgets table",
+            migration_042_create_org_budgets,
+            rollback_042_drop_org_budgets,
+        ),
+        Migration(
+            43,
+            "Create retention_policy_overrides table",
+            migration_043_create_retention_policy_overrides,
+            rollback_043_drop_retention_policy_overrides,
         ),
     ]
 

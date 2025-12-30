@@ -71,4 +71,3 @@ async def debug_schema(
 
 
 __all__ = ["router"]
-

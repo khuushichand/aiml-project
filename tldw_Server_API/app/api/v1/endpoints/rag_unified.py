@@ -1496,7 +1496,12 @@ async def unified_search_stream_endpoint(
             except Exception:
                 cfg = {}
 
-            provider_value = cfg.get("RAG_DEFAULT_LLM_PROVIDER")
+            try:
+                import os as _os
+                env_provider = _os.getenv("RAG_DEFAULT_LLM_PROVIDER")
+            except Exception:
+                env_provider = None
+            provider_value = env_provider if env_provider is not None else cfg.get("RAG_DEFAULT_LLM_PROVIDER")
             provider = (
                 provider_value.strip()
                 if isinstance(provider_value, str) and provider_value.strip()
@@ -1505,7 +1510,11 @@ async def unified_search_stream_endpoint(
 
             model_value = request.generation_model if isinstance(request.generation_model, str) else None
             if not model_value:
-                model_value = cfg.get("RAG_DEFAULT_LLM_MODEL")
+                try:
+                    env_model = _os.getenv("RAG_DEFAULT_LLM_MODEL")
+                except Exception:
+                    env_model = None
+                model_value = env_model if env_model is not None else cfg.get("RAG_DEFAULT_LLM_MODEL")
             model = (
                 model_value.strip()
                 if isinstance(model_value, str) and model_value.strip()

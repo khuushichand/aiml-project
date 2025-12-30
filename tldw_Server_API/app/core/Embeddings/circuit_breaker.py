@@ -11,71 +11,10 @@ from functools import wraps
 import threading
 
 from loguru import logger
-from prometheus_client import Counter, Gauge
+from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter, set_gauge
 
 # Type variables for generic typing
 T = TypeVar('T')
-
-# Prometheus metrics - use try/except to handle multiple registrations
-try:
-    CIRCUIT_BREAKER_STATE = Gauge(
-        'circuit_breaker_state',
-        'Current state of circuit breaker (0=closed, 1=open, 2=half_open)',
-        ['service', 'operation']
-    )
-except ValueError:
-    # Metric already registered, get existing one
-    from prometheus_client import REGISTRY
-    CIRCUIT_BREAKER_STATE = None
-    for collector in list(REGISTRY._collector_to_names.keys()):
-        if hasattr(collector, '_name') and collector._name == 'circuit_breaker_state':
-            CIRCUIT_BREAKER_STATE = collector
-            break
-
-try:
-    CIRCUIT_BREAKER_FAILURES = Counter(
-        'circuit_breaker_failures_total',
-        'Total number of failures tracked by circuit breaker',
-        ['service', 'operation']
-    )
-except ValueError:
-    # Metric already registered, get existing one
-    from prometheus_client import REGISTRY
-    CIRCUIT_BREAKER_FAILURES = None
-    for collector in list(REGISTRY._collector_to_names.keys()):
-        if hasattr(collector, '_name') and collector._name == 'circuit_breaker_failures_total':
-            CIRCUIT_BREAKER_FAILURES = collector
-            break
-
-try:
-    CIRCUIT_BREAKER_SUCCESSES = Counter(
-        'circuit_breaker_successes_total',
-        'Total number of successes tracked by circuit breaker',
-        ['service', 'operation']
-    )
-except ValueError:
-    # Metric already registered, get existing one
-    from prometheus_client import REGISTRY
-    CIRCUIT_BREAKER_SUCCESSES = None
-    for collector in list(REGISTRY._collector_to_names.keys()):
-        if hasattr(collector, '_name') and collector._name == 'circuit_breaker_successes_total':
-            CIRCUIT_BREAKER_SUCCESSES = collector
-            break
-
-try:
-    CIRCUIT_BREAKER_TRIPS = Counter(
-        'circuit_breaker_trips_total',
-        'Total number of times circuit breaker has tripped',
-        ['service', 'operation']
-    )
-except ValueError:
-    # Metric already registered, get existing one
-    from prometheus_client import REGISTRY
-    CIRCUIT_BREAKER_TRIPS = None
-    for collector in list(REGISTRY._collector_to_names.keys()):
-        if hasattr(collector, '_name') and collector._name == 'circuit_breaker_trips_total':
-            CIRCUIT_BREAKER_TRIPS = collector
-            break
 
 
 class CircuitState(Enum):
@@ -110,7 +49,10 @@ class CircuitBreaker:
         recovery_timeout: float = 60.0,
         expected_exception: type = Exception,
         success_threshold: int = 2,
-        half_open_max_calls: int = 3
+        half_open_max_calls: int = 3,
+        category: str = "embeddings",
+        service: Optional[str] = None,
+        operation: str = "call",
     ):
         """
         Initialize circuit breaker.
@@ -122,6 +64,9 @@ class CircuitBreaker:
             expected_exception: Exception type to catch (others pass through)
             success_threshold: Successes needed in half-open to close circuit
             half_open_max_calls: Max concurrent calls in half-open state
+            category: Metrics category label
+            service: Metrics service label override
+            operation: Metrics operation label for call outcomes
         """
         self.name = name
         self.failure_threshold = failure_threshold
@@ -129,6 +74,9 @@ class CircuitBreaker:
         self.expected_exception = expected_exception
         self.success_threshold = success_threshold
         self.half_open_max_calls = half_open_max_calls
+        self.category = category
+        self.service = service or name
+        self.operation = operation
 
         # State management
         self._state = CircuitState.CLOSED
@@ -144,6 +92,36 @@ class CircuitBreaker:
             f"Circuit breaker '{name}' initialized: "
             f"failure_threshold={failure_threshold}, "
             f"recovery_timeout={recovery_timeout}s"
+        )
+
+    def _metric_labels(self, operation: str) -> Dict[str, str]:
+        return {
+            "category": self.category,
+            "service": self.service,
+            "operation": operation,
+        }
+
+    def _record_state(self, state: "CircuitState"):
+        set_gauge(
+            "circuit_breaker_state",
+            state.value,
+            labels=self._metric_labels("state_change"),
+        )
+
+    def _record_trip(self, reason: str):
+        increment_counter(
+            "circuit_breaker_trips_total",
+            labels={
+                "category": self.category,
+                "service": self.service,
+                "reason": reason,
+            },
+        )
+
+    def _record_rejection(self):
+        increment_counter(
+            "circuit_breaker_rejections_total",
+            labels=self._metric_labels(self.operation),
         )
 
     @property
@@ -182,31 +160,19 @@ class CircuitBreaker:
         self._failure_count = 0
         self._success_count = 0
         self._half_open_calls = 0
-
-        CIRCUIT_BREAKER_STATE.labels(
-            service=self.name,
-            operation="state_change"
-        ).set(CircuitState.CLOSED.value)
+        self._record_state(CircuitState.CLOSED)
 
         logger.info(f"Circuit breaker '{self.name}' CLOSED")
 
-    def _transition_to_open(self):
+    def _transition_to_open(self, reason: str):
         """Transition to open state"""
         self._state = CircuitState.OPEN
         self._last_failure_time = time.time()
         self._failure_count = 0
         self._success_count = 0
         self._half_open_calls = 0
-
-        CIRCUIT_BREAKER_STATE.labels(
-            service=self.name,
-            operation="state_change"
-        ).set(CircuitState.OPEN.value)
-
-        CIRCUIT_BREAKER_TRIPS.labels(
-            service=self.name,
-            operation="trip"
-        ).inc()
+        self._record_state(CircuitState.OPEN)
+        self._record_trip(reason)
 
         logger.warning(
             f"Circuit breaker '{self.name}' OPEN - "
@@ -219,11 +185,7 @@ class CircuitBreaker:
         self._success_count = 0
         self._failure_count = 0
         self._half_open_calls = 0
-
-        CIRCUIT_BREAKER_STATE.labels(
-            service=self.name,
-            operation="state_change"
-        ).set(CircuitState.HALF_OPEN.value)
+        self._record_state(CircuitState.HALF_OPEN)
 
         logger.info(f"Circuit breaker '{self.name}' HALF-OPEN (testing recovery)")
 
@@ -247,12 +209,14 @@ class CircuitBreaker:
             self._update_state()
 
             if self._state == CircuitState.OPEN:
+                self._record_rejection()
                 raise CircuitBreakerError(
                     f"Circuit breaker '{self.name}' is OPEN"
                 )
 
             if self._state == CircuitState.HALF_OPEN:
                 if self._half_open_calls >= self.half_open_max_calls:
+                    self._record_rejection()
                     raise CircuitBreakerError(
                         f"Circuit breaker '{self.name}' half-open call limit reached"
                     )
@@ -263,7 +227,7 @@ class CircuitBreaker:
             self._on_success()
             return result
         except self.expected_exception as e:
-            self._on_failure()
+            self._on_failure(e)
             raise
 
     async def call_async(self, func: Callable[..., T], *args, **kwargs) -> T:
@@ -286,12 +250,14 @@ class CircuitBreaker:
             self._update_state()
 
             if self._state == CircuitState.OPEN:
+                self._record_rejection()
                 raise CircuitBreakerError(
                     f"Circuit breaker '{self.name}' is OPEN"
                 )
 
             if self._state == CircuitState.HALF_OPEN:
                 if self._half_open_calls >= self.half_open_max_calls:
+                    self._record_rejection()
                     raise CircuitBreakerError(
                         f"Circuit breaker '{self.name}' half-open call limit reached"
                     )
@@ -302,16 +268,16 @@ class CircuitBreaker:
             self._on_success()
             return result
         except self.expected_exception as e:
-            self._on_failure()
+            self._on_failure(e)
             raise
 
     def _on_success(self):
         """Handle successful call"""
         with self._lock:
-            CIRCUIT_BREAKER_SUCCESSES.labels(
-                service=self.name,
-                operation="call"
-            ).inc()
+            increment_counter(
+                "circuit_breaker_successes_total",
+                labels=self._metric_labels(self.operation),
+            )
 
             if self._state == CircuitState.HALF_OPEN:
                 self._success_count += 1
@@ -321,23 +287,29 @@ class CircuitBreaker:
                 # Reset failure count on success in closed state
                 self._failure_count = 0
 
-    def _on_failure(self):
+    def _on_failure(self, error: Optional[Exception] = None):
         """Handle failed call"""
         with self._lock:
-            CIRCUIT_BREAKER_FAILURES.labels(
-                service=self.name,
-                operation="call"
-            ).inc()
+            outcome = type(error).__name__ if error else "error"
+            increment_counter(
+                "circuit_breaker_failures_total",
+                labels={
+                    "category": self.category,
+                    "service": self.service,
+                    "operation": self.operation,
+                    "outcome": outcome,
+                },
+            )
 
             self._failure_count += 1
             self._last_failure_time = time.time()
 
             if self._state == CircuitState.HALF_OPEN:
                 # Single failure in half-open reopens circuit
-                self._transition_to_open()
+                self._transition_to_open("half_open_failure")
             elif self._state == CircuitState.CLOSED:
                 if self._failure_count >= self.failure_threshold:
-                    self._transition_to_open()
+                    self._transition_to_open("failure_threshold")
 
     def reset(self):
         """Manually reset circuit breaker to closed state"""

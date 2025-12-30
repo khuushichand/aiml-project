@@ -1,0 +1,94 @@
+name: Publish Docker images
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      manual_tag:
+        description: Optional tag for manual runs (e.g., test-123)
+        required: false
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_IMAGE }}
+
+jobs:
+  push_to_registries:
+    name: Push ${{ matrix.name }} image to GHCR and Docker Hub
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: app
+            dockerfile: Dockerfiles/Dockerfile.prod
+            ghcr_suffix: ""
+            dockerhub_suffix: ""
+          - name: worker
+            dockerfile: Dockerfiles/Dockerfile.worker
+            ghcr_suffix: "-worker"
+            dockerhub_suffix: "-worker"
+          - name: audio-worker
+            dockerfile: Dockerfiles/Dockerfile.audio_gpu_worker
+            ghcr_suffix: "-audio-worker"
+            dockerhub_suffix: "-audio-worker"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051
+        with:
+          images: |
+            ${{ env.DOCKERHUB_IMAGE }}${{ matrix.dockerhub_suffix }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.ghcr_suffix }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ github.event_name == 'release' }}
+            type=raw,value=${{ inputs.manual_tag }},enable=${{ github.event_name == 'workflow_dispatch' && inputs.manual_tag != '' }}
+            type=sha,format=short,enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      - name: Build and push Docker images
+        id: push
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Generate artifact attestation (GHCR)
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.ghcr_suffix }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

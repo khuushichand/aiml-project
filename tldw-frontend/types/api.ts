@@ -1,28 +1,82 @@
 // API Response Types
 
-export interface MediaItem {
+export interface MediaListItem {
   id: number;
   title: string;
-  author?: string;
-  content?: string;
-  description?: string;
-  url?: string;
-  type: 'video' | 'audio' | 'document' | 'article' | 'podcast';
-  transcription?: string;
-  summary?: string;
-  created_at: string;
-  updated_at: string;
-  tags?: string[];
-  metadata?: Record<string, any>;
+  url: string;
+  type: string;
+  keywords?: string[];
+}
+
+export type MediaItem = MediaListItem;
+
+export interface MediaPagination {
+  page: number;
+  results_per_page: number;
+  total_pages: number;
+  total_items: number;
 }
 
 export interface MediaListResponse {
-  items: MediaItem[];
-  total: number;
-  page: number;
-  page_size: number;
-  has_next: boolean;
-  has_prev: boolean;
+  items: MediaListItem[];
+  pagination: MediaPagination;
+}
+
+export interface ProcessResult {
+  processed_count?: number;
+  errors_count?: number;
+  errors?: string[];
+  results?: Array<Record<string, unknown>>;
+  confabulation_results?: unknown;
+  [key: string]: unknown;
+}
+
+export interface ChatCompletionResponse {
+  choices?: Array<{ message?: { content?: string } }>;
+}
+
+export interface MediaSourceDetail {
+  url?: string;
+  title: string;
+  duration?: number | string;
+  type: string;
+}
+
+export interface MediaProcessingDetail {
+  prompt?: string;
+  analysis?: string;
+  safe_metadata?: Record<string, unknown>;
+  model?: string;
+  timestamp_option?: boolean;
+}
+
+export interface MediaContentDetail {
+  metadata: Record<string, unknown>;
+  text: string;
+  word_count: number;
+}
+
+export interface VersionDetail {
+  uuid?: string;
+  media_id: number;
+  version_number: number;
+  created_at: string;
+  prompt?: string;
+  analysis_content?: string;
+  safe_metadata?: Record<string, unknown>;
+  content?: string;
+}
+
+export interface MediaDetailResponse {
+  media_id: number;
+  source: MediaSourceDetail;
+  processing: MediaProcessingDetail;
+  content: MediaContentDetail;
+  keywords: string[];
+  timestamps: string[];
+  versions?: VersionDetail[];
+  has_original_file?: boolean;
+  original_file_url?: string;
 }
 
 export interface SearchResult {
@@ -30,7 +84,7 @@ export interface SearchResult {
   title: string;
   content_snippet: string;
   relevance_score: number;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface SearchResponse {

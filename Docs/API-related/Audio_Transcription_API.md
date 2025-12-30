@@ -72,16 +72,16 @@ The tldw_server provides a comprehensive audio transcription API that is fully c
 
 The `model` string for `/api/v1/audio/transcriptions` is parsed via the same logic as the ingestion pipeline (`parse_transcription_model` in `Audio_Transcription_Lib.py`), so the following patterns are accepted:
 
-- **Whisper / faster-whisper**  
-  - `whisper-1`, `whisper` (aliases for the default faster-whisper Whisper model)  
+- **Whisper / faster-whisper**
+  - `whisper-1`, `whisper` (aliases for the default faster-whisper Whisper model)
   - Raw faster-whisper ids such as `large-v3`, `distil-whisper-large-v3`, or full HF ids (e.g. `openai/whisper-large-v3`).
-- **NVIDIA NeMo Parakeet**  
-  - `parakeet`, `parakeet-standard`, `parakeet-onnx`, `parakeet-mlx`  
+- **NVIDIA NeMo Parakeet**
+  - `parakeet`, `parakeet-standard`, `parakeet-onnx`, `parakeet-mlx`
   - Any string that `parse_transcription_model` resolves to provider `"parakeet"` (e.g., some `nemo-parakeet-*` ids).
-- **NVIDIA NeMo Canary**  
+- **NVIDIA NeMo Canary**
   - `canary` (and related aliases whose provider resolves to `"canary"`).
-- **Qwen2Audio**  
-  - `qwen2audio`, `qwen2audio-*` (all map to provider `"qwen2audio"`)  
+- **Qwen2Audio**
+  - `qwen2audio`, `qwen2audio-*` (all map to provider `"qwen2audio"`)
   - Convenience alias `qwen` also maps to `qwen2audio` in the HTTP API.
 
 ## API Endpoints

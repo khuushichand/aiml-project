@@ -172,6 +172,7 @@ class AuthnzUsersRepo:
         role: Optional[str] = None,
         is_active: Optional[bool] = None,
         search: Optional[str] = None,
+        org_ids: Optional[List[int]] = None,
     ) -> Tuple[List[Dict[str, Any]], int]:
         """
         Return a window of users and the total count matching the filters.
@@ -186,6 +187,22 @@ class AuthnzUsersRepo:
         conditions: list[str] = []
         params: list[Any] = []
         param_count = 0
+        join_clause = ""
+
+        if org_ids is not None:
+            if len(org_ids) == 0:
+                return [], 0
+            join_clause = " JOIN org_members om ON om.user_id = users.id"
+            if is_pg:
+                param_count += 1
+                conditions.append(f"om.org_id = ANY(${param_count})")
+                params.append(org_ids)
+                conditions.append("om.status = 'active'")
+            else:
+                placeholders = ", ".join(["?"] * len(org_ids))
+                conditions.append(f"om.org_id IN ({placeholders})")
+                params.extend(org_ids)
+                conditions.append("om.status = 'active'")
 
         if role:
             param_count += 1
@@ -212,37 +229,30 @@ class AuthnzUsersRepo:
 
         try:
             # Total count
-            if is_pg:
-                count_query = f"SELECT COUNT(*) FROM users{where_clause}"
-                total = await db.db_pool.fetchval(count_query, *params)
-            else:
-                count_query = f"SELECT COUNT(*) FROM users{where_clause}"
-                cursor = await db.db_pool.execute(count_query, params)
-                row = await cursor.fetchone()
-                total = row[0] if row else 0
+            count_query = f"SELECT COUNT(DISTINCT users.id) FROM users{join_clause}{where_clause}"
+            total = await db.db_pool.fetchval(count_query, *params)
 
             # Page of users
             if is_pg:
                 query = f"""
-                    SELECT id, uuid, username, email, role, is_active, is_verified,
+                    SELECT DISTINCT users.id, users.uuid, users.username, users.email, users.role, users.is_active, users.is_verified,
                            created_at, last_login, storage_quota_mb, storage_used_mb
-                    FROM users{where_clause}
-                    ORDER BY created_at DESC
+                    FROM users{join_clause}{where_clause}
+                    ORDER BY users.created_at DESC
                     LIMIT ${param_count + 1} OFFSET ${param_count + 2}
                 """
                 q_params = [*params, limit, offset]
                 rows = await db.db_pool.fetch(query, *q_params)
             else:
                 query = f"""
-                    SELECT id, uuid, username, email, role, is_active, is_verified,
+                    SELECT DISTINCT users.id, users.uuid, users.username, users.email, users.role, users.is_active, users.is_verified,
                            created_at, last_login, storage_quota_mb, storage_used_mb
-                    FROM users{where_clause}
-                    ORDER BY created_at DESC
+                    FROM users{join_clause}{where_clause}
+                    ORDER BY users.created_at DESC
                     LIMIT ? OFFSET ?
                 """
                 q_params = [*params, limit, offset]
-                cursor = await db.db_pool.execute(query, q_params)
-                rows = await cursor.fetchall()
+                rows = await db.db_pool.fetchall(query, *q_params)
 
             users: list[Dict[str, Any]] = []
             for row in rows:

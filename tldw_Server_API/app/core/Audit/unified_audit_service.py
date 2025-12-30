@@ -1223,14 +1223,18 @@ class UnifiedAuditService:
                 )
 
         # Add to buffer
+        should_flush = False
         async with self.buffer_lock:
             self.event_buffer.append(event)
             self.stats["events_logged"] += 1
+            should_flush = len(self.event_buffer) >= self.buffer_size or event.risk_score >= HIGH_RISK_SCORE
 
-            # Flush if buffer is full or high-risk event
+        # In test mode we avoid background tasks; flush immediately for determinism.
+        if self._test_mode:
+            await self.flush()
+        elif should_flush:
             # Task is tracked via _flush_futures in _tracked_flush() for graceful shutdown
-            if len(self.event_buffer) >= self.buffer_size or event.risk_score >= HIGH_RISK_SCORE:
-                asyncio.create_task(self._tracked_flush())
+            asyncio.create_task(self._tracked_flush())
 
         return event.event_id
 
@@ -2053,6 +2057,24 @@ class UnifiedAuditService:
             "risk_score", "pii_detected", "compliance_flags", "metadata",
         ]
 
+        def _maybe_load_json(value: Any) -> Any:
+            if value is None:
+                return None
+            if isinstance(value, (dict, list)):
+                return value
+            if isinstance(value, str):
+                try:
+                    return json.loads(value)
+                except Exception:
+                    return value
+            return value
+
+        def _deserialize_row(row: Dict[str, Any]) -> Dict[str, Any]:
+            out = dict(row)
+            out["metadata"] = _maybe_load_json(out.get("metadata"))
+            out["compliance_flags"] = _maybe_load_json(out.get("compliance_flags"))
+            return out
+
         # Streaming CSV export when writing to a file to reduce memory usage
         if fmt == "csv" and file_path is not None:
             p = Path(file_path)
@@ -2171,12 +2193,13 @@ class UnifiedAuditService:
                     for r in rows:
                         if max_rows is not None and written >= max_rows:
                             break
+                        payload = _deserialize_row(r)
                         if is_jsonl:
-                            yield json.dumps(r, ensure_ascii=False) + "\n"
+                            yield json.dumps(payload, ensure_ascii=False) + "\n"
                         else:
                             if not first:
                                 yield ","
-                            yield json.dumps(r, ensure_ascii=False)
+                            yield json.dumps(payload, ensure_ascii=False)
                             first = False
                         written += 1
                     # backpressure: yield control
@@ -2223,7 +2246,7 @@ class UnifiedAuditService:
                             break
                         if not first:
                             f.write(",")
-                        f.write(json.dumps(r, ensure_ascii=False))
+                        f.write(json.dumps(_deserialize_row(r), ensure_ascii=False))
                         written += 1
                         first = False
                     if len(rows) < chunk_size or (max_rows is not None and written >= max_rows):
@@ -2261,7 +2284,7 @@ class UnifiedAuditService:
                     for r in rows:
                         if max_rows is not None and written >= max_rows:
                             break
-                        f.write(json.dumps(r, ensure_ascii=False) + "\n")
+                        f.write(json.dumps(_deserialize_row(r), ensure_ascii=False) + "\n")
                         written += 1
                     if len(rows) < chunk_size or (max_rows is not None and written >= max_rows):
                         break
@@ -2308,7 +2331,10 @@ class UnifiedAuditService:
         if fmt == "json":
             # If no file path, return JSON content as a single string
             if file_path is None:
-                content = json.dumps(all_rows, ensure_ascii=False)
+                content = json.dumps(
+                    [_deserialize_row(r) for r in all_rows],
+                    ensure_ascii=False,
+                )
                 return content
             # File-path handled earlier
             return 0
@@ -2316,7 +2342,9 @@ class UnifiedAuditService:
             # JSON Lines: one JSON object per line
             if file_path is None:
                 # Return content as newline-separated JSON objects
-                return "\n".join(json.dumps(r, ensure_ascii=False) for r in all_rows)
+                return "\n".join(
+                    json.dumps(_deserialize_row(r), ensure_ascii=False) for r in all_rows
+                )
             p = Path(file_path)
             p.parent.mkdir(parents=True, exist_ok=True)
             rows_written = 0

@@ -50,6 +50,8 @@ The ingestion and media processing hub for video, audio, PDF, EPUB, documents (t
   - Upload gate: `tldw_Server_API/app/core/Ingestion_Media_Processing/Upload_Sink.py:1` via `FileValidator` (puremagic/python‑magic fallback), MIME/extension allowlists, size caps, optional YARA scanning, safe ZIP/TAR extraction with nesting/size limits.
   - API dependency: `tldw_Server_API/app/api/v1/API_Deps/validations_deps.py:1` provides a singleton validator.
   - Hardened parsers for XML/HTML; executables/scripts blocked by default.
+  - SSRF guard: outbound media URLs are checked against egress policy before download (audio/video + document-like URLs).
+    In tests, hostname-based DNS checks are relaxed to avoid flaky resolution; literal IP checks remain enforced.
 - Configuration:
   - Env vars: `MAGIC_FILE_PATH` (libmagic), `YARA_RULES_PATH` (malware rules); set via `.env`/env.
   - `loaded_config_data['media_processing']` keys honored by validator, e.g.: `max_audio_file_size_mb`, `max_video_file_size_mb`, `max_document_file_size_mb`, `max_archive_file_size_mb`, `max_archive_internal_files`, `max_archive_uncompressed_size_mb`, `max_archive_member_uncompressed_size_mb`, `max_archive_nesting_depth`, `yara_fail_open`.

@@ -231,6 +231,8 @@ class ChatbookManifestResponse(BaseModel):
     categories: List[str] = Field(default_factory=list)
     language: str = "en"
     license: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    truncation: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ExportJobResponse(BaseModel):

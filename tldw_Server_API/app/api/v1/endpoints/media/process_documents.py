@@ -374,6 +374,7 @@ async def process_documents_endpoint(
                     title_override=form_data.title,
                     author_override=form_data.author,
                     keywords=form_data.keywords,
+                    base_dir=temp_dir,
                 )
                 tasks.append(loop.run_in_executor(None, partial_func))
 

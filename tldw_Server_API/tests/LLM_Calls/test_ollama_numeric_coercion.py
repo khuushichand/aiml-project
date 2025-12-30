@@ -61,4 +61,3 @@ def test_ollama_top_p_is_coerced_to_float():
     assert "top_p" in captured_payload
     assert isinstance(captured_payload["top_p"], float)
     assert captured_payload["top_p"] == 0.9
-

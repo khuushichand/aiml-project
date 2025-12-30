@@ -72,4 +72,3 @@ def get_mediawiki_form_data(
 
 
 __all__ = ["get_mediawiki_form_data"]
-

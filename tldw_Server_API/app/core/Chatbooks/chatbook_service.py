@@ -121,6 +121,78 @@ class ChatbookService:
 
         return False
 
+    @staticmethod
+    def _get_env_int(name: str, default: int) -> int:
+        """Get integer value from environment variable with fallback to default."""
+        try:
+            return int(os.getenv(name, str(default)))
+        except (ValueError, TypeError):
+            return default
+
+    @classmethod
+    def _get_export_retention_seconds(cls) -> int:
+        raw_hours = os.getenv("CHATBOOKS_EXPORT_RETENTION_DEFAULT_HOURS", "24")
+        try:
+            hours = int(raw_hours)
+        except (TypeError, ValueError):
+            hours = 24
+        if hours <= 0:
+            hours = 24
+        return hours * 3600
+
+    @classmethod
+    def _get_download_ttl_seconds(cls) -> int:
+        ttl = cls._get_env_int("CHATBOOKS_URL_TTL_SECONDS", 0)
+        if ttl <= 0:
+            ttl = cls._get_export_retention_seconds()
+        return ttl
+
+    @classmethod
+    def _get_export_expiry(cls, now: datetime) -> datetime:
+        return now + timedelta(seconds=cls._get_export_retention_seconds())
+
+    @classmethod
+    def _get_download_expiry(cls, now: datetime, export_expires_at: datetime) -> datetime:
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        if export_expires_at.tzinfo is None:
+            export_expires_at = export_expires_at.replace(tzinfo=timezone.utc)
+        ttl_seconds = cls._get_download_ttl_seconds()
+        link_expires_at = now + timedelta(seconds=ttl_seconds)
+        return link_expires_at if link_expires_at <= export_expires_at else export_expires_at
+
+    @classmethod
+    def _get_binary_limits_bytes(cls) -> Dict[str, int]:
+        raw = os.getenv("CHATBOOKS_BINARY_LIMITS_MB", "").strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.warning("CHATBOOKS_BINARY_LIMITS_MB is not valid JSON; ignoring")
+            return {}
+        if not isinstance(parsed, dict):
+            logger.warning("CHATBOOKS_BINARY_LIMITS_MB must be a JSON object; ignoring")
+            return {}
+        limits: Dict[str, int] = {}
+        for key, value in parsed.items():
+            try:
+                mb_value = float(value)
+            except (TypeError, ValueError):
+                continue
+            if mb_value < 0:
+                continue
+            limits[str(key).strip().lower()] = int(mb_value * 1024 * 1024)
+        return limits
+
+    @staticmethod
+    def _resolve_binary_limit(limits: Dict[str, int], *keys: str) -> Optional[int]:
+        for key in keys:
+            limit = limits.get(key)
+            if limit is not None:
+                return limit
+        return None
+
     def __init__(self, user_id: Union[str, int], db: CharactersRAGDB, user_id_int: Optional[int] = None):
         """
         Initialize the chatbook service for a specific user.
@@ -943,6 +1015,7 @@ class ChatbookService:
                 categories=categories or [],
                 export_id=str(uuid4())
             )
+            manifest.binary_limits = self._get_binary_limits_bytes()
 
             # Collect content
             content = ChatbookContent()
@@ -1113,13 +1186,14 @@ class ChatbookService:
                             logger.debug(f"PS adapter update_status (cancelled) failed for export job {job.job_id}: {e}")
                     return
                 job.status = ExportStatus.COMPLETED
-                job.completed_at = datetime.now(timezone.utc)
+                now_utc = datetime.now(timezone.utc)
+                job.completed_at = now_utc
                 job.output_path = file_path
                 job.file_size_bytes = Path(file_path).stat().st_size if file_path else None
                 # Build (optionally signed) download URL and expiry
-                ttl_seconds = int(os.getenv("CHATBOOKS_URL_TTL_SECONDS", "86400") or "86400")
-                job.expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
-                job.download_url = self._build_download_url(job.job_id, job.expires_at)
+                job.expires_at = self._get_export_expiry(now_utc)
+                download_expires_at = self._get_download_expiry(now_utc, job.expires_at)
+                job.download_url = self._build_download_url(job.job_id, download_expires_at)
             else:
                 # Update job with failure
                 job.status = ExportStatus.FAILED
@@ -1678,9 +1752,10 @@ class ChatbookService:
                                 ej.file_size_bytes = Path(file_path).stat().st_size if file_path else None
                             except Exception:
                                 pass
-                            ttl_seconds = int(os.getenv("CHATBOOKS_URL_TTL_SECONDS", "86400") or "86400")
-                            ej.expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
-                            ej.download_url = self._build_download_url(ej.job_id, ej.expires_at)
+                            now_utc = datetime.now(timezone.utc)
+                            ej.expires_at = self._get_export_expiry(now_utc)
+                            download_expires_at = self._get_download_expiry(now_utc, ej.expires_at)
+                            ej.download_url = self._build_download_url(ej.job_id, download_expires_at)
                             self._save_export_job(ej)
                         jm.complete_job(
                             int(job["id"]),
@@ -2273,10 +2348,29 @@ class ChatbookService:
             normalized = self._normalize_evaluation_record(record)
             runs_payload: List[Dict[str, Any]] = []
             try:
-                runs, has_more = evals_db.list_runs(eval_id=str(eval_id), limit=200, return_has_more=True)
+                raw_max_rows = os.getenv("CHATBOOKS_EVAL_EXPORT_MAX_ROWS", "200")
+                try:
+                    max_rows = int(raw_max_rows)
+                except (TypeError, ValueError):
+                    max_rows = 200
+                runs, has_more = evals_db.list_runs(eval_id=str(eval_id), limit=max_rows, return_has_more=True)
                 runs_payload = [self._normalize_evaluation_run(run) for run in runs]
                 if has_more:
-                    self._note_todo("Evaluation export limited to first 200 runs; add pagination support.")
+                    normalized["truncated"] = True
+                    normalized["max_rows"] = max_rows
+                    truncation = manifest.truncation.setdefault("evaluations", {})
+                    truncation["truncated"] = True
+                    truncation["max_rows"] = max_rows
+                    if runs_payload:
+                        last_run_id = runs_payload[-1].get("id")
+                        if last_run_id:
+                            continuations = truncation.setdefault("continuations", [])
+                            continuations.append({
+                                "evaluation_id": str(eval_id),
+                                "run_id": str(last_run_id),
+                                "continuation_token": str(last_run_id)
+                            })
+                    self._note_todo("Evaluation export limited to max rows; add resumable export support.")
             except Exception as exc:
                 logger.debug(f"Failed to list evaluation runs for {eval_id}: {exc}")
                 self._note_todo("Evaluation runs export failed for some items; inspect logs.")
@@ -2307,6 +2401,10 @@ class ChatbookService:
         """Collect conversations for export."""
         conv_dir = work_dir / "content" / "conversations"
         conv_dir.mkdir(parents=True, exist_ok=True)
+        binary_limits = manifest.binary_limits or {}
+        attachment_limit = self._resolve_binary_limit(
+            binary_limits, "conversations", "conversation", "attachments"
+        )
 
         for conv_id in conversation_ids:
             try:
@@ -2337,6 +2435,15 @@ class ChatbookService:
                             image_bytes = image_bytes.tobytes()
                         if not image_bytes:
                             continue
+                        if attachment_limit is not None and len(image_bytes) > attachment_limit:
+                            message_payload["attachments"].append({
+                                "type": "image",
+                                "mime_type": image.get("image_mime_type"),
+                                "file_path": None,
+                                "bundled": False,
+                                "size_bytes": len(image_bytes)
+                            })
+                            continue
                         if attachments_dir is None:
                             attachments_dir = conv_dir / f"conversation_{conv_id}_assets"
                             attachments_dir.mkdir(parents=True, exist_ok=True)
@@ -2354,7 +2461,8 @@ class ChatbookService:
                         message_payload["attachments"].append({
                             "type": "image",
                             "mime_type": image.get("image_mime_type"),
-                            "file_path": rel_path
+                            "file_path": rel_path,
+                            "bundled": True
                         })
 
                     # Placeholder for future citation export support

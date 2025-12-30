@@ -2,7 +2,7 @@
 
 ## 1. Background
 - The ingestion pipeline optionally extracts factual statements from media chunks and stores them in `MediaDatabase.Claims`, with optional vector embeddings (`tldw_Server_API/app/core/Embeddings/ChromaDB_Library.py`).
-- The answer-time `ClaimsEngine` extracts and verifies claims for RAG outputs, providing supported/refuted/NEI labels, evidence, and citations (`tldw_Server_API/app/core/Ingestion_Media_Processing/Claims/claims_engine.py`).
+- The answer-time `ClaimsEngine` extracts and verifies claims for RAG outputs, providing supported/refuted/NEI labels, evidence, and citations (`tldw_Server_API/app/core/Claims_Extraction/claims_engine.py`).
 - REST endpoints and a background rebuild worker expose lifecycle controls, while the front-end search page provides toggles for claim extraction and verification.
 
 ## 2. Problem Statement
@@ -15,11 +15,12 @@ Analysts and downstream automations need grounded, inspectable factual statement
 - Provide operators APIs and UI controls to inspect, rebuild, and configure claims without direct DB access.
 
 ## 4. Out of Scope (v1)
-- Manual review workflow (status updates, notes, audit trails).
+- Reviewer UI/batch tooling beyond the API surface (workflow APIs/audit log exist, but end-to-end tooling remains out of scope; see Reviewer Workflow PRD).
 - Automated veracity scoring beyond supported/refuted/NEI labels.
 - Multilingual extraction/verification beyond existing English-centric models.
-- External fact-check provider integrations or cross-media claim deduplication.
+- External fact-check provider integrations.
 - Browser extension or export channels beyond existing chatbooks.
+- Cluster graph links, search grouping, or trending dashboards beyond the baseline clustering APIs.
 
 ## 5. Personas & Key Use Cases
 - **Research analyst**: Surface factual highlights from lengthy transcripts ahead of deep review.
@@ -29,7 +30,7 @@ Analysts and downstream automations need grounded, inspectable factual statement
 
 ## 6. Functional Requirements
 ### 6.1 Ingestion-Time Claims
-- After chunking, extract up to `CLAIMS_MAX_PER_CHUNK` statements using configured mode (`heuristic`, `ner`, provider, or fallback) and store with chunk hashes (`tldw_Server_API/app/core/Ingestion_Media_Processing/Claims/ingestion_claims.py`).
+- After chunking, extract up to `CLAIMS_MAX_PER_CHUNK` statements using configured mode (`heuristic`, `ner`, provider, or fallback) and store with chunk hashes (`tldw_Server_API/app/core/Claims_Extraction/ingestion_claims.py`).
 - When `CLAIMS_EMBED` is enabled, upsert claim embeddings into a per-user Chroma collection with metadata linking to media/chunk/extractor (`tldw_Server_API/app/core/Embeddings/ChromaDB_Library.py`).
 - Soft-delete prior claims before inserting rebuilt sets to maintain version history.
 
@@ -45,7 +46,7 @@ Analysts and downstream automations need grounded, inspectable factual statement
 - Deliver `POST` endpoints to rebuild single media, bulk media (`missing`, `all`, `stale` policies), and FTS indexes; expose `GET /status` for worker stats (`tldw_Server_API/app/api/v1/endpoints/claims.py`).
 
 ### 6.4 Background Rebuild & Automation
-- `ClaimsRebuildService` queues rebuild tasks, chunks stored content, reapplies extraction, soft-deletes old rows, and logs counts (`tldw_Server_API/app/services/claims_rebuild_service.py`).
+- `ClaimsRebuildService` queues rebuild tasks, chunks stored content, reapplies extraction, soft-deletes old rows, and logs counts (`tldw_Server_API/app/core/Claims_Extraction/claims_rebuild_service.py`).
 - Periodic loop in `main.py` optionally enqueues rebuilds based on `CLAIMS_REBUILD_*` settings, obeying single-user defaults until multi-user scheduling is implemented.
 
 ### 6.5 UI & Integrations
@@ -79,14 +80,17 @@ Analysts and downstream automations need grounded, inspectable factual statement
 - Future observability consideration: per-provider latency/cost tracking for claim-specific workloads.
 
 ## 12. Known Gaps & Risks
-- No reviewer workflow or claim-level moderation; all claims remain unreviewed after storage.
 - Multilingual support limited; spaCy default and prompts assume English.
 - Evidence spans rely on heuristic matching and can misalign in longer documents.
 - Cost control is limited to concurrency/timeout knobs; no per-job budget guardrails.
-- Deduplication across media and watchlist-style analytics are not implemented.
 
 ## 13. Roadmap
-1. Introduce reviewer states/notes and expose via API/UI to resolve unsupported claims.
-2. Expand extractor catalog (multilingual heuristics, lightweight local LLMs) and scheduling heuristics.
-3. Implement cross-media claim clustering/deduplication and integrate with watchlists/analytics.
-4. Add richer monitoring (provider latency/cost dashboards) and adaptive throttling for rebuild jobs.
+1. In Progress: nightly extractor delta reporting and correction motif aggregates for review analytics.
+2. Planned: trend dashboards and hotspot analytics for clustered claims (expands review analytics beyond nightly delta reporting).
+3. Planned: expand extractor catalog (multilingual heuristics, lightweight local LLMs) and scheduling heuristics.
+4. Planned: add per-job budget guardrails and provider latency/cost dashboards with adaptive throttling.
+5. Planned: improve evidence span alignment and correction workflows.
+
+## 14. References
+- Reviewer Workflow PRD (`Docs/Product/Claims_Module/Claims_Reviewer_Workflow_PRD.md`) for review workflow APIs and audit trails.
+- Claims Monitoring PRD (`Docs/Product/Claims_Module/Claims_Monitoring_PRD.md`) for metrics, alerting, and monitoring config.

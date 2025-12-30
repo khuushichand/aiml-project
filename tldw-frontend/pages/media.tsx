@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
 import { Layout } from '@/components/layout/Layout';
 import { Button } from '@/components/ui/Button';
@@ -9,8 +9,29 @@ import { useToast } from '@/components/ui/ToastProvider';
 import JsonEditor from '@/components/ui/JsonEditor';
 import { CardSkeleton } from '@/components/ui/Skeleton';
 import HotkeysOverlay from '@/components/ui/HotkeysOverlay';
+import type {
+  ChatCompletionResponse,
+  MediaDetailResponse,
+  MediaItem,
+  MediaListResponse,
+  ProcessResult,
+} from '@/types/api';
 
 type MediaType = 'video' | 'audio' | 'document' | 'pdf';
+
+const resolveMetadataValue = (
+  metadata: Record<string, unknown> | undefined,
+  keys: string[]
+): string | null => {
+  if (!metadata) return null;
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === 'string' && value.trim()) {
+      return value;
+    }
+  }
+  return null;
+};
 
 export default function MediaPage() {
   const { show } = useToast();
@@ -19,29 +40,29 @@ export default function MediaPage() {
   const [files, setFiles] = useState<FileList | null>(null);
   const [urls, setUrls] = useState('');
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<ProcessResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Search/list state
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchResults, setSearchResults] = useState<MediaItem[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
-  const [allItems, setAllItems] = useState<any[]>([]);
+  const [allItems, setAllItems] = useState<MediaItem[]>([]);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [totalItems, setTotalItems] = useState(0);
   const itemsPerPage = 10;
-  const [selectedItem, setSelectedItem] = useState<any | null>(null);
+  const [selectedItem, setSelectedItem] = useState<MediaDetailResponse | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<string | null>(null);
   const [analysisModel, setAnalysisModel] = useState<string>('gpt-3.5-turbo');
   const [analysisPrompt, setAnalysisPrompt] = useState<string>('Summarize the following content in 5 bullet points.');
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const [advancedJson, setAdvancedJson] = useState<string>(JSON.stringify({ perform_analysis: true, perform_chunking: true }, null, 2));
   type ClaimsToggle = 'inherit' | 'enabled' | 'disabled';
   const [claimsExtraction, setClaimsExtraction] = useState<ClaimsToggle>('inherit');
   const [claimsExtractorMode, setClaimsExtractorMode] = useState<string>('');
   const [claimsMaxPerChunk, setClaimsMaxPerChunk] = useState<string>('');
+  const MAX_SNIPPET_CHARS = 12000;
 
   const endpoint = (t: MediaType) => {
     switch (t) {
@@ -67,14 +88,21 @@ export default function MediaPage() {
       }
       // Advanced options JSON appended as fields
       try {
-        const opts = JSON.parse(advancedJson || '{}');
+        const rawAdvanced = advancedJson?.trim() || '{}';
+        const opts = JSON.parse(rawAdvanced);
         delete opts.perform_claims_extraction;
         delete opts.claims_extractor_mode;
         delete opts.claims_max_per_chunk;
         Object.entries(opts).forEach(([k, v]) => {
           if (v !== undefined && v !== null) fd.append(k, typeof v === 'string' ? v : JSON.stringify(v));
         });
-      } catch {}
+      } catch {
+        show({
+          title: 'Invalid advanced options JSON',
+          description: 'Using defaults instead.',
+          variant: 'warning',
+        });
+      }
       if (claimsExtraction !== 'inherit') {
         fd.append('perform_claims_extraction', claimsExtraction === 'enabled' ? 'true' : 'false');
       }
@@ -88,14 +116,15 @@ export default function MediaPage() {
         }
       }
 
-      const res = await apiClient.post(endpoint(mediaType), fd, {
+      const res = await apiClient.post<ProcessResult>(endpoint(mediaType), fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setResult(res);
       show({ title: 'Ingestion started', variant: 'success' });
-    } catch (e: any) {
-      setError(e.message || 'Upload failed');
-      show({ title: 'Upload failed', description: e?.message || 'Failed', variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      setError(message);
+      show({ title: 'Upload failed', description: message, variant: 'danger' });
     } finally {
       setLoading(false);
     }
@@ -109,23 +138,25 @@ export default function MediaPage() {
     }
     setSearchLoading(true);
     try {
-      const data = await apiClient.get<any>('/media/search', { params: { query: q, limit: 10 } });
+      const data = await apiClient.get<MediaListResponse>('/media/search', { params: { query: q, limit: 10 } });
       setSearchResults(data?.items || []);
-    } catch (e) {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
       setSearchResults([]);
+      show({ title: 'Search failed', description: message, variant: 'warning' });
     } finally {
       setSearchLoading(false);
     }
-  }, 300), []);
+  }, 300), [show]);
 
   useEffect(() => {
     doSearch(searchQuery);
   }, [searchQuery, doSearch]);
 
-  const loadAll = async (p = 1) => {
+  const loadAll = useCallback(async (p = 1) => {
     setSearchLoading(true);
     try {
-      const data = await apiClient.post<any>('/media/search', {
+      const data = await apiClient.post<MediaListResponse>('/media/search', {
         query: '',
         media_types: [],
         tags: [],
@@ -137,33 +168,45 @@ export default function MediaPage() {
       setTotalItems(data?.pagination?.total_items || 0);
       setTotalPages(data?.pagination?.total_pages || 1);
       show({ title: 'Media loaded', description: `Page ${p}`, variant: 'success' });
-    } catch (e) {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
       setAllItems([]);
-      show({ title: 'Load failed', variant: 'warning' });
+      show({ title: 'Load failed', description: message, variant: 'warning' });
     } finally {
       setSearchLoading(false);
     }
-  };
+  }, [itemsPerPage, show]);
 
-  const loadDetails = async (id: number) => {
+  const loadDetails = useCallback(async (id: number) => {
     try {
-      const data = await apiClient.get<any>(`/media/${id}`);
+      const data = await apiClient.get<MediaDetailResponse>(`/media/${id}`);
       setSelectedItem(data);
       setAnalysisResult(null);
       show({ title: 'Loaded details', variant: 'info' });
-    } catch (e) {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
       setSelectedItem(null);
-      show({ title: 'Load details failed', variant: 'warning' });
+      show({ title: 'Load details failed', description: message, variant: 'warning' });
     }
-  };
+  }, [show]);
 
-  const summarizeSelected = async () => {
+  const notifyIfTruncated = useCallback((text: string, actionLabel: string) => {
+    if (text.length <= MAX_SNIPPET_CHARS) return;
+    show({
+      title: 'Content truncated',
+      description: `${actionLabel} first ${MAX_SNIPPET_CHARS.toLocaleString()} of ${text.length.toLocaleString()} characters.`,
+      variant: 'info',
+    });
+  }, [show]);
+
+  const summarizeSelected = useCallback(async () => {
     if (!selectedItem) return;
     setAnalyzing(true);
     setAnalysisResult(null);
     try {
       const text: string = selectedItem?.content?.text || '';
-      const snippet = text.slice(0, 12000); // avoid very large payloads
+      notifyIfTruncated(text, 'Analyzing');
+      const snippet = text.slice(0, MAX_SNIPPET_CHARS); // avoid very large payloads
       const payload = {
         model: analysisModel,
         stream: false,
@@ -172,23 +215,25 @@ export default function MediaPage() {
           { role: 'user', content: `${analysisPrompt}\n\n${snippet}` }
         ],
       };
-      const res = await apiClient.post<any>('/chat/completions', payload);
+      const res = await apiClient.post<ChatCompletionResponse>('/chat/completions', payload);
       const textOut = res?.choices?.[0]?.message?.content || '';
       setAnalysisResult(textOut);
       show({ title: 'Summary ready', variant: 'success' });
-    } catch (e: any) {
-      setAnalysisResult(`Error: ${e.message || e}`);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      setAnalysisResult(`Error: ${message}`);
       show({ title: 'Summarize failed', variant: 'danger' });
     } finally {
       setAnalyzing(false);
     }
-  };
+  }, [analysisModel, analysisPrompt, notifyIfTruncated, selectedItem, show]);
 
-  const sendToChatSelected = async () => {
+  const sendToChatSelected = useCallback(async () => {
     if (!selectedItem) return;
     try {
       const text: string = selectedItem?.content?.text || '';
-      const snippet = text.slice(0, 12000); // keep reasonable size
+      notifyIfTruncated(text, 'Sending');
+      const snippet = text.slice(0, MAX_SNIPPET_CHARS); // keep reasonable size
       const payload = { message: snippet, title: selectedItem?.source?.title || '' };
       localStorage.setItem('tldw-chat-prefill', JSON.stringify(payload));
       router.push('/chat');
@@ -196,7 +241,7 @@ export default function MediaPage() {
     } catch {
       // no-op
     }
-  };
+  }, [MAX_SNIPPET_CHARS, notifyIfTruncated, router, selectedItem, show]);
 
   // Media hotkeys: Cmd/Ctrl+Shift+L (Load all), Cmd/Ctrl+Shift+S (Summarize), Cmd/Ctrl+Shift+J (Copy result JSON)
   useEffect(() => {
@@ -212,7 +257,7 @@ export default function MediaPage() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [result, summarizeSelected]);
+  }, [loadAll, result, show, summarizeSelected]);
 
   return (
     <Layout>
@@ -238,7 +283,7 @@ export default function MediaPage() {
                 {searchResults.map((item, idx) => (
                   <li key={idx} className="rounded border p-2">
                     <div className="font-medium text-gray-800">{item.title || 'Untitled'}</div>
-                    <div className="text-xs text-gray-500">{item.media_type || 'unknown'}</div>
+                    <div className="text-xs text-gray-500">{item.type || 'unknown'}</div>
                   </li>
                 ))}
               </ul>
@@ -266,9 +311,9 @@ export default function MediaPage() {
                     <div className="flex items-center justify-between">
                       <div>
                         <div className="font-medium text-gray-800">{item.title || 'Untitled'}</div>
-                        <div className="text-xs text-gray-500">{item.media_type || 'unknown'} • {item.author || 'Unknown'}</div>
+                        <div className="text-xs text-gray-500">{item.type || 'unknown'}</div>
                       </div>
-                      <div className="text-xs text-gray-400">{item.created_at ? new Date(item.created_at).toLocaleDateString() : ''}</div>
+                      <div className="text-xs text-gray-400">ID {item.id}</div>
                     </div>
                   </li>
                 ))}
@@ -338,6 +383,14 @@ export default function MediaPage() {
               <div className="mb-2 flex items-center justify-between">
                 <h2 className="text-lg font-semibold">Details: {selectedItem?.source?.title || 'Untitled'}</h2>
                 <div className="space-x-2">
+                  {selectedItem.has_original_file && (
+                    <Button
+                      variant="secondary"
+                      onClick={() => router.push(`/media/${selectedItem.media_id}/view`)}
+                    >
+                      View PDF
+                    </Button>
+                  )}
                   <Button onClick={summarizeSelected} loading={analyzing} disabled={analyzing}>Summarize</Button>
                   <Button variant="secondary" onClick={sendToChatSelected}>Send to Chat</Button>
                 </div>
@@ -349,7 +402,12 @@ export default function MediaPage() {
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">Author</div>
-                  <div className="text-sm">{selectedItem?.source?.author || '-'}</div>
+                  <div className="text-sm">
+                    {resolveMetadataValue(
+                      selectedItem?.content?.metadata,
+                      ['author', 'creator', 'uploader', 'channel']
+                    ) || '-'}
+                  </div>
                 </div>
                 <div>
                   <div className="text-xs text-gray-500">Words</div>

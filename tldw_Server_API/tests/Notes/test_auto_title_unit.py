@@ -39,4 +39,3 @@ def test_generate_note_title_entrypoint_defaults():
     t = generate_note_title(content, options=TitleGenOptions(max_len=20))
     assert t
     assert len(t) <= 20
-

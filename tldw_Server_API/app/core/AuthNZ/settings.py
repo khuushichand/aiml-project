@@ -203,6 +203,8 @@ class Settings(BaseSettings):
             "media.create",
             "media.update",
             "media.delete",
+            "claims.review",
+            "claims.admin",
         ],
         description="Default permissions granted to the single-user principal in single_user mode",
     )
@@ -296,6 +298,10 @@ class Settings(BaseSettings):
     BYOK_ALLOWED_PROVIDERS: Annotated[list[str], NoDecode] = Field(
         default_factory=list,
         description="Optional allowlist of providers eligible for BYOK (comma-separated or list)"
+    )
+    BYOK_ALLOWED_BASE_URL_PROVIDERS: Annotated[list[str], NoDecode] = Field(
+        default_factory=list,
+        description="Optional allowlist of providers that may set base_url in BYOK credential_fields"
     )
     BYOK_ENCRYPTION_KEY: Optional[str] = Field(
         default=None,
@@ -762,6 +768,15 @@ class Settings(BaseSettings):
                 v = env_val
         return _split_csv(v)
 
+    @field_validator("BYOK_ALLOWED_BASE_URL_PROVIDERS", mode="before")
+    @classmethod
+    def parse_byok_allowed_base_url_providers(cls, v):
+        if v is None:
+            env_val = os.getenv("BYOK_ALLOWED_BASE_URL_PROVIDERS")
+            if env_val is not None:
+                v = env_val
+        return _split_csv(v)
+
     @field_validator("BYOK_ENCRYPTION_KEY", mode="before")
     @classmethod
     def normalize_byok_encryption_key(cls, v):
@@ -885,6 +900,7 @@ def _load_overrides_from_config() -> dict:
         maybe_set("SINGLE_USER_API_KEY", "single_user_api_key", lambda v: v.strip())
         maybe_set("BYOK_ENABLED", "byok_enabled", _bool_from_str)
         maybe_set("BYOK_ALLOWED_PROVIDERS", "byok_allowed_providers", _split_csv)
+        maybe_set("BYOK_ALLOWED_BASE_URL_PROVIDERS", "byok_allowed_base_url_providers", _split_csv)
         maybe_set("BYOK_ENCRYPTION_KEY", "byok_encryption_key", lambda v: v.strip())
         maybe_set("BYOK_SECONDARY_ENCRYPTION_KEY", "byok_secondary_encryption_key", lambda v: v.strip())
         maybe_set("ENABLE_REGISTRATION", "enable_registration", _bool_from_str)

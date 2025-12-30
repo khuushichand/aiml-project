@@ -3,7 +3,7 @@ from typing import Any, Optional
 
 import pytest
 
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Claims.claims_engine import ClaimsEngine
+from tldw_Server_API.app.core.Claims_Extraction.claims_engine import ClaimsEngine
 
 
 class Doc:

@@ -1,3 +1,3 @@
-# SSO 
+# SSO
 
 https://scim.cloud/

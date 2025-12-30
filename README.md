@@ -29,19 +29,22 @@
 
 - [Overview](#overview)
 - [Current Status](#current-status)
-  - [Roadmap](#roadmap)
 - [What's New](#whats-new)
-  - [Privacy](#privacy)
+- [Privacy & Security](#privacy--security)
 - [Highlights](#highlights)
 - [Feature Status](#feature-status)
-- [Networking & Limits](#networking--limits)
-- [Architecture & Repo Layout](#architecture--repo-layout)
-- [Architecture Diagram](#architecture-diagram)
 - [Quickstart](#quickstart)
+  - [Run the API](#run-the-api)
+  - [Run the Web UI (WIP)](#run-the-web-ui-wip)
+  - [Docker Compose](#docker-compose)
+  - [Supporting Services via Docker](#supporting-services-via-docker)
 - [Usage Examples](#usage-examples)
 - [Key Endpoints](#key-endpoints)
-- [CI Status & Smoke Tests](#ci-status--smoke-tests)
+- [Architecture & Repo Layout](#architecture--repo-layout)
+- [Architecture Diagram](#architecture-diagram)
+- [Networking & Limits](#networking--limits)
 - [Running Tests](#running-tests)
+- [CI Status & Smoke Tests](#ci-status--smoke-tests)
 - [Documentation & Resources](#documentation--resources)
   - [Resource Governor Config](#resource-governor-config)
   - [OpenAI-Compatible Strict Mode (Local Providers)](#openai-compatible-strict-mode-local-providers)
@@ -53,8 +56,8 @@
 - [Contributing & Support](#contributing--support)
 - [Developer Guides](#developer-guides)
   - [Ingestion & Media Processing Docs](#ingestion--media-processing-docs)
-  - [More Detailed Explanation & Background](#more-detailed-explanation--background)
-  - [Local Models I recommend](#local-models-i-recommend)
+- [More Detailed Explanation & Background](#more-detailed-explanation--background)
+- [Local Models I recommend](#local-models-i-recommend)
 - [License](#license)
 - [Credits](#credits)
 - [About](#about)
@@ -64,66 +67,34 @@
 </details>
 
 ## Overview
-- **tldw_server** is an open-source research multi-tool / backend for ingesting, transcribing, analyzing, and retrieving knowledge from video, audio, documents, websites, and more. 
-- It consists of a FastAPI API-first server architecture backed by SQLite or Postgres depending on user choice, with OpenAI-compatible Chat and Audio APIs, a unified RAG pipeline, knowledge management, and integrations with local or hosted LLM providers (with cost/usage tracking).
-- The long-term vision is a personal research assistant inspired by The Young Lady’s Illustrated Primer-helping people learn, reason about, and retain what they watch or read.
+**tldw_server** is an open-source research assistant and media analysis backend for ingesting, transcribing, analyzing, and retrieving knowledge from video, audio, documents, websites, and more.
+It runs a FastAPI server with OpenAI-compatible Chat, Audio, Embeddings, and Evals APIs, plus a unified RAG pipeline, knowledge tools, and integrations with local or hosted LLM providers.
+The long-term vision is a personal research assistant inspired by "The Young Lady's Illustrated Primer" that helps people learn, reason about, and retain what they watch or read.
+
+Great for:
+- Turning videos, podcasts, and documents into searchable, citable knowledge.
+- Running local or hosted LLMs behind a consistent OpenAI-compatible API.
+- Building research workflows with RAG, evaluation, and prompt tooling.
+
+New here? Start with the Quickstart section below.
+If you're looking for a one line non-jargon explanation: Monolithic FastAPI server with a modular internal architecture, exposing different functionality via REST endpoints for each core module (loosely coupled where possible).
 
 
 ## Current Status
 
+Version 0.1.13 (beta). Expect bugs and rough edges; please report issues.
+
 <details>
-<summary> Current Project Status/Latest Release Details Here  - Click-Here</summary>
+<summary>Current focus and migration notes</summary>
 
-### Status: Version 0.1.8 published - tldw_server is now in beta
-- Expect bugs, and random issues.
-- Please report any found/encountered.
-- CI/CD reporting green/bug squashing is current Top priority next to getting the webui working properly.
-
-#### Active Work-In-Progres (not in order)
-Active Work-in-Progress/Current focus Tracker (not-in-order)
-- Workflows, 
-- browser extension (tldw_Assistant),
-- Unified Admin Dashboard
-- Watchlists,
-- Collections(Read-it-later)
-- Documentation 
-
-
-## What's New
-
-- FastAPI-first backend with OpenAI-compatible Chat and Audio APIs (including streaming STT and TTS)
-- Unified RAG and Evaluations modules (hybrid BM25 + vector with re-ranking; unified metrics)
-- MCP Unified module with JWT/RBAC, tool execution APIs, and WebSockets
-- New WebUI (Current is a WIP placeholder, expect it to be wonky/broken)
-- Strict OpenAI compatibility mode for local/self-hosted providers
-- PostgreSQL content mode + backup/restore helpers; Prometheus metrics and monitoring improvements
-
-See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
-
-
-### Privacy
-Privacy & Security
-- Self-hosted by design; no telemetry or data collection
-- Users own and control their data; see hardening guide for production
-- Metrics & Grafana <FIXME/UPDATE>
-  - Emitted metrics (core):
-    - `rg_decisions_total{category,scope,backend,result,policy_id}` — allow/deny decisions per category/scope/backend
-    - `rg_denials_total{category,scope,reason,policy_id}` — denial events by reason (e.g., `insufficient_capacity`)
-    - `rg_refunds_total{category,scope,reason,policy_id}` — refund events from commit/refund paths
-    - `rg_concurrency_active{category,scope,policy_id}` — active stream/job leases (gauge)
-  - Cardinality guard:
-    - By default, metrics DO NOT include `entity` labels to avoid high-cardinality pitfalls. If you truly need per-entity sampling, gate it behind `RG_METRICS_ENTITY_LABEL=true` and ensure hashing/masking is applied upstream.
-  - Quick Grafana panel examples:
-    - Allow vs Deny over time (per category):
-      - Query: `sum by (category, result) (rate(rg_decisions_total[5m]))`
-    - Denials by scope (top N):
-      - Query: `topk(5, sum by (scope) (rate(rg_denials_total[5m])))`
-    - Refund activity (tokens):
-      - Query: `sum by (policy_id) (rate(rg_refunds_total{category="tokens"}[5m]))`
-    - Active streams (per scope):
-      - Query: `avg by (scope) (rg_concurrency_active{category="streams"})`
-  - 
----
+### Active Work-in-Progress (not in order)
+- Workflows
+- Browser extension ([tldw_Browser_Assistant](https://github.com/rmusser01/tldw_browser_assistant))
+- Unified Admin Dashboard ([admin-ui](./admin-ui))
+- front-end webapp ([tldw-frontend](./tldw-frontend))
+- Watchlists
+- Collections (read-it-later)
+- Documentation
 
 ### Migrating From Gradio Version (pre-0.1.0)
 - Backup:
@@ -141,9 +112,26 @@ Privacy & Security
 - Frontend:
     - Legacy: /webui
     - Or integrate directly against the API;
----
-
 </details>
+
+## What's New (compared to Gradio)
+
+- FastAPI-first backend with OpenAI-compatible Chat and Audio APIs (including streaming STT and TTS)
+- Unified RAG and Evaluations modules (hybrid BM25 + vector with re-ranking; unified metrics)
+- MCP Unified module with JWT/RBAC, tool execution APIs, and WebSockets
+- New WebUI (current Next.js UI is WIP and may be unstable or rough)
+- Strict OpenAI compatibility mode for local/self-hosted providers
+- PostgreSQL content mode + backup/restore helpers; Prometheus metrics and monitoring improvements
+
+See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
+
+## Privacy & Security
+
+- Self-hosted by design; no telemetry or data collection.
+- Users own and control their data; see hardening guidance for production.
+- Auth modes: single-user API key or multi-user JWT.
+- Security reporting and hardening docs: `SECURITY.md`, `Docs/Published/User_Guides/Production_Hardening_Checklist.md`.
+- Outbound URL egress policy blocks SSRF to private networks and disallowed ports for media downloads (audio/video/doc URLs), with test-mode DNS relaxations for hostnames.
 
 ## Highlights
 
@@ -159,171 +147,16 @@ Privacy & Security
 
 ## Feature Status
 
-See the full Feature Status Matrix in `Docs/Published/Overview/Feature_Status.md`.
-
-## Architecture & Repo Layout
-
-<details>
-<summary> Architecture & Repo Layout Here - Click-Here</summary>
-
-```text
-<repo_root>/
-├── tldw_Server_API/              # Main API server implementation
-│   ├── app/
-│   │   ├── api/v1/
-│   │   │   ├── endpoints/        # REST endpoints (media, chat, audio, rag, evals, etc.)
-│   │   │   ├── schemas/          # Pydantic models
-│   │   │   └── API_Deps/         # Shared dependencies (auth, DB, rate limits)
-│   │   ├── core/                 # Core logic (AuthNZ, RAG, LLM, DB, TTS, MCP, etc.)
-│   │   ├── services/             # Background services
-│   │   └── main.py               # FastAPI entry point
-│   ├── WebUI/                    # Legacy integrated WebUI served at /webui
-│   ├── Config_Files/             # config.txt, example YAMLs, migration helpers
-│   ├── Databases/                # Default DBs (runtime data; some are gitignored)
-│   ├── tests/                    # Pytest suite
-│   └── requirements.txt          # Legacy pin set (prefer pyproject extras)
-├── tldw-frontend/                # Next.js WebUI (current client)
-├── Docs/                         # Documentation (API, Development, RAG, AuthNZ, TTS, etc.)
-├── Helper_Scripts/               # Utilities (installers, prompt tools, doc generators)
-├── Dockerfiles/                  # Docker images and compose files
-├── Databases/                    # DBs (AuthNZ defaults here; content DBs per-user under user_databases/)
-├── models/                       # Optional model assets (if used)
-├── pyproject.toml                # Project configuration
-├── README.md                     # Project README (this file)
-├── start-webui.sh                # Convenience script for WebUI + server
-└── Project_Guidelines.md         # Development philosophy
-```
-
-Notes
-- The FastAPI app serves a 'simple' UI at `/webui`; there is also a WIP Next.js client.
-- SQLite is default for local dev; PostgreSQL supported for AuthNZ and content DBs.
-
-
-## Architecture Diagram
-
-```mermaid
-flowchart LR
-  subgraph CLIENTS [Clients]
-    WebUI[Next.js WebUI]:::client
-    LegacyUI[Legacy WebUI (/webui)]:::client
-    APIClients[CLI/HTTP Clients]:::client
-  end
-
-  subgraph API_STACK [FastAPI App]
-    API[FastAPI App /api/v1]:::api
-    Endpoints[Endpoints]:::module
-    Dependencies[API Deps (Auth, DB, rate limits)]:::module
-    Services[Background Services]:::module
-  end
-
-  subgraph CORE [Core Modules]
-    AuthNZ[AuthNZ]:::core
-    RAG[RAG]:::core
-    LLM[LLM Calls]:::core
-    Embeddings[Embeddings]:::core
-    Media[Ingestion & Media Processing]:::core
-    TTS[Audio STT/TTS]:::core
-    Chatbooks[Chatbooks]:::core
-    MCP[MCP Unified]:::core
-  end
-
-  subgraph STORAGE [Storage]
-    UsersDB[(AuthNZ DB: SQLite/PostgreSQL)]:::db
-    ContentDB[(Content DBs: SQLite/PostgreSQL)]:::db
-    VectorDB[(ChromaDB / pgvector)]:::db
-  end
-
-  subgraph EXTERNAL [External Providers]
-    OpenAI[OpenAI/Anthropic/etc.]:::ext
-    LocalLLM[Local Providers (vLLM, Ollama, llama.cpp, ...)]:::ext
-    OCR[OCR (Tesseract, dots, POINTS)]:::ext
-    MediaDL[yt-dlp / ffmpeg]:::ext
-  end
-
-  %% Client to API
-  WebUI -->|HTTP| API
-  LegacyUI -->|HTTP| API
-  APIClients -->|HTTP/WebSocket| API
-
-  %% Inside API stack
-  API --> Endpoints
-  API --> Dependencies
-  API --> Services
-
-  %% Endpoints to core modules
-  Endpoints --> AuthNZ
-  Endpoints --> RAG
-  Endpoints --> LLM
-  Endpoints --> Embeddings
-  Endpoints --> Media
-  Endpoints --> TTS
-  Endpoints --> Chatbooks
-  Endpoints --> MCP
-
-  %% Core to storage
-  AuthNZ --> UsersDB
-  Media --> ContentDB
-  Chatbooks --> ContentDB
-  RAG --> ContentDB
-  RAG --> VectorDB
-
-  %% Core to external services
-  LLM --> OpenAI
-  LLM --> LocalLLM
-  Media --> MediaDL
-  TTS --> OpenAI
-  Media --> OCR
-
-  classDef client fill:#e8f3ff,stroke:#5b8def,color:#1f3b6e;
-  classDef api fill:#fff4e6,stroke:#ff9800,color:#5d3d00;
-  classDef module fill:#f4f6f8,stroke:#9aa5b1,color:#2d3748;
-  classDef core fill:#eefbea,stroke:#34a853,color:#1e4620;
-  classDef db fill:#f0eaff,stroke:#8e6cf1,color:#3a2a87;
-  classDef ext fill:#fff0f0,stroke:#e57373,color:#7b1f1f;
-```
-
-## Networking & Limits
-
-- HTTP client and TLS/pinning configuration: `tldw_Server_API/Config_Files/README.md` (timeouts, retries, redirects/proxies, JSON limits, TLS min version, cert pinning, SSE/download helpers).
-- Egress/SSRF policy and security middleware: `tldw_Server_API/app/core/Security/README.md`.
-- Resource Governor (rate limits, tokens, streams; Redis backend optional): `tldw_Server_API/app/core/Resource_Governance/README.md`.
-
-### API Rate Limits (High-Level)
-
-- **Characters & Character Chat**
-  - Per-user caps (configurable via env/settings; defaults documented in `Docs/API-related/CHARACTER_CHAT_API_DOCUMENTATION.md`):
-    - Max operations/hour (character operations).
-    - Max characters per user.
-    - Max concurrent chats per user.
-    - Max messages per chat.
-    - Per-minute limits for chat completions and message sends.
-  - Status endpoint:
-    - `GET /api/v1/characters/rate-limit-status` → returns a simple snapshot:
-      - `operations_used`, `operations_remaining`, `reset_time` (Unix timestamp or `null`).
-  - Enforcement is handled by `CharacterRateLimiter` with Redis-backed ZSETs when `REDIS_ENABLED=true`, or per-process in-memory counters otherwise.
-
-- **Core Chat / RAG / Embeddings**
-  - Per-user RPM/TPM limits enforced via the Resource Governor (optional Redis backend).
-  - See:
-    - `tldw_Server_API/app/core/Chat/rate_limiter.py`
-    - `tldw_Server_API/app/core/Resource_Governance/README.md`
-
-All limits are designed to be conservative by default and can be tuned using the various `*_RATE_LIMIT_*`, `MAX_*`, and RG policy settings in `Config_Files/` and environment variables.
-
-
-</details>
-
+See the full [Feature Status Matrix at `Docs/Published/Overview/Feature_Status.md`](./Docs/Published/Overview/Feature_Status.md).
 
 ## Quickstart
 
-<details>
-<summary>Project Quickstart/Get started in less than 5 minutes(maybe) - Click-Here</summary>
+### Run the API
 
 Prerequisites
 - Python 3.11+ (3.12/3.13 supported)
 - ffmpeg (for audio/video pipelines)
 
-Virtualenv
 1) Create environment and install dependencies (via pyproject.toml)
 ```bash
 python3 -m venv .venv
@@ -340,7 +173,7 @@ pip install -e .
 # Linux
 sudo apt install python3-pyaudio
 
-#MacOS
+# macOS
 brew install portaudio
 pip install pyaudio
 ```
@@ -362,9 +195,39 @@ python -m tldw_Server_API.app.core.AuthNZ.initialize
 python -m uvicorn tldw_Server_API.app.main:app --reload
 ```
 - API docs: http://127.0.0.1:8000/docs
-- Legacy WebUI: http://127.0.0.1:8000/webui/
+- Legacy WebUI: http://127.0.0.1:8000/webui/ (deprecated)
 
-Docker Compose
+### Run the Web UI (WIP)
+
+The current Next.js UI is a work in progress and may be unstable, buggy, or rough around the edges.
+Make sure the API from the section above is running.
+Requires Node.js and npm (or yarn/pnpm).
+
+1) From the repo root:
+```bash
+cd tldw-frontend
+cp .env.local.example .env.local
+```
+2) Set your API URL (defaults shown):
+```bash
+# .env.local
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
+NEXT_PUBLIC_API_VERSION=v1
+# Optional for single-user mode:
+# NEXT_PUBLIC_X_API_KEY=your_api_key
+```
+3) Install and run the dev server (use port 8080 to match default CORS):
+```bash
+npm install
+npm run dev -- -p 8080
+```
+Open http://localhost:8080
+
+Tip: `./start-webui.sh` launches the API and opens the legacy `/webui/` client.
+
+### Docker Compose
+
+Optional path for running the API + services with Docker.
 ```bash
 # Run from repo root
 
@@ -404,12 +267,10 @@ Notes
 - The legacy WebUI is served at `/webui`; the primary UI is the Next.js client in `tldw-frontend/`.
   - For unified streaming validation in non-prod, prefer the dev overlay above. You can also export `STREAMS_UNIFIED=1` directly in your environment.
 
-</details>
-
 ### Supporting Services via Docker
 
 <details>
-<summary> Current Project Status/Latest Release Details Here - Click-Here</summary>
+<summary>Supporting services (Postgres, Redis, Prometheus, Grafana)</summary>
 
 Run only infrastructure services without the app.
 
@@ -471,11 +332,10 @@ Tip: See multi-user setup and production hardening in Docs/User_Guides/Authentic
 
 </details>
 
-
 ## Usage Examples
 
 <details>
-<summary>Usage Examples - Click-Here</summary>
+<summary>Usage Examples</summary>
 
 Use the single-user API key with the `X-API-KEY` header.
 
@@ -532,27 +392,27 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/audio/transcriptions \
 
 ## Key Endpoints
 <details>
-<summary>Key Endpoints - Click-Here</summary>
+<summary>Key Endpoints</summary>
 
-- Media: `POST /api/v1/media/add` - ingest/process media (URLs/files) with DB persistence
-- Media Search: `POST /api/v1/media/search` - search ingested content
-- Chat: `POST /api/v1/chat/completions` - OpenAI-compatible chat
-- Chat Commands: `GET /api/v1/chat/commands` - list available slash commands
-- Chat Dictionary Validate: `POST /api/v1/chat/dictionaries/validate` - validate a chat dictionary
-- Embeddings: `POST /api/v1/embeddings` - OpenAI-compatible embeddings
-- RAG: `POST /api/v1/rag/search` - unified RAG search
-- Audio STT: `POST /api/v1/audio/transcriptions` - file-based transcription
-- Audio STT (WS): `WS /api/v1/audio/stream/transcribe` - real-time transcription
-- Audio TTS: `POST /api/v1/audio/speech` - text-to-speech (streaming and non-streaming)
-- TTS Voices: `GET /api/v1/audio/voices/catalog` - voice catalog across providers
-- Vector Stores: `POST /api/v1/vector_stores` - create; `POST /api/v1/vector_stores/{id}/query` - query
-- OCR Backends: `GET /api/v1/ocr/backends` - available OCR providers
-- VLM Backends: `GET /api/v1/vlm/backends` - available VLM providers
-- Connectors: `GET /api/v1/connectors/providers` - Drive/Notion providers
-- Outputs: `POST /api/v1/outputs` - generate output artifact (md/html/mp3)
-- Metrics: `GET /api/v1/metrics/text` - Prometheus metrics (text format)
-- Providers: `GET /api/v1/llm/providers` - provider/models list
-- MCP: `GET /api/v1/mcp/status` - MCP server status
+- Media: `POST /api/v1/media/add` - ingest/process media (URLs/files) with DB persistence ([docs](Docs/Code_Documentation/Ingestion_Media_Processing.md))
+- Media Search: `POST /api/v1/media/search` - search ingested content ([docs](Docs/API-related/API_Design.md))
+- Chat: `POST /api/v1/chat/completions` - OpenAI-compatible chat ([docs](Docs/API-related/Chat_API_Documentation.md))
+- Chat Commands: `GET /api/v1/chat/commands` - list available slash commands ([docs](Docs/API-related/Chatbook_Features_API_Documentation.md#chat-tools-slash-commands))
+- Chat Dictionary Validate: `POST /api/v1/chat/dictionaries/validate` - validate a chat dictionary ([docs](Docs/API-related/Chatbook_Features_API_Documentation.md#chat-dictionary-api))
+- Embeddings: `POST /api/v1/embeddings` - OpenAI-compatible embeddings ([docs](Docs/API-related/Embeddings_API_Documentation.md))
+- RAG: `POST /api/v1/rag/search` - unified RAG search ([docs](Docs/API-related/RAG-API-Guide.md))
+- Audio STT: `POST /api/v1/audio/transcriptions` - file-based transcription ([docs](Docs/API-related/Audio_Transcription_API.md))
+- Audio STT (WS): `WS /api/v1/audio/stream/transcribe` - real-time transcription ([docs](Docs/API-related/Audio_Transcription_API.md))
+- Audio TTS: `POST /api/v1/audio/speech` - text-to-speech (streaming and non-streaming) ([docs](Docs/API-related/TTS_API.md))
+- TTS Voices: `GET /api/v1/audio/voices/catalog` - voice catalog across providers ([docs](Docs/API-related/TTS_API.md))
+- Vector Stores: `POST /api/v1/vector_stores` - create; `POST /api/v1/vector_stores/{id}/query` - query ([docs](Docs/API-related/Vector_Stores_Admin_and_Query.md))
+- OCR Backends: `GET /api/v1/ocr/backends` - available OCR providers ([docs](Docs/API-related/OCR_API_Documentation.md))
+- VLM Backends: `GET /api/v1/vlm/backends` - available VLM providers ([docs](Docs/Code_Documentation/VLM_Backends.md))
+- Connectors: `GET /api/v1/connectors/providers` - Drive/Notion providers ([docs](Docs/Product/External_Connectors_PRD.md))
+- Outputs: `POST /api/v1/outputs` - generate output artifact (md/html/mp3) ([docs](Docs/Product/Content_Collections_PRD.md))
+- Metrics: `GET /api/v1/metrics/text` - Prometheus metrics (text format) ([docs](Docs/Deployment/Monitoring/Metrics_Cheatsheet.md))
+- Providers: `GET /api/v1/llm/providers` - provider/models list ([docs](Docs/API-related/Providers_API_Documentation.md))
+- MCP: `GET /api/v1/mcp/status` - MCP server status ([docs](Docs/MCP/Unified/System_Admin_Guide.md))
 
 Admin maintenance
 - Chat model aliases cache reload: `POST /api/v1/admin/chat/model-aliases/reload`
@@ -605,17 +465,208 @@ Examples
 
 </details>
 
+## Architecture & Repo Layout
+
+<details>
+<summary>Architecture & Repo Layout</summary>
+
+```text
+<repo_root>/
+├── tldw_Server_API/              # Main API server implementation
+│   ├── app/
+│   │   ├── api/v1/
+│   │   │   ├── endpoints/        # REST endpoints (media, chat, audio, rag, evals, etc.)
+│   │   │   ├── schemas/          # Pydantic models
+│   │   │   └── API_Deps/         # Shared dependencies (auth, DB, rate limits)
+│   │   ├── core/                 # Core logic (AuthNZ, RAG, LLM, DB, TTS, MCP, etc.)
+│   │   ├── services/             # Background services
+│   │   └── main.py               # FastAPI entry point
+│   ├── WebUI/                    # Legacy integrated WebUI served at /webui (deprecated)
+│   ├── Config_Files/             # config.txt, example YAMLs, migration helpers
+│   ├── Databases/                # Default DBs (runtime data; some are gitignored)
+│   ├── tests/                    # Pytest suite
+│   └── requirements.txt          # Legacy pin set (prefer pyproject extras)
+├── tldw-frontend/                # Next.js WebUI (current client)
+├── Docs/                         # Documentation (API, Development, RAG, AuthNZ, TTS, etc.)
+├── Helper_Scripts/               # Utilities (installers, prompt tools, doc generators)
+├── mock_openai_server/           # Mock OpenAI-compatible API server for tests/dev
+├── Dockerfiles/                  # Docker images and compose files
+├── Databases/                    # DBs (AuthNZ defaults here; content DBs per-user under user_databases/)
+├── models/                       # Optional model assets (if used)
+├── pyproject.toml                # Project configuration
+├── README.md                     # Project README (this file)
+├── start-webui.sh                # Convenience script for WebUI + server
+└── Project_Guidelines.md         # Development philosophy
+```
+
+Notes
+- The FastAPI app serves a legacy UI at `/webui` (deprecated); the Next.js UI in `tldw-frontend/` is the current client.
+- SQLite is default for local dev; PostgreSQL supported for AuthNZ and content DBs.
+- `mock_openai_server/` is handy for local OpenAI-compatible API testing.
+
+</details>
+
+## Architecture Diagram
+
+```mermaid
+flowchart LR
+  subgraph CLIENTS [Clients]
+    WebUI[Next.js WebUI (current)]:::client
+    LegacyUI[Legacy WebUI (/webui, deprecated)]:::client
+    MCPClients[MCP Clients (IDE/tools)]:::client
+    APIClients[CLI/HTTP Clients]:::client
+  end
+
+  subgraph API_STACK [FastAPI App]
+    API[FastAPI App /api/v1]:::api
+    Endpoints[Endpoints + Schemas]:::module
+    Dependencies[API Deps (Auth, DB, rate limits, resource governor)]:::module
+    Services[Background Services/Jobs]:::module
+  end
+
+  subgraph CORE [Core Modules]
+    AuthNZ[AuthNZ]:::core
+    RAG[RAG]:::core
+    LLM[LLM Calls]:::core
+    Embeddings[Embeddings]:::core
+    Media[Ingestion & Media Processing]:::core
+    Chunking[Chunking]:::core
+    Chat[Chat/Characters]:::core
+    Audio[Audio STT/TTS]:::core
+    Evaluations[Evaluations]:::core
+    PromptStudio[Prompt Studio]:::core
+    Knowledge[Notes/Prompts/Chatbooks]:::core
+    MCP[MCP Unified]:::core
+    Research[Research/Web Search]:::core
+  end
+
+  subgraph STORAGE [Storage]
+    UsersDB[(AuthNZ DB: SQLite/PostgreSQL)]:::db
+    ContentDB[(Content DBs: Media/Notes/Chats)]:::db
+    EvalsDB[(Evaluations DB: SQLite/PostgreSQL)]:::db
+    VectorDB[(Vector DB: ChromaDB/pgvector)]:::db
+  end
+
+  subgraph EXTERNAL [External Providers]
+    LLMCloud[LLM APIs (OpenAI, Anthropic, etc.)]:::ext
+    LLMOnPrem[Local LLMs (vLLM, Ollama, llama.cpp, ...)]:::ext
+    AudioProv[STT/TTS Providers]:::ext
+    OCRVLM[OCR/VLM (tesseract, dots, points)]:::ext
+    MediaDL[yt-dlp / ffmpeg]:::ext
+    WebSearch[Web Search/Scrapers]:::ext
+  end
+
+  %% Client to API
+  WebUI -->|HTTP| API
+  LegacyUI -->|HTTP| API
+  MCPClients -->|HTTP/WebSocket| API
+  APIClients -->|HTTP/WebSocket| API
+
+  %% Inside API stack
+  API --> Endpoints
+  API --> Dependencies
+  API --> Services
+
+  %% Endpoints to core modules
+  Endpoints --> AuthNZ
+  Endpoints --> RAG
+  Endpoints --> LLM
+  Endpoints --> Embeddings
+  Endpoints --> Media
+  Endpoints --> Chunking
+  Endpoints --> Chat
+  Endpoints --> Audio
+  Endpoints --> Evaluations
+  Endpoints --> PromptStudio
+  Endpoints --> Knowledge
+  Endpoints --> MCP
+  Endpoints --> Research
+
+  %% Core to storage
+  AuthNZ --> UsersDB
+  Media --> ContentDB
+  Knowledge --> ContentDB
+  Chat --> ContentDB
+  Evaluations --> EvalsDB
+  RAG --> ContentDB
+  RAG --> VectorDB
+  Embeddings --> VectorDB
+
+  %% Core to external services
+  LLM --> LLMCloud
+  LLM --> LLMOnPrem
+  Audio --> AudioProv
+  Media --> MediaDL
+  Media --> OCRVLM
+  Research --> WebSearch
+
+  classDef client fill:#e8f3ff,stroke:#5b8def,color:#1f3b6e;
+  classDef api fill:#fff4e6,stroke:#ff9800,color:#5d3d00;
+  classDef module fill:#f4f6f8,stroke:#9aa5b1,color:#2d3748;
+  classDef core fill:#eefbea,stroke:#34a853,color:#1e4620;
+  classDef db fill:#f0eaff,stroke:#8e6cf1,color:#3a2a87;
+  classDef ext fill:#fff0f0,stroke:#e57373,color:#7b1f1f;
+```
+
+## Networking & Limits
+
+- HTTP client and TLS/pinning configuration: `tldw_Server_API/Config_Files/README.md` (timeouts, retries, redirects/proxies, JSON limits, TLS min version, cert pinning, SSE/download helpers).
+- Egress/SSRF policy and security middleware: `tldw_Server_API/app/core/Security/README.md`.
+- Resource Governor (rate limits, tokens, streams; Redis backend optional): `tldw_Server_API/app/core/Resource_Governance/README.md`.
+
+### API Rate Limits (High-Level)
+
+- **Characters & Character Chat**
+  - Per-user caps (configurable via env/settings; defaults documented in `Docs/API-related/CHARACTER_CHAT_API_DOCUMENTATION.md`):
+    - Operations per hour (character operations).
+    - Per-user character limit.
+    - Concurrent chats per user.
+    - Messages per chat.
+    - Per-minute limits for chat completions and message sends.
+  - Status endpoint:
+    - `GET /api/v1/characters/rate-limit-status` → returns a simple snapshot:
+      - `operations_used`, `operations_remaining`, `reset_time` (Unix timestamp or `null`).
+  - Enforcement is handled by `CharacterRateLimiter` with Redis-backed ZSETs when `REDIS_ENABLED=true`, or per-process in-memory counters otherwise.
+
+- **Core Chat / RAG / Embeddings**
+  - Per-user RPM/TPM limits enforced via the Resource Governor (optional Redis backend).
+  - See:
+    - `tldw_Server_API/app/core/Chat/rate_limiter.py`
+    - `tldw_Server_API/app/core/Resource_Governance/README.md`
+
+All limits are designed to be conservative by default and can be tuned using the various `*_RATE_LIMIT_*`, `MAX_*`, and RG policy settings in `Config_Files/` and environment variables.
+
 ## Running Tests
 
 <details>
-<summary>Running Tests - Click-Here</summary>
+<summary>Running tests locally</summary>
 
 - `python -m pytest -v` - full test suite (skips heavy optional suites by default).
 - `python -m pytest --cov=tldw_Server_API --cov-report=term-missing` - coverage report.
 - Use markers (`unit`, `integration`, `e2e`, `external_api`, `performance`) to focus specific areas.
 - Enable optional suites with environment flags such as `RUN_MCP_TESTS=1`, `TLDW_TEST_POSTGRES_REQUIRED=1`, or `RUN_MOCK_OPENAI=1`.
 
+</details>
+
+## Frontend Integration Testing
+
+Use the helper script to run frontend unit tests plus smoke checks against a live backend:
+
+```bash
+cd tldw-frontend
+npm run test:integration
+```
+
+Notes:
+- Starts the backend (uvicorn) by default and runs `pytest -m integration`, then `npm run test:run` + `npm run smoke`.
+- Set `TLDW_X_API_KEY=...` for single-user mode (a temporary key is generated if missing).
+- Use `--backend-docker` to start the backend via Docker Compose, or `--skip-backend` if you already have it running.
+- Use `--no-backend-tests` to skip backend integration tests.
+
 ## CI Status & Smoke Tests
+
+<details>
+<summary>CI status and smoke tests</summary>
 
 | Workflow | Status |
 | --- | --- |
@@ -637,10 +688,12 @@ Run locally
 
 ## Documentation & Resources
 
-<details> 
+<details>
+<summary>Documentation and resources</summary>
 
 - `Docs/Documentation.md` - documentation index and developer guide links
 - `Docs/About.md` - project background and philosophy
+- `New-User-Guide.md` - guided walkthrough for first-time setup and usage
 - Module deep dives: `Docs/Development/AuthNZ-Developer-Guide.md`, `Docs/Development/RAG-Developer-Guide.md`, `Docs/MCP/Unified/Developer_Guide.md`
 - API references: `Docs/API-related/RAG-API-Guide.md`, `Docs/API-related/OCR_API_Documentation.md`, `Docs/API-related/Prompt_Studio_API.md`
 - Deployment/Monitoring: `Docs/Published/Deployment/First_Time_Production_Setup.md`, `Docs/Published/Deployment/Reverse_Proxy_Examples.md`, `Docs/Deployment/Monitoring/`
@@ -673,13 +726,18 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 ## Deployment
 
 <details>
+<summary>Deployment resources</summary>
 - Dockerfiles and compose templates live under `Dockerfiles/` (see `Dockerfiles/README.md`).
 - Reverse proxy samples: `Helper_Scripts/Samples/Nginx/`, `Helper_Scripts/Samples/Caddy/`.
 - Monitoring: `Docs/Deployment/Monitoring/` and `Helper_Scripts/Samples/Grafana/`.
 - Prometheus metrics exposed at `/metrics` and `/api/v1/metrics`.
 - Production hardening: `Docs/Published/User_Guides/Production_Hardening_Checklist.md`.
+</details>
 
 ## Monitoring
+
+<details>
+<summary>Monitoring resources</summary>
 
 - Monitoring docs and setup: `Docs/Deployment/Monitoring/README.md`
 - Grafana dashboards and samples: `Helper_Scripts/Samples/Grafana/README.md`
@@ -710,7 +768,8 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 
 ## Developer Guides
 
-<details><sumamry>Developer Guides + Links</sumamry>
+<details>
+<summary>Developer Guides + Links</summary>
 
 - Documentation index: `Docs/Documentation.md` (see the "Developer Guides" section)
 - Core module guides:
@@ -735,7 +794,9 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 
 ### More Detailed Explanation & Background
 <details>
-<summary>More Detailed Explanation & Background - Click-Here</summary>
+<summary>More Detailed Explanation & Background</summary>
+
+Optional background reading for deeper context; not required to use the project.
 
 - See `Docs/About.md` for the extended project background, vision, and notes.
 - https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5049562
@@ -807,7 +868,9 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 ### Local Models I recommend
 
 <details>
-<summary>Local Models I Can Recommend - Click-Here</summary>
+<summary>Local Models I Can Recommend</summary>
+
+Personal recommendations; optional reading.
 
 - These are just the 'standard smaller' models I recommend, there are many more out there, and you can use any of them with this project.
   - One should also be aware that people create 'fine-tunes' and 'merges' of existing models, to create new models that are more suited to their needs.
@@ -815,10 +878,10 @@ Some self-hosted OpenAI-compatible servers reject unknown fields (like `top_k`).
 - Mistral Nemo Instruct 2407 - https://huggingface.co/QuantFactory/Mistral-Nemo-Instruct-2407-GGUF
 - Magistral Small: https://huggingface.co/mistralai/Magistral-Small-2509-GGUF
 - Qwen 3/VL Series
-  - Qwen/Qwen3-VL-4B-Instruct (Qwen3 4B+Vision): https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF 
+  - Qwen/Qwen3-VL-4B-Instruct (Qwen3 4B+Vision): https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF
   - Qwen3-30B-A3B-Instruct-2507: https://huggingface.co/unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF
 
-For commercial API usage for use with this project: GPT-5.1, Anthropic's models(The Temu of AI services/models), Kimi k2, DeepSeek 
+For commercial API usage for use with this project: GPT-5.1, Anthropic's models(The Temu of AI services/models), Kimi k2, DeepSeek
 Originally written: Flipside I would say none, honestly. The (largest players) will gaslight you and charge you money for it. Fun.  That being said they obviously can provide help/be useful(helped me make this app), but it's important to remember that they're not your friend, and they're not there to help you. They are there to make money not off you, but off large institutions and your data.  You are just a stepping stone to their goals.
 2025 Nov: I would say service quality has improved enough to the point where it can make sense to use a 'premium' subscription/usage of API services without expecting to be screwed 7-8/10 times.
 2025 Dec: I spoke too soon. I have the opinion of GPT-5.1 High > Sonnet/Opus. The Anthropic models are just too 'independent/lazy'. I personally have never had gpt5 fill out a PRD with completely hallucinated bullshit, or gaslight me repeatedly across multiple different sessions. Sonnet/Opus 4.0-4.5? Complete opposite.
@@ -827,15 +890,15 @@ Originally written: Flipside I would say none, honestly. The (largest players) w
 From @nrose 05/08/2024 on Threads:
 ```
 No, it’s a design. First they train it, then they optimize it. Optimize it for what- better answers?
-  No. For efficiency. 
-Per watt. Because they need all the compute they can get to train the next model.So it’s a sawtooth. 
-The model declines over time, then the optimization makes it somewhat better, then in a sort of 
-  reverse asymptote, they dedicate all their “good compute” to the next bigger model.Which they then 
+  No. For efficiency.
+Per watt. Because they need all the compute they can get to train the next model.So it’s a sawtooth.
+The model declines over time, then the optimization makes it somewhat better, then in a sort of
+  reverse asymptote, they dedicate all their “good compute” to the next bigger model.Which they then
   trim down over time, so they can train the next big model… etc etc.
-None of these companies exist to provide AI services in 2024. They’re only doing it to finance the 
+None of these companies exist to provide AI services in 2024. They’re only doing it to finance the
  things they want to build in 2025 and 2026 and so on, and the goal is to obsolete computing in general
-  and become a hidden monopoly like the oil and electric companies. 
-2024 service quality is not a metric they want to optimize, they’re forced to, only to maintain some 
+  and become a hidden monopoly like the oil and electric companies.
+2024 service quality is not a metric they want to optimize, they’re forced to, only to maintain some
   directional income
 ```
 

@@ -87,4 +87,3 @@ async def test_record_and_remaining_cost_units_round_trip(tmp_path, monkeypatch)
             "RG_COST_UNITS_REQUESTS_PER_UNIT",
         ):
             os.environ.pop(key, None)
-

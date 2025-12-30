@@ -640,6 +640,8 @@ components:
           type: boolean
         media_quality:
           type: string
+        max_file_size_mb:
+          type: integer
         total_conversations:
           type: integer
         total_notes:
@@ -647,6 +649,12 @@ components:
         total_characters:
           type: integer
         total_media_items:
+          type: integer
+        total_prompts:
+          type: integer
+        total_evaluations:
+          type: integer
+        total_embeddings:
           type: integer
         total_world_books:
           type: integer
@@ -669,6 +677,44 @@ components:
           default: en
         license:
           type: string
+        metadata:
+          type: object
+          description: Manifest metadata (includes export policy fields like binary_limits).
+          additionalProperties: true
+          properties:
+            binary_limits:
+              type: object
+              description: Per content-type bundled size limits in bytes.
+              additionalProperties:
+                type: integer
+        truncation:
+          type: object
+          description: Truncation metadata for resumable exports.
+          additionalProperties: true
+          properties:
+            evaluations:
+              type: object
+              additionalProperties: true
+              properties:
+                truncated:
+                  type: boolean
+                max_rows:
+                  type: integer
+                continuations:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - evaluation_id
+                      - run_id
+                      - continuation_token
+                    properties:
+                      evaluation_id:
+                        type: string
+                      run_id:
+                        type: string
+                      continuation_token:
+                        type: string
 
     PreviewChatbookResponse:
       type: object
@@ -834,7 +880,7 @@ components:
             detail: Invalid content selection format
             error_type: ValidationError
             suggestions:
-              - Use format {"conversation": ["id1", "id2"]}
+              - 'Use format {"conversation": ["id1", "id2"]}'
               - Leave empty to export all content
 
     Unauthorized:

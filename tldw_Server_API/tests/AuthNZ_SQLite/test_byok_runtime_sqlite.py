@@ -97,7 +97,7 @@ async def test_byok_resolution_precedence(tmp_path, monkeypatch):
         team_ids=[team_id],
         org_ids=[org_id],
     )
-    assert resolved.source == "shared"
+    assert resolved.source == "team"
     assert resolved.api_key == "sk-team-openai-2222"
 
     # Remove team key to fall back to org shared key
@@ -108,7 +108,7 @@ async def test_byok_resolution_precedence(tmp_path, monkeypatch):
         team_ids=[team_id],
         org_ids=[org_id],
     )
-    assert resolved.source == "shared"
+    assert resolved.source == "org"
     assert resolved.api_key == "sk-org-openai-3333"
 
 

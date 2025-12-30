@@ -104,6 +104,8 @@ def _build_principal_from_user(
     # Membership/context from request.state (if present)
     org_ids: list[int] = []
     team_ids: list[int] = []
+    active_org_id: Optional[int] = None
+    active_team_id: Optional[int] = None
     try:
         raw_org_ids = getattr(request.state, "org_ids", None)
         if isinstance(raw_org_ids, (list, tuple)):
@@ -116,16 +118,44 @@ def _build_principal_from_user(
             team_ids = [int(t) for t in raw_team_ids if t is not None]
     except (AttributeError, TypeError, ValueError):
         team_ids = []
+    try:
+        raw_active_org = getattr(request.state, "active_org_id", None)
+        if raw_active_org is not None:
+            active_org_id = int(raw_active_org)
+    except (AttributeError, TypeError, ValueError):
+        active_org_id = None
+    try:
+        raw_active_team = getattr(request.state, "active_team_id", None)
+        if raw_active_team is not None:
+            active_team_id = int(raw_active_team)
+    except (AttributeError, TypeError, ValueError):
+        active_team_id = None
 
     # Claims on the User model are the canonical source of truth
     roles = list(getattr(user, "roles", []) or [])
     permissions = list(getattr(user, "permissions", []) or [])
     is_admin = bool(getattr(user, "is_admin", False) or ("admin" in roles))
+    username = None
+    email = None
+    try:
+        raw_username = getattr(user, "username", None)
+        if raw_username:
+            username = str(raw_username)
+    except Exception:
+        username = None
+    try:
+        raw_email = getattr(user, "email", None)
+        if raw_email:
+            email = str(raw_email)
+    except Exception:
+        email = None
 
     principal = AuthPrincipal(
         kind=kind,
         user_id=user_id_int,
         api_key_id=api_key_id,
+        username=username,
+        email=email,
         subject=subject,
         token_type=token_type,
         jti=jti,
@@ -134,6 +164,8 @@ def _build_principal_from_user(
         is_admin=is_admin,
         org_ids=org_ids,
         team_ids=team_ids,
+        active_org_id=active_org_id,
+        active_team_id=active_team_id,
     )
     return principal
 

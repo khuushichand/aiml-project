@@ -15,7 +15,11 @@ from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import (
     require_eval_permissions,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_token_scope
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_auth_principal,
+    rbac_rate_limit,
+    require_token_scope,
+)
 from tldw_Server_API.app.core.AuthNZ.permissions import EVALS_MANAGE, EVALS_READ
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
     get_unified_evaluation_service_for_user,
@@ -25,7 +29,7 @@ from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
     CreateEvaluationRequest, UpdateEvaluationRequest, EvaluationResponse,
     EvaluationListResponse, RunResponse, RunListResponse,
     DatasetOverride,
-    
+
 )
 from pydantic import BaseModel, Field
 from pydantic import ConfigDict
@@ -111,7 +115,10 @@ async def create_evaluation(
 @crud_router.get(
     "/",
     response_model=EvaluationListResponse,
-    dependencies=[Depends(require_eval_permissions(EVALS_READ))],
+    dependencies=[
+        Depends(get_auth_principal),
+        Depends(require_eval_permissions(EVALS_READ)),
+    ],
 )
 async def list_evaluations(
     limit: int = Query(20, ge=1, le=100),

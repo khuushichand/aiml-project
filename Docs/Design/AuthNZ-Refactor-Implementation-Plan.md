@@ -280,23 +280,23 @@ For this phase, we deliberately leave the above bootstrap path as guarded inline
 
 An explicit audit of `hasattr(conn, 'fetch*')` usage in `tldw_Server_API/app/core/AuthNZ` shows:
 
-- Module `api_key_manager.py` – **bootstrap/maintenance inline SQL only**  
+- Module `api_key_manager.py` – **bootstrap/maintenance inline SQL only**
   - Uses backend-branching (`if hasattr(conn, 'fetchval')` / `fetchrow`) for:
     - `_create_tables` DDL for `api_keys` / `api_key_audit_log` (bootstrap/backstop only).
-    - `cleanup_expired_keys`, which performs a periodic maintenance update for expired keys.  
+    - `cleanup_expired_keys`, which performs a periodic maintenance update for expired keys.
   - All request-time operations now delegate to `AuthnzApiKeysRepo` helpers:
     - `create_api_key_row`, `create_virtual_key_row`, `mark_rotated`, and `revoke_api_key_for_user` for create/rotate/revoke flows.
-    - `increment_usage`, `mark_key_expired`, and `insert_audit_log` for usage counters, status transitions, and audit logging.  
+    - `increment_usage`, `mark_key_expired`, and `insert_audit_log` for usage counters, status transitions, and audit logging.
   - Remaining inline SQL is explicitly treated as **bootstrap/maintenance guardrails** for v0.1 and may be migrated into migrations or repo helpers in a later iteration once operational requirements are fully captured.
 
-- Module `rate_limiter.py` – **rate-limiter DDL guardrails + repo-backed runtime**  
+- Module `rate_limiter.py` – **rate-limiter DDL guardrails + repo-backed runtime**
   - `_ensure_sqlite_schema` / `_ensure_postgres_schema` contain minimal DDL for `rate_limits`, `failed_attempts`, and `account_lockouts` to backstop environments that have not yet applied migrations. These helpers are invoked from `RateLimiter.initialize()` and are treated as bootstrap-only guardrails; canonical schema remains migration-driven (`migration_005_create_rate_limits_table` and related helpers).
   - All runtime reads/writes for `rate_limits`, `failed_attempts`, and `account_lockouts` (including lockout accounting and per-window increments) are delegated to `AuthnzRateLimitsRepo`.
   - The AuthNZ scheduler’s `_monitor_rate_limits` job now uses `AuthnzRateLimitsRepo.list_recent_violations` to surface aggregated rate-limit violations instead of embedding its own SQL, so rate-limit monitoring remains dialect-agnostic and repo-backed.
 
-- Module `initialize.py` – **bootstrap/DDL inline SQL (bootstrap only, partially consolidated)**  
-  - Uses backend-branching DDL to ensure presence of `audit_logs`, `sessions`, `registration_codes`, RBAC tables, and organizations/teams in non-SQLite deployments.  
-  - PostgreSQL DDL for usage tables (`usage_log`, `usage_daily`, `llm_usage_log`, `llm_usage_daily`) and virtual-key counters has been moved into `pg_migrations_extra.py` and is exercised via `ensure_usage_tables_pg` / `ensure_virtual_key_counters_pg`, which are called from both `initialize.setup_database` and FastAPI startup when a Postgres pool is present.  
+- Module `initialize.py` – **bootstrap/DDL inline SQL (bootstrap only, partially consolidated)**
+  - Uses backend-branching DDL to ensure presence of `audit_logs`, `sessions`, `registration_codes`, RBAC tables, and organizations/teams in non-SQLite deployments.
+  - PostgreSQL DDL for usage tables (`usage_log`, `usage_daily`, `llm_usage_log`, `llm_usage_daily`) and virtual-key counters has been moved into `pg_migrations_extra.py` and is exercised via `ensure_usage_tables_pg` / `ensure_virtual_key_counters_pg`, which are called from both `initialize.setup_database` and FastAPI startup when a Postgres pool is present.
   - Remaining inline SQL in `initialize.py` is explicitly treated as **bootstrap-only** for v0.1; it runs during explicit initialization to ensure core AuthNZ schemas are present but is not used on hot paths. Any new AuthNZ tables must be added via migrations or repo-backed helpers rather than new inline DDL here.
 
 MFA-related SQL has already been migrated behind `AuthnzMfaRepo`; no `hasattr(conn, 'fetch*')` MFA cluster remains in runtime paths.

@@ -68,7 +68,7 @@
       - Dispatches to processors for `pdf` / `document` / `ebook` / `json` / `email` and email archives.
       - Calls `persist_doc_item_and_children(...)` to write parent and child items plus claims.
     - `persist_primary_av_item(...)`, `persist_doc_item_and_children(...)`:
-      - Perform Media DB writes and ingestion-time claims persistence (`claims_utils.persist_claims_if_applicable`).
+      - Perform Media DB writes and ingestion-time claims persistence (`Claims_Extraction.claims_utils.persist_claims_if_applicable`).
       - Standardize envelopes (`status`, `input_ref`, `processing_source`, `media_type`, `metadata`,
         `content`/`transcript`, chunks, analysis, claims, `db_id`, `db_message`, `media_uuid`).
 

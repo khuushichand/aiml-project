@@ -153,4 +153,3 @@ def test_e2e_prompt_studio_deny_headers_retry_after(monkeypatch, tmp_path):
         r2 = client.get("/api/v1/prompt-studio/status")
         assert r2.status_code == 429, r2.text
         _assert_deny_headers(r2)
-

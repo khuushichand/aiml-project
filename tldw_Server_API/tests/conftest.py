@@ -34,6 +34,10 @@ os.environ["MPLBACKEND"] = "Agg"
 # Provide an explicit, deterministic API key for tests that rely on single-user/test-mode shortcuts.
 # Production code no longer assumes a default for SINGLE_USER_TEST_API_KEY.
 os.environ.setdefault("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
+# Force a deterministic single-user key for pytest runs, regardless of developer .env.
+os.environ["SINGLE_USER_API_KEY"] = os.environ["SINGLE_USER_TEST_API_KEY"]
+# Default to single-user auth for tests; suites that need multi-user set it explicitly.
+os.environ["AUTH_MODE"] = "single_user"
 # Ensure the AuthNZ PROFILE hint does not leak from developer shells into tests.
 # Tests that need a profile should set it explicitly via monkeypatch.
 os.environ.pop("PROFILE", None)
@@ -44,6 +48,8 @@ os.environ["WORKFLOWS_SCHEDULER_ENABLED"] = "false"
 # Relax webhook egress for test replay/egress simulations (no real network used in test short-circuit paths)
 os.environ.setdefault("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "false")
 os.environ.setdefault("WORKFLOWS_WEBHOOK_ALLOWLIST", "*")
+# Allow ephemeral localhost ports in tests.
+os.environ.setdefault("WORKFLOWS_EGRESS_ALLOWED_PORTS", "*")
 # Disable AuthNZ scheduler functions proactively to avoid background threads
 try:
     from tldw_Server_API.app.core.AuthNZ import scheduler as _auth_sched
@@ -91,6 +97,14 @@ _AUTH_ENV_BASELINE_KEYS = (
 )
 
 _AUTH_ENV_BASELINE = {k: os.environ.get(k) for k in _AUTH_ENV_BASELINE_KEYS}
+
+
+@pytest.fixture()
+def auth_headers():
+    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
+    settings = get_settings()
+    return {"X-API-KEY": settings.SINGLE_USER_API_KEY}
 
 
 @pytest.fixture(autouse=True)

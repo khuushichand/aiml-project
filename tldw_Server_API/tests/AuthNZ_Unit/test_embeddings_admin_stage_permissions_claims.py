@@ -125,4 +125,3 @@ def test_embeddings_stage_status_200_with_embeddings_admin_permission(monkeypatc
     assert resp.status_code == 200
     body = resp.json()
     assert isinstance(body, dict)
-

@@ -154,4 +154,3 @@ async def test_sandbox_admin_runs_allowed_for_admin_principal(monkeypatch):
     body = resp.json()
     assert isinstance(body.get("items"), list)
     assert body.get("total") == 0
-

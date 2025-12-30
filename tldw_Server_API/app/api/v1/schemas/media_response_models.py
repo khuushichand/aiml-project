@@ -37,6 +37,16 @@ class SuccessMessage(BaseModel):
     detail: Optional[str] = Field(None, description="Optional additional details.", json_schema_extra={"example": "Item processed."})
 
 
+class ReprocessMediaResponse(BaseModel):
+    """Response model for media reprocess requests."""
+    media_id: int = Field(..., description="Media item ID")
+    status: str = Field(..., description="Job status (accepted/completed/failed)")
+    message: str = Field(..., description="Human-readable status message")
+    chunks_created: Optional[int] = Field(None, description="Number of chunks created")
+    embeddings_started: bool = Field(False, description="Whether embeddings regeneration was started")
+    job_id: Optional[str] = Field(None, description="Reprocess job identifier when async")
+
+
 ######################## /api/v1/media/ Endpoint Response Models ########################
 #
 #
@@ -102,7 +112,9 @@ class MediaDetailResponse(BaseModel):
     content: MediaContentDetail = Field(..., description="Details about the extracted content.")
     keywords: List[str] = Field(..., description="Keywords associated with the media item.", json_schema_extra={"example": ["ai", "machine learning", "tech"]})
     timestamps: List[str] = Field(..., description="List of timestamps extracted from the content (if applicable).", json_schema_extra={"example": ["00:00:05", "00:01:12"]})
-    versions: List[VersionDetailResponse] = Field([], description="List of document versions, if applicable.") # <-- ADDED, default empty list
+    versions: List[VersionDetailResponse] = Field([], description="List of document versions, if applicable.")
+    has_original_file: bool = Field(False, description="Whether the original file (e.g., PDF) is available for download.", json_schema_extra={"example": True})
+    original_file_url: Optional[str] = Field(None, description="API URL to download the original file, if available.", json_schema_extra={"example": "/api/v1/media/123/file"})
 
 
     model_config = ConfigDict(

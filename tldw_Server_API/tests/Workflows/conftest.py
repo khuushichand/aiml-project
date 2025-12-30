@@ -17,6 +17,13 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import (
 )
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
+
+@pytest.fixture()
+def auth_headers():
+    settings = get_settings()
+    return {"X-API-KEY": settings.SINGLE_USER_API_KEY}
 
 
 @pytest.fixture(params=["sqlite", "postgres"])

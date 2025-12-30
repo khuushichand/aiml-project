@@ -110,4 +110,3 @@ async def test_moderation_users_200_for_admin_with_permission():
     assert resp.status_code == 200
     body = resp.json()
     assert body.get("overrides") == {}
-

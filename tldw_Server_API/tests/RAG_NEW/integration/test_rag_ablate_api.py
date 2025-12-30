@@ -15,7 +15,7 @@ def _test_mode(monkeypatch):
 
 
 @pytest.fixture()
-def client_with_overrides(monkeypatch):
+def client_with_overrides(monkeypatch, auth_headers):
     async def override_user():
         return User(id=1, username="tester", email=None, is_active=True)
 
@@ -47,10 +47,10 @@ def client_with_overrides(monkeypatch):
         # Prefer disabling lifespan to avoid DB/services startup in CI; skip if not supported
         import inspect as _inspect
         if 'lifespan' in _inspect.signature(TestClient.__init__).parameters:
-            with TestClient(fastapi_app, raise_server_exceptions=False, lifespan='off') as client:
+            with TestClient(fastapi_app, headers=auth_headers, raise_server_exceptions=False, lifespan='off') as client:
                 yield client
         else:
-            with TestClient(fastapi_app, raise_server_exceptions=False) as client:
+            with TestClient(fastapi_app, headers=auth_headers, raise_server_exceptions=False) as client:
                 yield client
     finally:
         fastapi_app.dependency_overrides.clear()
@@ -107,9 +107,9 @@ def test_rag_ablate_smoke(client_with_overrides, monkeypatch):
         assert md.get("strategy") == "agentic"
 
 
-def test_rag_ablate_capabilities_smoke():
+def test_rag_ablate_capabilities_smoke(auth_headers):
     # Quick smoke to ensure capabilities advertises new agentic knobs
-    with TestClient(fastapi_app) as client:
+    with TestClient(fastapi_app, headers=auth_headers) as client:
         resp = client.get("/api/v1/rag/capabilities")
         assert resp.status_code == 200, resp.text
         data = resp.json()

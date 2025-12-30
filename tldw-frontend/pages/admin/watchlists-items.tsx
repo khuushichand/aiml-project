@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { useToast } from '@/components/ui/ToastProvider';
 import { apiClient } from '@/lib/api';
+import { useIsAdmin } from '@/hooks/useIsAdmin';
 
 interface ItemRow {
   id: number;
@@ -26,6 +27,7 @@ interface ItemsListResponse {
 export default function AdminWatchlistsItemsPage() {
   const router = useRouter();
   const { show } = useToast();
+  const isAdmin = useIsAdmin();
   const [runId, setRunId] = useState<string>('');
   const [status, setStatus] = useState<string>('');
   const [page, setPage] = useState<number>(1);
@@ -51,14 +53,28 @@ export default function AdminWatchlistsItemsPage() {
       const data = await apiClient.get<ItemsListResponse>(`/watchlists/items`, { params: { run_id: rid, status: st || undefined, page: p, size: s } });
       setItems(Array.isArray(data?.items) ? data.items : []);
       setTotal(Number(data?.total || 0));
-    } catch (e: any) {
+    } catch (error: unknown) {
       setItems([]);
       setTotal(0);
-      show({ title: 'Failed to load items', description: e?.message, variant: 'danger' });
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to load items', description: message, variant: 'danger' });
     } finally {
       setLoading(false);
     }
   };
+
+  if (!isAdmin) {
+    return (
+      <Layout>
+        <div className="mx-auto max-w-3xl">
+          <h1 className="mb-4 text-2xl font-bold text-gray-900">Watchlists Items (Admin)</h1>
+          <div className="rounded-md border bg-white p-4 text-sm text-gray-700">
+            Admin access required to view watchlists items.
+          </div>
+        </div>
+      </Layout>
+    );
+  }
 
   return (
     <Layout>

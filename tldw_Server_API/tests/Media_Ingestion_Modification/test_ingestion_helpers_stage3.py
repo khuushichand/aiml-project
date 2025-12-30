@@ -162,4 +162,3 @@ def test_normalize_process_batch_orders_and_sets_defaults() -> None:
     assert "processed_count" in normalized
     assert "errors_count" in normalized
     assert "errors" in normalized
-

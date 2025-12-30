@@ -45,7 +45,7 @@ from tldw_Server_API.app.core.Evaluations.circuit_breaker import (
     CircuitOpenError
 )
 from tldw_Server_API.app.core.RAG.rag_service.types import Document
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Claims.claims_engine import ClaimsEngine
+from tldw_Server_API.app.core.Claims_Extraction.claims_engine import ClaimsEngine
 
 # Module-level alias and helpers
 def analyze(api_name: str, input_data: Any, custom_prompt_arg: Optional[str] = None, api_key: Optional[str] = None, system_message: Optional[str] = None, temp: Optional[float] = None, **kwargs) -> Any:

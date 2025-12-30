@@ -1,0 +1,409 @@
+# Claims Monitoring Implementation Plan
+
+## Goals
+- Expose claims monitoring configuration via API for UI consumption.
+- Emit claims provider, rebuild, and review metrics through the existing metrics registry.
+- Provide lightweight health and alerting endpoints that can be wired to dashboards.
+
+## Data Model
+- `ClaimsMonitoringConfig`
+  - `id` (PK), `workspace_id` (TEXT), `threshold_ratio` (REAL), `baseline_ratio` (REAL),
+    `slack_webhook_url` (TEXT), `webhook_url` (TEXT), `email_recipients` (TEXT JSON),
+    `enabled` (BOOLEAN), `created_at`, `updated_at`.
+- `ClaimsMonitoringAlerts` (alert rules)
+  - `id` (PK), `workspace_id` (TEXT), `name` (TEXT), `alert_type` (TEXT),
+    `threshold_ratio` (REAL), `baseline_ratio` (REAL), `channels` (TEXT JSON),
+    `enabled` (BOOLEAN), `created_at`, `updated_at`.
+- `ClaimsMonitoringEvents`
+  - `id` (PK), `workspace_id` (TEXT), `event_type` (TEXT), `severity` (TEXT),
+    `payload_json` (TEXT), `created_at`.
+- `ClaimsMonitoringHealth`
+  - `id` (PK), `workspace_id` (TEXT), `queue_size` (INTEGER),
+    `last_worker_heartbeat` (TIMESTAMP), `last_failure_at` (TIMESTAMP),
+    `last_failure_reason` (TEXT), `updated_at`.
+
+For v1, `workspace_id` maps to the current user id (string). Multi-tenant org/team
+extensions should add org/team identifiers in later iterations.
+
+## Alert Evaluation Semantics
+The monitoring pipeline computes two ratios for alert evaluation:
+- `window_ratio`: unsupported claims ratio over the evaluation window.
+- `baseline_window_ratio`: unsupported claims ratio over the baseline window.
+
+Alert configuration fields map to those ratios as follows:
+- `threshold_ratio` is an absolute ceiling for `window_ratio`. Alerts fire when
+  `window_ratio > threshold_ratio`.
+- `baseline_ratio` (config) is a drift threshold (delta). If set (non-null or
+  > 0.0), alerts also fire when
+  `window_ratio - baseline_window_ratio > baseline_ratio`.
+
+`threshold_ratio` is required for threshold-based alert types; `baseline_ratio`
+is optional and only enables drift checks. Alert types may require one or both
+ratios; if a ratio is omitted (null), its check is skipped. Example: if
+`baseline_window_ratio = 0.08`, `threshold_ratio = 0.20`, and
+`baseline_ratio = 0.05`, the alert triggers when `window_ratio > 0.20` or
+`window_ratio - 0.08 > 0.05`.
+
+## Metrics
+Register in a dedicated claims monitoring module:
+- `claims_provider_requests_total` (counter) labels: provider, model, mode.
+- `claims_provider_latency_seconds` (histogram) labels: provider, model.
+- `claims_provider_errors_total` (counter) labels: provider, model, reason.
+- `claims_provider_estimated_cost_usd_total` (counter) labels: provider, model.
+- `claims_rebuild_queue_size` (gauge).
+- `claims_rebuild_processed_total` (counter).
+- `claims_rebuild_failed_total` (counter).
+- `claims_rebuild_job_duration_seconds` (histogram).
+- `claims_rebuild_worker_heartbeat_timestamp` (gauge).
+- `claims_review_queue_size` (gauge).
+- `claims_review_processed_total` (counter).
+- `claims_review_latency_seconds` (histogram).
+- `claims_alert_webhook_delivered_total` (counter) labels: status (`success`, `failure`).
+- `claims_alert_webhook_failed_total` (counter) labels: reason (`timeout`, `dns`, `tls`, `http_4xx`, `http_5xx`, `invalid_url`, `other`).
+- `claims_alert_webhook_latency_seconds` (histogram) labels: status (`success`, `failure`).
+
+## Review Metrics Aggregation
+- Persist nightly review deltas to `ClaimsReviewExtractorMetricsDaily` (workspace_id maps to user id).
+- Aggregates `claims_review_log` into per-extractor daily metrics with correction motifs.
+- Scheduler controls:
+  - `CLAIMS_REVIEW_METRICS_SCHEDULER_ENABLED`
+  - `CLAIMS_REVIEW_METRICS_INTERVAL_SEC`
+  - `CLAIMS_REVIEW_METRICS_LOOKBACK_DAYS`
+
+## API Surface
+- `GET /api/v1/claims/monitoring/config`
+- `PATCH /api/v1/claims/monitoring/config`
+- `GET /api/v1/claims/alerts`
+- `POST /api/v1/claims/alerts`
+- `PATCH /api/v1/claims/alerts/{alert_id}`
+- `DELETE /api/v1/claims/alerts/{alert_id}`
+- `GET /api/v1/claims/rebuild/health`
+- `GET /api/v1/claims/review/metrics`
+- `POST /api/v1/claims/analytics/export`
+- `GET /api/v1/claims/analytics/export/{export_id}`
+- `GET /api/v1/claims/analytics/exports`
+
+The monitoring config and alerts are stored in Media DB for now.
+
+### Endpoint Semantics + Schemas
+All endpoints are scoped to the current workspace (v1: user id). Non-admin users
+are restricted to their own `workspace_id` and receive a 403 if they attempt to
+access another workspace's data. Admin users may query any `workspace_id` for
+multi-tenant access; an admin's own `workspace_id` still maps to their user id
+unless they explicitly request another workspace. Unless noted, responses
+include `created_at`/`updated_at` timestamps (ISO 8601).
+
+#### GET /api/v1/claims/monitoring/config
+Returns the single config row for the current workspace.
+
+Response schema:
+```json
+{
+  "id": "string",
+  "workspace_id": "string",
+  "threshold_ratio": 0.0,     // float, nullable: false, min: 0.0; alert when window_ratio > threshold_ratio
+  "baseline_ratio": 0.0,      // float, nullable: false, min: 0.0; drift delta, alert when window_ratio - baseline_window_ratio > baseline_ratio (0 disables drift)
+  "slack_webhook_url": "string|null", // nullable: true, https URL
+  "webhook_url": "string|null",       // nullable: true, https URL
+  "email_recipients": ["string"],     // array of email strings, nullable: true
+  "enabled": true,
+  "created_at": "string",
+  "updated_at": "string"
+}
+```
+
+#### PATCH /api/v1/claims/monitoring/config
+Creates or updates the single config row for the current workspace.
+
+Request schema (all optional; patchable fields):
+```json
+{
+  "threshold_ratio": 0.0,
+  "baseline_ratio": 0.0,
+  "slack_webhook_url": "string|null",
+  "webhook_url": "string|null",
+  "email_recipients": ["string"],
+  "enabled": true
+}
+```
+Constraints: `baseline_ratio <= threshold_ratio`, ratios >= 0.0; webhook URLs must be https.
+`threshold_ratio` is the absolute `window_ratio` ceiling; `baseline_ratio` is an
+optional drift threshold (delta above `baseline_window_ratio`). Use
+`baseline_ratio = 0.0` to disable drift checks for the workspace config.
+
+Response schema: same as GET `/claims/monitoring/config`.
+
+Example: configure email recipients + enable digests (no SMTP required):
+```json
+{
+  "email_recipients": ["alerts@example.com"],
+  "enabled": true
+}
+```
+Digest delivery is controlled via environment variables:
+- `CLAIMS_ALERT_EMAIL_DIGEST_ENABLED=true`
+- `CLAIMS_ALERT_EMAIL_DIGEST_INTERVAL_SEC=86400`
+- `CLAIMS_ALERT_EMAIL_DIGEST_MAX_EVENTS=500`
+
+If you do not have SMTP configured, keep `EMAIL_PROVIDER=mock` to log or write
+emails locally (`EMAIL_MOCK_OUTPUT=console|file|both`).
+
+#### GET /api/v1/claims/alerts
+Lists alert rules for the current workspace.
+
+Query params:
+```json
+{
+  "limit": 100,                     // optional, max 1000
+  "offset": 0,                      // optional
+  "sort_by": "created_at|name|alert_type", // optional
+  "sort_order": "asc|desc"          // optional
+}
+```
+
+Response schema:
+```json
+{
+  "items": [
+    {
+      "id": "string",
+      "workspace_id": "string",
+      "name": "string",
+      "alert_type": "string",          // e.g., "threshold_breach", "provider_error_rate"
+      "threshold_ratio": 0.0,          // nullable: true, min: 0.0; alert when window_ratio > threshold_ratio
+      "baseline_ratio": 0.0,           // nullable: true, min: 0.0; drift delta, alert when window_ratio - baseline_window_ratio > baseline_ratio
+      "channels": {
+        "slack": true,
+        "webhook": true,
+        "email": true
+      },                               // nullable: false, at least one channel true
+      "enabled": true,
+      "created_at": "string",
+      "updated_at": "string"
+    }
+  ],
+  "total": 0,
+  "limit": 100,
+  "offset": 0
+}
+```
+
+#### POST /api/v1/claims/alerts
+Creates an alert rule (not an event record). Events are written by the monitoring
+pipeline into `ClaimsMonitoringEvents`.
+
+Request schema (required fields: `name`, `alert_type`, `channels`):
+```json
+{
+  "name": "string",                   // non-empty
+  "alert_type": "string",
+  "threshold_ratio": 0.0,             // optional; alert when window_ratio > threshold_ratio
+  "baseline_ratio": 0.0,              // optional; drift delta, alert when window_ratio - baseline_window_ratio > baseline_ratio
+  "channels": {
+    "slack": true,
+    "webhook": true,
+    "email": true
+  },
+  "enabled": true
+}
+```
+Constraints: `baseline_ratio <= threshold_ratio` when both provided; ratios >= 0.0.
+`threshold_ratio` is the absolute `window_ratio` ceiling; `baseline_ratio` is an
+optional drift threshold (delta above `baseline_window_ratio`). If a ratio is
+null, its corresponding check is skipped.
+at least one channel must be true (otherwise 400 `invalid_channels`).
+
+Response schema: single alert rule (same shape as GET list item).
+
+#### PATCH /api/v1/claims/alerts/{alert_id}
+Updates an alert rule.
+
+Request schema (patchable fields):
+```json
+{
+  "name": "string",
+  "alert_type": "string",
+  "threshold_ratio": 0.0,             // optional; alert when window_ratio > threshold_ratio
+  "baseline_ratio": 0.0,              // optional; drift delta, alert when window_ratio - baseline_window_ratio > baseline_ratio
+  "channels": { "slack": true, "webhook": false, "email": true },
+  "enabled": true
+}
+```
+Constraints: `baseline_ratio <= threshold_ratio` when both provided; ratios >= 0.0.
+`threshold_ratio` is the absolute `window_ratio` ceiling; `baseline_ratio` is an
+optional drift threshold (delta above `baseline_window_ratio`). If a ratio is
+null, its corresponding check is skipped.
+at least one channel must be true (otherwise 400 `invalid_channels`).
+Response schema: single alert rule.
+
+#### DELETE /api/v1/claims/alerts/{alert_id}
+Deletes an alert rule.
+
+Response schema:
+```json
+{ "deleted": true }
+```
+
+#### GET /api/v1/claims/rebuild/health
+Returns persisted service health for claims rebuild workers.
+
+Response schema:
+```json
+{
+  "workspace_id": "string",
+  "queue_size": 0,                    // integer, >= 0
+  "last_worker_heartbeat": "string|null",
+  "last_failure_at": "string|null",
+  "last_failure_reason": "string|null",
+  "updated_at": "string"
+}
+```
+
+#### POST /api/v1/claims/analytics/export
+Creates an export for claims monitoring analytics.
+
+Request schema:
+```json
+{
+  "format": "csv|json",               // required
+  "filters": {
+    "workspace_id": "string|null",    // admin-only; non-admins should omit (ignored if provided); 403 on other workspace
+    "event_type": "string|null",
+    "severity": "string|null",
+    "provider": "string|null",
+    "model": "string|null",
+    "start_time": "string|null",      // ISO 8601
+    "end_time": "string|null"         // ISO 8601
+  },
+  "pagination": {
+    "limit": 1000,                    // optional, max 10000
+    "offset": 0                       // optional
+  }
+}
+```
+
+Response schema:
+```json
+{
+  "export_id": "string",
+  "format": "csv|json",
+  "status": "queued|ready|failed",
+  "download_url": "string|null",
+  "created_at": "string"
+}
+```
+Download endpoint: `GET /api/v1/claims/analytics/export/{export_id}` returns the export payload (JSON) or CSV body.
+
+#### GET /api/v1/claims/analytics/exports
+Lists stored analytics exports.
+
+Query params:
+```json
+{
+  "limit": 100,                       // optional, max 1000
+  "offset": 0,                        // optional
+  "status": "queued|ready|failed",    // optional
+  "format": "csv|json",               // optional
+  "workspace_id": "string|null"       // optional, admin-only filter; non-admins are scoped to their workspace_id
+}
+```
+Non-admin users are always scoped to their own workspace and receive a 403 if
+they attempt to query another workspace via `workspace_id`.
+
+Response schema:
+```json
+{
+  "exports": [
+    {
+      "export_id": "string",
+      "format": "csv|json",
+      "status": "queued|ready|failed",
+      "download_url": "string|null",
+      "created_at": "string",
+      "updated_at": "string",
+      "filters": "object|null",
+      "pagination": "object|null",
+      "error_message": "string|null"
+    }
+  ],
+  "total": 0,
+  "limit": 100,
+  "offset": 0
+}
+```
+
+### Export Status Lifecycle
+- **queued**: export request accepted and queued for async processing.
+- **ready**: export payload stored; `download_url` populated.
+- **failed**: processing error; `error_message` populated.
+
+State transitions:
+- queued -> ready: backend completes payload generation (typical: < 30s for < 100k records).
+- queued -> failed: validation, timeout, or storage error.
+
+Client guidance:
+- Poll `GET /api/v1/claims/analytics/export/{export_id}` with exponential backoff
+  (e.g., 2s, 5s, 10s, 30s) until `status` is `ready` or `failed`.
+- No webhook callback is provided; `export_id` is the tracking identifier.
+
+Cleanup:
+- Exports older than `CLAIMS_ANALYTICS_EXPORT_RETENTION_HOURS` (default 24) are deleted
+  by a scheduled cleanup job (e.g., every 6 hours).
+- Clients should download before expiry.
+
+### Error Handling
+All endpoints return consistent error payloads:
+```json
+{
+  "error": {
+    "code": "string",
+    "message": "string",
+    "details": "object|null"
+  }
+}
+```
+Status codes: 400 for validation failures, 401/403 for auth/permissions, 404 for
+missing resources, 409 for conflicts, 429 for rate limits, 500 for unexpected errors.
+Error code guidance: `invalid_channels` when all alert channels are false (400).
+
+Webhook delivery:
+- Retry strategy: exponential backoff with jitter.
+- Max retries: 5 attempts (initial attempt + 4 retries).
+- Backoff schedule: 5s, 15s, 45s, 120s, 300s (cap at 5 minutes).
+- On non-2xx response or network error, record a failed delivery event with
+  reason and attempt count; log at warn and emit `claims_alert_webhook_failed_total`
+  and `claims_alert_webhook_delivered_total{status="failure"}`.
+- On success (2xx), record delivery success, log at info, emit
+  `claims_alert_webhook_delivered_total{status="success"}`, and record
+  `claims_alert_webhook_latency_seconds` with the observed duration.
+- Reason/status mapping guidance:
+  - `status="success"`: any 2xx response.
+  - `status="failure"`: any non-2xx response or network/validation error.
+  - `reason="http_4xx"`: response status 400-499.
+  - `reason="http_5xx"`: response status 500-599.
+  - `reason="timeout"`: connect/read timeout exceeded.
+  - `reason="dns"`: name resolution failure.
+  - `reason="tls"`: TLS handshake/verification error.
+  - `reason="invalid_url"`: URL validation fails (scheme/host/SSRF policy).
+  - `reason="other"`: fallback for uncategorized errors.
+
+### Health Persistence
+Health endpoints must read from persisted state in Media DB so multi-instance
+restarts do not reset queue/heartbeat visibility. Workers update
+`ClaimsMonitoringHealth` on each heartbeat and queue size change; the API reads
+the latest row per workspace.
+
+## Access Control
+- Require `admin` role or `claims.admin` permission for config/alerts endpoints.
+- Health endpoint should be limited to `admin`/SRE roles.
+
+## Testing
+- API tests for config CRUD and rebuild health response shape.
+- Unit tests for metric registration and alert config serialization.
+- Config CRUD cases: reject invalid `webhook_url`/`slack_webhook_url`, enforce
+  `workspace_id` constraints on create/update, and return 404 on deleting
+  non-existent configs.
+- Alert threshold edge cases: validate `baseline_ratio <= threshold_ratio` and
+  reject negative ratios.
+- Integration coverage: webhook delivery retries and end-to-end alert emission
+  from threshold breach to stored `ClaimsMonitoringEvents`.

@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import dynamic from 'next/dynamic';
 import type { JsonSchema } from '@/lib/schema';
 
@@ -17,13 +17,14 @@ export function JsonEditor({
   schema?: JsonSchema;
   readOnly?: boolean;
 }) {
-  const [fallback, setFallback] = useState(false);
+  const [fallback] = useState(false);
 
   const handleEditorChange = useCallback((v?: string) => {
     onChange(v ?? '');
   }, [onChange]);
 
-  const onMount = useCallback((editor: any, monaco: any) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const onMount = useCallback((editor: unknown, monaco: any) => {
     try {
       if (schema && monaco?.languages?.json?.jsonDefaults) {
         monaco.languages.json.jsonDefaults.setDiagnosticsOptions({
@@ -63,7 +64,7 @@ export function JsonEditor({
       value={value}
       onChange={handleEditorChange}
       height={height}
-      theme={theme as any}
+      theme={theme as string}
       options={{
         readOnly: !!readOnly,
         minimap: { enabled: false },
@@ -72,7 +73,6 @@ export function JsonEditor({
         fontSize: 13,
       }}
       onMount={onMount}
-      onError={() => setFallback(true)}
     />
   );
 }

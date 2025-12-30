@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 
-function isObject(val: any) {
-  return val && typeof val === 'object' && !Array.isArray(val);
+function isObject(val: unknown): val is Record<string, unknown> {
+  return val !== null && typeof val === 'object' && !Array.isArray(val);
 }
 
-export function JsonTree({ data, level = 0 }: { data: any; level?: number }) {
+export function JsonTree({ data, level = 0 }: { data: unknown; level?: number }) {
   if (!isObject(data) && !Array.isArray(data)) {
     return <span className="font-mono text-sm">{String(data)}</span>;
   }
@@ -12,15 +12,15 @@ export function JsonTree({ data, level = 0 }: { data: any; level?: number }) {
   return (
     <div className="font-mono text-sm">
       {entries.map(([k, v]) => (
-        <TreeRow key={String(k)} k={k as any} v={v} level={level} />
+        <TreeRow key={String(k)} k={k as string | number} v={v} level={level} />
       ))}
     </div>
   );
 }
 
-function TreeRow({ k, v, level }: { k: string | number; v: any; level: number }) {
+function TreeRow({ k, v, level }: { k: string | number; v: unknown; level: number }) {
   const [open, setOpen] = useState(true);
-  const complex = (v && typeof v === 'object');
+  const complex = v !== null && typeof v === 'object';
   return (
     <div className="py-0.5">
       <div className="flex items-start">
@@ -45,7 +45,7 @@ function TreeRow({ k, v, level }: { k: string | number; v: any; level: number })
   );
 }
 
-function formatValue(v: any) {
+function formatValue(v: unknown) {
   if (v === null) return <span className="json-null">null</span>;
   if (typeof v === 'string') return <span className="json-string">"{v}"</span>;
   if (typeof v === 'number') return <span className="json-number">{v}</span>;

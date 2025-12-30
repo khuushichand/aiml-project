@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Layout } from '@/components/layout/Layout';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { useToast } from '@/components/ui/ToastProvider';
 import { apiClient } from '@/lib/api';
+import { useDebounce } from '@/hooks/useDebounce';
+import { useIsAdmin } from '@/hooks/useIsAdmin';
 
 interface Organization {
   id: number;
@@ -25,6 +27,7 @@ interface OrganizationListResponse {
 
 export default function AdminOrgsPage() {
   const { show } = useToast();
+  const isAdmin = useIsAdmin();
   const [orgs, setOrgs] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState<number>(1);
@@ -33,39 +36,55 @@ export default function AdminOrgsPage() {
   const [total, setTotal] = useState<number>(0);
   const [hasMore, setHasMore] = useState<boolean>(false);
 
-  const fetchOrgs = async () => {
+  const debouncedFilter = useDebounce(filter, 500);
+
+  const fetchOrgs = useCallback(async () => {
     setLoading(true);
     try {
       const offset = (page - 1) * size;
-      const params: any = { limit: size, offset };
-      if (filter.trim()) params.q = filter.trim();
+      const params: Record<string, unknown> = { limit: size, offset };
+      if (debouncedFilter.trim()) params.q = debouncedFilter.trim();
       const data = await apiClient.get<OrganizationListResponse>('/admin/orgs', { params });
-      setOrgs(Array.isArray((data as any)?.items) ? data.items : []);
-      setTotal(Number.isFinite((data as any)?.total) ? data.total : 0);
-      setHasMore(Boolean((data as any)?.has_more));
-    } catch (error: any) {
+      setOrgs(Array.isArray(data?.items) ? data.items : []);
+      setTotal(Number.isFinite(data?.total) ? data.total : 0);
+      setHasMore(Boolean(data?.has_more));
+    } catch (error: unknown) {
       setOrgs([]);
       setTotal(0);
       setHasMore(false);
-      show({ title: 'Failed to load organizations', description: error?.message, variant: 'danger' });
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Failed to load organizations', description: message, variant: 'danger' });
     } finally {
       setLoading(false);
     }
-  };
+  }, [debouncedFilter, page, show, size]);
 
   useEffect(() => {
     fetchOrgs();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, size]);
+  }, [fetchOrgs]);
 
   const copy = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
       show({ title: 'Copied to clipboard', description: text, variant: 'success' });
-    } catch (e: any) {
-      show({ title: 'Copy failed', description: e?.message, variant: 'danger' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      show({ title: 'Copy failed', description: message, variant: 'danger' });
     }
   };
+
+  if (!isAdmin) {
+    return (
+      <Layout>
+        <div className="mx-auto max-w-3xl">
+          <h1 className="mb-4 text-2xl font-bold text-gray-900">Organizations (Admin)</h1>
+          <div className="rounded-md border bg-white p-4 text-sm text-gray-700">
+            Admin access required to view organizations.
+          </div>
+        </div>
+      </Layout>
+    );
+  }
 
   return (
     <Layout>
@@ -143,15 +162,7 @@ export default function AdminOrgsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {orgs
-                  .filter((o) => {
-                    const q = filter.trim().toLowerCase();
-                    if (!q) return true;
-                    const name = (o.name || '').toLowerCase();
-                    const slug = (o.slug || '').toLowerCase();
-                    return name.includes(q) || slug.includes(q) || String(o.id).includes(q);
-                  })
-                  .map((o) => (
+                {orgs.map((o) => (
                   <tr key={o.id} className="bg-white">
                     <td className="px-3 py-2 text-gray-900">{o.id}</td>
                     <td className="px-3 py-2 text-gray-700">{o.name}</td>

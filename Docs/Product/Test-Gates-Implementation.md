@@ -117,7 +117,7 @@ Stage 5 — TEST_MODE & Pool Sizing Harmonization
   - Accept truthy `TEST_MODE` / `TLDW_TEST_MODE` variants.
 - File: `tldw_Server_API/app/core/Evaluations/connection_pool.py`
   - Use small pool sizes when `TEST_MODE` is truthy.
-  
+
 - Add shared helper `is_test_mode()` for consistent detection across modules (checks both envs; truthy set {1,true,yes,y,on}).
 
 Stage 6 — Docs & CI

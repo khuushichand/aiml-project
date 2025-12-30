@@ -31,4 +31,3 @@ def is_test_mode() -> bool:
         return _env_truthy(raw)
     except Exception:
         return False
-

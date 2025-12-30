@@ -194,4 +194,3 @@ async def test_notes_graph_write_allowed_when_principal_has_permission():
     assert resp.status_code == 200
     body = resp.json()
     assert body.get("status") in {"created", "stub"}
-

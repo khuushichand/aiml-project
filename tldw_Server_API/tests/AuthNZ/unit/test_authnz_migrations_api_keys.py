@@ -45,4 +45,3 @@ def test_migration_017_extend_api_keys_virtual_adds_columns() -> None:
             assert expected in cols
     finally:
         conn.close()
-

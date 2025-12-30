@@ -4486,6 +4486,7 @@ class JobManager:
     def retry_now_jobs(
         self,
         *,
+        job_id: Optional[int] = None,
         domain: Optional[str] = None,
         queue: Optional[str] = None,
         job_type: Optional[str] = None,
@@ -4508,6 +4509,8 @@ class JobManager:
                         where.append("queue=%s"); params.append(queue)
                     if job_type:
                         where.append("job_type=%s"); params.append(job_type)
+                    if job_id is not None:
+                        where.append("id=%s"); params.append(int(job_id))
                     wh = " AND ".join(where)
                     cur.execute(
                         (
@@ -4552,6 +4555,8 @@ class JobManager:
                     where.append("queue=?"); params.append(queue)
                 if job_type:
                     where.append("job_type=?"); params.append(job_type)
+                if job_id is not None:
+                    where.append("id=?"); params.append(int(job_id))
                 wh = " AND ".join(where)
                 row = conn.execute(
                     (

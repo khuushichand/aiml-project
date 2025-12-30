@@ -206,7 +206,10 @@ def test_env_vars(tmp_path_factory):
 
     # Configure single-user mode with a deterministic API key
     os.environ["AUTH_MODE"] = "single_user"
-    os.environ["SINGLE_USER_API_KEY"] = "test_api_key_abcdefghijklmnopqrstuvwxyz012345"
+    os.environ.setdefault(
+        "SINGLE_USER_API_KEY",
+        os.environ.get("SINGLE_USER_TEST_API_KEY", "test-api-key-12345"),
+    )
     os.environ["USER_DB_BASE_DIR"] = str(user_db_base)
 
     # Extra guards for tests

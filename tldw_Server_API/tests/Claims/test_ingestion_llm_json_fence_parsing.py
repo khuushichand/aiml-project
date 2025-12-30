@@ -1,6 +1,6 @@
 import json
 
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Claims.ingestion_claims import extract_claims_for_chunks
+from tldw_Server_API.app.core.Claims_Extraction.ingestion_claims import extract_claims_for_chunks
 
 
 def test_ingestion_llm_extractor_parses_json_in_fenced_block(monkeypatch):
@@ -10,7 +10,7 @@ def test_ingestion_llm_extractor_parses_json_in_fenced_block(monkeypatch):
         return f"Here are claims:\n```json\n{json.dumps(payload)}\n```\nThanks."
 
     # Patch the module-level override consumed by ingestion_claims
-    import tldw_Server_API.app.core.Ingestion_Media_Processing.Claims.ingestion_claims as mod
+    import tldw_Server_API.app.core.Claims_Extraction.ingestion_claims as mod
     monkeypatch.setattr(mod, "chat_api_call", _fake_chat_api_call, raising=False)
 
     chunks = [{"text": "irrelevant", "metadata": {"chunk_index": 0}}]

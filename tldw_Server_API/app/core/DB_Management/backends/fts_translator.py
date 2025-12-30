@@ -10,6 +10,8 @@ import re
 from typing import Dict, List, Optional, Tuple
 from loguru import logger
 
+MAX_FTS_QUERY_LENGTH = 8192
+
 
 class FTSQueryTranslator:
     """
@@ -19,6 +21,23 @@ class FTSQueryTranslator:
     - SQLite FTS5 MATCH syntax
     - PostgreSQL to_tsquery syntax
     """
+
+    @staticmethod
+    def _sanitize_query(query: str) -> str:
+        """Normalize and bound query length before regex processing."""
+        if not query:
+            return ''
+        normalized = query.strip()
+        if not normalized:
+            return ''
+        if len(normalized) > MAX_FTS_QUERY_LENGTH:
+            logger.warning(
+                "FTS query length %d exceeds max %d; truncating",
+                len(normalized),
+                MAX_FTS_QUERY_LENGTH,
+            )
+            normalized = normalized[:MAX_FTS_QUERY_LENGTH]
+        return normalized
 
     @staticmethod
     def sqlite_to_postgres(fts5_query: str, language: str = 'english') -> str:
@@ -40,11 +59,9 @@ class FTSQueryTranslator:
         Returns:
             PostgreSQL tsquery string
         """
-        # Handle empty query
-        if not fts5_query or not fts5_query.strip():
+        query = FTSQueryTranslator._sanitize_query(fts5_query)
+        if not query:
             return ''
-
-        query = fts5_query.strip()
 
         # Handle quoted phrases first
         # "exact phrase" -> 'exact phrase'
@@ -129,11 +146,9 @@ class FTSQueryTranslator:
         Returns:
             SQLite FTS5 query string
         """
-        # Handle empty query
-        if not tsquery or not tsquery.strip():
+        query = FTSQueryTranslator._sanitize_query(tsquery)
+        if not query:
             return ''
-
-        query = tsquery.strip()
 
         # Handle prefix searches
         # word:* -> word*
@@ -177,6 +192,10 @@ class FTSQueryTranslator:
         Returns:
             Normalized query for the target backend
         """
+        query = FTSQueryTranslator._sanitize_query(query)
+        if not query:
+            return ''
+
         # Try to detect query format
         is_postgres = any(op in query for op in ['&', '|', '<->', ':*', '!'])
         is_sqlite = any(op in query for op in ['NEAR', 'OR']) or query.startswith('-')
@@ -208,6 +227,10 @@ class FTSQueryTranslator:
         Returns:
             List of search terms
         """
+        query = FTSQueryTranslator._sanitize_query(query)
+        if not query:
+            return []
+
         # Remove operators
         cleaned = re.sub(r'[&|!<>\-*:()]', ' ', query)
         cleaned = re.sub(r'\s+', ' ', cleaned)

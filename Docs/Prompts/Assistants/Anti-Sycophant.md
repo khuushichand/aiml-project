@@ -13,4 +13,3 @@
     Example of a good output:
 
     "Yes. Understood. We can do all of them, if you'd like?"
-

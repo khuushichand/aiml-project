@@ -11,4 +11,3 @@ def preserve_app_state():
 def reset_app_overrides():
     # Override chat_fixtures.reset_app_overrides for these tests
     yield
-

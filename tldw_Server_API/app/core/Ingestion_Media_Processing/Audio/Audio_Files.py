@@ -43,7 +43,9 @@ from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Utils.Utils import downloaded_files, \
     sanitize_filename, logging, get_project_root
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib import extract_metadata
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 from tldw_Server_API.app.core.http_client import download as http_download, fetch as http_fetch, RetryPolicy
+from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
 # Lazy wrappers to avoid importing heavy transcription deps at module import time
 # Use the ConversionError defined in the transcription library to ensure
 # exception handling is consistent across modules (enables pytest fallback).
@@ -174,6 +176,16 @@ def _get_model_estimated_size(model_name: str) -> str:
     # Default for unknown models
     return 'Unknown size'
 
+
+def _validate_outbound_url(url: str) -> Optional[str]:
+    block_override: Optional[bool] = None
+    if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TESTING"):
+        block_override = False
+    result = evaluate_url_policy(url, block_private_override=block_override)
+    if not getattr(result, "allowed", False):
+        return result.reason or "URL blocked by security policy"
+    return None
+
 def download_audio_file(
     url: str,
     target_temp_dir: str,
@@ -215,6 +227,9 @@ def download_audio_file(
         Exception: For other unexpected errors during the download process.
     """
     try:
+        block_reason = _validate_outbound_url(url)
+        if block_reason:
+            raise AudioDownloadError(f"URL blocked by security policy: {block_reason}")
         logging.info(f"Attempting audio download from: {url} into {target_temp_dir}")
         headers = {}
         if use_cookies and cookies:
@@ -264,6 +279,11 @@ def download_audio_file(
         def _requests_stream_download(get_callable: Callable[..., Any]) -> str:
             resp = get_callable(url, headers=headers, stream=True, timeout=30)
             resp.raise_for_status()
+            content_type = (resp.headers.get("content-type") or "").lower()
+            if "audio/" not in content_type:
+                raise AudioDownloadError(
+                    f"Unexpected Content-Type for {url}: {content_type or 'unknown'}"
+                )
             # Prefer filename from Content-Disposition if provided by server
             content_disposition_hdr = resp.headers.get('content-disposition')
             if content_disposition_hdr and 'filename=' in content_disposition_hdr:
@@ -527,6 +547,7 @@ def process_audio_files(
     # Note: If keep_original=True, the caller needs to manage the lifecycle of temp_dir
     temp_directory_manager = None
     processing_temp_dir_path = None
+    temp_dir_provided = temp_dir is not None
 
     if temp_dir:
         processing_temp_dir_path = Path(temp_dir)
@@ -671,6 +692,20 @@ def process_audio_files(
 
                 else: # Local file input
                     local_path = Path(input_item)
+                    if temp_dir_provided:
+                        safe_local_path = resolve_safe_local_path(
+                            local_path,
+                            processing_temp_dir_path,
+                        )
+                        if safe_local_path is None:
+                            err_msg = (
+                                "Local file path rejected outside the temporary directory."
+                            )
+                            item_result["status"] = "Error"
+                            item_result["error"] = err_msg
+                            item_result.setdefault("warnings", []).append(err_msg)
+                            continue
+                        local_path = safe_local_path
                     if not local_path.exists():
                         raise FileNotFoundError(f"Local file not found: {input_item}")
                     if local_path.stat().st_size > MAX_FILE_SIZE:
@@ -1034,15 +1069,16 @@ def format_transcription_with_timestamps(segments: List[Dict[str, Any]], keep_ti
     """
     Formats transcription segments into a single string, optionally with timestamps.
 
-    Each segment is expected to be a dictionary with 'Time_Start', 'Time_End',
-    and 'Text' keys. Timestamps are formatted as HH:MM:SS. If 'Time_Start' or
-    'Time_End' are already strings in HH:MM:SS format, they are used directly.
+    Each segment is expected to be a dictionary with 'Time_Start'/'Time_End' or
+    'start_seconds'/'end_seconds' and 'Text' keys. Timestamps are formatted as
+    HH:MM:SS. If timestamps are already strings in HH:MM:SS format, they are
+    used directly.
     Otherwise, they are assumed to be numeric seconds and converted.
 
     Args:
         segments: A list of dictionaries, where each dictionary represents a
-                  transcription segment. Expected keys: 'Time_Start' (float/str),
-                  'Time_End' (float/str), 'Text' (str).
+                  transcription segment. Expected keys: 'Time_Start'/'Time_End'
+                  or 'start_seconds'/'end_seconds' (float/str), 'Text' (str).
         keep_timestamps: If True, timestamps [HH:MM:SS-HH:MM:SS] are prepended
                          to each segment's text. If False, only the text is joined.
                          Defaults to True.
@@ -1054,33 +1090,40 @@ def format_transcription_with_timestamps(segments: List[Dict[str, Any]], keep_ti
     if not segments:
         return ""
 
+    def _format_time_value(value: Any) -> str:
+        if value is None:
+            return "00:00:00"
+        if isinstance(value, str):
+            stripped = value.strip()
+            if ":" in stripped:
+                return stripped
+            try:
+                value = float(stripped)
+            except (ValueError, TypeError):
+                return stripped
+        try:
+            return time.strftime('%H:%M:%S', time.gmtime(float(value)))
+        except (ValueError, TypeError, OSError):
+            return str(value)
+
     formatted_lines = []
     if keep_timestamps:
-        formatted_segments = []
         for segment in segments:
-            start = segment.get('Time_Start', 0)
-            end = segment.get('Time_End', 0)
+            start = segment.get('Time_Start')
+            end = segment.get('Time_End')
+            if start is None:
+                start = segment.get('start_seconds', segment.get('start', 0))
+            if end is None:
+                end = segment.get('end_seconds', segment.get('end', 0))
             text = segment.get('Text', '').strip()
-
-            # Check if start and end are already formatted strings
-            if isinstance(start, str) and ':' in start:
-                # Already in HH:MM:SS format, use directly
-                formatted_segments.append(f"[{start}-{end}] {text}")
-            else:
-                # Numeric seconds, convert to time format
-                try:
-                    start_time = time.strftime('%H:%M:%S', time.gmtime(float(start)))
-                    end_time = time.strftime('%H:%M:%S', time.gmtime(float(end)))
-                    formatted_segments.append(f"[{start_time}-{end_time}] {text}")
-                except (ValueError, TypeError):
-                    # Fallback if conversion fails
-                    formatted_segments.append(f"[{start}-{end}] {text}")
-            # Join the segments with a newline to ensure proper formatting
-            formatted_segments.append(f"[{start:.2f}-{end:.2f}] {text}")
-        return "\n".join(formatted_segments)
+            start_str = _format_time_value(start)
+            end_str = _format_time_value(end)
+            formatted_lines.append(f"[{start_str}-{end_str}] {text}")
+        return "\n".join(formatted_lines)
     else:
-        # Join the text without timestamps
-        return "\n".join([segment.get('Text', '').strip() for segment in segments])
+        return "\n".join(
+            [segment.get('Text', '').strip() for segment in segments if segment.get('Text', '').strip()]
+        )
 
 
 HTTPONLY_PREFIX = '#HttpOnly_'
@@ -1163,6 +1206,9 @@ def download_youtube_audio(url: str, *, use_cookies: bool = False, cookies: Opti
         current working directory.
     """
     try:
+        block_reason = _validate_outbound_url(url)
+        if block_reason:
+            return None, f"URL blocked by security policy: {block_reason}"
         # Determine ffmpeg path based on the operating system.
         if os.name == 'nt':
             ffmpeg_path = './Bin/ffmpeg.exe'

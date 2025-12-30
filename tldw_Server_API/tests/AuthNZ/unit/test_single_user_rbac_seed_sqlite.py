@@ -39,4 +39,3 @@ async def test_single_user_rbac_seed_sqlite_file_applies_schema_and_seeds(tmp_pa
     finally:
         await reset_db_pool()
         reset_settings()
-

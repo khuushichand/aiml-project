@@ -178,4 +178,3 @@ async def test_workflows_run_webhook_deliveries_allowed_with_read_permission():
     assert resp.status_code == 200
     body = resp.json()
     assert isinstance(body.get("deliveries"), list)
-

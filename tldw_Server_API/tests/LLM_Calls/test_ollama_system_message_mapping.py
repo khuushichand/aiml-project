@@ -64,4 +64,3 @@ def test_ollama_accepts_system_message_kwarg_and_inserts_message():
     first = captured_payload["messages"][0]
     assert first.get("role") == "system"
     assert first.get("content") == system_text
-

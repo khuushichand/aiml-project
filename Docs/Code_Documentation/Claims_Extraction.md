@@ -11,7 +11,7 @@ References:
 
 ## Ingestion-Time Claims
 
-Path: `tldw_Server_API.app.core.Ingestion_Media_Processing.Claims.ingestion_claims`
+Path: `tldw_Server_API.app.core.Claims_Extraction.ingestion_claims`
 
 Flow (behind `ENABLE_INGESTION_CLAIMS`):
 - Hooked inside the embeddings pipeline (`ChromaDB_Library`). After chunking a document, the system optionally extracts claims (`heuristic` by default) and stores them in the `Claims` SQL table.
@@ -44,11 +44,11 @@ APIs and service:
 - `POST /api/v1/claims/{media_id}/rebuild` - enqueue rebuild for one item
 - `POST /api/v1/claims/rebuild/all` - enqueue rebuild for many items (policies: `missing|all|stale`)
 - `POST /api/v1/claims/rebuild_fts` - rebuild FTS
-- Background worker: `ClaimsRebuildService` (chunks content, extracts claims, stores/replaces; see `services/claims_rebuild_service.py`).
+- Background worker: `ClaimsRebuildService` (chunks content, extracts claims, stores/replaces; see `core/Claims_Extraction/claims_rebuild_service.py`).
 
 ## Answer-Time Claims (Extraction + Verification)
 
-Path: `tldw_Server_API.app.core.Ingestion_Media_Processing.Claims.claims_engine`
+Path: `tldw_Server_API.app.core.Claims_Extraction.claims_engine`
 
 High-level entry: `ClaimsEngine(analyze_fn).run(...)` returns:
 ```

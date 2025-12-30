@@ -97,4 +97,3 @@ async def test_learned_fusion_calibration_for_cross_encoder(monkeypatch):
             assert gate.get("reason") == "low_relevance_probability"
             assert isinstance(res.generated_answer, str)
             assert "sufficient grounded evidence" in res.generated_answer or "Insufficient" in res.generated_answer
-

@@ -27,8 +27,9 @@ async def test_handle_audio_transcribe_stage_uses_normalized_artifact(monkeypatc
         "metadata": {"provider": "faster-whisper", "model": "large-v3"},
     }
 
-    def _fake_run_stt_job_via_registry(path, model, language):
+    def _fake_run_stt_job_via_registry(path, model, language, base_dir=None):
         assert str(path) == str(wav_path)
+        assert base_dir is None
         return fake_artifact
 
     monkeypatch.setattr(atlib, "run_stt_job_via_registry", _fake_run_stt_job_via_registry, raising=True)
@@ -46,4 +47,3 @@ async def test_handle_audio_transcribe_stage_uses_normalized_artifact(monkeypatc
     assert updated_payload["segments"] == fake_segments
     assert updated_payload["text"] == "hello worker"
     assert updated_payload.get("normalized_stt") == fake_artifact
-

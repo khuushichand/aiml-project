@@ -12,6 +12,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from tldw_Server_API.app.core.config import get_stt_config
@@ -87,6 +88,7 @@ class SttProviderAdapter(ABC):
         task: str = "transcribe",
         word_timestamps: bool = False,
         prompt: Optional[str] = None,
+        base_dir: Optional[Path] = None,
     ) -> Dict[str, Any]:
         """
         Perform a batch transcription and return a normalized artifact.
@@ -128,6 +130,7 @@ class FasterWhisperAdapter(SttProviderAdapter):
         task: str = "transcribe",
         word_timestamps: bool = False,
         prompt: Optional[str] = None,
+        base_dir: Optional[Path] = None,
     ) -> Dict[str, Any]:
         # We reuse the core speech_to_text helper so behavior stays aligned
         # with existing REST/media ingestion flows.
@@ -203,6 +206,7 @@ class ParakeetAdapter(SttProviderAdapter):
         task: str = "transcribe",
         word_timestamps: bool = False,
         prompt: Optional[str] = None,
+        base_dir: Optional[Path] = None,
     ) -> Dict[str, Any]:
         # Parakeet batch flows are routed through speech_to_text's Parakeet
         # branch by encoding the model name (e.g. "parakeet-standard").
@@ -262,6 +266,7 @@ class CanaryAdapter(SttProviderAdapter):
         task: str = "transcribe",
         word_timestamps: bool = False,
         prompt: Optional[str] = None,
+        base_dir: Optional[Path] = None,
     ) -> Dict[str, Any]:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (  # type: ignore
             transcribe_with_canary,
@@ -330,6 +335,7 @@ class Qwen2AudioAdapter(SttProviderAdapter):
         task: str = "transcribe",
         word_timestamps: bool = False,
         prompt: Optional[str] = None,
+        base_dir: Optional[Path] = None,
     ) -> Dict[str, Any]:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (  # type: ignore
             speech_to_text,
@@ -387,6 +393,7 @@ class ExternalAdapter(SttProviderAdapter):
         task: str = "transcribe",
         word_timestamps: bool = False,
         prompt: Optional[str] = None,
+        base_dir: Optional[Path] = None,
     ) -> Dict[str, Any]:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_External_Provider import (  # type: ignore
             transcribe_with_external_provider,
@@ -397,7 +404,11 @@ class ExternalAdapter(SttProviderAdapter):
         if model_id.startswith("external:"):
             provider_name = model_id.split(":", 1)[1] or "default"
 
-        text = transcribe_with_external_provider(audio_path, provider_name=provider_name)
+        text = transcribe_with_external_provider(
+            audio_path,
+            provider_name=provider_name,
+            base_dir=base_dir,
+        )
         segments = [
             {
                 "start_seconds": 0.0,

@@ -11,7 +11,10 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_auth_principal,
+    get_registration_service_dep,
+)
 from tldw_Server_API.app.api.v1.API_Deps.org_deps import (
     OrgContext,
     require_org_role,
@@ -41,6 +44,8 @@ from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     OrgInviteCreateRequest,
     OrgInviteResponse,
     OrgInviteListResponse,
+    OrgInviteAcceptRequest,
+    OrgInviteAcceptResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
@@ -48,8 +53,13 @@ from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeam
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DuplicateOrganizationError,
     DuplicateTeamError,
+    InvalidRegistrationCodeError,
+    RegistrationCodeExpiredError,
+    RegistrationCodeExhaustedError,
+    RegistrationDisabledError,
 )
 from tldw_Server_API.app.services.org_invite_service import OrgInviteService, get_invite_service
+from tldw_Server_API.app.services.registration_service import RegistrationService
 from tldw_Server_API.app.core.Billing.subscription_service import get_subscription_service
 
 
@@ -957,3 +967,49 @@ async def revoke_invite(
         )
 
     logger.info(f"Revoked invite {invite_id} for org {ctx.org_id}")
+
+
+@router.post(
+    "/invites/accept",
+    response_model=OrgInviteAcceptResponse,
+    summary="Accept org-scoped registration code",
+)
+async def accept_org_invite(
+    body: OrgInviteAcceptRequest,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    registration_service: RegistrationService = Depends(get_registration_service_dep),
+):
+    """Accept an org-scoped registration code for an existing user."""
+    try:
+        result = await registration_service.accept_org_invite_code(
+            code=body.code,
+            user_id=principal.user_id,
+        )
+    except RegistrationDisabledError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc) or "Registration is currently disabled",
+        ) from exc
+    except RegistrationCodeExpiredError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Invite code has expired",
+        ) from exc
+    except RegistrationCodeExhaustedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Invite code has reached its usage limit",
+        ) from exc
+    except InvalidRegistrationCodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc) or "Invalid invite code",
+        ) from exc
+
+    return OrgInviteAcceptResponse(
+        success=True,
+        org_id=result.get("org_id"),
+        team_id=result.get("team_id"),
+        org_role=result.get("org_role"),
+        was_already_member=result.get("was_already_member", False),
+    )

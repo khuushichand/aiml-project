@@ -85,4 +85,3 @@ class TestKanbanDbCacheShutdown:
         assert dummy.closed is True
         assert len(kanban_deps._kanban_db_instances) == 0
         assert kanban_deps._kanban_db_health_checks == {}
-

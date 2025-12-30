@@ -27,6 +27,19 @@ tldw_Server_API/app/core/Ingestion_Media_Processing/
 └── XML_Ingestion_Lib.py         # Legacy XML import helper (DB-writing)
 ```
 
+- Submodule docs and references:
+  - `Audio/` ([docs](Docs/Code_Documentation/Ingestion_Pipeline_Audio.md))
+  - `Books/` ([docs](Docs/Code_Documentation/Ingestion_Pipeline_Ebooks.md))
+  - `Claims/` ([docs](Docs/Code_Documentation/Claims_Extraction.md))
+  - `MediaWiki/` ([docs](Docs/Code_Documentation/Ingestion_Pipeline_MediaWiki.md))
+  - `OCR/` ([docs](Docs/API-related/OCR_API_Documentation.md))
+  - `PDF/` ([docs](Docs/Code_Documentation/Ingestion_Pipeline_PDF.md))
+  - `Plaintext/` ([docs](Docs/Code_Documentation/Ingestion_Pipeline_Documents.md))
+  - `Video/` ([docs](Docs/Code_Documentation/Ingestion_Pipeline_Video.md))
+  - `Media_Update_lib.py` ([code](tldw_Server_API/app/core/Ingestion_Media_Processing/Media_Update_lib.py))
+  - `Upload_Sink.py` ([code](tldw_Server_API/app/core/Ingestion_Media_Processing/Upload_Sink.py))
+  - `XML_Ingestion_Lib.py` ([code](tldw_Server_API/app/core/Ingestion_Media_Processing/XML_Ingestion_Lib.py))
+
 ## Validation & Security: `Upload_Sink.py`
 
 - Core types:
@@ -87,7 +100,7 @@ under `tldw_Server_API.app.core.Ingestion_Media_Processing.persistence`:
 - `add_media_orchestrate(...)` – orchestrates TempDir management, upload saving, quota checks, per-type dispatch, and final status selection for `/media/add`.
 - `process_batch_media(...)` – canonical batch helper for audio/video items; wraps `Video_DL_Ingestion_Lib.process_videos` and `Audio_Files.process_audio_files` and then calls `persist_primary_av_item(...)` to write results to the Media DB.
 - `process_document_like_item(...)` – canonical helper for document-like items (PDFs, documents/HTML/XML/RTF/DOCX, ebooks, JSON, emails and email archives); performs download/validation, processor dispatch, and then calls `persist_doc_item_and_children(...)`.
-- `persist_primary_av_item(...)` / `persist_doc_item_and_children(...)` – handle Media DB writes and ingestion-time claims persistence via `claims_utils.persist_claims_if_applicable(...)`, keeping envelopes (`status`, `input_ref`, `processing_source`, `media_type`, `content`/`transcript`, `chunks`, `analysis`, `claims`, `db_id`, `db_message`, `media_uuid`) consistent across A/V and document flows.
+- `persist_primary_av_item(...)` / `persist_doc_item_and_children(...)` – handle Media DB writes and ingestion-time claims persistence via `Claims_Extraction.claims_utils.persist_claims_if_applicable(...)`, keeping envelopes (`status`, `input_ref`, `processing_source`, `media_type`, `content`/`transcript`, `chunks`, `analysis`, `claims`, `db_id`, `db_message`, `media_uuid`) consistent across A/V and document flows.
 
 The legacy `_legacy_media.py` file is now a compatibility shim that exposes
 shared constants, Pydantic forms, and thin delegates for tests and older

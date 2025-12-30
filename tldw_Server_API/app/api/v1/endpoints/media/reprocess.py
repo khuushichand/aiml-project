@@ -1,0 +1,322 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, status
+from loguru import logger
+
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_permissions
+from tldw_Server_API.app.api.v1.schemas.media_request_models import ReprocessMediaRequest
+from tldw_Server_API.app.api.v1.schemas.media_response_models import ReprocessMediaResponse
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_UPDATE
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    ConflictError,
+    DatabaseError,
+    InputError,
+    MediaDatabase,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
+    apply_chunking_template_if_any,
+    prepare_chunking_options_dict,
+)
+from tldw_Server_API.app.core.Chunking import improved_chunking_process
+from tldw_Server_API.app.core.Chunking.chunker import Chunker
+from tldw_Server_API.app.core.config import settings
+
+from tldw_Server_API.app.api.v1.endpoints import media_embeddings as embeddings_endpoint
+from tldw_Server_API.app.core.Chunking.templates import TemplateClassifier
+
+
+router = APIRouter(tags=["Media Management"])
+
+
+def _normalize_chunks(raw_chunks: List[Any]) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    for idx, chunk in enumerate(raw_chunks):
+        if isinstance(chunk, str):
+            text = chunk
+            meta: Optional[Dict[str, Any]] = None
+            start_char = None
+            end_char = None
+            chunk_type = None
+            chunk_index = idx
+        elif isinstance(chunk, dict):
+            text = chunk.get("text") or chunk.get("chunk_text")
+            meta = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else None
+            start_char = chunk.get("start_char") or chunk.get("start")
+            end_char = chunk.get("end_char") or chunk.get("end")
+            chunk_type = chunk.get("chunk_type") or (meta or {}).get("chunk_type")
+            raw_index = chunk.get("chunk_index")
+            if raw_index is None:
+                raw_index = (meta or {}).get("chunk_index")
+            if raw_index is None:
+                raw_index = (meta or {}).get("index")
+            try:
+                chunk_index = int(raw_index) if raw_index is not None else idx
+            except (TypeError, ValueError):
+                chunk_index = idx
+
+            if start_char is None:
+                start_char = (meta or {}).get("start_char")
+            if start_char is None:
+                start_char = (meta or {}).get("start_index")
+            if start_char is None:
+                start_char = (meta or {}).get("start_offset")
+
+            if end_char is None:
+                end_char = (meta or {}).get("end_char")
+            if end_char is None:
+                end_char = (meta or {}).get("end_index")
+            if end_char is None:
+                end_char = (meta or {}).get("end_offset")
+        else:
+            continue
+
+        if not isinstance(text, str) or not text.strip():
+            continue
+
+        normalized.append(
+            {
+                "chunk_text": text,
+                "chunk_index": chunk_index,
+                "start_char": start_char,
+                "end_char": end_char,
+                "chunk_type": chunk_type,
+                "metadata": meta if isinstance(meta, dict) else None,
+            }
+        )
+    return normalized
+
+
+def _delete_embeddings_for_media(media_id: int, user_id: str) -> None:
+    manager = embeddings_endpoint.ChromaDBManager(
+        user_id=user_id,
+        user_embedding_config=embeddings_endpoint._user_embedding_config(),
+    )
+    collection_name = f"user_{user_id}_media_embeddings"
+    collection = manager.get_or_create_collection(collection_name)
+    try:
+        collection.delete(where={"media_id": str(media_id)})
+    except Exception as exc:
+        logger.warning(
+            "Where-delete failed for media %s embeddings, falling back to id delete: %s",
+            media_id,
+            exc,
+        )
+        data = collection.get(where={"media_id": str(media_id)}, include=["metadatas"], limit=100000)
+        ids = (data or {}).get("ids") or []
+        if ids:
+            collection.delete(ids=ids)
+
+
+async def _generate_embeddings(
+    *,
+    media_id: int,
+    media_payload: Dict[str, Any],
+    request: ReprocessMediaRequest,
+    user_id: str,
+    db: MediaDatabase,
+) -> None:
+    try:
+        embedding_model = request.embedding_model or settings.get(
+            "embedding_model",
+            embeddings_endpoint.DEFAULT_EMBEDDING_MODEL,
+        )
+        embedding_provider = request.embedding_provider or settings.get(
+            "embedding_provider",
+            embeddings_endpoint.DEFAULT_EMBEDDING_PROVIDER,
+        )
+        await embeddings_endpoint.generate_embeddings_for_media(
+            media_id=media_id,
+            media_content=media_payload,
+            embedding_model=embedding_model,
+            embedding_provider=embedding_provider,
+            chunk_size=request.chunk_size,
+            chunk_overlap=request.chunk_overlap,
+            user_id=user_id,
+        )
+    except Exception as exc:
+        error_detail = f"{type(exc).__name__}: {exc}"
+        logger.error("Embeddings regeneration failed for media %s: %s", media_id, error_detail)
+        try:
+            db.mark_embeddings_error(media_id, error_detail)
+        except Exception as update_exc:
+            logger.error(
+                "Failed to mark embeddings error for media %s: %s",
+                media_id,
+                update_exc,
+            )
+        raise
+
+
+@router.post(
+    "/{media_id:int}/reprocess",
+    dependencies=[
+        Depends(require_permissions(MEDIA_UPDATE)),
+        Depends(rbac_rate_limit("media.update")),
+    ],
+    status_code=status.HTTP_200_OK,
+    response_model=ReprocessMediaResponse,
+    summary="Reprocess media chunks and embeddings",
+)
+async def reprocess_media_item(
+    payload: ReprocessMediaRequest,
+    background_tasks: BackgroundTasks,
+    media_id: int = Path(..., description="The ID of the media item"),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+    current_user: User = Depends(get_request_user),
+) -> ReprocessMediaResponse:
+    """
+    Reprocess stored media content by rebuilding chunks and/or regenerating embeddings.
+    """
+    logger.info(
+        "Reprocess request received for media_id={} (chunking={}, embeddings={})",
+        media_id,
+        payload.perform_chunking,
+        payload.generate_embeddings,
+    )
+    media_item = db.get_media_by_id(media_id)
+    if not media_item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media item not found.")
+
+    content = media_item.get("content") or ""
+    if not isinstance(content, str) or not content.strip():
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Media content is empty.")
+
+    if not payload.perform_chunking and not payload.generate_embeddings:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Nothing to reprocess (chunking and embeddings both disabled).",
+        )
+
+    chunks_created: Optional[int] = None
+    if payload.perform_chunking:
+        chunk_request = SimpleNamespace(**payload.model_dump())
+        chunk_request.media_type = media_item.get("type")
+        chunk_request.title = media_item.get("title")
+        chunk_request.url = media_item.get("url")
+
+        chunk_options = prepare_chunking_options_dict(chunk_request)
+        chunk_options = apply_chunking_template_if_any(
+            chunk_request,
+            db,
+            chunk_options,
+            TemplateClassifier=TemplateClassifier,
+            first_url=media_item.get("url"),
+            first_filename=media_item.get("filename"),
+        )
+        chunk_options = chunk_options or {}
+
+        use_hier = bool(
+            chunk_options.get("hierarchical")
+            or isinstance(chunk_options.get("hierarchical_template"), dict)
+        )
+        try:
+            if use_hier:
+                ck = Chunker()
+                raw_chunks = ck.chunk_text_hierarchical_flat(
+                    content,
+                    method=chunk_options.get("method") or "sentences",
+                    max_size=chunk_options.get("max_size") or 500,
+                    overlap=chunk_options.get("overlap") or 200,
+                    language=chunk_options.get("language"),
+                    template=chunk_options.get("hierarchical_template")
+                    if isinstance(chunk_options.get("hierarchical_template"), dict)
+                    else None,
+                )
+            else:
+                raw_chunks = improved_chunking_process(content, chunk_options)
+        except Exception as exc:
+            logger.error(
+                "Chunking failed for media %s: %s",
+                media_id,
+                exc,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to re-chunk media content.",
+            ) from exc
+
+        normalized_chunks = _normalize_chunks(raw_chunks)
+        try:
+            db.clear_unvectorized_chunks(media_id)
+        except (InputError, ConflictError) as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        except DatabaseError as exc:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+        if normalized_chunks:
+            try:
+                db.process_unvectorized_chunks(media_id, normalized_chunks)
+            except (InputError, ConflictError) as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+            except DatabaseError as exc:
+                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+        chunks_created = len(normalized_chunks)
+
+        try:
+            db.update_media_reprocess_state(
+                media_id,
+                chunking_status="completed",
+                reset_vector_processing=bool(payload.generate_embeddings),
+            )
+        except (ConflictError, InputError) as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        except DatabaseError as exc:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+    elif payload.generate_embeddings:
+        try:
+            db.update_media_reprocess_state(
+                media_id,
+                chunking_status=None,
+                reset_vector_processing=True,
+            )
+        except (ConflictError, InputError) as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        except DatabaseError as exc:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+    embeddings_started = False
+    if payload.generate_embeddings:
+        raw_user_id = getattr(current_user, "id", None)
+        if raw_user_id is None or raw_user_id == "":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authenticated user id missing.",
+            )
+        user_id = str(raw_user_id)
+        if payload.force_regenerate_embeddings:
+            try:
+                _delete_embeddings_for_media(media_id, user_id)
+            except Exception as exc:
+                logger.warning("Failed to delete embeddings for media %s: %s", media_id, exc)
+
+        embeddings_started = True
+        media_payload = {"media_item": media_item, "content": media_item}
+        background_tasks.add_task(
+            _generate_embeddings,
+            media_id=media_id,
+            media_payload=media_payload,
+            request=payload,
+            user_id=user_id,
+            db=db,
+        )
+
+    message = "Reprocess completed."
+    if payload.generate_embeddings:
+        message = "Reprocess completed; embeddings regeneration started."
+
+    return ReprocessMediaResponse(
+        media_id=media_id,
+        status="completed",
+        message=message,
+        chunks_created=chunks_created,
+        embeddings_started=embeddings_started,
+        job_id=None,
+    )
+
+
+__all__ = ["router"]

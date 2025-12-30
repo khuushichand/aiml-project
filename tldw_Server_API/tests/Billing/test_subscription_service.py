@@ -254,6 +254,37 @@ async def test_create_checkout_session_unknown_plan_raises_value_error(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_handle_checkout_completed_updates_plan_and_cycle() -> None:
+    """checkout.session.completed should persist plan_id and billing_cycle from metadata."""
+    repo = _FakeBillingRepo()
+    service = SubscriptionService(billing_repo=repo)
+
+    event_data = {
+        "object": {
+            "id": "cs_test_1",
+            "subscription": "sub_123",
+            "customer": "cus_456",
+            "metadata": {
+                "org_id": "7",
+                "plan_name": "pro",
+                "billing_cycle": "yearly",
+            },
+        }
+    }
+
+    result = await service._handle_checkout_completed(event_data, repo)  # type: ignore[attr-defined]
+
+    assert result["handled"] is True
+    assert repo.last_updated_subscription is not None
+    assert repo.last_updated_subscription["org_id"] == 7
+    assert repo.last_updated_subscription["plan_id"] == 2
+    assert repo.last_updated_subscription["billing_cycle"] == "yearly"
+    assert repo.last_updated_subscription["status"] == "active"
+    assert repo.last_updated_subscription["stripe_subscription_id"] == "sub_123"
+    assert repo.last_updated_subscription["stripe_customer_id"] == "cus_456"
+
+
+@pytest.mark.asyncio
 async def test_handle_subscription_updated_updates_plan_from_price(monkeypatch) -> None:
     """_handle_subscription_updated should update plan_id when price_id maps to a new plan."""
 

@@ -54,11 +54,13 @@ from tldw_Server_API.app.core.Utils.Utils import (
     extract_text_from_segments,
     logging
 )
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
 from tldw_Server_API.app.core.Metrics.metrics_logger import (
     log_counter, log_histogram
 )
+from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
 #
 #######################################################################################################################
 # Function Definitions
@@ -434,6 +436,13 @@ def download_video(
     When ``download_video_flag`` is True, the best muxed audio+video stream is
     downloaded instead so the original media can be retained.
     """
+    block_override: Optional[bool] = None
+    if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TESTING"):
+        block_override = False
+    policy_result = evaluate_url_policy(video_url, block_private_override=block_override)
+    if not getattr(policy_result, "allowed", False):
+        reason = policy_result.reason or "URL blocked by security policy"
+        raise ValueError(f"URL blocked by security policy: {reason}")
     download_dir = Path(download_path)
     download_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1177,6 +1186,15 @@ def process_single_video(
 
         # 1. Get Metadata & Determine LOCAL Processing Path
         if is_remote:
+            block_override: Optional[bool] = None
+            if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TESTING"):
+                block_override = False
+            policy_result = evaluate_url_policy(video_input, block_private_override=block_override)
+            if not getattr(policy_result, "allowed", False):
+                reason = policy_result.reason or "URL blocked by security policy"
+                err_msg = f"URL blocked by security policy: {reason}"
+                processing_result.update({"status": "Error", "error": err_msg})
+                return processing_result
             logger.info("Input is URL. Extracting metadata and downloading...")
             info_dict = extract_metadata(video_input, use_cookies, cookies)
             if not info_dict:
@@ -1209,22 +1227,38 @@ def process_single_video(
                     f"Download failed or file not found (target in {download_target_dir_str}) for URL: {video_input}"
                 )
 
-            local_file_path_for_transcription = downloaded_path
+            safe_downloaded = resolve_safe_local_path(
+                Path(downloaded_path),
+                processing_temp_dir,
+            )
+            if safe_downloaded is None:
+                raise FileNotFoundError(
+                    "Downloaded file path rejected outside temp directory."
+                )
+            local_file_path_for_transcription = str(safe_downloaded)
             # *** Update only the processing_source, keep original input_ref ***
             processing_result["processing_source"] = local_file_path_for_transcription
             logger.info(f"Download successful. Using local path: {local_file_path_for_transcription}")
 
         else:
             # Input is already a local file path
-            if not os.path.exists(video_input):
+            safe_local_path = resolve_safe_local_path(
+                Path(video_input),
+                processing_temp_dir,
+            )
+            if safe_local_path is None:
+                raise FileNotFoundError(
+                    f"Local file path rejected outside temp directory: {video_input}"
+                )
+            if not safe_local_path.exists():
                 raise FileNotFoundError(f"Local file not found: {video_input}")
-            local_file_path_for_transcription = video_input
+            local_file_path_for_transcription = str(safe_local_path)
             # *** Update only the processing_source, keep original input_ref ***
             processing_result["processing_source"] = local_file_path_for_transcription
             # Extract/create minimal metadata for local files if not already present
             if not processing_result.get("metadata"):
                  # Basic info; could potentially use ffprobe or similar for more details if needed
-                 path_obj = Path(video_input)
+                 path_obj = safe_local_path
                  info_dict = {
                      "title": path_obj.stem,
                      "description": "Local file",

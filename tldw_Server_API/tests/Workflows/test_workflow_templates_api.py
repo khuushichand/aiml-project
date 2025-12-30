@@ -8,7 +8,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 
 
 @pytest.fixture()
-def client(tmp_path) -> TestClient:
+def client(tmp_path, auth_headers) -> TestClient:
     db = WorkflowsDatabase(str(tmp_path / "wf.db"))
 
     async def override_user():
@@ -20,7 +20,7 @@ def client(tmp_path) -> TestClient:
     app.dependency_overrides[get_request_user] = override_user
     app.dependency_overrides[wf_mod._get_db] = override_db
 
-    with TestClient(app) as c:
+    with TestClient(app, headers=auth_headers) as c:
         yield c
 
     app.dependency_overrides.clear()

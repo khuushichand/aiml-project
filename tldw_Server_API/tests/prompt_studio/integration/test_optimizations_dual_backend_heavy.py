@@ -172,8 +172,20 @@ def prompt_studio_dual_backend_client(tmp_path_factory):
     # Use a module-scoped temporary directory so DB and seed can be shared
     tmp_dir = tmp_path_factory.mktemp("ps_heavy")
 
+    # Static test user for this module-scoped client
+    test_user = {
+        "id": "test-user-123",
+        "username": "testuser",
+        "email": "test@example.com",
+        "is_active": True,
+    }
+
+    user_db_dir = tmp_dir / test_user["id"] / "prompt_studio_dbs"
+    user_db_dir.mkdir(parents=True, exist_ok=True)
+    user_db_path = user_db_dir / "prompt_studio.db"
+
     if backend_choice == "sqlite":
-        db_instance = PromptStudioDatabase(str(tmp_dir / "prompt_studio_sqlite_heavy.sqlite"), "heavy-sqlite")
+        db_instance = PromptStudioDatabase(str(user_db_path), "heavy-sqlite")
     else:
         if not _HAS_POSTGRES:
             pytest.skip("psycopg not available; skipping Postgres backend for heavy suite")
@@ -192,7 +204,7 @@ def prompt_studio_dual_backend_client(tmp_path_factory):
         config = _create_temp_postgres_database(base_config)
         backend = DatabaseBackendFactory.create_backend(config)
         db_instance = PromptStudioDatabase(
-            db_path=str(tmp_dir / "prompt_studio_pg_placeholder.sqlite"),
+            db_path=str(user_db_path),
             client_id="heavy-postgres",
             backend=backend,
         )
@@ -201,14 +213,6 @@ def prompt_studio_dual_backend_client(tmp_path_factory):
     os.environ["TEST_MODE"] = "true"
     prev_user_base = app_settings.get("USER_DB_BASE_DIR")
     app_settings["USER_DB_BASE_DIR"] = tmp_dir
-
-    # Static test user for this module-scoped client
-    test_user = {
-        "id": "test-user-123",
-        "username": "testuser",
-        "email": "test@example.com",
-        "is_active": True,
-    }
 
     async def override_user():
         return User(
@@ -417,7 +421,7 @@ async def test_long_running_optimization_dual_backend(
         "/api/v1/prompt-studio/prompts/create",
         json={
             "project_id": project_id,
-            "name": f"Base Prompt ({backend_label})",
+            "name": f"Base Prompt ({backend_label}) [{optimizer_type}]",
             "system_prompt": "Summarize clearly",
             "user_prompt": "{{q}}",
         },

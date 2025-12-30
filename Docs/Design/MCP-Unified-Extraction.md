@@ -1,7 +1,7 @@
 # MCP Unified Extraction — Design Doc / PRD
 
-Author: tldw_server team  
-Status: Draft (v0.1)  
+Author: tldw_server team
+Status: Draft (v0.1)
 Target Version: v0.2.x
 
 ## 1) Summary

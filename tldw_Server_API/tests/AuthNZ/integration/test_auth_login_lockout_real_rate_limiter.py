@@ -141,4 +141,3 @@ class TestAuthLoginLockoutRealRateLimiter:
             assert "Too many failed login attempts" in body.get("detail", "")
             retry_after = int(r3.headers.get("Retry-After", "0"))
             assert retry_after > 0
-

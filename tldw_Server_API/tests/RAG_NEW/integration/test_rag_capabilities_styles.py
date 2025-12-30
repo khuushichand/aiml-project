@@ -2,9 +2,9 @@ from fastapi.testclient import TestClient
 from tldw_Server_API.app.main import app as fastapi_app
 
 
-def test_rag_capabilities_citation_styles_lowercased():
+def test_rag_capabilities_citation_styles_lowercased(auth_headers):
     """Capabilities should expose citation styles in lowercase to match schema literals."""
-    with TestClient(fastapi_app) as client:
+    with TestClient(fastapi_app, headers=auth_headers) as client:
         resp = client.get("/api/v1/rag/capabilities")
         assert resp.status_code == 200
         data = resp.json()

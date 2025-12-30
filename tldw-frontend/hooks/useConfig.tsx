@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import api, { getApiBaseUrl } from '@/lib/api';
 
 type Theme = 'light' | 'dark' | 'system';
@@ -79,7 +79,9 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
       if (config.xApiKey) localStorage.setItem('x_api_key', config.xApiKey); else localStorage.removeItem('x_api_key');
       if (config.apiBearer) localStorage.setItem('tldw-api-bearer', config.apiBearer); else localStorage.removeItem('tldw-api-bearer');
       localStorage.setItem('tldw-theme', config.theme);
-    } catch {}
+    } catch {
+      // localStorage may be unavailable in some contexts
+    }
     // Apply axios base URL
     const nextBase = computeBaseURL(config.apiBaseHost, config.apiVersion);
     api.defaults.baseURL = nextBase;
@@ -93,7 +95,7 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
   const setApiBearer = (bearer: string) => setConfig((c) => ({ ...c, apiBearer: bearer || undefined }));
   const setTheme = (t: Theme) => setConfig((c) => ({ ...c, theme: t }));
 
-  const reloadBootstrapConfig = async () => {
+  const reloadBootstrapConfig = useCallback(async () => {
     try {
       // Prefer explicit UI base origin if provided; else use API host; else window origin
       const preferredBase = (process.env.NEXT_PUBLIC_API_BASE_URL || '').toString().trim() || config.apiBaseHost || (typeof window !== 'undefined' ? window.location.origin : '');
@@ -107,9 +109,9 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
       const bearer = json?.api_bearer || config.apiBearer;
       setConfig((c) => ({ ...c, apiBaseHost: host, apiVersion: version, xApiKey: key, apiBearer: bearer }));
     } catch {
-      // ignore
+      // ignore bootstrap config fetch failures
     }
-  };
+  }, [config.apiBaseHost, config.apiVersion, config.xApiKey, config.apiBearer]);
 
   const value = useMemo(
     () => ({
@@ -121,7 +123,7 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
       setTheme,
       reloadBootstrapConfig,
     }),
-    [config]
+    [config, reloadBootstrapConfig]
   );
 
   return <ConfigContext.Provider value={value}>{children}</ConfigContext.Provider>;
