@@ -82,7 +82,7 @@ If you're looking for a one line non-jargon explanation: Modular monolithic Fast
 
 ## Current Status
 
-Version 0.1.12 (beta). Expect bugs and rough edges; please report issues.
+Version 0.1.13 (beta). Expect bugs and rough edges; please report issues.
 
 <details>
 <summary>Current focus and migration notes</summary>
@@ -91,6 +91,7 @@ Version 0.1.12 (beta). Expect bugs and rough edges; please report issues.
 - Workflows
 - Browser extension ([tldw_Browser_Assistant](https://github.com/rmusser01/tldw_browser_assistant))
 - Unified Admin Dashboard ([admin-ui](./admin-ui))
+- Front-End webapp ([tldw-frontend](./tldw-frontend))
 - Watchlists
 - Collections (read-it-later)
 - Documentation

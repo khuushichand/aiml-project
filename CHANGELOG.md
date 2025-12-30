@@ -15,6 +15,26 @@ and this project adheres to Some kind of Versioning
 
 ### Fixed
 
+
+## [0.1.13] - 2025-12-29
+
+### Added
+- tldw-frontend
+- admin-ui - Full Admin UI: dashboard, users/orgs/teams, roles & permissions, API keys, jobs, usage analytics, budgets, BYOK, flags, incidents, logs, monitoring panels.
+- Content Review: draft editor, sidebar, reattach-source flow, commit/review workflows.
+- BYOK improvements: scoped resolution, validation, dashboard and key management.
+- Option for review of media prior to ingestion.
+
+### Changed
+- Claims module expanded
+
+### Removed
+- N/A
+
+### Fixed
+- Improved frontend/backend error handling and type safety; more robust API interactions.
+
+
 ## [0.1.12] - 2025-12-20
 
 ### Added
