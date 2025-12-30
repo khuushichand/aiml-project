@@ -77,7 +77,7 @@ Great for:
 - Building research workflows with RAG, evaluation, and prompt tooling.
 
 New here? Start with the Quickstart section below.
-If you're looking for a one line non-jargon explanation: Modular monolithic FastAPI application, exposes different functionality via REST endpoints for access to each core module, each module following loose coupling, aiming towards atomicity of each where/when possible.
+If you're looking for a one line non-jargon explanation: Monolithic FastAPI server with a modular internal architecture, exposing different functionality via REST endpoints for each core module (loosely coupled where possible).
 
 
 ## Current Status
@@ -91,7 +91,7 @@ Version 0.1.13 (beta). Expect bugs and rough edges; please report issues.
 - Workflows
 - Browser extension ([tldw_Browser_Assistant](https://github.com/rmusser01/tldw_browser_assistant))
 - Unified Admin Dashboard ([admin-ui](./admin-ui))
-- Front-End webapp ([tldw-frontend](./tldw-frontend))
+- front-end webapp ([tldw-frontend](./tldw-frontend))
 - Watchlists
 - Collections (read-it-later)
 - Documentation
@@ -618,10 +618,10 @@ flowchart LR
 
 - **Characters & Character Chat**
   - Per-user caps (configurable via env/settings; defaults documented in `Docs/API-related/CHARACTER_CHAT_API_DOCUMENTATION.md`):
-    - Max operations/hour (character operations).
-    - Max characters per user.
-    - Max concurrent chats per user.
-    - Max messages per chat.
+    - Operations per hour (character operations).
+    - Per-user character limit.
+    - Concurrent chats per user.
+    - Messages per chat.
     - Per-minute limits for chat completions and message sends.
   - Status endpoint:
     - `GET /api/v1/characters/rate-limit-status` → returns a simple snapshot:

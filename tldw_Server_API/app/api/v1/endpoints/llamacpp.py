@@ -63,6 +63,15 @@ def _resolve_llm_manager(request: Request) -> LLMInferenceManager:
         raise HTTPException(status_code=503, detail="LLM manager not initialized.")
     return mgr  # type: ignore[return-value]
 
+def _llamacpp_unavailable(detail: Optional[str] = None) -> HTTPException:
+    base = "Llama.cpp backend is not configured."
+    guidance = "Enable [LlamaCpp] enabled=true in Config_Files/config.txt and restart the server."
+    if detail:
+        message = f"{base} ({detail}) {guidance}"
+    else:
+        message = f"{base} {guidance}"
+    return HTTPException(status_code=503, detail=message)
+
 
 def _resolve_llamacpp_target(llm_manager: LLMInferenceManager, required: tuple[str, ...]):
     """
@@ -74,7 +83,7 @@ def _resolve_llamacpp_target(llm_manager: LLMInferenceManager, required: tuple[s
     for cand in candidates:
         if cand and all(hasattr(cand, name) for name in required):
             return cand
-    raise HTTPException(status_code=503, detail="Llama.cpp backend is not configured.")
+    raise _llamacpp_unavailable()
 
 
 # --- Llama.cpp Specific Endpoints ---
@@ -98,7 +107,11 @@ async def start_llamacpp_server_endpoint(
         else:
             result = await target.start_server(backend="llamacpp", model_name=model_filename, server_args=server_args)
         return result
-    except (ModelNotFoundError, ServerError, InferenceError) as e:
+    except HTTPException:
+        raise
+    except InferenceError as e:
+        raise _llamacpp_unavailable(str(e))
+    except (ModelNotFoundError, ServerError) as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         llm_manager.logger.error(f"Unexpected error starting Llama.cpp server: {e}", exc_info=True)
@@ -114,7 +127,11 @@ async def stop_llamacpp_server_endpoint(llm_manager: LLMInferenceManager = Depen
         else:
             result = await target.stop_server(backend="llamacpp")
         return {"message": result}
-    except (ServerError, InferenceError) as e:
+    except HTTPException:
+        raise
+    except InferenceError as e:
+        raise _llamacpp_unavailable(str(e))
+    except ServerError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         llm_manager.logger.error(f"Unexpected error stopping Llama.cpp server: {e}", exc_info=True)
@@ -130,6 +147,10 @@ async def get_llamacpp_status_endpoint(llm_manager: LLMInferenceManager = Depend
         else:
             status = await target.get_server_status(backend="llamacpp")  # Via manager
         return status
+    except HTTPException:
+        raise
+    except InferenceError as e:
+        raise _llamacpp_unavailable(str(e))
     except Exception as e:
         llm_manager.logger.error(f"Unexpected error getting Llama.cpp server status: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An unexpected error occurred.")
@@ -140,6 +161,10 @@ async def get_llamacpp_metrics_endpoint(llm_manager: LLMInferenceManager = Depen
     try:
         handler = _resolve_llamacpp_target(llm_manager, ("get_metrics",))
         return handler.get_metrics()
+    except HTTPException:
+        raise
+    except InferenceError as e:
+        raise _llamacpp_unavailable(str(e))
     except Exception as e:
         llm_manager.logger.error(f"Unexpected error getting Llama.cpp metrics: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An unexpected error occurred.")
@@ -154,6 +179,8 @@ async def get_llamafile_metrics_endpoint():
         if hasattr(handler, "get_metrics"):
             return handler.get_metrics()  # type: ignore[attr-defined]
         return {"message": "metrics not available"}
+    except HTTPException:
+        raise
     except Exception as e:
         llm_manager.logger.error(f"Unexpected error getting Llamafile metrics: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An unexpected error occurred.")
@@ -164,14 +191,18 @@ async def list_llamacpp_models_endpoint(llm_manager: LLMInferenceManager = Depen
     try:
         handler = getattr(llm_manager, "llamacpp", None)
         if handler is None:
-            raise HTTPException(status_code=503, detail="Llama.cpp backend is not configured.")
+            raise _llamacpp_unavailable()
         if hasattr(handler, "list_models"):
             models = await handler.list_models()
         elif hasattr(llm_manager, "list_local_models"):
             models = await llm_manager.list_local_models(backend="llamacpp")
         else:
-            raise HTTPException(status_code=503, detail="Llama.cpp backend is not configured.")
+            raise _llamacpp_unavailable()
         return {"available_models": models}
+    except HTTPException:
+        raise
+    except InferenceError as e:
+        raise _llamacpp_unavailable(str(e))
     except Exception as e:
         llm_manager.logger.error(f"Unexpected error listing Llama.cpp models: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An unexpected error occurred.")
@@ -192,7 +223,7 @@ async def run_llamacpp_inference_endpoint(
     try:
         handler = getattr(llm_manager, "llamacpp", None)
         if handler is None:
-            raise HTTPException(status_code=503, detail="Llama.cpp backend is not configured.")
+            raise _llamacpp_unavailable()
         # Prefer handler methods when available; fallback to manager for compatibility with tests
         if handler and hasattr(handler, "get_server_status") and hasattr(handler, "inference"):
             status = await handler.get_server_status()
@@ -214,9 +245,13 @@ async def run_llamacpp_inference_endpoint(
                 **payload.to_kwargs(),  # Pass validated payload as kwargs (extras allowed)
             )
         else:
-            raise HTTPException(status_code=503, detail="Llama.cpp backend is not configured.")
+            raise _llamacpp_unavailable()
         return result
-    except (ServerError, InferenceError) as e:
+    except HTTPException:
+        raise
+    except InferenceError as e:
+        raise _llamacpp_unavailable(str(e))
+    except ServerError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         llm_manager.logger.error(f"Unexpected error during Llama.cpp inference: {e}", exc_info=True)
