@@ -120,10 +120,12 @@ def test_reclaim_expired_processing_job_dual_backend(prompt_studio_dual_backend_
         )
         conn.commit()
     else:
-        db._execute(  # type: ignore[attr-defined]
-            "UPDATE prompt_studio_job_queue SET leased_until = NOW() - INTERVAL '2 seconds' WHERE id = ?",
-            (job["id"],),
-        )
+        with db.transaction() as conn:  # type: ignore[attr-defined]
+            db._execute(  # type: ignore[attr-defined]
+                "UPDATE prompt_studio_job_queue SET leased_until = NOW() - INTERVAL '2 seconds' WHERE id = ?",
+                (job["id"],),
+                connection=conn,
+            )
 
     reclaimed = db.acquire_next_job()
     assert reclaimed is not None

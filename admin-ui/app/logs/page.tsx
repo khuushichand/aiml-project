@@ -46,6 +46,20 @@ type LogFilters = {
 
 const LOG_LEVELS = ['', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'];
 
+const getLevelBadgeProps = (level?: string | null) => {
+  const normalized = (level || '').toUpperCase();
+  if (normalized === 'ERROR' || normalized === 'CRITICAL') {
+    return { variant: 'destructive' as const };
+  }
+  if (normalized === 'WARNING') {
+    return { variant: 'outline' as const, className: 'border-yellow-300 bg-yellow-50 text-yellow-900' };
+  }
+  if (normalized === 'INFO') {
+    return { variant: 'secondary' as const };
+  }
+  return { variant: 'outline' as const };
+};
+
 const formatDateTime = (value?: string | null) => {
   if (!value) return '—';
   const parsed = new Date(value);
@@ -84,6 +98,7 @@ export default function LogsPage() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [refreshSignal, setRefreshSignal] = useState(0);
   const timezoneLabel =
     typeof Intl !== 'undefined'
       ? Intl.DateTimeFormat().resolvedOptions().timeZone || 'local time'
@@ -177,7 +192,7 @@ export default function LogsPage() {
     const controller = new AbortController();
     void loadLogs(controller.signal);
     return () => controller.abort();
-  }, [loadLogs]);
+  }, [loadLogs, refreshSignal]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
@@ -193,7 +208,7 @@ export default function LogsPage() {
             <Button
               variant="outline"
               onClick={() => {
-                void loadLogs();
+                setRefreshSignal((prev) => prev + 1);
               }}
               disabled={loading}
             >
@@ -337,10 +352,23 @@ export default function LogsPage() {
                           {formatDateTime(entry.timestamp)}
                         </TableCell>
                         <TableCell>
-                          <Badge variant="outline">{entry.level || '—'}</Badge>
+                          <Badge {...getLevelBadgeProps(entry.level)}>
+                            {entry.level || '—'}
+                          </Badge>
                         </TableCell>
-                        <TableCell className="max-w-[420px] truncate">
-                          {entry.message || '—'}
+                        <TableCell className="max-w-[420px]">
+                          {entry.message ? (
+                            <details>
+                              <summary className="cursor-pointer truncate" title={entry.message}>
+                                {entry.message}
+                              </summary>
+                              <div className="mt-2 whitespace-pre-wrap break-words text-sm text-muted-foreground">
+                                {entry.message}
+                              </div>
+                            </details>
+                          ) : (
+                            '—'
+                          )}
                         </TableCell>
                         <TableCell className="max-w-[240px] truncate">
                           {entry.logger || entry.module || '—'}

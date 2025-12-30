@@ -150,22 +150,25 @@ def pytest_configure(config):
 # =====================================================================
 
 @pytest.fixture(autouse=True)
-def _reset_chat_rate_limiter_between_tests():
+def _reset_chat_rate_limiter_between_tests(monkeypatch):
     """Reset chat rate limiter state before each test to avoid cross-test 429s.
 
     Ensures deterministic behavior for tests that expect 200 responses by
     restoring token buckets to full capacity for the default test user.
     """
     try:
-        # Ensure TEST_MODE so limiter uses deterministic config
-        os.environ.setdefault("TEST_MODE", "true")
+        # Force deterministic TEST_MODE rate limits for this test module.
+        monkeypatch.setenv("TEST_MODE", "true")
+        monkeypatch.setenv("TEST_CHAT_PER_USER_RPM", "2")
+        monkeypatch.setenv("TEST_CHAT_PER_CONVERSATION_RPM", "2")
+        monkeypatch.setenv("TEST_CHAT_GLOBAL_RPM", "10")
+        monkeypatch.setenv("TEST_CHAT_TOKENS_PER_MINUTE", "1000")
+        monkeypatch.delenv("TEST_CHAT_BURST_MULTIPLIER", raising=False)
         from tldw_Server_API.app.core.Chat.rate_limiter import (
-            get_rate_limiter,
             initialize_rate_limiter,
         )
-        rl = get_rate_limiter()
-        if rl is None:
-            rl = initialize_rate_limiter()
+        # Reinitialize each test to ensure TEST_CHAT_* env overrides apply.
+        rl = initialize_rate_limiter()
         # Reset per-user and global buckets (both common test ids)
         rl.reset_user_limits("test_user")
         rl.reset_user_limits("1")  # single_user mode default user id

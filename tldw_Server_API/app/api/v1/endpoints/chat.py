@@ -1413,12 +1413,7 @@ async def create_chat_completion(
                 rg_gov = None
                 rg_loader = None
 
-            if not rg_active:
-                try:
-                    if _is_test_mode and rg_gov is not None and rg_loader is not None:
-                        rg_active = True
-                except Exception:
-                    rg_active = False
+            # Avoid implicitly enabling RG in tests unless the global flag is set.
 
         rg_reserved = False
         if rate_limiter or (rg_active and rg_gov is not None and rg_loader is not None):

@@ -2781,6 +2781,55 @@ async def list_workflow_templates(q: Optional[str] = Query(None, description="Se
         return []
 
 
+@router.get(
+    "/templates/tags",
+    openapi_extra={
+        "x-codeSamples": [
+            {
+                "lang": "bash",
+                "label": "List tags",
+                "source": "curl -sS -H 'X-API-KEY: $API_KEY' \"$BASE/api/v1/workflows/templates/tags\" | jq ."
+            }
+        ]
+    },
+)
+async def list_workflow_template_tags() -> list[str]:
+    """Return the unique set of tags from all bundled templates."""
+    try:
+        # Robust search for Samples/Workflows
+        here = Path(__file__).resolve()
+        tpl_dir = None
+        p = here
+        for _ in range(0, 9):
+            candidate = p.parent / "Samples" / "Workflows"
+            if candidate.exists():
+                tpl_dir = candidate
+                break
+            p = p.parent
+        if tpl_dir is None or not tpl_dir.exists():
+            return []
+        tags_set: set[str] = set()
+        for f in tpl_dir.glob("*.workflow.json"):
+            try:
+                import json as _json
+                data = _json.loads(f.read_text(encoding="utf-8"))
+                tags = data.get("tags") or []
+                if isinstance(tags, list):
+                    for t in tags:
+                        try:
+                            s = str(t).strip()
+                            if s:
+                                tags_set.add(s)
+                        except Exception:
+                            continue
+            except Exception:
+                continue
+        return sorted(tags_set)
+    except Exception as e:
+        logger.warning(f"Failed to list template tags: {e}")
+        return []
+
+
 @router.get("/templates/{name:path}")
 async def get_workflow_template(name: str) -> Dict[str, Any]:
     """Return JSON content for a named workflow template (sans extension)."""
@@ -2869,55 +2918,6 @@ async def get_workflow_template_legacy(name: str) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"Failed to read workflow template {name}: {e}")
         raise HTTPException(status_code=500, detail="Failed to load template")
-
-
-@router.get(
-    "/templates/tags",
-    openapi_extra={
-        "x-codeSamples": [
-            {
-                "lang": "bash",
-                "label": "List tags",
-                "source": "curl -sS -H 'X-API-KEY: $API_KEY' \"$BASE/api/v1/workflows/templates/tags\" | jq ."
-            }
-        ]
-    },
-)
-async def list_workflow_template_tags() -> list[str]:
-    """Return the unique set of tags from all bundled templates."""
-    try:
-        # Robust search for Samples/Workflows
-        here = Path(__file__).resolve()
-        tpl_dir = None
-        p = here
-        for _ in range(0, 9):
-            candidate = p.parent / "Samples" / "Workflows"
-            if candidate.exists():
-                tpl_dir = candidate
-                break
-            p = p.parent
-        if tpl_dir is None or not tpl_dir.exists():
-            return []
-        tags_set: set[str] = set()
-        for f in tpl_dir.glob("*.workflow.json"):
-            try:
-                import json as _json
-                data = _json.loads(f.read_text(encoding="utf-8"))
-                tags = data.get("tags") or []
-                if isinstance(tags, list):
-                    for t in tags:
-                        try:
-                            s = str(t).strip()
-                            if s:
-                                tags_set.add(s)
-                        except Exception:
-                            continue
-            except Exception:
-                continue
-        return sorted(tags_set)
-    except Exception as e:
-        logger.warning(f"Failed to list template tags: {e}")
-        return []
 
 
 @router.get(

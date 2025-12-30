@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-FRONTEND_DIR="${REPO_ROOT}/tldw-frontend"
+FRONTEND_DIR="${REPO_ROOT}/admin-ui"
 
 : "${TLDW_BACKEND_HOST:=127.0.0.1}"
 : "${TLDW_BACKEND_PORT:=8000}"
@@ -250,10 +250,7 @@ if [[ ${RUN_BACKEND_TESTS} -eq 1 ]]; then
 fi
 
 echo "[+] Running frontend tests"
-(cd "${FRONTEND_DIR}" && npm run test:run)
-
-echo "[+] Running frontend smoke tests"
-(cd "${FRONTEND_DIR}" && npm run smoke)
+(cd "${FRONTEND_DIR}" && npm run test)
 
 if [[ ${KEEP_BACKEND} -eq 1 ]]; then
   echo "[i] Keeping backend running as requested (--keep-backend)."

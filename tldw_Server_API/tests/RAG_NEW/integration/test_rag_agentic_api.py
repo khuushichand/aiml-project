@@ -15,9 +15,9 @@ def _set_test_mode_env(monkeypatch):
     monkeypatch.setenv("TEST_MODE", "1")
 
 
-def test_rag_capabilities_agentic_features():
+def test_rag_capabilities_agentic_features(auth_headers):
     # Basic smoke: capabilities exposes agentic feature block
-    with TestClient(fastapi_app) as client:
+    with TestClient(fastapi_app, headers=auth_headers) as client:
         resp = client.get("/api/v1/rag/capabilities")
         assert resp.status_code == 200, resp.text
         data = resp.json()
@@ -42,9 +42,9 @@ def test_rag_capabilities_agentic_features():
     assert qs["agentic_search"]["body"]["strategy"] == "agentic"
 
 
-def test_rag_capabilities_agentic_new_knobs():
+def test_rag_capabilities_agentic_new_knobs(auth_headers):
     # Verify new agentic knobs are advertised
-    with TestClient(fastapi_app) as client:
+    with TestClient(fastapi_app, headers=auth_headers) as client:
         resp = client.get("/api/v1/rag/capabilities")
         assert resp.status_code == 200, resp.text
         data = resp.json()
@@ -66,9 +66,9 @@ def test_rag_capabilities_agentic_new_knobs():
         assert defaults.get("agentic_enable_metrics") is True
 
 
-def test_rag_capabilities_quick_start_multihop_vlm():
+def test_rag_capabilities_quick_start_multihop_vlm(auth_headers):
     # Ensure capabilities advertises the multi-hop agentic with VLM quick-start
-    with TestClient(fastapi_app) as client:
+    with TestClient(fastapi_app, headers=auth_headers) as client:
         resp = client.get("/api/v1/rag/capabilities")
         assert resp.status_code == 200, resp.text
         data = resp.json()
@@ -76,8 +76,8 @@ def test_rag_capabilities_quick_start_multihop_vlm():
     assert "agentic_multihop_vlm" in quick, "quick_start.agentic_multihop_vlm missing"
 
 
-def test_rag_capabilities_quick_start_explain():
-    with TestClient(fastapi_app) as client:
+def test_rag_capabilities_quick_start_explain(auth_headers):
+    with TestClient(fastapi_app, headers=auth_headers) as client:
         resp = client.get("/api/v1/rag/capabilities")
         assert resp.status_code == 200, resp.text
         data = resp.json()
@@ -149,7 +149,7 @@ def test_rag_agentic_streaming_plan_spans_then_delta(client_with_agentic_overrid
 
 
 @pytest.fixture()
-def client_with_agentic_overrides(monkeypatch):
+def client_with_agentic_overrides(monkeypatch, auth_headers):
     # Override auth dependencies: accept any test user; disable rate limits
     async def override_user():
         return User(id=1, username="tester", email=None, is_active=True)
@@ -182,10 +182,10 @@ def client_with_agentic_overrides(monkeypatch):
         # Prefer disabling lifespan to avoid DB/services startup in CI; skip if not supported
         import inspect as _inspect
         if 'lifespan' in _inspect.signature(TestClient.__init__).parameters:
-            with TestClient(fastapi_app, raise_server_exceptions=False, lifespan='off') as client:
+            with TestClient(fastapi_app, headers=auth_headers, raise_server_exceptions=False, lifespan='off') as client:
                 yield client
         else:  # Fallback: run without lifespan guard; if flaky in env, skip
-            with TestClient(fastapi_app, raise_server_exceptions=False) as client:
+            with TestClient(fastapi_app, headers=auth_headers, raise_server_exceptions=False) as client:
                 yield client
     finally:
         fastapi_app.dependency_overrides.clear()

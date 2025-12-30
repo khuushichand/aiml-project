@@ -83,6 +83,7 @@ Circuit Breaker Unification PRD
           - circuit_breaker_state{category,service,operation}
           - circuit_breaker_failures_total{category,service,operation,outcome}
           - circuit_breaker_successes_total{category,service,operation}
+          - circuit_breaker_timeouts_total{category,service,operation}
           - circuit_breaker_rejections_total{category,service,operation}
           - circuit_breaker_trips_total{category,service,reason}
       - Legacy shim: for one release, MetricsRegistry also emits circuit breaker metrics with legacy label values (e.g., service="category:name") to keep existing dashboards working.

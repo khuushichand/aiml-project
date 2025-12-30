@@ -663,45 +663,53 @@ class MCTSOptimizer:
         return best_score, best_prompt_id
 
     def _create_ephemeral_prompt_version(self, *, base_prompt: Dict[str, Any], system_text: str, user_text: str) -> int:
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
         # Compute next version number for the same prompt name within the project to avoid collisions
         new_name = f"{base_prompt['name']} (MCTS)"
-        try:
-            cursor.execute(
-                """
-                SELECT COALESCE(MAX(version_number), 0)
-                FROM prompt_studio_prompts
-                WHERE project_id = ? AND name = ?
-                """,
-                (base_prompt["project_id"], new_name),
-            )
-            row = cursor.fetchone()
-            next_version = int(row[0]) + 1 if row and row[0] is not None else (int(base_prompt.get("version_number") or 0) + 1)
-        except Exception:
-            next_version = (base_prompt.get("version_number") or 0) + 1
-        cursor.execute(
-            """
+        select_sql = """
+            SELECT COALESCE(MAX(version_number), 0)
+            FROM prompt_studio_prompts
+            WHERE project_id = ? AND name = ?
+        """
+        insert_sql = """
             INSERT INTO prompt_studio_prompts (
                 uuid, project_id, signature_id, name, system_prompt,
                 user_prompt, version_number, parent_version_id, client_id
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                f"mcts-{datetime.utcnow().timestamp()}",
-                base_prompt["project_id"],
-                base_prompt.get("signature_id"),
-                new_name,
-                system_text,
-                user_text,
-                next_version,
-                base_prompt.get("id"),
-                self.db.client_id,
-            ),
-        )
-        new_id = int(cursor.lastrowid)
-        conn.commit()
-        return new_id
+            RETURNING id
+        """
+        with self.db.transaction() as conn:
+            cursor = self.db._cursor_exec(conn, select_sql, (base_prompt["project_id"], new_name))
+            row = cursor.fetchone()
+            if row is not None and row[0] is not None:
+                next_version = int(row[0]) + 1
+            else:
+                next_version = int(base_prompt.get("version_number") or 0) + 1
+
+            cursor = self.db._cursor_exec(
+                conn,
+                insert_sql,
+                (
+                    f"mcts-{datetime.utcnow().timestamp()}",
+                    base_prompt["project_id"],
+                    base_prompt.get("signature_id"),
+                    new_name,
+                    system_text,
+                    user_text,
+                    next_version,
+                    base_prompt.get("id"),
+                    self.db.client_id,
+                ),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                new_id = getattr(cursor, "lastrowid", None)
+            elif isinstance(row, dict):
+                new_id = row.get("id")
+            else:
+                new_id = row[0]
+            if new_id is None:
+                raise RuntimeError("Failed to create MCTS prompt version")
+            return int(new_id)
 
     async def _evaluate_prompt(
         self,
@@ -784,27 +792,47 @@ class MCTSOptimizer:
     # --- Simple DB-backed cache via sync_log ---
     def _db_cache_get(self, key: str) -> Optional[Any]:
         try:
-            conn = self.db.get_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT payload, timestamp FROM sync_log WHERE entity = ? AND entity_uuid = ? ORDER BY timestamp DESC LIMIT 1",
-                ("prompt_studio_cache", key),
-            )
-            row = cursor.fetchone()
+            with self.db.transaction() as conn:
+                cursor = self.db._cursor_exec(
+                    conn,
+                    "SELECT payload, timestamp FROM sync_log WHERE entity = ? AND entity_uuid = ? ORDER BY timestamp DESC LIMIT 1",
+                    ("prompt_studio_cache", key),
+                )
+                row = cursor.fetchone()
             if not row:
                 return None
-            payload_raw = row[0]
+
+            payload_raw = None
+            if isinstance(row, dict):
+                payload_raw = row.get("payload")
+            else:
+                try:
+                    payload_raw = row.get("payload")
+                except Exception:
+                    payload_raw = row[0] if isinstance(row, (list, tuple)) or hasattr(row, "__getitem__") else None
+
+            if isinstance(payload_raw, (bytes, bytearray, memoryview)):
+                try:
+                    payload_raw = bytes(payload_raw).decode("utf-8")
+                except Exception:
+                    payload_raw = None
+
             import json, datetime
-            payload = json.loads(payload_raw) if isinstance(payload_raw, str) else self.db._row_to_dict(cursor, row)
-            data = payload if isinstance(payload, dict) else {}
-            expires = data.get("expires_at")
+            if isinstance(payload_raw, str):
+                payload = json.loads(payload_raw)
+            elif isinstance(payload_raw, dict):
+                payload = payload_raw
+            else:
+                return None
+
+            expires = payload.get("expires_at") if isinstance(payload, dict) else None
             if expires:
                 try:
                     if datetime.datetime.fromisoformat(expires) < datetime.datetime.utcnow():
                         return None
                 except Exception:
                     pass
-            return data.get("value")
+            return payload.get("value") if isinstance(payload, dict) else None
         except Exception:
             return None
 

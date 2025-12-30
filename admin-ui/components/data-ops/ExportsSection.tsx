@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -19,6 +19,10 @@ const EXPORT_FORMATS = [
 const API_HOST = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const API_VERSION = process.env.NEXT_PUBLIC_API_VERSION || 'v1';
 const API_URL = `${API_HOST.replace(/\/$/, '')}/api/${API_VERSION}`;
+
+type ExportsSectionProps = {
+  refreshSignal: number;
+};
 
 const splitDispositionParts = (value: string) => {
   const parts: string[] = [];
@@ -126,7 +130,7 @@ const downloadExport = async (
   }
 };
 
-export const ExportsSection = () => {
+export const ExportsSection = ({ refreshSignal }: ExportsSectionProps) => {
   const { selectedOrg } = useOrgContext();
   const { success, error: showError } = useToast();
 
@@ -143,6 +147,20 @@ export const ExportsSection = () => {
   const [userRole, setUserRole] = useState('');
   const [userStatus, setUserStatus] = useState('');
   const [userFormat, setUserFormat] = useState('csv');
+
+  useEffect(() => {
+    if (refreshSignal === 0) return;
+    setAuditStart('');
+    setAuditEnd('');
+    setAuditAction('');
+    setAuditUserId('');
+    setAuditResource('');
+    setAuditFormat('csv');
+    setUserSearch('');
+    setUserRole('');
+    setUserStatus('');
+    setUserFormat('csv');
+  }, [refreshSignal]);
 
   const handleAuditExport = async () => {
     try {

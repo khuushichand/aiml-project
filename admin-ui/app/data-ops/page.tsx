@@ -29,7 +29,7 @@ export default function DataOpsPage() {
 
           <BackupsSection refreshSignal={refreshSignal} />
           <RetentionPoliciesSection refreshSignal={refreshSignal} />
-          <ExportsSection />
+          <ExportsSection refreshSignal={refreshSignal} />
         </div>
       </ResponsiveLayout>
     </ProtectedRoute>

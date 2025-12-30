@@ -830,12 +830,21 @@ def test_client(test_env_vars):
 @pytest.fixture
 def auth_headers():
     """Authentication headers for API requests."""
-    api_key = os.environ.get("SINGLE_USER_API_KEY", "test-api-key-12345")
-    return {
-        "X-API-KEY": api_key,
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
+    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
+    settings = get_settings()
+    headers = {
+        "X-API-KEY": settings.SINGLE_USER_API_KEY,
+        "Content-Type": "application/json",
     }
+    # Only attach a bearer token when running explicit multi-user/JWT tests.
+    if settings.AUTH_MODE == "multi_user":
+        token = os.environ.get("TEST_JWT_TOKEN")
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        else:
+            headers.pop("X-API-KEY", None)
+    return headers
 
 
 @pytest.fixture

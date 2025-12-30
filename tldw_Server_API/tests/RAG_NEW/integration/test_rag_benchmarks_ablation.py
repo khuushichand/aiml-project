@@ -15,7 +15,7 @@ def _test_mode(monkeypatch):
 
 
 @pytest.fixture()
-def client_with_overrides(monkeypatch):
+def client_with_overrides(monkeypatch, auth_headers):
     async def override_user():
         return User(id=1, username="tester", email=None, is_active=True)
 
@@ -38,7 +38,7 @@ def client_with_overrides(monkeypatch):
             import pytest as _pytest
             _pytest.skip("TestClient lacks 'lifespan' support; skipping ablation benchmark smoke")
         # Disable lifespan to avoid heavy startup (DB, services) and ignore server exceptions
-        with TestClient(fastapi_app, raise_server_exceptions=False, lifespan='off') as client:
+        with TestClient(fastapi_app, headers=auth_headers, raise_server_exceptions=False, lifespan='off') as client:
             yield client
     finally:
         fastapi_app.dependency_overrides.clear()

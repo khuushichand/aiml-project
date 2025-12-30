@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 import uuid
 from unittest.mock import patch
+import importlib
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,18 +14,23 @@ from typing import Any
 
 # Prompt Studio routes are not included in minimal test app mode.
 os.environ["MINIMAL_TEST_APP"] = "0"
+# Ensure test flags are set before loading the app module.
+os.environ["TEST_MODE"] = "true"
+os.environ["AUTH_MODE"] = "single_user"
+os.environ["CSRF_ENABLED"] = "false"
 
-from tldw_Server_API.app.main import app as fastapi_app
+import tldw_Server_API.app.main as main_mod
+
+if getattr(main_mod, "_MINIMAL_TEST_APP", True):
+    main_mod = importlib.reload(main_mod)
+fastapi_app = main_mod.app
 from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import get_prompt_studio_db
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 
-# Set test environment variables
-os.environ["TEST_MODE"] = "true"
-os.environ["AUTH_MODE"] = "single_user"
-os.environ["CSRF_ENABLED"] = "false"
+# Environment variables already set before app import above.
 
 # Postgres setup is unified via tests._plugins.postgres.
 

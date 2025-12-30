@@ -607,6 +607,24 @@ class OptimizationEngine:
         self.bootstrap = BootstrapOptimizer(db, self.test_runner)
         self.mcts = MCTSOptimizer(db, self.test_runner)
 
+    @staticmethod
+    def _coerce_json_value(value: Any, default: Any) -> Any:
+        if value is None:
+            return default
+        if isinstance(value, (dict, list)):
+            return value
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            try:
+                value = bytes(value).decode("utf-8")
+            except Exception:
+                return default
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except Exception:
+                return default
+        return default
+
     async def optimize(self, optimization_id: int) -> Dict[str, Any]:
         """
         Run optimization based on configuration.
@@ -623,12 +641,25 @@ class OptimizationEngine:
             raise ValueError(f"Optimization {optimization_id} not found")
 
         # Parse configuration
-        config = json.loads(optimization.get("optimizer_config", "{}"))
+        config = self._coerce_json_value(
+            optimization.get("optimization_config") or optimization.get("optimizer_config"),
+            {},
+        )
         # Support both legacy "strategy" and new "optimizer_type" fields
         strategy = (
             (config.get("strategy") or optimization.get("optimizer_type") or config.get("optimizer_type") or "mipro")
         )
         strategy = str(strategy).lower()
+
+        test_case_ids = self._coerce_json_value(optimization.get("test_case_ids"), [])
+        if not isinstance(test_case_ids, list):
+            test_case_ids = []
+
+        model_config = self._coerce_json_value(optimization.get("model_config"), {})
+        if isinstance(model_config, list):
+            model_config = model_config[0] if model_config else {}
+        if not isinstance(model_config, dict):
+            model_config = {}
 
         # Update status
         self._update_optimization_status(optimization_id, "running")
@@ -638,8 +669,8 @@ class OptimizationEngine:
             if strategy == "mipro":
                 results = await self.mipro.optimize(
                     initial_prompt_id=optimization["initial_prompt_id"],
-                    test_case_ids=json.loads(optimization["test_case_ids"]),
-                    model_config=json.loads(optimization["model_config"]),
+                    test_case_ids=test_case_ids,
+                    model_config=model_config,
                     max_iterations=optimization["max_iterations"],
                     target_metric=MetricType(config.get("target_metric", "accuracy"))
                 )
@@ -647,8 +678,8 @@ class OptimizationEngine:
             elif strategy == "bootstrap":
                 results = await self.bootstrap.optimize(
                     prompt_id=optimization["initial_prompt_id"],
-                    test_case_ids=json.loads(optimization["test_case_ids"]),
-                    model_config=json.loads(optimization["model_config"]),
+                    test_case_ids=test_case_ids,
+                    model_config=model_config,
                     num_examples=config.get("num_examples", 3),
                     selection_strategy=config.get("selection_strategy", "diverse")
                 )
@@ -657,8 +688,8 @@ class OptimizationEngine:
                 results = await self.mcts.optimize(
                     initial_prompt_id=optimization["initial_prompt_id"],
                     optimization_id=optimization_id,
-                    test_case_ids=json.loads(optimization["test_case_ids"]),
-                    model_config=json.loads(optimization["model_config"]),
+                    test_case_ids=test_case_ids,
+                    model_config=model_config,
                     # Treat max_iterations as fallback simulations; allow override via strategy_params
                     max_iterations=optimization.get("max_iterations", 20),
                     target_metric=MetricType(config.get("target_metric", "accuracy")),

@@ -6,7 +6,7 @@ from tldw_Server_API.app.main import app
 
 
 @pytest.mark.integration
-def test_abtest_export_idempotency(monkeypatch):
+def test_abtest_export_idempotency(monkeypatch, auth_headers):
     # Disable admin-only for heavy evaluations and enable testing shortcut auth
     monkeypatch.setenv('EVALS_HEAVY_ADMIN_ONLY', 'false')
     monkeypatch.setenv('TESTING', 'true')
@@ -21,16 +21,24 @@ def test_abtest_export_idempotency(monkeypatch):
         "retrieval": {"k": 1},
         "reuse_existing": True,
     }
-    r = client.post("/api/v1/evaluations/embeddings/abtest", json={"name": "idem-exp", "config": cfg})
+    r = client.post(
+        "/api/v1/evaluations/embeddings/abtest",
+        json={"name": "idem-exp", "config": cfg},
+        headers=auth_headers,
+    )
     assert r.status_code == 200
     tid = r.json()["test_id"]
 
     # Kick off a run (doesn't need to complete for export shape)
-    r2 = client.post(f"/api/v1/evaluations/embeddings/abtest/{tid}/run", json={"config": cfg})
+    r2 = client.post(
+        f"/api/v1/evaluations/embeddings/abtest/{tid}/run",
+        json={"config": cfg},
+        headers=auth_headers,
+    )
     assert r2.status_code == 200
 
     # Export with Idempotency-Key
-    headers = {"Idempotency-Key": "abtest-export-1"}
+    headers = {**auth_headers, "Idempotency-Key": "abtest-export-1"}
     e1 = client.get(f"/api/v1/evaluations/embeddings/abtest/{tid}/export", params={"format": "json"}, headers=headers)
     assert e1.status_code == 200
     e2 = client.get(f"/api/v1/evaluations/embeddings/abtest/{tid}/export", params={"format": "json"}, headers=headers)
@@ -43,7 +51,7 @@ def test_abtest_export_idempotency(monkeypatch):
 
 
 @pytest.mark.integration
-def test_abtest_delete_idempotency(monkeypatch):
+def test_abtest_delete_idempotency(monkeypatch, auth_headers):
     monkeypatch.setenv('EVALS_HEAVY_ADMIN_ONLY', 'false')
     monkeypatch.setenv('TESTING', 'true')
     client = TestClient(app)
@@ -56,11 +64,15 @@ def test_abtest_delete_idempotency(monkeypatch):
         "retrieval": {"k": 1},
         "reuse_existing": True,
     }
-    r = client.post("/api/v1/evaluations/embeddings/abtest", json={"name": "idem-del", "config": cfg})
+    r = client.post(
+        "/api/v1/evaluations/embeddings/abtest",
+        json={"name": "idem-del", "config": cfg},
+        headers=auth_headers,
+    )
     assert r.status_code == 200
     tid = r.json()["test_id"]
 
-    headers = {"Idempotency-Key": "abtest-delete-1"}
+    headers = {**auth_headers, "Idempotency-Key": "abtest-delete-1"}
     d1 = client.delete(f"/api/v1/evaluations/embeddings/abtest/{tid}", headers=headers)
     assert d1.status_code == 200
     d2 = client.delete(f"/api/v1/evaluations/embeddings/abtest/{tid}", headers=headers)

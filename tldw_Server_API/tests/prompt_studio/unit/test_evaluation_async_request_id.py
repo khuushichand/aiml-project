@@ -67,7 +67,7 @@ def test_create_evaluation_async_schedules_with_request_id(monkeypatch, override
     # Patch the async runner to capture propagated request_id
     import tldw_Server_API.app.api.v1.endpoints.prompt_studio_evaluations as eval_ep
 
-    async def fake_run_evaluation_async(evaluation_id, db, *, request_id=None, traceparent=""):
+    async def fake_run_evaluation_async(evaluation_id, db, *, request_id=None, traceparent="", **_kwargs):
         called["request_id"] = request_id
 
     monkeypatch.setattr(eval_ep, "run_evaluation_async", fake_run_evaluation_async, raising=True)

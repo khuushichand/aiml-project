@@ -46,7 +46,10 @@ def test_llamacpp_inference_happy_path(llamacpp_client, monkeypatch):
             }
 
     import tldw_Server_API.app.api.v1.endpoints.llamacpp as lp
-    monkeypatch.setattr(lp, "llm_manager", _Mgr(), raising=False)
+    stub = _Mgr()
+    monkeypatch.setattr(lp, "llm_manager", stub, raising=False)
+    # Ensure dependency resolver sees the stub instead of app.state.llm_manager.
+    monkeypatch.setattr(client.app.state, "llm_manager", stub, raising=False)
 
     payload = {
         "model": "ignored-by-server",

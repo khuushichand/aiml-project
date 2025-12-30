@@ -138,6 +138,7 @@ CREATE TABLE IF NOT EXISTS prompt_studio_optimizations (
     optimized_prompt_id INTEGER REFERENCES prompt_studio_prompts(id),
     optimizer_type TEXT NOT NULL,
     optimization_config JSON,
+    test_case_ids JSON,
     initial_metrics JSON,
     final_metrics JSON,
     improvement_percentage REAL,

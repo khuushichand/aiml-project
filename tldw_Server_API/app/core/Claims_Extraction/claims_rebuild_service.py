@@ -161,6 +161,7 @@ class ClaimsRebuildService:
                 continue
             if task.media_id < 0:
                 # sentinel
+                self._queue.task_done()
                 continue
             start_time = time.time()
             try:

@@ -354,7 +354,7 @@ class TestTestCaseEndpoints:
 
                 run_data = {
                     "project_id": 1,
-                    "test_case_ids": ["test-1"],
+                    "test_case_ids": [1],
                     "prompt_id": 1
                 }
 

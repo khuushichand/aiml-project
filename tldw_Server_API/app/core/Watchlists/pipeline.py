@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import os
 import json
+import inspect
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -68,6 +69,17 @@ def _normalize_tz(tz: Optional[str]) -> str:
         except Exception:
             return "UTC"
     return tz
+
+
+def fetch_site_article(url: str):
+    """Wrapper for article fetch to allow test monkeypatching with sync or async callables."""
+    return fetch_site_article_async(url)
+
+
+async def _maybe_await(value):
+    if inspect.isawaitable(value):
+        return await value
+    return value
 
 
 def _compute_next_run(cron: Optional[str], timezone_str: Optional[str]) -> Optional[str]:
@@ -540,7 +552,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                     "author": it.get("author"),
                                 }
                         if article is None:
-                            article = None if test_mode else await fetch_site_article_async(link)
+                            article = None if test_mode else await _maybe_await(fetch_site_article(link))
                         if article is None and test_mode:
                             # In tests, fall back to summary as content
                             article = {
@@ -787,7 +799,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                             if test_mode:
                                 article = {"title": src.name or "Untitled", "url": page_url, "content": "", "author": None}
                             else:
-                                article = await fetch_site_article_async(page_url)
+                                article = await _maybe_await(fetch_site_article(page_url))
                         if (not article or not article.get("content")) and prefetch:
                             article = article or {}
                             article["title"] = article.get("title") or prefetch.get("title") or src.name

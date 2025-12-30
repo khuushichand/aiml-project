@@ -2249,6 +2249,7 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
             "evaluations",
             "orgs",
             "org-invites",
+            "prompt-studio",
             # Ensure experimental connectors endpoints are available in tests
             # to avoid 404s when the app is imported before ROUTES_ENABLE is set.
             "connectors",
@@ -2773,6 +2774,14 @@ def load_and_log_configs():
         chat_dict_replacement_strategy = config_parser_object.get('Chat-Dictionaries', 'chat_dictionary_replacement_strategy', fallback='character_lore_first')
         chat_dict_max_tokens = config_parser_object.get('Chat-Dictionaries', 'chat_dictionary_max_tokens', fallback='1000')
         default_rag_prompt = config_parser_object.get('Chat-Dictionaries', 'default_rag_prompt', fallback='')
+        rag_default_llm_provider = os.getenv("RAG_DEFAULT_LLM_PROVIDER") or (
+            config_parser_object.get('RAG', 'default_llm_provider', fallback=None)
+            if config_parser_object.has_section('RAG') else None
+        )
+        rag_default_llm_model = os.getenv("RAG_DEFAULT_LLM_MODEL") or (
+            config_parser_object.get('RAG', 'default_llm_model', fallback=None)
+            if config_parser_object.has_section('RAG') else None
+        )
 
         # Auto-Save Values
         save_character_chats = config_parser_object.get('Auto-Save', 'save_character_chats', fallback='False')
@@ -3497,6 +3506,8 @@ def load_and_log_configs():
                 'save_rag_chats': save_rag_chats,
             },
             'default_api': default_api,
+            'RAG_DEFAULT_LLM_PROVIDER': rag_default_llm_provider,
+            'RAG_DEFAULT_LLM_MODEL': rag_default_llm_model,
             'local_api_timeout': local_api_timeout,
             'STT_Settings': {
                 'default_stt_provider': default_stt_provider,
