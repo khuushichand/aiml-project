@@ -480,17 +480,22 @@ Examples
 │   │   │   └── API_Deps/         # Shared dependencies (auth, DB, rate limits)
 │   │   ├── core/                 # Core logic (AuthNZ, RAG, LLM, DB, TTS, MCP, etc.)
 │   │   ├── services/             # Background services
+│   │   ├── Setup_UI/             # Setup UI assets
+│   │   ├── static/               # Static assets
 │   │   └── main.py               # FastAPI entry point
+│   ├── cli/                      # CLI entry points
 │   ├── WebUI/                    # Legacy integrated WebUI served at /webui (deprecated)
 │   ├── Config_Files/             # config.txt, example YAMLs, migration helpers
 │   ├── Databases/                # Default DBs (runtime data; some are gitignored)
 │   ├── tests/                    # Pytest suite
 │   └── requirements.txt          # Legacy pin set (prefer pyproject extras)
+├── admin-ui/                     # Admin dashboard
 ├── tldw-frontend/                # Next.js WebUI (current client)
 ├── Docs/                         # Documentation (API, Development, RAG, AuthNZ, TTS, etc.)
 ├── Helper_Scripts/               # Utilities (installers, prompt tools, doc generators)
 ├── mock_openai_server/           # Mock OpenAI-compatible API server for tests/dev
 ├── Dockerfiles/                  # Docker images and compose files
+│   └── Monitoring/               # Monitoring stack assets
 ├── Databases/                    # DBs (AuthNZ defaults here; content DBs per-user under user_databases/)
 ├── models/                       # Optional model assets (if used)
 ├── pyproject.toml                # Project configuration
