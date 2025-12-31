@@ -5686,6 +5686,34 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"Database error fetching messages for conversation ID {conversation_id}: {e}")
             raise
 
+    def has_system_message_for_conversation(
+        self,
+        conversation_id: str,
+        include_deleted: bool = False,
+    ) -> bool:
+        """Check whether a conversation has at least one system message."""
+        delete_clause = "" if include_deleted else "AND m.deleted = 0"
+        query = f"""
+            SELECT 1
+            FROM messages m
+            JOIN conversations c ON m.conversation_id = c.id
+            WHERE m.conversation_id = ?
+              AND lower(m.sender) = 'system'
+              {delete_clause}
+              AND c.deleted = 0
+            LIMIT 1
+        """
+        try:
+            cursor = self.execute_query(query, (conversation_id,))
+            return cursor.fetchone() is not None
+        except CharactersRAGDBError as e:
+            logger.error(
+                "Database error checking system messages for conversation ID %s: %s",
+                conversation_id,
+                e,
+            )
+            raise
+
     def update_message(self, message_id: str, update_data: Dict[str, Any], expected_version: int) -> bool | None:
         """
         Updates an existing message using optimistic locking.

@@ -31,6 +31,59 @@ DANGEROUS_REGEX_PATTERNS = [
 ]
 
 
+def _has_nested_quantifiers(pattern: str) -> bool:
+    """Heuristic check for nested quantifiers like '(a+)+'. """
+    escaped = False
+    in_class = False
+    group_stack: List[bool] = []
+    last_closed_group_had_quantifier = False
+    last_token_was_group_end = False
+
+    for char in pattern:
+        if escaped:
+            escaped = False
+            last_token_was_group_end = False
+            continue
+
+        if char == "\\":
+            escaped = True
+            last_token_was_group_end = False
+            continue
+
+        if in_class:
+            if char == "]":
+                in_class = False
+            last_token_was_group_end = False
+            continue
+
+        if char == "[":
+            in_class = True
+            last_token_was_group_end = False
+            continue
+
+        if char == "(":
+            group_stack.append(False)
+            last_token_was_group_end = False
+            continue
+
+        if char == ")":
+            last_closed_group_had_quantifier = group_stack.pop() if group_stack else False
+            last_token_was_group_end = True
+            continue
+
+        if char in "*+?":
+            if last_token_was_group_end and last_closed_group_had_quantifier:
+                return True
+            if group_stack:
+                group_stack[-1] = True
+            last_token_was_group_end = False
+            continue
+
+        last_token_was_group_end = False
+
+    return False
+
+
 def validate_regex_pattern_safety(pattern: str) -> str:
     """Validate a regex pattern for basic ReDoS safety checks.
 
@@ -66,8 +119,7 @@ def validate_regex_pattern_safety(pattern: str) -> str:
 
     # Check for excessive quantifier nesting (heuristic)
     # Count nested groups with quantifiers
-    quantifier_pattern = re.compile(r'\([^()]*[+*?][^()]*\)[+*?]')
-    if quantifier_pattern.search(pattern):
+    if _has_nested_quantifiers(pattern):
         logger.warning(f"Regex pattern may have nested quantifiers: {pattern[:50]}...")
         # Don't fail, just warn - some nested quantifiers are safe
 

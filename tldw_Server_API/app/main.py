@@ -577,6 +577,7 @@ else:
     # RAG & Workflows
     from tldw_Server_API.app.api.v1.endpoints.rag_health import router as rag_health_router
     from tldw_Server_API.app.api.v1.endpoints.rag_unified import router as rag_unified_router
+    from tldw_Server_API.app.api.v1.endpoints.feedback import router as feedback_router
 
     try:
         from tldw_Server_API.app.api.v1.endpoints.workflows import router as workflows_router
@@ -3968,6 +3969,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(rag_unified_router, tags=["rag-unified"])
     except Exception as _rag_min_err:
         logger.debug(f"Skipping rag_unified router in minimal test app: {_rag_min_err}")
+    # Explicit feedback endpoints (shared chat/RAG)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.feedback import router as feedback_router
+
+        app.include_router(feedback_router, prefix=f"{API_V1_PREFIX}/feedback", tags=["feedback"])
+    except Exception as _feedback_min_err:
+        logger.debug(f"Skipping feedback router in minimal test app: {_feedback_min_err}")
     # Vision-language backends listing (lightweight; needed for smoke tests)
     try:
         from tldw_Server_API.app.api.v1.endpoints.vlm import router as vlm_router
@@ -4497,6 +4505,7 @@ else:
         _include_if_enabled("prompt-studio", prompt_studio_websocket_router, tags=["prompt-studio"])
     _include_if_enabled("rag-health", rag_health_router, tags=["rag-health"])
     _include_if_enabled("rag-unified", rag_unified_router, tags=["rag-unified"])
+    _include_if_enabled("feedback", feedback_router, prefix=f"{API_V1_PREFIX}/feedback", tags=["feedback"])
     if _HAS_WORKFLOWS:
         # In test contexts, force-include workflows regardless of policy to avoid 404s.
         _test_ctx = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"} or "pytest" in sys.modules

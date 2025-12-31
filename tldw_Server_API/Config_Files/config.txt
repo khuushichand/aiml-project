@@ -460,6 +460,10 @@ agentic_cache_backend = memory
 # and background jobs.
 agentic_cache_ttl_sec = 600
 
+# Enable/disable implicit feedback capture (click/copy/expand/dwell/citation-used)
+# Env override: IMPLICIT_FEEDBACK_ENABLED=true|false (default true)
+implicit_feedback_enabled = true
+
 [ResourceGovernor]
 # Global Resource Governor enable flag (env: RG_ENABLED)
 enabled = true

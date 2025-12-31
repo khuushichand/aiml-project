@@ -1468,13 +1468,34 @@ class UnifiedBatchResponse(BaseModel):
 
 
 class ImplicitFeedbackEvent(BaseModel):
-    """Schema for implicit feedback signals from WebUI (click/expand/copy)."""
-    event_type: Literal["click", "expand", "copy"] = Field(description="Type of implicit event")
+    """Schema for implicit feedback signals from WebUI (click/expand/copy/dwell/citation)."""
+    event_type: Literal["click", "expand", "copy", "dwell_time", "citation_used"] = Field(
+        description="Type of implicit event"
+    )
     query: Optional[str] = Field(default=None, description="Original query text")
     feedback_id: Optional[str] = Field(default=None, description="Optional feedback correlation id")
     doc_id: Optional[str] = Field(default=None, description="Document/chunk id involved")
+    chunk_ids: Optional[List[str]] = Field(default=None, description="Optional chunk ids involved")
     rank: Optional[int] = Field(default=None, description="Rank position of the doc in the displayed list")
-    impression_list: Optional[List[str]] = Field(default=None, description="Ordered doc ids visible when the event happened")
+    impression_list: Optional[List[str]] = Field(
+        default=None,
+        description="Ordered doc ids visible when the event happened"
+    )
     corpus: Optional[str] = Field(default=None, description="Corpus/namespace if set in the request")
     user_id: Optional[str] = Field(default=None, description="User id if available")
     session_id: Optional[str] = Field(default=None, description="Browser session id if available")
+    conversation_id: Optional[str] = Field(default=None, description="Conversation id if available")
+    message_id: Optional[str] = Field(default=None, description="Message id if available")
+    dwell_ms: Optional[int] = Field(default=None, ge=0, description="Dwell time in milliseconds")
+
+    if model_validator is not None:
+        @model_validator(mode="before")
+        def _validate_dwell_ms(cls, values):  # type: ignore
+            try:
+                if isinstance(values, dict) and values.get("event_type") == "dwell_time":
+                    dwell_ms = values.get("dwell_ms")
+                    if dwell_ms is None:
+                        raise ValueError("dwell_ms is required when event_type=dwell_time")
+            except Exception:
+                raise
+            return values

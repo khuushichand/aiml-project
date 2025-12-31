@@ -27,7 +27,10 @@ from tldw_Server_API.app.core.Chat.chat_helpers import (
     get_or_create_conversation,
 )
 from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import replace_placeholders
-from tldw_Server_API.app.core.Character_Chat.modules.character_utils import sanitize_sender_name
+from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
+    map_sender_to_role,
+    sanitize_sender_name,
+)
 from tldw_Server_API.app.core.Chat.prompt_template_manager import (
     DEFAULT_RAW_PASSTHROUGH_TEMPLATE,
     load_template,
@@ -904,13 +907,9 @@ async def build_context_and_messages(
             raw_hist = list(reversed(raw_hist))
         for db_msg in raw_hist:
             sender_val = str(db_msg.get("sender", "") or "")
-            sender_lower = sender_val.lower()
-            if sender_lower == "user":
-                role = "user"
-            elif sender_lower == "tool":
-                role = "tool"
-            else:
-                role = "assistant"
+            role = map_sender_to_role(sender_val, character_card.get("name") if character_card else None)
+            if role == "system":
+                continue
             char_name_hist = character_card.get("name", "Char") if character_card else "Char"
             text_content = db_msg.get("content", "")
             if text_content and role != "tool":
@@ -1149,6 +1148,7 @@ async def execute_streaming_call(
     character_card_for_context: Optional[Dict[str, Any]],
     chat_db: Any,
     save_message_fn: Callable[..., Any],
+    system_message_id: Optional[str] = None,
     audit_service: Optional[Any],
     audit_context: Optional[Any],
     client_id: str,
@@ -1555,12 +1555,13 @@ async def execute_streaming_call(
                 message_payload["tool_calls"] = tool_calls
             if function_call:
                 message_payload["function_call"] = function_call
-            await save_message_fn(
+            saved_message_id = await save_message_fn(
                 chat_db,
                 final_conversation_id,
                 message_payload,
                 use_transaction=True,
             )
+            return saved_message_id
         # Usage logging (estimated) after stream completes
         try:
             pt_est = 0
@@ -1778,6 +1779,7 @@ async def execute_streaming_call(
                 idle_timeout=CHAT_IDLE_TIMEOUT,
                 heartbeat_interval=CHAT_HEARTBEAT_INTERVAL,
                 text_transform=_out_transform,
+                system_message_id=system_message_id,
             )
             try:
                 async for chunk in generator:
@@ -1888,6 +1890,7 @@ async def execute_non_stream_call(
     character_card_for_context: Optional[Dict[str, Any]],
     chat_db: Any,
     save_message_fn: Callable[..., Any],
+    system_message_id: Optional[str] = None,
     audit_service: Optional[Any],
     audit_context: Optional[Any],
     client_id: str,
@@ -2253,6 +2256,7 @@ async def execute_non_stream_call(
     except Exception as e:
         logger.warning(f"Moderation output processing error: {e}")
 
+    assistant_message_id: Optional[str] = None
     should_save_response = (
         should_persist
         and final_conversation_id
@@ -2275,7 +2279,7 @@ async def execute_non_stream_call(
             message_payload["tool_calls"] = tool_calls_to_save
         if function_call_to_save is not None:
             message_payload["function_call"] = function_call_to_save
-        await save_message_fn(
+        assistant_message_id = await save_message_fn(
             chat_db,
             final_conversation_id,
             message_payload,
@@ -2291,6 +2295,10 @@ async def execute_non_stream_call(
 
     if isinstance(encoded_payload, dict):
         encoded_payload["tldw_conversation_id"] = final_conversation_id
+        if assistant_message_id:
+            encoded_payload["tldw_message_id"] = assistant_message_id
+        if system_message_id:
+            encoded_payload["tldw_system_message_id"] = system_message_id
 
     # Audit success
     if audit_service and audit_context:

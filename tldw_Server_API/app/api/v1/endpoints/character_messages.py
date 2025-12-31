@@ -350,6 +350,7 @@ async def get_chat_messages(
     format_for_completions: bool = Query(False, description="Format messages for use with chat/completions endpoint"),
     include_tool_calls: bool = Query(False, description="Include tool_calls metadata per message when available (standard format only)"),
     include_metadata: bool = Query(False, description="Include stored message metadata.extra JSON where available"),
+    include_message_ids: bool = Query(False, description="Include message_id fields when formatting for completions"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ):
@@ -394,20 +395,25 @@ async def get_chat_messages(
                 formatted_messages = []
                 metadata_extra_map: Dict[str, Any] = {}
 
-                # Add system prompt if character exists
-                if character and include_character_context:
-                    system_prompt_parts = [
-                        f"You are {character.get('name', 'Assistant')}.",
-                        character.get('description', ''),
-                        character.get('personality', ''),
-                        character.get('scenario', ''),
-                        character.get('system_prompt', '')
-                    ]
-                    system_prompt = '\n'.join(part for part in system_prompt_parts if part)
-                    formatted_messages.append({
-                        "role": "system",
-                        "content": system_prompt.strip()
-                    })
+                # Add system prompt only on the first page and only if no system message exists in DB
+                if character and include_character_context and offset == 0:
+                    has_system_in_page = any(
+                        map_sender_to_role(msg.get('sender'), character.get('name')) == "system"
+                        for msg in paginated
+                    )
+                    if not has_system_in_page:
+                        system_prompt_parts = [
+                            f"You are {character.get('name', 'Assistant')}.",
+                            character.get('description', ''),
+                            character.get('personality', ''),
+                            character.get('scenario', ''),
+                            character.get('system_prompt', '')
+                        ]
+                        system_prompt = '\n'.join(part for part in system_prompt_parts if part)
+                        formatted_messages.append({
+                            "role": "system",
+                            "content": system_prompt.strip()
+                        })
 
                 # Add conversation messages with optional tool role messages
                 import re as _re
@@ -418,6 +424,8 @@ async def get_chat_messages(
                     msg_id = msg.get('id')
 
                     base_message: Dict[str, Any] = {"role": role, "content": content}
+                    if include_message_ids and msg_id:
+                        base_message["message_id"] = msg_id
 
                     # If assistant message has tool_calls in metadata, include tool role messages (OpenAI-compatible)
                     md = None

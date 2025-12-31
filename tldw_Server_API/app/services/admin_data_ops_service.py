@@ -49,17 +49,53 @@ DATASET_DB_RESOLVERS = {
     "evaluations": DatabasePaths.get_evaluations_db_path,
     "audit": DatabasePaths.get_audit_db_path,
 }
+_BACKUP_DATASETS = frozenset(list(DATASET_DB_RESOLVERS.keys()) + ["authnz"])
+_BACKUP_EXTENSIONS = (".db", ".sqlib", ".dump")
 
 
 def _backup_base_dir() -> str:
     return os.environ.get("TLDW_DB_BACKUP_PATH") or get_project_relative_path("tldw_DB_Backups")
 
 
+def _validate_backup_dataset(dataset: str) -> str:
+    name = str(dataset or "").strip().lower()
+    if name not in _BACKUP_DATASETS:
+        raise ValueError("unknown_dataset")
+    return name
+
+
+def _normalize_user_id(user_id: Optional[int]) -> Optional[int]:
+    if user_id is None:
+        return None
+    try:
+        value = int(user_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid_user_id") from exc
+    return value
+
+
+def _safe_join(base_dir: str, name: str) -> str:
+    base_dir_abs = os.path.abspath(base_dir)
+    candidate = os.path.abspath(os.path.join(base_dir_abs, name))
+    base_real = os.path.realpath(base_dir_abs)
+    candidate_real = os.path.realpath(candidate)
+    try:
+        if os.path.commonpath([base_real, candidate_real]) != base_real:
+            raise ValueError("invalid_backup_path")
+    except ValueError as exc:
+        raise ValueError("invalid_backup_path") from exc
+    if os.path.islink(candidate):
+        raise ValueError("invalid_backup_path")
+    return candidate
+
+
 def _backup_dir_for_dataset(dataset: str, user_id: Optional[int]) -> str:
     base_dir = _backup_base_dir()
-    if user_id is not None:
-        base_dir = os.path.join(base_dir, f"user_{user_id}")
-    return os.path.join(base_dir, dataset)
+    dataset_name = _validate_backup_dataset(dataset)
+    safe_user_id = _normalize_user_id(user_id)
+    if safe_user_id is not None:
+        base_dir = os.path.join(base_dir, f"user_{safe_user_id}")
+    return os.path.join(base_dir, dataset_name)
 
 
 def _extract_backup_path(message: str) -> Optional[str]:
@@ -77,7 +113,7 @@ def _list_backup_files(dataset: str, user_id: Optional[int]) -> List[BackupFile]
         return []
     files = []
     for entry in os.scandir(backup_dir):
-        if not entry.is_file():
+        if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
             continue
         if not entry.name.endswith((".db", ".sqlib", ".dump")):
             continue
@@ -154,12 +190,31 @@ def _normalize_backup_filename(path: str) -> str:
     return os.path.basename(path)
 
 
+def _validate_backup_id(backup_id: str) -> str:
+    name = os.path.basename(str(backup_id or "").strip())
+    if not name:
+        raise ValueError("invalid_backup_id")
+    if name != backup_id:
+        raise ValueError("invalid_backup_id")
+    if name.startswith("-"):
+        raise ValueError("invalid_backup_id")
+    if not name.endswith(_BACKUP_EXTENSIONS):
+        raise ValueError("invalid_backup_id")
+    return name
+
+
 def _prune_backups(backup_dir: str, max_backups: int) -> int:
     if max_backups <= 0:
         return 0
     if not os.path.isdir(backup_dir):
         return 0
-    files = [entry for entry in os.scandir(backup_dir) if entry.is_file() and entry.name.endswith((".db", ".sqlib", ".dump"))]
+    files = [
+        entry
+        for entry in os.scandir(backup_dir)
+        if entry.is_file(follow_symlinks=False)
+        and not entry.is_symlink()
+        and entry.name.endswith((".db", ".sqlib", ".dump"))
+    ]
     files.sort(key=lambda entry: entry.stat().st_mtime, reverse=True)
     removed = 0
     for entry in files[max_backups:]:
@@ -221,12 +276,12 @@ def restore_backup_snapshot(
 ) -> str:
     db_path, effective_user_id = _resolve_dataset_db_path(dataset, user_id)
     backup_dir = _backup_dir_for_dataset(dataset, effective_user_id)
-    backup_name = os.path.basename(backup_id)
+    backup_name = _validate_backup_id(backup_id)
 
     if dataset == "authnz" and not str(db_path).startswith("sqlite") and str(db_path).startswith("postgres"):
         config = _config_from_postgres_url(db_path)
         backend = SimpleNamespace(backend_type=BackendType.POSTGRESQL, config=config)
-        backup_path = os.path.join(backup_dir, backup_name)
+        backup_path = _safe_join(backup_dir, backup_name)
         result = restore_postgres_backup(backend, backup_path, drop_first=True)
         if result != "ok":
             raise RuntimeError(result)

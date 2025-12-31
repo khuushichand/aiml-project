@@ -225,6 +225,7 @@ For each type in `chunking_types` (`article|audio|book|document|mediawiki_articl
   - `low_confidence_behavior` (str): `continue|ask|decline`
   - `agentic_cache_backend` (str): `memory|sqlite`
   - `agentic_cache_ttl_sec` (int)
+  - `implicit_feedback_enabled` (bool): Enable implicit feedback capture (click/copy/expand/dwell/citation-used).
 
 ## [API] (Hosted providers)
 For each provider, settings follow the pattern:

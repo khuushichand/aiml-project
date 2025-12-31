@@ -29,7 +29,7 @@ import time
 import uuid
 from functools import partial, lru_cache
 from collections import defaultdict, deque
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from unittest.mock import Mock
 from weakref import WeakKeyDictionary
 import threading
@@ -771,7 +771,7 @@ async def _save_message_turn_to_db(
     metrics = get_chat_metrics()
     current_loop = asyncio.get_running_loop()
     role = message_obj.get("role")
-    if role not in ("user", "assistant", "tool"):
+    if role not in ("user", "assistant", "tool", "system"):
         logger.warning("Skip DB save: invalid role='%s' for conv=%s", role, conversation_id)
         return None
 
@@ -879,6 +879,9 @@ async def _save_message_turn_to_db(
         "image_mime_type": primary_image_mime,
         "client_id": db.client_id,
     }
+    timestamp = message_obj.get("timestamp")
+    if timestamp:
+        db_payload["timestamp"] = timestamp
     if normalized_images:
         # Remove helper position key before persisting
         db_payload["images"] = [{"data": item["data"], "mime": item["mime"]} for item in normalized_images]
@@ -951,6 +954,57 @@ async def _save_message_turn_to_db(
             cause=e_unexpected_db
         )
         error.log(level="critical")
+        return None
+
+
+async def _persist_system_message_if_needed(
+    *,
+    db: CharactersRAGDB,
+    conversation_id: str,
+    system_message: Optional[str],
+    save_message_fn: Callable[..., Any],
+    loop: asyncio.AbstractEventLoop,
+) -> Optional[str]:
+    if not system_message or not system_message.strip():
+        return None
+    try:
+        has_system = await loop.run_in_executor(
+            None,
+            db.has_system_message_for_conversation,
+            conversation_id,
+        )
+    except Exception as exc:
+        logger.debug(
+            "System message presence check failed for conv=%s: %s",
+            conversation_id,
+            exc,
+        )
+        has_system = False
+    if has_system:
+        return None
+    try:
+        conv_created_at = None
+        try:
+            conv = await loop.run_in_executor(None, db.get_conversation_by_id, conversation_id)
+            if conv:
+                conv_created_at = conv.get("created_at")
+        except Exception:
+            conv_created_at = None
+        system_payload: Dict[str, Any] = {"role": "system", "content": system_message.strip()}
+        if conv_created_at:
+            system_payload["timestamp"] = conv_created_at
+        return await save_message_fn(
+            db,
+            conversation_id,
+            system_payload,
+            use_transaction=True,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to persist system message for conv=%s: %s",
+            conversation_id,
+            exc,
+        )
         return None
 
 
@@ -1790,6 +1844,16 @@ async def create_chat_completion(
                 llm_payload_messages=llm_payload_messages,
             )
 
+            system_message_id: Optional[str] = None
+            if should_persist and final_conversation_id:
+                system_message_id = await _persist_system_message_if_needed(
+                    db=chat_db,
+                    conversation_id=final_conversation_id,
+                    system_message=final_system_message,
+                    save_message_fn=_save_message_turn_to_db,
+                    loop=current_loop,
+                )
+
             # --- LLM Call ---
             cleaned_args = build_call_params_from_request(
                 request_data=request_data,
@@ -2126,6 +2190,7 @@ async def create_chat_completion(
                     character_card_for_context=character_card_for_context,
                     chat_db=chat_db,
                     save_message_fn=_save_message_turn_to_db,
+                    system_message_id=system_message_id,
                     audit_service=audit_service,
                     audit_context=context,
                     client_id=user_id,
@@ -2162,6 +2227,7 @@ async def create_chat_completion(
                     character_card_for_context=character_card_for_context,
                     chat_db=chat_db,
                     save_message_fn=_save_message_turn_to_db,
+                    system_message_id=system_message_id,
                     audit_service=audit_service,
                     audit_context=context,
                     client_id=user_id,

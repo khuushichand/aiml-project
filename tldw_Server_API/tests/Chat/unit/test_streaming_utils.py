@@ -298,23 +298,36 @@ class TestSafeStreamGenerator:
     async def test_stream_metadata(self):
         """Test stream metadata messages."""
         handler = StreamingResponseHandler("conv_123", "gpt-4")
+        handler.system_message_id = "sys_123"
 
         async def mock_stream():
             yield "Content"
 
+        async def save_callback(content):
+            return "msg_456"
+
         messages = []
-        async for message in handler.safe_stream_generator(mock_stream()):
+        async for message in handler.safe_stream_generator(mock_stream(), save_callback):
             messages.append(message)
 
         # Check stream_start event
         start_msgs = [m for m in messages if "stream_start" in m]
         assert len(start_msgs) == 1
         assert "conv_123" in start_msgs[0]
+        start_lines = [line for line in start_msgs[0].splitlines() if line.startswith("data: ")]
+        assert len(start_lines) == 1
+        start_payload = json.loads(start_lines[0][6:])
+        assert start_payload.get("tldw_system_message_id") == "sys_123"
 
         # Check stream_end event
         end_msgs = [m for m in messages if "stream_end" in m]
         assert len(end_msgs) == 1
         assert "success" in end_msgs[0]
+        end_lines = [line for line in end_msgs[0].splitlines() if line.startswith("data: ")]
+        assert len(end_lines) == 1
+        end_payload = json.loads(end_lines[0][6:])
+        assert end_payload.get("tldw_message_id") == "msg_456"
+        assert end_payload.get("tldw_system_message_id") == "sys_123"
 
     @pytest.mark.asyncio
     async def test_sync_stream_closed_on_cancel(self):

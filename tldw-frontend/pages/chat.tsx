@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Layout } from '@/components/layout/Layout';
 import { Button } from '@/components/ui/Button';
 import { apiClient, getApiBaseUrl, buildAuthHeaders } from '@/lib/api';
+import { cn } from '@/lib/utils';
 import { streamSSE } from '@/lib/sse';
 import { useToast } from '@/components/ui/ToastProvider';
 import JsonEditor from '@/components/ui/JsonEditor';
@@ -26,7 +27,7 @@ interface ProvidersResponse {
 
 type Role = 'user'|'assistant'|'system'|'tool';
 type UiMessage = {
-  id?: string;
+  messageId?: string;
   role: Role;
   text?: string;
   tool?: { name?: string; id?: string; content?: string };
@@ -41,7 +42,7 @@ type SessionItem = { id: string; title: string; model: string; created_at: strin
 export default function ChatPage() {
   const { show } = useToast();
   const [uiMessages, setUiMessages] = useState<UiMessage[]>([
-    { role: 'system', text: 'You are a helpful assistant.' },
+    { role: 'system', text: 'System prompt text' },
   ]);
   const [composerText, setComposerText] = useState('');
   const [model, setModel] = useState('gpt-3.5-turbo');
@@ -64,6 +65,17 @@ export default function ChatPage() {
   const [currentModelOnly, setCurrentModelOnly] = useState<string | undefined>(undefined);
   const [scrollLock, setScrollLock] = useState(false);
   const [showJump, setShowJump] = useState(false);
+  const [feedbackById, setFeedbackById] = useState<Record<string, { value?: 'up' | 'down'; pending?: boolean }>>({});
+  const chatSessionIdRef = useRef<string | null>(null);
+  const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
+  const [feedbackModalMessage, setFeedbackModalMessage] = useState<ChatMessage | null>(null);
+  const [feedbackModalHelpful, setFeedbackModalHelpful] = useState<boolean | null>(null);
+  const [feedbackModalRating, setFeedbackModalRating] = useState(0);
+  const [feedbackModalIssues, setFeedbackModalIssues] = useState<string[]>([]);
+  const [feedbackModalNotes, setFeedbackModalNotes] = useState('');
+  const [feedbackModalSubmitting, setFeedbackModalSubmitting] = useState(false);
+  const dwellTimerRef = useRef<number | null>(null);
+  const dwellSentRef = useRef<Set<string>>(new Set());
   const [slashMode, setSlashMode] = useState<'system'|'preface'|'replace'>(() => {
     try {
       const s = localStorage.getItem('tldw-slash-mode');
@@ -77,6 +89,80 @@ export default function ChatPage() {
   const suppressAutoScrollRef = useRef(false);
   const onStopStream = useCallback(() => {
     try { abortRef.current?.abort(); } catch {}
+  }, []);
+  const attachMessageIdToLastAssistant = useCallback((messageId: string) => {
+    if (!messageId) return;
+    setUiMessages((prev) => {
+      const updated = [...prev];
+      for (let i = updated.length - 1; i >= 0; i--) {
+        const msg = updated[i];
+        if (msg?.role === 'assistant' && !msg.messageId) {
+          updated[i] = { ...msg, messageId };
+          break;
+        }
+      }
+      return updated;
+    });
+  }, []);
+  const attachMessageIdToSystem = useCallback((messageId: string) => {
+    if (!messageId) return;
+    setUiMessages((prev) => {
+      const updated = [...prev];
+      for (let i = 0; i < updated.length; i++) {
+        const msg = updated[i];
+        if (msg?.role === 'system' && !msg.messageId) {
+          updated[i] = { ...msg, messageId };
+          break;
+        }
+      }
+      return updated;
+    });
+  }, []);
+
+  const issueOptions = useMemo(() => ([
+    { id: 'incorrect_information', label: 'Incorrect information' },
+    { id: 'not_relevant', label: 'Not relevant to my question' },
+    { id: 'missing_details', label: 'Missing important details' },
+    { id: 'sources_unhelpful', label: 'Sources were unhelpful' },
+    { id: 'too_verbose', label: 'Too verbose' },
+    { id: 'too_brief', label: 'Too brief' },
+    { id: 'other', label: 'Other' },
+  ]), []);
+
+  const getLatestUserQuery = useCallback(() => {
+    for (let i = uiMessages.length - 1; i >= 0; i--) {
+      if (uiMessages[i]?.role === 'user' && uiMessages[i]?.text) {
+        return uiMessages[i]?.text || '';
+      }
+    }
+    return '';
+  }, [uiMessages]);
+
+  const sendImplicitFeedback = useCallback(async (payload: Record<string, unknown>) => {
+    try {
+      const query = getLatestUserQuery();
+      await apiClient.post('/rag/feedback/implicit', {
+        query: query || undefined,
+        session_id: chatSessionIdRef.current || undefined,
+        conversation_id: conversationId || undefined,
+        ...payload,
+      });
+    } catch {
+      // best-effort
+    }
+  }, [conversationId, getLatestUserQuery]);
+
+  const openFeedbackModal = useCallback((msg: ChatMessage, helpful: boolean | null) => {
+    setFeedbackModalMessage(msg);
+    setFeedbackModalHelpful(helpful);
+    setFeedbackModalRating(0);
+    setFeedbackModalIssues([]);
+    setFeedbackModalNotes('');
+    setFeedbackModalOpen(true);
+  }, []);
+
+  const closeFeedbackModal = useCallback(() => {
+    setFeedbackModalOpen(false);
   }, []);
 
   const webAssetBase = useMemo(() => {
@@ -117,6 +203,23 @@ export default function ChatPage() {
     try { const s = localStorage.getItem('tldw-chat-sessions'); if (s) setSessions(JSON.parse(s)); } catch {}
   };
   useEffect(() => { loadSessions(); }, []);
+  useEffect(() => {
+    try {
+      const key = 'tldw-chat-session-id';
+      const existing = localStorage.getItem(key);
+      if (existing) {
+        chatSessionIdRef.current = existing;
+        return;
+      }
+      const generated = (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
+        ? crypto.randomUUID()
+        : `sess_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      localStorage.setItem(key, generated);
+      chatSessionIdRef.current = generated;
+    } catch {
+      chatSessionIdRef.current = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    }
+  }, []);
 
   // Recent models helpers
   const loadRecentModels = () => {
@@ -138,9 +241,10 @@ export default function ChatPage() {
 
   const startNewChat = () => {
     setConversationId(null);
-    setUiMessages([{ role: 'system', text: 'You are a helpful assistant.' }]);
+    setUiMessages([{ role: 'system', text: 'System prompt text' }]);
     setPageOffset(0);
     setHasMoreHistory(false);
+    setFeedbackById({});
   };
 
   // Load saved messages when switching to a known conversation
@@ -151,6 +255,7 @@ export default function ChatPage() {
       offset: String(offset),
       format_for_completions: 'true',
       include_character_context: 'true',
+      include_message_ids: 'true',
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const data = await apiClient.get<any>(`/chats/${cid}/messages?${qs.toString()}`);
@@ -159,17 +264,24 @@ export default function ChatPage() {
     // Map to UiMessage[]
     const mapped: UiMessage[] = msgs.map((m) => {
       const role: Role = (m.role || 'assistant') as Role;
+      const messageId = m.message_id || m.id;
       if (role === 'tool') {
-        return { role, tool: { id: m.tool_call_id, name: m.name, content: m.content } };
+        return { role, messageId, tool: { id: m.tool_call_id, name: m.name, content: m.content } };
       }
-      return { role, text: m.content };
+      return { role, messageId, text: m.content };
     });
-    // If offset > 0, prepend older messages
+    const normalized = offset > 0
+      ? mapped.filter((m) => !(m.role === 'system' && !m.messageId))
+      : mapped;
     setUiMessages((prev) => {
-      const withoutSystem = prev.filter((x) => x.role !== 'system');
-      const system = prev.find((x) => x.role === 'system');
-      const combined = [...(system ? [system] : []), ...mapped, ...withoutSystem];
-      return combined;
+      if (offset > 0) {
+        return [...normalized, ...prev];
+      }
+      const hasSystem = normalized.some((m) => m.role === 'system');
+      if (!hasSystem) {
+        return [{ role: 'system', text: 'System prompt text' }, ...normalized];
+      }
+      return normalized;
     });
     setHasMoreHistory(msgs.length === pageSize);
   }, [pageSize]);
@@ -191,7 +303,7 @@ export default function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
 
-    const sendMessage = async (messageText?: string) => {
+  const sendMessage = async (messageText?: string) => {
     const text = messageText ?? composerText;
         if (!text.trim() || sending) return;
         show({ title: 'Sending message…', variant: 'info' });
@@ -253,6 +365,10 @@ export default function ChatPage() {
           const mdl = json?.model || json?.tldw_model || json?.tldw_metadata?.model;
           if (prov) setCurrentProvider(String(prov));
           if (mdl) setCurrentModelOnly(String(mdl));
+          const streamMessageId = json?.tldw_message_id;
+          if (streamMessageId) attachMessageIdToLastAssistant(String(streamMessageId));
+          const streamSystemMessageId = json?.tldw_system_message_id;
+          if (streamSystemMessageId) attachMessageIdToSystem(String(streamSystemMessageId));
           // Streamed tool calls / results
           const dTools = json?.choices?.[0]?.delta?.tool_calls;
           if (Array.isArray(dTools) && dTools.length) {
@@ -296,6 +412,12 @@ export default function ChatPage() {
         if (res?.tldw_conversation_id && !conversationId) {
           setConversationId(String(res.tldw_conversation_id));
         }
+        if (res?.tldw_message_id) {
+          attachMessageIdToLastAssistant(String(res.tldw_message_id));
+        }
+        if (res?.tldw_system_message_id) {
+          attachMessageIdToSystem(String(res.tldw_system_message_id));
+        }
         setUiMessages((prev) => {
           const updated = [...prev];
           const lastIdx = updated.length - 1;
@@ -326,6 +448,98 @@ export default function ChatPage() {
       abortRef.current = null;
     }
   };
+
+  const handleFeedback = useCallback(async (messageId: string, helpful: boolean) => {
+    if (!messageId) return;
+    const current = feedbackById[messageId];
+    const nextValue = helpful ? 'up' : 'down';
+    if (current?.pending) return;
+    if (current?.value === nextValue) return;
+
+    setFeedbackById((prev) => ({
+      ...prev,
+      [messageId]: { value: nextValue, pending: true },
+    }));
+
+    try {
+      await apiClient.post('/feedback/explicit', {
+        conversation_id: conversationId || undefined,
+        message_id: messageId,
+        feedback_type: 'helpful',
+        helpful,
+        session_id: chatSessionIdRef.current || undefined,
+      });
+      setFeedbackById((prev) => ({
+        ...prev,
+        [messageId]: { value: nextValue, pending: false },
+      }));
+      show({ title: 'Feedback sent', variant: 'success' });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Could not submit feedback';
+      setFeedbackById((prev) => ({
+        ...prev,
+        [messageId]: { value: current?.value, pending: false },
+      }));
+      show({ title: 'Feedback failed', description: message, variant: 'danger' });
+    }
+  }, [conversationId, feedbackById, show]);
+
+  const handleDetailedFeedbackSubmit = useCallback(async () => {
+    const messageId = feedbackModalMessage?.messageId;
+    if (!messageId) return;
+    const trimmedNotes = feedbackModalNotes.trim();
+    const hasRating = feedbackModalRating > 0;
+    const hasIssues = feedbackModalIssues.length > 0;
+    const hasNotes = trimmedNotes.length > 0;
+    const helpful = feedbackModalHelpful;
+    if (!hasRating && !hasIssues && !hasNotes && helpful === null) {
+      show({ title: 'Add a rating or note', variant: 'warning' });
+      return;
+    }
+
+    let feedbackType: 'helpful' | 'relevance' | 'report' = 'helpful';
+    if (hasRating) {
+      feedbackType = 'relevance';
+    } else if (hasIssues || hasNotes) {
+      feedbackType = 'report';
+    }
+
+    setFeedbackModalSubmitting(true);
+    try {
+      await apiClient.post('/feedback/explicit', {
+        conversation_id: conversationId || undefined,
+        message_id: messageId,
+        feedback_type: feedbackType,
+        helpful: helpful ?? undefined,
+        relevance_score: hasRating ? feedbackModalRating : undefined,
+        issues: hasIssues ? feedbackModalIssues : undefined,
+        user_notes: hasNotes ? trimmedNotes : undefined,
+        session_id: chatSessionIdRef.current || undefined,
+      });
+      if (helpful !== null) {
+        setFeedbackById((prev) => ({
+          ...prev,
+          [messageId]: { value: helpful ? 'up' : 'down', pending: false },
+        }));
+      }
+      show({ title: 'Feedback sent', variant: 'success' });
+      closeFeedbackModal();
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Could not submit feedback';
+      show({ title: 'Feedback failed', description: message, variant: 'danger' });
+    } finally {
+      setFeedbackModalSubmitting(false);
+    }
+  }, [
+    conversationId,
+    feedbackModalHelpful,
+    feedbackModalIssues,
+    feedbackModalMessage,
+    feedbackModalNotes,
+    feedbackModalRating,
+    closeFeedbackModal,
+    show,
+  ]);
 
   useEffect(() => {
     const loadProviders = async () => {
@@ -377,6 +591,10 @@ export default function ChatPage() {
           if (last?.text) {
             await navigator.clipboard.writeText(last.text);
             show({ title: 'Assistant reply copied', variant: 'success' });
+            void sendImplicitFeedback({
+              event_type: 'copy',
+              message_id: last.messageId || undefined,
+            });
           }
         } catch {}
       }
@@ -384,7 +602,7 @@ export default function ChatPage() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uiMessages, sendMessage]); // show is stable from toast hook
+  }, [uiMessages, sendMessage, sendImplicitFeedback, show]);
 
   // Persist current chat model for use across pages (e.g., Media Analyze)
   useEffect(() => {
@@ -402,7 +620,7 @@ export default function ChatPage() {
         const userCount = uiMessages.filter((m) => m.role === 'user').length;
         if (userCount === 0 && !conversationId && data?.message) {
           setUiMessages([
-            { role: 'system', text: 'You are a helpful assistant.' },
+            { role: 'system', text: 'System prompt text' },
             { role: 'user', text: String(data.message) }
           ] as UiMessage[]);
         }
@@ -446,8 +664,9 @@ export default function ChatPage() {
   // When conversationId changes, reset view and load first page
   useEffect(() => {
     if (!conversationId) return;
-    setUiMessages([{ role: 'system', text: 'You are a helpful assistant.' }]);
+    setUiMessages([{ role: 'system', text: 'System prompt text' }]);
     setPageOffset(0);
+    setFeedbackById({});
     (async () => {
       await loadConversationPage(conversationId, 0);
       setPageOffset((p) => p + pageSize);
@@ -470,7 +689,6 @@ export default function ChatPage() {
     const avatarProvider = currentProvider || providerFromModel;
     const avatarUrl = providerIconUrl(avatarProvider);
     return uiMessages
-      .filter((m) => m.role !== 'system')
       .map((m) => {
         if (m.role === 'tool' && m.tool) {
           return {
@@ -478,18 +696,108 @@ export default function ChatPage() {
             position: 'left',
             content: { name: m.tool.name || 'tool', text: m.tool.content || '' },
             user: { name: 'Tool' },
+            role: 'tool',
+            messageId: m.messageId,
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
           } as any;
         }
         const isUser = m.role === 'user';
+        const isSystem = m.role === 'system';
         return {
           type: 'text',
-          position: isUser ? 'right' : 'left',
+          position: isSystem ? 'center' : (isUser ? 'right' : 'left'),
           content: { text: m.text || '' },
-          user: isUser ? { name: 'You' } : (avatarUrl ? { name: 'Assistant', avatar: avatarUrl } : { name: 'Assistant' }),
+          user: isUser
+            ? { name: 'You' }
+            : isSystem
+              ? undefined
+              : (avatarUrl ? { name: 'Assistant', avatar: avatarUrl } : { name: 'Assistant' }),
+          role: m.role,
+          messageId: m.messageId,
         } as ChatMessage;
       });
   }, [uiMessages, model, currentProvider, providerIconUrl]);
+
+  const renderFeedbackFooter = useCallback((msg: ChatMessage) => {
+    if (!msg.messageId) return null;
+    if (!msg.role || msg.role === 'user') return null;
+    const state = feedbackById[msg.messageId] || {};
+    const pending = state.pending;
+    const upSelected = state.value === 'up';
+    const downSelected = state.value === 'down';
+
+    const baseButton = 'rounded border px-2 py-0.5 text-[11px] transition';
+    const upClasses = cn(
+      baseButton,
+      upSelected ? 'border-blue-400 bg-blue-50 text-blue-700' : 'border-gray-300 text-gray-600 hover:bg-gray-100',
+      pending && 'opacity-60 cursor-not-allowed'
+    );
+    const downClasses = cn(
+      baseButton,
+      downSelected ? 'border-red-400 bg-red-50 text-red-700' : 'border-gray-300 text-gray-600 hover:bg-gray-100',
+      pending && 'opacity-60 cursor-not-allowed'
+    );
+
+    return (
+      <div className="flex items-center gap-2 text-[11px] text-gray-500">
+        <span>Was this helpful?</span>
+        <button
+          type="button"
+          className={upClasses}
+          onClick={() => handleFeedback(msg.messageId as string, true)}
+          disabled={pending}
+          aria-label="Send helpful feedback"
+        >
+          Yes
+        </button>
+        <button
+          type="button"
+          className={downClasses}
+          onClick={() => openFeedbackModal(msg, false)}
+          disabled={pending}
+          aria-label="Send not helpful feedback"
+        >
+          No
+        </button>
+        <button
+          type="button"
+          className="rounded border border-gray-300 px-2 py-0.5 text-[11px] text-gray-600 hover:bg-gray-100"
+          onClick={() => openFeedbackModal(msg, null)}
+          aria-label="Open feedback details"
+        >
+          Details
+        </button>
+      </div>
+    );
+  }, [feedbackById, handleFeedback, openFeedbackModal]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const lastAssistant = [...uiMessages].reverse().find((m) => m.role === 'assistant' && m.messageId && m.text);
+    if (!lastAssistant?.messageId || !lastAssistant.text) return;
+    if (dwellSentRef.current.has(lastAssistant.messageId)) return;
+
+    if (dwellTimerRef.current) {
+      window.clearTimeout(dwellTimerRef.current);
+    }
+
+    dwellTimerRef.current = window.setTimeout(() => {
+      if (!lastAssistant.messageId || dwellSentRef.current.has(lastAssistant.messageId)) return;
+      dwellSentRef.current.add(lastAssistant.messageId);
+      void sendImplicitFeedback({
+        event_type: 'dwell_time',
+        dwell_ms: 3000,
+        message_id: lastAssistant.messageId,
+      });
+    }, 3000);
+
+    return () => {
+      if (dwellTimerRef.current) {
+        window.clearTimeout(dwellTimerRef.current);
+        dwellTimerRef.current = null;
+      }
+    };
+  }, [sendImplicitFeedback, uiMessages]);
 
   const atBottom = (el: HTMLElement | null): boolean => {
     if (!el) return true;
@@ -657,7 +965,36 @@ export default function ChatPage() {
               )}
               <ChatMessageList
                 messages={chatuiMessages}
+                renderMessageFooter={renderFeedbackFooter}
                 renderMessageContent={(msg: ChatMessage) => {
+                  if (msg.role === 'system') {
+                    const text = typeof msg.content === 'string'
+                      ? msg.content
+                      : msg.content?.text || '';
+                    return (
+                      <details
+                        onToggle={(event) => {
+                          const target = event.currentTarget as HTMLDetailsElement;
+                          if (target.open && msg.messageId) {
+                            void sendImplicitFeedback({
+                              event_type: 'expand',
+                              message_id: msg.messageId,
+                            });
+                          }
+                        }}
+                      >
+                        <summary className="cursor-pointer text-xs text-amber-700">
+                          <span className="mr-2 inline-flex rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900">
+                            System
+                          </span>
+                          <span>System prompt text</span>
+                        </summary>
+                        <div className="mt-2 whitespace-pre-wrap text-xs text-amber-900">
+                          {text || 'System prompt text'}
+                        </div>
+                      </details>
+                    );
+                  }
                   if (msg.type === 'tool') {
                     const contentObj = typeof msg.content === 'object' ? msg.content : null;
                     const name = contentObj?.name || 'tool';
@@ -721,6 +1058,100 @@ export default function ChatPage() {
           </div>
         </div>
       </div>
+      {feedbackModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={closeFeedbackModal}>
+          <div
+            className="w-full max-w-lg rounded-lg bg-white p-4 shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-gray-900">Feedback</h3>
+              <button
+                type="button"
+                className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-100"
+                onClick={closeFeedbackModal}
+                aria-label="Close feedback dialog"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mb-4">
+              <div className="text-sm font-medium text-gray-800">How would you rate this response?</div>
+              <div className="mt-2 flex items-center gap-2">
+                {Array.from({ length: 5 }).map((_, idx) => {
+                  const ratingValue = idx + 1;
+                  const active = ratingValue <= feedbackModalRating;
+                  return (
+                    <button
+                      key={`rating-${ratingValue}`}
+                      type="button"
+                      className={cn(
+                        'h-8 w-8 rounded-full border text-sm font-semibold transition',
+                        active ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-300 text-gray-500 hover:bg-gray-100'
+                      )}
+                      onClick={() => setFeedbackModalRating(ratingValue)}
+                      aria-label={`Rate ${ratingValue} out of 5`}
+                    >
+                      {ratingValue}
+                    </button>
+                  );
+                })}
+                {feedbackModalRating > 0 && (
+                  <span className="text-xs text-gray-500">{feedbackModalRating}/5</span>
+                )}
+              </div>
+            </div>
+
+            <div className="mb-4">
+              <div className="text-sm font-medium text-gray-800">What was the issue? (select all that apply)</div>
+              <div className="mt-2 grid grid-cols-1 gap-2 text-sm text-gray-700 sm:grid-cols-2">
+                {issueOptions.map((issue) => (
+                  <label key={issue.id} className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={feedbackModalIssues.includes(issue.id)}
+                      onChange={() => {
+                        setFeedbackModalIssues((prev) => (
+                          prev.includes(issue.id)
+                            ? prev.filter((item) => item !== issue.id)
+                            : [...prev, issue.id]
+                        ));
+                      }}
+                    />
+                    <span>{issue.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="mb-4">
+              <label className="text-sm font-medium text-gray-800" htmlFor="feedback-notes">
+                Additional comments (optional)
+              </label>
+              <textarea
+                id="feedback-notes"
+                className="mt-2 w-full rounded border border-gray-300 p-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                rows={4}
+                value={feedbackModalNotes}
+                onChange={(event) => setFeedbackModalNotes(event.target.value)}
+                placeholder="Share extra context to help improve responses..."
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2">
+              <Button variant="secondary" onClick={closeFeedbackModal} disabled={feedbackModalSubmitting}>
+                Cancel
+              </Button>
+              <Button onClick={handleDetailedFeedbackSubmit} loading={feedbackModalSubmitting}>
+                Submit Feedback
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </Layout>
   );
 }

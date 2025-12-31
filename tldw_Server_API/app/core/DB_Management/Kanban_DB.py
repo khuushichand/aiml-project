@@ -29,10 +29,13 @@ import sqlite3
 import threading
 import uuid as uuid_module
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.testing import is_test_mode
 
 # --- Helper Functions ---
 def _utcnow_iso() -> str:
@@ -43,6 +46,36 @@ def _utcnow_iso() -> str:
 def _generate_uuid() -> str:
     """Generate a lowercase hex UUID."""
     return uuid_module.uuid4().hex.lower()
+
+
+def _is_test_context() -> bool:
+    return bool(os.getenv("PYTEST_CURRENT_TEST")) or is_test_mode()
+
+
+def _normalize_db_path(
+    db_path: str,
+    user_id: str,
+    allow_external_db_path: bool
+) -> Tuple[str, bool]:
+    if not db_path or not str(db_path).strip():
+        raise InputError("db_path is required")
+
+    if db_path == ":memory:":
+        return db_path, True
+
+    try:
+        resolved = Path(db_path).expanduser().resolve()
+    except (OSError, RuntimeError) as exc:
+        raise InputError(f"Invalid db_path: {db_path}") from exc
+
+    if not allow_external_db_path and not _is_test_context():
+        user_dir = DatabasePaths.get_user_base_directory(user_id).resolve()
+        try:
+            resolved.relative_to(user_dir)
+        except ValueError as exc:
+            raise InputError(f"db_path must be within user database directory: {user_dir}") from exc
+
+    return str(resolved), False
 
 
 # --- Custom Exceptions ---
@@ -115,24 +148,32 @@ class KanbanDB:
     MAX_COMMENTS_PER_CARD = 500
     MAX_COMMENT_SIZE = 10000  # characters
 
-    def __init__(self, db_path: str, user_id: str) -> None:
+    def __init__(self, db_path: str, user_id: str, allow_external_db_path: bool = False) -> None:
         """
         Initialize the KanbanDB instance.
 
         Args:
             db_path: Path to the SQLite database file.
             user_id: The user ID for this database instance.
+            allow_external_db_path: If True, skip user directory enforcement.
         """
-        self.db_path = db_path
         self.user_id = str(user_id)
         self._lock = threading.RLock()
+        self.db_path, self._is_memory_db = _normalize_db_path(
+            db_path,
+            self.user_id,
+            allow_external_db_path,
+        )
 
         # Ensure directory exists
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        if not self._is_memory_db:
+            db_dir = os.path.dirname(self.db_path)
+            if db_dir:
+                os.makedirs(db_dir, exist_ok=True)
 
         # Initialize schema
         self._ensure_schema()
-        logger.debug(f"KanbanDB initialized for user {user_id} at {db_path}")
+        logger.debug(f"KanbanDB initialized for user {user_id} at {self.db_path}")
 
     def _connect(self) -> sqlite3.Connection:
         """Create and configure a database connection."""

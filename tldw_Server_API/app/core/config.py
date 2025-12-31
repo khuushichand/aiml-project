@@ -1604,6 +1604,10 @@ def load_comprehensive_config():
                 'RAG_AGENTIC_CACHE_TTL_SEC',
                 config_parser.get('RAG', 'agentic_cache_ttl_sec', fallback='600')
             )
+            _env_default(
+                'IMPLICIT_FEEDBACK_ENABLED',
+                config_parser.get('RAG', 'implicit_feedback_enabled', fallback='true')
+            )
     except Exception as _rag_env_err:
         _log_debug(f"RAG env propagation skipped: {_rag_env_err}")
 
@@ -1809,6 +1813,17 @@ def rag_agentic_cache_ttl_sec(default: int = 600) -> int:
         return max(1, int(str(v)))
     except Exception:
         return default
+
+
+def implicit_feedback_enabled(default: bool = True) -> bool:
+    v = os.getenv("IMPLICIT_FEEDBACK_ENABLED")
+    if v is None:
+        try:
+            cp = load_comprehensive_config()
+            v = cp.get("RAG", "implicit_feedback_enabled", fallback=str(default)) if cp else str(default)
+        except Exception:
+            v = str(default)
+    return _as_bool(v, default)
 
 
 # ----------------------------

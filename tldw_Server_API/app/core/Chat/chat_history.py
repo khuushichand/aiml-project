@@ -232,7 +232,7 @@ def save_chat_history_to_db_wrapper(
                 message_save_count = 0
                 for index, message_obj in enumerate(chatbot_history):
                     sender = message_obj.get("role")
-                    if not sender or sender == "system":
+                    if not sender:
                         logging.debug("Skipping message with role '%s' at index %s", sender, index)
                         continue
 

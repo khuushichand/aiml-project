@@ -37,8 +37,9 @@ def test_user_feedback_schema_sqlite_executes_expected_statements() -> None:
     db = _StubChaChaDb(BackendType.SQLITE)
     UserFeedbackStore(db)
     statements = [stmt for stmt, _ in db.executed]
-    assert len(statements) == 3
+    assert len(statements) == 4
     assert any('helpful INTEGER' in stmt for stmt in statements)
+    assert any('issues' in stmt for stmt in statements)
     assert all('conversation_feedback' in stmt for stmt in statements)
 
 
@@ -46,8 +47,9 @@ def test_user_feedback_schema_postgres_uses_boolean_and_timestamp() -> None:
     db = _StubChaChaDb(BackendType.POSTGRESQL)
     UserFeedbackStore(db)
     statements = [stmt for stmt, _ in db.executed]
-    assert len(statements) == 3
+    assert len(statements) == 4
     assert any('helpful BOOLEAN' in stmt for stmt in statements)
+    assert any('issues' in stmt for stmt in statements)
     assert any('TIMESTAMPTZ' in stmt for stmt in statements)
 
 

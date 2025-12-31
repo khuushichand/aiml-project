@@ -64,7 +64,11 @@ def main() -> int:
         db_path = DatabasePaths.get_kanban_db_path(args.user_id)
 
     try:
-        db = KanbanDB(db_path=str(db_path), user_id=str(args.user_id))
+        db = KanbanDB(
+            db_path=str(db_path),
+            user_id=str(args.user_id),
+            allow_external_db_path=bool(args.db_path),
+        )
         if args.action == "rebuild":
             db.rebuild_fts()
         else:

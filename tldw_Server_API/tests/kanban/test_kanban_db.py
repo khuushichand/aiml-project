@@ -12,8 +12,9 @@ Tests cover:
 - Search functionality
 - Error handling
 """
-import pytest
 from typing import Dict, Any
+
+import pytest
 
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
     KanbanDB,
@@ -22,6 +23,27 @@ from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
     ConflictError,
     NotFoundError,
 )
+from tldw_Server_API.app.core.DB_Management import Kanban_DB as kanban_db_module
+
+
+class TestDbPathValidation:
+    """Tests for KanbanDB path validation."""
+
+    def test_rejects_external_db_path(self, monkeypatch: pytest.MonkeyPatch, tmp_path):
+        monkeypatch.setattr(kanban_db_module, "_is_test_context", lambda: False)
+        monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path / "user_dbs"))
+        external_path = tmp_path / "outside" / "Kanban.db"
+
+        with pytest.raises(InputError):
+            KanbanDB(db_path=str(external_path), user_id="1")
+
+    def test_allows_external_db_path_when_explicit(self, monkeypatch: pytest.MonkeyPatch, tmp_path):
+        monkeypatch.setattr(kanban_db_module, "_is_test_context", lambda: False)
+        monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path / "user_dbs"))
+        external_path = tmp_path / "outside" / "Kanban.db"
+
+        db = KanbanDB(db_path=str(external_path), user_id="1", allow_external_db_path=True)
+        assert db.db_path == str(external_path.resolve())
 
 
 # =============================================================================

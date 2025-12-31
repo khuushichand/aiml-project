@@ -127,6 +127,18 @@ def test_restore_creates_snapshot_when_target_exists(tmp_path):
     assert db_path.read_text() == "new data"
 
 
+def test_restore_rejects_invalid_backup_name(tmp_path):
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    db_path = tmp_path / "restore.db"
+    db_path.write_text("existing data")
+
+    result = restore_single_db_backup(str(db_path), str(backup_dir), "data", "../evil.db")
+
+    assert "invalid backup name" in result.lower()
+    assert db_path.read_text() == "existing data"
+
+
 def test_backup_round_trip_uses_flat_directory(tmp_path):
     db_path = tmp_path / "data.db"
     with sqlite3.connect(db_path) as conn:

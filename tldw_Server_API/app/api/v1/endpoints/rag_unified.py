@@ -1105,6 +1105,9 @@ async def rag_implicit_feedback(
     current_user: User = Depends(get_request_user),
 ):
     try:
+        from tldw_Server_API.app.core.config import implicit_feedback_enabled
+        if not implicit_feedback_enabled():
+            return {"ok": True, "disabled": True}
         user_id = request.user_id or (current_user.username if current_user else None)
         collector = UnifiedFeedbackSystem()
         await collector.record_implicit_interaction(
