@@ -211,13 +211,28 @@ export default function ChatPage() {
         chatSessionIdRef.current = existing;
         return;
       }
-      const generated = (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
+      const hasCrypto = typeof crypto !== 'undefined';
+      const generated = (hasCrypto && 'randomUUID' in crypto)
         ? crypto.randomUUID()
-        : `sess_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+        : (hasCrypto && 'getRandomValues' in crypto)
+          ? (() => {
+              const bytes = new Uint8Array(16);
+              crypto.getRandomValues(bytes);
+              // Convert bytes to a hex string, keep existing "sess_" prefix
+              return 'sess_' + Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+            })()
+          : `sess_${Date.now()}`;
       localStorage.setItem(key, generated);
       chatSessionIdRef.current = generated;
     } catch {
-      chatSessionIdRef.current = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      const hasCrypto = typeof crypto !== 'undefined' && 'getRandomValues' in crypto;
+      if (hasCrypto) {
+        const bytes = new Uint8Array(16);
+        crypto.getRandomValues(bytes);
+        chatSessionIdRef.current = 'sess_' + Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+      } else {
+        chatSessionIdRef.current = `sess_${Date.now()}`;
+      }
     }
   }, []);
 
