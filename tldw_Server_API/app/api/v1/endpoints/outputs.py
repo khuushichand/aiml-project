@@ -62,6 +62,16 @@ def _resolve_output_path_for_user(user_id: int, path_value: str | PathlibPath) -
         logger.warning(f"outputs: empty output path component from {path_value!r}")
         raise HTTPException(status_code=400, detail="invalid_path")
 
+    # Reject any path separators to ensure this remains a simple filename.
+    if os.sep in candidate_name or (os.altsep and os.altsep in candidate_name):
+        logger.warning(f"outputs: path separator detected in output filename: {candidate_name!r}")
+        raise HTTPException(status_code=400, detail="invalid_path")
+
+    # Enforce a conservative filename pattern (alphanumeric, underscore, dash, dot).
+    if not re.match(r"^[A-Za-z0-9_.-]+$", candidate_name):
+        logger.warning(f"outputs: invalid characters in output filename: {candidate_name!r}")
+        raise HTTPException(status_code=400, detail="invalid_path")
+
     safe_candidate = PathlibPath(candidate_name)
     try:
         resolved = (base_resolved / safe_candidate).resolve(strict=False)
