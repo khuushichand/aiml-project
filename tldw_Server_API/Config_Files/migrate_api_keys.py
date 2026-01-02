@@ -114,7 +114,7 @@ def main():
             else:
                 env_vars[env_name] = value
                 keys_found.append((section, key, env_name))
-                print(f"  Found {env_name} (value hidden)")
+                print("  Found API key (value hidden)")
 
     if not env_vars and not existing_env:
         print("\nNo API keys found to migrate.")
