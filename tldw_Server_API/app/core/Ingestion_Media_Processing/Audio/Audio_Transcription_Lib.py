@@ -1649,12 +1649,16 @@ def check_model_exists(model_name: str) -> bool:
     """
     if not model_name:
         return False
-    default_download_root = str(WHISPER_MODEL_BASE_DIR)
+
+    # Resolve the default download root once as an absolute, normalized path.
+    # All model paths must remain within this directory.
+    default_root_path = WHISPER_MODEL_BASE_DIR.resolve(strict=False)
+    default_download_root = str(default_root_path)
 
     try:
         normalized = _normalize_whisper_model_identifier(
             model_name,
-            base_dir=Path(default_download_root),
+            base_dir=default_root_path,
         )
     except ValueError as exc:
         logging.warning(f"Rejected unsafe whisper model identifier '{model_name}': {exc}")
@@ -1662,19 +1666,28 @@ def check_model_exists(model_name: str) -> bool:
 
     normalized_path = Path(normalized)
     if normalized_path.is_absolute():
-        return normalized_path.exists()
+        # Defensive: ensure any absolute path returned by the normalizer is
+        # still confined to the allowed model base directory before accessing it.
+        candidate = normalized_path.resolve(strict=False)
+        if not _path_is_within(candidate, default_root_path):
+            logging.warning(
+                "Whisper model path resolved outside allowed base directory; "
+                f"model_name={model_name!r}, path={candidate!r}, base={default_root_path!r}"
+            )
+            return False
+        return candidate.exists()
 
-    # Check in default download directory
-    model_path = os.path.join(default_download_root, normalized)
-    if os.path.isdir(model_path):
+    # Check in default download directory for relative identifiers
+    model_path = default_root_path / normalized
+    if model_path.is_dir():
         return True
 
     # Check if it's a Hub ID that might be cached
     if _is_hf_model_id(normalized):
         # Convert Hub ID to potential cache path
         cache_name = normalized.replace('/', '_')
-        cache_path = os.path.join(default_download_root, cache_name)
-        if os.path.isdir(cache_path):
+        cache_path = default_root_path / cache_name
+        if cache_path.is_dir():
             return True
 
     # Check faster-whisper's default cache location
