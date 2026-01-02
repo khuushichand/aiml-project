@@ -14,6 +14,7 @@ import asyncio
 import os
 from datetime import datetime
 from typing import Optional
+from pathlib import Path
 
 from loguru import logger
 
@@ -24,6 +25,45 @@ except Exception:  # pragma: no cover
 
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
+
+def _sanitize_media_db_path(user_id: str, db_path: Optional[str]) -> str:
+    """
+    Resolve and validate the media DB path for the given user.
+
+    Ensures that any override stays within the media DB root directory.
+    """
+    # Compute the default per-user database path and root directory
+    default_path = str(
+        DatabasePaths.get_media_db_path(
+            int(user_id) if str(user_id).isdigit() else DatabasePaths.get_single_user_id()
+        )
+    )
+    default_path_obj = Path(default_path)
+    media_root = default_path_obj.parent
+
+    # Start from environment/default behavior if explicit path is not provided
+    raw_path = db_path or os.getenv("MEDIA_DB_PATH", default_path)
+
+    # Normalize and resolve the candidate path
+    candidate = Path(raw_path).expanduser()
+    try:
+        candidate_resolved = candidate.resolve(strict=False)
+    except TypeError:
+        # Fallback for environments where strict parameter is not supported
+        candidate_resolved = candidate.resolve()
+
+    # If the candidate is relative, interpret it as relative to the media root
+    if not candidate_resolved.is_absolute():
+        candidate_resolved = (media_root / candidate).resolve()
+
+    # Enforce that the final path remains within the media root directory
+    try:
+        candidate_resolved.relative_to(media_root)
+    except ValueError:
+        raise ValueError("Invalid media_db_path; must reside within the media DB root directory")
+
+    return str(candidate_resolved)
 
 
 async def _get_media_ids_marked_deleted(db_path: str) -> list[int]:
@@ -56,8 +96,12 @@ async def compact_once(user_id: str, db_path: Optional[str] = None) -> int:
         logger.error(f"Compactor initialization failed: {e}")
         return 0
 
-    default_path = str(DatabasePaths.get_media_db_path(int(user_id) if str(user_id).isdigit() else DatabasePaths.get_single_user_id()))
-    dbp = db_path or os.getenv("MEDIA_DB_PATH", default_path)
+    try:
+        dbp = _sanitize_media_db_path(user_id, db_path)
+    except ValueError as e:
+        logger.error(f"Compactor received invalid media_db_path for user_id={user_id}: {e}")
+        return 0
+
     ids = await _get_media_ids_marked_deleted(dbp)
     if not ids:
         return 0
