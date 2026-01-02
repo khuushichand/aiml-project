@@ -58,7 +58,12 @@ class DatabasePaths:
             else:
                 base_path = base_path.resolve()
 
-        user_dir = base_path / str(user_id)
+        # Normalize and validate user_id to ensure it is safe as a single path segment
+        safe_user_id = str(user_id).strip()
+        if not safe_user_id.isdigit():
+            raise ValueError(f"Invalid user_id for filesystem path: {user_id!r}")
+
+        user_dir = base_path / safe_user_id
 
         # Ensure directory exists
         try:
