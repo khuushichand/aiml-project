@@ -6,8 +6,27 @@ try:
     from pydantic import model_validator  # type: ignore
 except ImportError:
     model_validator = None  # type: ignore
+try:
+    from pydantic import root_validator  # type: ignore
+except ImportError:
+    root_validator = None  # type: ignore
 from pydantic import ConfigDict
 from ._compat import Field
+
+
+def _validate_feedback_requirements(values: object) -> object:
+    if not isinstance(values, dict):
+        return values
+    message_id = values.get("message_id")
+    query = values.get("query")
+    if not message_id and (query is None or str(query).strip() == ""):
+        raise ValueError("query is required when message_id is not provided")
+    feedback_type = values.get("feedback_type")
+    if feedback_type == "helpful" and values.get("helpful") is None:
+        raise ValueError("helpful is required when feedback_type is 'helpful'")
+    if feedback_type == "relevance" and values.get("relevance_score") is None:
+        raise ValueError("relevance_score is required when feedback_type is 'relevance'")
+    return values
 
 
 class ExplicitFeedbackRequest(BaseModel):
@@ -28,13 +47,11 @@ class ExplicitFeedbackRequest(BaseModel):
     if model_validator is not None:
         @model_validator(mode="before")
         def _require_query_for_rag_only(cls, values):  # type: ignore
-            if isinstance(values, dict):
-                message_id = values.get("message_id")
-                query = values.get("query")
-                if not message_id:
-                    if query is None or str(query).strip() == "":
-                        raise ValueError("query is required when message_id is not provided")
-            return values
+            return _validate_feedback_requirements(values)
+    elif root_validator is not None:
+        @root_validator(pre=True)  # type: ignore
+        def _require_query_for_rag_only(cls, values):  # type: ignore
+            return _validate_feedback_requirements(values)
 
     model_config = ConfigDict(json_schema_extra={
         "example": {

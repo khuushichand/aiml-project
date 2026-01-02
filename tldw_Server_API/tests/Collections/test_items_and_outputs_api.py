@@ -13,6 +13,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.exceptions import InvalidStoragePathError
 from tldw_Server_API.app.api.v1.endpoints.outputs import _resolve_output_path_for_user
 
 
@@ -226,7 +227,7 @@ def test_outputs_download_rejects_storage_path_outside_base(client_with_user, tm
     external = tmp_path / "outside.md"
     external.write_text("nope", encoding="utf-8")
     cdb = CollectionsDatabase.for_user(user_id=123)
-    with pytest.raises(ValueError):
+    with pytest.raises(InvalidStoragePathError):
         cdb.create_output_artifact(
             type_="newsletter_markdown",
             title="outside",
@@ -252,7 +253,7 @@ def test_outputs_delete_skips_invalid_path_file_removal(client_with_user, tmp_pa
     external = tmp_path / "external.txt"
     external.write_text("keep", encoding="utf-8")
     cdb = CollectionsDatabase.for_user(user_id=123)
-    with pytest.raises(ValueError):
+    with pytest.raises(InvalidStoragePathError):
         cdb.create_output_artifact(
             type_="newsletter_markdown",
             title="outside-delete",
@@ -287,7 +288,7 @@ def test_outputs_purge_skips_invalid_path_delete_files(client_with_user, tmp_pat
     external.write_text("keep", encoding="utf-8")
     cdb = CollectionsDatabase.for_user(user_id=123)
     past = (datetime.utcnow() - timedelta(days=1)).replace(microsecond=0).isoformat()
-    with pytest.raises(ValueError):
+    with pytest.raises(InvalidStoragePathError):
         cdb.create_output_artifact(
             type_="newsletter_markdown",
             title="outside-purge",
@@ -313,7 +314,7 @@ def test_outputs_purge_skips_invalid_path_delete_files(client_with_user, tmp_pat
         cdb.get_output_artifact(row_id, include_deleted=True)
 
 
-def test_outputs_resolve_path_rejects_traversal(client_with_user):
+def test_outputs_resolve_path_rejects_traversal(client_with_user):  # noqa: ARG001 - fixture sets up USER_DB_BASE_DIR
     user_id = 123
     with pytest.raises(HTTPException) as excinfo:
         _resolve_output_path_for_user(user_id, "../outside.txt")

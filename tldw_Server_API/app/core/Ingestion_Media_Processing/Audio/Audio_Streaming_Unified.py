@@ -547,7 +547,7 @@ class StreamingDiarizer:
         Parameters:
             sample_rate (int): Audio sample rate in Hz used for buffering and diarization. Defaults to 16000 when falsy.
             store_audio (bool): If True, persist the combined audio to disk when finalizing diarization.
-            storage_dir (Optional[str]): Directory path where persisted audio will be written when store_audio is True.
+            storage_dir (Optional[str]): Untrusted directory name hint for persisted audio. Sanitized to a safe subdirectory under system temp; absolute paths and path traversal attempts are constrained to basename only.
             num_speakers (Optional[int]): Optional hint for the expected number of speakers; passed to the underlying diarization service when available.
         """
         self.sample_rate = int(sample_rate or 16000)

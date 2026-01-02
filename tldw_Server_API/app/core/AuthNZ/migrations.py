@@ -2032,8 +2032,15 @@ def migration_044_add_api_keys_key_id(conn: sqlite3.Connection) -> None:
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key_id ON api_keys(key_id)")
         conn.commit()
         logger.info("Migration 044: Added api_keys.key_id + index")
-    except Exception as error:
+    except sqlite3.OperationalError as error:
         logger.warning(f"Migration 044 skipped or failed: {error}")
+
+
+def rollback_044_drop_api_keys_key_id(conn: sqlite3.Connection) -> None:
+    """Rollback migration 044 by dropping key_id index (column cannot be dropped in SQLite)."""
+    conn.execute("DROP INDEX IF EXISTS idx_api_keys_key_id")
+    conn.commit()
+    logger.info("Rollback 044: Dropped idx_api_keys_key_id index")
 
 
 #######################################################################################################################
@@ -2172,6 +2179,7 @@ def get_authnz_migrations() -> List[Migration]:
             44,
             "Add api_keys.key_id column",
             migration_044_add_api_keys_key_id,
+            rollback_044_drop_api_keys_key_id,
         ),
     ]
 

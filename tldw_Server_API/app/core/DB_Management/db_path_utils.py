@@ -11,6 +11,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Utils.Utils import get_project_root
+from tldw_Server_API.app.core.exceptions import StorageUnavailableError
 
 
 
@@ -66,7 +67,7 @@ class DatabasePaths:
             logger.debug(f"Ensured user directory exists: {user_dir}")
         except OSError as e:
             logger.error(f"Failed to create user directory {user_dir}: {e}")
-            raise
+            raise StorageUnavailableError("Failed to create user directory") from e
 
         return user_dir
 

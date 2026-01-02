@@ -19,6 +19,7 @@ def test_chat_completion_persists_system_message(authenticated_client, mock_chac
             ChatCompletionUserMessageParam(role="user", content="Hello system prompt")
         ],
         save_to_db=True,
+        # Endpoint auto-generates the system message via apply_prompt_templating().
     )
 
     with patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_llm, \

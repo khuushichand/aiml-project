@@ -288,7 +288,10 @@ def test_perform_transcription_regenerates_on_invalid_cache(monkeypatch, tmp_pat
     regenerated = [{"Text": "regen"}]
     regen_called = {"called": False}
 
-    monkeypatch.setattr(atlib, "convert_to_wav", lambda *args, **kwargs: str(audio_file))
+    def fake_convert_to_wav(_path, *_args, **_kwargs):
+        return str(audio_file)
+
+    monkeypatch.setattr(atlib, "convert_to_wav", fake_convert_to_wav)
 
     def fake_run_stt(
         path,
@@ -393,7 +396,7 @@ def test_speech_to_text_respects_persist_toggle(monkeypatch, tmp_path):
 
 
 @pytest.mark.unit
-def test_speech_to_text_rejects_symlink_input(monkeypatch, tmp_path):
+def test_speech_to_text_rejects_symlink_input(tmp_path):
     audio_file = tmp_path / "sample.wav"
     audio_file.write_bytes(b"\x00" * 2048)
     link = tmp_path / "sample_link.wav"

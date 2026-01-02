@@ -23,6 +23,7 @@ from typing import Optional
 
 from loguru import logger
 
+from tldw_Server_API.app.core.exceptions import StoragePathValidationError
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
@@ -135,7 +136,7 @@ async def _purge_for_user(user_id: int, delete_files: bool, grace_days: int) -> 
                 if p.exists():
                     p.unlink()
                     files_deleted += 1
-            except ValueError as e:
+            except StoragePathValidationError as e:
                 logger.warning(f"outputs_purge: invalid output path for output {rid}: {pth} error={e}")
             except (OSError, PermissionError) as e:
                 logger.warning(f"outputs_purge: failed to delete file for output {rid}: {pth} error={e}")

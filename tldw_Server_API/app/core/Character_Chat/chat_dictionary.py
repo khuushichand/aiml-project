@@ -219,7 +219,9 @@ class ChatDictionaryEntry:
     def _compile_regex_pattern(self, pattern: str) -> _regex.Pattern:
         if not pattern:
             raise re.error(f"Empty regex pattern from key '{self.raw_key}'")
-        _safe_compile_regex(pattern, self.key_flags)
+        safe_compiled = _safe_compile_regex(pattern, self.key_flags)
+        if isinstance(safe_compiled, _regex.Pattern):
+            return safe_compiled
         try:
             return _regex.compile(pattern, self.key_flags)
         except _regex.error as exc:

@@ -30,6 +30,7 @@ type UiMessage = {
   messageId?: string;
   role: Role;
   text?: string;
+  name?: string;
   tool?: { name?: string; id?: string; content?: string };
   provider?: string;
   model?: string;
@@ -280,10 +281,11 @@ export default function ChatPage() {
     const mapped: UiMessage[] = msgs.map((m) => {
       const role: Role = (m.role || 'assistant') as Role;
       const messageId = m.message_id || m.id;
+      const name = typeof m.name === 'string' ? m.name : undefined;
       if (role === 'tool') {
         return { role, messageId, tool: { id: m.tool_call_id, name: m.name, content: m.content } };
       }
-      return { role, messageId, text: m.content };
+      return { role, messageId, text: m.content, name };
     });
     const normalized = offset > 0
       ? mapped.filter((m) => !(m.role === 'system' && !m.messageId))
@@ -322,7 +324,19 @@ export default function ChatPage() {
     const text = messageText ?? composerText;
         if (!text.trim() || sending) return;
         show({ title: 'Sending message…', variant: 'info' });
-        const newUi = [...uiMessages, { role: 'user', text: text.trim() } as UiMessage, { role: 'assistant', text: '' } as UiMessage];
+    const lastAssistantName = (() => {
+      for (let i = uiMessages.length - 1; i >= 0; i--) {
+        if (uiMessages[i]?.role === 'assistant' && uiMessages[i]?.name) {
+          return uiMessages[i]?.name;
+        }
+      }
+      return undefined;
+    })();
+    const newUi = [
+      ...uiMessages,
+      { role: 'user', text: text.trim() } as UiMessage,
+      { role: 'assistant', text: '', name: lastAssistantName } as UiMessage,
+    ];
         setUiMessages(newUi);
         setComposerText('');
         setSending(true);
@@ -341,6 +355,8 @@ export default function ChatPage() {
             const out: any = { role: m.role, content };
             const toolCallId = m.tool?.id;
             if (toolCallId) out.tool_call_id = toolCallId;
+            const senderName = m.name || m.tool?.name;
+            if (senderName) out.name = senderName;
             return out;
           }),
       };
@@ -466,15 +482,21 @@ export default function ChatPage() {
 
   const handleFeedback = useCallback(async (messageId: string, helpful: boolean) => {
     if (!messageId) return;
-    const current = feedbackById[messageId];
     const nextValue = helpful ? 'up' : 'down';
-    if (current?.pending) return;
-    if (current?.value === nextValue) return;
-
-    setFeedbackById((prev) => ({
-      ...prev,
-      [messageId]: { value: nextValue, pending: true },
-    }));
+    let previousValue: 'up' | 'down' | undefined;
+    let shouldSend = false;
+    setFeedbackById((prev) => {
+      const current = prev[messageId];
+      if (current?.pending) return prev;
+      if (current?.value === nextValue) return prev;
+      previousValue = current?.value;
+      shouldSend = true;
+      return {
+        ...prev,
+        [messageId]: { value: nextValue, pending: true },
+      };
+    });
+    if (!shouldSend) return;
 
     try {
       await apiClient.post('/feedback/explicit', {
@@ -493,11 +515,11 @@ export default function ChatPage() {
       const message = error instanceof Error ? error.message : 'Could not submit feedback';
       setFeedbackById((prev) => ({
         ...prev,
-        [messageId]: { value: current?.value, pending: false },
+        [messageId]: { value: previousValue, pending: false },
       }));
       show({ title: 'Feedback failed', description: message, variant: 'danger' });
     }
-  }, [conversationId, feedbackById, show]);
+  }, [conversationId, show]);
 
   const handleDetailedFeedbackSubmit = useCallback(async () => {
     const messageId = feedbackModalMessage?.messageId;
@@ -718,6 +740,7 @@ export default function ChatPage() {
         }
         const isUser = m.role === 'user';
         const isSystem = m.role === 'system';
+        const assistantName = m.name || 'Assistant';
         return {
           type: 'text',
           position: isSystem ? 'center' : (isUser ? 'right' : 'left'),
@@ -726,7 +749,7 @@ export default function ChatPage() {
             ? { name: 'You' }
             : isSystem
               ? undefined
-              : (avatarUrl ? { name: 'Assistant', avatar: avatarUrl } : { name: 'Assistant' }),
+              : (avatarUrl ? { name: assistantName, avatar: avatarUrl } : { name: assistantName }),
           role: m.role,
           messageId: m.messageId,
         } as ChatMessage;

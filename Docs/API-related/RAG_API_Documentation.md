@@ -153,7 +153,7 @@ Returns a categorized list of features and their parameter names (query expansio
 
 POST `/api/v1/feedback/explicit`
 
-Shared endpoint for chat + RAG feedback. Key fields: `feedback_type`, `helpful`, `relevance_score`, `issues`, `user_notes`, and optional `document_ids`/`chunk_ids` for source-level feedback. For chat feedback, include `message_id` (query can be derived). For RAG-only feedback (no `message_id`), `query` is required. Returns `{ "ok": true, "feedback_id": "..." }`.
+Shared endpoint for chat + RAG feedback. Key fields: `feedback_type`, `helpful`, `relevance_score`, `issues`, `user_notes`, and optional `document_ids`/`chunk_ids` for source-level feedback. For chat feedback, include `message_id` (query can be derived). For RAG-only feedback (no `message_id`), `query` is required. When `feedback_type=helpful`, `helpful` is required; when `feedback_type=relevance`, `relevance_score` is required. Returns `{ "ok": true, "feedback_id": "..." }`.
 
 ### Implicit Feedback
 

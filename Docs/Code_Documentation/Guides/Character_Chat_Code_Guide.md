@@ -136,6 +136,7 @@ msgs = retrieve_conversation_messages_for_ui(db, chat_id, messages_limit=50)
 # Or via endpoint:
 # GET /api/v1/chats/{chat_id}/messages?format_for_completions=true
 # Add include_character_context=true to prepend character system context
+# Add include_message_ids=true to include message_id fields in completions format
 ```
 
 5) Prepare and call completion (v2)
@@ -184,7 +185,7 @@ curl -sS "$API/chats/<CHAT_ID>/messages?limit=50&include_tool_calls=true&include
   -H "X-API-KEY: $KEY"
 
 # Completions-ready format with system context:
-curl -sS "$API/chats/<CHAT_ID>/messages?format_for_completions=true&include_character_context=true" \
+curl -sS "$API/chats/<CHAT_ID>/messages?format_for_completions=true&include_character_context=true&include_message_ids=true" \
   -H "X-API-KEY: $KEY"
 ```
 

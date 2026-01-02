@@ -8,7 +8,7 @@ protecting against ReDoS (Regular Expression Denial of Service) attacks.
 
 import re
 import time as _time_module
-from typing import Tuple
+from typing import Tuple, Union
 
 import regex  # Third-party regex engine with timeout support
 from loguru import logger
@@ -197,7 +197,7 @@ def _safe_compile_regex_impl(
     pattern: str,
     flags: int = 0,
     timeout_ms: int = MAX_REGEX_COMPILE_TIME_MS
-) -> re.Pattern:
+) -> Union[re.Pattern, regex.Pattern]:
     """Internal helper to compile a regex pattern with runtime safety checks.
 
     This function assumes basic validation has already been performed.
@@ -234,6 +234,7 @@ def _safe_compile_regex_impl(
     # Perform a bounded test match using the `regex` module with a real timeout
     test_input = "a" * SAFE_TEST_INPUT_SIZE
     match_start = _time_module.perf_counter()
+    safe_compiled = None
     try:
         safe_compiled = regex.compile(pattern, flags)
         safe_compiled.search(test_input, timeout=MAX_REGEX_VALIDATE_TIME_MS / 1000.0)
@@ -253,14 +254,14 @@ def _safe_compile_regex_impl(
             f"(threshold: {timeout_ms}ms)"
         )
 
-    return compiled
+    return safe_compiled or compiled
 
 
 def safe_compile_regex(
     pattern: str,
     flags: int = 0,
     timeout_ms: int = MAX_REGEX_COMPILE_TIME_MS,
-) -> re.Pattern:
+) -> Union[re.Pattern, regex.Pattern]:
     """Compile a user-provided regex pattern with full safety checks to prevent ReDoS.
 
     This wrapper validates the pattern first and then performs a timed compile

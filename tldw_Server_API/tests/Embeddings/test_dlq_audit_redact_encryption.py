@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import json
 import os
 import pytest
@@ -128,9 +130,10 @@ def test_dlq_requeue_audited(disable_heavy_startup, admin_user, redis_client, mo
 
 def _aesgcm_available() -> bool:
     try:
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: F401
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        _ = AESGCM
         return True
-    except Exception:
+    except ImportError:
         return False
 
 
@@ -150,6 +153,39 @@ def test_dlq_crypto_roundtrip_scrypt(monkeypatch):
         obj = json.loads(enc)
         assert obj.get("kdf") == "scrypt"
         assert obj.get("salt")
+        assert obj.get("kdf_params") == dlq_crypto._SCRYPT_PARAMS
+
+
+@pytest.mark.unit
+def test_dlq_crypto_uses_stored_kdf_params(monkeypatch):
+    if not _aesgcm_available():
+        pytest.skip("cryptography not available")
+    from tldw_Server_API.app.core.Embeddings import dlq_crypto
+
+    key_str = "test-passphrase"
+    monkeypatch.setenv("EMBEDDINGS_DLQ_ENCRYPTION_KEY", key_str)
+    params = {"n": 2**12, "r": 8, "p": 1, "dklen": 32}
+    salt = b"test-salt-1234"
+    key = hashlib.scrypt(
+        key_str.encode("utf-8"),
+        salt=salt,
+        n=params["n"],
+        r=params["r"],
+        p=params["p"],
+        dklen=params["dklen"],
+    )
+    payload = {"msg": "hello", "count": 1}
+    raw = json.dumps(payload, default=str).encode("utf-8")
+    obj = dlq_crypto._aesgcm_encrypt(raw, key)
+    if obj.get("alg") != "AESGCM":
+        pytest.skip("AESGCM unavailable")
+    obj["kdf"] = "scrypt"
+    obj["salt"] = base64.b64encode(salt).decode("utf-8")
+    obj["kdf_params"] = params
+    enc_json = json.dumps(obj)
+
+    dec = dlq_crypto.decrypt_payload_if_present(enc_json)
+    assert dec == payload
 
 
 @pytest.mark.unit
@@ -160,10 +196,21 @@ def test_dlq_crypto_roundtrip_legacy(monkeypatch):
 
     key_str = "legacy-passphrase"
     monkeypatch.setenv("EMBEDDINGS_DLQ_ENCRYPTION_KEY", key_str)
+    monkeypatch.delenv("EMBEDDINGS_DLQ_SALT", raising=False)
     payload = {"legacy": True, "value": "ok"}
-    key = dlq_crypto._derive_key_from_passphrase_legacy(key_str)
+    import base64
+    import hashlib
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    key = hashlib.sha256(key_str.encode("utf-8")).digest()
     raw = json.dumps(payload, default=str).encode("utf-8")
-    obj = dlq_crypto._aesgcm_encrypt(raw, key)
-    enc_json = json.dumps(obj)
+    nonce = os.urandom(12)
+    aesgcm = AESGCM(key)
+    ct = aesgcm.encrypt(nonce, raw, associated_data=None)
+    enc_json = json.dumps({
+        "alg": "AESGCM",
+        "nonce": base64.b64encode(nonce).decode("utf-8"),
+        "ct": base64.b64encode(ct).decode("utf-8"),
+    })
     dec = dlq_crypto.decrypt_payload_if_present(enc_json)
     assert dec == payload

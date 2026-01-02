@@ -65,11 +65,18 @@ def test_hard_citations_heuristic_maps_sentences_to_spans():
     assert found
 
 
-def test_clip_guardrail_text_caps_and_preserves_edges():
+def test_hard_citations_clip_long_answer_preserves_edges():
     max_len = guardrails._MAX_GUARDRAIL_TEXT
-    text = ("A" * (max_len // 2)) + ("M" * 10) + ("Z" * (max_len // 2 + 10))
-    clipped = guardrails._clip_guardrail_text(text)
-    assert len(clipped) <= max_len
-    assert clipped.startswith("A")
-    assert clipped.endswith("Z")
-    assert " " in clipped
+    head = "Head sentence about WidgetCo."
+    middle = "Middle sentence should be clipped."
+    tail = "Tail sentence about revenue."
+    filler = "x" * (max_len + 50)
+    answer = f"{head} {filler}. {middle} {filler}. {tail}"
+    docs = [Document(id="d1", content=f"{head} {middle} {tail}", metadata={"source": "media_db"}, score=1.0)]
+
+    hc = build_hard_citations(answer, docs, claims_payload=None)
+    sentences = [s.get("text", "") for s in hc.get("sentences", [])]
+
+    assert any(head in s for s in sentences)
+    assert any(tail in s for s in sentences)
+    assert not any(middle in s for s in sentences)

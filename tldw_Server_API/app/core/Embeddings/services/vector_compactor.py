@@ -35,8 +35,8 @@ async def _get_media_ids_marked_deleted(db_path: str) -> list[int]:
     finally:
         try:
             db.close_connection()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Compactor: failed to close media DB connection: {e}")
 
 
 def _collection_name_for(user_id: str, media_id: int) -> str:
@@ -76,8 +76,8 @@ async def compact_once(user_id: str, db_path: Optional[str] = None) -> int:
             logger.warning(f"Compactor error removing vectors for media_id={mid}: {e}")
     try:
         mgr.close()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Compactor: failed to close ChromaDB manager: {e}")
     return touched
 
 

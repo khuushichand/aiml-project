@@ -12,6 +12,8 @@ import json
 import os
 from typing import Optional, Dict, Any, Tuple
 
+from loguru import logger
+
 
 _SCRYPT_PARAMS = {
     "n": 2**14,
@@ -38,7 +40,15 @@ def _derive_key_from_passphrase(passphrase: str, salt: bytes) -> Tuple[bytes, st
             dklen=_SCRYPT_PARAMS["dklen"],
         )
         return key, "scrypt"
-    except Exception:
+    except (ValueError, MemoryError) as exc:
+        allow_weak = str(os.getenv("EMBEDDINGS_DLQ_ALLOW_WEAK_KDF", "")).lower() in {"1", "true", "yes", "on"}
+        logger.warning(
+            "DLQ KDF scrypt failed; weak fallback %s. error=%s",
+            "enabled" if allow_weak else "disabled",
+            f"{type(exc).__name__}: {exc}",
+        )
+        if not allow_weak:
+            raise
         return _derive_key_from_passphrase_legacy(passphrase), "sha256"
 
 
@@ -91,8 +101,7 @@ def encrypt_payload_if_configured(payload_obj: Dict[str, Any]) -> Optional[str]:
     if not key_str:
         return None
     try:
-        salt_env = os.getenv("EMBEDDINGS_DLQ_SALT")
-        salt = (salt_env.encode("utf-8") if salt_env else os.urandom(16))
+        salt = os.urandom(16)
         key, kdf_used = _derive_key_from_passphrase(key_str, salt)
         raw = json.dumps(payload_obj, default=str).encode("utf-8")
         obj = _aesgcm_encrypt(raw, key)
@@ -123,7 +132,21 @@ def decrypt_payload_if_present(enc_json: Optional[str]) -> Optional[Dict[str, An
         if kdf == "scrypt":
             salt_b64 = obj.get("salt") or ""
             salt = base64.b64decode(salt_b64)
-            key, _ = _derive_key_from_passphrase(key_str, salt)
+            stored_params = obj.get("kdf_params") or {}
+            if not isinstance(stored_params, dict):
+                stored_params = {}
+            try:
+                import hashlib
+                key = hashlib.scrypt(
+                    key_str.encode("utf-8"),
+                    salt=salt,
+                    n=int(stored_params.get("n", _SCRYPT_PARAMS["n"])),
+                    r=int(stored_params.get("r", _SCRYPT_PARAMS["r"])),
+                    p=int(stored_params.get("p", _SCRYPT_PARAMS["p"])),
+                    dklen=int(stored_params.get("dklen", _SCRYPT_PARAMS["dklen"])),
+                )
+            except Exception:
+                key = _derive_key_from_passphrase_legacy(key_str)
         else:
             key = _derive_key_from_passphrase_legacy(key_str)
         raw = _aesgcm_decrypt(obj, key)

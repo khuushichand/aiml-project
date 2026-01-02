@@ -354,9 +354,14 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
         return [p for p in (pp.strip() for pp in props) if p]
 
     def _split_on_punct(self, s: str) -> List[str]:
+        """Split a sentence into chunks around strong punctuation and parentheticals.
+
+        Handles semicolons, em/en dashes, and optional colon boundaries, while
+        treating longer parenthetical spans as separate propositions.
+        """
         # Split on semicolons and em/en dashes; keep colon splits cautiously
         # Use regex that keeps delimiters by splitting on boundary while later trimming
-        s = s.replace("-", " - ").replace("-", " - ")
+        s = s.replace("—", " - ").replace("–", " - ")
         # Split on ; or standalone dashes
         parts = re.split(r"\s*[;]+\s*|\s+[---]\s+", s)
         # Further split around parentheses content as its own proposition when long

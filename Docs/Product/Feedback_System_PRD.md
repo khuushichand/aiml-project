@@ -110,7 +110,7 @@ Auth + rate limits:
 - Add a lightweight per-user rate limit to the explicit feedback endpoint to prevent spam.
 
 Idempotency rule (if idempotency_key is omitted):
-- Best-effort dedupe by (conversation_id, message_id, feedback_type, helpful, relevance_score) within a short window (e.g., 5 minutes). If a follow-up submission adds issues or user_notes, the server merges those fields instead of dropping the request (union issues, overwrite user_notes).
+- Best-effort dedupe by (conversation_id, message_id, feedback_type, helpful, relevance_score) within a short window (e.g., 5 minutes). If a follow-up submission adds issues or user_notes, the server merges those fields instead of dropping the request (union issues, overwrite user_notes). helpful and relevance_score are part of the dedupe key, so they are not overwritten on merge; if either changes, treat it as a new feedback record (or require an explicit idempotency_key update semantics).
 - For RAG-only feedback (no message_id), dedupe by (query, feedback_type, helpful, relevance_score, document_ids, chunk_ids) within the same window.
 
 ### Implicit Feedback (existing endpoint, expanded)

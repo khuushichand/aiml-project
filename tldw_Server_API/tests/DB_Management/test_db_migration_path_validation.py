@@ -43,3 +43,8 @@ def test_rollback_rejects_backup_outside_backup_dir(tmp_path):
 
     with pytest.raises(MigrationError):
         migrator.rollback_to_backup(str(outside_backup))
+
+
+def test_in_memory_db_path_rejected():
+    with pytest.raises(MigrationError):
+        DatabaseMigrator(":memory:")

@@ -60,8 +60,10 @@ def _resolved_dir() -> Path:
 def _assert_within_base(path: Path, base: Path) -> None:
     resolved_base = base.resolve(strict=False)
     resolved_path = path.resolve(strict=False)
-    if resolved_base not in resolved_path.parents:
-        raise ValueError("Template path must stay within the watchlist template directory")
+    try:
+        resolved_path.relative_to(resolved_base)
+    except ValueError:
+        raise ValueError("Template path must stay within the watchlist template directory") from None
 
 
 def _template_path(name: str, fmt: str) -> Path:
@@ -134,6 +136,7 @@ def load_template(name: str) -> TemplateRecord:
     directory = _resolved_dir()
     for suffix in _SUPPORTED_SUFFIXES:
         candidate = directory / f"{name}{suffix}"
+        _assert_within_base(candidate, directory)
         if candidate.exists():
             fmt = suffix.lstrip(".")
             content = candidate.read_text(encoding="utf-8")
@@ -165,9 +168,12 @@ def save_template(
     directory = path.parent
 
     # Determine if any variant exists
-    existing_variants = [
-        directory / f"{name}{suffix}" for suffix in _SUPPORTED_SUFFIXES if (directory / f"{name}{suffix}").exists()
-    ]
+    existing_variants = []
+    for suffix in _SUPPORTED_SUFFIXES:
+        candidate = directory / f"{name}{suffix}"
+        _assert_within_base(candidate, directory)
+        if candidate.exists():
+            existing_variants.append(candidate)
     if existing_variants and not overwrite:
         raise TemplateExistsError(name)
 
@@ -187,6 +193,7 @@ def delete_template(name: str) -> None:
     removed = False
     for suffix in _SUPPORTED_SUFFIXES:
         candidate = directory / f"{name}{suffix}"
+        _assert_within_base(candidate, directory)
         if candidate.exists():
             candidate.unlink()
             removed = True

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path as PathlibPath
-from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path as FastAPIPath
 from pydantic import BaseModel
@@ -18,8 +18,6 @@ from tldw_Server_API.app.api.v1.endpoints.outputs_templates import _build_items_
 from tldw_Server_API.app.core.Chat.prompt_template_manager import safe_render
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from starlette.responses import FileResponse
-import re
-import json
 from tldw_Server_API.app.services.outputs_service import (
     update_output_artifact_db,
     find_outputs_to_purge,
@@ -40,7 +38,7 @@ def _resolve_output_path_for_user(user_id: int, path_value: str | PathlibPath) -
         base_resolved = base_dir.resolve(strict=False)
     except Exception as e:
         logger.error(f"outputs: failed to resolve outputs base dir for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail="storage_unavailable")
+        raise HTTPException(status_code=500, detail="storage_unavailable") from e
     candidate = path_value if isinstance(path_value, PathlibPath) else PathlibPath(path_value)
     try:
         candidate = candidate.expanduser()
@@ -50,7 +48,7 @@ def _resolve_output_path_for_user(user_id: int, path_value: str | PathlibPath) -
             resolved = (base_resolved / candidate).resolve(strict=False)
     except Exception as e:
         logger.warning(f"outputs: invalid output path {path_value}: {e}")
-        raise HTTPException(status_code=400, detail="invalid_path")
+        raise HTTPException(status_code=400, detail="invalid_path") from e
     if not resolved.is_relative_to(base_resolved):
         logger.warning(f"outputs: output path outside base dir: {resolved}")
         raise HTTPException(status_code=400, detail="invalid_path")
@@ -65,7 +63,7 @@ async def list_outputs(
     run_id: int | None = None,
     type: str | None = None,
     include_deleted: bool = False,
-    current_user: User = Depends(get_request_user),
+    _current_user: User = Depends(get_request_user),
     cdb = Depends(get_collections_db_for_user),
 ):
     limit = max(1, min(200, size))
@@ -89,7 +87,7 @@ async def list_outputs(
 async def list_deleted_outputs(
     page: int = 1,
     size: int = 50,
-    current_user: User = Depends(get_request_user),
+    _current_user: User = Depends(get_request_user),
     cdb = Depends(get_collections_db_for_user),
 ):
     limit = max(1, min(200, size))
@@ -175,9 +173,9 @@ async def create_output(
 
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     ext = "mp3" if tpl.format == "mp3" else (tpl.format if tpl.format in ("md", "html") else "md")
-    base = _sanitize_title_for_filename(payload.title or tpl.name or "output")[:50]
+    base = _sanitize_title_for_filename(payload.title or tpl.name or "output")
     filename = f"{base}_{ts}.{ext}"
-    path = _resolve_output_path_for_user(user_id, out_dir / filename)
+    path = _resolve_output_path_for_user(user_id, filename)
 
     if tpl.format == "mp3":
         # Synthesize speech from rendered text using default model/voice
@@ -442,7 +440,7 @@ async def update_output(
         ts = m.group(1) if m else None
         base = _sanitize_title_for_filename(payload.title)
         new_name = f"{base}_{ts}{ext}" if ts else f"{base}{ext}"
-        new_full = _resolve_output_path_for_user(user_id, p.with_name(new_name))
+        new_full = _resolve_output_path_for_user(user_id, new_name)
         try:
             if p.exists():
                 p.rename(new_full)
@@ -480,7 +478,7 @@ async def update_output(
         m = re.search(r"_(\d{8}_\d{6})$", stem)
         ts = m.group(1) if m else None
         new_filename = f"{base_title}_{ts}{ext}" if ts else f"{base_title}{ext}"
-        target_path = _resolve_output_path_for_user(user_id, source_path.with_name(new_filename))
+        target_path = _resolve_output_path_for_user(user_id, new_filename)
         try:
             target_path.write_text(converted, encoding="utf-8")
             if target_path.resolve() != source_path.resolve() and source_path.exists():

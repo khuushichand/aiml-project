@@ -310,6 +310,7 @@ Retrieve messages from a chat session, with optional character context for AI co
 - `format_for_completions` (bool, default: false): Format response for use with `/api/v1/chat/completions`
 - `include_tool_calls` (bool, default: false): Include a `tool_calls` field per message (standard format only)
 - `include_metadata` (bool, default: false): Include stored per-message `metadata.extra` where available
+- `include_message_ids` (bool, default: false): Include `message_id` fields when `format_for_completions=true`
 
 **Response:** `200 OK`
 
@@ -353,10 +354,12 @@ With `format_for_completions=true&include_character_context=true` (tool calls an
     },
     {
       "role": "user",
+      "message_id": "msg_123456",
       "content": "Hello!"
     },
     {
       "role": "assistant",
+      "message_id": "msg_123457",
       "content": "Hello! I'm your helpful assistant.",
       "tool_calls": [
         {
@@ -469,7 +472,7 @@ Streaming behavior follows the core Chat API: the server sends an initial `event
 
 1. **Get formatted messages from the chat session:**
 ```bash
-curl -X GET "http://localhost:8000/api/v1/chats/{chat_id}/messages?format_for_completions=true&include_character_context=true" \
+curl -X GET "http://localhost:8000/api/v1/chats/{chat_id}/messages?format_for_completions=true&include_character_context=true&include_message_ids=true" \
   -H "X-API-KEY: your-api-key"
 ```
 

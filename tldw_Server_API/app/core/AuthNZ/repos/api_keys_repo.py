@@ -649,8 +649,8 @@ class AuthnzApiKeysRepo:
                             llm_budget_day_usd, llm_budget_month_usd,
                             llm_allowed_endpoints, llm_allowed_providers, llm_allowed_models,
                             metadata
-                        ) VALUES (?,?,?,?,?,?,'active',?,
-                            1,?,?,?,?,?,?,?,?,?,?,?,?
+                        ) VALUES (?,?,?,?,?,?,?,'active',?,
+                            1,?,?,?,?,?,?,?,?,?,?,?
                         )
                         """,
                         (

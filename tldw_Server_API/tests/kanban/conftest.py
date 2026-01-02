@@ -2,21 +2,21 @@
 """
 Pytest fixtures for Kanban database tests.
 """
-import os
 import shutil
 import tempfile
-from pathlib import Path
 from typing import Generator
 
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
 @pytest.fixture
-def temp_db_dir() -> Generator[str, None, None]:
+def temp_db_dir(monkeypatch: pytest.MonkeyPatch) -> Generator[str, None, None]:
     """Create a temporary directory that persists for the entire test."""
     tmpdir = tempfile.mkdtemp()
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
     yield tmpdir
     # Clean up after the test is completely done
     try:
@@ -28,7 +28,7 @@ def temp_db_dir() -> Generator[str, None, None]:
 @pytest.fixture
 def temp_db_path(temp_db_dir: str) -> str:
     """Create a temporary database file path."""
-    return os.path.join(temp_db_dir, "test_kanban.db")
+    return str(DatabasePaths.get_kanban_db_path("test_user_1"))
 
 
 @pytest.fixture
@@ -40,13 +40,11 @@ def kanban_db(temp_db_path: str) -> Generator[KanbanDB, None, None]:
 
 
 @pytest.fixture
-def kanban_db_user2(temp_db_path: str) -> Generator[KanbanDB, None, None]:
+def kanban_db_user2(temp_db_dir: str) -> Generator[KanbanDB, None, None]:
     """Create a second KanbanDB instance for testing user isolation."""
-    # Use a different temp dir for user 2
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = os.path.join(tmpdir, "test_kanban_user2.db")
-        db = KanbanDB(db_path=db_path, user_id="test_user_2")
-        yield db
+    db_path = DatabasePaths.get_kanban_db_path("test_user_2")
+    db = KanbanDB(db_path=str(db_path), user_id="test_user_2")
+    yield db
 
 
 @pytest.fixture

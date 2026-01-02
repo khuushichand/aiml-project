@@ -874,7 +874,7 @@ async def build_context_and_messages(
     if not conv_id:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to establish conversation context.")
 
-    # History loading (configurable limit/order)
+    # History loading (configurable limit/order; filter non-persistable senders, normalize assistant names)
     requested_history_limit = getattr(request_data, "history_message_limit", None)
     if requested_history_limit is None:
         history_limit = DEFAULT_HISTORY_MESSAGE_LIMIT

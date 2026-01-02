@@ -23,6 +23,7 @@ from tldw_Server_API.app.core.RAG.rag_service.analytics_system import UnifiedFee
 router = APIRouter()
 
 # In-memory cache for idempotency; per-process scope (no cross-worker guarantees).
+# Pending entries reduce duplicate submissions within a single worker.
 _IDEMPOTENCY_WINDOW_SECONDS = 300
 _IDEMPOTENCY_CLEANUP_INTERVAL_SECONDS = 60
 _idempotency_lock = Lock()
@@ -36,6 +37,7 @@ class _IdempotencyRecord:
     created_at: float
     issues: List[str]
     user_notes: Optional[str]
+    pending: bool = False
 
 
 def _normalize_text_list(values: Optional[List[str]]) -> List[str]:
@@ -89,11 +91,50 @@ def _get_idempotency_record(key: str) -> Optional[_IdempotencyRecord]:
         return record
 
 
-def _set_idempotency_record(key: str, record: _IdempotencyRecord) -> None:
+def _reserve_idempotency_record(
+    key: str,
+    issues: List[str],
+    user_notes: Optional[str],
+) -> tuple[bool, _IdempotencyRecord]:
     now = time.monotonic()
     with _idempotency_lock:
         _cleanup_idempotency_store(now)
+        record = _idempotency_store.get(key)
+        if record:
+            if (now - record.created_at) > _IDEMPOTENCY_WINDOW_SECONDS:
+                _idempotency_store.pop(key, None)
+            else:
+                return False, record
+        record = _IdempotencyRecord(
+            feedback_id=None,
+            created_at=now,
+            issues=issues,
+            user_notes=user_notes,
+            pending=True,
+        )
         _idempotency_store[key] = record
+        return True, record
+
+
+def _finalize_idempotency_record(
+    key: str,
+    feedback_id: Optional[str],
+    issues: List[str],
+    user_notes: Optional[str],
+) -> None:
+    with _idempotency_lock:
+        record = _idempotency_store.get(key)
+        if not record:
+            return
+        record.feedback_id = feedback_id
+        record.issues = issues
+        record.user_notes = user_notes
+        record.pending = False
+
+
+def _clear_idempotency_record(key: str) -> None:
+    with _idempotency_lock:
+        _idempotency_store.pop(key, None)
 
 
 def _update_idempotency_record(key: str, issues: List[str], user_notes: Optional[str]) -> None:
@@ -196,50 +237,61 @@ async def submit_explicit_feedback(
         chunk_ids=chunk_ids,
     )
 
-    existing = _get_idempotency_record(dedupe_key)
-    if existing:
-        if (issues or payload.user_notes is not None) and existing.feedback_id:
-            collector = UnifiedFeedbackSystem(chacha_db=db)
-            if collector.user_feedback:
-                await collector.user_feedback.merge_feedback_update(
-                    existing.feedback_id,
-                    issues=issues or None,
-                    user_notes=payload.user_notes,
-                )
+    reserved, existing = _reserve_idempotency_record(dedupe_key, issues, payload.user_notes)
+    if not reserved:
+        if issues or payload.user_notes is not None:
             merged_issues = _merge_issues(existing.issues, issues)
             updated_notes = existing.user_notes if payload.user_notes is None else payload.user_notes
+            if existing.feedback_id and not existing.pending:
+                collector = UnifiedFeedbackSystem(chacha_db=db)
+                if collector.user_feedback:
+                    await collector.user_feedback.merge_feedback_update(
+                        existing.feedback_id,
+                        issues=merged_issues or None,
+                        user_notes=updated_notes,
+                    )
             _update_idempotency_record(dedupe_key, merged_issues, updated_notes)
         return ExplicitFeedbackResponse(ok=True, feedback_id=existing.feedback_id)
 
     collector = UnifiedFeedbackSystem(chacha_db=db)
-    result = await collector.submit_feedback(
-        conversation_id=resolved_conversation_id or "",
-        query=resolved_query,
-        document_ids=document_ids,
-        chunk_ids=chunk_ids,
-        relevance_score=payload.relevance_score,
-        helpful=payload.helpful,
-        issues=issues or None,
-        user_notes=payload.user_notes,
-        _user_id=current_user.username if current_user else None,
-        message_id=payload.message_id,
-    )
+    try:
+        result = await collector.submit_feedback(
+            conversation_id=resolved_conversation_id or "",
+            query=resolved_query,
+            document_ids=document_ids,
+            chunk_ids=chunk_ids,
+            relevance_score=payload.relevance_score,
+            helpful=payload.helpful,
+            issues=issues or None,
+            user_notes=payload.user_notes,
+            _user_id=current_user.username if current_user else None,
+            message_id=payload.message_id,
+        )
+    except Exception:  # noqa: BLE001 - clear pending idempotency slot on any failure
+        _clear_idempotency_record(dedupe_key)
+        raise
 
     if result.get("errors"):
         logger.warning("Explicit feedback errors: {}", result.get("errors"))
 
     feedback_id = result.get("feedback_id")
     if resolved_conversation_id and not feedback_id:
+        _clear_idempotency_record(dedupe_key)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Could not record feedback")
 
-    _set_idempotency_record(
-        dedupe_key,
-        _IdempotencyRecord(
-            feedback_id=feedback_id,
-            created_at=time.monotonic(),
-            issues=issues,
-            user_notes=payload.user_notes,
-        ),
-    )
+    finalized = _get_idempotency_record(dedupe_key)
+    final_issues = finalized.issues if finalized else issues
+    final_notes = finalized.user_notes if finalized else payload.user_notes
+    _finalize_idempotency_record(dedupe_key, feedback_id, final_issues, final_notes)
+    if (
+        feedback_id
+        and collector.user_feedback
+        and (final_issues != issues or final_notes != payload.user_notes)
+    ):
+        await collector.user_feedback.merge_feedback_update(
+            feedback_id,
+            issues=final_issues or None,
+            user_notes=final_notes,
+        )
 
     return ExplicitFeedbackResponse(ok=True, feedback_id=feedback_id)

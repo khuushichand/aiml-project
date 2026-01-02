@@ -12,4 +12,5 @@ def should_persist_message_role(role: Optional[str]) -> bool:
         return False
     if isinstance(role, str):
         return bool(role.strip())
-    return True
+    # Unexpected type - fail safe by not persisting.
+    return False

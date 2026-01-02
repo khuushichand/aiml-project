@@ -35,7 +35,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.testing import is_test_mode
 
 # --- Helper Functions ---
 def _utcnow_iso() -> str:
@@ -48,15 +47,11 @@ def _generate_uuid() -> str:
     return uuid_module.uuid4().hex.lower()
 
 
-def _is_test_context() -> bool:
-    return bool(os.getenv("PYTEST_CURRENT_TEST")) or is_test_mode()
-
-
 def _normalize_db_path(
     db_path: str,
     user_id: str,
-    allow_external_db_path: bool
 ) -> Tuple[str, bool]:
+    """Normalize db_path and always enforce user directory containment."""
     if not db_path or not str(db_path).strip():
         raise InputError("db_path is required")
 
@@ -68,12 +63,11 @@ def _normalize_db_path(
     except (OSError, RuntimeError) as exc:
         raise InputError(f"Invalid db_path: {db_path}") from exc
 
-    if not allow_external_db_path and not _is_test_context():
-        user_dir = DatabasePaths.get_user_base_directory(user_id).resolve()
-        try:
-            resolved.relative_to(user_dir)
-        except ValueError as exc:
-            raise InputError(f"db_path must be within user database directory: {user_dir}") from exc
+    user_dir = DatabasePaths.get_user_base_directory(user_id).resolve()
+    try:
+        resolved.relative_to(user_dir)
+    except ValueError as exc:
+        raise InputError(f"db_path must be within user database directory: {user_dir}") from exc
 
     return str(resolved), False
 
@@ -165,21 +159,20 @@ class KanbanDB:
     MAX_COMMENTS_PER_CARD = 500
     MAX_COMMENT_SIZE = 10000  # characters
 
-    def __init__(self, db_path: str, user_id: str, allow_external_db_path: bool = False) -> None:
+    def __init__(self, db_path: str, user_id: str) -> None:
         """
         Initialize the KanbanDB instance.
 
         Args:
             db_path: Path to the SQLite database file.
             user_id: The user ID for this database instance.
-            allow_external_db_path: If True, skip user directory enforcement.
+                The path must resolve within the user-scoped database directory.
         """
         self.user_id = str(user_id)
         self._lock = threading.RLock()
         self.db_path, self._is_memory_db = _normalize_db_path(
             db_path,
             self.user_id,
-            allow_external_db_path,
         )
         self._memory_conn: Optional[_KanbanMemoryConnection] = None
 
@@ -195,15 +188,22 @@ class KanbanDB:
 
     def _configure_connection(self, conn: sqlite3.Connection, *, enable_wal: bool = True) -> None:
         conn.row_factory = sqlite3.Row
+        # Foreign keys and timeout are required for integrity and responsiveness.
+        try:
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute("PRAGMA busy_timeout=30000")
+        except Exception as e:
+            logger.error("Failed to set critical PRAGMA options: %s", e)
+            raise KanbanDBError(f"Failed to set critical PRAGMA options: {e}") from e
+
+        # Performance pragmas are best-effort; log failures for investigation.
         try:
             if enable_wal:
                 conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA foreign_keys=ON")
-            conn.execute("PRAGMA busy_timeout=30000")
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA cache_size=-64000")  # 64MB cache
         except Exception as e:
-            logger.warning(f"Failed to set PRAGMA options: {e}")
+            logger.error("Failed to set performance PRAGMA options: %s", e)
 
     def _connect(self) -> sqlite3.Connection:
         """Create and configure a database connection."""
@@ -239,14 +239,30 @@ class KanbanDB:
                 conn.close()
 
     def close(self) -> None:
-        """Close any persistent in-memory connection."""
+        """
+        Close any persistent in-memory connection.
+
+        This is only needed for :memory: databases. File-based databases are a
+        no-op. Call this when finished with the KanbanDB instance to free
+        resources.
+        """
         with self._lock:
             if self._memory_conn is None:
                 return
             try:
                 self._memory_conn.force_close()
+            except Exception as e:
+                logger.warning(f"Error closing memory connection: {e}")
             finally:
                 self._memory_conn = None
+
+    def __del__(self) -> None:
+        """Cleanup on garbage collection."""
+        try:
+            self.close()
+        except Exception:
+            # Ignore errors during cleanup - object is being destroyed anyway.
+            pass
 
     def _get_schema_sql(self) -> str:
         """Return the complete schema SQL."""

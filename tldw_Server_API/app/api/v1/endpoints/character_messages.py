@@ -350,7 +350,10 @@ async def get_chat_messages(
     format_for_completions: bool = Query(False, description="Format messages for use with chat/completions endpoint"),
     include_tool_calls: bool = Query(False, description="Include tool_calls metadata per message when available (standard format only)"),
     include_metadata: bool = Query(False, description="Include stored message metadata.extra JSON where available"),
-    include_message_ids: bool = Query(False, description="Include message_id fields when formatting for completions"),
+    include_message_ids: bool = Query(
+        False,
+        description="Include message_id fields when formatting for completions (no effect on standard format)",
+    ),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ):
@@ -364,6 +367,7 @@ async def get_chat_messages(
         include_deleted: Whether to include soft-deleted messages
         include_character_context: Include character personality as system message
         format_for_completions: Return in format ready for /api/v1/chat/completions
+        include_message_ids: Include message_id fields only in completions-formatted output
         db: Database instance
         current_user: Authenticated user
 

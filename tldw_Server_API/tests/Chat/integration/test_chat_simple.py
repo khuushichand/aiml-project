@@ -12,14 +12,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     ChatCompletionUserMessageParam
 )
 
-
-def _redact_secret(value: str, head: int = 4, tail: int = 4) -> str:
-    if not value:
-        return ""
-    text = str(value)
-    if len(text) <= head + tail:
-        return "*" * len(text)
-    return f"{text[:head]}...{text[-tail:]}"
+from tldw_Server_API.tests.utils.test_helpers import redact_secret
 
 
 def test_chat_completion_works(client, auth_token, mock_chacha_db, setup_dependencies, configure_for_mock_server):
@@ -68,8 +61,8 @@ def test_chat_completion_works(client, auth_token, mock_chacha_db, setup_depende
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings
         settings = get_settings()
         print(f"AUTH_MODE: {settings.AUTH_MODE}")
-        print(f"Expected API key: {_redact_secret(settings.SINGLE_USER_API_KEY)}")
-        print(f"Auth token from fixture: {_redact_secret(auth_token)}")
+        print(f"Expected API key: {redact_secret(settings.SINGLE_USER_API_KEY)}")
+        print(f"Auth token from fixture: {redact_secret(auth_token)}")
 
         # Debug: make the request manually to see what headers are sent
         headers = {"X-CSRF-Token": client.csrf_token}
@@ -84,7 +77,7 @@ def test_chat_completion_works(client, auth_token, mock_chacha_db, setup_depende
         redacted_headers = dict(headers)
         for key in ("Authorization", "X-API-KEY"):
             if key in redacted_headers:
-                redacted_headers[key] = _redact_secret(redacted_headers[key])
+                redacted_headers[key] = redact_secret(redacted_headers[key])
         print(f"Headers being sent: {redacted_headers}")
 
         try:

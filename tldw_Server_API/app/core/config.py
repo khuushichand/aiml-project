@@ -1819,6 +1819,17 @@ def rag_agentic_cache_ttl_sec(default: int = 600) -> int:
 
 
 def implicit_feedback_enabled(default: bool = True) -> bool:
+    """
+    Check if implicit feedback collection is enabled.
+
+    Resolution order:
+      1) Environment variable IMPLICIT_FEEDBACK_ENABLED
+      2) config.txt [RAG] section implicit_feedback_enabled key
+      3) Provided default (True unless overridden)
+
+    Returns:
+        bool: True if implicit feedback should be collected
+    """
     v = os.getenv("IMPLICIT_FEEDBACK_ENABLED")
     if v is None:
         try:

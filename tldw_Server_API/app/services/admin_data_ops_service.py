@@ -14,6 +14,14 @@ from urllib.parse import urlparse
 
 from loguru import logger
 
+from tldw_Server_API.app.core.exceptions import (
+    InvalidBackupIdError,
+    InvalidBackupPathError,
+    InvalidBackupUserIdError,
+    InvalidRetentionPolicyError,
+    InvalidRetentionRangeError,
+    UnknownBackupDatasetError,
+)
 from tldw_Server_API.app.core.DB_Management.DB_Backups import (
     create_backup,
     create_incremental_backup,
@@ -49,7 +57,7 @@ DATASET_DB_RESOLVERS = {
     "evaluations": DatabasePaths.get_evaluations_db_path,
     "audit": DatabasePaths.get_audit_db_path,
 }
-_BACKUP_DATASETS = frozenset(list(DATASET_DB_RESOLVERS.keys()) + ["authnz"])
+_BACKUP_DATASETS = frozenset([*DATASET_DB_RESOLVERS.keys(), "authnz"])
 _BACKUP_EXTENSIONS = (".db", ".sqlib", ".dump")
 
 
@@ -60,7 +68,7 @@ def _backup_base_dir() -> str:
 def _validate_backup_dataset(dataset: str) -> str:
     name = str(dataset or "").strip().lower()
     if name not in _BACKUP_DATASETS:
-        raise ValueError("unknown_dataset")
+        raise UnknownBackupDatasetError("unknown_dataset")
     return name
 
 
@@ -70,7 +78,9 @@ def _normalize_user_id(user_id: Optional[int]) -> Optional[int]:
     try:
         value = int(user_id)
     except (TypeError, ValueError) as exc:
-        raise ValueError("invalid_user_id") from exc
+        raise InvalidBackupUserIdError("invalid_user_id") from exc
+    if value <= 0:
+        raise InvalidBackupUserIdError("invalid_user_id")
     return value
 
 
@@ -81,11 +91,21 @@ def _safe_join(base_dir: str, name: str) -> str:
     candidate_real = os.path.realpath(candidate)
     try:
         if os.path.commonpath([base_real, candidate_real]) != base_real:
-            raise ValueError("invalid_backup_path")
+            raise InvalidBackupPathError("invalid_backup_path")
+        relative = os.path.relpath(candidate, base_dir_abs)
     except ValueError as exc:
-        raise ValueError("invalid_backup_path") from exc
+        raise InvalidBackupPathError("invalid_backup_path") from exc
+    if relative.startswith(os.pardir + os.sep) or relative == os.pardir:
+        raise InvalidBackupPathError("invalid_backup_path")
     if os.path.islink(candidate):
-        raise ValueError("invalid_backup_path")
+        raise InvalidBackupPathError("invalid_backup_path")
+    current = base_dir_abs
+    for part in relative.split(os.sep):
+        if part in ("", "."):
+            continue
+        current = os.path.join(current, part)
+        if os.path.islink(current):
+            raise InvalidBackupPathError("invalid_backup_path")
     return candidate
 
 
@@ -139,7 +159,7 @@ def list_backup_items(
     limit: int,
     offset: int,
 ) -> Tuple[List[BackupFile], int]:
-    datasets = [_validate_backup_dataset(dataset)] if dataset is not None else list(DATASET_DB_RESOLVERS.keys()) + ["authnz"]
+    datasets = [_validate_backup_dataset(dataset)] if dataset is not None else [*DATASET_DB_RESOLVERS.keys(), "authnz"]
     items: List[BackupFile] = []
     for key in datasets:
         dataset_user_id = None if key == "authnz" else user_id
@@ -165,7 +185,7 @@ def _resolve_dataset_db_path(dataset: str, user_id: Optional[int]) -> Tuple[str,
 
     resolver = DATASET_DB_RESOLVERS.get(dataset)
     if not resolver:
-        raise ValueError("unknown_dataset")
+        raise UnknownBackupDatasetError("unknown_dataset")
     effective_user_id = user_id if user_id is not None else DatabasePaths.get_single_user_id()
     return str(resolver(effective_user_id)), effective_user_id
 
@@ -191,13 +211,13 @@ def _normalize_backup_filename(path: str) -> str:
 def _validate_backup_id(backup_id: str) -> str:
     name = os.path.basename(str(backup_id or "").strip())
     if not name:
-        raise ValueError("invalid_backup_id")
+        raise InvalidBackupIdError("invalid_backup_id")
     if name != backup_id:
-        raise ValueError("invalid_backup_id")
+        raise InvalidBackupIdError("invalid_backup_id")
     if name.startswith("-"):
-        raise ValueError("invalid_backup_id")
+        raise InvalidBackupIdError("invalid_backup_id")
     if not name.endswith(_BACKUP_EXTENSIONS):
-        raise ValueError("invalid_backup_id")
+        raise InvalidBackupIdError("invalid_backup_id")
     return name
 
 
@@ -210,7 +230,6 @@ def _prune_backups(backup_dir: str, max_backups: int) -> int:
         entry
         for entry in os.scandir(backup_dir)
         if entry.is_file(follow_symlinks=False)
-        and not entry.is_symlink()
         and entry.name.endswith(_BACKUP_EXTENSIONS)
     ]
     files.sort(key=lambda entry: entry.stat().st_mtime, reverse=True)
@@ -310,11 +329,11 @@ async def list_retention_policies() -> List[Dict[str, Any]]:
 async def update_retention_policy(policy_key: str, days: int) -> Dict[str, Any]:
     meta = RETENTION_POLICIES.get(policy_key)
     if not meta:
-        raise ValueError("unknown_policy")
+        raise InvalidRetentionPolicyError("unknown_policy")
     min_val = int(meta["min"])
     max_val = int(meta["max"])
     if days < min_val or days > max_val:
-        raise ValueError("invalid_range")
+        raise InvalidRetentionRangeError("invalid_range")
 
     settings = get_settings()
     effective_days = int(days)

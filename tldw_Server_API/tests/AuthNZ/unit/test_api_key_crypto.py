@@ -21,6 +21,12 @@ def test_parse_api_key_rejects_legacy_format() -> None:
     assert ak.parse_api_key("not_a_tldw_key") is None
 
 
+def test_parse_api_key_handles_edge_cases() -> None:
+    assert ak.parse_api_key("") is None
+    assert ak.parse_api_key("   ") is None
+    assert ak.parse_api_key("tldw_.") is None
+
+
 def test_kdf_roundtrip_verifies() -> None:
     api_key = "tldw_deadbeefcafe.secret"
     encoded = ak.kdf_hash_api_key(api_key, salt=b"fixed-salt-123456")

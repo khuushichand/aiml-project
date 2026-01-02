@@ -22,6 +22,11 @@ from urllib.parse import urlparse
 
 from loguru import logger
 
+from tldw_Server_API.app.core.exceptions import (
+    InvalidStoragePathError,
+    InvalidStorageUserIdError,
+    StorageUnavailableError,
+)
 from .backends.base import DatabaseBackend, DatabaseConfig, BackendType, DatabaseError
 from .backends.factory import DatabaseBackendFactory
 from .db_path_utils import DatabasePaths
@@ -1045,13 +1050,13 @@ class CollectionsDatabase:
             user_id = int(self.user_id)
         except (TypeError, ValueError) as exc:
             logger.error(f"outputs: invalid user id for storage path resolution: {self.user_id}")
-            raise ValueError("invalid_user_id") from exc
+            raise InvalidStorageUserIdError("invalid_user_id") from exc
         base_dir = DatabasePaths.get_user_base_directory(user_id) / "outputs"
         try:
             base_resolved = base_dir.resolve(strict=False)
         except Exception as exc:
             logger.error(f"outputs: failed to resolve outputs base dir for user {self.user_id}: {exc}")
-            raise ValueError("storage_unavailable") from exc
+            raise StorageUnavailableError("storage_unavailable") from exc
         candidate = path_value if isinstance(path_value, Path) else Path(path_value)
         try:
             candidate = candidate.expanduser()
@@ -1061,14 +1066,14 @@ class CollectionsDatabase:
                 resolved = (base_resolved / candidate).resolve(strict=False)
         except Exception as exc:
             logger.warning(f"outputs: invalid output path {path_value}: {exc}")
-            raise ValueError("invalid_path") from exc
+            raise InvalidStoragePathError("invalid_path") from exc
         try:
             if not resolved.is_relative_to(base_resolved):
                 logger.warning(f"outputs: output path outside base dir: {resolved}")
-                raise ValueError("invalid_path")
+                raise InvalidStoragePathError("invalid_path")
         except Exception as exc:
             logger.warning(f"outputs: invalid output path {path_value}: {exc}")
-            raise ValueError("invalid_path") from exc
+            raise InvalidStoragePathError("invalid_path") from exc
         return str(resolved)
 
     @dataclass

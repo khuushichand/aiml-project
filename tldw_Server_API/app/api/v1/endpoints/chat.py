@@ -30,6 +30,7 @@ import uuid
 from functools import partial, lru_cache
 from collections import defaultdict, deque
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from datetime import date, datetime, timezone
 from unittest.mock import Mock
 from weakref import WeakKeyDictionary
 import threading
@@ -738,6 +739,38 @@ def _summarize_tool_calls(tool_calls: Any) -> str:
     except Exception:
         return "[tool_call]"
 
+def _normalize_message_timestamp(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, date):
+        dt = datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+    elif isinstance(value, (int, float)):
+        try:
+            dt = datetime.fromtimestamp(float(value), tz=timezone.utc)
+            return dt.isoformat().replace("+00:00", "Z")
+        except (ValueError, OSError, OverflowError):
+            return None
+    elif isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        s_norm = s[:-1] + "+00:00" if s.endswith("Z") else s
+        try:
+            dt = datetime.fromisoformat(s_norm)
+        except ValueError:
+            try:
+                dt = datetime.fromtimestamp(float(s), tz=timezone.utc)
+            except (ValueError, OSError, OverflowError):
+                return None
+    else:
+        return None
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
 def _persist_message_sync(
     db: CharactersRAGDB,
     payload: Dict[str, Any],
@@ -879,7 +912,7 @@ async def _save_message_turn_to_db(
         "image_mime_type": primary_image_mime,
         "client_id": db.client_id,
     }
-    timestamp = message_obj.get("timestamp")
+    timestamp = _normalize_message_timestamp(message_obj.get("timestamp"))
     if timestamp:
         db_payload["timestamp"] = timestamp
     if normalized_images:
@@ -974,7 +1007,7 @@ async def _persist_system_message_if_needed(
             db.has_system_message_for_conversation,
             conversation_id,
         )
-    except Exception as exc:
+    except (CharactersRAGDBError, RuntimeError) as exc:
         logger.debug(
             "System message presence check failed for conv=%s: %s",
             conversation_id,
@@ -989,7 +1022,7 @@ async def _persist_system_message_if_needed(
             conv = await loop.run_in_executor(None, db.get_conversation_by_id, conversation_id)
             if conv:
                 conv_created_at = conv.get("created_at")
-        except Exception:
+        except (CharactersRAGDBError, RuntimeError):
             conv_created_at = None
         system_payload: Dict[str, Any] = {"role": "system", "content": system_message.strip()}
         if conv_created_at:
@@ -1000,7 +1033,7 @@ async def _persist_system_message_if_needed(
             system_payload,
             use_transaction=True,
         )
-    except Exception as exc:
+    except (CharactersRAGDBError, InputError, ConflictError, RuntimeError) as exc:
         logger.warning(
             "Failed to persist system message for conv=%s: %s",
             conversation_id,

@@ -17,9 +17,11 @@ import time
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
+
+from tldw_Server_API.app.core.exceptions import UnsafeUserPathError
 
 
 @dataclass
@@ -29,13 +31,18 @@ class Prior:
     corpus: Optional[str] = None
 
 
+_DEFAULT_USER_ID = "anon"
 _SAFE_USER_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
+def _empty_store() -> Dict[str, Any]:
+    return {"priors": {}, "events": {}, "pairs": {}}
+
+
 def _normalize_user_id(raw_user_id: Optional[str]) -> str:
-    raw = str(raw_user_id or "anon").strip()
+    raw = str(raw_user_id or _DEFAULT_USER_ID).strip()
     if not raw:
-        return "anon"
+        return _DEFAULT_USER_ID
     if _SAFE_USER_ID_RE.fullmatch(raw):
         return raw
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -43,7 +50,13 @@ def _normalize_user_id(raw_user_id: Optional[str]) -> str:
 
 
 def _resolve_path(path: Path) -> Path:
-    return Path(os.path.realpath(str(path)))
+    """Expand and resolve a path without requiring it to exist."""
+    expanded = path.expanduser()
+    try:
+        return expanded.resolve(strict=False)
+    except TypeError:
+        # Python < 3.6 doesn't support strict parameter
+        return expanded.resolve()
 
 
 def _get_user_base_dir() -> Path:
@@ -58,7 +71,7 @@ def _safe_user_dir(user_id: str) -> Path:
     try:
         candidate.relative_to(base)
     except ValueError as exc:
-        raise ValueError("Unsafe user_id path for personalization store") from exc
+        raise UnsafeUserPathError("Unsafe user_id path for personalization store") from exc
     return candidate
 
 
@@ -68,18 +81,26 @@ class UserPersonalizationStore:
         base = _safe_user_dir(self.user_id)
         base.mkdir(parents=True, exist_ok=True)
         self.path = base / "rag_personalization.json"
-        self._data: Dict[str, any] = {}
+        self._data: Dict[str, Any] = {}
         self._load()
 
     def _load(self) -> None:
         try:
             if self.path.exists():
                 with self.path.open("r", encoding="utf-8") as f:
-                    self._data = json.load(f)
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    self._data = data
+                else:
+                    self._data = _empty_store()
             else:
-                self._data = {"priors": {}, "events": {}, "pairs": {}}
-        except Exception:
-            self._data = {"priors": {}, "events": {}, "pairs": {}}
+                self._data = _empty_store()
+            self._data.setdefault("priors", {})
+            self._data.setdefault("events", {})
+            self._data.setdefault("pairs", {})
+        except Exception as e:
+            logger.debug(f"Failed loading personalization data: {e}")
+            self._data = _empty_store()
 
     def _save(self) -> None:
         try:
@@ -132,7 +153,7 @@ class UserPersonalizationStore:
         except Exception:
             return 0.0
 
-    def boost_documents(self, documents: List[any], *, corpus: Optional[str] = None) -> List[any]:
+    def boost_documents(self, documents: List[Any], *, corpus: Optional[str] = None) -> List[Any]:
         # Adjust scores by a bounded additive boost based on priors
         try:
             weight = float(os.getenv("RAG_PERSONALIZATION_WEIGHT", "0.1"))

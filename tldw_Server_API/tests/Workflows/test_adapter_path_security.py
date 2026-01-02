@@ -73,3 +73,30 @@ async def test_stt_transcribe_rejects_outside_base(monkeypatch, tmp_path):
         {"user_id": 123},
     )
     assert result.get("error") == "file_access_denied"
+
+
+@pytest.mark.asyncio
+async def test_stt_transcribe_accepts_inside_base(monkeypatch, tmp_path):
+    user_base = tmp_path / "user_dbs"
+    user_id = 123
+    user_dir = user_base / str(user_id)
+    user_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(user_base))
+
+    inside = user_dir / "valid.wav"
+    inside.write_bytes(b"RIFF\x00\x00\x00WAVEfmt ")
+
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Transcription_Lib as stt_mod
+
+    def _fake_speech_to_text(*_args, **_kwargs):
+        return ([{"Text": "hello"}], "en")
+
+    monkeypatch.setattr(stt_mod, "speech_to_text", _fake_speech_to_text, raising=True)
+
+    result = await wf_adapters.run_stt_transcribe_adapter(
+        {"file_uri": f"file://{inside}"},
+        {"user_id": user_id},
+    )
+    assert result.get("text") == "hello"
+    assert result.get("segments") == [{"Text": "hello"}]
+    assert result.get("language") == "en"

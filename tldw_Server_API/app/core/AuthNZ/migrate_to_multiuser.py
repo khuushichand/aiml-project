@@ -12,7 +12,6 @@ import sys
 import json
 import secrets
 import sqlite3
-import re
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
@@ -25,28 +24,11 @@ sys.path.append(str(Path(__file__).parent.parent.parent.parent.parent))
 from tldw_Server_API.app.core.DB_Management.UserDatabase import UserDatabase
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.username_utils import normalize_admin_username
 
 ########################################################################################################################
 # Migration Functions
 ########################################################################################################################
-
-_USERNAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
-_RESERVED_USERNAMES = {"admin", "root", "system", "api", "null", "undefined"}
-
-
-def _normalize_admin_username(raw: str) -> str:
-    candidate = (raw or "").strip().lower()
-    if not candidate:
-        raise ValueError("Username is required")
-    if len(candidate) < 3:
-        raise ValueError("Username must be at least 3 characters long")
-    if len(candidate) > 50:
-        raise ValueError("Username must not exceed 50 characters")
-    if not _USERNAME_PATTERN.match(candidate):
-        raise ValueError("Username can only contain letters, numbers, underscores, and hyphens")
-    if candidate in _RESERVED_USERNAMES:
-        raise ValueError("This username is reserved and cannot be used")
-    return candidate
 
 def create_admin_user(user_db: UserDatabase, password_service: PasswordService) -> Dict[str, Any]:
     """
@@ -67,7 +49,7 @@ def create_admin_user(user_db: UserDatabase, password_service: PasswordService) 
     while True:
         raw_username = input("\nEnter admin username (default: tldw_admin): ").strip() or "tldw_admin"
         try:
-            username = _normalize_admin_username(raw_username)
+            username = normalize_admin_username(raw_username)
             break
         except ValueError as exc:
             print(f"❌ {exc}")

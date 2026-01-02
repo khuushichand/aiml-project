@@ -323,6 +323,13 @@ def _normalize_whisper_model_identifier(
     if not raw:
         raise ValueError("Whisper model identifier cannot be empty")
 
+    path_like = (
+        raw.startswith(("/", ".", "~"))
+        or _looks_like_windows_drive(raw)
+        or os.sep in raw
+        or (os.altsep and os.altsep in raw)
+    )
+
     if (
         _is_hf_model_id(raw)
         and not raw.startswith(("/", ".", "~"))
@@ -330,28 +337,26 @@ def _normalize_whisper_model_identifier(
     ):
         return raw
 
-    path_like = (
-        raw.startswith(("/", ".", "~"))
-        or _looks_like_windows_drive(raw)
-        or os.sep in raw
-        or (os.altsep and os.altsep in raw)
-    )
-    if path_like:
-        base_root = base_dir if base_dir is not None else WHISPER_MODEL_BASE_DIR
-        safe_path = resolve_safe_local_path(Path(raw), Path(base_root))
-        if safe_path is None:
-            raise ValueError(
-                f"Whisper model path must resolve under {Path(base_root).resolve(strict=False)}"
-            )
-        if not safe_path.exists():
-            raise ValueError(f"Whisper model path does not exist: {safe_path}")
-        try:
-            _assert_no_symlink(safe_path, label="Whisper model path")
-        except ValueError as exc:
-            raise ValueError(str(exc)) from exc
-        return str(safe_path)
+    if not path_like:
+        if raw in {".", ".."} or ".." in raw:
+            raise ValueError("Whisper model identifier may not contain path traversal components")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", raw):
+            raise ValueError("Whisper model identifier contains invalid characters")
+        return raw
 
-    return raw
+    base_root = base_dir if base_dir is not None else WHISPER_MODEL_BASE_DIR
+    safe_path = resolve_safe_local_path(Path(raw), Path(base_root))
+    if safe_path is None:
+        raise ValueError(
+            f"Whisper model path must resolve under {Path(base_root).resolve(strict=False)}"
+        )
+    if not safe_path.exists():
+        raise ValueError(f"Whisper model path does not exist: {safe_path}")
+    try:
+        _assert_no_symlink(safe_path, label="Whisper model path")
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
+    return str(safe_path)
 
 
 def validate_whisper_model_identifier(model_name: str) -> str:
@@ -396,7 +401,10 @@ def _resolve_transcript_cache_dir(
     base_dir: Optional[Path] = None,
 ) -> Path:
     """
-    Resolve and create the transcript cache directory under the temp root.
+    Resolve and create the transcript cache directory.
+
+    When base_dir is provided, creates the cache under that directory.
+    Otherwise, creates the cache alongside the audio file.
     """
     root_dir = base_dir if base_dir is not None else audio_path.parent
     cache_dir = root_dir / TRANSCRIPT_CACHE_DIR_NAME

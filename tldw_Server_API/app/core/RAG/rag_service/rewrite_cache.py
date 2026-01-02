@@ -26,19 +26,26 @@ _ALLOWED_USER_ID_CHARS = set(string.ascii_letters + string.digits + "_-")
 
 
 def _is_relative_to(path: Path, base: Path) -> bool:
+    """Return True if path is safely contained in base (Path, Path -> bool).
+    Uses Path.relative_to for containment; avoids traversal edge cases."""
     try:
         path.relative_to(base)
-        return True
     except ValueError:
         return False
+    else:
+        return True
 
 
 def _hash_user_id(value: str) -> str:
+    """Hash a user_id into a stable directory name (str -> str).
+    Uses SHA256 prefix to avoid leaking raw IDs to disk paths."""
     digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
     return f"user_{digest}"
 
 
 def _is_safe_user_id(user_id: str) -> bool:
+    """Validate a user_id path segment (str -> bool).
+    Rejects empty/relative components and non-allowed chars for safety."""
     if not user_id or user_id in {".", ".."}:
         return False
     if user_id[0] not in string.ascii_letters + string.digits:
@@ -49,6 +56,8 @@ def _is_safe_user_id(user_id: str) -> bool:
 
 
 def _normalize_user_id_segment(user_id: Optional[str]) -> str:
+    """Normalize user_id into a safe path segment (Optional[str] -> str).
+    Returns raw if safe; otherwise returns a hashed fallback (e.g., user_<hash>)."""
     raw = str(user_id or "").strip()
     if not raw:
         return "anon"
@@ -58,6 +67,8 @@ def _normalize_user_id_segment(user_id: Optional[str]) -> str:
 
 
 def _resolve_user_cache_path(user_id: str) -> Path:
+    """Resolve per-user cache path under base dir (str -> Path).
+    Falls back to hashed directory if path would escape base; avoids traversal."""
     base_dir = _USER_DB_BASE.resolve()
     safe_component = _normalize_user_id_segment(user_id)
     cache_dir = (base_dir / safe_component / "Rewrite_Cache").resolve()
@@ -132,7 +143,8 @@ class RewriteCache:
                     p = _resolve_user_cache_path(str(user_id))
                     p.parent.mkdir(parents=True, exist_ok=True)
                     self.path = str(p)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to resolve user cache path for user_id={user_id}: {e}")
                     self.path = str(_safe_path())
             else:
                 self.path = str(_safe_path())

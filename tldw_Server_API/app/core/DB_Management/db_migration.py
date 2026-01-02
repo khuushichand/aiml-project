@@ -81,9 +81,11 @@ class Migration:
 
 
 class DatabaseMigrator:
-    """Handles database migrations for SQLite databases"""
+    """Handles database migrations for on-disk SQLite databases"""
 
     def __init__(self, db_path: str, migrations_dir: str = None):
+        if self._is_memory_db_path(db_path):
+            raise MigrationError("DatabaseMigrator does not support in-memory database paths")
         db_path_resolved = self._resolve_path(Path(db_path))
         self.db_path = str(db_path_resolved)
         self._db_dir = db_path_resolved.parent
@@ -118,6 +120,17 @@ class DatabaseMigrator:
             return expanded.resolve()
 
     @staticmethod
+    def _is_memory_db_path(db_path: str) -> bool:
+        """Return True if db_path refers to an in-memory SQLite database."""
+        raw = (db_path or "").strip()
+        if raw == ":memory:":
+            return True
+        if raw.lower().startswith("file:"):
+            lowered = raw.lower()
+            return "mode=memory" in lowered or ":memory:" in lowered
+        return False
+
+    @staticmethod
     def _is_within_directory(path: Path, base_dir: Path) -> bool:
         """Return True if path is within base_dir."""
         try:
@@ -139,7 +152,7 @@ class DatabaseMigrator:
         return resolved
 
     def _validate_backup_path(self, backup_path: str) -> Path:
-        """Ensure backup_path exists and is scoped to the backup directory."""
+        """Ensure backup_path exists, is a file, and is scoped to the backup directory."""
         resolved = self._resolve_path(Path(backup_path))
         backup_dir = self._resolve_path(Path(self.backup_dir))
         if not self._is_within_directory(resolved, backup_dir):
@@ -148,6 +161,8 @@ class DatabaseMigrator:
             )
         if not resolved.exists():
             raise MigrationError(f"Backup not found: {resolved}")
+        if not resolved.is_file():
+            raise MigrationError(f"Backup path is not a file: {resolved}")
         return resolved
 
     @contextmanager

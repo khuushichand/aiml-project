@@ -1,14 +1,9 @@
 from pathlib import Path
 
-from tldw_Server_API.app.core.RAG.rag_service.rewrite_cache import RewriteCache
-
-
-def _is_relative_to(path: Path, base: Path) -> bool:
-    try:
-        path.relative_to(base)
-        return True
-    except ValueError:
-        return False
+from tldw_Server_API.app.core.RAG.rag_service.rewrite_cache import (
+    RewriteCache,
+    _is_relative_to,
+)
 
 
 def test_rewrite_cache_put_get(tmp_path, monkeypatch):
@@ -40,3 +35,18 @@ def test_rewrite_cache_user_id_preserves_safe_segment(tmp_path, monkeypatch):
     cache_path = Path(rc.path).resolve()
     assert cache_path.parent.name == "Rewrite_Cache"
     assert cache_path.parent.parent.name == "user_123"
+
+
+def test_rewrite_cache_user_id_with_special_chars(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    rc = RewriteCache(user_id="user_abc-123")
+    cache_path = Path(rc.path).resolve()
+    assert cache_path.parent.parent.name == "user_abc-123"
+
+
+def test_rewrite_cache_unsafe_user_id_is_hashed(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    rc = RewriteCache(user_id="../../etc/passwd")
+    cache_path = Path(rc.path).resolve()
+    assert cache_path.parent.parent.name.startswith("user_")
+    assert cache_path.parent.parent.name != "../../etc/passwd"

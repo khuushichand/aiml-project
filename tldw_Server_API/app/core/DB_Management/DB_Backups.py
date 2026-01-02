@@ -24,7 +24,8 @@ _SQLITE_BACKUP_EXTS = (".db", ".sqlib")
 _POSTGRES_BACKUP_EXTS = (".dump",)
 
 
-def _sanitize_backup_label(label: str, fallback: str) -> str:
+def _sanitize_backup_label(label: str, fallback: str = "db") -> str:
+    """Sanitize a backup label to be safe for filenames."""
     raw = str(label or "").strip()
     cleaned = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in raw)
     cleaned = cleaned.strip("_")
@@ -32,6 +33,7 @@ def _sanitize_backup_label(label: str, fallback: str) -> str:
 
 
 def _validate_backup_name(backup_name: str, allowed_exts: tuple[str, ...]) -> Optional[str]:
+    """Validate a backup filename for safety and allowed extensions."""
     name = str(backup_name or "").strip()
     if not name:
         return None
@@ -47,15 +49,13 @@ def _validate_backup_name(backup_name: str, allowed_exts: tuple[str, ...]) -> Op
 def _safe_join(base_dir: str, name: str) -> Optional[str]:
     base_dir_abs = os.path.abspath(base_dir)
     candidate = os.path.abspath(os.path.join(base_dir_abs, name))
-    base_real = os.path.realpath(base_dir_abs)
-    candidate_real = os.path.realpath(candidate)
     try:
-        if os.path.commonpath([base_real, candidate_real]) != base_real:
-            return None
         relative = os.path.relpath(candidate, base_dir_abs)
     except ValueError:
         return None
     if relative.startswith(os.pardir + os.sep) or relative == os.pardir:
+        return None
+    if os.path.islink(candidate):
         return None
     current = base_dir_abs
     for part in relative.split(os.sep):
@@ -64,6 +64,13 @@ def _safe_join(base_dir: str, name: str) -> Optional[str]:
         current = os.path.join(current, part)
         if os.path.islink(current):
             return None
+    base_real = os.path.realpath(base_dir_abs)
+    candidate_real = os.path.realpath(candidate)
+    try:
+        if os.path.commonpath([base_real, candidate_real]) != base_real:
+            return None
+    except ValueError:
+        return None
     return candidate
 
 def init_backup_directory(backup_base_dir: str, db_name: str) -> str:
@@ -152,8 +159,8 @@ def create_incremental_backup(db_path: str, backup_dir: str, db_name: str) -> st
             try:
                 conn.execute("VACUUM INTO ?", (backup_file,))
             except sqlite3.OperationalError:
-                escaped_path = backup_file.replace("'", "''")
-                conn.execute(f"VACUUM INTO '{escaped_path}'")
+                quoted_path = conn.execute("SELECT quote(?)", (backup_file,)).fetchone()[0]
+                conn.execute(f"VACUUM INTO {quoted_path}")
 
         logger.info(f"Incremental backup created: {backup_file}")
         return f"Incremental backup created: {backup_file}"
@@ -168,7 +175,7 @@ def list_backups(backup_dir: str) -> str:
     try:
         backup_dir = os.path.abspath(backup_dir)
         backups = [f for f in os.listdir(backup_dir)
-                   if f.endswith(('.db', '.sqlib'))]
+                   if f.endswith(_SQLITE_BACKUP_EXTS)]
         backups.sort(reverse=True)  # Most recent first
         return "\n".join(backups) if backups else "No backups found"
     except Exception as e:
@@ -328,11 +335,16 @@ def create_postgres_backup(
     user = config.pg_user or "postgres"
     password = config.pg_password or None
 
-    backup_dir = os.path.abspath(backup_dir)
-    os.makedirs(backup_dir, exist_ok=True)
+    backup_dir_abs = os.path.abspath(backup_dir)
+    if os.path.islink(backup_dir_abs):
+        msg = f"Backup directory is a symlink: {backup_dir_abs}"
+        logger.error(msg)
+        return msg
+    backup_dir_real = os.path.realpath(backup_dir_abs)
+    os.makedirs(backup_dir_real, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_label = _sanitize_backup_label(label, "content")
-    out_file = _safe_join(backup_dir, f"{safe_label}_pgdump_{timestamp}.dump")
+    out_file = _safe_join(backup_dir_real, f"{safe_label}_pgdump_{timestamp}.dump")
     if not out_file:
         msg = "Invalid backup path"
         logger.error(msg)

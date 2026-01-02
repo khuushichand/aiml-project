@@ -1129,7 +1129,7 @@ async def create_transcription(
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=str(exc),
-                )
+                ) from exc
         # Wrap the heavy work to ensure we always release the job slot
         try:
             if provider == "faster-whisper":
@@ -1773,7 +1773,7 @@ async def get_stt_health(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=str(exc),
-            )
+            ) from exc
     else:
         resolved_model = raw_model
 

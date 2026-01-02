@@ -17,7 +17,7 @@ Tag in OpenAPI: `character-messages`
 
 - Send message: `POST /api/v1/chats/{chat_id}/messages`
 - List messages: `GET /api/v1/chats/{chat_id}/messages`
-  - Query params: `limit`, `offset`, `include_deleted`, `include_character_context`, `format_for_completions`
+  - Query params: `limit`, `offset`, `include_deleted`, `include_character_context`, `format_for_completions`, `include_tool_calls`, `include_metadata`, `include_message_ids`
 - Edit message: `PUT /api/v1/messages/{message_id}`
 - Delete message (soft): `DELETE /api/v1/messages/{message_id}`
 - Search messages: `GET /api/v1/chats/{chat_id}/messages/search`
@@ -26,6 +26,7 @@ Notes
 - Ownership is enforced per conversation and per message.
 - `format_for_completions=true` returns the OpenAI-style `messages` array ready for `/api/v1/chat/completions`.
 - When `include_character_context=true`, a system message is added with the character’s persona fields.
+- `include_message_ids=true` only applies when `format_for_completions=true` and adds `message_id` to base messages.
 
 ## Examples
 

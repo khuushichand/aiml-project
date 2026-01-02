@@ -50,6 +50,54 @@ class SecurityAlertFileError(Exception):
     """Raised when writing a security alert to a file sink fails."""
 
 
+class StoragePathValidationError(Exception):
+    """Base exception for storage path validation failures."""
+
+
+class InvalidStoragePathError(StoragePathValidationError):
+    """Raised when a storage path is invalid or outside its allowed base."""
+
+
+class StorageUnavailableError(StoragePathValidationError):
+    """Raised when storage base directories cannot be resolved."""
+
+
+class InvalidStorageUserIdError(StoragePathValidationError):
+    """Raised when a storage path resolution is attempted with an invalid user id."""
+
+
+class UnsafeUserPathError(StoragePathValidationError):
+    """Raised when a user-derived path escapes an allowed base directory."""
+
+
+class AdminDataOpsError(ValueError):
+    """Base exception for admin data ops validation errors."""
+
+
+class UnknownBackupDatasetError(AdminDataOpsError):
+    """Raised when a backup request references an unknown dataset."""
+
+
+class InvalidBackupUserIdError(AdminDataOpsError):
+    """Raised when a backup request references an invalid user id."""
+
+
+class InvalidBackupPathError(AdminDataOpsError):
+    """Raised when a backup path is invalid or unsafe."""
+
+
+class InvalidBackupIdError(AdminDataOpsError):
+    """Raised when a backup id is malformed or unsafe."""
+
+
+class InvalidRetentionPolicyError(AdminDataOpsError):
+    """Raised when a retention policy key is unknown."""
+
+
+class InvalidRetentionRangeError(AdminDataOpsError):
+    """Raised when a retention policy update is out of range."""
+
+
 class ResourceNotFoundError(Exception):
     """Generic resource-not-found error for domain-level lookups."""
 

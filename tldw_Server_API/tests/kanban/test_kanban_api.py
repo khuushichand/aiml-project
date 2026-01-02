@@ -4,8 +4,6 @@ Integration tests for Kanban API endpoints using a real Kanban DB.
 No mocking of internal functions; only dependency override to inject a temp DB.
 """
 
-import os
-import tempfile
 import importlib
 
 import pytest
@@ -13,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
 pytestmark = pytest.mark.integration
@@ -21,7 +20,8 @@ pytestmark = pytest.mark.integration
 @pytest.fixture()
 def client_with_kanban_db(tmp_path, monkeypatch):
     """Create a test client with a temporary Kanban database."""
-    db_path = tmp_path / "kanban_integration.db"
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path / "user_dbs"))
+    db_path = DatabasePaths.get_kanban_db_path("integration_test_user")
     db = KanbanDB(str(db_path), user_id="integration_test_user")
 
     async def override_user():

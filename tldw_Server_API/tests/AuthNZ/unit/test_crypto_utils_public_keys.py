@@ -21,6 +21,7 @@ def _derive_expected_key(raw: str) -> bytes:
 def test_public_keys_excluded_when_secret_present(monkeypatch):
     # Ensure a clean settings instance
     reset_settings()
+    monkeypatch.setenv("TEST_MODE", "true")
 
     # Configure multi-user with a real secret and a public key present
     monkeypatch.setenv("AUTH_MODE", "multi_user")

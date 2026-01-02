@@ -24,6 +24,23 @@ class AdapterError(Exception):
 
 
 def _sanitize_path_component(value: str, default: str, max_len: int = 80) -> str:
+    """
+    Normalize a string for safe use as a single filesystem path component.
+
+    Args:
+        value (str): Raw input to sanitize.
+        default (str): Fallback value when the input normalizes to empty.
+        max_len (int): Maximum length of the returned component.
+
+    Returns:
+        str: A sanitized component containing only ASCII letters, digits, dot,
+        underscore, or dash.
+
+    Security:
+        Replaces any other character with "_" and strips leading/trailing
+        dot/underscore/dash to reduce traversal-like components. This does not
+        ensure uniqueness; callers should still enforce base-dir containment.
+    """
     raw = str(value or "").strip()
     cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw).strip("._-")
     if not cleaned:
@@ -31,11 +48,68 @@ def _sanitize_path_component(value: str, default: str, max_len: int = 80) -> str
     return cleaned[:max_len]
 
 
+def _is_subpath(parent: Path, child: Path) -> bool:
+    """
+    Return True if 'child' is located within 'parent' (after resolving both).
+    This is a compatibility-safe equivalent of Path.is_relative_to.
+    """
+    try:
+        parent_resolved = parent.resolve(strict=False)
+    except Exception as e:
+        logger.debug(f"Failed to resolve parent path {parent}: {e}")
+        parent_resolved = parent
+    try:
+        child_resolved = child.resolve(strict=False)
+    except Exception as e:
+        logger.debug(f"Failed to resolve child path {child}: {e}")
+        child_resolved = child
+    try:
+        child_resolved.relative_to(parent_resolved)
+        return True
+    except ValueError:
+        return False
+
+
 def _artifacts_base_dir() -> Path:
-    return Path("Databases") / "artifacts"
+    """
+    Resolve the base directory used for workflow artifacts.
+
+    Args:
+        None.
+
+    Returns:
+        Path: Absolute artifacts base when project root is available, otherwise
+        a relative `Databases/artifacts` path.
+
+    Security:
+        Prefers anchoring to the project root to avoid CWD-dependent behavior.
+        On failure, falls back to a relative path that must be resolved and
+        checked for containment by callers.
+    """
+    try:
+        from tldw_Server_API.app.core.Utils.Utils import get_project_root
+        return (Path(get_project_root()) / "Databases" / "artifacts").resolve()
+    except Exception:
+        # Fallback to relative path
+        return Path("Databases") / "artifacts"
 
 
 def _resolve_artifacts_dir(step_run_id: str | None) -> Path:
+    """
+    Build a per-step artifact directory path under the artifacts base.
+
+    Args:
+        step_run_id (str | None): Optional step run identifier used as a folder
+        name after sanitization.
+
+    Returns:
+        Path: A resolved candidate artifact directory path.
+
+    Security:
+        Uses `_sanitize_path_component` to limit characters and length, resolves
+        paths with `strict=False`, and verifies containment via `_is_subpath`.
+        If containment fails, falls back to a generated safe identifier.
+    """
     base_dir = _artifacts_base_dir()
     try:
         base_resolved = base_dir.resolve(strict=False)
@@ -43,13 +117,28 @@ def _resolve_artifacts_dir(step_run_id: str | None) -> Path:
         base_resolved = base_dir
     safe_id = _sanitize_path_component(step_run_id or "", f"artifact_{int(time.time() * 1000)}")
     candidate = (base_resolved / safe_id).resolve(strict=False)
-    if not candidate.is_relative_to(base_resolved):
+    if not _is_subpath(base_resolved, candidate):
         safe_id = f"artifact_{int(time.time() * 1000)}"
         candidate = (base_resolved / safe_id).resolve(strict=False)
     return candidate
 
 
 def _resolve_artifact_filename(name: str, ext: str, default_stem: str = "artifact") -> str:
+    """
+    Produce a safe artifact filename with a fixed extension.
+
+    Args:
+        name (str): Original filename input, possibly containing paths.
+        ext (str): Extension to append (without leading dot).
+        default_stem (str): Fallback stem when the name is empty or unsafe.
+
+    Returns:
+        str: Sanitized filename with the requested extension.
+
+    Security:
+        Drops path components (`Path(name).name`) and sanitizes the stem to
+        ASCII alphanumerics plus `._-` to avoid traversal or separator issues.
+    """
     raw_name = Path(name).name
     if raw_name in {"", ".", ".."}:
         raw_name = default_stem
@@ -58,12 +147,42 @@ def _resolve_artifact_filename(name: str, ext: str, default_stem: str = "artifac
     return f"{safe_stem}.{ext}"
 
 
-def _unsafe_file_access_allowed(config: Dict[str, Any] | None) -> bool:
+def _unsafe_file_access_allowed(config: Dict[str, Any] | None) -> bool:  # noqa: ARG001
+    """
+    Determine whether unsafe file access is explicitly enabled.
+
+    Args:
+        config (Dict[str, Any] | None): Ignored on purpose to prevent user-
+        supplied overrides.
+
+    Returns:
+        bool: True when the server environment enables unsafe access.
+
+    Security:
+        Only honors the `WORKFLOWS_ALLOW_UNSAFE_FILE_ACCESS` environment
+        variable so workflow configs cannot bypass path restrictions.
+    """
     # Ignore per-step config to avoid user-controlled path bypasses.
     return str(os.getenv("WORKFLOWS_ALLOW_UNSAFE_FILE_ACCESS", "")).lower() in {"1", "true", "yes", "on"}
 
 
 def _workflow_file_base_dir(context: Dict[str, Any], config: Dict[str, Any] | None) -> Path:
+    """
+    Resolve the base directory for workflow file access.
+
+    Args:
+        context (Dict[str, Any]): Workflow context, may include `user_id`.
+        config (Dict[str, Any] | None): Currently unused; reserved for parity.
+
+    Returns:
+        Path: A resolved base directory for allowed file access.
+
+    Security:
+        Only honors server-side `WORKFLOWS_FILE_BASE_DIR` overrides. When a
+        relative override is provided, it is anchored to the project root with
+        `strict=False` resolution. Falls back to per-user database roots or
+        `Databases/` on failure.
+    """
     # Only allow server-side base dir overrides.
     env_override = os.getenv("WORKFLOWS_FILE_BASE_DIR")
     if env_override:
@@ -90,6 +209,24 @@ def _workflow_file_base_dir(context: Dict[str, Any], config: Dict[str, Any] | No
 
 
 def _resolve_workflow_file_path(path_value: str, context: Dict[str, Any], config: Dict[str, Any] | None = None) -> Path:
+    """
+    Resolve a workflow file path relative to the allowed base directory.
+
+    Args:
+        path_value (str): User-supplied path or filename.
+        context (Dict[str, Any]): Workflow context used to derive base dir.
+        config (Dict[str, Any] | None): Optional config; only used to check the
+        unsafe access flag.
+
+    Returns:
+        Path: A resolved filesystem path.
+
+    Security:
+        When unsafe access is enabled, returns the expanded path without
+        containment checks. Otherwise resolves with `strict=False` and enforces
+        containment via `_is_subpath`, raising `AdapterError("file_access_denied")`
+        on violations.
+    """
     if _unsafe_file_access_allowed(config):
         return Path(path_value).expanduser()
     base_dir = _workflow_file_base_dir(context, config)
@@ -102,12 +239,27 @@ def _resolve_workflow_file_path(path_value: str, context: Dict[str, Any], config
         resolved = candidate.resolve(strict=False)
     else:
         resolved = (base_resolved / candidate).resolve(strict=False)
-    if not resolved.is_relative_to(base_resolved):
+    if not _is_subpath(base_resolved, resolved):
         raise AdapterError("file_access_denied")
     return resolved
 
 
 def _resolve_workflow_file_uri(file_uri: str, context: Dict[str, Any], config: Dict[str, Any] | None = None) -> Path:
+    """
+    Resolve a `file://` URI to a safe local filesystem path.
+
+    Args:
+        file_uri (str): File URI to resolve (must start with `file://`).
+        context (Dict[str, Any]): Workflow context used to derive base dir.
+        config (Dict[str, Any] | None): Optional config for unsafe access flag.
+
+    Returns:
+        Path: A resolved filesystem path.
+
+    Security:
+        Rejects non-file URIs with `AdapterError("missing_or_invalid_file_uri")`
+        and applies the same containment rules as `_resolve_workflow_file_path`.
+    """
     if not file_uri.startswith("file://"):
         raise AdapterError("missing_or_invalid_file_uri")
     raw_path = file_uri[len("file://"):]
@@ -1908,9 +2060,8 @@ async def run_mcp_tool_adapter(config: Dict[str, Any], context: Dict[str, Any]) 
     # Optional artifact persistence of result
     try:
         if bool(config.get("save_artifact")) and callable(context.get("add_artifact")):
-            from pathlib import Path
             step_run_id = str(context.get("step_run_id") or "")
-            art_dir = Path("Databases") / "artifacts" / (step_run_id or f"mcp_{int(time.time()*1000)}")
+            art_dir = _resolve_artifacts_dir(step_run_id or f"mcp_{int(time.time()*1000)}")
             art_dir.mkdir(parents=True, exist_ok=True)
             fpath = art_dir / "mcp_result.json"
             fpath.write_text(json.dumps(result, default=str, indent=2), encoding="utf-8")
@@ -2160,9 +2311,8 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
                 # Optional artifact of response metadata
                 try:
                     if callable(context.get("add_artifact")):
-                        from pathlib import Path
                         step_run_id = str(context.get("step_run_id") or "")
-                        art_dir = Path("Databases") / "artifacts" / (step_run_id or f"webhook_{int(time.time()*1000)}")
+                        art_dir = _resolve_artifacts_dir(step_run_id or f"webhook_{int(time.time()*1000)}")
                         art_dir.mkdir(parents=True, exist_ok=True)
                         fpath = art_dir / "webhook_response.json"
                         data = {"status_code": resp.status_code, "headers": dict(resp.headers)}

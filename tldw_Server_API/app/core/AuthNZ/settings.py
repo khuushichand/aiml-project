@@ -716,7 +716,7 @@ class Settings(BaseSettings):
                     from tldw_Server_API.app.core.AuthNZ.api_key_crypto import parse_api_key
 
                     is_new_format = parse_api_key(self.SINGLE_USER_API_KEY) is not None
-                except Exception:
+                except (ImportError, AttributeError):
                     is_new_format = False
 
                 if not is_new_format and not allow_legacy:

@@ -13,7 +13,6 @@ import asyncio
 import sys
 import os
 import secrets
-import re
 from pathlib import Path
 from typing import Optional
 from getpass import getpass
@@ -40,6 +39,7 @@ from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.scheduler import start_authnz_scheduler
 from tldw_Server_API.app.core.AuthNZ.monitoring import get_authnz_monitor
+from tldw_Server_API.app.core.AuthNZ.username_utils import normalize_admin_username
 
 #######################################################################################################################
 #
@@ -79,25 +79,6 @@ def _sanitize_db_url(url: Optional[str]) -> str:
     except Exception:
         # Fall back to the original string if parsing fails; avoid raising during diagnostics.
         return url
-
-
-_USERNAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
-_RESERVED_USERNAMES = {"admin", "root", "system", "api", "null", "undefined"}
-
-
-def _normalize_admin_username(raw: str) -> str:
-    candidate = (raw or "").strip().lower()
-    if not candidate:
-        raise ValueError("Username is required")
-    if len(candidate) < 3:
-        raise ValueError("Username must be at least 3 characters")
-    if len(candidate) > 50:
-        raise ValueError("Username must not exceed 50 characters")
-    if not _USERNAME_PATTERN.match(candidate):
-        raise ValueError("Username can only contain letters, numbers, underscores, and hyphens")
-    if candidate in _RESERVED_USERNAMES:
-        raise ValueError("This username is reserved and cannot be used")
-    return candidate
 
 
 def _resolve_sqlite_db_path(db_url: str) -> Optional[Path]:
@@ -744,7 +725,7 @@ async def create_admin_user():
     while True:
         raw_username = input("   Admin username (default: tldw_admin): ").strip() or "tldw_admin"
         try:
-            username = _normalize_admin_username(raw_username)
+            username = normalize_admin_username(raw_username)
             break
         except ValueError as exc:
             print(f"   {exc}")
@@ -864,7 +845,11 @@ async def bootstrap_single_user_profile() -> bool:
             parsed = parse_api_key(api_key_value)
             if parsed:
                 key_identifier, _secret = parsed
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - defensive: parsing failures must not block bootstrap
+            logger.opt(exception=True).debug(
+                "Failed to parse SINGLE_USER_API_KEY for identifier extraction: {}",
+                exc,
+            )
             key_identifier = None
 
         from tldw_Server_API.app.core.AuthNZ.repos.api_keys_repo import AuthnzApiKeysRepo
