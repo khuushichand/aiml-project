@@ -45,6 +45,13 @@ def _validate_backup_name(backup_name: str, allowed_exts: tuple[str, ...]) -> Op
 
 
 def _safe_join(base_dir: str, name: str) -> Optional[str]:
+    """
+    Safely join a base directory and a relative name, ensuring the result
+    stays within the base and does not traverse symlinks.
+
+    Returns the absolute path on success, or None if the resulting path
+    would escape the base directory or involve symlinks.
+    """
     base_dir_abs = os.path.abspath(base_dir)
     candidate = os.path.abspath(os.path.join(base_dir_abs, name))
     base_real = os.path.realpath(base_dir_abs)
@@ -52,19 +59,12 @@ def _safe_join(base_dir: str, name: str) -> Optional[str]:
     try:
         if os.path.commonpath([base_real, candidate_real]) != base_real:
             return None
-        relative = os.path.relpath(candidate, base_dir_abs)
     except ValueError:
         return None
-    if relative.startswith(os.pardir + os.sep) or relative == os.pardir:
+    if os.path.islink(candidate_real):
         return None
-    current = base_dir_abs
-    for part in relative.split(os.sep):
-        if part in ("", "."):
-            continue
-        current = os.path.join(current, part)
-        if os.path.islink(current):
-            return None
-    return candidate
+    return candidate_real
+
 
 def init_backup_directory(backup_base_dir: str, db_name: str) -> str:
     """Initialize backup directory for a specific database."""
@@ -328,11 +328,17 @@ def create_postgres_backup(
     user = config.pg_user or "postgres"
     password = config.pg_password or None
 
-    backup_dir = os.path.abspath(backup_dir)
-    os.makedirs(backup_dir, exist_ok=True)
+    # Normalize and validate backup directory
+    backup_dir_abs = os.path.abspath(backup_dir)
+    backup_dir_real = os.path.realpath(backup_dir_abs)
+    if os.path.islink(backup_dir_real):
+        msg = "Invalid backup directory"
+        logger.error(msg)
+        return msg
+    os.makedirs(backup_dir_real, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_label = _sanitize_backup_label(label, "content")
-    out_file = _safe_join(backup_dir, f"{safe_label}_pgdump_{timestamp}.dump")
+    out_file = _safe_join(backup_dir_real, f"{safe_label}_pgdump_{timestamp}.dump")
     if not out_file:
         msg = "Invalid backup path"
         logger.error(msg)
