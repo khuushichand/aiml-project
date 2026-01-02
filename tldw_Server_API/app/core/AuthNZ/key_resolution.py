@@ -24,10 +24,16 @@ def _compute_legacy_hmac_digests(api_key: str, key_materials: List[bytes]) -> Li
     """
     Compute legacy HMAC-SHA256 digests for an API key using the provided key materials.
 
-    This helper exists solely for backward compatibility with historical `api_keys.key_hash`
-    values that were stored as HMAC-SHA256 digests, prior to the introduction of the
-    PBKDF2-based KDF scheme. New keys should be stored and verified using `kdf_hash_api_key`
-    and `verify_kdf_hash` instead of this legacy mechanism.
+    IMPORTANT: This helper is **deprecated** and exists solely for backward compatibility
+    with historical `api_keys.key_hash` values that were stored as HMAC-SHA256 digests,
+    prior to the introduction of the PBKDF2-based KDF scheme.
+
+    - It MUST NOT be used for hashing new API keys, passwords, or other credentials.
+    - All new keys MUST be stored and verified using `kdf_hash_api_key` and
+      `verify_kdf_hash`, which use a computationally expensive KDF.
+
+    The implementation MUST remain byte-for-byte compatible with the historical
+    HMAC-SHA256 digests so that existing database rows continue to verify correctly.
     """
     digests: List[str] = []
     for key in key_materials:
