@@ -323,6 +323,17 @@ def _normalize_whisper_model_identifier(
     if not raw:
         raise ValueError("Whisper model identifier cannot be empty")
 
+    # If this looks like a Hugging Face Hub model id and *not* a local path,
+    # return it directly. We avoid interpreting it as a filesystem path.
+    if (
+        _is_hf_model_id(raw)
+        and not raw.startswith(("/", ".", "~"))
+        and not _looks_like_windows_drive(raw)
+        and os.sep not in raw
+        and (os.altsep is None or os.altsep not in raw)
+    ):
+        return raw
+
     path_like = (
         raw.startswith(("/", ".", "~"))
         or _looks_like_windows_drive(raw)
@@ -1657,12 +1668,16 @@ def check_model_exists(model_name: str) -> bool:
     """
     if not model_name:
         return False
-    default_download_root = str(WHISPER_MODEL_BASE_DIR)
+
+    # Resolve the default download root once as an absolute, normalized path.
+    # All model paths must remain within this directory.
+    default_root_path = WHISPER_MODEL_BASE_DIR.resolve(strict=False)
+    default_download_root = str(default_root_path)
 
     try:
         normalized = _normalize_whisper_model_identifier(
             model_name,
-            base_dir=Path(default_download_root),
+            base_dir=default_root_path,
         )
     except ValueError as exc:
         logging.warning(f"Rejected unsafe whisper model identifier '{model_name}': {exc}")
@@ -1670,19 +1685,28 @@ def check_model_exists(model_name: str) -> bool:
 
     normalized_path = Path(normalized)
     if normalized_path.is_absolute():
-        return normalized_path.exists()
+        # Defensive: ensure any absolute path returned by the normalizer is
+        # still confined to the allowed model base directory before accessing it.
+        candidate = normalized_path.resolve(strict=False)
+        if not _path_is_within(candidate, default_root_path):
+            logging.warning(
+                "Whisper model path resolved outside allowed base directory; "
+                f"model_name={model_name!r}, path={candidate!r}, base={default_root_path!r}"
+            )
+            return False
+        return candidate.exists()
 
-    # Check in default download directory
-    model_path = os.path.join(default_download_root, normalized)
-    if os.path.isdir(model_path):
+    # Check in default download directory for relative identifiers
+    model_path = default_root_path / normalized
+    if model_path.is_dir():
         return True
 
     # Check if it's a Hub ID that might be cached
     if _is_hf_model_id(normalized):
         # Convert Hub ID to potential cache path
         cache_name = normalized.replace('/', '_')
-        cache_path = os.path.join(default_download_root, cache_name)
-        if os.path.isdir(cache_path):
+        cache_path = default_root_path / cache_name
+        if cache_path.is_dir():
             return True
 
     # Check faster-whisper's default cache location
@@ -1828,17 +1852,43 @@ class WhisperModel(OriginalWhisperModel):
             # Let faster-whisper handle finding/downloading this standard model.
             logging.info(f"Treating '{resolved_identifier}' as a standard model size name.")
 
-            custom_path_check = download_root_path / resolved_identifier
-            if custom_path_check.is_dir():
+            # As an additional safety check, never interpret a "standard model"
+            # identifier as a nested or absolute filesystem path. If it contains
+            # any path separators or looks like a drive/path prefix, we skip the
+            # local directory check and pass the name through to faster-whisper.
+            if (
+                resolved_identifier.startswith(("/", ".", "~"))
+                or _looks_like_windows_drive(resolved_identifier)
+                or os.sep in resolved_identifier
+                or (os.altsep and os.altsep in resolved_identifier)
+            ):
                 logging.info(
-                    f"Found standard model '{resolved_identifier}' in custom download root: {custom_path_check}"
+                    "Standard model identifier %r looks like a path; skipping local "
+                    "directory check under download_root.",
+                    resolved_identifier,
                 )
-                resolved_identifier = str(custom_path_check) # Use the local path
             else:
-                logging.info(
-                    f"Standard model '{resolved_identifier}' not in custom root. Passing name to faster-whisper."
-                )
-                # resolved_identifier remains the model size name
+                custom_path_check = download_root_path / resolved_identifier
+                try:
+                    # Resolve both paths to ensure we compare normalized absolute paths
+                    root_resolved = download_root_path.resolve()
+                    candidate_resolved = custom_path_check.resolve()
+                    # Ensure the candidate directory stays within the allowed root
+                    candidate_resolved.relative_to(root_resolved)
+                    is_within_root = True
+                except Exception:
+                    is_within_root = False
+                if is_within_root and candidate_resolved.is_dir():
+                    logging.info(
+                        f"Found standard model '{resolved_identifier}' in custom download root: {candidate_resolved}"
+                    )
+                    resolved_identifier = str(candidate_resolved)  # Use the local path
+                else:
+                    logging.info(
+                        f"Standard model '{resolved_identifier}' not in custom root. Passing name to faster-whisper."
+                    )
+                    # resolved_identifier remains the model size name
+
 
         # --- Pass the determined identifier and other args to the parent ---
         logging.info(

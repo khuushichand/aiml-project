@@ -107,6 +107,10 @@ def _safe_join(base_dir: str, name: str) -> str:
         if os.path.islink(current):
             raise InvalidBackupPathError("invalid_backup_path")
     return candidate
+        raise ValueError("invalid_backup_path") from exc
+    if os.path.islink(candidate_real):
+        raise ValueError("invalid_backup_path")
+    return candidate_real
 
 
 def _backup_dir_for_dataset(dataset: str, user_id: Optional[int]) -> str:
@@ -114,8 +118,8 @@ def _backup_dir_for_dataset(dataset: str, user_id: Optional[int]) -> str:
     dataset_name = _validate_backup_dataset(dataset)
     safe_user_id = _normalize_user_id(user_id)
     if safe_user_id is not None:
-        base_dir = os.path.join(base_dir, f"user_{safe_user_id}")
-    return os.path.join(base_dir, dataset_name)
+        base_dir = _safe_join(base_dir, f"user_{safe_user_id}")
+    return _safe_join(base_dir, dataset_name)
 
 
 def _extract_backup_path(message: str) -> Optional[str]:
@@ -230,6 +234,7 @@ def _prune_backups(backup_dir: str, max_backups: int) -> int:
         entry
         for entry in os.scandir(backup_dir)
         if entry.is_file(follow_symlinks=False)
+        and not entry.is_symlink()
         and entry.name.endswith(_BACKUP_EXTENSIONS)
     ]
     files.sort(key=lambda entry: entry.stat().st_mtime, reverse=True)

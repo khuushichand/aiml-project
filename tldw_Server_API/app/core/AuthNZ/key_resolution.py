@@ -21,6 +21,32 @@ from tldw_Server_API.app.core.AuthNZ.api_key_crypto import (
 from tldw_Server_API.app.core.AuthNZ.repos.api_keys_repo import AuthnzApiKeysRepo
 
 
+def _compute_legacy_hmac_digests(api_key: str, key_materials: List[bytes]) -> List[str]:
+    """
+    Compute legacy HMAC-SHA256 digests for an API key using the provided key materials.
+
+    IMPORTANT: This helper is **deprecated** and exists solely for backward compatibility
+    with historical `api_keys.key_hash` values that were stored as HMAC-SHA256 digests,
+    prior to the introduction of the PBKDF2-based KDF scheme.
+
+    - It MUST NOT be used for hashing new API keys, passwords, or other credentials.
+    - All new keys MUST be stored and verified using `kdf_hash_api_key` and
+      `verify_kdf_hash`, which use a computationally expensive KDF.
+
+    The implementation MUST remain byte-for-byte compatible with the historical
+    HMAC-SHA256 digests so that existing database rows continue to verify correctly.
+    """
+    digests: List[str] = []
+    for key in key_materials:
+        try:
+            digest = hmac.new(key, api_key.encode("utf-8"), hashlib.sha256).hexdigest()
+            if digest not in digests:
+                digests.append(digest)
+        except Exception as exc:
+            logger.debug("resolve_api_key_by_hash: legacy HMAC derive failed: {}", exc)
+    return digests
+
+
 async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Dict[str, Any]]:
     """
     Resolve an API key to its database identity via key_id or legacy HMAC lookup.
@@ -67,6 +93,12 @@ async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Di
             except Exception as e:
                 logger.debug("resolve_api_key_by_hash: failed to derive HMAC materials: {}", e)
                 key_materials = ()
+        # Legacy hash stored with key_id: verify directly against HMAC candidates.
+        try:
+            key_materials = tuple(derive_hmac_key_candidates(s))
+        except Exception as e:
+            logger.debug("resolve_api_key_by_hash: failed to derive HMAC materials: {}", e)
+            key_materials = ()
 
             for key in key_materials:
                 try:
@@ -75,6 +107,7 @@ async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Di
                         digests.append(d)
                 except Exception as _e:
                     logger.debug("resolve_api_key_by_hash: HMAC derive failed: {}", _e)
+        digests: List[str] = _compute_legacy_hmac_digests(api_key, list(key_materials))
 
             if stored_hash and stored_hash in digests:
                 return {"id": row.get("id"), "user_id": row.get("user_id")}
@@ -104,6 +137,7 @@ async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Di
     if not digests:
         return None
 
+    # Dialect-aware query (aligns with APIKeyManager.validate_api_key)
     try:
         row = await repo.fetch_active_by_hash_candidates(digests)
     except Exception as e:

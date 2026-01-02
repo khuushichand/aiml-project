@@ -24,12 +24,27 @@ _SQLITE_BACKUP_EXTS = (".db", ".sqlib")
 _POSTGRES_BACKUP_EXTS = (".dump",)
 
 
-def _sanitize_backup_label(label: str, fallback: str = "db") -> str:
-    """Sanitize a backup label to be safe for filenames."""
+def _sanitize_backup_label(label: str, fallback: str) -> str:
+    """
+    Sanitize a backup label so it is safe to use as a single path component.
+
+    - Only allow alphanumerics, '-' and '_'.
+    - Strip surrounding whitespace and '_' characters.
+    - Truncate to a reasonable maximum length.
+    - Fall back to the provided default if the result is empty or malformed.
+    """
     raw = str(label or "").strip()
+    # Allow only safe filename characters
     cleaned = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in raw)
+    # Trim leading/trailing underscores to avoid odd-looking names
     cleaned = cleaned.strip("_")
-    return cleaned or fallback
+    # Enforce a maximum length to avoid pathological names
+    if len(cleaned) > 100:
+        cleaned = cleaned[:100]
+    # Ensure we end up with a non-empty, sane label
+    if not cleaned or not cleaned[0].isalnum():
+        return fallback
+    return cleaned
 
 
 def _validate_backup_name(backup_name: str, allowed_exts: tuple[str, ...]) -> Optional[str]:
@@ -47,23 +62,18 @@ def _validate_backup_name(backup_name: str, allowed_exts: tuple[str, ...]) -> Op
 
 
 def _safe_join(base_dir: str, name: str) -> Optional[str]:
+    """
+    Safely join a base directory and a relative name, ensuring the result
+    stays within the base and does not traverse symlinks.
+
+    # Reject empty components and absolute paths outright
+    if not name or os.path.isabs(name):
+        return None
+    Returns the absolute path on success, or None if the resulting path
+    would escape the base directory or involve symlinks.
+    """
     base_dir_abs = os.path.abspath(base_dir)
     candidate = os.path.abspath(os.path.join(base_dir_abs, name))
-    try:
-        relative = os.path.relpath(candidate, base_dir_abs)
-    except ValueError:
-        return None
-    if relative.startswith(os.pardir + os.sep) or relative == os.pardir:
-        return None
-    if os.path.islink(candidate):
-        return None
-    current = base_dir_abs
-    for part in relative.split(os.sep):
-        if part in ("", "."):
-            continue
-        current = os.path.join(current, part)
-        if os.path.islink(current):
-            return None
     base_real = os.path.realpath(base_dir_abs)
     candidate_real = os.path.realpath(candidate)
     try:
@@ -71,7 +81,10 @@ def _safe_join(base_dir: str, name: str) -> Optional[str]:
             return None
     except ValueError:
         return None
-    return candidate
+    if os.path.islink(candidate_real):
+        return None
+    return candidate_real
+
 
 def init_backup_directory(backup_base_dir: str, db_name: str) -> str:
     """Initialize backup directory for a specific database."""
@@ -159,8 +172,8 @@ def create_incremental_backup(db_path: str, backup_dir: str, db_name: str) -> st
             try:
                 conn.execute("VACUUM INTO ?", (backup_file,))
             except sqlite3.OperationalError:
-                quoted_path = conn.execute("SELECT quote(?)", (backup_file,)).fetchone()[0]
-                conn.execute(f"VACUUM INTO {quoted_path}")
+                escaped_path = backup_file.replace("'", "''")
+                conn.execute(f"VACUUM INTO '{escaped_path}'")
 
         logger.info(f"Incremental backup created: {backup_file}")
         return f"Incremental backup created: {backup_file}"
@@ -175,7 +188,7 @@ def list_backups(backup_dir: str) -> str:
     try:
         backup_dir = os.path.abspath(backup_dir)
         backups = [f for f in os.listdir(backup_dir)
-                   if f.endswith(_SQLITE_BACKUP_EXTS)]
+                   if f.endswith(('.db', '.sqlib'))]
         backups.sort(reverse=True)  # Most recent first
         return "\n".join(backups) if backups else "No backups found"
     except Exception as e:
@@ -335,12 +348,13 @@ def create_postgres_backup(
     user = config.pg_user or "postgres"
     password = config.pg_password or None
 
+    # Normalize and validate backup directory
     backup_dir_abs = os.path.abspath(backup_dir)
-    if os.path.islink(backup_dir_abs):
-        msg = f"Backup directory is a symlink: {backup_dir_abs}"
+    backup_dir_real = os.path.realpath(backup_dir_abs)
+    if os.path.islink(backup_dir_real):
+        msg = "Invalid backup directory"
         logger.error(msg)
         return msg
-    backup_dir_real = os.path.realpath(backup_dir_abs)
     os.makedirs(backup_dir_real, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_label = _sanitize_backup_label(label, "content")
@@ -385,6 +399,20 @@ def create_postgres_backup(
         return f"pg_dump error: {exc}"
 
 
+def _get_postgres_backup_base_dir(config) -> str:
+    """
+    Determine the base directory where PostgreSQL backups are stored for
+    the given database configuration. This keeps restores confined to the
+    expected backup root on disk instead of trusting user input paths.
+    """
+    # Reuse the same project-relative backup root used elsewhere.
+    base_dir = get_project_relative_path("tldw_DB_Backups")
+    db_name = getattr(config, "pg_database", None) or "postgres"
+    # Use a sanitized database name to avoid introducing path separators.
+    safe_db_name = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in str(db_name))
+    return os.path.join(base_dir, safe_db_name)
+
+
 def restore_postgres_backup(
     backend: DatabaseBackend,
     dump_file: str,
@@ -412,13 +440,21 @@ def restore_postgres_backup(
         logger.error(msg)
         return msg
 
-    dump_path = str(dump_file or "").strip()
-    backup_name = _validate_backup_name(os.path.basename(dump_path), _POSTGRES_BACKUP_EXTS)
+    # Treat dump_file as a logical backup identifier/filename, not as a full path.
+    backup_id = str(dump_file or "").strip()
+    backup_name = _validate_backup_name(os.path.basename(backup_id), _POSTGRES_BACKUP_EXTS)
     if not backup_name:
         msg = "Invalid dump file name"
         logger.error(f"{msg}: {dump_file}")
         return msg
-    backup_dir = os.path.abspath(os.path.dirname(dump_path) or ".")
+
+    config = getattr(backend, "config", None)
+    if not config:
+        msg = "PostgreSQL backend missing configuration; cannot perform restore"
+        logger.error(msg)
+        return msg
+
+    backup_dir = _get_postgres_backup_base_dir(config)
     safe_dump_path = _safe_join(backup_dir, backup_name)
     if not safe_dump_path:
         msg = "Invalid dump file path"

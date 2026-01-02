@@ -67,13 +67,18 @@ def _normalize_user_id_segment(user_id: Optional[str]) -> str:
 
 
 def _resolve_user_cache_path(user_id: str) -> Path:
-    """Resolve per-user cache path under base dir (str -> Path).
-    Falls back to hashed directory if path would escape base; avoids traversal."""
+    """
+    Resolve a per-user cache file path confined under `_USER_DB_BASE`.
+
+    The user_id is first normalized to a single safe path segment (alphanumeric,
+    '_', or '-') or a short hash. This prevents injection of path separators or
+    traversal sequences. The resulting directory layout is:
+        Databases/user_databases/<safe_component>/Rewrite_Cache/rewrite_cache.jsonl
+    """
     base_dir = _USER_DB_BASE.resolve()
     safe_component = _normalize_user_id_segment(user_id)
-    cache_dir = (base_dir / safe_component / "Rewrite_Cache").resolve()
-    if not _is_relative_to(cache_dir, base_dir):
-        cache_dir = (base_dir / _hash_user_id(user_id) / "Rewrite_Cache").resolve()
+    # Construct path using only the sanitized single directory component.
+    cache_dir = base_dir / safe_component / "Rewrite_Cache"
     return cache_dir / "rewrite_cache.jsonl"
 
 

@@ -33,22 +33,50 @@ def _outputs_dir_for_user(user_id: int) -> PathlibPath:
 
 
 def _resolve_output_path_for_user(user_id: int, path_value: str | PathlibPath) -> PathlibPath:
+    """
+    Resolve a path for a user's output, ensuring it stays within the user's outputs directory.
+
+    The caller may pass either a string or a Path. Regardless of input, this function:
+      * Disallows absolute paths and home-expansion.
+      * Uses only the final path component (filename) to avoid directory traversal.
+      * Resolves the final path under the per-user outputs directory.
+    """
     base_dir = _outputs_dir_for_user(user_id)
     try:
         base_resolved = base_dir.resolve(strict=False)
     except Exception as e:
         logger.error(f"outputs: failed to resolve outputs base dir for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail="storage_unavailable") from e
+        raise HTTPException(status_code=500, detail="storage_unavailable")
+
+    # Normalize the candidate to a single relative filename component.
     candidate = path_value if isinstance(path_value, PathlibPath) else PathlibPath(path_value)
+    if candidate.is_absolute():
+        logger.warning(f"outputs: absolute paths are not allowed for outputs: {candidate}")
+        raise HTTPException(status_code=400, detail="invalid_path")
+
+    # Restrict to the final component to prevent directory traversal such as "../".
+    candidate_name = candidate.name
+    if not candidate_name:
+        logger.warning(f"outputs: empty output path component from {path_value!r}")
+        raise HTTPException(status_code=400, detail="invalid_path")
+
+    # Reject any path separators to ensure this remains a simple filename.
+    if os.sep in candidate_name or (os.altsep and os.altsep in candidate_name):
+        logger.warning(f"outputs: path separator detected in output filename: {candidate_name!r}")
+        raise HTTPException(status_code=400, detail="invalid_path")
+
+    # Enforce a conservative filename pattern (alphanumeric, underscore, dash, dot).
+    if not re.match(r"^[A-Za-z0-9_.-]+$", candidate_name):
+        logger.warning(f"outputs: invalid characters in output filename: {candidate_name!r}")
+        raise HTTPException(status_code=400, detail="invalid_path")
+
+    safe_candidate = PathlibPath(candidate_name)
     try:
-        candidate = candidate.expanduser()
-        if candidate.is_absolute():
-            resolved = candidate.resolve(strict=False)
-        else:
-            resolved = (base_resolved / candidate).resolve(strict=False)
+        resolved = (base_resolved / safe_candidate).resolve(strict=False)
     except Exception as e:
         logger.warning(f"outputs: invalid output path {path_value}: {e}")
-        raise HTTPException(status_code=400, detail="invalid_path") from e
+        raise HTTPException(status_code=400, detail="invalid_path")
+
     if not resolved.is_relative_to(base_resolved):
         logger.warning(f"outputs: output path outside base dir: {resolved}")
         raise HTTPException(status_code=400, detail="invalid_path")
