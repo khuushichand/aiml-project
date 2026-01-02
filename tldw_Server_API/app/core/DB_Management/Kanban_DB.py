@@ -68,12 +68,19 @@ def _normalize_db_path(
     except (OSError, RuntimeError) as exc:
         raise InputError(f"Invalid db_path: {db_path}") from exc
 
-    if not allow_external_db_path and not _is_test_context():
-        user_dir = DatabasePaths.get_user_base_directory(user_id).resolve()
+    # Always enforce that the database path stays within the user's base directory
+    # when a user_id is provided and we are not in a test context. This guards
+    # against directory traversal or use of unexpected locations, even if
+    # allow_external_db_path is True.
+    if user_id and not _is_test_context():
+        try:
+            user_dir = DatabasePaths.get_user_base_directory(user_id).resolve()
+        except Exception as exc:
+            raise InputError("Unable to determine user database directory") from exc
         try:
             resolved.relative_to(user_dir)
         except ValueError as exc:
-            raise InputError(f"db_path must be within user database directory: {user_dir}") from exc
+            raise InputError("db_path must be within the user database directory") from exc
 
     return str(resolved), False
 
