@@ -323,15 +323,33 @@ def _normalize_whisper_model_identifier(
     if not raw:
         raise ValueError("Whisper model identifier cannot be empty")
 
+    # If this looks like a Hugging Face Hub model id and *not* a local path,
+    # return it directly. We avoid interpreting it as a filesystem path.
     if (
         _is_hf_model_id(raw)
         and not raw.startswith(("/", ".", "~"))
         and not _looks_like_windows_drive(raw)
+        and os.sep not in raw
+        and (os.altsep is None or os.altsep not in raw)
     ):
         return raw
 
     path_like = (
         raw.startswith(("/", ".", "~"))
+
+    # For non-path-like "standard" model names, enforce a conservative pattern
+    # so we never accidentally treat a user-controlled value as a filesystem path.
+    if not path_like:
+        # Reject values that contain path traversal patterns.
+        if ".." in raw or raw.startswith(("/", ".", "~")):
+            raise ValueError(f"Invalid whisper model identifier: {raw!r}")
+        # Disallow any directory separator characters.
+        if os.sep in raw or (os.altsep and os.altsep in raw):
+            raise ValueError(f"Invalid whisper model identifier: {raw!r}")
+        # Optionally, restrict to a safe character set: letters, digits, dot, dash, underscore.
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", raw):
+            raise ValueError(f"Invalid whisper model identifier: {raw!r}")
+        return raw
         or _looks_like_windows_drive(raw)
         or os.sep in raw
         or (os.altsep and os.altsep in raw)
@@ -1833,27 +1851,43 @@ class WhisperModel(OriginalWhisperModel):
             # Let faster-whisper handle finding/downloading this standard model.
             logging.info(f"Treating '{resolved_identifier}' as a standard model size name.")
 
-            custom_path_check = download_root_path / resolved_identifier
-            try:
-                # Resolve both paths to ensure we compare normalized absolute paths
-                root_resolved = download_root_path.resolve()
-                candidate_resolved = custom_path_check.resolve()
-                # Ensure the candidate directory stays within the allowed root
-                candidate_resolved.relative_to(root_resolved)
-                is_within_root = True
-            except Exception:
-                is_within_root = False
-
-            if is_within_root and candidate_resolved.is_dir():
+            # As an additional safety check, never interpret a "standard model"
+            # identifier as a nested or absolute filesystem path. If it contains
+            # any path separators or looks like a drive/path prefix, we skip the
+            # local directory check and pass the name through to faster-whisper.
+            if (
+                resolved_identifier.startswith(("/", ".", "~"))
+                or _looks_like_windows_drive(resolved_identifier)
+                or os.sep in resolved_identifier
+                or (os.altsep and os.altsep in resolved_identifier)
+            ):
                 logging.info(
-                    f"Found standard model '{resolved_identifier}' in custom download root: {candidate_resolved}"
+                    "Standard model identifier %r looks like a path; skipping local "
+                    "directory check under download_root.",
+                    resolved_identifier,
                 )
-                resolved_identifier = str(candidate_resolved)  # Use the local path
             else:
-                logging.info(
-                    f"Standard model '{resolved_identifier}' not in custom root. Passing name to faster-whisper."
-                )
-                # resolved_identifier remains the model size name
+                custom_path_check = download_root_path / resolved_identifier
+                try:
+                    # Resolve both paths to ensure we compare normalized absolute paths
+                    root_resolved = download_root_path.resolve()
+                    candidate_resolved = custom_path_check.resolve()
+                    # Ensure the candidate directory stays within the allowed root
+                    candidate_resolved.relative_to(root_resolved)
+                    is_within_root = True
+                except Exception:
+                    is_within_root = False
+                if is_within_root and candidate_resolved.is_dir():
+                    logging.info(
+                        f"Found standard model '{resolved_identifier}' in custom download root: {candidate_resolved}"
+                    )
+                    resolved_identifier = str(candidate_resolved)  # Use the local path
+                else:
+                    logging.info(
+                        f"Standard model '{resolved_identifier}' not in custom root. Passing name to faster-whisper."
+                    )
+                    # resolved_identifier remains the model size name
+
 
         # --- Pass the determined identifier and other args to the parent ---
         logging.info(
