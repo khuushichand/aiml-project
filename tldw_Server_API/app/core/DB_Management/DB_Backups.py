@@ -379,6 +379,20 @@ def create_postgres_backup(
         return f"pg_dump error: {exc}"
 
 
+def _get_postgres_backup_base_dir(config) -> str:
+    """
+    Determine the base directory where PostgreSQL backups are stored for
+    the given database configuration. This keeps restores confined to the
+    expected backup root on disk instead of trusting user input paths.
+    """
+    # Reuse the same project-relative backup root used elsewhere.
+    base_dir = get_project_relative_path("tldw_DB_Backups")
+    db_name = getattr(config, "pg_database", None) or "postgres"
+    # Use a sanitized database name to avoid introducing path separators.
+    safe_db_name = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in str(db_name))
+    return os.path.join(base_dir, safe_db_name)
+
+
 def restore_postgres_backup(
     backend: DatabaseBackend,
     dump_file: str,
@@ -406,13 +420,21 @@ def restore_postgres_backup(
         logger.error(msg)
         return msg
 
-    dump_path = str(dump_file or "").strip()
-    backup_name = _validate_backup_name(os.path.basename(dump_path), _POSTGRES_BACKUP_EXTS)
+    # Treat dump_file as a logical backup identifier/filename, not as a full path.
+    backup_id = str(dump_file or "").strip()
+    backup_name = _validate_backup_name(os.path.basename(backup_id), _POSTGRES_BACKUP_EXTS)
     if not backup_name:
         msg = "Invalid dump file name"
         logger.error(f"{msg}: {dump_file}")
         return msg
-    backup_dir = os.path.abspath(os.path.dirname(dump_path) or ".")
+
+    config = getattr(backend, "config", None)
+    if not config:
+        msg = "PostgreSQL backend missing configuration; cannot perform restore"
+        logger.error(msg)
+        return msg
+
+    backup_dir = _get_postgres_backup_base_dir(config)
     safe_dump_path = _safe_join(backup_dir, backup_name)
     if not safe_dump_path:
         msg = "Invalid dump file path"
@@ -420,12 +442,6 @@ def restore_postgres_backup(
         return msg
     if not os.path.exists(safe_dump_path):
         msg = f"dump not found: {safe_dump_path}"
-        logger.error(msg)
-        return msg
-
-    config = getattr(backend, "config", None)
-    if not config:
-        msg = "PostgreSQL backend missing configuration; cannot perform restore"
         logger.error(msg)
         return msg
 
