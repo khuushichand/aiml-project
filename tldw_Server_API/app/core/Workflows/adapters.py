@@ -31,6 +31,26 @@ def _sanitize_path_component(value: str, default: str, max_len: int = 80) -> str
     return cleaned[:max_len]
 
 
+def _is_subpath(parent: Path, child: Path) -> bool:
+    """
+    Return True if 'child' is located within 'parent' (after resolving both).
+    This is a compatibility-safe equivalent of Path.is_relative_to.
+    """
+    try:
+        parent_resolved = parent.resolve(strict=False)
+    except Exception:
+        parent_resolved = parent
+    try:
+        child_resolved = child.resolve(strict=False)
+    except Exception:
+        child_resolved = child
+    try:
+        child_resolved.relative_to(parent_resolved)
+        return True
+    except ValueError:
+        return False
+
+
 def _artifacts_base_dir() -> Path:
     return Path("Databases") / "artifacts"
 
@@ -41,11 +61,18 @@ def _resolve_artifacts_dir(step_run_id: str | None) -> Path:
         base_resolved = base_dir.resolve(strict=False)
     except Exception:
         base_resolved = base_dir
+    # Sanitize the provided ID and force it to be a single path component.
     safe_id = _sanitize_path_component(step_run_id or "", f"artifact_{int(time.time() * 1000)}")
+    safe_id = Path(safe_id).name or f"artifact_{int(time.time() * 1000)}"
     candidate = (base_resolved / safe_id).resolve(strict=False)
-    if not candidate.is_relative_to(base_resolved):
-        safe_id = f"artifact_{int(time.time() * 1000)}"
-        candidate = (base_resolved / safe_id).resolve(strict=False)
+    if not _is_subpath(base_resolved, candidate):
+        # Fall back to a generated artifact id if the original cannot be contained safely.
+        fallback_id = f"artifact_{int(time.time() * 1000)}"
+        fallback_id = Path(fallback_id).name
+        candidate = (base_resolved / fallback_id).resolve(strict=False)
+        if not _is_subpath(base_resolved, candidate):
+            # As a last resort, refuse to use an unsafe path.
+            raise AdapterError("artifact_dir_resolution_failed")
     return candidate
 
 
