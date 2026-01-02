@@ -59,10 +59,12 @@ def _resolved_dir() -> Path:
 
 def _assert_within_base(path: Path, base: Path) -> None:
     resolved_base = base.resolve(strict=False)
-    resolved_path = path.resolve(strict=False)
+    # Anchor the candidate path under the resolved base and normalize it.
+    # Using only path.name ensures no caller can escape via subdirectories.
+    candidate = (resolved_base / path.name).resolve(strict=False)
     try:
         # Ensure the resolved path is within the resolved base directory
-        resolved_path.relative_to(resolved_base)
+        candidate.relative_to(resolved_base)
     except ValueError:
         raise ValueError("Template path must stay within the watchlist template directory")
 
