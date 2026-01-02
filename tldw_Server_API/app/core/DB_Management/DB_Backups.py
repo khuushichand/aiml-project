@@ -25,10 +25,26 @@ _POSTGRES_BACKUP_EXTS = (".dump",)
 
 
 def _sanitize_backup_label(label: str, fallback: str) -> str:
+    """
+    Sanitize a backup label so it is safe to use as a single path component.
+
+    - Only allow alphanumerics, '-' and '_'.
+    - Strip surrounding whitespace and '_' characters.
+    - Truncate to a reasonable maximum length.
+    - Fall back to the provided default if the result is empty or malformed.
+    """
     raw = str(label or "").strip()
+    # Allow only safe filename characters
     cleaned = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in raw)
+    # Trim leading/trailing underscores to avoid odd-looking names
     cleaned = cleaned.strip("_")
-    return cleaned or fallback
+    # Enforce a maximum length to avoid pathological names
+    if len(cleaned) > 100:
+        cleaned = cleaned[:100]
+    # Ensure we end up with a non-empty, sane label
+    if not cleaned or not cleaned[0].isalnum():
+        return fallback
+    return cleaned
 
 
 def _validate_backup_name(backup_name: str, allowed_exts: tuple[str, ...]) -> Optional[str]:
@@ -49,6 +65,9 @@ def _safe_join(base_dir: str, name: str) -> Optional[str]:
     Safely join a base directory and a relative name, ensuring the result
     stays within the base and does not traverse symlinks.
 
+    # Reject empty components and absolute paths outright
+    if not name or os.path.isabs(name):
+        return None
     Returns the absolute path on success, or None if the resulting path
     would escape the base directory or involve symlinks.
     """
