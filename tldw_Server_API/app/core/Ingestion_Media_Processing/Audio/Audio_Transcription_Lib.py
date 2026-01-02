@@ -1821,11 +1821,21 @@ class WhisperModel(OriginalWhisperModel):
             logging.info(f"Treating '{resolved_identifier}' as a standard model size name.")
 
             custom_path_check = download_root_path / resolved_identifier
-            if custom_path_check.is_dir():
+            try:
+                # Resolve both paths to ensure we compare normalized absolute paths
+                root_resolved = download_root_path.resolve()
+                candidate_resolved = custom_path_check.resolve()
+                # Ensure the candidate directory stays within the allowed root
+                candidate_resolved.relative_to(root_resolved)
+                is_within_root = True
+            except Exception:
+                is_within_root = False
+
+            if is_within_root and candidate_resolved.is_dir():
                 logging.info(
-                    f"Found standard model '{resolved_identifier}' in custom download root: {custom_path_check}"
+                    f"Found standard model '{resolved_identifier}' in custom download root: {candidate_resolved}"
                 )
-                resolved_identifier = str(custom_path_check) # Use the local path
+                resolved_identifier = str(candidate_resolved)  # Use the local path
             else:
                 logging.info(
                     f"Standard model '{resolved_identifier}' not in custom root. Passing name to faster-whisper."
