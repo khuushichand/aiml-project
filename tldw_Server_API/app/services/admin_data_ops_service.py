@@ -94,8 +94,8 @@ def _backup_dir_for_dataset(dataset: str, user_id: Optional[int]) -> str:
     dataset_name = _validate_backup_dataset(dataset)
     safe_user_id = _normalize_user_id(user_id)
     if safe_user_id is not None:
-        base_dir = os.path.join(base_dir, f"user_{safe_user_id}")
-    return os.path.join(base_dir, dataset_name)
+        base_dir = _safe_join(base_dir, f"user_{safe_user_id}")
+    return _safe_join(base_dir, dataset_name)
 
 
 def _extract_backup_path(message: str) -> Optional[str]:
