@@ -12,6 +12,7 @@ import json
 import os
 import time
 import hashlib
+import string
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -20,6 +21,49 @@ from loguru import logger
 
 
 DEFAULT_PATH = Path("Databases/Rewrite_Cache/rewrite_cache.jsonl")
+_USER_DB_BASE = Path("Databases/user_databases")
+_ALLOWED_USER_ID_CHARS = set(string.ascii_letters + string.digits + "_-")
+
+
+def _is_relative_to(path: Path, base: Path) -> bool:
+    try:
+        path.relative_to(base)
+        return True
+    except ValueError:
+        return False
+
+
+def _hash_user_id(value: str) -> str:
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+    return f"user_{digest}"
+
+
+def _is_safe_user_id(user_id: str) -> bool:
+    if not user_id or user_id in {".", ".."}:
+        return False
+    if user_id[0] not in string.ascii_letters + string.digits:
+        return False
+    if user_id[-1] not in string.ascii_letters + string.digits:
+        return False
+    return all(ch in _ALLOWED_USER_ID_CHARS for ch in user_id)
+
+
+def _normalize_user_id_segment(user_id: Optional[str]) -> str:
+    raw = str(user_id or "").strip()
+    if not raw:
+        return "anon"
+    if _is_safe_user_id(raw):
+        return raw
+    return _hash_user_id(raw)
+
+
+def _resolve_user_cache_path(user_id: str) -> Path:
+    base_dir = _USER_DB_BASE.resolve()
+    safe_component = _normalize_user_id_segment(user_id)
+    cache_dir = (base_dir / safe_component / "Rewrite_Cache").resolve()
+    if not _is_relative_to(cache_dir, base_dir):
+        cache_dir = (base_dir / _hash_user_id(user_id) / "Rewrite_Cache").resolve()
+    return cache_dir / "rewrite_cache.jsonl"
 
 
 def _safe_path() -> Path:
@@ -84,12 +128,12 @@ class RewriteCache:
         # Determine storage path (per-user if provided)
         if path is None:
             if user_id:
-                base = Path("Databases/user_databases") / str(user_id) / "Rewrite_Cache"
                 try:
-                    base.mkdir(parents=True, exist_ok=True)
+                    p = _resolve_user_cache_path(str(user_id))
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    self.path = str(p)
                 except Exception:
-                    pass
-                self.path = str(base / "rewrite_cache.jsonl")
+                    self.path = str(_safe_path())
             else:
                 self.path = str(_safe_path())
         else:

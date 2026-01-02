@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from tldw_Server_API.app.core.config import get_stt_config
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 
 try:
     # Reuse the central model-name parser so HTTP/OpenAI-style model
@@ -147,9 +148,10 @@ class FasterWhisperAdapter(SttProviderAdapter):
         else:
             selected_lang = language or None
 
+        model_name = model or "distil-large-v3"
         result = fw_speech_to_text(
             audio_path,
-            whisper_model=model or "",
+            whisper_model=model_name,
             selected_source_lang=selected_lang,
             vad_filter=False,
             diarize=False,
@@ -157,6 +159,7 @@ class FasterWhisperAdapter(SttProviderAdapter):
             return_language=True,
             initial_prompt=prompt,
             task=task,
+            base_dir=base_dir,
         )
 
         segments_list, detected_lang = result
@@ -176,7 +179,7 @@ class FasterWhisperAdapter(SttProviderAdapter):
             "usage": {"duration_ms": None, "tokens": None},
             "metadata": {
                 "provider": self.name.value,
-                "model": model or "",
+                "model": model_name,
             },
         }
 
@@ -222,6 +225,7 @@ class ParakeetAdapter(SttProviderAdapter):
             vad_filter=False,
             diarize=False,
             return_language=True,
+            base_dir=base_dir,
         )
         text = " ".join(
             str(seg.get("Text", "")).strip()
@@ -274,10 +278,17 @@ class CanaryAdapter(SttProviderAdapter):
         import soundfile as sf  # type: ignore
         import numpy as np  # type: ignore
 
+        path_obj = Path(audio_path)
+        if base_dir is not None:
+            safe_path = resolve_safe_local_path(path_obj, base_dir)
+            if safe_path is None:
+                raise ValueError(f"Audio path rejected outside base_dir: {audio_path}")
+            path_obj = safe_path
+
         try:
-            audio_np, sample_rate = sf.read(audio_path)
+            audio_np, sample_rate = sf.read(str(path_obj))
         except Exception as e:
-            raise ValueError(f"Failed to read audio file {audio_path}: {e}") from e
+            raise ValueError(f"Failed to read audio file {path_obj}: {e}") from e
         if not isinstance(audio_np, np.ndarray):
             audio_np = np.array(audio_np, dtype="float32")
 
@@ -349,6 +360,7 @@ class Qwen2AudioAdapter(SttProviderAdapter):
             vad_filter=False,
             diarize=False,
             return_language=True,
+            base_dir=base_dir,
         )
         text = " ".join(
             str(seg.get("Text", "")).strip()

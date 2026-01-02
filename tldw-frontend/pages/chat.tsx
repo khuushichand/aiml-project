@@ -753,7 +753,7 @@ export default function ChatPage() {
         <button
           type="button"
           className={downClasses}
-          onClick={() => openFeedbackModal(msg, false)}
+          onClick={() => handleFeedback(msg.messageId as string, false)}
           disabled={pending}
           aria-label="Send not helpful feedback"
         >

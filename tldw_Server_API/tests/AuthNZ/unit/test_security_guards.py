@@ -126,6 +126,7 @@ class TestCryptoFallbackProtection:
         # Set up environment for production with test context
         monkeypatch.setenv("ENVIRONMENT", "production")
         monkeypatch.setenv("PYTEST_CURRENT_TEST", "yes")  # Mark as test context
+        monkeypatch.setenv("TEST_MODE", "true")
 
         from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key_candidates
 
@@ -153,6 +154,7 @@ class TestCryptoFallbackProtection:
         # Set up environment for non-production with test context
         monkeypatch.setenv("ENVIRONMENT", "development")
         monkeypatch.setenv("PYTEST_CURRENT_TEST", "yes")  # Mark as test context
+        monkeypatch.setenv("TEST_MODE", "true")
 
         from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key_candidates
 

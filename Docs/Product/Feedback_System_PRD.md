@@ -7,7 +7,7 @@ This PRD defines a unified feedback system that supports chat responses and RAG 
 - Ship a shared explicit feedback endpoint for chat + RAG, backed by UnifiedFeedbackSystem.
 - Capture per-response helpfulness, relevance (1-5), issue categories, and notes.
 - Support message-level feedback (conversation/message IDs) and source-level feedback (document/chunk IDs).
-- Always-on implicit feedback by default (click/copy/expand/dwell/citation-used) for personalization signals; disable via feature flag in regulated environments.
+- Always-on implicit feedback by default (click/copy/expand/dwell/citation_used) for personalization signals; disable via feature flag in regulated environments.
 - Add UI hooks for quick thumbs + detailed modal in modern chat UI.
 
 ## Non-Goals
@@ -28,7 +28,7 @@ This PRD defines a unified feedback system that supports chat responses and RAG 
 - Supports per-source feedback by accepting document_ids and chunk_ids.
 
 2) Implicit feedback (always-on by default)
-- Records click/expand/copy/dwell/citation-used signals without UI.
+- Records click/expand/copy/dwell/citation_used signals without UI.
 - Captures session_id, optional query, optional doc_id, and rank.
 - Dwell time recorded once per response to avoid spam.
 
@@ -141,7 +141,7 @@ Notes:
 
 ### Quick Feedback Row
 ASCII wireframe:
-```
+```text
 +----------------------------------------------------+
 | Assistant: The main function handles...            |
 | ...                                                |
@@ -156,7 +156,7 @@ ASCII wireframe:
 - [...] opens detailed modal.
 
 ### Detailed Feedback Modal
-```
+```text
 +-----------------------------------------------+
 | Feedback                                  [X] |
 +-----------------------------------------------+
@@ -178,7 +178,7 @@ ASCII wireframe:
 - Submitting sends relevance_score, issues, and user_notes.
 
 ### Source-Level Feedback (Pro mode)
-```
+```text
 Sources (3)
 +-----------------------------------+
 | main.py:42                  [UP][DOWN] |
@@ -224,7 +224,7 @@ Sources (3)
 
 ### Phase 4: Source-Level + Implicit
 - Add per-source feedback UI where sources are shown.
-- Emit implicit signals (copy/click/expand/dwell/citation-used) with dwell_ms and citation identifiers when available.
+- Emit implicit signals (copy/click/expand/dwell/citation_used) with dwell_ms and citation identifiers when available.
 
 ## Risks & Mitigations
 - Missing message IDs in UI: add optional message ID sidecar in chat messages API.

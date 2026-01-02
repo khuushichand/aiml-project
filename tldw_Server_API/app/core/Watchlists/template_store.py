@@ -57,14 +57,29 @@ def _resolved_dir() -> Path:
     return base
 
 
+def _assert_within_base(path: Path, base: Path) -> None:
+    resolved_base = base.resolve(strict=False)
+    resolved_path = path.resolve(strict=False)
+    if resolved_base not in resolved_path.parents:
+        raise ValueError("Template path must stay within the watchlist template directory")
+
+
 def _template_path(name: str, fmt: str) -> Path:
+    name = _sanitize_name(name)
     fmt = fmt.lower()
     suffix = ".md" if fmt == "md" else ".html"
-    return _resolved_dir() / f"{name}{suffix}"
+    base = _resolved_dir()
+    path = base / f"{name}{suffix}"
+    _assert_within_base(path, base)
+    return path
 
 
 def _meta_path(name: str) -> Path:
-    return _resolved_dir() / f"{name}.meta.json"
+    name = _sanitize_name(name)
+    base = _resolved_dir()
+    path = base / f"{name}.meta.json"
+    _assert_within_base(path, base)
+    return path
 
 
 def _load_description(meta_file: Path) -> Optional[str]:

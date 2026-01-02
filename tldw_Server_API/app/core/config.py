@@ -532,6 +532,8 @@ def load_settings():
             return default
         return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
+    implicit_feedback_enabled_value = _to_bool(os.getenv("IMPLICIT_FEEDBACK_ENABLED"), True)
+
     def _safe_int(value: object, default: int) -> int:
         try:
             if value is None:
@@ -1212,6 +1214,7 @@ def load_settings():
                 ))(load_comprehensive_config())
             )
         ))(),
+        "IMPLICIT_FEEDBACK_ENABLED": implicit_feedback_enabled_value,
 
         # RAG LLM reranker configuration (provider/model)
         "RAG_LLM_RERANKER_PROVIDER": (lambda _env, _cp: (
@@ -1821,7 +1824,10 @@ def implicit_feedback_enabled(default: bool = True) -> bool:
         try:
             cp = load_comprehensive_config()
             v = cp.get("RAG", "implicit_feedback_enabled", fallback=str(default)) if cp else str(default)
-        except Exception:
+        except (FileNotFoundError, configparser.Error) as exc:
+            _log_debug(
+                f"implicit_feedback_enabled: config load failed, falling back to default={default}: {exc}"
+            )
             v = str(default)
     return _as_bool(v, default)
 

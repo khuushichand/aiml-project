@@ -26,6 +26,16 @@ Use existing feedback_analytics fields:
 - feedback_type, rating, categories, improvement_areas
 Map issues -> categories or improvement_areas for reporting.
 
+## Schema Migration Strategy
+- ChaChaNotes schema changes live in `tldw_Server_API/app/core/DB_Management/ChaChaNotes_DB.py` as
+  `_MIGRATION_SQL_V{n}_TO_V{n+1}` (and `_MIGRATION_SQL_V{n}_TO_V{n+1}_POSTGRES` when needed), with
+  `_CURRENT_SCHEMA_VERSION` bumped when a new migration is added.
+- For v0.1, `conversation_feedback.issues` is added via the bootstrap DDL in
+  `tldw_Server_API/app/core/RAG/rag_service/analytics_system.py` (`UserFeedbackStore._init_schema`)
+  to avoid a full schema bump. The `ALTER TABLE` is idempotent for both SQLite and Postgres.
+- Backward compatibility: existing rows get `issues` as NULL; API serialization treats missing/NULL
+  as `[]`, so no backfill is required.
+
 ## API Design
 
 ### Explicit Feedback
@@ -58,8 +68,13 @@ Query derivation:
 Idempotency:
 - If idempotency_key is present, dedupe by (user_id, idempotency_key).
 - If idempotency_key is absent, best-effort dedupe within a short window:
-  - Chat: (conversation_id, message_id, feedback_type, helpful, relevance_score)
-  - RAG-only: (query, feedback_type, helpful, relevance_score, document_ids, chunk_ids)
+  - Chat: (conversation_id, message_id, feedback_type, helpful, relevance_score[, user_notes_hash])
+  - RAG-only: (query, feedback_type, helpful, relevance_score, document_ids, chunk_ids[, user_notes_hash])
+- user_notes_hash: when user_notes is present, append a SHA-256 hex digest of user_notes after
+  UTF-8 encoding and trimming leading/trailing whitespace. This avoids storing raw notes in the
+  key while preventing accidental collisions when helpful/relevance_score are omitted.
+- For repeated submissions that differ only in user_notes (or if you want stronger guarantees),
+  clients should send an idempotency_key so updates are reliably deduped and merged.
 
 Auth and rate limits:
 - Require the same AuthNZ modes as other chat/RAG endpoints.
@@ -94,6 +109,13 @@ Capture rules:
 Feature flag:
 - IMPLICIT_FEEDBACK_ENABLED (default true). When false, server ignores implicit events.
 
+Rate limits and throttling:
+- Apply a separate per-user rate limit for implicit events (target: 300/min) so explicit feedback
+  stays available even under noisy UI activity.
+- Client should debounce high-frequency UI interactions and emit at most one dwell event per response.
+- If the implicit rate limit is exceeded, the server may drop events or return 429; the UI should
+  treat implicit feedback as best-effort.
+
 ## UI Integration
 
 ### Quick feedback row
@@ -118,6 +140,23 @@ Feature flag:
 ## Observability
 - Log success/failure counts for explicit feedback endpoint.
 - Track implicit event rates and drop counts when feature flag is off.
+
+## Setup & Verification
+- Enable implicit events via `implicit_feedback_enabled=true` in `Config_Files/config.txt` or `IMPLICIT_FEEDBACK_ENABLED=true` in the environment.
+- Explicit feedback is served at `POST /api/v1/feedback/explicit`; implicit feedback is served at `POST /api/v1/rag/feedback/implicit`.
+- Use the same auth headers as chat/RAG endpoints.
+- Smoke test:
+  ```bash
+  curl -X POST http://127.0.0.1:8000/api/v1/feedback/explicit \
+    -H 'Authorization: Bearer <JWT>' \
+    -H 'Content-Type: application/json' \
+    -d '{"conversation_id":"C_123","message_id":"M_456","feedback_type":"helpful","helpful":true}'
+
+  curl -X POST http://127.0.0.1:8000/api/v1/rag/feedback/implicit \
+    -H 'Authorization: Bearer <JWT>' \
+    -H 'Content-Type: application/json' \
+    -d '{"event_type":"copy","query":"example query","session_id":"S_1"}'
+  ```
 
 ## Testing Strategy
 - Unit tests for schema validation and required-by-context rules.

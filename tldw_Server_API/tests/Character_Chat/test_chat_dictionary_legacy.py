@@ -13,6 +13,7 @@ import pytest
 import json
 import tempfile
 import re
+from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 from datetime import datetime
 
@@ -279,7 +280,7 @@ Description: Test import
             f.write(markdown_content)
             f.flush()
 
-            result = service.import_from_markdown(f.name, "Test Dictionary")
+            result = service.import_from_markdown(Path(f.name), "Test Dictionary")
 
         # The method returns the dictionary ID, not a dict
         assert result == 1
@@ -305,7 +306,7 @@ Description: Test import
         with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
             temp_path = f.name
 
-        result = service.export_to_markdown(1, temp_path)
+        result = service.export_to_markdown(1, Path(temp_path))
 
         # The method returns a boolean
         assert result == True

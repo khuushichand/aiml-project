@@ -504,6 +504,37 @@ def test_save_chat_history_new_conversation_default_char():
 
 
 @pytest.mark.unit
+@patch("tldw_Server_API.app.core.Chat.chat_history.DEFAULT_CHARACTER_NAME", "TestDefaultChar")
+def test_save_chat_history_persists_system_message():
+    mock_db = MagicMock(spec=CharactersRAGDB)
+    mock_db.client_id = "unit_test_client_sys"
+    mock_db.get_character_card_by_name.return_value = {"id": 99, "name": "TestDefaultChar"}
+    mock_db.add_conversation.return_value = "new_conv_id_sys"
+    mock_db.add_message.return_value = None
+    mock_db.transaction.return_value.__enter__.return_value = None
+
+    history_to_save = [
+        {"role": "system", "content": "System rules"},
+        {"role": "user", "content": "Hello"}
+    ]
+
+    conv_id, message = save_chat_history_to_db_wrapper(
+        db=mock_db,
+        chatbot_history=history_to_save,
+        conversation_id=None,
+        media_content_for_char_assoc=None,
+        character_name_for_chat=None
+    )
+
+    assert conv_id == "new_conv_id_sys"
+    assert "success" in message.lower()
+    assert mock_db.add_message.call_count == 2
+    first_message_call_args = mock_db.add_message.call_args_list[0].args[0]
+    assert first_message_call_args["sender"] == "system"
+    assert first_message_call_args["content"] == "System rules"
+
+
+@pytest.mark.unit
 def test_save_chat_history_resave_conversation_specific_char():
     mock_db = MagicMock(spec=CharactersRAGDB)
     mock_db.client_id = "unit_test_client_resave"

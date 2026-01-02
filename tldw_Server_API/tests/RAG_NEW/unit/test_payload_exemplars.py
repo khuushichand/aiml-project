@@ -1,7 +1,11 @@
 import json
 from pathlib import Path
 
-from tldw_Server_API.app.core.RAG.rag_service.payload_exemplars import maybe_record_exemplar, _redact
+import tldw_Server_API.app.core.RAG.rag_service.payload_exemplars as payload_exemplars
+from tldw_Server_API.app.core.RAG.rag_service.payload_exemplars import (
+    _redact,
+    maybe_record_exemplar,
+)
 
 
 def test_redact_basic():
@@ -13,7 +17,10 @@ def test_redact_basic():
 
 
 def test_exemplar_writes(tmp_path, monkeypatch):
-    sink = tmp_path / "ex.jsonl"
+    base_dir = tmp_path / "observability"
+    sink = base_dir / "ex.jsonl"
+    monkeypatch.setattr(payload_exemplars, "BASE_DIR", base_dir)
+    monkeypatch.setattr(payload_exemplars, "SINK", base_dir / "rag_payload_exemplars.jsonl")
     monkeypatch.setenv("RAG_PAYLOAD_EXEMPLAR_PATH", str(sink))
     monkeypatch.setenv("RAG_PAYLOAD_EXEMPLAR_SAMPLING", "1.0")  # force write
 
@@ -31,3 +38,36 @@ def test_exemplar_writes(tmp_path, monkeypatch):
     assert data[-1]["reason"] == "test"
     # When explicit path override is used, namespace is still recorded but does not affect sink
     assert "namespace" in data[-1]
+
+
+def test_safe_sink_enforces_base_dir(tmp_path, monkeypatch):
+    base_dir = tmp_path / "observability"
+    sink = base_dir / "rag_payload_exemplars.jsonl"
+    monkeypatch.setattr(payload_exemplars, "BASE_DIR", base_dir)
+    monkeypatch.setattr(payload_exemplars, "SINK", sink)
+    monkeypatch.setenv("RAG_PAYLOAD_EXEMPLAR_PATH", str(tmp_path / "outside.jsonl"))
+
+    path = payload_exemplars._safe_sink()
+    assert path == sink
+
+    inside = base_dir / "custom.jsonl"
+    monkeypatch.setenv("RAG_PAYLOAD_EXEMPLAR_PATH", str(inside))
+    path = payload_exemplars._safe_sink()
+    assert path == inside.resolve()
+
+
+def test_safe_sink_namespace_and_user_fallback(tmp_path, monkeypatch):
+    base_dir = tmp_path / "observability"
+    sink = base_dir / "rag_payload_exemplars.jsonl"
+    monkeypatch.setattr(payload_exemplars, "BASE_DIR", base_dir)
+    monkeypatch.setattr(payload_exemplars, "SINK", sink)
+    monkeypatch.delenv("RAG_PAYLOAD_EXEMPLAR_PATH", raising=False)
+
+    path = payload_exemplars._safe_sink(namespace="tenant-1")
+    assert path == base_dir / "tenants" / "tenant-1" / "rag_payload_exemplars.jsonl"
+
+    path = payload_exemplars._safe_sink(user_id="user-1")
+    assert path == base_dir / "users" / "user-1" / "rag_payload_exemplars.jsonl"
+
+    path = payload_exemplars._safe_sink(namespace="!!!")
+    assert path == sink

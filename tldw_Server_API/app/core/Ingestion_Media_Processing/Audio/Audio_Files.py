@@ -122,7 +122,19 @@ def check_transcription_model_status(model_name: str) -> Dict[str, Any]:
         - 'message': Human-readable status message
         - 'model': The model name
     """
-    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import check_model_exists
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
+        check_model_exists,
+        validate_whisper_model_identifier,
+    )
+
+    try:
+        model_name = validate_whisper_model_identifier(model_name)
+    except ValueError as exc:
+        return {
+            'available': False,
+            'message': str(exc),
+            'model': model_name,
+        }
 
     if check_model_exists(model_name):
         return {
@@ -747,7 +759,11 @@ def process_audio_files(
                     update_progress(f"Converting '{Path(current_audio_path).name}' to WAV...")
                     try:
                         # Overwrite in temp dir context for non-WAV inputs
-                        wav_file_path = convert_to_wav(current_audio_path, overwrite=True)
+                        wav_file_path = convert_to_wav(
+                            current_audio_path,
+                            overwrite=True,
+                            base_dir=processing_temp_dir_path,
+                        )
                         # ... (path checking logic - ensure wav_file_path is valid) ...
                         if not wav_file_path or not Path(wav_file_path).exists():
                              raise TranscriptionConversionError(f"convert_to_wav did not return a valid path or file does not exist: {wav_file_path}")
@@ -789,6 +805,7 @@ def process_audio_files(
                         selected_source_lang=transcription_language,
                         vad_filter=vad_use,
                         diarize=diarize,
+                        base_dir=processing_temp_dir_path,
                     )
                     raw_segments = transcription_output
 

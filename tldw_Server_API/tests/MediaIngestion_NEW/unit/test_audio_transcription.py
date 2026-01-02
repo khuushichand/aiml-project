@@ -66,6 +66,20 @@ def test_convert_to_wav_rejects_invalid_range(tmp_path):
 
 
 @pytest.mark.unit
+def test_convert_to_wav_rejects_symlink_input(tmp_path):
+    target = tmp_path / "real.mp3"
+    target.write_bytes(b"\x00" * 2048)
+    link = tmp_path / "link.mp3"
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip("symlinks not supported on this platform")
+
+    with pytest.raises(ConversionError):
+        convert_to_wav(str(link), overwrite=True)
+
+
+@pytest.mark.unit
 def test_convert_to_wav_respects_ffmpeg_path(monkeypatch, tmp_path):
     ffmpeg_path = tmp_path / "ffmpeg-bin"
     ffmpeg_path.write_text("#!/bin/sh\necho ffmpeg\n")
@@ -249,8 +263,9 @@ def test_speech_to_text_persists_cache_files(monkeypatch, tmp_path):
     segments = speech_to_text(str(audio_file), whisper_model="tiny", selected_source_lang="en")
     assert segments
 
-    out_file = audio_file.with_name(f"{audio_file.stem}-whisper_model-tiny.segments.json")
-    pretty_file = audio_file.with_name(f"{audio_file.stem}-whisper_model-tiny.segments_pretty.json")
+    cache_dir = audio_file.parent / atlib.TRANSCRIPT_CACHE_DIR_NAME
+    out_file = cache_dir / f"{audio_file.stem}-whisper_model-tiny.segments.json"
+    pretty_file = cache_dir / f"{audio_file.stem}-whisper_model-tiny.segments_pretty.json"
 
     assert out_file.exists()
     payload = json.loads(out_file.read_text())
@@ -264,8 +279,10 @@ def test_perform_transcription_regenerates_on_invalid_cache(monkeypatch, tmp_pat
     audio_file.write_bytes(b"\x00" * 2048)
 
     model_name = "fake-model"
-    base_path = audio_file.with_suffix("")
-    cache_path = base_path.with_name(f"{base_path.name}-transcription_model-{model_name}.segments.json")
+    cache_dir = audio_file.parent / atlib.TRANSCRIPT_CACHE_DIR_NAME
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    model_name_sanitized = atlib._sanitize_transcription_model_name(model_name)
+    cache_path = cache_dir / f"{audio_file.stem}-transcription_model-{model_name_sanitized}.segments.json"
     cache_path.write_text("not valid json")
 
     regenerated = [{"Text": "regen"}]
@@ -273,8 +290,15 @@ def test_perform_transcription_regenerates_on_invalid_cache(monkeypatch, tmp_pat
 
     monkeypatch.setattr(atlib, "convert_to_wav", lambda *args, **kwargs: str(audio_file))
 
-    def fake_run_stt(path, model, vad_filter=False, selected_source_lang="en", duration_seconds=None):
-        _ = (path, vad_filter, duration_seconds)  # kept for signature compatibility in tests
+    def fake_run_stt(
+        path,
+        model,
+        vad_filter=False,
+        selected_source_lang="en",
+        duration_seconds=None,
+        base_dir=None,
+    ):
+        _ = (path, vad_filter, duration_seconds, base_dir)  # kept for signature compatibility in tests
         regen_called["called"] = True
         return {
             "text": "regen",
@@ -363,8 +387,89 @@ def test_speech_to_text_respects_persist_toggle(monkeypatch, tmp_path):
     segments = speech_to_text(str(audio_file), whisper_model="tiny", selected_source_lang="en", persist_segments=False)
     assert segments
 
-    out_file = audio_file.with_name(f"{audio_file.stem}-whisper_model-tiny.segments.json")
+    cache_dir = audio_file.parent / atlib.TRANSCRIPT_CACHE_DIR_NAME
+    out_file = cache_dir / f"{audio_file.stem}-whisper_model-tiny.segments.json"
     assert not out_file.exists()
+
+
+@pytest.mark.unit
+def test_speech_to_text_rejects_symlink_input(monkeypatch, tmp_path):
+    audio_file = tmp_path / "sample.wav"
+    audio_file.write_bytes(b"\x00" * 2048)
+    link = tmp_path / "sample_link.wav"
+    try:
+        link.symlink_to(audio_file)
+    except OSError:
+        pytest.skip("symlinks not supported on this platform")
+
+    with pytest.raises(ValueError):
+        speech_to_text(str(link), whisper_model="tiny", selected_source_lang="en", persist_segments=False)
+
+
+@pytest.mark.unit
+def test_speech_to_text_rejects_path_outside_base_dir(tmp_path):
+    audio_file = tmp_path / "sample.wav"
+    audio_file.write_bytes(b"\x00" * 16)
+    base_dir = tmp_path / "allowed"
+    base_dir.mkdir()
+
+    with pytest.raises(ValueError):
+        speech_to_text(
+            str(audio_file),
+            whisper_model="tiny",
+            selected_source_lang="en",
+            base_dir=base_dir,
+        )
+
+
+@pytest.mark.unit
+def test_speech_to_text_rejects_path_outside_allowed_roots(monkeypatch, tmp_path):
+    audio_file = tmp_path / "sample.wav"
+    audio_file.write_bytes(b"\x00" * 2048)
+    allowed_root = tmp_path / "allowed"
+    allowed_root.mkdir()
+
+    monkeypatch.setattr(atlib, "_get_allowed_media_base_dirs", lambda: [allowed_root])
+
+    with pytest.raises(ValueError):
+        speech_to_text(
+            str(audio_file),
+            whisper_model="tiny",
+            selected_source_lang="en",
+        )
+
+
+@pytest.mark.unit
+def test_validate_whisper_model_identifier_rejects_path(tmp_path):
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
+        validate_whisper_model_identifier,
+    )
+
+    with pytest.raises(ValueError):
+        validate_whisper_model_identifier(str(tmp_path / "model.bin"))
+
+
+@pytest.mark.unit
+def test_validate_whisper_model_identifier_allows_hf_id():
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
+        validate_whisper_model_identifier,
+    )
+
+    assert (
+        validate_whisper_model_identifier("openai/whisper-large-v3")
+        == "openai/whisper-large-v3"
+    )
+
+
+@pytest.mark.unit
+def test_resolve_whisper_download_root_rejects_outside_base(monkeypatch, tmp_path):
+    base_root = tmp_path / "models" / "Whisper"
+    base_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(atlib, "WHISPER_MODEL_BASE_DIR", base_root)
+
+    outside_root = tmp_path / "outside"
+    with pytest.raises(ValueError):
+        atlib._resolve_whisper_download_root(str(outside_root))
 
 
 @pytest.mark.unit

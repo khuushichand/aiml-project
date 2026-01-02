@@ -46,6 +46,7 @@ def test_public_keys_excluded_when_secret_present(monkeypatch):
 def test_only_public_key_uses_test_fallback_in_pytest(monkeypatch):
     # Ensure clean settings
     reset_settings()
+    monkeypatch.setenv("TEST_MODE", "true")
 
     # Only public key is set; in pytest context, fallback key should be used
     monkeypatch.setenv("AUTH_MODE", "multi_user")

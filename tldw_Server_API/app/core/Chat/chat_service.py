@@ -31,6 +31,7 @@ from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
     map_sender_to_role,
     sanitize_sender_name,
 )
+from tldw_Server_API.app.core.Chat.message_utils import should_persist_message_role
 from tldw_Server_API.app.core.Chat.prompt_template_manager import (
     DEFAULT_RAW_PASSTHROUGH_TEMPLATE,
     load_template,
@@ -907,9 +908,9 @@ async def build_context_and_messages(
             raw_hist = list(reversed(raw_hist))
         for db_msg in raw_hist:
             sender_val = str(db_msg.get("sender", "") or "")
-            role = map_sender_to_role(sender_val, character_card.get("name") if character_card else None)
-            if role == "system":
+            if not should_persist_message_role(sender_val):
                 continue
+            role = map_sender_to_role(sender_val, character_card.get("name") if character_card else None)
             char_name_hist = character_card.get("name", "Char") if character_card else "Char"
             text_content = db_msg.get("content", "")
             if text_content and role != "tool":
@@ -982,7 +983,7 @@ async def build_context_and_messages(
     # Process current turn messages (persist if needed)
     request_messages: List[Dict[str, Any]] = []
     for msg_model in request_data.messages:
-        if msg_model.role == "system":
+        if not should_persist_message_role(msg_model.role):
             continue
         request_messages.append(msg_model.model_dump(exclude_none=True))
 
@@ -1436,6 +1437,7 @@ async def execute_streaming_call(
         tool_calls: Optional[List[Dict[str, Any]]],
         function_call: Optional[Dict[str, Any]],
     ):
+        saved_message_id: Optional[str] = None
         full_reply_to_save = full_reply
         post_stream_blocked = False
         try:
@@ -1536,14 +1538,8 @@ async def execute_streaming_call(
         if should_persist and final_conversation_id and not post_stream_blocked and (
             full_reply_to_save or tool_calls or function_call
         ):
-            asst_name = character_card_for_context.get("name", "Assistant") if character_card_for_context else "Assistant"
-            asst_name = (
-                asst_name.replace(" ", "_")
-                .replace("<", "")
-                .replace(">", "")
-                .replace("|", "")
-                .replace("\\", "")
-                .replace("/", "")
+            asst_name = sanitize_sender_name(
+                character_card_for_context.get("name") if character_card_for_context else None
             )
             message_payload: Dict[str, Any] = {
                 "role": "assistant",
@@ -1561,7 +1557,6 @@ async def execute_streaming_call(
                 message_payload,
                 use_transaction=True,
             )
-            return saved_message_id
         # Usage logging (estimated) after stream completes
         try:
             pt_est = 0
@@ -1629,6 +1624,7 @@ async def execute_streaming_call(
                 await on_success(selected_provider)
         except Exception:
             pass
+        return saved_message_id
 
     async def tracked_streaming_generator():
         async with metrics.track_streaming(final_conversation_id) as stream_tracker:
@@ -2263,14 +2259,8 @@ async def execute_non_stream_call(
         and (content_to_save or tool_calls_to_save or function_call_to_save)
     )
     if should_save_response:
-        asst_name = character_card_for_context.get("name", "Assistant") if character_card_for_context else "Assistant"
-        asst_name = (
-            asst_name.replace(" ", "_")
-            .replace("<", "")
-            .replace(">", "")
-            .replace("|", "")
-            .replace("\\", "")
-            .replace("/", "")
+        asst_name = sanitize_sender_name(
+            character_card_for_context.get("name") if character_card_for_context else None
         )
         message_payload: Dict[str, Any] = {"role": "assistant", "name": asst_name}
         if content_to_save is not None:

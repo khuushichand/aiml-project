@@ -18,3 +18,13 @@ def test_personalization_boost(tmp_path, monkeypatch):
     boosted = store.boost_documents(docs, corpus="demo")
     # d2 should be ranked first after boost
     assert boosted[0].id == "d2"
+
+
+def test_personalization_store_sanitizes_user_id(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    store = UserPersonalizationStore("../evil")
+    base = (tmp_path / "Databases" / "user_databases").resolve()
+    path = store.path.resolve()
+    path.relative_to(base)
+    assert "/" not in store.user_id
+    assert "\\" not in store.user_id

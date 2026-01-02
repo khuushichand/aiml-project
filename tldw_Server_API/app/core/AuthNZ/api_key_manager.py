@@ -2,7 +2,6 @@
 # Description: API key management with rotation, expiration, and revocation capabilities
 #
 # Imports
-import secrets
 import hashlib
 import hmac
 import json
@@ -21,6 +20,15 @@ from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 from tldw_Server_API.app.core.AuthNZ.crypto_utils import (
     derive_hmac_key,
     derive_hmac_key_candidates,
+)
+from tldw_Server_API.app.core.AuthNZ.api_key_crypto import (
+    format_api_key,
+    generate_api_key_id,
+    generate_api_key_secret,
+    is_kdf_hash,
+    kdf_hash_api_key,
+    parse_api_key,
+    verify_kdf_hash,
 )
 
 if TYPE_CHECKING:
@@ -157,7 +165,6 @@ class APIKeyManager:
         self._initialized = False
         self.settings = get_settings()
         self.key_prefix = "tldw_"  # Prefix for identifying our API keys
-        self.key_length = 32  # Length of random part
         # Fingerprint the HMAC key material to detect settings changes (e.g., JWT_SECRET_KEY)
         self._hmac_key_fingerprint = _compute_hmac_fingerprint(self.settings)
 
@@ -314,43 +321,38 @@ class APIKeyManager:
                 f"Failed to create API keys tables {self._db_context_hint()}"
             ) from e
 
-    def generate_api_key(self) -> tuple[str, str]:
+    def generate_api_key(self) -> tuple[str, str, str]:
         """
         Generate a new API key
 
         Returns:
-            Tuple of (full_key, key_hash)
+            Tuple of (full_key, key_hash, key_id)
             - full_key: The complete API key to give to the user
             - key_hash: The hash to store in the database
+            - key_id: Embedded key identifier for fast lookup
         """
-        # Generate random key
-        random_part = secrets.token_urlsafe(self.key_length)
-        full_key = f"{self.key_prefix}{random_part}"
+        key_id = generate_api_key_id()
+        secret = generate_api_key_secret()
+        full_key = format_api_key(key_id, secret)
+        key_hash = kdf_hash_api_key(full_key)
 
-        # Create HMAC hash for storage using centralized derivation
-        hmac_key = derive_hmac_key(self.settings)
-        key_hash = hmac.new(hmac_key, full_key.encode("utf-8"), hashlib.sha256).hexdigest()
-
-        return full_key, key_hash
+        return full_key, key_hash, key_id
 
     def hash_api_key(self, api_key: str) -> str:
         """
-        Hash an API key for comparison using HMAC-SHA256.
+        Hash an API key for storage or comparison.
 
-        This provides better security than plain SHA256 by using a secret key,
-        preventing length extension attacks.
-
-        Note: We use HMAC-SHA256 instead of Argon2 because:
-        - API keys are already high-entropy (cryptographically random)
-        - This hash is used for fast lookups on every API request
-        - Argon2 would add unnecessary latency (100-1000x slower)
+        New-format keys use a slow PBKDF2-HMAC-SHA256 KDF to protect
+        low-entropy secrets. Legacy keys retain HMAC-SHA256 hashing.
 
         Args:
             api_key: The API key to hash
 
         Returns:
-            HMAC-SHA256 hash of the API key
+            Encoded hash string (KDF for new-format keys, HMAC-SHA256 hex for legacy)
         """
+        if parse_api_key(api_key):
+            return kdf_hash_api_key(api_key)
         candidates = self.hash_candidates(api_key)
         if not candidates:
             raise ValueError("Unable to derive API key hash candidates")
@@ -405,7 +407,7 @@ class APIKeyManager:
         stored_scope = json.dumps(scope) if isinstance(scope, (list, tuple)) else scope
 
         # Generate the key
-        full_key, key_hash = self.generate_api_key()
+        full_key, key_hash, key_identifier = self.generate_api_key()
         key_prefix = full_key[:10] + "..."  # Store prefix for identification
 
         # Calculate expiration
@@ -418,6 +420,7 @@ class APIKeyManager:
             key_id = await repo.create_api_key_row(
                 user_id=user_id,
                 key_hash=key_hash,
+                key_identifier=key_identifier,
                 key_prefix=key_prefix,
                 name=name,
                 description=description,
@@ -479,7 +482,7 @@ class APIKeyManager:
         if not self._initialized:
             await self.initialize()
 
-        full_key, key_hash = self.generate_api_key()
+        full_key, key_hash, key_identifier = self.generate_api_key()
         key_prefix = full_key[:10] + "..."
         expires_at = None
         if expires_in_days is not None:
@@ -490,6 +493,7 @@ class APIKeyManager:
             key_id = await repo.create_virtual_key_row(
                 user_id=user_id,
                 key_hash=key_hash,
+                key_identifier=key_identifier,
                 key_prefix=key_prefix,
                 name=name,
                 description=description,
@@ -557,19 +561,45 @@ class APIKeyManager:
         if not self._initialized:
             await self.initialize()
 
-        hash_candidates = self.hash_candidates(api_key)
-        if not hash_candidates:
-            return None
-
         try:
             repo = self._get_repo()
-            result = await repo.fetch_active_by_hash_candidates(hash_candidates)
-            if not result:
-                return None
+            key_id_info = parse_api_key(api_key)
+            hash_candidates: List[str] = []
+            primary_hash: Optional[str] = None
 
-            key_info = dict(result)
-            stored_hash = key_info.get("key_hash")
-            primary_hash = hash_candidates[0]
+            if key_id_info:
+                key_identifier, _secret = key_id_info
+                result = await repo.fetch_active_by_key_id(key_identifier)
+                if not result:
+                    return None
+
+                key_info = dict(result)
+                stored_hash = key_info.get("key_hash")
+                if not stored_hash:
+                    return None
+
+                if is_kdf_hash(stored_hash):
+                    if not verify_kdf_hash(api_key, stored_hash):
+                        return None
+                else:
+                    hash_candidates = self.hash_candidates(api_key)
+                    if not hash_candidates:
+                        return None
+                    primary_hash = hash_candidates[0]
+                    if not hmac.compare_digest(stored_hash, primary_hash):
+                        return None
+            else:
+                hash_candidates = self.hash_candidates(api_key)
+                if not hash_candidates:
+                    return None
+
+                result = await repo.fetch_active_by_hash_candidates(hash_candidates)
+                if not result:
+                    return None
+
+                key_info = dict(result)
+                stored_hash = key_info.get("key_hash")
+                primary_hash = hash_candidates[0]
 
             # Check expiration
             expires_at_raw = key_info.get("expires_at")
@@ -626,18 +656,19 @@ class APIKeyManager:
                             )
                         return None
 
-            # Use timing-safe comparison to prevent timing attacks
-            if stored_hash and not hmac.compare_digest(stored_hash, primary_hash):
-                try:
-                    await repo.update_key_hash(key_info["id"], primary_hash)
-                    key_info["key_hash"] = primary_hash
-                except Exception as normalize_exc:
-                    if self.settings.PII_REDACT_LOGS:
-                        logger.warning("Failed to normalize API key hash (details redacted)")
-                    else:
-                        logger.warning(
-                            f"Failed to normalize API key hash for key {key_info.get('id')}: {normalize_exc}"
-                        )
+            # Use timing-safe comparison to prevent timing attacks (legacy HMAC path only)
+            if primary_hash and stored_hash and not is_kdf_hash(stored_hash):
+                if not hmac.compare_digest(stored_hash, primary_hash):
+                    try:
+                        await repo.update_key_hash(key_info["id"], primary_hash)
+                        key_info["key_hash"] = primary_hash
+                    except Exception as normalize_exc:
+                        if self.settings.PII_REDACT_LOGS:
+                            logger.warning("Failed to normalize API key hash (details redacted)")
+                        else:
+                            logger.warning(
+                                f"Failed to normalize API key hash for key {key_info.get('id')}: {normalize_exc}"
+                            )
             key_info.pop("key_hash", None)
 
             # Check scope
@@ -714,7 +745,7 @@ class APIKeyManager:
                 allowed_ips = decoded_allowed_ips  # type: ignore[assignment]
 
             # Generate new key credentials
-            full_key, key_hash = self.generate_api_key()
+            full_key, key_hash, key_identifier = self.generate_api_key()
             key_prefix = full_key[:10] + "..."
 
             # Calculate expiration for new key
@@ -731,6 +762,7 @@ class APIKeyManager:
                 user_id=user_id,
                 old_key_id=key_id,
                 new_key_hash=key_hash,
+                new_key_identifier=key_identifier,
                 new_key_prefix=key_prefix,
                 new_name=new_name,
                 new_description=old_key['description'],

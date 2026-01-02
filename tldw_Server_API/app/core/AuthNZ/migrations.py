@@ -117,6 +117,7 @@ def migration_003_create_api_keys_table(conn: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
             key_hash TEXT UNIQUE NOT NULL,
+            key_id TEXT,
             key_prefix TEXT,
             name TEXT,
             description TEXT,
@@ -149,6 +150,7 @@ def migration_003_create_api_keys_table(conn: sqlite3.Connection) -> None:
                 conn.execute(f"ALTER TABLE api_keys ADD COLUMN {decl}")
                 cols.add(name)
 
+        add_col('key_id', "key_id TEXT")
         add_col('key_prefix', "key_prefix TEXT")
         add_col('description', "description TEXT")
         add_col('scope', "scope TEXT DEFAULT 'read'")
@@ -170,6 +172,7 @@ def migration_003_create_api_keys_table(conn: sqlite3.Connection) -> None:
     # Create indexes (only if columns exist)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key_id ON api_keys(key_id)")
     try:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")
     except Exception:
@@ -2019,6 +2022,20 @@ def rollback_043_drop_retention_policy_overrides(conn: sqlite3.Connection) -> No
     logger.info("Rollback 043: Dropped retention_policy_overrides table")
 
 
+def migration_044_add_api_keys_key_id(conn: sqlite3.Connection) -> None:
+    """Add key_id column + index for api_keys (SQLite)."""
+    try:
+        cur = conn.execute("PRAGMA table_info(api_keys)")
+        cols = {row[1] for row in cur.fetchall()}
+        if "key_id" not in cols:
+            conn.execute("ALTER TABLE api_keys ADD COLUMN key_id TEXT")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key_id ON api_keys(key_id)")
+        conn.commit()
+        logger.info("Migration 044: Added api_keys.key_id + index")
+    except Exception as error:
+        logger.warning(f"Migration 044 skipped or failed: {error}")
+
+
 #######################################################################################################################
 #
 # Migration Registry
@@ -2150,6 +2167,11 @@ def get_authnz_migrations() -> List[Migration]:
             "Create retention_policy_overrides table",
             migration_043_create_retention_policy_overrides,
             rollback_043_drop_retention_policy_overrides,
+        ),
+        Migration(
+            44,
+            "Add api_keys.key_id column",
+            migration_044_add_api_keys_key_id,
         ),
     ]
 

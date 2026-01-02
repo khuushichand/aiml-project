@@ -115,7 +115,7 @@ def _list_backup_files(dataset: str, user_id: Optional[int]) -> List[BackupFile]
     for entry in os.scandir(backup_dir):
         if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
             continue
-        if not entry.name.endswith((".db", ".sqlib", ".dump")):
+        if not entry.name.endswith(_BACKUP_EXTENSIONS):
             continue
         stat = entry.stat()
         files.append(
@@ -139,11 +139,9 @@ def list_backup_items(
     limit: int,
     offset: int,
 ) -> Tuple[List[BackupFile], int]:
-    datasets = [dataset] if dataset else list(DATASET_DB_RESOLVERS.keys()) + ["authnz"]
+    datasets = [_validate_backup_dataset(dataset)] if dataset is not None else list(DATASET_DB_RESOLVERS.keys()) + ["authnz"]
     items: List[BackupFile] = []
     for key in datasets:
-        if key not in DATASET_DB_RESOLVERS and key != "authnz":
-            continue
         dataset_user_id = None if key == "authnz" else user_id
         items.extend(_list_backup_files(key, dataset_user_id))
     items.sort(key=lambda item: item.created_at, reverse=True)
@@ -213,7 +211,7 @@ def _prune_backups(backup_dir: str, max_backups: int) -> int:
         for entry in os.scandir(backup_dir)
         if entry.is_file(follow_symlinks=False)
         and not entry.is_symlink()
-        and entry.name.endswith((".db", ".sqlib", ".dump"))
+        and entry.name.endswith(_BACKUP_EXTENSIONS)
     ]
     files.sort(key=lambda entry: entry.stat().st_mtime, reverse=True)
     removed = 0

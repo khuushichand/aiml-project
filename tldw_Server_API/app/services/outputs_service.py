@@ -22,6 +22,7 @@ def update_output_artifact_db(
         sets.append("title = ?")
         params.append(new_title)
     if new_path is not None:
+        new_path = cdb.resolve_output_storage_path(new_path)
         sets.append("storage_path = ?")
         params.append(new_path)
     if new_format is not None:

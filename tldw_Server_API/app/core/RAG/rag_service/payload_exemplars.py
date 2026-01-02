@@ -18,7 +18,20 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 
-SINK = Path("Databases/observability/rag_payload_exemplars.jsonl")
+BASE_DIR = Path("Databases/observability")
+SINK = BASE_DIR / "rag_payload_exemplars.jsonl"
+
+
+def _enforce_base_dir(candidate: Path) -> Path:
+    base_dir = BASE_DIR.resolve()
+    try:
+        resolved = candidate.expanduser().resolve()
+    except Exception:
+        return SINK
+    if not resolved.is_relative_to(base_dir):
+        logger.warning("RAG payload exemplar path outside base dir; using default path.")
+        return SINK
+    return resolved
 
 
 def _safe_sink(user_id: Optional[str] = None, namespace: Optional[str] = None) -> Path:
@@ -26,15 +39,21 @@ def _safe_sink(user_id: Optional[str] = None, namespace: Optional[str] = None) -
         # Prefer explicit override when provided
         p = os.getenv("RAG_PAYLOAD_EXEMPLAR_PATH")
         if p:
-            sink = Path(p)
+            sink = _enforce_base_dir(Path(p))
         else:
             # In multi-tenant setups, segregate exemplars per user/namespace
             if namespace:
                 safe_namespace = "".join(c for c in str(namespace) if c.isalnum() or c in ('-', '_', '.'))
-                sink = Path("Databases/observability") / "tenants" / safe_namespace / "rag_payload_exemplars.jsonl"
+                if safe_namespace:
+                    sink = BASE_DIR / "tenants" / safe_namespace / "rag_payload_exemplars.jsonl"
+                else:
+                    sink = SINK
             elif user_id:
                 safe_user_id = "".join(c for c in str(user_id) if c.isalnum() or c in ('-', '_', '.'))
-                sink = Path("Databases/observability") / "users" / safe_user_id / "rag_payload_exemplars.jsonl"
+                if safe_user_id:
+                    sink = BASE_DIR / "users" / safe_user_id / "rag_payload_exemplars.jsonl"
+                else:
+                    sink = SINK
             else:
                 sink = SINK
         sink.parent.mkdir(parents=True, exist_ok=True)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -20,6 +21,97 @@ from tldw_Server_API.app.core.http_client import create_client as _wf_create_cli
 
 class AdapterError(Exception):
     pass
+
+
+def _sanitize_path_component(value: str, default: str, max_len: int = 80) -> str:
+    raw = str(value or "").strip()
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw).strip("._-")
+    if not cleaned:
+        cleaned = default
+    return cleaned[:max_len]
+
+
+def _artifacts_base_dir() -> Path:
+    return Path("Databases") / "artifacts"
+
+
+def _resolve_artifacts_dir(step_run_id: str | None) -> Path:
+    base_dir = _artifacts_base_dir()
+    try:
+        base_resolved = base_dir.resolve(strict=False)
+    except Exception:
+        base_resolved = base_dir
+    safe_id = _sanitize_path_component(step_run_id or "", f"artifact_{int(time.time() * 1000)}")
+    candidate = (base_resolved / safe_id).resolve(strict=False)
+    if not candidate.is_relative_to(base_resolved):
+        safe_id = f"artifact_{int(time.time() * 1000)}"
+        candidate = (base_resolved / safe_id).resolve(strict=False)
+    return candidate
+
+
+def _resolve_artifact_filename(name: str, ext: str, default_stem: str = "artifact") -> str:
+    raw_name = Path(name).name
+    if raw_name in {"", ".", ".."}:
+        raw_name = default_stem
+    stem = Path(raw_name).stem or default_stem
+    safe_stem = _sanitize_path_component(stem, default_stem)
+    return f"{safe_stem}.{ext}"
+
+
+def _unsafe_file_access_allowed(config: Dict[str, Any] | None) -> bool:
+    # Ignore per-step config to avoid user-controlled path bypasses.
+    return str(os.getenv("WORKFLOWS_ALLOW_UNSAFE_FILE_ACCESS", "")).lower() in {"1", "true", "yes", "on"}
+
+
+def _workflow_file_base_dir(context: Dict[str, Any], config: Dict[str, Any] | None) -> Path:
+    # Only allow server-side base dir overrides.
+    env_override = os.getenv("WORKFLOWS_FILE_BASE_DIR")
+    if env_override:
+        base = Path(str(env_override)).expanduser()
+        if not base.is_absolute():
+            try:
+                from tldw_Server_API.app.core.Utils.Utils import get_project_root
+                base = (Path(get_project_root()) / base).resolve()
+            except Exception:
+                base = base.resolve()
+        else:
+            base = base.resolve()
+        return base
+    try:
+        from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+        raw_user_id = context.get("user_id") if isinstance(context, dict) else None
+        try:
+            user_id = int(raw_user_id) if raw_user_id is not None else DatabasePaths.get_single_user_id()
+        except Exception:
+            user_id = DatabasePaths.get_single_user_id()
+        return DatabasePaths.get_user_base_directory(user_id)
+    except Exception:
+        return Path("Databases").resolve()
+
+
+def _resolve_workflow_file_path(path_value: str, context: Dict[str, Any], config: Dict[str, Any] | None = None) -> Path:
+    if _unsafe_file_access_allowed(config):
+        return Path(path_value).expanduser()
+    base_dir = _workflow_file_base_dir(context, config)
+    try:
+        base_resolved = base_dir.resolve(strict=False)
+    except Exception:
+        base_resolved = base_dir
+    candidate = Path(path_value).expanduser()
+    if candidate.is_absolute():
+        resolved = candidate.resolve(strict=False)
+    else:
+        resolved = (base_resolved / candidate).resolve(strict=False)
+    if not resolved.is_relative_to(base_resolved):
+        raise AdapterError("file_access_denied")
+    return resolved
+
+
+def _resolve_workflow_file_uri(file_uri: str, context: Dict[str, Any], config: Dict[str, Any] | None = None) -> Path:
+    if not file_uri.startswith("file://"):
+        raise AdapterError("missing_or_invalid_file_uri")
+    raw_path = file_uri[len("file://"):]
+    return _resolve_workflow_file_path(raw_path, context, config)
 
 
 async def run_prompt_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
@@ -90,9 +182,8 @@ async def run_prompt_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
     # Optional artifact persistence
     try:
         if bool(config.get("save_artifact")) and callable(context.get("add_artifact")):
-            from pathlib import Path
             step_run_id = str(context.get("step_run_id") or "")
-            art_dir = Path("Databases") / "artifacts" / (step_run_id or f"prompt_{int(time.time()*1000)}")
+            art_dir = _resolve_artifacts_dir(step_run_id or f"prompt_{int(time.time()*1000)}")
             art_dir.mkdir(parents=True, exist_ok=True)
             fpath = art_dir / "prompt.txt"
             fpath.write_text(rendered or "", encoding="utf-8")
@@ -254,12 +345,16 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
 
         # file:// URIs: read and optionally chunk locally
         if uri.startswith("file://"):
-            path = uri[len("file://"):]
+            try:
+                resolved_path = _resolve_workflow_file_uri(uri, context, config)
+            except AdapterError:
+                out["metadata"].append({"source": uri, "status": "file_access_denied"})
+                continue
             try:
                 try:
-                    text = Path(path).read_text(encoding="utf-8")
+                    text = resolved_path.read_text(encoding="utf-8")
                 except Exception:
-                    text = Path(path).read_text(errors="ignore")
+                    text = resolved_path.read_text(errors="ignore")
             except Exception:
                 out["metadata"].append({"source": uri, "status": "read_error"})
                 continue
@@ -365,7 +460,7 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                             from pathlib import Path as _Path
                             _mdb_path = str((_Path(__file__).resolve().parents[5] / "Databases" / "Media_DB_v2.db").resolve())
                     mdb = MediaDatabase(_mdb_path, client_id="workflow_engine")
-                    title = (config.get("metadata", {}) or {}).get("title") or Path(path).name
+                    title = (config.get("metadata", {}) or {}).get("title") or resolved_path.name
                     keywords = (config.get("metadata", {}) or {}).get("tags") or []
                     media_type = src.get("media_type") or "document"
                     media_id, media_uuid, msg = mdb.add_media_with_keywords(
@@ -907,7 +1002,7 @@ async def run_tts_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     import uuid, time as _time, os as _os
     from pathlib import Path
     step_run_id = str(context.get("step_run_id") or f"tts_{int(_time.time()*1000)}")
-    out_dir = Path("Databases") / "artifacts" / step_run_id
+    out_dir = _resolve_artifacts_dir(step_run_id)
     out_dir.mkdir(parents=True, exist_ok=True)
     ext = "mp3" if fmt not in {"wav","opus","flac","aac","pcm"} else fmt
     # Optional file naming template
@@ -937,6 +1032,7 @@ async def run_tts_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
             fname = f"speech.{ext}"
     else:
         fname = f"speech.{ext}"
+    fname = _resolve_artifact_filename(fname, ext, default_stem="speech")
     out_path = out_dir / fname
 
     size_bytes = 0
@@ -1165,15 +1261,18 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
         file_uri = str(config.get("file_uri") or "").strip()
         if not file_uri.startswith("file://"):
             return {"error": "missing_or_invalid_file_uri"}
-        path = file_uri[len("file://"):]
+        try:
+            resolved_path = _resolve_workflow_file_uri(file_uri, context, config)
+        except AdapterError as e:
+            return {"error": str(e)}
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
-            fb = Path(path).read_bytes()
+            fb = resolved_path.read_bytes()
             performed_analysis = bool(config.get("perform_analysis", True))
             chunk_opts = config.get("chunking") or {}
             result = await process_pdf_task(
                 file_bytes=fb,
-                filename=Path(path).name,
+                filename=resolved_path.name,
                 parser=str(config.get("parser") or "pymupdf4llm"),
                 perform_analysis=performed_analysis,
                 api_name=config.get("api_name") if performed_analysis else None,
@@ -1200,10 +1299,13 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
         file_uri = str(config.get("file_uri") or "").strip()
         if not file_uri.startswith("file://"):
             return {"error": "missing_or_invalid_file_uri"}
-        path = file_uri[len("file://"):]
+        try:
+            resolved_path = _resolve_workflow_file_uri(file_uri, context, config)
+        except AdapterError as e:
+            return {"error": str(e)}
         try:
             from tldw_Server_API.app.services.ebook_processing_service import process_ebook_task
-            res = await process_ebook_task(file_path=path, title=config.get("title"), author=config.get("author"), custom_prompt=config.get("custom_prompt"), api_name=config.get("api_name"))
+            res = await process_ebook_task(file_path=str(resolved_path), title=config.get("title"), author=config.get("author"), custom_prompt=config.get("custom_prompt"), api_name=config.get("api_name"))
             out = {"kind": "ebook", "content": res.get("text") or "", "summary": res.get("summary") or "", "metadata": res.get("metadata") or {}}
             return _emit(out)
         except Exception as e:
@@ -1214,13 +1316,16 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
         file_uri = str(config.get("file_uri") or "").strip()
         if not file_uri.startswith("file://"):
             return {"error": "missing_or_invalid_file_uri"}
-        path = file_uri[len("file://"):]
+        try:
+            resolved_path = _resolve_workflow_file_uri(file_uri, context, config)
+        except AdapterError as e:
+            return {"error": str(e)}
         try:
             from tldw_Server_API.app.services.xml_processing_service import process_xml_task
-            fb = Path(path).read_bytes()
+            fb = resolved_path.read_bytes()
             res = await process_xml_task(
                 file_bytes=fb,
-                filename=Path(path).name,
+                filename=resolved_path.name,
                 title=config.get("title"),
                 author=config.get("author"),
                 keywords=config.get("keywords") or [],
@@ -1242,12 +1347,15 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
         if not file_uri.startswith("file://"):
             return {"error": "missing_or_invalid_file_uri"}
         # In workflows, we return a placeholder summary; full streaming is endpoint-only
-        path = file_uri[len("file://"):]
         try:
-            content = Path(path).read_text(errors="ignore")
+            resolved_path = _resolve_workflow_file_uri(file_uri, context, config)
+        except AdapterError as e:
+            return {"error": str(e)}
+        try:
+            content = resolved_path.read_text(errors="ignore")
         except Exception:
             content = ""
-        return _emit({"kind": "mediawiki_dump", "content": content[:5000], "metadata": {"file": Path(path).name}})
+        return _emit({"kind": "mediawiki_dump", "content": content[:5000], "metadata": {"file": resolved_path.name}})
 
     # Podcast (url)
     if kind == "podcast":
@@ -1502,7 +1610,10 @@ async def run_stt_transcribe_adapter(config: Dict[str, Any], context: Dict[str, 
     file_uri = str(config.get("file_uri") or "").strip()
     if not (file_uri and file_uri.startswith("file://")):
         return {"error": "missing_or_invalid_file_uri"}
-    path = file_uri[len("file://"):]
+    try:
+        resolved_path = _resolve_workflow_file_uri(file_uri, context, config)
+    except AdapterError as e:
+        return {"error": str(e)}
     model = str(config.get("model") or "large-v3")
     language = config.get("language") or None
     diarize = bool(config.get("diarize", False))
@@ -1511,7 +1622,7 @@ async def run_stt_transcribe_adapter(config: Dict[str, Any], context: Dict[str, 
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import speech_to_text
         # When language is None, allow the STT backend to auto-detect.
         segs_or_pair = speech_to_text(
-            path,
+            str(resolved_path),
             whisper_model=model,
             selected_source_lang=language,
             vad_filter=False,

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -1038,6 +1039,38 @@ class CollectionsDatabase:
     # ------------------------
     # Outputs artifacts API
     # ------------------------
+    def resolve_output_storage_path(self, path_value: str | Path) -> str:
+        """Resolve and validate output storage paths under the user outputs directory."""
+        try:
+            user_id = int(self.user_id)
+        except (TypeError, ValueError) as exc:
+            logger.error(f"outputs: invalid user id for storage path resolution: {self.user_id}")
+            raise ValueError("invalid_user_id") from exc
+        base_dir = DatabasePaths.get_user_base_directory(user_id) / "outputs"
+        try:
+            base_resolved = base_dir.resolve(strict=False)
+        except Exception as exc:
+            logger.error(f"outputs: failed to resolve outputs base dir for user {self.user_id}: {exc}")
+            raise ValueError("storage_unavailable") from exc
+        candidate = path_value if isinstance(path_value, Path) else Path(path_value)
+        try:
+            candidate = candidate.expanduser()
+            if candidate.is_absolute():
+                resolved = candidate.resolve(strict=False)
+            else:
+                resolved = (base_resolved / candidate).resolve(strict=False)
+        except Exception as exc:
+            logger.warning(f"outputs: invalid output path {path_value}: {exc}")
+            raise ValueError("invalid_path") from exc
+        try:
+            if not resolved.is_relative_to(base_resolved):
+                logger.warning(f"outputs: output path outside base dir: {resolved}")
+                raise ValueError("invalid_path")
+        except Exception as exc:
+            logger.warning(f"outputs: invalid output path {path_value}: {exc}")
+            raise ValueError("invalid_path") from exc
+        return str(resolved)
+
     @dataclass
     class OutputArtifactRow:
         id: int
@@ -1068,6 +1101,7 @@ class CollectionsDatabase:
         retention_until: Optional[str] = None,
     ) -> "CollectionsDatabase.OutputArtifactRow":
         now = _utcnow_iso()
+        resolved_storage_path = self.resolve_output_storage_path(storage_path)
         q = (
             "INSERT INTO outputs (user_id, job_id, run_id, type, title, format, storage_path, metadata_json, created_at, media_item_id, chatbook_path, deleted, deleted_at, retention_until) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?)"
@@ -1079,7 +1113,7 @@ class CollectionsDatabase:
             type_,
             title,
             format_,
-            storage_path,
+            resolved_storage_path,
             metadata_json,
             now,
             media_item_id,
@@ -1168,6 +1202,7 @@ class CollectionsDatabase:
         fields = ["title = ?"]
         params: list[Any] = [new_title]
         if new_storage_path is not None:
+            new_storage_path = self.resolve_output_storage_path(new_storage_path)
             fields.append("storage_path = ?")
             params.append(new_storage_path)
         params.extend([output_id, self.user_id])

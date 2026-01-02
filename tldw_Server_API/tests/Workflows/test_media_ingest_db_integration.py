@@ -27,6 +27,7 @@ def client_with_wf(tmp_path, monkeypatch, auth_headers):
 
     # Ensure tests do not attempt network
     monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("WORKFLOWS_FILE_BASE_DIR", str(tmp_path))
 
     with TestClient(app, headers=auth_headers) as client:
         yield client

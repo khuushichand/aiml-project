@@ -261,7 +261,7 @@ class TestSafeStreamGenerator:
         """Test handling of save callback errors."""
         handler = StreamingResponseHandler("conv_123", "gpt-4")
 
-        async def failing_callback(content):
+        async def failing_callback(_content):
             raise Exception("Save failed")
 
         async def mock_stream():
@@ -303,7 +303,7 @@ class TestSafeStreamGenerator:
         async def mock_stream():
             yield "Content"
 
-        async def save_callback(content):
+        async def save_callback(_content):
             return "msg_456"
 
         messages = []

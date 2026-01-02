@@ -52,8 +52,18 @@ def _safe_join(base_dir: str, name: str) -> Optional[str]:
     try:
         if os.path.commonpath([base_real, candidate_real]) != base_real:
             return None
+        relative = os.path.relpath(candidate, base_dir_abs)
     except ValueError:
         return None
+    if relative.startswith(os.pardir + os.sep) or relative == os.pardir:
+        return None
+    current = base_dir_abs
+    for part in relative.split(os.sep):
+        if part in ("", "."):
+            continue
+        current = os.path.join(current, part)
+        if os.path.islink(current):
+            return None
     return candidate
 
 def init_backup_directory(backup_base_dir: str, db_name: str) -> str:
@@ -390,12 +400,20 @@ def restore_postgres_backup(
         logger.error(msg)
         return msg
 
-    if not dump_file.endswith(_POSTGRES_BACKUP_EXTS):
-        msg = "Invalid dump file extension"
-        logger.error(msg)
+    dump_path = str(dump_file or "").strip()
+    backup_name = _validate_backup_name(os.path.basename(dump_path), _POSTGRES_BACKUP_EXTS)
+    if not backup_name:
+        msg = "Invalid dump file name"
+        logger.error(f"{msg}: {dump_file}")
         return msg
-    if not os.path.exists(dump_file):
-        msg = f"dump not found: {dump_file}"
+    backup_dir = os.path.abspath(os.path.dirname(dump_path) or ".")
+    safe_dump_path = _safe_join(backup_dir, backup_name)
+    if not safe_dump_path:
+        msg = "Invalid dump file path"
+        logger.error(f"{msg}: {dump_file}")
+        return msg
+    if not os.path.exists(safe_dump_path):
+        msg = f"dump not found: {safe_dump_path}"
         logger.error(msg)
         return msg
 
@@ -422,14 +440,14 @@ def restore_postgres_backup(
     if drop_first:
         cmd.append("-c")    # clean (drop) database objects before recreating
     cmd.append("--")
-    cmd.append(dump_file)
+    cmd.append(safe_dump_path)
 
     env = os.environ.copy()
     if password:
         env["PGPASSWORD"] = str(password)
 
     try:
-        logger.info(f"Running pg_restore on {dump_file} into database '{dbname}'")
+        logger.info(f"Running pg_restore on {safe_dump_path} into database '{dbname}'")
         proc = subprocess.run(cmd, env=env, capture_output=True, text=True)
         if proc.returncode != 0:
             logger.error(f"pg_restore failed ({proc.returncode}): {proc.stderr.strip()}")

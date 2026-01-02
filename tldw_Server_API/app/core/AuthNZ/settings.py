@@ -695,8 +695,8 @@ class Settings(BaseSettings):
             elif self.SINGLE_USER_API_KEY == "change-me-in-production":
                 raise ValueError(
                     "Default API key detected! Please set SINGLE_USER_API_KEY via environment or .env.\n"
-                    "Example:\n"
-                    "  export SINGLE_USER_API_KEY=$(python -c \"import secrets; print(secrets.token_urlsafe(32))\")"
+                    "Generate a secure key via:\n"
+                    "  python -m tldw_Server_API.app.core.AuthNZ.initialize"
                 )
             elif len(self.SINGLE_USER_API_KEY) < 16:
                 # Allow short keys in explicit test contexts to avoid brittle fixtures
@@ -704,12 +704,34 @@ class Settings(BaseSettings):
                     return
                 raise ValueError(
                     "SINGLE_USER_API_KEY must be at least 16 characters.\n"
-                    "Set it via environment or .env. Example:\n"
-                    "  export SINGLE_USER_API_KEY=$(python -c \"import secrets; print(secrets.token_urlsafe(32))\")"
+                    "Generate a secure key via:\n"
+                    "  python -m tldw_Server_API.app.core.AuthNZ.initialize"
                 )
 
             # Hard fail in production if key is missing/weak/default
             prod_flag = os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
+            allow_legacy = os.getenv("TLDW_ALLOW_LEGACY_SINGLE_USER_KEY", "").lower() in {"true", "1", "yes", "y", "on"}
+            if not in_test_context:
+                try:
+                    from tldw_Server_API.app.core.AuthNZ.api_key_crypto import parse_api_key
+
+                    is_new_format = parse_api_key(self.SINGLE_USER_API_KEY) is not None
+                except Exception:
+                    is_new_format = False
+
+                if not is_new_format and not allow_legacy:
+                    if prod_flag:
+                        raise ValueError(
+                            "In production (tldw_production=true), SINGLE_USER_API_KEY must use the "
+                            "server-generated format (tldw_<kid>.<secret>). "
+                            "Generate a new key via:\n"
+                            "  python -m tldw_Server_API.app.core.AuthNZ.initialize\n"
+                            "or set TLDW_ALLOW_LEGACY_SINGLE_USER_KEY=true to temporarily bypass."
+                        )
+                    logger.warning(
+                        "SINGLE_USER_API_KEY uses a legacy format; "
+                        "generate a new server-generated key for improved security."
+                    )
             if prod_flag:
                 weak = (
                     not self.SINGLE_USER_API_KEY
@@ -719,8 +741,8 @@ class Settings(BaseSettings):
                 if weak:
                     raise ValueError(
                         "In production (tldw_production=true), SINGLE_USER_API_KEY must be set to a secure value (>=24 chars) "
-                        "and must not use defaults.\nSet it via environment or .env. Example:\n"
-                        "  export SINGLE_USER_API_KEY=$(python -c \"import secrets; print(secrets.token_urlsafe(32))\")"
+                        "and must not use defaults.\nGenerate a secure key via:\n"
+                        "  python -m tldw_Server_API.app.core.AuthNZ.initialize"
                     )
 
     @field_validator("JWT_SECRET_KEY")

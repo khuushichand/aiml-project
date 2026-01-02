@@ -130,10 +130,13 @@ async def _purge_for_user(user_id: int, delete_files: bool, grace_days: int) -> 
     if delete_files and ids:
         for rid, pth in list(paths.items()):
             try:
-                p = Path(pth)
+                safe_path = cdb.resolve_output_storage_path(pth)
+                p = Path(safe_path)
                 if p.exists():
                     p.unlink()
                     files_deleted += 1
+            except ValueError as e:
+                logger.warning(f"outputs_purge: invalid output path for output {rid}: {pth} error={e}")
             except (OSError, PermissionError) as e:
                 logger.warning(f"outputs_purge: failed to delete file for output {rid}: {pth} error={e}")
                 try:

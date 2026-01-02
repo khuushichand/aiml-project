@@ -418,11 +418,14 @@ class UserFeedbackStore:
             if isinstance(row, dict):
                 record = dict(row)
             else:
-                try:
+                # Handle sqlite3.Row or tuple-like results
+                if hasattr(row, "keys"):
                     record = dict(row)
-                except Exception:
-                    columns = [col[0] for col in cursor.description] if cursor.description else []
-                    record = {columns[idx]: row[idx] for idx in range(len(columns))}
+                elif cursor.description:
+                    columns = [col[0] for col in cursor.description]
+                    record = dict(zip(columns, row))
+                else:
+                    record = {}
 
             raw_issues = record.get("issues")
             existing_issues: List[str] = []
@@ -543,7 +546,7 @@ class UnifiedFeedbackSystem:
         helpful: Optional[bool] = None,
         issues: Optional[List[str]] = None,
         user_notes: Optional[str] = None,
-        user_id: Optional[str] = None,
+        _user_id: Optional[str] = None,  # Reserved for future use
         message_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
@@ -808,7 +811,7 @@ async def collect_feedback(context: Any, **kwargs) -> Any:
             relevance_score=fb.get("relevance_score"),
             helpful=fb.get("helpful"),
             user_notes=fb.get("user_notes"),
-            user_id=fb.get("user_id")
+            _user_id=fb.get("user_id")
         )
 
         context.metadata["feedback_result"] = result

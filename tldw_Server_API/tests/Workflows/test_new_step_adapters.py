@@ -17,6 +17,7 @@ pytestmark = pytest.mark.integration
 def client_with_wf(tmp_path, monkeypatch, auth_headers):
     # Force test mode for adapters that check it
     monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("WORKFLOWS_FILE_BASE_DIR", str(tmp_path))
     # Provide a temporary USER_DB_BASE_DIR for embedding/chroma
     base = tmp_path / "user_databases"
     base.mkdir(parents=True, exist_ok=True)

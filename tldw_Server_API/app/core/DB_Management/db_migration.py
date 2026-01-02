@@ -84,26 +84,71 @@ class DatabaseMigrator:
     """Handles database migrations for SQLite databases"""
 
     def __init__(self, db_path: str, migrations_dir: str = None):
-        self.db_path = db_path
+        db_path_resolved = self._resolve_path(Path(db_path))
+        self.db_path = str(db_path_resolved)
+        self._db_dir = db_path_resolved.parent
 
-        package_migrations_dir = Path(__file__).resolve().parent / "migrations"
+        package_migrations_dir = self._resolve_path(
+            Path(__file__).resolve().parent / "migrations"
+        )
+        self._migration_roots = (self._db_dir, package_migrations_dir)
         if migrations_dir is not None:
-            chosen_dir = Path(migrations_dir)
+            chosen_dir = self._validate_migrations_dir(Path(migrations_dir))
             chosen_dir.mkdir(parents=True, exist_ok=True)
         elif package_migrations_dir.exists():
             chosen_dir = package_migrations_dir
         else:
-            fallback_dir = Path(db_path).resolve().parent / "migrations"
+            fallback_dir = self._db_dir / "migrations"
             fallback_dir.mkdir(parents=True, exist_ok=True)
             chosen_dir = fallback_dir
 
         self.migrations_dir = str(chosen_dir)
 
         # Backup directory
-        self.backup_dir = os.path.join(
-            os.path.dirname(db_path), "backups"
-        )
+        self.backup_dir = str(self._db_dir / "backups")
         os.makedirs(self.backup_dir, exist_ok=True)
+
+    @staticmethod
+    def _resolve_path(path: Path) -> Path:
+        """Expand and resolve a path without requiring it to exist."""
+        expanded = path.expanduser()
+        try:
+            return expanded.resolve(strict=False)
+        except TypeError:
+            return expanded.resolve()
+
+    @staticmethod
+    def _is_within_directory(path: Path, base_dir: Path) -> bool:
+        """Return True if path is within base_dir."""
+        try:
+            path.relative_to(base_dir)
+            return True
+        except ValueError:
+            return False
+
+    def _validate_migrations_dir(self, migrations_dir: Path) -> Path:
+        """Ensure migrations_dir stays within an approved root."""
+        resolved = self._resolve_path(migrations_dir)
+        if not any(
+            self._is_within_directory(resolved, root) for root in self._migration_roots
+        ):
+            raise MigrationError(
+                "Migrations directory must be within the database directory "
+                f"or the packaged migrations path: {resolved}"
+            )
+        return resolved
+
+    def _validate_backup_path(self, backup_path: str) -> Path:
+        """Ensure backup_path exists and is scoped to the backup directory."""
+        resolved = self._resolve_path(Path(backup_path))
+        backup_dir = self._resolve_path(Path(self.backup_dir))
+        if not self._is_within_directory(resolved, backup_dir):
+            raise MigrationError(
+                f"Backup path is outside the backup directory: {resolved}"
+            )
+        if not resolved.exists():
+            raise MigrationError(f"Backup not found: {resolved}")
+        return resolved
 
     @contextmanager
     def _get_connection(self):
@@ -513,17 +558,17 @@ class DatabaseMigrator:
 
     def rollback_to_backup(self, backup_path: str):
         """Restore database from backup"""
-        if not os.path.exists(backup_path):
-            raise MigrationError(f"Backup not found: {backup_path}")
+        backup_path_resolved = self._validate_backup_path(backup_path)
+        backup_path_str = str(backup_path_resolved)
 
         # Create a safety backup of current state
         safety_backup = self.create_backup("before_rollback")
 
         try:
             # Replace current database with backup
-            shutil.copy2(backup_path, self.db_path)
+            shutil.copy2(backup_path_str, self.db_path)
             for suffix in ("-wal", "-shm"):
-                backup_sidecar = f"{backup_path}{suffix}"
+                backup_sidecar = f"{backup_path_str}{suffix}"
                 target_sidecar = f"{self.db_path}{suffix}"
                 if os.path.exists(backup_sidecar):
                     shutil.copy2(backup_sidecar, target_sidecar)

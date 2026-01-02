@@ -13,6 +13,7 @@ import asyncio
 import sys
 import os
 import secrets
+import re
 from pathlib import Path
 from typing import Optional
 from getpass import getpass
@@ -78,6 +79,25 @@ def _sanitize_db_url(url: Optional[str]) -> str:
     except Exception:
         # Fall back to the original string if parsing fails; avoid raising during diagnostics.
         return url
+
+
+_USERNAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+_RESERVED_USERNAMES = {"admin", "root", "system", "api", "null", "undefined"}
+
+
+def _normalize_admin_username(raw: str) -> str:
+    candidate = (raw or "").strip().lower()
+    if not candidate:
+        raise ValueError("Username is required")
+    if len(candidate) < 3:
+        raise ValueError("Username must be at least 3 characters")
+    if len(candidate) > 50:
+        raise ValueError("Username must not exceed 50 characters")
+    if not _USERNAME_PATTERN.match(candidate):
+        raise ValueError("Username can only contain letters, numbers, underscores, and hyphens")
+    if candidate in _RESERVED_USERNAMES:
+        raise ValueError("This username is reserved and cannot be used")
+    return candidate
 
 
 def _resolve_sqlite_db_path(db_url: str) -> Optional[Path]:
@@ -187,9 +207,15 @@ def generate_secure_keys():
     """Generate secure keys for configuration"""
     print("\n🔑 Generating secure keys...")
 
+    from tldw_Server_API.app.core.AuthNZ.api_key_crypto import (
+        format_api_key,
+        generate_api_key_id,
+        generate_api_key_secret,
+    )
+
     keys = {
         'JWT_SECRET_KEY': secrets.token_urlsafe(32),
-        'SINGLE_USER_API_KEY': secrets.token_urlsafe(32),
+        'SINGLE_USER_API_KEY': format_api_key(generate_api_key_id(), generate_api_key_secret()),
         'API_KEY_PEPPER': secrets.token_hex(32)
     }
 
@@ -716,10 +742,12 @@ async def create_admin_user():
 
     # Get user input
     while True:
-        username = input("   Admin username (default: admin): ").strip() or "admin"
-        if len(username) >= 3:
+        raw_username = input("   Admin username (default: tldw_admin): ").strip() or "tldw_admin"
+        try:
+            username = _normalize_admin_username(raw_username)
             break
-        print("   Username must be at least 3 characters")
+        except ValueError as exc:
+            print(f"   {exc}")
 
     while True:
         email = input("   Admin email: ").strip()
@@ -829,6 +857,15 @@ async def bootstrap_single_user_profile() -> bool:
 
         key_hash = manager.hash_api_key(api_key_value)
         key_prefix = (api_key_value[:10] + "...") if len(api_key_value) > 10 else api_key_value
+        key_identifier = None
+        try:
+            from tldw_Server_API.app.core.AuthNZ.api_key_crypto import parse_api_key
+
+            parsed = parse_api_key(api_key_value)
+            if parsed:
+                key_identifier, _secret = parsed
+        except Exception:
+            key_identifier = None
 
         from tldw_Server_API.app.core.AuthNZ.repos.api_keys_repo import AuthnzApiKeysRepo
 
@@ -836,6 +873,7 @@ async def bootstrap_single_user_profile() -> bool:
         await repo.upsert_primary_key(
             user_id=settings.SINGLE_USER_FIXED_ID,
             key_hash=key_hash,
+            key_identifier=key_identifier,
             key_prefix=key_prefix,
             name="single-user primary key",
             description="Primary API key for single-user profile",

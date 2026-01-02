@@ -968,6 +968,7 @@ async def _persist_system_message_if_needed(
     if not system_message or not system_message.strip():
         return None
     try:
+        # Best-effort guard; concurrent requests may still race and insert duplicates.
         has_system = await loop.run_in_executor(
             None,
             db.has_system_message_for_conversation,

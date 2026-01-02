@@ -24,8 +24,9 @@ The tldw_server supports two authentication modes:
 
 ### Single-User Mode (Default for Development)
 ```bash
-# Generate a strong key once and set SINGLE_USER_API_KEY
-export SINGLE_USER_API_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+# Generate a strong key once and set SINGLE_USER_API_KEY (new format)
+python -m tldw_Server_API.app.core.AuthNZ.initialize
+# Copy SINGLE_USER_API_KEY into your environment
 export API_KEY="${SINGLE_USER_API_KEY}"
 ```
 

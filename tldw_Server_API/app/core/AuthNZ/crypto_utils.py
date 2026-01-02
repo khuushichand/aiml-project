@@ -35,7 +35,7 @@ def derive_hmac_key(settings: Optional[Settings] = None) -> bytes:
     - otherwise: JWT secrets/keys (HS or RS/ES)
     - fallback: only in explicit test contexts
 
-    The returned key is SHA256(material_bytes).digest() to produce
+    The returned key is derived using PBKDF2-HMAC-SHA256 to produce
     a uniform 32-byte key suitable for HMAC-SHA256.
     """
     keys = derive_hmac_key_candidates(settings)
@@ -58,6 +58,12 @@ def derive_hmac_key_candidates(settings: Optional[Settings] = None) -> List[byte
 
     # Detect pytest context and known deterministic JWT secret used only for testing
     test_mode_env = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+    allow_test_fallback = test_mode_env or os.getenv("TLDW_ALLOW_TEST_FALLBACK_KEYS", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     pytest_active = os.getenv("PYTEST_CURRENT_TEST") is not None
     in_test_context = test_mode_env or pytest_active
     test_secret_env = os.getenv("JWT_SECRET_TEST_KEY", "test-secret-jwt-key-please-change-1234567890")
@@ -100,11 +106,12 @@ def derive_hmac_key_candidates(settings: Optional[Settings] = None) -> List[byte
     # Note: secondary public keys are also excluded by design
 
     if not digest_sources:
-        # Allow fallback only in explicit automated test scenarios to preserve fixture behaviour.
-        if not in_test_context:
+        # Allow fallback only with explicit test-mode intent to prevent production misuse.
+        if not allow_test_fallback:
             raise ValueError(
                 "derive_hmac_key could not locate a configured secret. "
-                "Set API_KEY_PEPPER (recommended) or provide JWT_SECRET_KEY / JWT_PRIVATE_KEY."
+                "Set API_KEY_PEPPER (recommended) or provide JWT_SECRET_KEY / JWT_PRIVATE_KEY. "
+                "For explicit test-only fallback, set TEST_MODE=1."
             )
         # SECURITY: Additional production guard - never use fallback in production environment
         environment = os.getenv("ENVIRONMENT", "").strip().lower()

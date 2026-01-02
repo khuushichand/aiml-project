@@ -31,6 +31,22 @@ except Exception:  # pragma: no cover - fallback for tests
         score: float = 0.0
 
 
+# Cap regex processing to avoid worst-case CPU on unbounded input.
+_MAX_GUARDRAIL_TEXT = 200_000
+
+
+def _clip_guardrail_text(text: str, max_len: int = _MAX_GUARDRAIL_TEXT) -> str:
+    if not isinstance(text, str) or not text:
+        return ""
+    if len(text) <= max_len:
+        return text
+    head_len = max_len // 2
+    tail_len = max_len - head_len - 1
+    if tail_len <= 0:
+        return text[:max_len]
+    return f"{text[:head_len]} {text[-tail_len:]}"
+
+
 # -------------------- Instruction-injection filtering --------------------
 
 _INJECTION_PATTERNS = [
@@ -54,7 +70,8 @@ def detect_injection_score(text: str) -> float:
     """
     if not isinstance(text, str) or not text:
         return 0.0
-    matches = _INJECTION_REGEX.findall(text)
+    clipped = _clip_guardrail_text(text)
+    matches = _INJECTION_REGEX.findall(clipped)
     if not matches:
         return 0.0
     return min(1.0, len(matches) / 3.0)
@@ -137,7 +154,7 @@ def _extract_numeric_tokens(text: str) -> Set[str]:
     - Maps word multipliers (million/billion/thousand/percent)
     - Strips currency symbols
     """
-    s = text or ""
+    s = _clip_guardrail_text(text)
     toks = [m.group(0) for m in _NUMERIC_RE.finditer(s)]
     # Handle simple word multipliers like "3 million" or "5 percent"
     try:
@@ -273,6 +290,7 @@ def build_hard_citations(
     out: Dict[str, Any] = {"sentences": [], "coverage": 0.0, "total": 0, "supported": 0}
     if not isinstance(answer, str) or not answer.strip():
         return out
+    clipped_answer = _clip_guardrail_text(answer)
 
     # If claims payload exists, prefer it
     if isinstance(claims_payload, list) and claims_payload:
@@ -302,7 +320,7 @@ def build_hard_citations(
         return out
 
     # Heuristic fallback: sentence split and substring match
-    sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.split(answer.strip()) if s.strip()]
+    sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.split(clipped_answer.strip()) if s.strip()]
     total = 0
     supported = 0
     for s in sentences:
@@ -355,7 +373,8 @@ def build_quote_citations(answer: str, docs: List[Document]) -> Dict[str, Any]:
     out: Dict[str, Any] = {"quotes": [], "total": 0, "supported": 0, "coverage": 0.0}
     if not isinstance(answer, str) or not answer.strip():
         return out
-    matches = _QUOTE_RE.findall(answer)
+    clipped_answer = _clip_guardrail_text(answer)
+    matches = _QUOTE_RE.findall(clipped_answer)
     quotes: List[str] = []
     for a, b in matches:
         q = a or b

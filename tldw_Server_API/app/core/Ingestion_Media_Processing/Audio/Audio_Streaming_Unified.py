@@ -53,6 +53,29 @@ except Exception:  # pragma: no cover
     def load_comprehensive_config():  # type: ignore
         return None
 
+
+def _safe_temp_subdir(raw: Optional[str]) -> Optional[Path]:
+    """Return a sanitized temp-only subdirectory path derived from untrusted input."""
+    if not raw:
+        return None
+    try:
+        raw_str = str(raw).strip()
+    except Exception:
+        return None
+    if not raw_str:
+        return None
+    name = Path(raw_str).name
+    if name in {"", ".", ".."}:
+        return None
+    safe = "".join(
+        ch if (ch.isascii() and (ch.isalnum() or ch in "._-")) else "_"
+        for ch in name
+    ).strip("._-")
+    if not safe:
+        return None
+    base = Path(tempfile.gettempdir()) / "tldw_diarization"
+    return base / safe
+
 # Expose get_whisper_model at module scope so tests can monkeypatch it
 # (WhisperStreamingTranscriber.initialize() will prefer a module-level symbol if present.)
 try:  # pragma: no cover - import availability varies in test contexts
@@ -529,7 +552,7 @@ class StreamingDiarizer:
         """
         self.sample_rate = int(sample_rate or 16000)
         self.store_audio = bool(store_audio)
-        self.storage_dir = Path(storage_dir).expanduser() if storage_dir else None
+        self.storage_dir = _safe_temp_subdir(storage_dir)
         self.num_speakers = num_speakers
         self._audio_chunks: List[np.ndarray] = []
         self._transcript_segments: List[Dict[str, Any]] = []
@@ -2071,7 +2094,12 @@ async def handle_unified_websocket(
                         config.diarization_store_audio = bool(diarization_payload.get("store_audio"))
                     storage_dir = diarization_payload.get("storage_dir")
                     if storage_dir:
-                        config.diarization_storage_dir = str(storage_dir)
+                        safe_dir = _safe_temp_subdir(storage_dir)
+                        if safe_dir:
+                            config.diarization_storage_dir = str(safe_dir)
+                        else:
+                            logger.warning("Ignoring diarization.storage_dir from client; using temp directory only")
+                            config.diarization_storage_dir = None
                     if "num_speakers" in diarization_payload:
                         try:
                             config.diarization_num_speakers = int(diarization_payload.get("num_speakers") or 0) or None

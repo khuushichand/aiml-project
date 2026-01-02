@@ -363,13 +363,21 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
         final = []
         for p in parts:
             # Extract parenthetical segments
-            # Use non-greedy to avoid swallowing too much
+            # Index-based scan avoids regex backtracking on untrusted input.
             start = 0
-            for m in re.finditer(r"\(([^)]+)\)", p):
-                pre = p[start:m.start()].strip()
+            i = p.find("(")
+            while i != -1:
+                pre = p[start:i].strip()
                 if pre:
                     final.append(pre)
-                inside = m.group(1).strip()
+                j = p.find(")", i + 1)
+                if j == -1:
+                    tail = p[i:].strip()
+                    if tail:
+                        final.append(tail)
+                    start = len(p)
+                    break
+                inside = p[i + 1:j].strip()
                 if len(inside) > 10:  # treat longer parentheses as a proposition
                     final.append(inside)
                 else:
@@ -378,10 +386,12 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
                         final[-1] = (final[-1] + " (" + inside + ")").strip()
                     else:
                         final.append("(" + inside + ")")
-                start = m.end()
-            tail = p[start:].strip()
-            if tail:
-                final.append(tail)
+                start = j + 1
+                i = p.find("(", start)
+            if start < len(p):
+                tail = p[start:].strip()
+                if tail:
+                    final.append(tail)
         # Optionally split on colon if it looks like clause boundary
         colon_split: List[str] = []
         for p in final:

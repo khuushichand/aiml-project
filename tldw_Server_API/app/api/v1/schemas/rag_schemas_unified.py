@@ -1491,11 +1491,8 @@ class ImplicitFeedbackEvent(BaseModel):
     if model_validator is not None:
         @model_validator(mode="before")
         def _validate_dwell_ms(cls, values):  # type: ignore
-            try:
-                if isinstance(values, dict) and values.get("event_type") == "dwell_time":
-                    dwell_ms = values.get("dwell_ms")
-                    if dwell_ms is None:
-                        raise ValueError("dwell_ms is required when event_type=dwell_time")
-            except Exception:
-                raise
+            if isinstance(values, dict) and values.get("event_type") == "dwell_time":
+                dwell_ms = values.get("dwell_ms")
+                if dwell_ms is None:
+                    raise ValueError("dwell_ms is required when event_type='dwell_time'")
             return values

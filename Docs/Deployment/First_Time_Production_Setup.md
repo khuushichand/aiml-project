@@ -26,7 +26,7 @@ Related documents
 Security preflight
 - Decide auth mode: `single_user` (API key) or `multi_user` (JWT).
 - Generate strong secrets:
-  - API key: `python -c "import secrets;print(secrets.token_urlsafe(32))"`
+  - API key: `python -m tldw_Server_API.app.core.AuthNZ.initialize` (choose "Generate secure keys")
   - JWT secret: `openssl rand -base64 64`
 - Restrict CORS to your site(s) with `ALLOWED_ORIGINS`.
 - In production, set `tldw_production=true` to mask secrets in logs and harden defaults.
@@ -55,7 +55,8 @@ export JWT_SECRET_KEY="$(openssl rand -base64 64)"
 export DATABASE_URL="postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users"
 
 # Strong single-user key if you use single_user mode instead
-export SINGLE_USER_API_KEY="$(python -c "import secrets;print(secrets.token_urlsafe(32))")"
+# Generate via the AuthNZ initializer and copy SINGLE_USER_API_KEY into .env
+python -m tldw_Server_API.app.core.AuthNZ.initialize
 
 # Production hardening
 export tldw_production=true

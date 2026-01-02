@@ -1010,7 +1010,12 @@ async def create_transcription(
                 convert_to_wav as _convert_to_wav,
             )
 
-            canonical_path = _convert_to_wav(temp_audio_path, offset=0, overwrite=False)
+            canonical_path = _convert_to_wav(
+                temp_audio_path,
+                offset=0,
+                overwrite=False,
+                base_dir=PathLib(temp_audio_path).parent,
+            )
         except Exception as e:
             logger.debug(f"convert_to_wav failed; using original temp file: path={temp_audio_path}, error={e}")
             canonical_path = temp_audio_path
@@ -1059,6 +1064,7 @@ async def create_transcription(
             speech_to_text as fw_speech_to_text,
             strip_whisper_metadata_header,
             is_transcription_error_message as _is_transcription_error_message,
+            validate_whisper_model_identifier,
         )
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import (
             Audio_Files as audio_files,
@@ -1116,6 +1122,14 @@ async def create_transcription(
         detected_language: Optional[str] = None
         segments_for_timing: Optional[List[Dict[str, Any]]] = None
         whisper_model_name = _map_openai_audio_model_to_whisper(model)
+        if provider == "faster-whisper":
+            try:
+                whisper_model_name = validate_whisper_model_identifier(whisper_model_name)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=str(exc),
+                )
         # Wrap the heavy work to ensure we always release the job slot
         try:
             if provider == "faster-whisper":
@@ -1753,6 +1767,13 @@ async def get_stt_health(
     # internal faster-whisper model name so health checks align with /transcriptions.
     if provider_raw == "whisper":
         resolved_model = _map_openai_audio_model_to_whisper(raw_model)
+        try:
+            resolved_model = stt_lib.validate_whisper_model_identifier(resolved_model)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            )
     else:
         resolved_model = raw_model
 

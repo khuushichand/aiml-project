@@ -124,3 +124,46 @@ def test_dlq_requeue_audited(disable_heavy_startup, admin_user, redis_client, mo
     )
     assert r3.status_code == 200
     assert any(e.get("action") == "bulk_requeue" for e in stub.events)
+
+
+def _aesgcm_available() -> bool:
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+@pytest.mark.unit
+def test_dlq_crypto_roundtrip_scrypt(monkeypatch):
+    monkeypatch.setenv("EMBEDDINGS_DLQ_ENCRYPTION_KEY", "test-passphrase")
+    monkeypatch.setenv("EMBEDDINGS_DLQ_SALT", "static-salt")
+    from tldw_Server_API.app.core.Embeddings import dlq_crypto
+
+    payload = {"msg": "hello", "count": 3}
+    enc = dlq_crypto.encrypt_payload_if_configured(payload)
+    assert enc is not None
+    dec = dlq_crypto.decrypt_payload_if_present(enc)
+    assert dec == payload
+
+    if _aesgcm_available():
+        obj = json.loads(enc)
+        assert obj.get("kdf") == "scrypt"
+        assert obj.get("salt")
+
+
+@pytest.mark.unit
+def test_dlq_crypto_roundtrip_legacy(monkeypatch):
+    if not _aesgcm_available():
+        pytest.skip("cryptography not available")
+    from tldw_Server_API.app.core.Embeddings import dlq_crypto
+
+    key_str = "legacy-passphrase"
+    monkeypatch.setenv("EMBEDDINGS_DLQ_ENCRYPTION_KEY", key_str)
+    payload = {"legacy": True, "value": "ok"}
+    key = dlq_crypto._derive_key_from_passphrase_legacy(key_str)
+    raw = json.dumps(payload, default=str).encode("utf-8")
+    obj = dlq_crypto._aesgcm_encrypt(raw, key)
+    enc_json = json.dumps(obj)
+    dec = dlq_crypto.decrypt_payload_if_present(enc_json)
+    assert dec == payload

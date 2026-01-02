@@ -22,6 +22,7 @@ from tldw_Server_API.app.core.RAG.rag_service.analytics_system import UnifiedFee
 
 router = APIRouter()
 
+# In-memory cache for idempotency; per-process scope (no cross-worker guarantees).
 _IDEMPOTENCY_WINDOW_SECONDS = 300
 _IDEMPOTENCY_CLEANUP_INTERVAL_SECONDS = 60
 _idempotency_lock = Lock()
@@ -220,7 +221,7 @@ async def submit_explicit_feedback(
         helpful=payload.helpful,
         issues=issues or None,
         user_notes=payload.user_notes,
-        user_id=current_user.username if current_user else None,
+        _user_id=current_user.username if current_user else None,
         message_id=payload.message_id,
     )
 

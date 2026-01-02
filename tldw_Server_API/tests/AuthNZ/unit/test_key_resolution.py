@@ -32,6 +32,18 @@ class _FakeSQLitePool:
         return {"id": 99, "user_id": 13}
 
 
+class _FakePostgresKeyIdPool:
+    def __init__(self, key_hash: str):
+        self.pool = object()
+        self.key_hash = key_hash
+        self.calls = []
+
+    async def fetchone(self, query: str, key_id: str, status: str):
+        self.calls.append((query, key_id, status))
+        assert status == "active"
+        return {"id": 55, "user_id": 21, "key_hash": self.key_hash}
+
+
 @pytest.mark.asyncio
 async def test_resolve_api_key_by_hash_postgres(monkeypatch):
     # Use APIKeyManager derivation to compute expected HMAC digests
@@ -86,3 +98,31 @@ async def test_resolve_api_key_by_hash_sqlite(monkeypatch):
     result = await resolve_api_key_by_hash(api_key)
     assert result == {"id": 99, "user_id": 13}
     assert fake_pool.calls, "expected fetchone to be called with candidates"
+
+
+@pytest.mark.asyncio
+async def test_resolve_api_key_by_hash_key_id(monkeypatch):
+    from tldw_Server_API.app.core.AuthNZ.api_key_crypto import format_api_key, kdf_hash_api_key
+    from tldw_Server_API.app.core.AuthNZ.key_resolution import resolve_api_key_by_hash
+    from tldw_Server_API.app.core.AuthNZ.settings import Settings
+    import tldw_Server_API.app.core.AuthNZ.key_resolution as keyres
+
+    api_key = format_api_key("deadbeefcafe", "secret-part")
+    encoded = kdf_hash_api_key(api_key, salt=b"fixed-salt-123456")
+
+    monkeypatch.setattr(
+        keyres,
+        "get_settings",
+        lambda: Settings(AUTH_MODE="multi_user", JWT_SECRET_KEY="test-secret-keyid-1234567890"),
+        raising=True,
+    )
+    fake_pool = _FakePostgresKeyIdPool(encoded)
+
+    async def _fake_get_db_pool():
+        return fake_pool
+
+    monkeypatch.setattr(keyres, "get_db_pool", _fake_get_db_pool, raising=True)
+
+    result = await resolve_api_key_by_hash(api_key)
+    assert result == {"id": 55, "user_id": 21}
+    assert fake_pool.calls, "expected key_id lookup to be invoked"

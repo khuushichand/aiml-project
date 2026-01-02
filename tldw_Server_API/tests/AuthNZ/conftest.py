@@ -515,7 +515,8 @@ async def isolated_test_environment(monkeypatch):
             CREATE TABLE IF NOT EXISTS api_keys (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                key_hash VARCHAR(64) UNIQUE NOT NULL,
+                key_hash TEXT UNIQUE NOT NULL,
+                key_id VARCHAR(32),
                 key_prefix VARCHAR(16) NOT NULL,
                 name VARCHAR(255),
                 description TEXT,
@@ -549,6 +550,7 @@ async def isolated_test_environment(monkeypatch):
         """)
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)")
+        await test_conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key_id ON api_keys(key_id)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at)")
 
@@ -1252,7 +1254,8 @@ async def setup_test_database(monkeypatch):
             CREATE TABLE IF NOT EXISTS api_keys (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                key_hash VARCHAR(64) UNIQUE NOT NULL,
+                key_hash TEXT UNIQUE NOT NULL,
+                key_id VARCHAR(32),
                 key_prefix VARCHAR(16) NOT NULL,
                 name VARCHAR(255),
                 description TEXT,
@@ -1286,6 +1289,7 @@ async def setup_test_database(monkeypatch):
         """)
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)")
+        await test_conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key_id ON api_keys(key_id)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at)")
 

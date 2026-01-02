@@ -130,8 +130,11 @@ export default function SearchPage() {
         session_id: sessionId || undefined,
         ...payload,
       });
-    } catch {
+    } catch (err) {
       // best-effort
+      if (process.env.NODE_ENV === 'development') {
+        console.debug('[ImplicitFeedback] failed:', err);
+      }
     }
   };
 
@@ -572,6 +575,11 @@ export default function SearchPage() {
     return () => window.removeEventListener('keydown', key);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [curl, result]); // show is stable from toast hook
+
+  const documents = result?.documents || [];
+  const impressionList = documents
+    .map((doc: any, idx: number) => buildDocId(doc, `doc-${idx + 1}`))
+    .filter(Boolean);
 
   return (
     <Layout>
@@ -1022,14 +1030,11 @@ export default function SearchPage() {
                 </div>
                 <ul className="space-y-2 text-sm">
                   {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-                  {(result.documents || []).map((d: any, i: number) => {
+                  {documents.map((d: any, i: number) => {
                     const docId = buildDocId(d, `doc-${i + 1}`);
                     const docKey = docId || `doc-${i + 1}`;
                     const chunkIds = buildChunkIds(d);
                     const corpus = buildCorpus(d);
-                    const impressionList = (result.documents || [])
-                      .map((doc: any, idx: number) => buildDocId(doc, `doc-${idx + 1}`))
-                      .filter(Boolean);
                     const feedbackState = docFeedbackById[docId] || {};
                     const pending = feedbackState.pending;
                     const upSelected = feedbackState.value === 'up';

@@ -45,6 +45,15 @@ class TestDbPathValidation:
         db = KanbanDB(db_path=str(external_path), user_id="1", allow_external_db_path=True)
         assert db.db_path == str(external_path.resolve())
 
+    def test_memory_db_initializes_schema(self):
+        db = KanbanDB(db_path=":memory:", user_id="mem-user")
+        board = db.create_board(name="Memory Board", client_id="mem-1")
+        fetched = db.get_board(board["id"])
+
+        assert fetched is not None
+        assert fetched["id"] == board["id"]
+        db.close()
+
 
 # =============================================================================
 # Board Tests

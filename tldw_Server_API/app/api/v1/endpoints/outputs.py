@@ -30,6 +30,33 @@ from tldw_Server_API.app.services.outputs_service import (
 router = APIRouter(prefix="/outputs", tags=["outputs"])
 
 
+def _outputs_dir_for_user(user_id: int) -> PathlibPath:
+    return DatabasePaths.get_user_base_directory(user_id) / "outputs"
+
+
+def _resolve_output_path_for_user(user_id: int, path_value: str | PathlibPath) -> PathlibPath:
+    base_dir = _outputs_dir_for_user(user_id)
+    try:
+        base_resolved = base_dir.resolve(strict=False)
+    except Exception as e:
+        logger.error(f"outputs: failed to resolve outputs base dir for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="storage_unavailable")
+    candidate = path_value if isinstance(path_value, PathlibPath) else PathlibPath(path_value)
+    try:
+        candidate = candidate.expanduser()
+        if candidate.is_absolute():
+            resolved = candidate.resolve(strict=False)
+        else:
+            resolved = (base_resolved / candidate).resolve(strict=False)
+    except Exception as e:
+        logger.warning(f"outputs: invalid output path {path_value}: {e}")
+        raise HTTPException(status_code=400, detail="invalid_path")
+    if not resolved.is_relative_to(base_resolved):
+        logger.warning(f"outputs: output path outside base dir: {resolved}")
+        raise HTTPException(status_code=400, detail="invalid_path")
+    return resolved
+
+
 @router.get("", response_model=OutputListResponse, summary="List outputs with filters")
 async def list_outputs(
     page: int = 1,
@@ -138,8 +165,8 @@ async def create_output(
         raise HTTPException(status_code=422, detail="render_failed")
 
     # Persist to file under user outputs dir
-    user_dir = DatabasePaths.get_user_base_directory(int(current_user.id or 0))
-    out_dir = user_dir / "outputs"
+    user_id = int(current_user.id or 0)
+    out_dir = _outputs_dir_for_user(user_id)
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
     except Exception as e:
@@ -148,9 +175,9 @@ async def create_output(
 
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     ext = "mp3" if tpl.format == "mp3" else (tpl.format if tpl.format in ("md", "html") else "md")
-    base = (payload.title or tpl.name or "output").strip().replace(" ", "_")[:50]
+    base = _sanitize_title_for_filename(payload.title or tpl.name or "output")[:50]
     filename = f"{base}_{ts}.{ext}"
-    path = out_dir / filename
+    path = _resolve_output_path_for_user(user_id, out_dir / filename)
 
     if tpl.format == "mp3":
         # Synthesize speech from rendered text using default model/voice
@@ -279,7 +306,8 @@ async def download_output(
     except KeyError:
         raise HTTPException(status_code=404, detail="output_not_found")
 
-    path = PathlibPath(row.storage_path)
+    user_id = int(current_user.id or 0)
+    path = _resolve_output_path_for_user(user_id, row.storage_path)
     if not path.exists():
         raise HTTPException(status_code=404, detail="file_missing")
 
@@ -307,7 +335,8 @@ async def download_output_by_name(
         row = cdb.get_output_artifact_by_title(title, format_=(format if format else None))
     except KeyError:
         raise HTTPException(status_code=404, detail="output_not_found")
-    path = PathlibPath(row.storage_path)
+    user_id = int(current_user.id or 0)
+    path = _resolve_output_path_for_user(user_id, row.storage_path)
     if not path.exists():
         raise HTTPException(status_code=404, detail="file_missing")
     media_types = {
@@ -333,7 +362,8 @@ async def head_download_output(
         row = cdb.get_output_artifact(output_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="output_not_found")
-    path = PathlibPath(row.storage_path)
+    user_id = int(current_user.id or 0)
+    path = _resolve_output_path_for_user(user_id, row.storage_path)
     if not path.exists():
         raise HTTPException(status_code=404, detail="file_missing")
     # Return headers; FastAPI will send no body
@@ -357,14 +387,19 @@ async def delete_output(
     cdb = Depends(get_collections_db_for_user),
 ):
     # If hard delete and delete_file requested, remove file first
+    user_id = int(current_user.id or 0)
     fs_deleted = False
     if hard and delete_file:
         try:
             row = cdb.get_output_artifact(output_id)
-            p = PathlibPath(row.storage_path)
-            if p.exists():
-                p.unlink()
-                fs_deleted = True
+            try:
+                p = _resolve_output_path_for_user(user_id, row.storage_path)
+            except HTTPException as e:
+                logger.warning(f"outputs.delete: invalid output path for {output_id}: {e.detail}")
+            else:
+                if p.exists():
+                    p.unlink()
+                    fs_deleted = True
         except KeyError:
             raise HTTPException(status_code=404, detail="output_not_found")
         except Exception:
@@ -393,19 +428,21 @@ async def update_output(
     except KeyError:
         raise HTTPException(status_code=404, detail="output_not_found")
 
+    user_id = int(current_user.id or 0)
+    source_path = _resolve_output_path_for_user(user_id, row.storage_path)
     new_path: str | None = None
     new_title: str | None = None
     new_format: str | None = None
     if payload.title and payload.title != row.title:
         # Attempt to rename the file keeping timestamp suffix if present
-        p = PathlibPath(row.storage_path)
+        p = source_path
         ext = p.suffix
         stem = p.stem
         m = re.search(r"_(\d{8}_\d{6})$", stem)
         ts = m.group(1) if m else None
         base = _sanitize_title_for_filename(payload.title)
         new_name = f"{base}_{ts}{ext}" if ts else f"{base}{ext}"
-        new_full = p.with_name(new_name)
+        new_full = _resolve_output_path_for_user(user_id, p.with_name(new_name))
         try:
             if p.exists():
                 p.rename(new_full)
@@ -420,7 +457,7 @@ async def update_output(
     if payload.format and payload.format != row.format:
         if row.format not in ("md", "html") or payload.format not in ("md", "html"):
             raise HTTPException(status_code=422, detail="unsupported_format_change")
-        source_path = PathlibPath(new_path or row.storage_path)
+        source_path = _resolve_output_path_for_user(user_id, new_path or source_path)
         try:
             src_text = source_path.read_text(encoding="utf-8")
         except Exception:
@@ -443,7 +480,7 @@ async def update_output(
         m = re.search(r"_(\d{8}_\d{6})$", stem)
         ts = m.group(1) if m else None
         new_filename = f"{base_title}_{ts}{ext}" if ts else f"{base_title}{ext}"
-        target_path = source_path.with_name(new_filename)
+        target_path = _resolve_output_path_for_user(user_id, source_path.with_name(new_filename))
         try:
             target_path.write_text(converted, encoding="utf-8")
             if target_path.resolve() != source_path.resolve() and source_path.exists():
@@ -493,6 +530,7 @@ async def purge_outputs(
     current_user: User = Depends(get_request_user),
     cdb = Depends(get_collections_db_for_user),
 ):
+    user_id = int(current_user.id or 0)
     now = datetime.utcnow().replace(microsecond=0).isoformat()
     ids: set[int] = set()
     paths: dict[int, str] = {}
@@ -514,10 +552,12 @@ async def purge_outputs(
     if payload.delete_files and ids:
         for rid, pth in list(paths.items()):
             try:
-                p = PathlibPath(pth)
+                p = _resolve_output_path_for_user(user_id, pth)
                 if p.exists():
                     p.unlink()
                     files_deleted += 1
+            except HTTPException as e:
+                logger.warning(f"outputs.purge: invalid output path for {rid}: {e.detail}")
             except Exception as del_err:
                 logger.warning(f"outputs.purge: failed to delete file {pth}: {del_err}")
                 continue

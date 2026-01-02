@@ -14,6 +14,8 @@ from typing import Dict, List, Optional, Any, Union
 from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 from loguru import logger
 
+from tldw_Server_API.app.core.Character_Chat.constants import MAX_CHAT_DICTIONARY_TEXT_LENGTH
+
 # Maximum length for regex patterns to prevent complexity attacks
 MAX_REGEX_PATTERN_LENGTH = 500
 
@@ -232,7 +234,7 @@ class ChatDictionaryWithEntries(ChatDictionaryResponse):
 
 class ProcessTextRequest(BaseModel):
     """Request schema for processing text through dictionaries."""
-    text: str = Field(..., description="Text to process")
+    text: str = Field(..., max_length=MAX_CHAT_DICTIONARY_TEXT_LENGTH, description="Text to process")
     dictionary_id: Optional[int] = Field(None, description="Specific dictionary to use")
     group: Optional[str] = Field(None, description="Specific group to filter entries")
     max_iterations: int = Field(5, ge=1, le=20, description="Maximum processing iterations")

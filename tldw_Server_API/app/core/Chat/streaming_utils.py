@@ -820,10 +820,15 @@ class StreamingResponseHandler:
                     if self.system_message_id:
                         end_payload["tldw_system_message_id"] = self.system_message_id
                     yield f"event: stream_end\ndata: {json.dumps(end_payload)}\n\n"
-                # Ensure final [DONE] sentinel for client compatibility (unless already sent)
-                if not self.done_sent:
+                # Ensure final [DONE] sentinel for client compatibility (unless already sent).
+                # If upstream already sent [DONE], defer emission until after stream_end.
+                if self.upstream_done_received and not self.done_sent:
                     yield "data: [DONE]\n\n"
                     self.done_sent = True
+                elif not self.done_sent:
+                    yield "data: [DONE]\n\n"
+                    self.done_sent = True
+                self.upstream_done_received = False
 
             except Exception as e:
                 logger.error(f"Error in stream cleanup for {self.conversation_id}: {e}")

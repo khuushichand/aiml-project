@@ -6,6 +6,7 @@ from tldw_Server_API.app.core.RAG.rag_service.guardrails import (
     check_numeric_fidelity,
     build_hard_citations,
 )
+from tldw_Server_API.app.core.RAG.rag_service import guardrails
 from tldw_Server_API.app.core.RAG.rag_service.types import Document
 
 
@@ -62,3 +63,13 @@ def test_hard_citations_heuristic_maps_sentences_to_spans():
             found = True
             break
     assert found
+
+
+def test_clip_guardrail_text_caps_and_preserves_edges():
+    max_len = guardrails._MAX_GUARDRAIL_TEXT
+    text = ("A" * (max_len // 2)) + ("M" * 10) + ("Z" * (max_len // 2 + 10))
+    clipped = guardrails._clip_guardrail_text(text)
+    assert len(clipped) <= max_len
+    assert clipped.startswith("A")
+    assert clipped.endswith("Z")
+    assert " " in clipped

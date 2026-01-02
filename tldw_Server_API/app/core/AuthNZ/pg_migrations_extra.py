@@ -434,7 +434,8 @@ _CREATE_API_KEYS_TABLES = [
         CREATE TABLE IF NOT EXISTS api_keys (
             id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            key_hash VARCHAR(64) UNIQUE NOT NULL,
+            key_hash TEXT UNIQUE NOT NULL,
+            key_id VARCHAR(32),
             key_prefix VARCHAR(16) NOT NULL,
             name VARCHAR(255),
             description TEXT,
@@ -459,6 +460,8 @@ _CREATE_API_KEYS_TABLES = [
     ),
     ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS scope VARCHAR(50) DEFAULT 'read'", ()),
     ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active'", ()),
+    ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS key_id VARCHAR(32)", ()),
+    ("ALTER TABLE api_keys ALTER COLUMN key_hash TYPE TEXT", ()),
     ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS metadata JSONB", ()),
     ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS rotated_from INTEGER REFERENCES api_keys(id)", ()),
     ("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS rotated_to INTEGER REFERENCES api_keys(id)", ()),
@@ -480,6 +483,7 @@ _CREATE_API_KEYS_TABLES = [
     # Helpful indexes
     ("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)", ()),
+    ("CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key_id ON api_keys(key_id)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at)", ()),
     ("CREATE INDEX IF NOT EXISTS idx_api_keys_virtual ON api_keys(is_virtual)", ()),

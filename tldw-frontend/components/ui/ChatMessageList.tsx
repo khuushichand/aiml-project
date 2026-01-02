@@ -67,10 +67,12 @@ export const ChatMessageList = forwardRef<ChatMessageListHandle, ChatMessageList
           const isCenter = msg.position === 'center';
           const isSystem = msg.role === 'system';
           const footer = renderMessageFooter ? renderMessageFooter(msg) : null;
+          const messageTestId = msg.messageId ? `message-container-${msg.messageId}` : undefined;
 
           return (
             <div
               key={msg.messageId ? `msg-${msg.messageId}` : idx}
+              data-testid={messageTestId}
               className={cn(
                 'flex',
                 isCenter && 'justify-center',

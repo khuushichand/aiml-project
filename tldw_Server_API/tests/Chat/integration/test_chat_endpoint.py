@@ -377,9 +377,11 @@ def test_system_message_extraction(
     mock_chat_api_call.assert_called_once()
     call_args = mock_chat_api_call.call_args.kwargs
     assert call_args["system_message"] == "You are a helpful assistant."
-    assert len(call_args["messages_payload"]) == 1
-    assert call_args["messages_payload"][0]["role"] == "user"
-    assert call_args["messages_payload"][0]["content"] == "Hello there."  # Assuming passthrough template
+    assert len(call_args["messages_payload"]) == 2
+    assert call_args["messages_payload"][0]["role"] == "system"
+    assert call_args["messages_payload"][0]["content"] == "You are a helpful assistant."
+    assert call_args["messages_payload"][1]["role"] == "user"
+    assert call_args["messages_payload"][1]["content"] == "Hello there."  # Assuming passthrough template
     # Clean up only the overrides we added (not the auth override from fixture)
     app.dependency_overrides.pop(get_media_db_for_user, None)
     app.dependency_overrides.pop(get_chacha_db_for_user, None)

@@ -5692,19 +5692,31 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         include_deleted: bool = False,
     ) -> bool:
         """Check whether a conversation has at least one system message."""
-        delete_clause = "" if include_deleted else "AND m.deleted = 0"
-        query = f"""
-            SELECT 1
-            FROM messages m
-            JOIN conversations c ON m.conversation_id = c.id
-            WHERE m.conversation_id = ?
-              AND lower(m.sender) = 'system'
-              {delete_clause}
-              AND c.deleted = 0
-            LIMIT 1
-        """
+        if include_deleted:
+            query = """
+                SELECT 1
+                FROM messages m
+                JOIN conversations c ON m.conversation_id = c.id
+                WHERE m.conversation_id = ?
+                  AND lower(m.sender) = 'system'
+                  AND c.deleted = ?
+                LIMIT 1
+            """
+            params = (conversation_id, False)
+        else:
+            query = """
+                SELECT 1
+                FROM messages m
+                JOIN conversations c ON m.conversation_id = c.id
+                WHERE m.conversation_id = ?
+                  AND lower(m.sender) = 'system'
+                  AND m.deleted = ?
+                  AND c.deleted = ?
+                LIMIT 1
+            """
+            params = (conversation_id, False, False)
         try:
-            cursor = self.execute_query(query, (conversation_id,))
+            cursor = self.execute_query(query, params)
             return cursor.fetchone() is not None
         except CharactersRAGDBError as e:
             logger.error(

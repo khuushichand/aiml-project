@@ -15,7 +15,7 @@ def _row_to_dict(row, cursor):
         return row
     try:
         return dict(row)
-    except Exception:
+    except (TypeError, ValueError):
         columns = [col[0] for col in cursor.description] if cursor.description else []
         return {columns[idx]: row[idx] for idx in range(len(columns))}
 
@@ -141,7 +141,7 @@ def test_explicit_feedback_idempotent_merge_updates_issues_and_notes(feedback_se
 
 @pytest.mark.integration
 def test_explicit_feedback_rag_only_accepts_query(feedback_setup):
-    client, db, _conversation_id, _message_id = feedback_setup
+    client, _db, _conversation_id, _message_id = feedback_setup
 
     payload = {
         "feedback_type": "relevance",

@@ -10,8 +10,9 @@ For personal use, the simplest setup:
 # 1. Copy the authentication template
 cp .env.authnz.template .env
 
-# 2. Generate a secure API key
-python -c "import secrets; print('SINGLE_USER_API_KEY=' + secrets.token_urlsafe(32))"
+# 2. Generate a secure API key (new format)
+python -m tldw_Server_API.app.core.AuthNZ.initialize
+# Choose "Generate secure keys" and copy SINGLE_USER_API_KEY
 
 # 3. Add the generated key to your .env file
 # Edit .env and replace SINGLE_USER_API_KEY value
@@ -19,7 +20,7 @@ python -c "import secrets; print('SINGLE_USER_API_KEY=' + secrets.token_urlsafe(
 # 4. Set AUTH_MODE to single_user in .env
 AUTH_MODE=single_user
 
-# 5. Initialize the authentication system
+# 5. Initialize the authentication system (if you haven't already)
 python -m tldw_Server_API.app.core.AuthNZ.initialize
 
 # 6. Start the server - your API key will be displayed in the console

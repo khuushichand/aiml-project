@@ -2783,6 +2783,14 @@ OPENAPI_TAGS = [
         "externalDocs": {"description": "RAG notes", "url": _ext_url("/docs-static/RAG_Notes.md")},
     },
     {
+        "name": "feedback",
+        "description": "User feedback capture for RAG quality and relevance signals.",
+        "externalDocs": {
+            "description": "Feedback system design",
+            "url": _ext_url("/docs-static/Design/Feedback_System.md"),
+        },
+    },
+    {
         "name": "workflows",
         "description": "Workflow definitions and execution (scaffolding, experimental).",
         "externalDocs": {"description": "Workflows", "url": _ext_url("/docs-static/Design/Workflows.md")},
@@ -3136,7 +3144,7 @@ def custom_openapi():
         },
         {
             "name": "RAG & Evals",
-            "tags": ["rag-health", "rag-unified", "evaluations", "benchmarks"],
+            "tags": ["rag-health", "rag-unified", "feedback", "evaluations", "benchmarks"],
         },
         {
             "name": "Embeddings & Vectors",

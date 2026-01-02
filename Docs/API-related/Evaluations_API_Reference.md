@@ -782,9 +782,10 @@ When `webhook_url` is provided in a run request, the following payload is sent u
 
 ## Code Examples
 
-> ⚠️ Generate a strong API key and set it via `SINGLE_USER_API_KEY` before running these examples:
+> ⚠️ Generate a strong API key (new format) and set it via `SINGLE_USER_API_KEY` before running these examples:
 > ```bash
-> export SINGLE_USER_API_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+> python -m tldw_Server_API.app.core.AuthNZ.initialize
+> # Copy SINGLE_USER_API_KEY into your environment
 > ```
 > Replace `YOUR_API_KEY` below with that value (or load it from your environment at runtime).
 

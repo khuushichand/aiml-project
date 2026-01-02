@@ -133,6 +133,7 @@ def test_transcribe_batch_whisper_normalizes_artifact(monkeypatch, tmp_path):
         return_language,
         initial_prompt=None,
         task="transcribe",
+        base_dir=None,
     ):
         assert str(path) == str(audio_file)
         assert whisper_model == "tiny"
@@ -184,6 +185,7 @@ def test_transcribe_batch_parakeet_normalizes_artifact(monkeypatch, tmp_path):
         vad_filter,
         diarize,
         return_language,
+        base_dir=None,
     ):
         assert str(path) == str(audio_file)
         # Parakeet adapter encodes model name into whisper_model

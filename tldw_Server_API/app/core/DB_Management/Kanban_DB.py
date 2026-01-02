@@ -78,6 +78,23 @@ def _normalize_db_path(
     return str(resolved), False
 
 
+# --- SQLite Connection Helpers ---
+class _KanbanMemoryConnection(sqlite3.Connection):
+    """SQLite connection that keeps :memory: databases alive across operations."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._allow_close = False
+
+    def close(self) -> None:
+        if self._allow_close:
+            super().close()
+
+    def force_close(self) -> None:
+        self._allow_close = True
+        super().close()
+
+
 # --- Custom Exceptions ---
 class KanbanDBError(Exception):
     """Base exception for KanbanDB related errors."""
@@ -164,6 +181,7 @@ class KanbanDB:
             self.user_id,
             allow_external_db_path,
         )
+        self._memory_conn: Optional[_KanbanMemoryConnection] = None
 
         # Ensure directory exists
         if not self._is_memory_db:
@@ -175,18 +193,35 @@ class KanbanDB:
         self._ensure_schema()
         logger.debug(f"KanbanDB initialized for user {user_id} at {self.db_path}")
 
-    def _connect(self) -> sqlite3.Connection:
-        """Create and configure a database connection."""
-        conn = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
+    def _configure_connection(self, conn: sqlite3.Connection, *, enable_wal: bool = True) -> None:
         conn.row_factory = sqlite3.Row
         try:
-            conn.execute("PRAGMA journal_mode=WAL")
+            if enable_wal:
+                conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA foreign_keys=ON")
             conn.execute("PRAGMA busy_timeout=30000")
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA cache_size=-64000")  # 64MB cache
         except Exception as e:
             logger.warning(f"Failed to set PRAGMA options: {e}")
+
+    def _connect(self) -> sqlite3.Connection:
+        """Create and configure a database connection."""
+        if self._is_memory_db:
+            if self._memory_conn is None:
+                # Keep a single shared connection so :memory: schema/data persist.
+                self._memory_conn = sqlite3.connect(
+                    self.db_path,
+                    timeout=30,
+                    isolation_level=None,
+                    check_same_thread=False,
+                    factory=_KanbanMemoryConnection,
+                )
+                self._configure_connection(self._memory_conn, enable_wal=False)
+            return self._memory_conn
+
+        conn = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
+        self._configure_connection(conn)
         return conn
 
     def _ensure_schema(self) -> None:
@@ -202,6 +237,16 @@ class KanbanDB:
                 raise KanbanDBError(f"Schema creation failed: {e}") from e
             finally:
                 conn.close()
+
+    def close(self) -> None:
+        """Close any persistent in-memory connection."""
+        with self._lock:
+            if self._memory_conn is None:
+                return
+            try:
+                self._memory_conn.force_close()
+            finally:
+                self._memory_conn = None
 
     def _get_schema_sql(self) -> str:
         """Return the complete schema SQL."""

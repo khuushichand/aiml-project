@@ -81,17 +81,13 @@ describe('ChatPage feedback (streaming)', () => {
     await screen.findByText('Hello from stream');
     await waitFor(() => expect(mocks.streamSSE).toHaveBeenCalled());
 
-    const systemSummary = screen.getByText('System prompt text', { selector: 'summary span' });
-    const systemContainer = systemSummary.closest('div')?.parentElement?.parentElement;
-    expect(systemContainer).toBeTruthy();
-    const systemFeedbackButton = within(systemContainer as HTMLElement).getByRole('button', {
+    const systemContainer = screen.getByTestId('message-container-sys_1');
+    const systemFeedbackButton = within(systemContainer).getByRole('button', {
       name: /Send helpful feedback/i,
     });
 
-    const assistantText = screen.getByText('Hello from stream');
-    const assistantContainer = assistantText.closest('div')?.parentElement?.parentElement;
-    expect(assistantContainer).toBeTruthy();
-    const assistantFeedbackButton = within(assistantContainer as HTMLElement).getByRole('button', {
+    const assistantContainer = screen.getByTestId('message-container-msg_1');
+    const assistantFeedbackButton = within(assistantContainer).getByRole('button', {
       name: /Send helpful feedback/i,
     });
 
@@ -123,10 +119,8 @@ describe('ChatPage feedback (streaming)', () => {
     await screen.findByText('Hello from stream');
     await waitFor(() => expect(mocks.streamSSE).toHaveBeenCalled());
 
-    const assistantText = screen.getByText('Hello from stream');
-    const assistantContainer = assistantText.closest('div')?.parentElement?.parentElement;
-    expect(assistantContainer).toBeTruthy();
-    const detailsButton = within(assistantContainer as HTMLElement).getByRole('button', {
+    const assistantContainer = screen.getByTestId('message-container-msg_1');
+    const detailsButton = within(assistantContainer).getByRole('button', {
       name: /Open feedback details/i,
     });
 
@@ -153,7 +147,8 @@ describe('ChatPage feedback (streaming)', () => {
   });
 
   it('emits dwell_time implicit feedback after a response settles', async () => {
-    const user = userEvent.setup();
+    vi.useFakeTimers();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTimeAsync });
     render(<ChatPage />);
 
     const composer = screen.getByPlaceholderText('Type your message…');
@@ -161,7 +156,7 @@ describe('ChatPage feedback (streaming)', () => {
     await user.click(screen.getByRole('button', { name: 'Send' }));
 
     await screen.findByText('Hello from stream');
-    await new Promise((resolve) => setTimeout(resolve, 3100));
+    await vi.advanceTimersByTimeAsync(3100);
 
     await waitFor(() => {
       expect(mocks.apiClient.post).toHaveBeenCalledWith(
@@ -173,5 +168,5 @@ describe('ChatPage feedback (streaming)', () => {
         })
       );
     });
-  }, 10000);
+  });
 });

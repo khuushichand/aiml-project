@@ -4,7 +4,7 @@ from typing import List, Optional, Literal
 from pydantic import BaseModel
 try:
     from pydantic import model_validator  # type: ignore
-except Exception:
+except ImportError:
     model_validator = None  # type: ignore
 from pydantic import ConfigDict
 from ._compat import Field

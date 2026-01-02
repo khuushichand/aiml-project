@@ -397,11 +397,11 @@ async def get_chat_messages(
 
                 # Add system prompt only on the first page and only if no system message exists in DB
                 if character and include_character_context and offset == 0:
-                    has_system_in_page = any(
-                        map_sender_to_role(msg.get('sender'), character.get('name')) == "system"
-                        for msg in paginated
+                    has_system_in_db = db.has_system_message_for_conversation(
+                        chat_id,
+                        include_deleted=include_deleted,
                     )
-                    if not has_system_in_page:
+                    if not has_system_in_db:
                         system_prompt_parts = [
                             f"You are {character.get('name', 'Assistant')}.",
                             character.get('description', ''),

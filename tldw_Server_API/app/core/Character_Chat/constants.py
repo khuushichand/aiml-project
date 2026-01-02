@@ -15,6 +15,12 @@ MAX_REGEX_LENGTH = 500
 MAX_REGEX_COMPILE_TIME_MS = 100
 """Maximum time in milliseconds for regex compilation (heuristic-based)."""
 
+MAX_REGEX_MATCH_TIME_MS = 100
+"""Maximum time in milliseconds for regex match/replace operations."""
+
+MAX_CHAT_DICTIONARY_TEXT_LENGTH = 400_000
+"""Maximum input length for chat dictionary processing."""
+
 
 # =============================================================================
 # Cache Size Constants

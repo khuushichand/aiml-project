@@ -35,6 +35,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 )
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.Utils.Utils import generate_unique_filename, logging
+from tldw_Server_API.app.core.Chat.message_utils import should_persist_message_role
 
 HistoryList = List[Union[Tuple[Optional[str], Optional[str]], Dict[str, Any]]]
 MediaContent = Optional[Dict[str, Any]]
@@ -232,7 +233,7 @@ def save_chat_history_to_db_wrapper(
                 message_save_count = 0
                 for index, message_obj in enumerate(chatbot_history):
                     sender = message_obj.get("role")
-                    if not sender:
+                    if not should_persist_message_role(sender):
                         logging.debug("Skipping message with role '%s' at index %s", sender, index)
                         continue
 

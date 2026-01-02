@@ -10,9 +10,11 @@ This avoids cross-tenant leakage by isolating data per user.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -27,10 +29,43 @@ class Prior:
     corpus: Optional[str] = None
 
 
+_SAFE_USER_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _normalize_user_id(raw_user_id: Optional[str]) -> str:
+    raw = str(raw_user_id or "anon").strip()
+    if not raw:
+        return "anon"
+    if _SAFE_USER_ID_RE.fullmatch(raw):
+        return raw
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return f"u_{digest}"
+
+
+def _resolve_path(path: Path) -> Path:
+    return Path(os.path.realpath(str(path)))
+
+
+def _get_user_base_dir() -> Path:
+    base = _resolve_path(Path("Databases/user_databases"))
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def _safe_user_dir(user_id: str) -> Path:
+    base = _get_user_base_dir()
+    candidate = _resolve_path(base / user_id)
+    try:
+        candidate.relative_to(base)
+    except ValueError as exc:
+        raise ValueError("Unsafe user_id path for personalization store") from exc
+    return candidate
+
+
 class UserPersonalizationStore:
     def __init__(self, user_id: Optional[str]) -> None:
-        self.user_id = (user_id or "anon").strip()
-        base = Path("Databases/user_databases") / self.user_id
+        self.user_id = _normalize_user_id(user_id)
+        base = _safe_user_dir(self.user_id)
         base.mkdir(parents=True, exist_ok=True)
         self.path = base / "rag_personalization.json"
         self._data: Dict[str, any] = {}

@@ -10,12 +10,36 @@ from __future__ import annotations
 import base64
 import json
 import os
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 
 
-def _derive_key_from_passphrase(passphrase: str) -> bytes:
+_SCRYPT_PARAMS = {
+    "n": 2**14,
+    "r": 8,
+    "p": 1,
+    "dklen": 32,
+}
+
+
+def _derive_key_from_passphrase_legacy(passphrase: str) -> bytes:
     import hashlib
     return hashlib.sha256(passphrase.encode("utf-8")).digest()
+
+
+def _derive_key_from_passphrase(passphrase: str, salt: bytes) -> Tuple[bytes, str]:
+    import hashlib
+    try:
+        key = hashlib.scrypt(
+            passphrase.encode("utf-8"),
+            salt=salt,
+            n=_SCRYPT_PARAMS["n"],
+            r=_SCRYPT_PARAMS["r"],
+            p=_SCRYPT_PARAMS["p"],
+            dklen=_SCRYPT_PARAMS["dklen"],
+        )
+        return key, "scrypt"
+    except Exception:
+        return _derive_key_from_passphrase_legacy(passphrase), "sha256"
 
 
 def _aesgcm_encrypt(plaintext: bytes, key: bytes) -> Dict[str, str]:
@@ -67,9 +91,16 @@ def encrypt_payload_if_configured(payload_obj: Dict[str, Any]) -> Optional[str]:
     if not key_str:
         return None
     try:
-        key = _derive_key_from_passphrase(key_str)
+        salt_env = os.getenv("EMBEDDINGS_DLQ_SALT")
+        salt = (salt_env.encode("utf-8") if salt_env else os.urandom(16))
+        key, kdf_used = _derive_key_from_passphrase(key_str, salt)
         raw = json.dumps(payload_obj, default=str).encode("utf-8")
         obj = _aesgcm_encrypt(raw, key)
+        if obj.get("alg") == "AESGCM":
+            obj["kdf"] = kdf_used
+            if kdf_used == "scrypt":
+                obj["salt"] = base64.b64encode(salt).decode("utf-8")
+                obj["kdf_params"] = _SCRYPT_PARAMS
         return json.dumps(obj)
     except Exception:
         return None
@@ -88,7 +119,13 @@ def decrypt_payload_if_present(enc_json: Optional[str]) -> Optional[Dict[str, An
         # Without key, cannot decrypt; return None
         return None
     try:
-        key = _derive_key_from_passphrase(key_str)
+        kdf = obj.get("kdf")
+        if kdf == "scrypt":
+            salt_b64 = obj.get("salt") or ""
+            salt = base64.b64decode(salt_b64)
+            key, _ = _derive_key_from_passphrase(key_str, salt)
+        else:
+            key = _derive_key_from_passphrase_legacy(key_str)
         raw = _aesgcm_decrypt(obj, key)
         if raw is None:
             return None

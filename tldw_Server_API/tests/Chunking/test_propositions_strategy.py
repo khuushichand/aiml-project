@@ -52,6 +52,14 @@ class TestPropositionStrategy:
         assert isinstance(chunks, list)
         assert len(chunks) >= 1
 
+    def test_unbalanced_parentheses_handled(self):
+        strategy = PropositionChunkingStrategy()
+        text = "Intro " + ("(" * 500) + " trailing text."
+        chunks = strategy.chunk(text, max_size=2, overlap=0, aggressiveness=1, min_proposition_length=1)
+        assert isinstance(chunks, list)
+        assert len(chunks) >= 1
+        assert "(" in chunks[0]
+
 
 class TestChunkerIntegration:
     def test_chunker_with_propositions_method(self):

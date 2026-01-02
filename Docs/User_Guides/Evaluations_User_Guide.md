@@ -26,7 +26,7 @@ The Evaluations module in tldw_server provides a comprehensive framework for eva
 
 ### Prerequisites
 - tldw_server running (default: http://localhost:8000)
-- API key for authentication (`SINGLE_USER_API_KEY` set to a strong value, e.g. `python -c "import secrets; print(secrets.token_urlsafe(32))"`)
+- API key for authentication (`SINGLE_USER_API_KEY` set to a strong value; generate via `python -m tldw_Server_API.app.core.AuthNZ.initialize`)
 - (Optional) LLM API key for model-graded evaluations (OpenAI, Anthropic, etc.)
 
 ### Quick Setup
