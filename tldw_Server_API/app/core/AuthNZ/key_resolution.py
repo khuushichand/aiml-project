@@ -20,6 +20,26 @@ from tldw_Server_API.app.core.AuthNZ.api_key_crypto import (
 )
 
 
+def _compute_legacy_hmac_digests(api_key: str, key_materials: List[bytes]) -> List[str]:
+    """
+    Compute legacy HMAC-SHA256 digests for an API key using the provided key materials.
+
+    This helper exists solely for backward compatibility with historical `api_keys.key_hash`
+    values that were stored as HMAC-SHA256 digests, prior to the introduction of the
+    PBKDF2-based KDF scheme. New keys should be stored and verified using `kdf_hash_api_key`
+    and `verify_kdf_hash` instead of this legacy mechanism.
+    """
+    digests: List[str] = []
+    for key in key_materials:
+        try:
+            digest = hmac.new(key, api_key.encode("utf-8"), hashlib.sha256).hexdigest()
+            if digest not in digests:
+                digests.append(digest)
+        except Exception as exc:
+            logger.debug("resolve_api_key_by_hash: legacy HMAC derive failed: {}", exc)
+    return digests
+
+
 async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Dict[str, Any]]:
     """
     Resolve an API key to its database identity via key_id or legacy HMAC lookup.
@@ -84,20 +104,13 @@ async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Di
             return {"id": row[0], "user_id": row[1]}
 
         # Legacy hash stored with key_id: verify directly against HMAC candidates.
-        digests: List[str] = []
         try:
             key_materials = tuple(derive_hmac_key_candidates(s))
         except Exception as e:
             logger.debug("resolve_api_key_by_hash: failed to derive HMAC materials: {}", e)
             key_materials = ()
 
-        for key in key_materials:
-            try:
-                d = hmac.new(key, api_key.encode("utf-8"), hashlib.sha256).hexdigest()
-                if d not in digests:
-                    digests.append(d)
-            except Exception as _e:
-                logger.debug("resolve_api_key_by_hash: HMAC derive failed: {}", _e)
+        digests: List[str] = _compute_legacy_hmac_digests(api_key, list(key_materials))
 
         if stored_hash and stored_hash in digests:
             if isinstance(row, dict):
