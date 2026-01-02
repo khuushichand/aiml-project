@@ -62,8 +62,15 @@ class DatabasePaths:
         safe_user_id = str(user_id).strip()
         if not safe_user_id.isdigit():
             raise ValueError(f"Invalid user_id for filesystem path: {user_id!r}")
+        if int(safe_user_id) < 1:
+            raise ValueError(f"user_id must be a positive integer for filesystem path: {user_id!r}")
 
-        user_dir = base_path / safe_user_id
+        # Construct and normalize user directory and ensure it stays under base_path
+        user_dir = (base_path / safe_user_id).resolve()
+        try:
+            user_dir.relative_to(base_path)
+        except ValueError as exc:
+            raise ValueError(f"Computed user directory escapes base path: {user_dir!r}") from exc
 
         # Ensure directory exists
         try:
