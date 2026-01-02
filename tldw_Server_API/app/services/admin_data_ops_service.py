@@ -84,9 +84,9 @@ def _safe_join(base_dir: str, name: str) -> str:
             raise ValueError("invalid_backup_path")
     except ValueError as exc:
         raise ValueError("invalid_backup_path") from exc
-    if os.path.islink(candidate):
+    if os.path.islink(candidate_real):
         raise ValueError("invalid_backup_path")
-    return candidate
+    return candidate_real
 
 
 def _backup_dir_for_dataset(dataset: str, user_id: Optional[int]) -> str:
