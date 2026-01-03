@@ -3092,13 +3092,13 @@ async def approve_step(
     # Update step decision via DB adapter
     try:
         db.approve_step_decision(run_id=run_id, step_id=step_id, approved_by=str(current_user.id), comment=payload.comment or "")
-    except Exception:
+    except Exception as exc:
         logger.exception(
             "Workflows approval: failed to persist decision for run_id={} step_id={}",
             run_id,
             step_id,
         )
-        raise HTTPException(status_code=500, detail="Failed to approve step")
+        raise HTTPException(status_code=500, detail="Failed to approve step") from exc
 
     # Resume run from next step
     engine = WorkflowEngine(db)
@@ -3134,13 +3134,13 @@ async def reject_step(
         db.reject_step_decision(run_id=run_id, step_id=step_id, approved_by=str(current_user.id), comment=payload.comment or "")
         db.update_run_status(run_id, status="failed", status_reason="rejected_by_human", ended_at=_utcnow_iso())
         db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "human_rejected", {"step_id": step_id})
-    except Exception:
+    except Exception as exc:
         logger.exception(
             "Workflows rejection: failed to persist decision for run_id={} step_id={}",
             run_id,
             step_id,
         )
-        raise HTTPException(status_code=500, detail="Failed to reject step")
+        raise HTTPException(status_code=500, detail="Failed to reject step") from exc
     return {"ok": True}
 
 

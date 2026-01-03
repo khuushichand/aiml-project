@@ -185,9 +185,9 @@ def validate_regex_safety(pattern: str) -> Tuple[bool, str]:
             return False, f"Pattern too slow: test match took {elapsed_ms:.2f}ms"
     except regex.error as e:
         return False, f"Invalid regex: {e}"
+    except Exception as e:
         # Catch-all to avoid unexpected exceptions from breaking validation.
         logger.debug(f"Unexpected error during regex validation: {e}")
-    except Exception as e:
         return False, f"Regex validation error: {e}"
 
     return True, ""

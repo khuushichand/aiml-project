@@ -55,26 +55,6 @@ def _is_subpath(parent: Path, child: Path) -> bool:
     """
     try:
         parent_resolved = parent.resolve(strict=False)
-    except Exception:
-        parent_resolved = parent
-    try:
-        child_resolved = child.resolve(strict=False)
-    except Exception:
-        child_resolved = child
-    try:
-        child_resolved.relative_to(parent_resolved)
-        return True
-    except ValueError:
-        return False
-
-
-def _is_subpath(parent: Path, child: Path) -> bool:
-    """
-    Return True if 'child' is located within 'parent' (after resolving both).
-    This is a compatibility-safe equivalent of Path.is_relative_to.
-    """
-    try:
-        parent_resolved = parent.resolve(strict=False)
     except Exception as e:
         logger.debug(f"Failed to resolve parent path {parent}: {e}")
         parent_resolved = parent
@@ -156,9 +136,6 @@ def _resolve_artifacts_dir(step_run_id: str | None) -> Path:
         if not _is_subpath(base_resolved, candidate):
             # As a last resort, refuse to use an unsafe path.
             raise AdapterError("artifact_dir_resolution_failed")
-    if not _is_subpath(base_resolved, candidate):
-        safe_id = f"artifact_{int(time.time() * 1000)}"
-        candidate = (base_resolved / safe_id).resolve(strict=False)
     return candidate
 
 

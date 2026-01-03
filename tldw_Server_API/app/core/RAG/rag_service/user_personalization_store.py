@@ -17,11 +17,12 @@ import time
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
 from tldw_Server_API.app.core.exceptions import UnsafeUserPathError
+from tldw_Server_API.app.core.Utils.path_utils import resolve_path
 
 
 @dataclass
@@ -49,25 +50,15 @@ def _normalize_user_id(raw_user_id: Optional[str]) -> str:
     return f"u_{digest}"
 
 
-def _resolve_path(path: Path) -> Path:
-    """Expand and resolve a path without requiring it to exist."""
-    expanded = path.expanduser()
-    try:
-        return expanded.resolve(strict=False)
-    except TypeError:
-        # Python < 3.6 doesn't support strict parameter
-        return expanded.resolve()
-
-
 def _get_user_base_dir() -> Path:
-    base = _resolve_path(Path("Databases/user_databases"))
+    base = resolve_path(Path("Databases/user_databases"))
     base.mkdir(parents=True, exist_ok=True)
     return base
 
 
 def _safe_user_dir(user_id: str) -> Path:
     base = _get_user_base_dir()
-    candidate = _resolve_path(base / user_id)
+    candidate = resolve_path(base / user_id)
     try:
         candidate.relative_to(base)
     except ValueError as exc:
@@ -99,7 +90,7 @@ class UserPersonalizationStore:
             self._data.setdefault("events", {})
             self._data.setdefault("pairs", {})
         except Exception as e:
-            logger.debug(f"Failed loading personalization data: {e}")
+            logger.warning(f"Failed loading personalization data for user {self.user_id}: {e}")
             self._data = _empty_store()
 
     def _save(self) -> None:
@@ -162,9 +153,24 @@ class UserPersonalizationStore:
         boosted = []
         for d in documents:
             try:
-                did = getattr(d, "id", None) or (isinstance(d, dict) and d.get("id"))
-                base = float(getattr(d, "score", 0.0) if hasattr(d, "score") else (d.get("score", 0.0) if isinstance(d, dict) else 0.0))
-                prior = self.get_prior(str(did))
+                if hasattr(d, "id"):
+                    did = d.id
+                elif isinstance(d, dict):
+                    did = d.get("id")
+                else:
+                    did = None
+
+                if hasattr(d, "score"):
+                    base = float(d.score)
+                elif isinstance(d, dict):
+                    base = float(d.get("score", 0.0))
+                else:
+                    base = 0.0
+                prior_data = self._data.get("priors", {}).get(str(did)) if did is not None else None
+                if corpus and prior_data and prior_data.get("corpus") != corpus:
+                    prior = 0.0
+                else:
+                    prior = self.get_prior(str(did)) if did is not None else 0.0
                 new_score = base + (weight * prior)
                 if hasattr(d, "score"):
                     d.score = new_score

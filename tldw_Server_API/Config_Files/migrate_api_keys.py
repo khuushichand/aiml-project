@@ -133,8 +133,7 @@ def _collect_env_vars(
             else:
                 env_vars[env_name] = value
                 keys_found.append((section, key, env_name))
-                print(f"  Found {env_name}: {value[:5]}...")
-    print("  Found API key (value hidden)")
+                print("  Found API key (value hidden)")
     return env_vars, keys_found
 
 

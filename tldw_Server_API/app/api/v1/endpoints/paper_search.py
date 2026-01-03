@@ -195,7 +195,7 @@ async def paper_search_arxiv(
         raise
     except Exception as e:
         logger.error(f"Unexpected arXiv search error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
     total_pages = math.ceil(total_results_from_api / search_params.results_per_page) if search_params.results_per_page > 0 else 0
     if total_results_from_api == 0:
@@ -254,7 +254,7 @@ async def paper_search_biorxiv(
         raise
     except Exception as e:
         logger.error(f"Unexpected BioRxiv search error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
     total_pages = math.ceil(total_results / search_params.results_per_page) if search_params.results_per_page > 0 else 0
     if total_results == 0:
@@ -312,7 +312,7 @@ async def paper_search_medrxiv_by_doi(
         raise
     except Exception as e:
         logger.error(f"Unexpected MedRxiv DOI error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
 
 @router.get(
@@ -440,7 +440,7 @@ async def pmc_oai_identify():
         raise
     except Exception as e:
         logger.error(f"Unexpected PMC OAI Identify error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
 
 @router.get(
@@ -2183,7 +2183,12 @@ def _handle_provider_error(err: str) -> None:
     if "timed out" in low:
         raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
     if "http error" in low:
-        nums = [int(s) for s in err.split() if s.isdigit() and 400 <= int(s) < 600]
+        nums = []
+        for s in err.split():
+            if s.isdigit():
+                num = int(s)
+                if 400 <= num < 600:
+                    nums.append(num)
         code = nums[0] if nums else 502
         raise HTTPException(status_code=code, detail=_PROVIDER_ERROR_DETAIL)
     raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)

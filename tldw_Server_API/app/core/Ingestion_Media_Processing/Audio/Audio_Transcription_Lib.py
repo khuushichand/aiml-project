@@ -220,7 +220,7 @@ def _assert_no_symlink(path: Path, *, label: str) -> None:
     """
     Raise ValueError if the path or any existing parent is a symlink.
     """
-    for candidate in [path] + list(path.parents):
+    for candidate in [path, *path.parents]:
         if not candidate.exists():
             continue
         try:
@@ -258,14 +258,14 @@ def _get_allowed_media_base_dirs() -> List[Path]:
     roots: List[Path] = []
     try:
         roots.append(Path(tempfile.gettempdir()).resolve(strict=False))
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug(f"Could not resolve temp directory for allowed base dirs: {exc}")
     try:
         user_base = settings.get("USER_DB_BASE_DIR")
         if user_base:
             roots.append(Path(user_base).resolve(strict=False))
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug(f"Could not resolve USER_DB_BASE_DIR for allowed base dirs: {exc}")
 
     _ALLOWED_MEDIA_BASE_DIRS = roots
     return list(roots)
@@ -329,8 +329,6 @@ def _normalize_whisper_model_identifier(
         _is_hf_model_id(raw)
         and not raw.startswith(("/", ".", "~"))
         and not _looks_like_windows_drive(raw)
-        and os.sep not in raw
-        and (os.altsep is None or os.altsep not in raw)
     ):
         return raw
 
@@ -340,13 +338,6 @@ def _normalize_whisper_model_identifier(
         or os.sep in raw
         or (os.altsep and os.altsep in raw)
     )
-
-    if (
-        _is_hf_model_id(raw)
-        and not raw.startswith(("/", ".", "~"))
-        and not _looks_like_windows_drive(raw)
-    ):
-        return raw
 
     if not path_like:
         if raw in {".", ".."} or ".." in raw:
@@ -1672,7 +1663,6 @@ def check_model_exists(model_name: str) -> bool:
     # Resolve the default download root once as an absolute, normalized path.
     # All model paths must remain within this directory.
     default_root_path = WHISPER_MODEL_BASE_DIR.resolve(strict=False)
-    default_download_root = str(default_root_path)
 
     try:
         normalized = _normalize_whisper_model_identifier(

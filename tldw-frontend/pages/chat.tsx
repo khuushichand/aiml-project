@@ -205,6 +205,22 @@ export default function ChatPage() {
   };
   useEffect(() => { loadSessions(); }, []);
   useEffect(() => {
+    const generateSessionId = () => {
+      const hasCrypto = typeof crypto !== 'undefined';
+      if (hasCrypto && 'randomUUID' in crypto) {
+        return crypto.randomUUID();
+      }
+      if (hasCrypto && 'getRandomValues' in crypto) {
+        const bytes = new Uint8Array(16);
+        crypto.getRandomValues(bytes);
+        // Convert bytes to a hex string, keep existing "sess_" prefix
+        return 'sess_' + Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+      }
+      if (typeof console !== 'undefined') {
+        console.warn('Using timestamp-based chat session id; crypto API unavailable.');
+      }
+      return `sess_${Date.now()}`;
+    };
     try {
       const key = 'tldw-chat-session-id';
       const existing = localStorage.getItem(key);
@@ -212,28 +228,11 @@ export default function ChatPage() {
         chatSessionIdRef.current = existing;
         return;
       }
-      const hasCrypto = typeof crypto !== 'undefined';
-      const generated = (hasCrypto && 'randomUUID' in crypto)
-        ? crypto.randomUUID()
-        : (hasCrypto && 'getRandomValues' in crypto)
-          ? (() => {
-              const bytes = new Uint8Array(16);
-              crypto.getRandomValues(bytes);
-              // Convert bytes to a hex string, keep existing "sess_" prefix
-              return 'sess_' + Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
-            })()
-          : `sess_${Date.now()}`;
+      const generated = generateSessionId();
       localStorage.setItem(key, generated);
       chatSessionIdRef.current = generated;
     } catch {
-      const hasCrypto = typeof crypto !== 'undefined' && 'getRandomValues' in crypto;
-      if (hasCrypto) {
-        const bytes = new Uint8Array(16);
-        crypto.getRandomValues(bytes);
-        chatSessionIdRef.current = 'sess_' + Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
-      } else {
-        chatSessionIdRef.current = `sess_${Date.now()}`;
-      }
+      chatSessionIdRef.current = generateSessionId();
     }
   }, []);
 

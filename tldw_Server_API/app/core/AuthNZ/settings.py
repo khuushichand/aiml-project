@@ -21,6 +21,9 @@ except Exception:
     load_comprehensive_config = None  # Fallback if import graph changes
     core_settings = None
 
+SECURE_KEY_INIT_COMMAND = "python -m tldw_Server_API.app.core.AuthNZ.initialize"
+SECURE_KEY_GUIDANCE = f"Generate a secure key via:\n  {SECURE_KEY_INIT_COMMAND}"
+
 #######################################################################################################################
 #
 # Settings Class
@@ -679,8 +682,7 @@ class Settings(BaseSettings):
                 else:
                     raise ValueError(
                         "SINGLE_USER_API_KEY is required for single-user mode but is not configured.\n"
-                        "Generate a secure key by running:\n"
-                        "  python -m tldw_Server_API.app.core.AuthNZ.initialize\n"
+                        f"{SECURE_KEY_GUIDANCE}\n"
                         "and follow the prompts (option \"Generate secure keys\").\n"
                         "Then set SINGLE_USER_API_KEY in your environment or .env file."
                     )
@@ -695,8 +697,7 @@ class Settings(BaseSettings):
             elif self.SINGLE_USER_API_KEY == "change-me-in-production":
                 raise ValueError(
                     "Default API key detected! Please set SINGLE_USER_API_KEY via environment or .env.\n"
-                    "Generate a secure key via:\n"
-                    "  python -m tldw_Server_API.app.core.AuthNZ.initialize"
+                    f"{SECURE_KEY_GUIDANCE}"
                 )
             elif len(self.SINGLE_USER_API_KEY) < 16:
                 # Allow short keys in explicit test contexts to avoid brittle fixtures
@@ -704,8 +705,7 @@ class Settings(BaseSettings):
                     return
                 raise ValueError(
                     "SINGLE_USER_API_KEY must be at least 16 characters.\n"
-                    "Generate a secure key via:\n"
-                    "  python -m tldw_Server_API.app.core.AuthNZ.initialize"
+                    f"{SECURE_KEY_GUIDANCE}"
                 )
 
             # Hard fail in production if key is missing/weak/default
@@ -724,8 +724,7 @@ class Settings(BaseSettings):
                         raise ValueError(
                             "In production (tldw_production=true), SINGLE_USER_API_KEY must use the "
                             "server-generated format (tldw_<kid>.<secret>). "
-                            "Generate a new key via:\n"
-                            "  python -m tldw_Server_API.app.core.AuthNZ.initialize\n"
+                            f"{SECURE_KEY_GUIDANCE}\n"
                             "or set TLDW_ALLOW_LEGACY_SINGLE_USER_KEY=true to temporarily bypass."
                         )
                     logger.warning(
@@ -741,8 +740,7 @@ class Settings(BaseSettings):
                 if weak:
                     raise ValueError(
                         "In production (tldw_production=true), SINGLE_USER_API_KEY must be set to a secure value (>=24 chars) "
-                        "and must not use defaults.\nGenerate a secure key via:\n"
-                        "  python -m tldw_Server_API.app.core.AuthNZ.initialize"
+                        f"and must not use defaults.\n{SECURE_KEY_GUIDANCE}"
                     )
 
     @field_validator("JWT_SECRET_KEY")

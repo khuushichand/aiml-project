@@ -145,7 +145,11 @@ def decrypt_payload_if_present(enc_json: Optional[str]) -> Optional[Dict[str, An
                     p=int(stored_params.get("p", _SCRYPT_PARAMS["p"])),
                     dklen=int(stored_params.get("dklen", _SCRYPT_PARAMS["dklen"])),
                 )
-            except Exception:
+            except (ValueError, MemoryError, TypeError) as exc:
+                logger.debug(
+                    "DLQ decrypt scrypt failed, using legacy KDF: %s",
+                    type(exc).__name__,
+                )
                 key = _derive_key_from_passphrase_legacy(key_str)
         else:
             key = _derive_key_from_passphrase_legacy(key_str)

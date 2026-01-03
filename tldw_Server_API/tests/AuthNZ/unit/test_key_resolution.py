@@ -44,24 +44,19 @@ class _FakePostgresKeyIdPool:
         return {"id": 55, "user_id": 21, "key_hash": self.key_hash}
 
 
-class _FakeSQLiteKeyIdFallbackPool:
-    def __init__(self, expected_key_id, expected_candidates):
+class _FakeSQLiteKeyIdOnlyPool:
+    def __init__(self, expected_key_id):
         self.pool = None
         self.expected_key_id = expected_key_id
-        self.expected_candidates = tuple(expected_candidates)
         self.calls = []
 
     async def fetchone(self, query: str, params):
         self.calls.append((query, params))
-        if "key_id" in query:
-            key_id, status = params
-            assert key_id == self.expected_key_id
-            assert status == "active"
-            return None
-        *candidates, status = tuple(params)
-        assert tuple(candidates) == self.expected_candidates
+        key_id, status = params
+        assert "key_id" in query
+        assert key_id == self.expected_key_id
         assert status == "active"
-        return {"id": 101, "user_id": 202}
+        return None
 
 
 @pytest.mark.asyncio
@@ -133,7 +128,7 @@ async def test_resolve_api_key_by_hash_key_id(monkeypatch):
     monkeypatch.setattr(
         keyres,
         "get_settings",
-        lambda: Settings(AUTH_MODE="multi_user", JWT_SECRET_KEY="test-secret-keyid-1234567890"),
+        lambda: Settings(AUTH_MODE="multi_user", JWT_SECRET_KEY="test-secret-keyid-1234567890-abcdefghijklmnopqrstuvwxyz"),
         raising=True,
     )
     fake_pool = _FakePostgresKeyIdPool(encoded)
@@ -149,20 +144,17 @@ async def test_resolve_api_key_by_hash_key_id(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_resolve_api_key_by_hash_key_id_fallbacks_to_hmac(monkeypatch):
+async def test_resolve_api_key_by_hash_key_id_does_not_fallback(monkeypatch):
     from tldw_Server_API.app.core.AuthNZ.api_key_crypto import format_api_key
-    from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
     from tldw_Server_API.app.core.AuthNZ.key_resolution import resolve_api_key_by_hash
     from tldw_Server_API.app.core.AuthNZ.settings import Settings
     import tldw_Server_API.app.core.AuthNZ.key_resolution as keyres
 
     api_key = format_api_key("deadbeefcafe", "secret-part")
-    mgr = APIKeyManager()
-    mgr.settings = Settings(AUTH_MODE="multi_user", JWT_SECRET_KEY="new-secret-xyz-abcdefghijklmnopqrstuvwxyz0123")
-    candidates = mgr.hash_candidates(api_key)
+    settings = Settings(AUTH_MODE="multi_user", JWT_SECRET_KEY="new-secret-xyz-abcdefghijklmnopqrstuvwxyz0123")
 
-    monkeypatch.setattr(keyres, "get_settings", lambda: mgr.settings, raising=True)
-    fake_pool = _FakeSQLiteKeyIdFallbackPool("deadbeefcafe", candidates)
+    monkeypatch.setattr(keyres, "get_settings", lambda: settings, raising=True)
+    fake_pool = _FakeSQLiteKeyIdOnlyPool("deadbeefcafe")
 
     async def _fake_get_db_pool():
         return fake_pool
@@ -170,5 +162,5 @@ async def test_resolve_api_key_by_hash_key_id_fallbacks_to_hmac(monkeypatch):
     monkeypatch.setattr(keyres, "get_db_pool", _fake_get_db_pool, raising=True)
 
     result = await resolve_api_key_by_hash(api_key)
-    assert result == {"id": 101, "user_id": 202}
-    assert fake_pool.calls, "expected key_id lookup and HMAC fallback to be invoked"
+    assert result is None
+    assert len(fake_pool.calls) == 1, "expected only key_id lookup to be invoked"

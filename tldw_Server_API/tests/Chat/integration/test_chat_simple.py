@@ -11,7 +11,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     ChatCompletionRequest,
     ChatCompletionUserMessageParam
 )
-from tldw_Server_API.tests.Utils.test_helpers import redact_secret
+from tldw_Server_API.app.core.security_utils import redact_secret
 
 
 def test_chat_completion_works(client, auth_token, mock_chacha_db, setup_dependencies, configure_for_mock_server):

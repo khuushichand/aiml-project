@@ -27,6 +27,7 @@ from tldw_Server_API.app.core.exceptions import StoragePathValidationError
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.services.outputs_service import normalize_output_storage_path
 
 
 def _get_user_db_base_dir() -> Path:
@@ -131,8 +132,12 @@ async def _purge_for_user(user_id: int, delete_files: bool, grace_days: int) -> 
     if delete_files and ids:
         for rid, pth in list(paths.items()):
             try:
-                safe_path = cdb.resolve_output_storage_path(pth)
-                p = Path(safe_path)
+                relative_name = normalize_output_storage_path(user_id, pth)
+                base_dir = DatabasePaths.get_user_base_directory(user_id) / "outputs"
+                base_resolved = base_dir.resolve(strict=False)
+                p = (base_resolved / relative_name).resolve(strict=False)
+                if not p.is_relative_to(base_resolved):
+                    raise StoragePathValidationError("invalid_path")
                 if p.exists():
                     p.unlink()
                     files_deleted += 1

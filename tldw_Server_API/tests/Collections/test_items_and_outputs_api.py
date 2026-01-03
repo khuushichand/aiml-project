@@ -169,7 +169,7 @@ def test_outputs_preview_with_inline_data_and_generate(client_with_user, tmp_pat
     assert r.status_code == 200, r.text
     out = r.json()
     assert out["format"] == "md"
-    path = Path(out["storage_path"])  # type: ignore[arg-type]
+    path = _resolve_output_path_for_user(123, out["storage_path"])
     assert path.exists(), f"Output file missing at {path}"
     text = path.read_text(encoding="utf-8")
     assert "Example Story" in text
@@ -188,6 +188,9 @@ def test_outputs_preview_with_inline_data_and_generate(client_with_user, tmp_pat
     r = client.head(f"/api/v1/outputs/{oid}/download")
     assert r.status_code == 200
     assert int(r.headers.get("content-length", "0")) > 0
+    r = client.get("/api/v1/outputs/download/by-name", params={"title": "demo", "format": "md"})
+    assert r.status_code == 200
+    assert r.headers.get("content-type", "").startswith("text/markdown")
 
     # List outputs
     r = client.get("/api/v1/outputs", params={"page": 1, "size": 10})
@@ -215,7 +218,7 @@ def test_outputs_create_sanitizes_title_and_enforces_base_dir(client_with_user):
     r = client.post("/api/v1/outputs", json={"template_id": tid, "data": {"items": []}, "title": "../outside"})
     assert r.status_code == 200, r.text
     out = r.json()
-    out_path = Path(out["storage_path"])  # type: ignore[arg-type]
+    out_path = _resolve_output_path_for_user(123, out["storage_path"])
     base_dir = DatabasePaths.get_user_base_directory(123) / "outputs"
     assert out_path.exists()
     assert out_path.resolve().is_relative_to(base_dir.resolve())
@@ -245,6 +248,27 @@ def test_outputs_download_rejects_storage_path_outside_base(client_with_user, tm
     r = client.get(f"/api/v1/outputs/{row_id}/download")
     assert r.status_code == 400, r.text
     assert r.json().get("detail") == "invalid_path"
+
+
+def test_outputs_download_normalizes_legacy_absolute_path(client_with_user):
+    client = client_with_user
+
+    base_dir = DatabasePaths.get_user_base_directory(123) / "outputs"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    legacy_path = base_dir / "legacy.md"
+    legacy_path.write_text("legacy", encoding="utf-8")
+    cdb = CollectionsDatabase.for_user(user_id=123)
+    row_id = _insert_output_row_raw(
+        cdb,
+        title="legacy",
+        format_="md",
+        storage_path=str(legacy_path),
+    )
+
+    r = client.get(f"/api/v1/outputs/{row_id}/download")
+    assert r.status_code == 200, r.text
+    row = cdb.get_output_artifact(row_id)
+    assert row.storage_path == "legacy.md"
 
 
 def test_outputs_delete_skips_invalid_path_file_removal(client_with_user, tmp_path):

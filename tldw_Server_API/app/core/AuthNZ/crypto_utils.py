@@ -17,6 +17,10 @@ from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 
+_HMAC_KDF_SALT = b"tldw_authnz_hmac_kdf_v1"
+_HMAC_KDF_ITERATIONS = 100_000
+_HMAC_KDF_DKLEN = 32
+
 
 def _ensure_secret_bytes(secret: Optional[str]) -> Optional[bytes]:
     if secret is None:
@@ -24,6 +28,22 @@ def _ensure_secret_bytes(secret: Optional[str]) -> Optional[bytes]:
     if isinstance(secret, bytes):
         return secret
     return str(secret).encode("utf-8")
+
+
+def _derive_hmac_key_from_source(source: bytes) -> bytes:
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        source,
+        _HMAC_KDF_SALT,
+        _HMAC_KDF_ITERATIONS,
+        dklen=_HMAC_KDF_DKLEN,
+    )
+
+
+def derive_hmac_key_from_source(raw: str | bytes) -> bytes:
+    """Derive a 32-byte HMAC key from raw secret material using the configured KDF."""
+    source = raw if isinstance(raw, bytes) else str(raw).encode("utf-8")
+    return _derive_hmac_key_from_source(source)
 
 
 def derive_hmac_key(settings: Optional[Settings] = None) -> bytes:
@@ -133,13 +153,11 @@ def derive_hmac_key_candidates(settings: Optional[Settings] = None) -> List[byte
     # This is intentionally computationally expensive to harden low-entropy secrets
     # (for example, human-chosen API keys) against brute-force attacks.
     keys: list[bytes] = []
-    kdf_salt = b"tldw_authnz_hmac_kdf_v1"
-    kdf_iterations = 100_000
     for source in digest_sources:
-        hashed = hashlib.pbkdf2_hmac("sha256", source, kdf_salt, kdf_iterations, dklen=32)
+        hashed = _derive_hmac_key_from_source(source)
         if hashed not in keys:
             keys.append(hashed)
     return keys
 
 
-__all__ = ["derive_hmac_key", "derive_hmac_key_candidates"]
+__all__ = ["derive_hmac_key", "derive_hmac_key_candidates", "derive_hmac_key_from_source"]

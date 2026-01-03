@@ -34,6 +34,8 @@ postgresql:/
 # Allow frontend source lib directories.
 !admin-ui/lib/
 !admin-ui/lib/**
+!tldw-frontend/lib/
+!tldw-frontend/lib/**
 
 # PyInstaller
 *.manifest

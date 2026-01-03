@@ -13,6 +13,10 @@ except ImportError:
 from pydantic import ConfigDict
 from ._compat import Field
 
+_ERR_QUERY_REQUIRED = "query is required when message_id is not provided"
+_ERR_HELPFUL_REQUIRED = "helpful is required when feedback_type is 'helpful'"
+_ERR_RELEVANCE_REQUIRED = "relevance_score is required when feedback_type is 'relevance'"
+
 
 def _validate_feedback_requirements(values: object) -> object:
     if not isinstance(values, dict):
@@ -20,12 +24,12 @@ def _validate_feedback_requirements(values: object) -> object:
     message_id = values.get("message_id")
     query = values.get("query")
     if not message_id and (query is None or str(query).strip() == ""):
-        raise ValueError("query is required when message_id is not provided")
+        raise ValueError(_ERR_QUERY_REQUIRED)
     feedback_type = values.get("feedback_type")
     if feedback_type == "helpful" and values.get("helpful") is None:
-        raise ValueError("helpful is required when feedback_type is 'helpful'")
+        raise ValueError(_ERR_HELPFUL_REQUIRED)
     if feedback_type == "relevance" and values.get("relevance_score") is None:
-        raise ValueError("relevance_score is required when feedback_type is 'relevance'")
+        raise ValueError(_ERR_RELEVANCE_REQUIRED)
     return values
 
 

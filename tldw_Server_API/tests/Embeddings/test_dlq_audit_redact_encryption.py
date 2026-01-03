@@ -140,7 +140,6 @@ def _aesgcm_available() -> bool:
 @pytest.mark.unit
 def test_dlq_crypto_roundtrip_scrypt(monkeypatch):
     monkeypatch.setenv("EMBEDDINGS_DLQ_ENCRYPTION_KEY", "test-passphrase")
-    monkeypatch.setenv("EMBEDDINGS_DLQ_SALT", "static-salt")
     from tldw_Server_API.app.core.Embeddings import dlq_crypto
 
     payload = {"msg": "hello", "count": 3}
@@ -198,8 +197,6 @@ def test_dlq_crypto_roundtrip_legacy(monkeypatch):
     monkeypatch.setenv("EMBEDDINGS_DLQ_ENCRYPTION_KEY", key_str)
     monkeypatch.delenv("EMBEDDINGS_DLQ_SALT", raising=False)
     payload = {"legacy": True, "value": "ok"}
-    import base64
-    import hashlib
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
     key = hashlib.sha256(key_str.encode("utf-8")).digest()

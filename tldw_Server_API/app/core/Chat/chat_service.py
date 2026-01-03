@@ -83,6 +83,11 @@ def _coerce_int(value: Optional[str], default: int) -> int:
         return default
 
 
+def _should_include_message_in_llm_payload(role: Optional[str]) -> bool:
+    """Return True when a message role should be included in the LLM payload."""
+    return should_persist_message_role(role)
+
+
 _MAX_HISTORY_MESSAGES = max(1, _coerce_int(_chat_config.get("max_history_messages"), 200))
 
 _default_history_limit = 20
@@ -874,7 +879,7 @@ async def build_context_and_messages(
     if not conv_id:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to establish conversation context.")
 
-    # History loading (configurable limit/order; filter non-persistable senders, normalize assistant names)
+    # History loading (configurable limit/order; filter non-persistable roles, normalize assistant names)
     requested_history_limit = getattr(request_data, "history_message_limit", None)
     if requested_history_limit is None:
         history_limit = DEFAULT_HISTORY_MESSAGE_LIMIT
@@ -908,9 +913,11 @@ async def build_context_and_messages(
             raw_hist = list(reversed(raw_hist))
         for db_msg in raw_hist:
             sender_val = str(db_msg.get("sender", "") or "")
-            if not should_persist_message_role(sender_val):
+            if not sender_val.strip():
                 continue
             role = map_sender_to_role(sender_val, character_card.get("name") if character_card else None)
+            if not _should_include_message_in_llm_payload(role):
+                continue
             char_name_hist = character_card.get("name", "Char") if character_card else "Char"
             text_content = db_msg.get("content", "")
             if text_content and role != "tool":
@@ -983,7 +990,7 @@ async def build_context_and_messages(
     # Process current turn messages (persist if needed)
     request_messages: List[Dict[str, Any]] = []
     for msg_model in request_data.messages:
-        if not should_persist_message_role(msg_model.role):
+        if not _should_include_message_in_llm_payload(msg_model.role):
             continue
         request_messages.append(msg_model.model_dump(exclude_none=True))
 

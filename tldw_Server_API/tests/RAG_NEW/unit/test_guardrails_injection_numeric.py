@@ -6,7 +6,6 @@ from tldw_Server_API.app.core.RAG.rag_service.guardrails import (
     check_numeric_fidelity,
     build_hard_citations,
 )
-from tldw_Server_API.app.core.RAG.rag_service import guardrails
 from tldw_Server_API.app.core.RAG.rag_service.types import Document
 
 
@@ -65,8 +64,9 @@ def test_hard_citations_heuristic_maps_sentences_to_spans():
     assert found
 
 
+@pytest.mark.unit
 def test_hard_citations_clip_long_answer_preserves_edges():
-    max_len = guardrails._MAX_GUARDRAIL_TEXT
+    max_len = 10000
     head = "Head sentence about WidgetCo."
     middle = "Middle sentence should be clipped."
     tail = "Tail sentence about revenue."

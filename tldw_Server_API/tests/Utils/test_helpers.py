@@ -1,19 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
-
-
-def redact_secret(value: Optional[str], head: int = 4, tail: int = 4) -> str:
-    """Redact a secret string (Optional[str], int, int -> str) for logs.
-    Returns "" for falsy input; masks short strings; keeps head/tail for long values.
-    Example: redact_secret("abcdefghij", 4, 4) -> "abcd...ghij".
-    """
-    if not value:
-        return ""
-    text = str(value)
-    if len(text) <= head + tail:
-        return "*" * len(text)
-    return f"{text[:head]}...{text[-tail:]}"
+from tldw_Server_API.app.core.security_utils import redact_secret
 
 
 def test_redact_secret_empty_and_none():

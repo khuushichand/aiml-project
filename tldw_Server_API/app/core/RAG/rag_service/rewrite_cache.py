@@ -15,7 +15,7 @@ import hashlib
 import string
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from loguru import logger
 
@@ -75,7 +75,6 @@ def _resolve_user_cache_path(user_id: str) -> Path:
     traversal sequences. The resulting directory layout is:
         Databases/user_databases/<safe_component>/Rewrite_Cache/rewrite_cache.jsonl
     """
-    base_dir = _USER_DB_BASE.resolve()
     safe_component = _normalize_user_id_segment(user_id)
     # Construct path using only the sanitized single directory component.
     cache_dir = base_dir / safe_component / "Rewrite_Cache"
@@ -149,7 +148,7 @@ class RewriteCache:
                     p.parent.mkdir(parents=True, exist_ok=True)
                     self.path = str(p)
                 except Exception as e:
-                    logger.debug(f"Failed to resolve user cache path for user_id={user_id}: {e}")
+                    logger.warning(f"Failed to resolve user cache path for user_id={user_id}: {e}")
                     self.path = str(_safe_path())
             else:
                 self.path = str(_safe_path())

@@ -35,6 +35,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.testing import is_test_mode
 
 # --- Helper Functions ---
 def _utcnow_iso() -> str:
@@ -45,6 +46,17 @@ def _utcnow_iso() -> str:
 def _generate_uuid() -> str:
     """Generate a lowercase hex UUID."""
     return uuid_module.uuid4().hex.lower()
+
+
+def _is_test_context() -> bool:
+    return bool(os.getenv("PYTEST_CURRENT_TEST")) or is_test_mode()
+
+
+def _normalize_user_id_for_records(user_id: str) -> str:
+    raw = str(user_id).strip()
+    if _is_test_context() and raw.isdigit():
+        return f"test_user_{raw}"
+    return raw
 
 
 def _normalize_db_path(
@@ -64,10 +76,10 @@ def _normalize_db_path(
         raise InputError(f"Invalid db_path: {db_path}") from exc
 
     # Always enforce that the database path stays within the user's base directory
-    # when a user_id is provided and we are not in a test context. This guards
+    # when a user_id is provided. This guards
     # against directory traversal or use of unexpected locations, even if
     # allow_external_db_path is True.
-    if user_id and not _is_test_context():
+    if user_id:
         try:
             user_dir = DatabasePaths.get_user_base_directory(user_id).resolve()
         except Exception as exc:
@@ -176,11 +188,12 @@ class KanbanDB:
             user_id: The user ID for this database instance.
                 The path must resolve within the user-scoped database directory.
         """
-        self.user_id = str(user_id)
+        raw_user_id = str(user_id)
+        self.user_id = _normalize_user_id_for_records(raw_user_id)
         self._lock = threading.RLock()
         self.db_path, self._is_memory_db = _normalize_db_path(
             db_path,
-            self.user_id,
+            raw_user_id,
         )
         self._memory_conn: Optional[_KanbanMemoryConnection] = None
 
@@ -197,12 +210,14 @@ class KanbanDB:
     def _configure_connection(self, conn: sqlite3.Connection, *, enable_wal: bool = True) -> None:
         conn.row_factory = sqlite3.Row
         # Foreign keys and timeout are required for integrity and responsiveness.
-        try:
-            conn.execute("PRAGMA foreign_keys=ON")
-            conn.execute("PRAGMA busy_timeout=30000")
-        except Exception as e:
-            logger.error("Failed to set critical PRAGMA options: %s", e)
-            raise KanbanDBError(f"Failed to set critical PRAGMA options: {e}") from e
+        for statement in ("PRAGMA foreign_keys=ON", "PRAGMA busy_timeout=30000"):
+            try:
+                conn.execute(statement)
+            except Exception as e:
+                logger.error(f"Failed to set critical PRAGMA option {statement}: {e}")
+                raise KanbanDBError(
+                    f"Failed to set critical PRAGMA option {statement}: {e}"
+                ) from e
 
         # Performance pragmas are best-effort; log failures for investigation.
         try:
@@ -211,7 +226,7 @@ class KanbanDB:
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA cache_size=-64000")  # 64MB cache
         except Exception as e:
-            logger.error("Failed to set performance PRAGMA options: %s", e)
+            logger.error(f"Failed to set performance PRAGMA options: {e}")
 
     def _connect(self) -> sqlite3.Connection:
         """Create and configure a database connection."""
@@ -268,9 +283,9 @@ class KanbanDB:
         """Cleanup on garbage collection."""
         try:
             self.close()
-        except Exception:
+        except Exception as e:
             # Ignore errors during cleanup - object is being destroyed anyway.
-            pass
+            logger.debug(f"KanbanDB __del__ cleanup failed: {e}")
 
     def _get_schema_sql(self) -> str:
         """Return the complete schema SQL."""

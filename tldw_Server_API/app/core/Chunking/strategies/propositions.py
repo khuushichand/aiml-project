@@ -361,7 +361,7 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
         """
         # Split on semicolons and em/en dashes; keep colon splits cautiously
         # Use regex that keeps delimiters by splitting on boundary while later trimming
-        s = s.replace("—", " - ").replace("–", " - ")
+        s = s.replace("—", " - ").replace("\u2013", " - ")
         # Split on ; or standalone dashes
         parts = re.split(r"\s*[;]+\s*|\s+[---]\s+", s)
         # Further split around parentheses content as its own proposition when long

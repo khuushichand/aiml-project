@@ -267,7 +267,7 @@ async def submit_explicit_feedback(
             _user_id=current_user.username if current_user else None,
             message_id=payload.message_id,
         )
-    except Exception:  # noqa: BLE001 - clear pending idempotency slot on any failure
+    except Exception:  # clear pending idempotency slot on any failure
         _clear_idempotency_record(dedupe_key)
         raise
 

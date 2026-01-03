@@ -23,21 +23,19 @@ def _safe_join(base_dir: str, name: str) -> Optional[str]:
     Safely join a base directory and a path component, preventing directory traversal
     and symlink-based escapes.
 
+    Rejects empty components and absolute paths.
+
     Returns the normalized, real path on success, or None on failure.
     """
+    if not name or os.path.isabs(name):
+        return None
     base_dir_abs = os.path.abspath(base_dir)
     candidate = os.path.abspath(os.path.join(base_dir_abs, name))
-    base_real = os.path.realpath(base_dir_abs)
-    candidate_real = os.path.realpath(candidate)
     try:
-        if os.path.commonpath([base_real, candidate_real]) != base_real:
-            return None
         relative = os.path.relpath(candidate, base_dir_abs)
     except ValueError:
         return None
     if relative.startswith(os.pardir + os.sep) or relative == os.pardir:
-        return None
-    if os.path.islink(candidate):
         return None
     current = base_dir_abs
     for part in relative.split(os.sep):
@@ -46,7 +44,12 @@ def _safe_join(base_dir: str, name: str) -> Optional[str]:
         current = os.path.join(current, part)
         if os.path.islink(current):
             return None
-    if os.path.islink(candidate_real):
+    base_real = os.path.realpath(base_dir_abs)
+    candidate_real = os.path.realpath(candidate)
+    try:
+        if os.path.commonpath([base_real, candidate_real]) != base_real:
+            return None
+    except ValueError:
         return None
     return candidate_real
 #######################################################################################################################
@@ -92,31 +95,6 @@ def _validate_backup_name(backup_name: str, allowed_exts: tuple[str, ...]) -> Op
     if not name.endswith(allowed_exts):
         return None
     return name
-
-
-def _safe_join(base_dir: str, name: str) -> Optional[str]:
-    """
-    Safely join a base directory and a relative name, ensuring the result
-    stays within the base and does not traverse symlinks.
-
-    # Reject empty components and absolute paths outright
-    if not name or os.path.isabs(name):
-        return None
-    Returns the absolute path on success, or None if the resulting path
-    would escape the base directory or involve symlinks.
-    """
-    base_dir_abs = os.path.abspath(base_dir)
-    candidate = os.path.abspath(os.path.join(base_dir_abs, name))
-    base_real = os.path.realpath(base_dir_abs)
-    candidate_real = os.path.realpath(candidate)
-    try:
-        if os.path.commonpath([base_real, candidate_real]) != base_real:
-            return None
-    except ValueError:
-        return None
-    if os.path.islink(candidate_real):
-        return None
-    return candidate_real
 
 
 def init_backup_directory(backup_base_dir: str, db_name: str) -> str:
@@ -495,12 +473,6 @@ def restore_postgres_backup(
         return msg
     if not os.path.exists(safe_dump_path):
         msg = f"dump not found: {safe_dump_path}"
-        logger.error(msg)
-        return msg
-
-    config = getattr(backend, "config", None)
-    if not config:
-        msg = "PostgreSQL backend missing configuration; cannot perform restore"
         logger.error(msg)
         return msg
 

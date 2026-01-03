@@ -905,7 +905,7 @@ async def refresh_token(
                 pass
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired refresh token.",
+            detail="Invalid or expired refresh token",
             headers={"WWW-Authenticate": "Bearer"}
         )
     except Exception as e:
@@ -1024,7 +1024,7 @@ async def register(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Username or email already exists."
-        )
+        ) from e
     except WeakPasswordError as e:
         logger.warning(f"Registration failed - weak password: {e}")
         log_counter("auth_register_weak_password")
@@ -1038,7 +1038,7 @@ async def register(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Password does not meet requirements."
-        )
+        ) from e
     except InvalidRegistrationCodeError as e:
         logger.warning(f"Registration failed - invalid code: {e}")
         log_counter("auth_register_invalid_code")
@@ -1052,7 +1052,7 @@ async def register(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid registration code."
-        )
+        ) from e
     except RegistrationError as e:
         logger.error(f"Registration error: {e}")
         log_counter("auth_register_error")
@@ -1066,7 +1066,7 @@ async def register(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Registration failed."
-        )
+        ) from e
     except HTTPException:
         # Propagate explicit HTTPException responses (for example the
         # local-single-user profile guard) without wrapping them as 500.
@@ -1085,7 +1085,7 @@ async def register(
             log_histogram("auth_register_duration", time.perf_counter() - start_time)
             if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
                 try:
-                    response.headers["X-TLDW-Register-Error"] = str(e)
+                    response.headers["X-TLDW-Register-Error"] = "duplicate-user-wrapped"
                 except Exception:
                     pass
             _finalize_register_diag(request, response)

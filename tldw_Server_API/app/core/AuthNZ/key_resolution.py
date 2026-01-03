@@ -93,7 +93,10 @@ async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Di
         try:
             key_materials = tuple(derive_hmac_key_candidates(s))
         except Exception as e:
-            logger.debug("resolve_api_key_by_hash: failed to derive HMAC materials: {}", e)
+            logger.warning(
+                "resolve_api_key_by_hash: failed to derive HMAC materials; legacy lookup disabled: {}",
+                e,
+            )
             key_materials = ()
 
         digests = _compute_legacy_hmac_digests(api_key, list(key_materials))
@@ -109,7 +112,10 @@ async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Di
             except Exception as _dbg_exc:
                 logger.trace(f"resolve_api_key_by_hash: debug logging failed: {_dbg_exc}")
     except Exception as e:
-        logger.debug("resolve_api_key_by_hash: failed to derive HMAC materials: {}", e)
+        logger.warning(
+            "resolve_api_key_by_hash: failed to derive HMAC materials; legacy lookup disabled: {}",
+            e,
+        )
         key_materials = ()
 
     # Important: mirror APIKeyManager.hash_candidates (HMAC-SHA256 with secret key)

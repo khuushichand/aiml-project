@@ -28,13 +28,13 @@ def temp_db_dir(monkeypatch: pytest.MonkeyPatch) -> Generator[str, None, None]:
 @pytest.fixture
 def temp_db_path(temp_db_dir: str) -> str:
     """Create a temporary database file path."""
-    return str(DatabasePaths.get_kanban_db_path("test_user_1"))
+    return str(DatabasePaths.get_kanban_db_path(1))
 
 
 @pytest.fixture
 def kanban_db(temp_db_path: str) -> Generator[KanbanDB, None, None]:
     """Create a KanbanDB instance with a temporary database."""
-    db = KanbanDB(db_path=temp_db_path, user_id="test_user_1")
+    db = KanbanDB(db_path=temp_db_path, user_id="1")
     yield db
     # No cleanup needed - temp_db_dir fixture handles it
 
@@ -42,8 +42,9 @@ def kanban_db(temp_db_path: str) -> Generator[KanbanDB, None, None]:
 @pytest.fixture
 def kanban_db_user2(temp_db_dir: str) -> Generator[KanbanDB, None, None]:
     """Create a second KanbanDB instance for testing user isolation."""
-    db_path = DatabasePaths.get_kanban_db_path("test_user_2")
-    db = KanbanDB(db_path=str(db_path), user_id="test_user_2")
+    _ = temp_db_dir  # ensure fixture is used for env setup
+    db_path = DatabasePaths.get_kanban_db_path(2)
+    db = KanbanDB(db_path=str(db_path), user_id="2")
     yield db
 
 

@@ -50,3 +50,6 @@ def test_rewrite_cache_unsafe_user_id_is_hashed(tmp_path, monkeypatch):
     cache_path = Path(rc.path).resolve()
     assert cache_path.parent.parent.name.startswith("user_")
     assert cache_path.parent.parent.name != "../../etc/passwd"
+    rc2 = RewriteCache(user_id="../../etc/passwd")
+    cache_path2 = Path(rc2.path).resolve()
+    assert cache_path.parent.parent.name == cache_path2.parent.parent.name

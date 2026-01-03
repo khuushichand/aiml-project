@@ -19,10 +19,11 @@ import json
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 from loguru import logger
 from contextlib import contextmanager
 
+from tldw_Server_API.app.core.Utils.path_utils import resolve_path
 
 
 class MigrationError(Exception):
@@ -83,14 +84,14 @@ class Migration:
 class DatabaseMigrator:
     """Handles database migrations for on-disk SQLite databases"""
 
-    def __init__(self, db_path: str, migrations_dir: str = None):
+    def __init__(self, db_path: str, migrations_dir: Optional[str] = None):
         if self._is_memory_db_path(db_path):
             raise MigrationError("DatabaseMigrator does not support in-memory database paths")
-        db_path_resolved = self._resolve_path(Path(db_path))
+        db_path_resolved = resolve_path(Path(db_path))
         self.db_path = str(db_path_resolved)
         self._db_dir = db_path_resolved.parent
 
-        package_migrations_dir = self._resolve_path(
+        package_migrations_dir = resolve_path(
             Path(__file__).resolve().parent / "migrations"
         )
         self._migration_roots = (self._db_dir, package_migrations_dir)
@@ -109,15 +110,6 @@ class DatabaseMigrator:
         # Backup directory
         self.backup_dir = str(self._db_dir / "backups")
         os.makedirs(self.backup_dir, exist_ok=True)
-
-    @staticmethod
-    def _resolve_path(path: Path) -> Path:
-        """Expand and resolve a path without requiring it to exist."""
-        expanded = path.expanduser()
-        try:
-            return expanded.resolve(strict=False)
-        except TypeError:
-            return expanded.resolve()
 
     @staticmethod
     def _is_memory_db_path(db_path: str) -> bool:
@@ -141,7 +133,7 @@ class DatabaseMigrator:
 
     def _validate_migrations_dir(self, migrations_dir: Path) -> Path:
         """Ensure migrations_dir stays within an approved root."""
-        resolved = self._resolve_path(migrations_dir)
+        resolved = resolve_path(migrations_dir)
         if not any(
             self._is_within_directory(resolved, root) for root in self._migration_roots
         ):
@@ -153,8 +145,8 @@ class DatabaseMigrator:
 
     def _validate_backup_path(self, backup_path: str) -> Path:
         """Ensure backup_path exists, is a file, and is scoped to the backup directory."""
-        resolved = self._resolve_path(Path(backup_path))
-        backup_dir = self._resolve_path(Path(self.backup_dir))
+        resolved = resolve_path(Path(backup_path))
+        backup_dir = resolve_path(Path(self.backup_dir))
         if not self._is_within_directory(resolved, backup_dir):
             raise MigrationError(
                 f"Backup path is outside the backup directory: {resolved}"

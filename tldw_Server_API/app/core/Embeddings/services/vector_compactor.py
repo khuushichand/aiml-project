@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sqlite3
 from datetime import datetime
-from typing import Optional
 from pathlib import Path
+from typing import Optional
 
 from loguru import logger
 
@@ -23,8 +24,21 @@ try:
 except Exception:  # pragma: no cover
     aioredis = None  # type: ignore
 
+try:
+    from chromadb.errors import ChromaError
+except Exception:  # pragma: no cover
+    ChromaError = None  # type: ignore
+
+from tldw_Server_API.app.core.DB_Management.backends.base import (
+    DatabaseError as BackendDatabaseError,
+)
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
+_DB_CLOSE_EXCEPTIONS = (BackendDatabaseError, sqlite3.Error, OSError, RuntimeError)
+_CHROMA_CLOSE_EXCEPTIONS = (RuntimeError, OSError)
+if ChromaError is not None:
+    _CHROMA_CLOSE_EXCEPTIONS = _CHROMA_CLOSE_EXCEPTIONS + (ChromaError,)
 
 
 def _sanitize_media_db_path(user_id: str, db_path: Optional[str]) -> str:
@@ -45,23 +59,25 @@ def _sanitize_media_db_path(user_id: str, db_path: Optional[str]) -> str:
     # Start from environment/default behavior if explicit path is not provided
     raw_path = db_path or os.getenv("MEDIA_DB_PATH", default_path)
 
-    # Normalize and resolve the candidate path
+    # Normalize the candidate path
     candidate = Path(raw_path).expanduser()
+
+    # If the candidate is relative, interpret it as relative to the media root
+    if not candidate.is_absolute():
+        candidate = media_root / candidate
+
+    # Resolve the final path
     try:
         candidate_resolved = candidate.resolve(strict=False)
     except TypeError:
         # Fallback for environments where strict parameter is not supported
         candidate_resolved = candidate.resolve()
 
-    # If the candidate is relative, interpret it as relative to the media root
-    if not candidate_resolved.is_absolute():
-        candidate_resolved = (media_root / candidate).resolve()
-
     # Enforce that the final path remains within the media root directory
     try:
         candidate_resolved.relative_to(media_root)
     except ValueError:
-        raise ValueError("Invalid media_db_path; must reside within the media DB root directory")
+        raise ValueError("Invalid media_db_path; must reside within the media DB root directory") from None
 
     return str(candidate_resolved)
 
@@ -75,8 +91,10 @@ async def _get_media_ids_marked_deleted(db_path: str) -> list[int]:
     finally:
         try:
             db.close_connection()
-        except Exception as e:
+        except _DB_CLOSE_EXCEPTIONS as e:
             logger.debug(f"Compactor: failed to close media DB connection: {e}")
+        except Exception as e:
+            logger.debug(f"Compactor: unexpected error closing media DB connection: {e}")
 
 
 def _collection_name_for(user_id: str, media_id: int) -> str:
@@ -120,8 +138,10 @@ async def compact_once(user_id: str, db_path: Optional[str] = None) -> int:
             logger.warning(f"Compactor error removing vectors for media_id={mid}: {e}")
     try:
         mgr.close()
-    except Exception as e:
+    except _CHROMA_CLOSE_EXCEPTIONS as e:
         logger.debug(f"Compactor: failed to close ChromaDB manager: {e}")
+    except Exception as e:
+        logger.debug(f"Compactor: unexpected error closing ChromaDB manager: {e}")
     return touched
 
 

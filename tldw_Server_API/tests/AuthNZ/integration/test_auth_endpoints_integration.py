@@ -273,7 +273,7 @@ class TestAuthEndpointsIntegration:
         reset_settings()
 
         registration_service.register_user = AsyncMock(
-            side_effect=DuplicateUserError("Username already exists")
+            side_effect=DuplicateUserError("username")
         )
 
         from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_registration_service_dep
@@ -293,7 +293,7 @@ class TestAuthEndpointsIntegration:
             )
 
         assert response.status_code == 409
-        assert "Username already exists" in response.json()["detail"]
+        assert response.json()["detail"] == "Username or email already exists."
 
         app.dependency_overrides.clear()
 

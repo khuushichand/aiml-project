@@ -4,14 +4,45 @@ Centralized database path management utilities.
 Ensures consistent database file locations across the application.
 """
 
+import hashlib
 import os
+import re
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, Union
 from loguru import logger
 
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Utils.Utils import get_project_root
 from tldw_Server_API.app.core.exceptions import StorageUnavailableError
+
+
+UserId = Union[int, str]
+_SAFE_TEST_USER_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _is_test_context() -> bool:
+    return bool(os.getenv("PYTEST_CURRENT_TEST")) or is_test_mode()
+
+
+def _normalize_user_id(user_id: UserId) -> str:
+    raw = str(user_id).strip()
+    if not raw:
+        raise ValueError("user_id must not be empty for filesystem path")
+    if raw.isdigit():
+        if int(raw) < 1:
+            raise ValueError(f"user_id must be a positive integer for filesystem path: {user_id!r}")
+        return raw
+    if _is_test_context():
+        if (
+            _SAFE_TEST_USER_ID_RE.fullmatch(raw)
+            and raw[0].isalnum()
+            and raw[-1].isalnum()
+        ):
+            return raw
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+        return f"u_{digest}"
+    raise ValueError(f"Invalid user_id for filesystem path: {user_id!r}")
 
 
 
@@ -36,7 +67,7 @@ class DatabasePaths:
     WORKFLOWS_SUBDIR = "workflows"
 
     @staticmethod
-    def get_user_base_directory(user_id: int) -> Path:
+    def get_user_base_directory(user_id: UserId) -> Path:
         """
         Get the base directory for a specific user's databases.
 
@@ -60,11 +91,7 @@ class DatabasePaths:
                 base_path = base_path.resolve()
 
         # Normalize and validate user_id to ensure it is safe as a single path segment
-        safe_user_id = str(user_id).strip()
-        if not safe_user_id.isdigit():
-            raise ValueError(f"Invalid user_id for filesystem path: {user_id!r}")
-        if int(safe_user_id) < 1:
-            raise ValueError(f"user_id must be a positive integer for filesystem path: {user_id!r}")
+        safe_user_id = _normalize_user_id(user_id)
 
         # Construct and normalize user directory and ensure it stays under base_path
         user_dir = (base_path / safe_user_id).resolve()
@@ -84,19 +111,19 @@ class DatabasePaths:
         return user_dir
 
     @staticmethod
-    def get_media_db_path(user_id: int) -> Path:
+    def get_media_db_path(user_id: UserId) -> Path:
         """Get the path to the user's media database."""
         user_dir = DatabasePaths.get_user_base_directory(user_id)
         return user_dir / DatabasePaths.MEDIA_DB_NAME
 
     @staticmethod
-    def get_chacha_db_path(user_id: int) -> Path:
+    def get_chacha_db_path(user_id: UserId) -> Path:
         """Get the path to the user's ChaChaNotes database."""
         user_dir = DatabasePaths.get_user_base_directory(user_id)
         return user_dir / DatabasePaths.CHACHA_DB_NAME
 
     @staticmethod
-    def get_prompts_db_path(user_id: int) -> Path:
+    def get_prompts_db_path(user_id: UserId) -> Path:
         """Get the path to the user's prompts database."""
         user_dir = DatabasePaths.get_user_base_directory(user_id)
         prompts_dir = user_dir / DatabasePaths.PROMPTS_SUBDIR
@@ -111,7 +138,7 @@ class DatabasePaths:
         return prompts_dir / DatabasePaths.PROMPTS_DB_NAME
 
     @staticmethod
-    def get_audit_db_path(user_id: int) -> Path:
+    def get_audit_db_path(user_id: UserId) -> Path:
         """Get the path to the user's audit database."""
         user_dir = DatabasePaths.get_user_base_directory(user_id)
         audit_dir = user_dir / DatabasePaths.AUDIT_SUBDIR
@@ -126,7 +153,7 @@ class DatabasePaths:
         return audit_dir / DatabasePaths.AUDIT_DB_NAME
 
     @staticmethod
-    def get_evaluations_db_path(user_id: int) -> Path:
+    def get_evaluations_db_path(user_id: UserId) -> Path:
         """Get the path to the user's evaluations database."""
         user_dir = DatabasePaths.get_user_base_directory(user_id)
         eval_dir = user_dir / DatabasePaths.EVALUATIONS_SUBDIR
@@ -141,14 +168,14 @@ class DatabasePaths:
         return eval_dir / DatabasePaths.EVALUATIONS_DB_NAME
 
     @staticmethod
-    def get_personalization_db_path(user_id: int) -> Path:
+    def get_personalization_db_path(user_id: UserId) -> Path:
         """Get the path to the user's Personalization database."""
         user_dir = DatabasePaths.get_user_base_directory(user_id)
         # Keep at root of user dir alongside ChaChaNotes for discoverability
         return user_dir / DatabasePaths.PERSONALIZATION_DB_NAME
 
     @staticmethod
-    def get_workflows_db_path(user_id: int) -> Path:
+    def get_workflows_db_path(user_id: UserId) -> Path:
         """Get the path to the user's workflows database."""
         user_dir = DatabasePaths.get_user_base_directory(user_id)
         workflows_dir = user_dir / DatabasePaths.WORKFLOWS_SUBDIR
@@ -160,7 +187,7 @@ class DatabasePaths:
         return workflows_dir / DatabasePaths.WORKFLOWS_DB_NAME
 
     @staticmethod
-    def get_workflows_scheduler_db_path(user_id: int) -> Path:
+    def get_workflows_scheduler_db_path(user_id: UserId) -> Path:
         """Get the path to the user's workflows scheduler database."""
         user_dir = DatabasePaths.get_user_base_directory(user_id)
         workflows_dir = user_dir / DatabasePaths.WORKFLOWS_SUBDIR
@@ -172,14 +199,14 @@ class DatabasePaths:
         return workflows_dir / DatabasePaths.WORKFLOWS_SCHEDULER_DB_NAME
 
     @staticmethod
-    def get_kanban_db_path(user_id: int) -> Path:
+    def get_kanban_db_path(user_id: UserId) -> Path:
         """Get the path to the user's Kanban database."""
         user_dir = DatabasePaths.get_user_base_directory(user_id)
         # Keep at root of user dir alongside ChaChaNotes for discoverability
         return user_dir / DatabasePaths.KANBAN_DB_NAME
 
     @staticmethod
-    def get_all_user_db_paths(user_id: int) -> Dict[str, Path]:
+    def get_all_user_db_paths(user_id: UserId) -> Dict[str, Path]:
         """
         Get all database paths for a user.
 
@@ -199,7 +226,7 @@ class DatabasePaths:
         }
 
     @staticmethod
-    def validate_database_structure(user_id: int) -> bool:
+    def validate_database_structure(user_id: UserId) -> bool:
         """
         Validate that all required directories exist for a user.
 
@@ -229,22 +256,22 @@ class DatabasePaths:
 
 
 # Convenience functions for backward compatibility
-def get_user_media_db_path(user_id: int) -> str:
+def get_user_media_db_path(user_id: UserId) -> str:
     """Get the media database path for a user (returns string for compatibility)."""
     return str(DatabasePaths.get_media_db_path(user_id))
 
 
-def get_user_chacha_db_path(user_id: int) -> str:
+def get_user_chacha_db_path(user_id: UserId) -> str:
     """Get the ChaChaNotes database path for a user (returns string for compatibility)."""
     return str(DatabasePaths.get_chacha_db_path(user_id))
 
 
-def get_user_prompts_db_path(user_id: int) -> str:
+def get_user_prompts_db_path(user_id: UserId) -> str:
     """Get the prompts database path for a user (returns string for compatibility)."""
     return str(DatabasePaths.get_prompts_db_path(user_id))
 
 
-def ensure_user_database_structure(user_id: int) -> bool:
+def ensure_user_database_structure(user_id: UserId) -> bool:
     """
     Ensure all database directories exist for a user.
 

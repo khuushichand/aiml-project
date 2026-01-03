@@ -17,11 +17,13 @@ from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.endpoints.outputs_templates import _build_items_context_from_media_ids, _select_media_ids_for_run
 from tldw_Server_API.app.core.Chat.prompt_template_manager import safe_render
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.exceptions import InvalidStoragePathError
 from starlette.responses import FileResponse
 from tldw_Server_API.app.services.outputs_service import (
     update_output_artifact_db,
     find_outputs_to_purge,
     delete_outputs_by_ids,
+    normalize_output_storage_path,
 )
 
 
@@ -48,15 +50,19 @@ def _resolve_output_path_for_user(user_id: int, path_value: str | PathlibPath) -
         logger.error(f"outputs: failed to resolve outputs base dir for user {user_id}: {e}")
         raise HTTPException(status_code=500, detail="storage_unavailable")
 
+    # Defense-in-depth: treat path_value as untrusted and reduce to a safe filename under base_dir.
     # Normalize the candidate to a single relative filename component.
     candidate = path_value if isinstance(path_value, PathlibPath) else PathlibPath(path_value)
     if candidate.is_absolute():
         logger.warning(f"outputs: absolute paths are not allowed for outputs: {candidate}")
         raise HTTPException(status_code=400, detail="invalid_path")
+    if len(candidate.parts) != 1:
+        logger.warning(f"outputs: nested output paths are not allowed: {candidate}")
+        raise HTTPException(status_code=400, detail="invalid_path")
 
     # Restrict to the final component to prevent directory traversal such as "../".
     candidate_name = candidate.name
-    if not candidate_name:
+    if not candidate_name or candidate_name in (".", ".."):
         logger.warning(f"outputs: empty output path component from {path_value!r}")
         raise HTTPException(status_code=400, detail="invalid_path")
 
@@ -83,6 +89,34 @@ def _resolve_output_path_for_user(user_id: int, path_value: str | PathlibPath) -
     return resolved
 
 
+def _normalize_output_storage_path_for_user(
+    *,
+    cdb,
+    user_id: int,
+    output_id: int,
+    storage_path: str,
+    update_db: bool = True,
+) -> str:
+    try:
+        normalized = normalize_output_storage_path(user_id, storage_path)
+    except InvalidStoragePathError as exc:
+        raise HTTPException(status_code=400, detail="invalid_path") from exc
+    if update_db and normalized != storage_path:
+        try:
+            update_output_artifact_db(
+                cdb=cdb,
+                output_id=output_id,
+                user_id=str(user_id),
+                new_title=None,
+                new_path=normalized,
+                new_format=None,
+                retention_until=None,
+            )
+        except Exception as exc:
+            logger.warning(f"outputs: failed to normalize storage_path for {output_id}: {exc}")
+    return normalized
+
+
 @router.get("", response_model=OutputListResponse, summary="List outputs with filters")
 async def list_outputs(
     page: int = 1,
@@ -97,17 +131,28 @@ async def list_outputs(
     limit = max(1, min(200, size))
     offset = (max(1, page) - 1) * limit
     rows, total = cdb.list_output_artifacts(limit=limit, offset=offset, job_id=job_id, run_id=run_id, type_=type, include_deleted=include_deleted)
-    items = [
-        OutputArtifact(
-            id=r.id,
-            title=r.title,
-            type=r.type,
-            format=r.format,  # type: ignore[arg-type]
-            storage_path=r.storage_path,
-            created_at=datetime.fromisoformat(r.created_at),
+    items = []
+    for r in rows:
+        try:
+            storage_path = _normalize_output_storage_path_for_user(
+                cdb=cdb,
+                user_id=int(_current_user.id or 0),
+                output_id=r.id,
+                storage_path=r.storage_path,
+            )
+        except HTTPException as exc:
+            logger.warning(f"outputs.list: invalid storage path for {r.id}: {exc.detail}")
+            storage_path = r.storage_path
+        items.append(
+            OutputArtifact(
+                id=r.id,
+                title=r.title,
+                type=r.type,
+                format=r.format,  # type: ignore[arg-type]
+                storage_path=storage_path,
+                created_at=datetime.fromisoformat(r.created_at),
+            )
         )
-        for r in rows
-    ]
     return OutputListResponse(items=items, total=total, page=page, size=limit)
 
 
@@ -121,17 +166,29 @@ async def list_deleted_outputs(
     limit = max(1, min(200, size))
     offset = (max(1, page) - 1) * limit
     rows, total = cdb.list_output_artifacts(limit=limit, offset=offset, include_deleted=True, only_deleted=True)
-    items = [
-        OutputArtifact(
-            id=r.id,
-            title=r.title,
-            type=r.type,
-            format=r.format,  # type: ignore[arg-type]
-            storage_path=r.storage_path,
-            created_at=datetime.fromisoformat(r.created_at),
+    items = []
+    for r in rows:
+        try:
+            storage_path = _normalize_output_storage_path_for_user(
+                cdb=cdb,
+                user_id=int(_current_user.id or 0),
+                output_id=r.id,
+                storage_path=r.storage_path,
+                update_db=False,
+            )
+        except HTTPException as exc:
+            logger.warning(f"outputs.list_deleted: invalid storage path for {r.id}: {exc.detail}")
+            storage_path = r.storage_path
+        items.append(
+            OutputArtifact(
+                id=r.id,
+                title=r.title,
+                type=r.type,
+                format=r.format,  # type: ignore[arg-type]
+                storage_path=storage_path,
+                created_at=datetime.fromisoformat(r.created_at),
+            )
         )
-        for r in rows
-    ]
     return OutputListResponse(items=items, total=total, page=page, size=limit)
 
 
@@ -276,7 +333,8 @@ async def create_output(
             type_=tpl.type,
             title=payload.title or tpl.name,
             format_=tpl.format,
-            storage_path=str(path),
+            # Store only the filename; absolute path is reconstructed on read.
+            storage_path=filename,
             metadata_json=json.dumps(meta),
             job_id=None,
             run_id=payload.run_id,
@@ -333,7 +391,13 @@ async def download_output(
         raise HTTPException(status_code=404, detail="output_not_found")
 
     user_id = int(current_user.id or 0)
-    path = _resolve_output_path_for_user(user_id, row.storage_path)
+    storage_name = _normalize_output_storage_path_for_user(
+        cdb=cdb,
+        user_id=user_id,
+        output_id=row.id,
+        storage_path=row.storage_path,
+    )
+    path = _resolve_output_path_for_user(user_id, storage_name)
     if not path.exists():
         raise HTTPException(status_code=404, detail="file_missing")
 
@@ -362,7 +426,13 @@ async def download_output_by_name(
     except KeyError:
         raise HTTPException(status_code=404, detail="output_not_found")
     user_id = int(current_user.id or 0)
-    path = _resolve_output_path_for_user(user_id, row.storage_path)
+    storage_name = _normalize_output_storage_path_for_user(
+        cdb=cdb,
+        user_id=user_id,
+        output_id=row.id,
+        storage_path=row.storage_path,
+    )
+    path = _resolve_output_path_for_user(user_id, storage_name)
     if not path.exists():
         raise HTTPException(status_code=404, detail="file_missing")
     media_types = {
@@ -389,7 +459,13 @@ async def head_download_output(
     except KeyError:
         raise HTTPException(status_code=404, detail="output_not_found")
     user_id = int(current_user.id or 0)
-    path = _resolve_output_path_for_user(user_id, row.storage_path)
+    storage_name = _normalize_output_storage_path_for_user(
+        cdb=cdb,
+        user_id=user_id,
+        output_id=row.id,
+        storage_path=row.storage_path,
+    )
+    path = _resolve_output_path_for_user(user_id, storage_name)
     if not path.exists():
         raise HTTPException(status_code=404, detail="file_missing")
     # Return headers; FastAPI will send no body
@@ -419,7 +495,14 @@ async def delete_output(
         try:
             row = cdb.get_output_artifact(output_id)
             try:
-                p = _resolve_output_path_for_user(user_id, row.storage_path)
+                storage_name = _normalize_output_storage_path_for_user(
+                    cdb=cdb,
+                    user_id=user_id,
+                    output_id=row.id,
+                    storage_path=row.storage_path,
+                    update_db=False,
+                )
+                p = _resolve_output_path_for_user(user_id, storage_name)
             except HTTPException as e:
                 logger.warning(f"outputs.delete: invalid output path for {output_id}: {e.detail}")
             else:
@@ -455,7 +538,13 @@ async def update_output(
         raise HTTPException(status_code=404, detail="output_not_found")
 
     user_id = int(current_user.id or 0)
-    source_path = _resolve_output_path_for_user(user_id, row.storage_path)
+    storage_name = _normalize_output_storage_path_for_user(
+        cdb=cdb,
+        user_id=user_id,
+        output_id=row.id,
+        storage_path=row.storage_path,
+    )
+    source_path = _resolve_output_path_for_user(user_id, storage_name)
     new_path: str | None = None
     new_title: str | None = None
     new_format: str | None = None
@@ -472,7 +561,7 @@ async def update_output(
         try:
             if p.exists():
                 p.rename(new_full)
-            new_path = str(new_full)
+            new_path = new_name
             new_title = payload.title
         except Exception as e:
             # If FS rename fails, keep old path and only update title in DB
@@ -483,7 +572,8 @@ async def update_output(
     if payload.format and payload.format != row.format:
         if row.format not in ("md", "html") or payload.format not in ("md", "html"):
             raise HTTPException(status_code=422, detail="unsupported_format_change")
-        source_path = _resolve_output_path_for_user(user_id, new_path or source_path)
+        if new_path is not None:
+            source_path = _resolve_output_path_for_user(user_id, new_path)
         try:
             src_text = source_path.read_text(encoding="utf-8")
         except Exception:
@@ -514,7 +604,7 @@ async def update_output(
                     source_path.unlink()
                 except Exception as _unlink_err:
                     logger.warning(f"failed to remove old output file {source_path}: {_unlink_err}")
-            new_path = str(target_path)
+            new_path = new_filename
             new_format = payload.format
         except Exception:
             raise HTTPException(status_code=500, detail="write_failed")
@@ -578,7 +668,14 @@ async def purge_outputs(
     if payload.delete_files and ids:
         for rid, pth in list(paths.items()):
             try:
-                p = _resolve_output_path_for_user(user_id, pth)
+                storage_name = _normalize_output_storage_path_for_user(
+                    cdb=cdb,
+                    user_id=user_id,
+                    output_id=rid,
+                    storage_path=pth,
+                    update_db=False,
+                )
+                p = _resolve_output_path_for_user(user_id, storage_name)
                 if p.exists():
                     p.unlink()
                     files_deleted += 1
