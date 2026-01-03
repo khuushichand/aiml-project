@@ -204,6 +204,12 @@ Sources (3)
 - Implicit events are best-effort and non-blocking.
 - No PII stored beyond existing user/session identifiers.
 
+## Setup & Verification
+- Enable implicit events via `implicit_feedback_enabled=true` in `Config_Files/config.txt` or `IMPLICIT_FEEDBACK_ENABLED=true` in the environment.
+- Explicit feedback endpoint: `POST /api/v1/feedback/explicit`.
+- Implicit feedback endpoint: `POST /api/v1/rag/feedback/implicit`.
+- Use the same auth headers as chat/RAG endpoints.
+
 ## Implementation Plan (Phases)
 ### Phase 1: API + Schema
 - Add ExplicitFeedbackRequest + ExplicitFeedbackResponse.

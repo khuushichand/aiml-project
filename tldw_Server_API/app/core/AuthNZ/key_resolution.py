@@ -79,20 +79,16 @@ async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Di
             logger.warning("resolve_api_key_by_hash: key_id lookup failed: {}", e)
             raise
 
-        if row:
-            stored_hash = row.get("key_hash")
-            if stored_hash and is_kdf_hash(stored_hash):
-                if not verify_kdf_hash(api_key, stored_hash):
-                    return None
-                return {"id": row.get("id"), "user_id": row.get("user_id")}
+        if not row:
+            # Key-id present but no row: do not fall back to full-table HMAC scan.
+            return None
 
-            # Legacy hash stored with key_id: verify directly against HMAC candidates.
-            digests: List[str] = []
-            try:
-                key_materials = tuple(derive_hmac_key_candidates(s))
-            except Exception as e:
-                logger.debug("resolve_api_key_by_hash: failed to derive HMAC materials: {}", e)
-                key_materials = ()
+        stored_hash = row.get("key_hash")
+        if stored_hash and is_kdf_hash(stored_hash):
+            if not verify_kdf_hash(api_key, stored_hash):
+                return None
+            return {"id": row.get("id"), "user_id": row.get("user_id")}
+
         # Legacy hash stored with key_id: verify directly against HMAC candidates.
         try:
             key_materials = tuple(derive_hmac_key_candidates(s))
@@ -100,20 +96,11 @@ async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Di
             logger.debug("resolve_api_key_by_hash: failed to derive HMAC materials: {}", e)
             key_materials = ()
 
-            for key in key_materials:
-                try:
-                    d = hmac.new(key, api_key.encode("utf-8"), hashlib.sha256).hexdigest()
-                    if d not in digests:
-                        digests.append(d)
-                except Exception as _e:
-                    logger.debug("resolve_api_key_by_hash: HMAC derive failed: {}", _e)
-        digests: List[str] = _compute_legacy_hmac_digests(api_key, list(key_materials))
+        digests = _compute_legacy_hmac_digests(api_key, list(key_materials))
+        if stored_hash and stored_hash in digests:
+            return {"id": row.get("id"), "user_id": row.get("user_id")}
+        return None
 
-            if stored_hash and stored_hash in digests:
-                return {"id": row.get("id"), "user_id": row.get("user_id")}
-            return None
-
-    digests: List[str] = []
     try:
         key_materials = tuple(derive_hmac_key_candidates(s))
         if os.getenv("BUDGET_MW_DEBUG", "").lower() in {"1", "true", "yes", "on"} or os.getenv("PYTEST_CURRENT_TEST"):
@@ -126,13 +113,7 @@ async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> Optional[Di
         key_materials = ()
 
     # Important: mirror APIKeyManager.hash_candidates (HMAC-SHA256 with secret key)
-    for key in key_materials:
-        try:
-            d = hmac.new(key, api_key.encode("utf-8"), hashlib.sha256).hexdigest()
-            if d not in digests:
-                digests.append(d)
-        except Exception as _e:
-            logger.debug("resolve_api_key_by_hash: HMAC derive failed: {}", _e)
+    digests = _compute_legacy_hmac_digests(api_key, list(key_materials))
 
     if not digests:
         return None

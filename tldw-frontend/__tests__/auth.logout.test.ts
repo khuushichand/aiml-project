@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { authService } from '@/lib/auth';
 import { apiClient } from '@/lib/api';
+import { clearRuntimeAuth, setRuntimeApiKey } from '@/lib/authStorage';
 
 vi.mock('@/lib/api', () => {
   return {
@@ -39,11 +40,13 @@ describe('authService.logout', () => {
   beforeEach(() => {
     clearEnv();
     localStorage.clear();
+    clearRuntimeAuth();
     mockedApiClient.post.mockResolvedValue({});
   });
 
   afterEach(() => {
     localStorage.clear();
+    clearRuntimeAuth();
     restoreEnv();
     vi.resetAllMocks();
   });
@@ -68,7 +71,7 @@ describe('authService.logout', () => {
   });
 
   it('does not call /auth/logout when no token exists', () => {
-    localStorage.setItem('x_api_key', 'key');
+    setRuntimeApiKey('key');
 
     authService.logout();
 

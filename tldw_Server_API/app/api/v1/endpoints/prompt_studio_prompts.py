@@ -305,9 +305,10 @@ async def list_prompts(
             detail="Failed to list prompts"
         )
     except InputError as e:
+        logger.warning(f"Prompt studio input error listing prompts: {getattr(e, 'original_message', str(e))}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=getattr(e, "safe_message", "Invalid input.")
         )
 
 # Simple alias that mirrors the canonical list response shape
@@ -397,9 +398,10 @@ async def get_prompt(
             detail="Failed to get prompt"
         )
     except InputError as e:
+        logger.warning(f"Prompt studio input error getting prompt: {getattr(e, 'original_message', str(e))}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=getattr(e, "safe_message", "Invalid input.")
         )
 
 @router.put(
@@ -533,9 +535,10 @@ async def update_prompt(
             detail="Failed to update prompt"
         )
     except InputError as e:
+        logger.warning(f"Prompt studio input error updating prompt: {getattr(e, 'original_message', str(e))}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=getattr(e, "safe_message", "Invalid input.")
         )
 
 @router.get("/history/{prompt_id}", response_model=StandardResponse, openapi_extra={
@@ -583,9 +586,10 @@ async def get_prompt_history(
             detail="Failed to get prompt history"
         )
     except InputError as e:
+        logger.warning(f"Prompt studio input error getting prompt history: {getattr(e, 'original_message', str(e))}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=getattr(e, "safe_message", "Invalid input.")
         )
 
 @router.post("/revert/{prompt_id}/{version}", response_model=StandardResponse, openapi_extra={
@@ -644,7 +648,8 @@ async def revert_prompt(
             detail="Failed to revert prompt"
         )
     except InputError as e:
+        logger.warning(f"Prompt studio input error reverting prompt: {getattr(e, 'original_message', str(e))}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=getattr(e, "safe_message", "Invalid input.")
         )

@@ -3,6 +3,7 @@ import { Layout } from '@/components/layout/Layout';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { buildAuthHeaders, getApiBaseUrl } from '@/lib/api';
+import { getApiKey } from '@/lib/authStorage';
 import { useToast } from '@/components/ui/ToastProvider';
 import { Tabs } from '@/components/ui/Tabs';
 import JsonViewer from '@/components/ui/JsonViewer';
@@ -216,7 +217,7 @@ function StreamingSTTSection() {
       // Attempt to include auth in query params for WS if server supports it
       try {
         const token = localStorage.getItem('access_token');
-        const xk = localStorage.getItem('x_api_key');
+        const xk = getApiKey();
         const urlObj = new URL(wsUrl);
         if (token) urlObj.searchParams.set('token', token);
         if (xk) urlObj.searchParams.set('x-api-key', xk);
@@ -618,7 +619,7 @@ function VoiceChatStreamSection() {
       let wsUrl = httpToWs(`${getApiBaseUrl()}/audio/chat/stream`);
       try {
         const token = localStorage.getItem('access_token');
-        const xk = localStorage.getItem('x_api_key');
+        const xk = getApiKey();
         const urlObj = new URL(wsUrl);
         if (token) urlObj.searchParams.set('token', token);
         if (xk) urlObj.searchParams.set('x-api-key', xk);

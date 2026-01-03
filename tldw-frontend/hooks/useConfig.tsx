@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import api, { getApiBaseUrl } from '@/lib/api';
+import { setRuntimeApiBearer, setRuntimeApiKey } from '@/lib/authStorage';
 
 type Theme = 'light' | 'dark' | 'system';
 
@@ -53,8 +54,8 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
     }
     const storedHost = localStorage.getItem('tldw-api-host') || DEFAULT_HOST;
     const storedVersion = localStorage.getItem('tldw-api-version') || (process.env.NEXT_PUBLIC_API_VERSION || 'v1');
-    const storedKey = localStorage.getItem('x_api_key') || process.env.NEXT_PUBLIC_X_API_KEY || '';
-    const storedBearer = localStorage.getItem('tldw-api-bearer') || process.env.NEXT_PUBLIC_API_BEARER || '';
+    const storedKey = process.env.NEXT_PUBLIC_X_API_KEY || '';
+    const storedBearer = process.env.NEXT_PUBLIC_API_BEARER || '';
     const storedTheme = (localStorage.getItem('tldw-theme') as Theme) || 'system';
     return { apiBaseHost: storedHost, apiVersion: storedVersion, xApiKey: storedKey || undefined, apiBearer: storedBearer || undefined, theme: storedTheme, csrfToken: null };
   });
@@ -72,12 +73,12 @@ export function ConfigProvider({ children }: { children: React.ReactNode }) {
   // Persist config changes and update axios baseURL
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    setRuntimeApiKey(config.xApiKey);
+    setRuntimeApiBearer(config.apiBearer);
     // Persist
     try {
       localStorage.setItem('tldw-api-host', config.apiBaseHost);
       localStorage.setItem('tldw-api-version', config.apiVersion);
-      if (config.xApiKey) localStorage.setItem('x_api_key', config.xApiKey); else localStorage.removeItem('x_api_key');
-      if (config.apiBearer) localStorage.setItem('tldw-api-bearer', config.apiBearer); else localStorage.removeItem('tldw-api-bearer');
       localStorage.setItem('tldw-theme', config.theme);
     } catch {
       // localStorage may be unavailable in some contexts

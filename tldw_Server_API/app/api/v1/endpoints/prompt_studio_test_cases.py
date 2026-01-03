@@ -178,9 +178,10 @@ async def create_test_case(
         )
 
     except ConflictError as e:
+        logger.warning("Conflict creating test case: {}", e)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=str(e)
+            detail="Test case already exists"
         )
     except DatabaseError as e:
         logger.error(f"Database error creating test case: {e}")
@@ -1045,9 +1046,10 @@ async def generate_test_cases(
         )
 
     except ValueError as e:
+        logger.warning("Invalid test case generation request: {}", e)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail="Invalid test case generation request"
         )
     except Exception as e:
         logger.error(f"Error generating test cases: {e}")

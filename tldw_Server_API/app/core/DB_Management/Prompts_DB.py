@@ -62,7 +62,13 @@ class SchemaError(DatabaseError):
 
 class InputError(ValueError):
     """Custom exception for input validation errors."""
-    pass
+
+    DEFAULT_SAFE_MESSAGE = "Invalid input."
+
+    def __init__(self, message: str, safe_message: Optional[str] = None):
+        super().__init__(message)
+        self.original_message = str(message)
+        self.safe_message = safe_message or self.DEFAULT_SAFE_MESSAGE
 
 
 class ConflictError(DatabaseError):

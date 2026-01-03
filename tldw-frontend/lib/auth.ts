@@ -1,4 +1,5 @@
 import { apiClient } from './api';
+import { getRuntimeApiBearer, getRuntimeApiKey } from './authStorage';
 
 export interface LoginCredentials {
   username: string;
@@ -44,12 +45,12 @@ type ApiErrorLike = {
 
 const getStoredApiKey = (): string | null => {
   if (typeof window === 'undefined') return null;
-  return localStorage.getItem('x_api_key');
+  return getRuntimeApiKey();
 };
 
 const getStoredApiBearer = (): string | null => {
   if (typeof window === 'undefined') return null;
-  return localStorage.getItem('tldw-api-bearer');
+  return getRuntimeApiBearer();
 };
 
 const hasStoredApiKey = (): boolean => !!getStoredApiKey();

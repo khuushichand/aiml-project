@@ -97,8 +97,8 @@ async def process_web_scraping_endpoint(
     except Exception as exc:  # pragma: no cover - defensive path
         import traceback
 
-        error_detail = f"Web scraping failed: {str(exc)}"
-        logger.error("Web scraping endpoint error: {}", error_detail)
+        error_detail = "Web scraping failed due to an internal error."
+        logger.error("Web scraping endpoint error: {}", exc)
         try:
             logger.error("Traceback: {}", traceback.format_exc())
             logger.error(

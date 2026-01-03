@@ -106,8 +106,7 @@ def _safe_join(base_dir: str, name: str) -> str:
         current = os.path.join(current, part)
         if os.path.islink(current):
             raise InvalidBackupPathError("invalid_backup_path")
-    return candidate
-        raise ValueError("invalid_backup_path") from exc
+        return candidate
     if os.path.islink(candidate_real):
         raise ValueError("invalid_backup_path")
     return candidate_real

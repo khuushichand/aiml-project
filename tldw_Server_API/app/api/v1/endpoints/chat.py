@@ -1235,7 +1235,7 @@ async def create_chat_completion(
 
         except ValueError as e:
             logger.warning(f"Input validation error: {e}")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid request.")
 
         # Slash command handling: compute, moderate, then optionally inject
         try:
@@ -1434,7 +1434,7 @@ async def create_chat_completion(
             validate_request_size(request_json)
         except ValueError as e:
             logger.warning(f"Input validation error: {e}")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid request.") from e
 
         # Apply rate limiting after slash command mutation so estimates are accurate.
         #
@@ -2096,7 +2096,10 @@ async def create_chat_completion(
                     logger.warning(
                         "Queue admission rejected for request_id=%s: %s", request_id, e
                     )
-                    raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(e))
+                    raise HTTPException(
+                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                        detail="Rate limit exceeded. Please retry.",
+                    )
                 except Exception as e:
                     # Treat unexpected queue errors as service unavailable
                     logger.error(
@@ -2380,7 +2383,26 @@ async def create_chat_completion(
                 )
 
             # Tests expect detail to be a string; expose safe user_message when available
-            safe_detail = getattr(e_chat, 'user_message', None) or str(e_chat)
+            safe_detail = getattr(e_chat, "user_message", None)
+            if not safe_detail:
+                if http_status == status.HTTP_400_BAD_REQUEST:
+                    safe_detail = "Invalid request."
+                elif http_status == status.HTTP_401_UNAUTHORIZED:
+                    safe_detail = "Unauthorized."
+                elif http_status == status.HTTP_403_FORBIDDEN:
+                    safe_detail = "Forbidden."
+                elif http_status == status.HTTP_404_NOT_FOUND:
+                    safe_detail = "Not found."
+                elif http_status == status.HTTP_409_CONFLICT:
+                    safe_detail = "Conflict."
+                elif http_status == status.HTTP_429_TOO_MANY_REQUESTS:
+                    safe_detail = "Rate limit exceeded. Please retry."
+                else:
+                    safe_detail = "An unexpected internal server error occurred."
+                logger.error(
+                    "ChatModuleException missing user_message: {}",
+                    repr(e_chat),
+                )
             raise HTTPException(
                 status_code=http_status,
                 detail=safe_detail
@@ -2409,9 +2431,12 @@ async def create_chat_completion(
                     status.HTTP_409_CONFLICT if isinstance(e_chat, ConflictError) else
                     status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
-                client_detail = (
-                    (str(e_chat) or type(e_chat).__name__) if db_status < 500 else "A database error occurred. Please try again later."
-                )
+                if db_status == status.HTTP_400_BAD_REQUEST:
+                    client_detail = "Invalid request."
+                elif db_status == status.HTTP_409_CONFLICT:
+                    client_detail = "Conflict."
+                else:
+                    client_detail = "A database error occurred. Please try again later."
                 raise HTTPException(status_code=db_status, detail=client_detail)
             # Handle legacy chat library exceptions robustly, even if class identity differs.
             # For non-library exceptions, return a generic 500 rather than leaking the raw exception.
@@ -2491,8 +2516,21 @@ async def create_chat_completion(
                     pass
             # Standardize error messages - never expose internal details for 5xx errors
             if err_status < 500:
-                # Client errors can have more detail; ensure non-empty
-                client_detail = getattr(e_chat, 'message', None) or str(e_chat) or type(e_chat).__name__
+                # Keep client errors generic to avoid leaking provider details.
+                if err_status == status.HTTP_400_BAD_REQUEST:
+                    client_detail = "Invalid request."
+                elif err_status == status.HTTP_401_UNAUTHORIZED:
+                    client_detail = "Unauthorized."
+                elif err_status == status.HTTP_403_FORBIDDEN:
+                    client_detail = "Forbidden."
+                elif err_status == status.HTTP_404_NOT_FOUND:
+                    client_detail = "Not found."
+                elif err_status == status.HTTP_409_CONFLICT:
+                    client_detail = "Conflict."
+                elif err_status == status.HTTP_429_TOO_MANY_REQUESTS:
+                    client_detail = "Rate limit exceeded. Please retry."
+                else:
+                    client_detail = "Request failed."
             else:
                 # Server errors should be generic
                 if err_status == 502:
@@ -2545,8 +2583,8 @@ async def get_chat_queue_status():
         queue_status = queue.get_queue_status()
         return {"enabled": True, **queue_status}
     except Exception as e:
-        logger.warning("Chat queue status inspection failed: {}", e)
-        return {"enabled": True, "error": str(e)}
+        logger.exception("Chat queue status inspection failed")
+        return {"enabled": True, "error": "Queue status unavailable"}
 
 
 @router.get(
@@ -2578,8 +2616,8 @@ async def get_chat_queue_activity(
         activity = queue.get_recent_activity(limit=limit)
         return {"enabled": True, "limit": limit, "activity": activity}
     except Exception as e:
-        logger.warning("Chat queue activity inspection failed: {}", e)
-        return {"enabled": True, "error": str(e)}
+        logger.exception("Chat queue activity inspection failed")
+        return {"enabled": True, "error": "Queue activity unavailable"}
 
 def _sanitize_json_for_rate_limit(request_json: str) -> str:
     """Redact base64 image payloads to avoid inflating token estimates.

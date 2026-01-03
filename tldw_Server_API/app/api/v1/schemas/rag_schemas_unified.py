@@ -1496,3 +1496,19 @@ class ImplicitFeedbackEvent(BaseModel):
                 if dwell_ms is None:
                     raise ValueError("dwell_ms is required when event_type='dwell_time'")
             return values
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "event_type": "dwell_time",
+            "query": "how to reset auth",
+            "doc_id": "doc_1",
+            "chunk_ids": ["chunk_9"],
+            "rank": 2,
+            "impression_list": ["doc_1", "doc_2", "doc_3"],
+            "corpus": "media_db",
+            "session_id": "sess_abc123",
+            "conversation_id": "C_...",
+            "message_id": "M_...",
+            "dwell_ms": 3000,
+        }
+    })

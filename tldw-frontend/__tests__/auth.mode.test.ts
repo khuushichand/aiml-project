@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { getAuthMode } from '@/lib/auth';
+import { clearRuntimeAuth, setRuntimeApiBearer, setRuntimeApiKey } from '@/lib/authStorage';
 
 const originalApiKey = process.env.NEXT_PUBLIC_X_API_KEY;
 const originalBearer = process.env.NEXT_PUBLIC_API_BEARER;
@@ -26,10 +27,12 @@ describe('getAuthMode', () => {
   beforeEach(() => {
     clearEnv();
     localStorage.clear();
+    clearRuntimeAuth();
   });
 
   afterEach(() => {
     localStorage.clear();
+    clearRuntimeAuth();
     restoreEnv();
   });
 
@@ -50,17 +53,17 @@ describe('getAuthMode', () => {
 
   it('prefers jwt when access_token and stored x_api_key are both present', () => {
     localStorage.setItem('access_token', 'token');
-    localStorage.setItem('x_api_key', 'key');
+    setRuntimeApiKey('key');
     expect(getAuthMode()).toBe('jwt');
   });
 
   it('returns env_single_user when stored x_api_key is present', () => {
-    localStorage.setItem('x_api_key', 'key');
+    setRuntimeApiKey('key');
     expect(getAuthMode()).toBe('env_single_user');
   });
 
   it('returns env_bearer when stored api bearer is present', () => {
-    localStorage.setItem('tldw-api-bearer', 'bearer');
+    setRuntimeApiBearer('bearer');
     expect(getAuthMode()).toBe('env_bearer');
   });
 

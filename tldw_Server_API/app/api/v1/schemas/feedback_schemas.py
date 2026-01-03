@@ -60,9 +60,14 @@ class ExplicitFeedbackRequest(BaseModel):
             "feedback_type": "helpful",
             "helpful": True,
             "relevance_score": 4,
+            "document_ids": ["doc_1"],
+            "chunk_ids": ["chunk_9"],
+            "corpus": "media_db",
             "issues": ["not_relevant"],
             "user_notes": "The answer was about a different feature.",
             "query": "how to reset auth",
+            "session_id": "sess_abc123",
+            "idempotency_key": "fb_01HXYZ...",
         }
     })
 

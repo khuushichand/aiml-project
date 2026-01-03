@@ -275,7 +275,12 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
                 try:
                     jsonschema.validate(cfg, schema)  # type: ignore[attr-defined]
                 except Exception as e:  # pragma: no cover - depends on optional dep
-                    raise HTTPException(status_code=422, detail=f"Invalid config for step '{s.get('id', t)}': {e}")
+                    logger.debug(
+                        "Workflows validation: invalid config for step {}: {}",
+                        s.get("id", t),
+                        e,
+                    )
+                    raise HTTPException(status_code=422, detail=f"Invalid config for step '{s.get('id', t)}'")
 
     # Graph/DAG robustness checks (detect explicit cycles and unknown targets)
     _validate_dag(defn)
@@ -1859,7 +1864,7 @@ async def replay_webhook_dlq(
             db.update_webhook_dlq_failure(dlq_id=dlq_id, last_error=str(e), next_attempt_at_iso=None)
         except Exception:
             pass
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": "delivery_failed"}
 
 
 @router.get(
@@ -2028,7 +2033,8 @@ async def verify_artifacts_batch(
                 "recorded": recorded,
             })
         except Exception as e:
-            results.append({"artifact_id": aid, "ok": False, "error": str(e)})
+            logger.debug("Workflows artifact verify: hash failed for artifact_id={}: {}", aid, e)
+            results.append({"artifact_id": aid, "ok": False, "error": "hash_error"})
 
     return {"results": results}
 
@@ -3086,8 +3092,13 @@ async def approve_step(
     # Update step decision via DB adapter
     try:
         db.approve_step_decision(run_id=run_id, step_id=step_id, approved_by=str(current_user.id), comment=payload.comment or "")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception(
+            "Workflows approval: failed to persist decision for run_id={} step_id={}",
+            run_id,
+            step_id,
+        )
+        raise HTTPException(status_code=500, detail="Failed to approve step")
 
     # Resume run from next step
     engine = WorkflowEngine(db)
@@ -3123,8 +3134,13 @@ async def reject_step(
         db.reject_step_decision(run_id=run_id, step_id=step_id, approved_by=str(current_user.id), comment=payload.comment or "")
         db.update_run_status(run_id, status="failed", status_reason="rejected_by_human", ended_at=_utcnow_iso())
         db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "human_rejected", {"step_id": step_id})
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception(
+            "Workflows rejection: failed to persist decision for run_id={} step_id={}",
+            run_id,
+            step_id,
+        )
+        raise HTTPException(status_code=500, detail="Failed to reject step")
     return {"ok": True}
 
 

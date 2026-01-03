@@ -71,6 +71,12 @@ from tldw_Server_API.app.core.http_client import (
 
 router = APIRouter()
 
+_PROVIDER_TIMEOUT_DETAIL = "Upstream provider request timed out"
+_PROVIDER_ERROR_DETAIL = "Upstream provider request failed"
+_PROVIDER_UNEXPECTED_DETAIL = "Unexpected provider error"
+_PROVIDER_NOT_CONFIGURED_DETAIL = "Upstream provider not configured"
+_BATCH_ERROR_DETAIL = "Batch ingest failed"
+
 
 async def _download_pdf_bytes(
     url: str,
@@ -181,15 +187,15 @@ async def paper_search_arxiv(
         if error_message:
             logger.error(f"arXiv provider error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=f"arXiv API request timed out: {error_message}")
-            raise HTTPException(status_code=502, detail=f"arXiv API error: {error_message}")
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
         if papers_list is None:
             raise HTTPException(status_code=500, detail="arXiv search failed to return paper data.")
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Unexpected arXiv search error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected arXiv error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
     total_pages = math.ceil(total_results_from_api / search_params.results_per_page) if search_params.results_per_page > 0 else 0
     if total_results_from_api == 0:
@@ -240,15 +246,15 @@ async def paper_search_biorxiv(
         if error_message:
             logger.error(f"BioRxiv provider error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=f"BioRxiv API request timed out: {error_message}")
-            raise HTTPException(status_code=502, detail=f"BioRxiv API error: {error_message}")
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
         if items is None:
             raise HTTPException(status_code=500, detail="BioRxiv search failed to return data.")
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Unexpected BioRxiv search error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected BioRxiv error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
     total_pages = math.ceil(total_results / search_params.results_per_page) if search_params.results_per_page > 0 else 0
     if total_results == 0:
@@ -306,7 +312,7 @@ async def paper_search_medrxiv_by_doi(
         raise
     except Exception as e:
         logger.error(f"Unexpected MedRxiv DOI error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected MedRxiv DOI error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -425,8 +431,8 @@ async def pmc_oai_identify():
         if error_message:
             logger.error(f"PMC OAI Identify error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=error_message)
-            raise HTTPException(status_code=502, detail=error_message)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
         if info is None:
             raise HTTPException(status_code=500, detail="PMC OAI Identify returned no data.")
         return PMCOAIIdentifyResponse(info=info)
@@ -434,7 +440,7 @@ async def pmc_oai_identify():
         raise
     except Exception as e:
         logger.error(f"Unexpected PMC OAI Identify error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -450,8 +456,8 @@ async def pmc_oai_list_sets(resumptionToken: Optional[str] = Query(None)):
         if error_message:
             logger.error(f"PMC OAI ListSets error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=error_message)
-            raise HTTPException(status_code=502, detail=error_message)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
         if items is None:
             items = []
         return PMCOAIListSetsResponse(query_echo={"resumptionToken": resumptionToken}, items=[
@@ -464,7 +470,7 @@ async def pmc_oai_list_sets(resumptionToken: Optional[str] = Query(None)):
         raise
     except Exception as e:
         logger.error(f"Unexpected PMC OAI ListSets error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -488,8 +494,8 @@ async def pmc_oai_list_identifiers(
         if error_message:
             logger.error(f"PMC OAI ListIdentifiers error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=error_message)
-            raise HTTPException(status_code=502, detail=error_message)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
         if items is None:
             items = []
         return PMCOAIIdentifiersResponse(
@@ -501,7 +507,7 @@ async def pmc_oai_list_identifiers(
         raise
     except Exception as e:
         logger.error(f"Unexpected PMC OAI ListIdentifiers error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -525,8 +531,8 @@ async def pmc_oai_list_records(
         if error_message:
             logger.error(f"PMC OAI ListRecords error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=error_message)
-            raise HTTPException(status_code=502, detail=error_message)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
         if items is None:
             items = []
         return PMCOAIListResponse(
@@ -538,7 +544,7 @@ async def pmc_oai_list_records(
         raise
     except Exception as e:
         logger.error(f"Unexpected PMC OAI ListRecords error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -554,8 +560,8 @@ async def pmc_oai_get_record(identifier: str = Query(...), metadataPrefix: str =
         if error_message:
             logger.error(f"PMC OAI GetRecord error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=error_message)
-            raise HTTPException(status_code=502, detail=error_message)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
         if not item:
             raise HTTPException(status_code=404, detail="Record not found")
         return PMCOAIRecord(**item)
@@ -563,7 +569,7 @@ async def pmc_oai_get_record(identifier: str = Query(...), metadataPrefix: str =
         raise
     except Exception as e:
         logger.error(f"Unexpected PMC OAI GetRecord error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 # -------------------- PMC OA Web Service Endpoints --------------------
@@ -581,8 +587,8 @@ async def pmc_oa_identify():
         if error_message:
             logger.error(f"PMC OA Identify error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=error_message)
-            raise HTTPException(status_code=502, detail=error_message)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
         if info is None:
             raise HTTPException(status_code=500, detail="PMC OA Identify returned no data.")
         return PMCOAIdentifyResponse(info=info)
@@ -590,7 +596,7 @@ async def pmc_oa_identify():
         raise
     except Exception as e:
         logger.error(f"Unexpected PMC OA Identify error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -614,8 +620,8 @@ async def pmc_oa_query(
         if error_message:
             logger.error(f"PMC OA query error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=error_message)
-            raise HTTPException(status_code=502, detail=error_message)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
         if items is None:
             items = []
         # Server-side filters
@@ -638,7 +644,7 @@ async def pmc_oa_query(
         raise
     except Exception as e:
         logger.error(f"Unexpected PMC OA query error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 from fastapi.responses import StreamingResponse, Response
@@ -656,12 +662,12 @@ async def pmc_oa_fetch_pdf(pmcid: str = Query(..., description="PMCID numeric or
         if error_message:
             logger.error(f"PMC OA fetch-pdf error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=error_message)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
             if "http error" in error_message.lower():
                 nums = [int(s) for s in error_message.split() if s.isdigit() and 400 <= int(s) < 600]
                 code = nums[0] if nums else 502
-                raise HTTPException(status_code=code, detail=error_message)
-            raise HTTPException(status_code=502, detail=error_message)
+                raise HTTPException(status_code=code, detail=_PROVIDER_ERROR_DETAIL)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
         if not content:
             raise HTTPException(status_code=404, detail="PDF not found for PMCID")
         stream = io.BytesIO(content)
@@ -672,7 +678,7 @@ async def pmc_oa_fetch_pdf(pmcid: str = Query(..., description="PMCID numeric or
         raise
     except Exception as e:
         logger.error(f"Unexpected PMC OA fetch-pdf error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.post(
@@ -713,12 +719,12 @@ async def pmc_oa_ingest_pdf(
         if error_message:
             logger.error(f"PMC OA download error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=error_message)
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
             if "http error" in error_message.lower():
                 nums = [int(s) for s in error_message.split() if s.isdigit() and 400 <= int(s) < 600]
                 code = nums[0] if nums else 502
-                raise HTTPException(status_code=code, detail=error_message)
-            raise HTTPException(status_code=502, detail=error_message)
+                raise HTTPException(status_code=code, detail=_PROVIDER_ERROR_DETAIL)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
         if not content:
             raise HTTPException(status_code=404, detail="PDF not found for PMCID")
 
@@ -879,7 +885,7 @@ async def pmc_oa_ingest_pdf(
         raise
     except Exception as e:
         logger.error(f"Unexpected PMC OA ingest error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 def _http_session():
@@ -1047,7 +1053,7 @@ async def arxiv_ingest(
         status = getattr(e.response, 'status_code', 502)
         if status == 404:
             raise HTTPException(status_code=404, detail="viXra PDF returned 404")
-        raise HTTPException(status_code=502, detail=str(e))
+        raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
     except Exception as e:
         logger.error(f"arXiv ingest error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="arXiv ingest failed")
@@ -1190,7 +1196,7 @@ async def eartharxiv_ingest(
         status = getattr(e.response, 'status_code', 502)
         if status == 404:
             raise HTTPException(status_code=404, detail="viXra PDF returned 404")
-        raise HTTPException(status_code=502, detail=str(e))
+        raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
     except Exception as e:
         logger.error(f"EarthArXiv ingest error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="EarthArXiv ingest failed")
@@ -1230,7 +1236,7 @@ async def pubmed_ingest(
         """
         meta, err = PubMed.get_pubmed_by_id(pmid)
         if err:
-            raise HTTPException(status_code=502, detail=err)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
         if not meta:
             raise HTTPException(status_code=404, detail="PMID not found")
         pmcid = meta.get('pmcid')
@@ -1238,7 +1244,7 @@ async def pubmed_ingest(
             raise HTTPException(status_code=400, detail="No PMC Open Access PMCID available for this PMID")
         content, filename, d_err = await loop.run_in_executor(None, PMC_OA.download_pmc_pdf, pmcid)
         if d_err or not content:
-            raise HTTPException(status_code=502, detail=d_err or "Failed to download PMC PDF")
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
 
         from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf_task
         kw_list = [k.strip() for k in (keywords or '').split(',') if k.strip()] if keywords else None
@@ -1379,7 +1385,7 @@ async def s2_ingest(
         """
         meta, err = Semantic_Scholar.get_paper_details_semantic_scholar(paper_id)
         if err:
-            raise HTTPException(status_code=502, detail=err)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
         if not meta:
             raise HTTPException(status_code=404, detail="paperId not found")
         oap = meta.get('openAccessPdf') or {}
@@ -1476,11 +1482,11 @@ async def paper_search_biorxiv_by_doi(
         if error_message:
             logger.error(f"BioRxiv DOI provider error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=f"BioRxiv API request timed out: {error_message}")
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
             # Map 404 style errors if provided
             if "HTTP Error: 404" in error_message or "HTTP Error: 400" in error_message:
                 raise HTTPException(status_code=404, detail="Paper not found for DOI")
-            raise HTTPException(status_code=502, detail=f"BioRxiv API error: {error_message}")
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
         if not item:
             raise HTTPException(status_code=404, detail="Paper not found for DOI")
         return BioRxivPaper(**item)
@@ -1488,7 +1494,7 @@ async def paper_search_biorxiv_by_doi(
         raise
     except Exception as e:
         logger.error(f"Unexpected BioRxiv DOI error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected BioRxiv DOI error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -1523,20 +1529,20 @@ async def paper_search_semantic_scholar(
         if error_message:
             logger.error(f"Semantic Scholar provider error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=f"Semantic Scholar API request timed out: {error_message}")
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
             if "HTTP Error" in error_message:
                 # Try to extract status code from error string
                 nums = [int(s) for s in error_message.split() if s.isdigit() and 400 <= int(s) < 600]
                 code = nums[0] if nums else 502
-                raise HTTPException(status_code=code, detail=f"Semantic Scholar API error: {error_message}")
-            raise HTTPException(status_code=502, detail=f"Semantic Scholar API error: {error_message}")
+                raise HTTPException(status_code=code, detail=_PROVIDER_ERROR_DETAIL)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
         if api_response_data is None or "data" not in api_response_data:
             raise HTTPException(status_code=500, detail="Semantic Scholar search returned invalid data.")
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Unexpected Semantic Scholar search error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected Semantic Scholar error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
     total_results_api = api_response_data.get("total", 0)
     actual_offset_api = api_response_data.get("offset", 0)
@@ -1602,15 +1608,15 @@ async def paper_search_biorxiv_pubs(
         if error_message:
             logger.error(f"BioRxiv pubs error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=f"BioRxiv API request timed out: {error_message}")
-            raise HTTPException(status_code=502, detail=f"BioRxiv API error: {error_message}")
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
         if items is None:
             raise HTTPException(status_code=500, detail="BioRxiv pubs search failed to return data.")
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Unexpected BioRxiv pubs search error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected BioRxiv pubs error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
     total_pages = math.ceil(total_results / search_params.results_per_page) if search_params.results_per_page > 0 else 0
     if total_results == 0:
@@ -1668,20 +1674,20 @@ async def paper_search_pubmed(
         if error_message:
             logger.error(f"PubMed provider error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=f"PubMed API request timed out: {error_message}")
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
             if "http error" in error_message.lower():
                 # Try to extract status code
                 nums = [int(s) for s in error_message.split() if s.isdigit() and 400 <= int(s) < 600]
                 code = nums[0] if nums else 502
-                raise HTTPException(status_code=code, detail=f"PubMed API error: {error_message}")
-            raise HTTPException(status_code=502, detail=f"PubMed API error: {error_message}")
+                raise HTTPException(status_code=code, detail=_PROVIDER_ERROR_DETAIL)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
         if items is None:
             raise HTTPException(status_code=500, detail="PubMed search failed to return data.")
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Unexpected PubMed search error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected PubMed error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
     total_pages = math.ceil(total_results / search_params.results_per_page) if search_params.results_per_page > 0 else 0
     if total_results == 0:
@@ -1724,7 +1730,7 @@ async def paper_search_biorxiv_pubs_by_doi(
         if error_message:
             logger.error(f"BioRxiv pubs by-doi error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=f"BioRxiv API request timed out: {error_message}")
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
         if not item:
             raise HTTPException(status_code=404, detail="Published record not found for DOI")
         if not include_abstracts and isinstance(item, dict):
@@ -1734,7 +1740,7 @@ async def paper_search_biorxiv_pubs_by_doi(
         raise
     except Exception as e:
         logger.error(f"Unexpected BioRxiv pubs by-doi error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected BioRxiv pubs by-doi error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 # End of paper_search.py
@@ -1767,8 +1773,8 @@ async def paper_search_biorxiv_publisher(
         if err:
             logger.error(f"BioRxiv publisher error: {err}")
             if "timed out" in err.lower():
-                raise HTTPException(status_code=504, detail=f"BioRxiv API request timed out: {err}")
-            raise HTTPException(status_code=502, detail=f"BioRxiv API error: {err}")
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
         if items is None:
             raise HTTPException(status_code=500, detail="BioRxiv publisher search failed to return data.")
         total_pages = math.ceil(total / search_params.results_per_page) if search_params.results_per_page > 0 else 0
@@ -1792,7 +1798,7 @@ async def paper_search_biorxiv_publisher(
         raise
     except Exception as e:
         logger.error(f"Unexpected BioRxiv publisher search error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected BioRxiv publisher error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -1820,8 +1826,8 @@ async def paper_search_biorxiv_pub(
         if err:
             logger.error(f"BioRxiv pub error: {err}")
             if "timed out" in err.lower():
-                raise HTTPException(status_code=504, detail=f"BioRxiv API request timed out: {err}")
-            raise HTTPException(status_code=502, detail=f"BioRxiv API error: {err}")
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
         if items is None:
             raise HTTPException(status_code=500, detail="BioRxiv pub search failed to return data.")
         total_pages = math.ceil(total / search_params.results_per_page) if search_params.results_per_page > 0 else 0
@@ -1844,7 +1850,7 @@ async def paper_search_biorxiv_pub(
         raise
     except Exception as e:
         logger.error(f"Unexpected BioRxiv pub search error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected BioRxiv pub error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -1875,8 +1881,8 @@ async def paper_search_biorxiv_funder(
         if err:
             logger.error(f"BioRxiv funder error: {err}")
             if "timed out" in err.lower():
-                raise HTTPException(status_code=504, detail=f"BioRxiv API request timed out: {err}")
-            raise HTTPException(status_code=502, detail=f"BioRxiv API error: {err}")
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
         if items is None:
             raise HTTPException(status_code=500, detail="BioRxiv funder search failed to return data.")
         total_pages = math.ceil(total / search_params.results_per_page) if search_params.results_per_page > 0 else 0
@@ -1902,7 +1908,7 @@ async def paper_search_biorxiv_funder(
         raise
     except Exception as e:
         logger.error(f"Unexpected BioRxiv funder search error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected BioRxiv funder error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -1920,8 +1926,8 @@ async def paper_search_biorxiv_summary(
         if err:
             logger.error(f"BioRxiv summary error: {err}")
             if "timed out" in err.lower():
-                raise HTTPException(status_code=504, detail=f"BioRxiv API request timed out: {err}")
-            raise HTTPException(status_code=502, detail=f"BioRxiv API error: {err}")
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
         if items is None:
             items = []
         return BioRxivSummaryResponse(query_echo={"interval": search_params.interval}, items=items)  # type: ignore[arg-type]
@@ -1929,7 +1935,7 @@ async def paper_search_biorxiv_summary(
         raise
     except Exception as e:
         logger.error(f"Unexpected BioRxiv summary error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected BioRxiv summary error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -1947,8 +1953,8 @@ async def paper_search_biorxiv_usage(
         if err:
             logger.error(f"BioRxiv usage error: {err}")
             if "timed out" in err.lower():
-                raise HTTPException(status_code=504, detail=f"BioRxiv API request timed out: {err}")
-            raise HTTPException(status_code=502, detail=f"BioRxiv API error: {err}")
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
         if items is None:
             items = []
         return BioRxivUsageResponse(query_echo={"interval": search_params.interval}, items=items)  # type: ignore[arg-type]
@@ -1956,7 +1962,7 @@ async def paper_search_biorxiv_usage(
         raise
     except Exception as e:
         logger.error(f"Unexpected BioRxiv usage error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected BioRxiv usage error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 # -------------------- BioRxiv Raw Passthrough Endpoints (CSV/XML) --------------------
@@ -2171,14 +2177,16 @@ def _handle_provider_error(err: str) -> None:
     if not err:
         return
     low = err.lower()
+    logger.error(f"Provider error: {err}")
     if "not configured" in low:
-        raise HTTPException(status_code=501, detail=err)
+        raise HTTPException(status_code=501, detail=_PROVIDER_NOT_CONFIGURED_DETAIL)
     if "timed out" in low:
-        raise HTTPException(status_code=504, detail=err)
+        raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
     if "http error" in low:
-        # Fall back to 502 if no specific status is included in message
-        raise HTTPException(status_code=502, detail=err)
-    raise HTTPException(status_code=502, detail=err)
+        nums = [int(s) for s in err.split() if s.isdigit() and 400 <= int(s) < 600]
+        code = nums[0] if nums else 502
+        raise HTTPException(status_code=code, detail=_PROVIDER_ERROR_DETAIL)
+    raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
 
 
 # ---------------- RePEc / CitEc Endpoints ----------------
@@ -2212,7 +2220,7 @@ async def repec_by_handle(handle: str = Query(..., min_length=8)):
         raise
     except Exception as e:
         logger.error(f"Unexpected RePEc by-handle error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected RePEc error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -2234,7 +2242,7 @@ async def repec_citations(handle: str = Query(..., min_length=8)):
         raise
     except Exception as e:
         logger.error(f"Unexpected RePEc/CitEc citations error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected RePEc/CitEc error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -2283,7 +2291,7 @@ async def paper_search_ieee(search_params: IEEESearchRequestForm = Depends()):
         raise
     except Exception as e:
         logger.error(f"Unexpected IEEE search error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected IEEE error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -2305,7 +2313,7 @@ async def paper_search_ieee_by_doi(params: DOIRequestForm = Depends()):
         raise
     except Exception as e:
         logger.error(f"Unexpected IEEE by-doi error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected IEEE by-doi error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -2327,7 +2335,7 @@ async def paper_search_ieee_by_id(article_number: str = Query(...)):
         raise
     except Exception as e:
         logger.error(f"Unexpected IEEE by-id error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected IEEE by-id error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -2374,7 +2382,7 @@ async def paper_search_springer(search_params: SimpleVenueSearchForm = Depends()
         raise
     except Exception as e:
         logger.error(f"Unexpected Springer search error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected Springer error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -2396,7 +2404,7 @@ async def paper_search_springer_by_doi(params: DOIRequestForm = Depends()):
         raise
     except Exception as e:
         logger.error(f"Unexpected Springer by-doi error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected Springer by-doi error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -2450,7 +2458,7 @@ async def paper_search_scopus(
         raise
     except Exception as e:
         logger.error(f"Unexpected Scopus search error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected Scopus error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -2472,7 +2480,7 @@ async def paper_search_scopus_by_doi(params: DOIRequestForm = Depends()):
         raise
     except Exception as e:
         logger.error(f"Unexpected Scopus by-doi error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected Scopus by-doi error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -2521,7 +2529,7 @@ async def paper_search_acm(search_params: SimpleVenueSearchForm = Depends()):
         raise
     except Exception as e:
         logger.error(f"Unexpected ACM search error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected ACM error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -2543,7 +2551,7 @@ async def paper_search_acm_by_doi(params: DOIRequestForm = Depends()):
         raise
     except Exception as e:
         logger.error(f"Unexpected ACM by-doi error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected ACM by-doi error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -2591,7 +2599,7 @@ async def paper_search_wiley(search_params: SimpleVenueSearchForm = Depends()):
         raise
     except Exception as e:
         logger.error(f"Unexpected Wiley search error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected Wiley error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -2613,7 +2621,7 @@ async def paper_search_wiley_by_doi(params: DOIRequestForm = Depends()):
         raise
     except Exception as e:
         logger.error(f"Unexpected Wiley by-doi error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected Wiley by-doi error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.post(
@@ -2766,7 +2774,7 @@ async def ingest_by_doi(
         status = getattr(e.response, 'status_code', 502)
         if status == 404:
             raise HTTPException(status_code=404, detail="viXra PDF returned 404")
-        raise HTTPException(status_code=502, detail=str(e))
+        raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
     except Exception as e:
         logger.error(f"OA ingest by DOI error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="OA ingest by DOI failed")
@@ -2890,9 +2898,9 @@ async def ingest_batch(
                     pmcid_norm = f"PMC{pmcid_norm}"
                 content, filename, d_err = await loop.run_in_executor(None, PMC_OA.download_pmc_pdf, pmcid_norm)
                 if d_err:
-                    return IngestBatchResultItem(pmcid=pmcid_norm, success=False, error=d_err)
+                    return IngestBatchResultItem(pmcid=pmcid_norm, success=False, error=_BATCH_ERROR_DETAIL)
                 if not content:
-                    return IngestBatchResultItem(pmcid=pmcid_norm, success=False, error="Empty PMC PDF content")
+                    return IngestBatchResultItem(pmcid=pmcid_norm, success=False, error=_BATCH_ERROR_DETAIL)
                 result = await process_pdf_task(
                     file_bytes=content,
                     filename=filename or f"{pmcid_norm}.pdf",
@@ -3089,9 +3097,9 @@ async def ingest_batch(
                 _, err = (None, None)
                 pdf_url, err = await loop.run_in_executor(None, Unpaywall.resolve_oa_pdf, doi)
                 if err:
-                    return IngestBatchResultItem(doi=doi, pdf_url=None, pmcid=pmcid, arxiv_id=arxiv_id, success=False, error=err)
+                    return IngestBatchResultItem(doi=doi, pdf_url=None, pmcid=pmcid, arxiv_id=arxiv_id, success=False, error=_BATCH_ERROR_DETAIL)
             if not pdf_url:
-                return IngestBatchResultItem(doi=doi, pdf_url=None, pmcid=pmcid, arxiv_id=arxiv_id, success=False, error="No pdf_url and DOI unresolved")
+                return IngestBatchResultItem(doi=doi, pdf_url=None, pmcid=pmcid, arxiv_id=arxiv_id, success=False, error=_BATCH_ERROR_DETAIL)
             # Download PDF
             content = await _download_pdf_bytes(pdf_url)
             # Process & persist
@@ -3152,7 +3160,7 @@ async def ingest_batch(
             return IngestBatchResultItem(doi=doi, pdf_url=pdf_url, pmcid=pmcid, arxiv_id=arxiv_id, success=True, media_id=media_id, media_uuid=media_uuid)
         except Exception as e:
             logger.error(f"Batch ingest error for doi={doi} pmcid={pmcid} arxiv={arxiv_id} pdf={pdf_url}: {e}", exc_info=True)
-            return IngestBatchResultItem(doi=doi, pdf_url=pdf_url, pmcid=pmcid, arxiv_id=arxiv_id, success=False, error=str(e))
+            return IngestBatchResultItem(doi=doi, pdf_url=pdf_url, pmcid=pmcid, arxiv_id=arxiv_id, success=False, error=_BATCH_ERROR_DETAIL)
 
     for it in payload.items:
         try:
@@ -3218,7 +3226,7 @@ async def chemrxiv_items(search: ChemRxivSearchRequestForm = Depends()):
         raise
     except Exception as e:
         logger.error(f"Unexpected ChemRxiv search error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected ChemRxiv error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -3240,7 +3248,7 @@ async def chemrxiv_item_by_id(itemId: str = Query(..., min_length=3)):
         raise
     except Exception as e:
         logger.error(f"Unexpected ChemRxiv by-id error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected ChemRxiv by-id error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -3262,7 +3270,7 @@ async def chemrxiv_item_by_doi(doi: str = Query(..., min_length=3)):
         raise
     except Exception as e:
         logger.error(f"Unexpected ChemRxiv by-doi error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected ChemRxiv by-doi error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -3411,7 +3419,7 @@ async def earthrxiv_search(
         raise
     except Exception as e:
         logger.error(f"Unexpected EarthArXiv search error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected EarthArXiv error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -3433,7 +3441,7 @@ async def earthrxiv_by_id(osf_id: str = Query(..., min_length=3)):
         raise
     except Exception as e:
         logger.error(f"Unexpected EarthArXiv by-id error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected EarthArXiv by-id error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -3455,7 +3463,7 @@ async def earthrxiv_by_doi(doi: str = Query(..., min_length=3)):
         raise
     except Exception as e:
         logger.error(f"Unexpected EarthArXiv by-doi error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected EarthArXiv by-doi error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 # -------------------- OSF Preprints (Generic) --------------------
@@ -3499,7 +3507,7 @@ async def osf_search(search: OSFSearchRequestForm = Depends()):
         raise
     except Exception as e:
         logger.error(f"Unexpected OSF search error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected OSF error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -3521,7 +3529,7 @@ async def osf_by_id(osf_id: str = Query(..., min_length=3)):
         raise
     except Exception as e:
         logger.error(f"Unexpected OSF by-id error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected OSF by-id error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -3543,7 +3551,7 @@ async def osf_by_doi(doi: str = Query(..., min_length=3)):
         raise
     except Exception as e:
         logger.error(f"Unexpected OSF by-doi error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected OSF by-doi error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.post(
@@ -3688,7 +3696,7 @@ async def osf_ingest(
     except HTTPException:
         raise
     except requests.exceptions.HTTPError as e:
-        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=str(e))
+        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=_PROVIDER_ERROR_DETAIL)
     except Exception as e:
         logger.error(f"OSF ingest error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="OSF ingest failed")
@@ -3778,7 +3786,7 @@ async def zenodo_search(
         raise
     except Exception as e:
         logger.error(f"Unexpected Zenodo search error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected Zenodo error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -3800,7 +3808,7 @@ async def zenodo_by_id(record_id: str = Query(..., min_length=1)):
         raise
     except Exception as e:
         logger.error(f"Unexpected Zenodo by-id error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected Zenodo by-id error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -3822,7 +3830,7 @@ async def zenodo_by_doi(doi: str = Query(..., min_length=3)):
         raise
     except Exception as e:
         logger.error(f"Unexpected Zenodo by-doi error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected Zenodo by-doi error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -4013,7 +4021,7 @@ async def zenodo_ingest(
     except HTTPException:
         raise
     except requests.exceptions.HTTPError as e:
-        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=str(e))
+        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=_PROVIDER_ERROR_DETAIL)
     except Exception as e:
         logger.error(f"Zenodo ingest error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Zenodo ingest failed")
@@ -4055,7 +4063,7 @@ async def figshare_search(
         raise
     except Exception as e:
         logger.error(f"Unexpected Figshare search error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected Figshare error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -4077,7 +4085,7 @@ async def figshare_by_id(article_id: str = Query(..., min_length=1)):
         raise
     except Exception as e:
         logger.error(f"Unexpected Figshare by-id error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected Figshare by-id error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -4099,7 +4107,7 @@ async def figshare_by_doi(doi: str = Query(..., min_length=3)):
         raise
     except Exception as e:
         logger.error(f"Unexpected Figshare by-doi error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected Figshare by-doi error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -4278,7 +4286,7 @@ async def figshare_ingest(
     except HTTPException:
         raise
     except requests.exceptions.HTTPError as e:
-        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=str(e))
+        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=_PROVIDER_ERROR_DETAIL)
     except Exception as e:
         logger.error(f"Figshare ingest error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Figshare ingest failed")
@@ -4430,7 +4438,7 @@ async def figshare_ingest_by_doi(
     except HTTPException:
         raise
     except requests.exceptions.HTTPError as e:
-        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=str(e))
+        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=_PROVIDER_ERROR_DETAIL)
     except Exception as e:
         logger.error(f"Figshare ingest-by-doi error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Figshare ingest-by-doi failed")
@@ -4474,7 +4482,7 @@ async def hal_search(
         raise
     except Exception as e:
         logger.error(f"Unexpected HAL search error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected HAL error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -4530,7 +4538,7 @@ async def hal_by_id(docid: str = Query(..., min_length=1), scope: Optional[str] 
         raise
     except Exception as e:
         logger.error(f"Unexpected HAL by-id error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected HAL by-id error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.post(
@@ -4671,7 +4679,7 @@ async def hal_ingest(
     except HTTPException:
         raise
     except requests.exceptions.HTTPError as e:
-        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=str(e))
+        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=_PROVIDER_ERROR_DETAIL)
     except Exception as e:
         logger.error(f"HAL ingest error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="HAL ingest failed")
@@ -4825,7 +4833,7 @@ async def vixra_ingest(
     except HTTPException:
         raise
     except requests.exceptions.HTTPError as e:
-        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=str(e))
+        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=_PROVIDER_ERROR_DETAIL)
     except Exception as e:
         logger.error(f"viXra ingest error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="viXra ingest failed")
@@ -4861,7 +4869,7 @@ async def vixra_search(
         raise
     except Exception as e:
         logger.error(f"Unexpected viXra search error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected viXra error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 @router.get(
     "/arxiv/by-id",
@@ -4878,8 +4886,8 @@ async def paper_search_arxiv_by_id(
         if error_message:
             logger.error(f"arXiv by-id provider error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=f"arXiv API request timed out: {error_message}")
-            raise HTTPException(status_code=502, detail=f"arXiv API error: {error_message}")
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
         if not item:
             raise HTTPException(status_code=404, detail="Paper not found for arXiv ID")
         return ArxivPaper(**item)
@@ -4887,7 +4895,7 @@ async def paper_search_arxiv_by_id(
         raise
     except Exception as e:
         logger.error(f"Unexpected arXiv by-id error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected arXiv by-id error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -4909,12 +4917,12 @@ async def paper_search_semantic_scholar_by_id(
         if error_message:
             logger.error(f"Semantic Scholar by-id provider error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=f"Semantic Scholar API request timed out: {error_message}")
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
             if "HTTP Error" in error_message:
                 nums = [int(s) for s in error_message.split() if s.isdigit() and 400 <= int(s) < 600]
                 code = nums[0] if nums else 502
-                raise HTTPException(status_code=code, detail=f"Semantic Scholar API error: {error_message}")
-            raise HTTPException(status_code=502, detail=f"Semantic Scholar API error: {error_message}")
+                raise HTTPException(status_code=code, detail=_PROVIDER_ERROR_DETAIL)
+            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
         if not data:
             raise HTTPException(status_code=404, detail="Paper not found for paperId")
         if data.get("openAccessPdf") is None:
@@ -4924,7 +4932,7 @@ async def paper_search_semantic_scholar_by_id(
         raise
     except Exception as e:
         logger.error(f"Unexpected Semantic Scholar by-id error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected Semantic Scholar by-id error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)
 
 
 @router.get(
@@ -4946,11 +4954,11 @@ async def paper_search_pubmed_by_id(
         if error_message:
             logger.error(f"PubMed by-id provider error: {error_message}")
             if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=f"PubMed API request timed out: {error_message}")
+                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
             if "http error" in error_message.lower():
                 nums = [int(s) for s in error_message.split() if s.isdigit() and 400 <= int(s) < 600]
                 code = nums[0] if nums else 502
-                raise HTTPException(status_code=code, detail=f"PubMed API error: {error_message}")
+                raise HTTPException(status_code=code, detail=_PROVIDER_ERROR_DETAIL)
         if not item:
             raise HTTPException(status_code=404, detail="Record not found for PMID")
         return PubMedPaper(**item)
@@ -4958,4 +4966,4 @@ async def paper_search_pubmed_by_id(
         raise
     except Exception as e:
         logger.error(f"Unexpected PubMed by-id error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Unexpected PubMed by-id error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL)

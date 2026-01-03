@@ -618,13 +618,13 @@ async def login(
         log_histogram("auth_login_duration", time.perf_counter() - start_time)
         if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):  # expose details in tests
             try:
-                response.headers["X-TLDW-Login-Error"] = str(e)
+                response.headers["X-TLDW-Login-Error"] = "internal-error"
                 _finalize_login_diag(request, response)
             except Exception:
                 pass
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Login error: {e}"
+                detail="An error occurred during login"
             )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -905,7 +905,7 @@ async def refresh_token(
                 pass
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=str(e),
+            detail="Invalid or expired refresh token.",
             headers={"WWW-Authenticate": "Bearer"}
         )
     except Exception as e:
@@ -915,7 +915,7 @@ async def refresh_token(
         if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
             try:
                 response.headers["X-TLDW-Refresh-Stage"] = "unexpected"
-                response.headers["X-TLDW-Refresh-Reason"] = str(e)
+                response.headers["X-TLDW-Refresh-Reason"] = "internal-error"
                 response.headers["X-TLDW-Refresh-Duration-ms"] = str(int((time.perf_counter() - start_time) * 1000))
             except Exception:
                 pass
@@ -1017,13 +1017,13 @@ async def register(
         # Attach diagnostics (if enabled)
         if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
             try:
-                response.headers["X-TLDW-Register-Error"] = str(e)
+                response.headers["X-TLDW-Register-Error"] = "duplicate-user"
             except Exception:
                 pass
         _finalize_register_diag(request, response)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=str(e)
+            detail="Username or email already exists."
         )
     except WeakPasswordError as e:
         logger.warning(f"Registration failed - weak password: {e}")
@@ -1031,13 +1031,13 @@ async def register(
         log_histogram("auth_register_duration", time.perf_counter() - start_time)
         if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
             try:
-                response.headers["X-TLDW-Register-Error"] = str(e)
+                response.headers["X-TLDW-Register-Error"] = "weak-password"
             except Exception:
                 pass
         _finalize_register_diag(request, response)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail="Password does not meet requirements."
         )
     except InvalidRegistrationCodeError as e:
         logger.warning(f"Registration failed - invalid code: {e}")
@@ -1045,13 +1045,13 @@ async def register(
         log_histogram("auth_register_duration", time.perf_counter() - start_time)
         if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
             try:
-                response.headers["X-TLDW-Register-Error"] = str(e)
+                response.headers["X-TLDW-Register-Error"] = "invalid-registration-code"
             except Exception:
                 pass
         _finalize_register_diag(request, response)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail="Invalid registration code."
         )
     except RegistrationError as e:
         logger.error(f"Registration error: {e}")
@@ -1059,13 +1059,13 @@ async def register(
         log_histogram("auth_register_duration", time.perf_counter() - start_time)
         if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
             try:
-                response.headers["X-TLDW-Register-Error"] = str(e)
+                response.headers["X-TLDW-Register-Error"] = "registration-error"
             except Exception:
                 pass
         _finalize_register_diag(request, response)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail="Registration failed."
         )
     except HTTPException:
         # Propagate explicit HTTPException responses (for example the
@@ -1099,7 +1099,7 @@ async def register(
         log_histogram("auth_register_duration", time.perf_counter() - start_time)
         if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
             try:
-                response.headers["X-TLDW-Register-Error"] = str(e)
+                response.headers["X-TLDW-Register-Error"] = "internal-error"
             except Exception:
                 pass
         duration = time.perf_counter() - start_time
@@ -1113,11 +1113,11 @@ async def register(
             from fastapi.responses import JSONResponse
             return JSONResponse(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                content={"detail": f"Registration error: {e}"},
+                content={"detail": "An error occurred during registration"},
                 headers={
                     "X-TLDW-DB": db_backend,
                     "X-TLDW-CSRF-Enabled": "true" if bool(_csrf_globals.get("CSRF_ENABLED", None)) else "false",
-                    "X-TLDW-Register-Error": str(e),
+                    "X-TLDW-Register-Error": "internal-error",
                     "X-TLDW-Register-Duration-ms": str(int(duration * 1000)),
                 },
             )

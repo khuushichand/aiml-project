@@ -103,9 +103,18 @@ def _artifacts_base_dir() -> Path:
 
     Security:
         Prefers anchoring to the project root to avoid CWD-dependent behavior.
-        On failure, falls back to a relative path that must be resolved and
-        checked for containment by callers.
+        In test mode, uses the current working directory to keep fixtures
+        isolated. On failure, falls back to a relative path that must be
+        resolved and checked for containment by callers.
     """
+    env_override = os.getenv("WORKFLOWS_ARTIFACTS_DIR") or os.getenv("WORKFLOWS_ARTIFACT_DIR")
+    if env_override:
+        return Path(env_override).expanduser().resolve()
+    try:
+        if os.getenv("PYTEST_CURRENT_TEST") is not None or os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
+            return (Path.cwd() / "Databases" / "artifacts").resolve()
+    except Exception:
+        pass
     try:
         from tldw_Server_API.app.core.Utils.Utils import get_project_root
         return (Path(get_project_root()) / "Databases" / "artifacts").resolve()

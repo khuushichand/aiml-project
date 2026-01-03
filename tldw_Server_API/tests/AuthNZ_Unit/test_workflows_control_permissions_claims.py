@@ -47,6 +47,7 @@ def _build_app_with_overrides(
     principal: AuthPrincipal,
     *,
     user_permissions: List[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(workflows_mod.router)
@@ -98,13 +99,13 @@ def _build_app_with_overrides(
             return None
 
     # Avoid invoking the real WorkflowEngine; use a lightweight stub instead.
-    workflows_mod.WorkflowEngine = _FakeEngine  # type: ignore[assignment]
+    monkeypatch.setattr(workflows_mod, "WorkflowEngine", _FakeEngine, raising=True)
 
     return app
 
 
 @pytest.mark.asyncio
-async def test_workflows_control_run_forbidden_when_principal_lacks_control_permission_but_user_has():
+async def test_workflows_control_run_forbidden_when_principal_lacks_control_permission_but_user_has(monkeypatch: pytest.MonkeyPatch):
     """
     PermissionChecker sees workflows.runs.control on the User object, but the
     AuthPrincipal lacks WORKFLOWS_RUNS_CONTROL in its permissions. The request
@@ -119,6 +120,7 @@ async def test_workflows_control_run_forbidden_when_principal_lacks_control_perm
     app = _build_app_with_overrides(
         principal,
         user_permissions=[WORKFLOWS_RUNS_CONTROL],
+        monkeypatch=monkeypatch,
     )
 
     with TestClient(app) as client:
@@ -128,7 +130,7 @@ async def test_workflows_control_run_forbidden_when_principal_lacks_control_perm
 
 
 @pytest.mark.asyncio
-async def test_workflows_control_run_allowed_with_control_permission():
+async def test_workflows_control_run_allowed_with_control_permission(monkeypatch: pytest.MonkeyPatch):
     principal = _make_principal(
         roles=["user"],
         permissions=[WORKFLOWS_RUNS_CONTROL],
@@ -137,6 +139,7 @@ async def test_workflows_control_run_allowed_with_control_permission():
     app = _build_app_with_overrides(
         principal,
         user_permissions=[WORKFLOWS_RUNS_CONTROL],
+        monkeypatch=monkeypatch,
     )
 
     with TestClient(app) as client:

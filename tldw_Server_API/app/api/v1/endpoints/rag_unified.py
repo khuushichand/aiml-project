@@ -1090,7 +1090,7 @@ async def unified_search_endpoint(
         logger.error(f"Full traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Search failed: {str(e)}"
+            detail="Search failed due to an internal error."
         )
 
 
@@ -1228,7 +1228,7 @@ async def unified_batch_endpoint(
         logger.error(f"Batch search error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Batch search failed: {str(e)}"
+            detail="Batch search failed due to an internal error."
         )
 
 
@@ -1312,7 +1312,7 @@ async def simple_search_endpoint(
         logger.error(f"Simple search error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Search failed: {str(e)}"
+            detail="Search failed due to an internal error."
         )
 
 
@@ -1569,8 +1569,8 @@ async def unified_search_stream_endpoint(
             if final_overlay:
                 yield json.dumps({"type": "final_claims", **final_overlay}) + "\n"
 
-        except Exception as e:
-            yield json.dumps({"type": "error", "message": str(e)}) + "\n"
+        except Exception:
+            yield json.dumps({"type": "error", "message": "Search failed due to an internal error."}) + "\n"
 
     return StreamingResponse(event_stream(), media_type="application/x-ndjson")
 
@@ -1635,7 +1635,7 @@ async def advanced_search_endpoint(
         logger.error(f"Advanced search error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Search failed: {str(e)}"
+            detail="Search failed due to an internal error."
         )
 
 
