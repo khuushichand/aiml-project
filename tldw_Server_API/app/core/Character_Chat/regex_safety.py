@@ -220,11 +220,13 @@ def _safe_compile_regex_impl(
     if is_dangerous:
         raise re.error(f"Regex pattern rejected: {reason}")
 
-    # Attempt compilation with timing (best-effort since Python doesn't support compile timeouts)
-    # We compile with standard `re` first to ensure compatibility, then use `regex` for timeout-safe matching.
+    # Attempt compilation with timing (best-effort since Python doesn't support compile timeouts).
+    # NOTE: We compile with standard `re` first to reject patterns that `regex` accepts but the
+    # stdlib `re` doesn't (callers may rely on stdlib-compatible syntax). We then compile with
+    # `regex` to enable timeout-safe matching; the `regex` pattern is what we return.
     start_time = _time_module.perf_counter()
     try:
-        compiled = re.compile(pattern, flags)
+        _re_compiled = re.compile(pattern, flags)
     except re.error:
         raise
 

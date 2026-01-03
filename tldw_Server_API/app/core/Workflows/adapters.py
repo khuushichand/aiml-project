@@ -120,7 +120,11 @@ def _resolve_artifacts_dir(step_run_id: str | None) -> Path:
     base_dir = _artifacts_base_dir()
     try:
         base_resolved = base_dir.resolve(strict=False)
-    except Exception:
+    except Exception as exc:
+        logger.opt(exception=exc).debug(
+            "Artifacts base dir resolve failed for {}. Using unresolved base dir.",
+            base_dir,
+        )
         base_resolved = base_dir
     # Sanitize the provided ID and force it to be a single path component.
     safe_id = _sanitize_path_component(step_run_id or "", f"artifact_{int(time.time() * 1000)}")
@@ -1413,7 +1417,8 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
                 custom_headers=custom_headers,
             )
         except Exception as e:
-            return {"error": f"process_media_error:{e}"}
+            logger.exception("Web scraping process media failed")
+            return {"error": "process_media_error"}
         # Normalize response
         articles = []
         try:

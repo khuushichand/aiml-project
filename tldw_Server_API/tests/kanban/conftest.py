@@ -20,7 +20,9 @@ def temp_db_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 @pytest.fixture
 def temp_db_path(temp_db_dir: Path) -> Path:
     """Create a temporary database file path."""
-    return DatabasePaths.get_kanban_db_path(1)
+    # Ensure USER_DB_BASE_DIR is configured via temp_db_dir fixture.
+    _ = temp_db_dir
+    return DatabasePaths.get_kanban_db_path("1")
 
 
 @pytest.fixture

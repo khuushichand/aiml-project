@@ -2177,7 +2177,7 @@ def _handle_provider_error(err: str) -> None:
     if not err:
         return
     low = err.lower()
-    logger.error(f"Provider error: {err}")
+    logger.error("Provider error: {}", err)
     if "not configured" in low:
         raise HTTPException(
             status_code=501,

@@ -153,7 +153,7 @@ class RewriteCache:
                 try:
                     p = _resolve_user_cache_path(str(user_id))
                     p.parent.mkdir(parents=True, exist_ok=True)
-                except ValueError as e:
+                except (ValueError, UnsafeUserPathError) as e:
                     logger.warning(f"Failed to resolve user cache path for user_id={hashed_user_id}: {e}")
                     self.path = str(_safe_path())
                 except OSError as e:

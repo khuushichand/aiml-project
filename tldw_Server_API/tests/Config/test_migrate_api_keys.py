@@ -11,6 +11,8 @@ assert _spec and _spec.loader
 migrate_api_keys = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(migrate_api_keys)
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.mark.parametrize(
     "value",

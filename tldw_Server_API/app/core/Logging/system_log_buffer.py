@@ -66,6 +66,18 @@ def _log_sink(message: Any) -> None:
 
 
 def _sink_still_present(sink_id: int) -> bool:
+    """Check if a loguru sink with the given ID still exists.
+
+    WARNING: This function accesses loguru's private internals and may break
+    with future loguru versions. It returns False if the sink is not found
+    or if any error occurs during the check.
+
+    Args:
+        sink_id: The integer ID returned by logger.add().
+
+    Returns:
+        True if the sink appears to still exist, False otherwise.
+    """
     # Loguru doesn't expose a public API for checking removed sinks.
     try:
         core = getattr(logger, "_core", None)

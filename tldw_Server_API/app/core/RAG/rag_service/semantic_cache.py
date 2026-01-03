@@ -639,22 +639,57 @@ def _default_persist_path(namespace_key: str) -> Optional[str]:
         return None
     try:
         base_dir_resolved = base_dir.expanduser().resolve(strict=False)
-    except Exception:
+    except (OSError, RuntimeError, ValueError) as exc:
+        logger.error(
+            "Semantic cache: failed to resolve base dir {} for default persist path: {}",
+            base_dir,
+            exc,
+        )
         return None
+    except Exception:
+        logger.exception(
+            "Semantic cache: unexpected error resolving base dir {} for default persist path",
+            base_dir,
+        )
+        raise
     # Normalize and bound the namespace key before embedding it in the filename.
     safe_key = _normalize_namespace_key_for_filename(namespace_key)
     candidate = base_dir_resolved / f"semantic_cache_{safe_key}.json"
     try:
         full_path = candidate.resolve(strict=False)
-    except Exception:
+    except (OSError, RuntimeError, ValueError) as exc:
+        logger.error(
+            "Semantic cache: failed to resolve default persist path {}: {}",
+            candidate,
+            exc,
+        )
         return None
+    except Exception:
+        logger.exception(
+            "Semantic cache: unexpected error resolving default persist path {}",
+            candidate,
+        )
+        raise
     # Verify that the final path is contained within the base cache directory.
     try:
         if not (full_path == base_dir_resolved or base_dir_resolved in full_path.parents):
             logger.warning(f"Refusing to use out-of-root cache path: {full_path}")
             return None
-    except Exception:
+    except (OSError, RuntimeError, ValueError) as exc:
+        logger.error(
+            "Semantic cache: failed to validate cache path {} against base dir {}: {}",
+            full_path,
+            base_dir_resolved,
+            exc,
+        )
         return None
+    except Exception:
+        logger.exception(
+            "Semantic cache: unexpected error validating cache path {} against base dir {}",
+            full_path,
+            base_dir_resolved,
+        )
+        raise
     return str(full_path)
 
 

@@ -568,6 +568,9 @@ Per-user databases are stored at:
 ```text
 Databases/user_databases/{user_id}/Kanban.db
 ```
+Developer note: when constructing `KanbanDB`, use
+`DatabasePaths.get_kanban_db_path(user_id)` (or `:memory:` in tests). Arbitrary
+filesystem paths are rejected.
 
 #### Backup
 

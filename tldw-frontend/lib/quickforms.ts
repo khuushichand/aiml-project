@@ -221,13 +221,19 @@ export const QUICK_FORMS: QuickFormPreset[] = [
     title: 'Chat Completion',
     method: 'POST',
     path: '/chat/completions',
-    defaults: { model: 'auto', prompt: 'What is the main topic?', stream: true, save_to_db: false },
+    defaults: {
+      model: 'auto',
+      prompt: 'What is the main topic?',
+      system: 'You are a helpful assistant.',
+      stream: true,
+      save_to_db: false,
+    },
     toBody: (s) => ({
       model: s.model || 'auto',
       stream: !!s.stream,
       save_to_db: !!s.save_to_db,
       messages: [
-        { role: 'system', content: 'You are a helpful assistant.' },
+        { role: 'system', content: String(s.system || 'You are a helpful assistant.') },
         { role: 'user', content: String(s.prompt || '') },
       ],
     }),
@@ -258,6 +264,7 @@ export const QUICK_FORMS: QuickFormPreset[] = [
         model: { type: 'string', description: 'Provider/model identifier' },
         stream: { type: 'boolean', description: 'Enable Server-Sent Events streaming' },
         save_to_db: { type: 'boolean', description: 'Persist conversation to database' },
+        system: { type: 'string', description: 'System prompt for the assistant' },
         messages: {
           type: 'array',
           items: {

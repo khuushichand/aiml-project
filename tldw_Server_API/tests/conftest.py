@@ -20,14 +20,6 @@ pytest_plugins = (
 import os
 from pathlib import Path
 try:
-    from tldw_Server_API.tests.helpers.pgvector import pgvector_dsn, pgvector_temp_table
-except (ImportError, ModuleNotFoundError):
-    # pgvector helpers are optional; tests that need them will skip gracefully
-    pass
-except Exception as e:
-    import logging
-    logging.getLogger(__name__).debug("Failed to import pgvector helpers: %s", e)
-try:
     # Ensure tests see provider keys from the canonical location
     # Load once at collection time, without overriding explicit env
     from dotenv import load_dotenv  # type: ignore

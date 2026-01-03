@@ -214,7 +214,7 @@ class KanbanDB:
         for statement in ("PRAGMA foreign_keys=ON", "PRAGMA busy_timeout=30000"):
             try:
                 conn.execute(statement)
-            except Exception as e:
+            except sqlite3.Error as e:
                 logger.error(f"Failed to set critical PRAGMA option {statement}: {e}")
                 raise KanbanDBError(
                     f"Failed to set critical PRAGMA option {statement}: {e}"
@@ -226,7 +226,7 @@ class KanbanDB:
                 conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA cache_size=-64000")  # 64MB cache
-        except Exception as e:
+        except sqlite3.Error as e:
             logger.error(f"Failed to set performance PRAGMA options: {e}")
 
     def _connect(self) -> sqlite3.Connection:
@@ -287,7 +287,7 @@ class KanbanDB:
                 return
             try:
                 self._memory_conn.force_close()
-            except Exception as e:
+            except sqlite3.Error as e:
                 logger.warning(f"Error closing memory connection: {e}")
             finally:
                 self._memory_conn = None
