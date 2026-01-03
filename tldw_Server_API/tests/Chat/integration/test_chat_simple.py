@@ -60,7 +60,7 @@ def test_chat_completion_works(client, auth_token, mock_chacha_db, setup_depende
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings
         settings = get_settings()
         print(f"AUTH_MODE: {settings.AUTH_MODE}")
-        print(f"Expected API key: {redact_secret(settings.SINGLE_USER_API_KEY)}")
+        print(f"Expected API key is {'set' if settings.SINGLE_USER_API_KEY else 'not set'}")
         print(f"Auth token from fixture: {redact_secret(auth_token)}")
 
         # Debug: make the request manually to see what headers are sent
