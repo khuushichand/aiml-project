@@ -16,6 +16,39 @@ from tldw_Server_API.app.core.Utils.Utils import get_project_relative_path
 from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseBackend, BackendType
 #
 # End of Imports
+
+
+def _safe_join(base_dir: str, name: str) -> Optional[str]:
+    """
+    Safely join a base directory and a path component, preventing directory traversal
+    and symlink-based escapes.
+
+    Returns the normalized, real path on success, or None on failure.
+    """
+    base_dir_abs = os.path.abspath(base_dir)
+    candidate = os.path.abspath(os.path.join(base_dir_abs, name))
+    base_real = os.path.realpath(base_dir_abs)
+    candidate_real = os.path.realpath(candidate)
+    try:
+        if os.path.commonpath([base_real, candidate_real]) != base_real:
+            return None
+        relative = os.path.relpath(candidate, base_dir_abs)
+    except ValueError:
+        return None
+    if relative.startswith(os.pardir + os.sep) or relative == os.pardir:
+        return None
+    if os.path.islink(candidate):
+        return None
+    current = base_dir_abs
+    for part in relative.split(os.sep):
+        if part in ("", "."):
+            continue
+        current = os.path.join(current, part)
+        if os.path.islink(current):
+            return None
+    if os.path.islink(candidate_real):
+        return None
+    return candidate_real
 #######################################################################################################################
 #
 # Functions:
@@ -348,10 +381,10 @@ def create_postgres_backup(
     user = config.pg_user or "postgres"
     password = config.pg_password or None
 
-    # Normalize and validate backup directory
-    backup_dir_abs = os.path.abspath(backup_dir)
-    backup_dir_real = os.path.realpath(backup_dir_abs)
-    if os.path.islink(backup_dir_real):
+    # Normalize and validate backup directory, anchoring it to the backup base path
+    backup_base = get_project_relative_path("tldw_DB_Backups")
+    backup_dir_real = _safe_join(backup_base, backup_dir)
+    if not backup_dir_real:
         msg = "Invalid backup directory"
         logger.error(msg)
         return msg
