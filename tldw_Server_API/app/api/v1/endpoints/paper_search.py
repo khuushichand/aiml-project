@@ -184,18 +184,14 @@ async def paper_search_arxiv(
             start_index,
             search_params.results_per_page,
         )
-        if error_message:
-            logger.error(f"arXiv provider error: {error_message}")
-            if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
-            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
-        if papers_list is None:
-            raise HTTPException(status_code=500, detail="arXiv search failed to return paper data.")
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Unexpected arXiv search error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
+
+    if error_message:
+        _handle_provider_error(f"arXiv: {error_message}")
+    if papers_list is None:
+        raise HTTPException(status_code=500, detail="arXiv search failed to return paper data.")
 
     total_pages = math.ceil(total_results_from_api / search_params.results_per_page) if search_params.results_per_page > 0 else 0
     if total_results_from_api == 0:
@@ -2181,12 +2177,12 @@ def _handle_provider_error(err: str) -> None:
     if "not configured" in low:
         raise HTTPException(
             status_code=501,
-            detail={"message": _PROVIDER_NOT_CONFIGURED_DETAIL, "provider_error": err},
+            detail=_PROVIDER_NOT_CONFIGURED_DETAIL,
         )
     if "timed out" in low:
         raise HTTPException(
             status_code=504,
-            detail={"message": _PROVIDER_TIMEOUT_DETAIL, "provider_error": err},
+            detail=_PROVIDER_TIMEOUT_DETAIL,
         )
     if "http error" in low:
         match = re.search(r'(?:http\s+)?error\s*[:\s]*(\d{3})', err, re.IGNORECASE)
@@ -2203,11 +2199,11 @@ def _handle_provider_error(err: str) -> None:
             logger.warning("Could not extract HTTP status from error message: {}", err)
         raise HTTPException(
             status_code=code,
-            detail={"message": _PROVIDER_ERROR_DETAIL, "provider_error": err},
+            detail=_PROVIDER_ERROR_DETAIL,
         )
     raise HTTPException(
         status_code=502,
-        detail={"message": _PROVIDER_ERROR_DETAIL, "provider_error": err},
+        detail=_PROVIDER_ERROR_DETAIL,
     )
 
 

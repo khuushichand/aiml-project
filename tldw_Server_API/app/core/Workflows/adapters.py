@@ -1416,7 +1416,7 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
                 user_agent=user_agent,
                 custom_headers=custom_headers,
             )
-        except Exception as e:
+        except Exception:
             logger.exception("Web scraping process media failed")
             return {"error": "process_media_error"}
         # Normalize response
@@ -1899,7 +1899,10 @@ async def run_diff_change_adapter(config: Dict[str, Any], context: Dict[str, Any
 
 
 class _async_file_writer:
-    """Minimal async file writer context manager for streaming to disk."""
+    """Minimal async file writer context manager for streaming to disk.
+
+    Uses synchronous file I/O; keep payloads small or swap to aiofiles if needed.
+    """
     def __init__(self, path: Path):
         self._path = path
         self._fp = None

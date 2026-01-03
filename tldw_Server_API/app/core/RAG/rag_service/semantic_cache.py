@@ -613,23 +613,27 @@ def _resolve_default_cache_dir() -> Optional[Path]:
         from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
         cfg = load_and_log_configs() or {}
         project_root = cfg.get("PROJECT_ROOT")
-        if project_root:
+    except Exception as exc:
+        logger.debug("Semantic cache: could not load config for PROJECT_ROOT: {}", exc)
+        return None
+    if project_root:
+        try:
             # Use a fixed subdirectory under the project root for cache storage.
             _DEFAULT_CACHE_DIR = (Path(project_root) / "Databases" / "cache").expanduser().resolve(strict=False)
             return _DEFAULT_CACHE_DIR
-    except (OSError, RuntimeError, ValueError) as exc:
-        logger.error(
-            "Semantic cache: failed to resolve base dir from PROJECT_ROOT {}: {}",
-            project_root,
-            exc,
-        )
-        return None
-    except Exception:
-        logger.exception(
-            "Semantic cache: unexpected error resolving base dir from PROJECT_ROOT {}",
-            project_root,
-        )
-        raise
+        except (OSError, RuntimeError, ValueError) as exc:
+            logger.error(
+                "Semantic cache: failed to resolve cache path from PROJECT_ROOT {}: {}",
+                project_root,
+                exc,
+            )
+            return None
+        except Exception:
+            logger.exception(
+                "Semantic cache: unexpected error resolving cache path from PROJECT_ROOT {}",
+                project_root,
+            )
+            raise
     return None
 
 

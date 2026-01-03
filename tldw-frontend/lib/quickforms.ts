@@ -242,6 +242,21 @@ export const QUICK_FORMS: QuickFormPreset[] = [
       if (!b || typeof b !== 'object') errs.push('Body must be an object');
       const messages = asArray(b?.messages);
       if (messages.length === 0) errs.push('messages must be a non-empty array');
+      for (let i = 0; i < messages.length; i++) {
+        const msg = messages[i];
+        if (!msg || typeof msg !== 'object' || Array.isArray(msg)) {
+          errs.push(`Message ${i + 1} must be an object`);
+          continue;
+        }
+        const msgObj = msg as QuickFormBody;
+        if (!msgObj.role || typeof msgObj.role !== 'string') {
+          errs.push(`Message ${i + 1} missing valid role`);
+        }
+        if (msgObj.content === undefined || msgObj.content === null) {
+          errs.push(`Message ${i + 1} missing content`);
+        }
+      }
+      if (errs.length > 0) return errs;
       const last = (messages[messages.length - 1] ?? {}) as QuickFormBody;
       if (last.role !== 'user' || !String(last.content || '').trim()) errs.push('Last message must be a non-empty user message');
       const totalLength = messages.reduce((sum: number, msg: { content?: QuickFormValue }) => sum + String(msg?.content || '').length, 0);

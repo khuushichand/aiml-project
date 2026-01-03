@@ -24,6 +24,7 @@ from tldw_Server_API.app.core.exceptions import UnsafeUserPathError
 DEFAULT_PATH = Path("Databases/Rewrite_Cache/rewrite_cache.jsonl")
 _USER_DB_BASE = Path("Databases/user_databases")
 _ALLOWED_USER_ID_CHARS = set(string.ascii_letters + string.digits + "_-")
+_ERR_MSG_PATH_TRAVERSAL = "Resolved rewrite cache path is outside user database base."
 
 
 def _is_relative_to(path: Path, base: Path) -> bool:
@@ -75,6 +76,15 @@ def _resolve_user_cache_path(user_id: str) -> Path:
     '_', or '-') or a short hash. This prevents injection of path separators or
     traversal sequences. The resulting directory layout is:
         Databases/user_databases/<safe_component>/Rewrite_Cache/rewrite_cache.jsonl
+
+    Args:
+        user_id: User identifier to create cache path for.
+
+    Returns:
+        Path: Validated cache file path.
+
+    Raises:
+        UnsafeUserPathError: If resolved path is outside user database base.
     """
     safe_component = _normalize_user_id_segment(user_id)
     # Construct path using only the sanitized single directory component.
@@ -83,7 +93,7 @@ def _resolve_user_cache_path(user_id: str) -> Path:
     base_resolved = _USER_DB_BASE.resolve(strict=False)
     cache_resolved = cache_path.resolve(strict=False)
     if not _is_relative_to(cache_resolved, base_resolved):
-        raise UnsafeUserPathError("Resolved rewrite cache path is outside user database base.")
+        raise UnsafeUserPathError(_ERR_MSG_PATH_TRAVERSAL)
     return cache_path
 
 
@@ -96,7 +106,11 @@ def _safe_path() -> Path:
             p = DEFAULT_PATH
         p.parent.mkdir(parents=True, exist_ok=True)
         return p
+    except (OSError, RuntimeError, ValueError) as exc:
+        logger.error("Rewrite cache: failed to resolve cache path; using default: {}", exc)
+        return DEFAULT_PATH
     except Exception:
+        logger.exception("Rewrite cache: unexpected error resolving cache path; using default")
         return DEFAULT_PATH
 
 
@@ -115,7 +129,11 @@ def _normalize_query(q: str) -> str:
                     out.append(" ")
                     prev_space = True
         return "".join(out).strip()
+    except (AttributeError, TypeError, ValueError) as exc:
+        logger.warning("Rewrite cache: failed to normalize query; returning fallback: {}", exc)
+        return q or ""
     except Exception:
+        logger.exception("Rewrite cache: unexpected error normalizing query")
         return q or ""
 
 

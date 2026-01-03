@@ -1,4 +1,4 @@
-from fastapi import HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from loguru import logger
 from typing import Optional
@@ -122,8 +122,8 @@ class InvalidTemplatePathError(TemplateValidationError):
 class InvalidSecretRedactionParametersError(ValueError):
     """Raised when secret redaction parameters are invalid."""
 
-    def __init__(self):
-        super().__init__("head and tail must be non-negative")
+    def __init__(self, message: str = "head and tail must be non-negative"):
+        super().__init__(message)
 
 
 class ResourceNotFoundError(Exception):
@@ -161,7 +161,10 @@ class AdapterError(WorkflowAdapterError):
     """Workflow adapter-specific error."""
 
 
-async def video_processing_exception_handler(request: Request, exc: VideoProcessingError):
+async def video_processing_exception_handler(
+    _request: Request,
+    exc: VideoProcessingError,
+) -> JSONResponse:
     logger.error("Video processing failed: {}", exc)
     return JSONResponse(
         status_code=500,
@@ -169,5 +172,5 @@ async def video_processing_exception_handler(request: Request, exc: VideoProcess
     )
 
 
-def setup_exception_handlers(app):
+def setup_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(VideoProcessingError, video_processing_exception_handler)
