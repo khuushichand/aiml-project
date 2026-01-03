@@ -28,7 +28,7 @@ export async function validateWithAjv(data: unknown, schema?: JsonSchema): Promi
       if (typeof console !== 'undefined') {
         console.warn('[validateWithAjv] AJV unavailable – schema validation skipped');
       }
-      return [];
+      throw new Error('AJV unavailable: missing default export');
     }
     const ajv = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false });
     const validate = ajv.compile(schema);
@@ -36,11 +36,12 @@ export async function validateWithAjv(data: unknown, schema?: JsonSchema): Promi
     if (ok) return [];
     const errs = (validate.errors || []).map((e: AjvError) => `${e.instancePath || e.schemaPath || ''}: ${e.message ?? 'invalid'}`);
     return errs;
-  } catch {
-    // ajv not installed or failed, return no errors to avoid blocking
+  } catch (err) {
+    // ajv not installed or failed to initialize; surface to caller
     if (typeof console !== 'undefined') {
       console.warn('[validateWithAjv] AJV unavailable – schema validation skipped');
     }
-    return [];
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`AJV unavailable: ${message}`);
   }
 }

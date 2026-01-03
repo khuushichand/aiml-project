@@ -145,12 +145,17 @@ class RewriteCache:
             if user_id:
                 try:
                     p = _resolve_user_cache_path(str(user_id))
-                    p.parent.mkdir(parents=True, exist_ok=True)
-                    self.path = str(p)
                 except Exception as e:
                     hashed_user_id = _hash_user_id(str(user_id))
                     logger.warning(f"Failed to resolve user cache path for user_id={hashed_user_id}: {e}")
                     self.path = str(_safe_path())
+                else:
+                    try:
+                        p.parent.mkdir(parents=True, exist_ok=True)
+                    except Exception as e:
+                        hashed_user_id = _hash_user_id(str(user_id))
+                        logger.warning(f"Failed to create user cache directory for user_id={hashed_user_id}: {e}")
+                    self.path = str(p)
             else:
                 self.path = str(_safe_path())
         else:

@@ -182,7 +182,7 @@ def _unsafe_file_access_allowed(config: Dict[str, Any] | None) -> bool:  # noqa:
     return str(os.getenv("WORKFLOWS_ALLOW_UNSAFE_FILE_ACCESS", "")).lower() in {"1", "true", "yes", "on"}
 
 
-def _workflow_file_base_dir(context: Dict[str, Any], config: Dict[str, Any] | None) -> Path:
+def _workflow_file_base_dir(context: Dict[str, Any], config: Dict[str, Any] | None) -> Path:  # noqa: ARG001
     """
     Resolve the base directory for workflow file access.
 

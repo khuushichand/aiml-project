@@ -6,7 +6,7 @@ const SESSION_PREFIX = 'sess_';
 function normalizeSessionId(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
-  if (!trimmed || trimmed.length > 128 || !SESSION_ID_PATTERN.test(trimmed)) return null;
+  if (!trimmed || !SESSION_ID_PATTERN.test(trimmed)) return null;
   return trimmed;
 }
 

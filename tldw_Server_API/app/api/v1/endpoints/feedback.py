@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import time
+import asyncio
 from dataclasses import dataclass
-from threading import Lock
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -26,7 +26,7 @@ router = APIRouter()
 # Pending entries reduce duplicate submissions within a single worker.
 _IDEMPOTENCY_WINDOW_SECONDS = 300
 _IDEMPOTENCY_CLEANUP_INTERVAL_SECONDS = 60
-_idempotency_lock = Lock()
+_idempotency_lock = asyncio.Lock()
 _idempotency_store: dict[str, "_IdempotencyRecord"] = {}
 _idempotency_last_cleanup = 0.0
 
@@ -78,9 +78,9 @@ def _cleanup_idempotency_store(now: float) -> None:
     _idempotency_last_cleanup = now
 
 
-def _get_idempotency_record(key: str) -> Optional[_IdempotencyRecord]:
+async def _get_idempotency_record(key: str) -> Optional[_IdempotencyRecord]:
     now = time.monotonic()
-    with _idempotency_lock:
+    async with _idempotency_lock:
         _cleanup_idempotency_store(now)
         record = _idempotency_store.get(key)
         if not record:
@@ -91,13 +91,13 @@ def _get_idempotency_record(key: str) -> Optional[_IdempotencyRecord]:
         return record
 
 
-def _reserve_idempotency_record(
+async def _reserve_idempotency_record(
     key: str,
     issues: List[str],
     user_notes: Optional[str],
 ) -> tuple[bool, _IdempotencyRecord]:
     now = time.monotonic()
-    with _idempotency_lock:
+    async with _idempotency_lock:
         _cleanup_idempotency_store(now)
         record = _idempotency_store.get(key)
         if record:
@@ -116,13 +116,13 @@ def _reserve_idempotency_record(
         return True, record
 
 
-def _finalize_idempotency_record(
+async def _finalize_idempotency_record(
     key: str,
     feedback_id: Optional[str],
     issues: List[str],
     user_notes: Optional[str],
 ) -> None:
-    with _idempotency_lock:
+    async with _idempotency_lock:
         record = _idempotency_store.get(key)
         if not record:
             return
@@ -132,13 +132,13 @@ def _finalize_idempotency_record(
         record.pending = False
 
 
-def _clear_idempotency_record(key: str) -> None:
-    with _idempotency_lock:
+async def _clear_idempotency_record(key: str) -> None:
+    async with _idempotency_lock:
         _idempotency_store.pop(key, None)
 
 
-def _update_idempotency_record(key: str, issues: List[str], user_notes: Optional[str]) -> None:
-    with _idempotency_lock:
+async def _update_idempotency_record(key: str, issues: List[str], user_notes: Optional[str]) -> None:
+    async with _idempotency_lock:
         record = _idempotency_store.get(key)
         if not record:
             return
@@ -162,11 +162,17 @@ def _build_dedupe_key(
             f"chat:{user_key}:{conversation_id or ''}:{request.message_id}:"
             f"{request.feedback_type}:{request.helpful}:{request.relevance_score}"
         )
+    normalized_query = str(query or "")
+    if normalized_query.strip() == "":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="query is required when message_id is not provided",
+        )
     doc_key = ",".join(sorted(document_ids)) if document_ids else ""
     chunk_key = ",".join(sorted(chunk_ids)) if chunk_ids else ""
     corpus = request.corpus or ""
     return (
-        f"rag:{user_key}:{query}:{request.feedback_type}:"
+        f"rag:{user_key}:{normalized_query}:{request.feedback_type}:"
         f"{request.helpful}:{request.relevance_score}:{doc_key}:{chunk_key}:{corpus}"
     )
 
@@ -176,12 +182,8 @@ def _ensure_conversation_owner(conversation: dict, current_user: User) -> None:
     user_id = current_user.id
     if conv_client_id is None or user_id is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
-    try:
-        if int(conv_client_id) != int(user_id):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
-    except (TypeError, ValueError):
-        if str(conv_client_id) != str(user_id):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation") from None
+    if str(conv_client_id) != str(user_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
 
 
 @router.post(
@@ -202,6 +204,12 @@ async def submit_explicit_feedback(
         message = db.get_message_by_id(payload.message_id)
         if not message or message.get("deleted"):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+        message_owner = message.get("user_id") or message.get("owner_id") or message.get("client_id")
+        if message_owner is not None and str(message_owner) != str(current_user.id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not allowed to submit feedback for this message",
+            )
         if not resolved_conversation_id:
             resolved_conversation_id = message.get("conversation_id")
         if resolved_conversation_id != message.get("conversation_id"):
@@ -237,7 +245,7 @@ async def submit_explicit_feedback(
         chunk_ids=chunk_ids,
     )
 
-    reserved, existing = _reserve_idempotency_record(dedupe_key, issues, payload.user_notes)
+    reserved, existing = await _reserve_idempotency_record(dedupe_key, issues, payload.user_notes)
     if not reserved:
         if issues or payload.user_notes is not None:
             merged_issues = _merge_issues(existing.issues, issues)
@@ -245,12 +253,15 @@ async def submit_explicit_feedback(
             if existing.feedback_id and not existing.pending:
                 collector = UnifiedFeedbackSystem(chacha_db=db)
                 if collector.user_feedback:
-                    await collector.user_feedback.merge_feedback_update(
-                        existing.feedback_id,
-                        issues=merged_issues or None,
-                        user_notes=updated_notes,
-                    )
-            _update_idempotency_record(dedupe_key, merged_issues, updated_notes)
+                    try:
+                        await collector.user_feedback.merge_feedback_update(
+                            existing.feedback_id,
+                            issues=merged_issues or None,
+                            user_notes=updated_notes,
+                        )
+                    except Exception as e:
+                        logger.warning("Failed to merge feedback update: {}", e)
+            await _update_idempotency_record(dedupe_key, merged_issues, updated_notes)
         return ExplicitFeedbackResponse(ok=True, feedback_id=existing.feedback_id)
 
     collector = UnifiedFeedbackSystem(chacha_db=db)
@@ -268,7 +279,7 @@ async def submit_explicit_feedback(
             message_id=payload.message_id,
         )
     except Exception:  # clear pending idempotency slot on any failure
-        _clear_idempotency_record(dedupe_key)
+        await _clear_idempotency_record(dedupe_key)
         raise
 
     if result.get("errors"):
@@ -276,13 +287,12 @@ async def submit_explicit_feedback(
 
     feedback_id = result.get("feedback_id")
     if resolved_conversation_id and not feedback_id:
-        _clear_idempotency_record(dedupe_key)
+        await _clear_idempotency_record(dedupe_key)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Could not record feedback")
 
-    finalized = _get_idempotency_record(dedupe_key)
-    final_issues = finalized.issues if finalized else issues
-    final_notes = finalized.user_notes if finalized else payload.user_notes
-    _finalize_idempotency_record(dedupe_key, feedback_id, final_issues, final_notes)
+    final_issues = existing.issues if existing else issues
+    final_notes = existing.user_notes if existing else payload.user_notes
+    await _finalize_idempotency_record(dedupe_key, feedback_id, final_issues, final_notes)
     if (
         feedback_id
         and collector.user_feedback

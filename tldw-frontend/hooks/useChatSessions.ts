@@ -41,8 +41,9 @@ export function useChatSessions() {
     setSessions((prev) => {
       const ids = new Set(prev.map((p) => p.id));
       const merged = [...prev, ...incoming.filter((m) => !ids.has(m.id))];
-      persistSessions(merged);
-      return merged;
+      const trimmed = merged.length > MAX_SESSIONS ? merged.slice(-MAX_SESSIONS) : merged;
+      persistSessions(trimmed);
+      return trimmed;
     });
   }, [persistSessions]);
 

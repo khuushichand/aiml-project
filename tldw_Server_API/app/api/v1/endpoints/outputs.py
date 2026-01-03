@@ -72,7 +72,7 @@ def _resolve_output_path_for_user(user_id: int, path_value: str | PathlibPath) -
         raise HTTPException(status_code=400, detail="invalid_path")
 
     # Enforce a conservative filename pattern (alphanumeric, underscore, dash, dot).
-    if not re.match(r"^[A-Za-z0-9_.-]+$", candidate_name):
+    if not re.match(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$", candidate_name):
         logger.warning(f"outputs: invalid characters in output filename: {candidate_name!r}")
         raise HTTPException(status_code=400, detail="invalid_path")
 
@@ -106,14 +106,14 @@ def _normalize_output_storage_path_for_user(
             update_output_artifact_db(
                 cdb=cdb,
                 output_id=output_id,
-                user_id=str(user_id),
                 new_title=None,
                 new_path=normalized,
                 new_format=None,
                 retention_until=None,
             )
         except Exception as exc:
-            logger.warning(f"outputs: failed to normalize storage_path for {output_id}: {exc}")
+            logger.error(f"outputs: failed to normalize storage_path for {output_id}: {exc}")
+            raise HTTPException(status_code=500, detail="db_update_failed") from exc
     return normalized
 
 
@@ -522,6 +522,7 @@ async def delete_output(
 
 def _sanitize_title_for_filename(title: str) -> str:
     s = re.sub(r"[^A-Za-z0-9_.-]+", "_", title.strip())
+    s = re.sub(r"\.+", ".", s).strip(".")
     return s[:80] or "output"
 
 
@@ -614,7 +615,6 @@ async def update_output(
         final = update_output_artifact_db(
             cdb=cdb,
             output_id=output_id,
-            user_id=row.user_id,
             new_title=new_title,
             new_path=new_path,
             new_format=new_format,

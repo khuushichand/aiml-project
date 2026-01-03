@@ -13,7 +13,7 @@ export function toBool(val: unknown, fallback = false): boolean {
 }
 
 /** Normalize a possibly singular-or-array value into a lowercase string array. */
-function normalizeStringArray(input: unknown): string[] {
+export function normalizeStringArray(input: unknown): string[] {
   const arr = Array.isArray(input) ? input : (input != null ? [input] : []);
   return arr
     .map((v) => (v != null ? String(v) : ''))

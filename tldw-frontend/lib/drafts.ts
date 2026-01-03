@@ -142,6 +142,9 @@ export async function persistDraftFileAsset({
   };
 }
 
+/**
+ * Draft writes are critical; throw when local storage is unavailable so callers can surface failures.
+ */
 export async function persistDraft(draft: Draft): Promise<void> {
   const db = getDb();
   if (!db) {
@@ -242,6 +245,7 @@ export async function resolveDraftFileAssetStatus(
 
   if (asset.fileHandle) {
     try {
+      // Probe to verify handle is still accessible.
       await asset.fileHandle.getFile();
       return {
         assetStatus: 'present',
@@ -304,6 +308,7 @@ export async function requestFileHandleForFile(
     }
     return handle;
   } catch {
+    // User cancelled or picker failed; return null to signal no handle obtained.
     return null;
   }
 }

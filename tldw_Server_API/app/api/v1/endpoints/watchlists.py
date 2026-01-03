@@ -77,6 +77,7 @@ from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (
     ScrapedItem, ScrapedItemsListResponse, ScrapedItemUpdateRequest,
     WatchlistOutput, WatchlistOutputCreateRequest, WatchlistOutputsListResponse,
     WatchlistTemplateCreateRequest, WatchlistTemplateDetail, WatchlistTemplateListResponse, WatchlistTemplateSummary,
+    WatchlistTemplateValidationErrorResponse,
     WatchlistFiltersPayload, WatchlistFilter, SourcesImportResponse, SourcesImportItem,
 )
 
@@ -978,7 +979,7 @@ async def bulk_create_sources(
                     )
                     errors_count += 1
                     continue
-        except Exception as e:
+        except Exception:
             items.append(
                 SourcesBulkCreateItem(
                     name=s.name,
@@ -2431,7 +2432,12 @@ async def get_template(
     )
 
 
-@router.post("/templates", response_model=WatchlistTemplateDetail, summary="Create or update a template")
+@router.post(
+    "/templates",
+    response_model=WatchlistTemplateDetail,
+    summary="Create or update a template",
+    responses={400: {"model": WatchlistTemplateValidationErrorResponse}},
+)
 async def create_template(
     payload: WatchlistTemplateCreateRequest,
     current_user: User = Depends(get_request_user),
@@ -2445,7 +2451,10 @@ async def create_template(
             overwrite=payload.overwrite,
         )
     except TemplateValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "template_validation_error", "message": str(exc)},
+        )
     except template_store.TemplateExistsError:
         raise HTTPException(status_code=409, detail="template_exists")
     return WatchlistTemplateDetail(

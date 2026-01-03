@@ -4,6 +4,7 @@ import re
 import uuid
 from typing import Callable
 
+from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
@@ -23,32 +24,26 @@ def _generate_session_id() -> str:
     return f"{SESSION_ID_PREFIX}{uuid.uuid4().hex}"
 
 
-def _clean_request_id(value: str | None) -> str:
+def _clean_id(value: str | None, generator: Callable[[], str]) -> str:
     if not value:
-        return _generate_request_id()
+        return generator()
 
     candidate = value.strip()
     if not candidate:
-        return _generate_request_id()
+        return generator()
 
     if len(candidate) > MAX_REQUEST_ID_LENGTH or not SAFE_REQUEST_ID_PATTERN.fullmatch(candidate):
-        return _generate_request_id()
+        return generator()
 
     return candidate
+
+
+def _clean_request_id(value: str | None) -> str:
+    return _clean_id(value, _generate_request_id)
 
 
 def _clean_session_id(value: str | None) -> str:
-    if not value:
-        return _generate_session_id()
-
-    candidate = value.strip()
-    if not candidate:
-        return _generate_session_id()
-
-    if len(candidate) > MAX_REQUEST_ID_LENGTH or not SAFE_REQUEST_ID_PATTERN.fullmatch(candidate):
-        return _generate_session_id()
-
-    return candidate
+    return _clean_id(value, _generate_session_id)
 
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
@@ -75,8 +70,13 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
             tm = get_tracing_manager()
             tm.set_baggage("request_id", request_id)
             tm.set_baggage("session_id", session_id)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception(
+                "Failed to set tracing baggage for request_id={} session_id={}: {}",
+                request_id,
+                session_id,
+                e,
+            )
 
         response: Response = await call_next(request)
         response.headers.setdefault(self.header_name, request_id)

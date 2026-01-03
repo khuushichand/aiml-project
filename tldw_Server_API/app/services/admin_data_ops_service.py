@@ -157,7 +157,8 @@ def list_backup_items(
 
 
 def _resolve_dataset_db_path(dataset: str, user_id: Optional[int]) -> Tuple[str, Optional[int]]:
-    if dataset == "authnz":
+    dataset_name = _validate_backup_dataset(dataset)
+    if dataset_name == "authnz":
         settings = get_settings()
         url = settings.DATABASE_URL
         parsed = urlparse(url)
@@ -170,9 +171,7 @@ def _resolve_dataset_db_path(dataset: str, user_id: Optional[int]) -> Tuple[str,
             return fs_path, None
         return url, None
 
-    resolver = DATASET_DB_RESOLVERS.get(dataset)
-    if not resolver:
-        raise UnknownBackupDatasetError("unknown_dataset")
+    resolver = DATASET_DB_RESOLVERS.get(dataset_name)
     effective_user_id = user_id if user_id is not None else DatabasePaths.get_single_user_id()
     return str(resolver(effective_user_id)), effective_user_id
 

@@ -1,3 +1,4 @@
+import { useEffect, useId, useRef, type KeyboardEvent } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/Button';
 
@@ -20,6 +21,22 @@ type FeedbackModalProps = {
   onNotesChange: (notes: string) => void;
 };
 
+const getFocusableElements = (container: HTMLElement | null): HTMLElement[] => {
+  if (!container) return [];
+  const selectors = [
+    'button:not([disabled])',
+    '[href]',
+    'input:not([disabled])',
+    'select:not([disabled])',
+    'textarea:not([disabled])',
+    '[tabindex]:not([tabindex="-1"])',
+  ];
+  return Array.from(container.querySelectorAll<HTMLElement>(selectors.join(',')))
+    .filter((el) => !el.hasAttribute('disabled'))
+    .filter((el) => el.getAttribute('aria-hidden') !== 'true')
+    .filter((el) => el.offsetParent !== null);
+};
+
 export function FeedbackModal({
   open,
   rating,
@@ -33,6 +50,42 @@ export function FeedbackModal({
   onIssuesChange,
   onNotesChange,
 }: FeedbackModalProps) {
+  const titleId = useId();
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    previousFocusRef.current = document.activeElement as HTMLElement | null;
+
+    const focusDialog = () => {
+      const focusable = getFocusableElements(dialogRef.current);
+      if (focusable.length > 0) {
+        focusable[0].focus();
+        return;
+      }
+      dialogRef.current?.focus();
+    };
+
+    const supportsRaf = typeof window.requestAnimationFrame === 'function';
+    const schedule = supportsRaf
+      ? window.requestAnimationFrame
+      : (cb: () => void) => window.setTimeout(cb, 0);
+    const cancelSchedule = supportsRaf
+      ? window.cancelAnimationFrame
+      : window.clearTimeout;
+    const scheduleId = schedule(focusDialog);
+
+    return () => {
+      cancelSchedule(scheduleId);
+      const previous = previousFocusRef.current;
+      if (previous && document.contains(previous)) {
+        previous.focus();
+      }
+      previousFocusRef.current = null;
+    };
+  }, [open]);
+
   if (!open) return null;
 
   const toggleIssue = (issueId: string) => {
@@ -43,16 +96,53 @@ export function FeedbackModal({
     );
   };
 
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.stopPropagation();
+      onClose();
+      return;
+    }
+    if (event.key !== 'Tab') {
+      return;
+    }
+    const dialogEl = dialogRef.current;
+    const focusable = getFocusableElements(dialogEl);
+    if (!dialogEl || focusable.length === 0) {
+      event.preventDefault();
+      dialogEl?.focus();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement as HTMLElement | null;
+    if (active && !dialogEl.contains(active)) {
+      event.preventDefault();
+      first.focus();
+      return;
+    }
+    if (event.shiftKey && active === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} aria-hidden="true" />
       <div
-        className="w-full max-w-lg rounded-lg bg-white p-4 shadow-xl"
-        onClick={(event) => event.stopPropagation()}
+        className="relative z-10 w-full max-w-lg rounded-lg bg-white p-4 shadow-xl"
         role="dialog"
         aria-modal="true"
+        aria-labelledby={titleId}
+        ref={dialogRef}
+        tabIndex={-1}
+        onKeyDown={handleKeyDown}
       >
         <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-lg font-semibold text-gray-900">Feedback</h3>
+          <h3 id={titleId} className="text-lg font-semibold text-gray-900">Feedback</h3>
           <button
             type="button"
             className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-100"

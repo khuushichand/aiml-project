@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Dict, List, Optional
 
 from loguru import logger
@@ -17,14 +16,11 @@ def normalize_output_storage_path(user_id: int, storage_path: str) -> str:
     if not storage_path:
         raise InvalidStoragePathError("invalid_path")
 
-    base_resolved: Path | None = None
-    candidate = Path(storage_path).expanduser()
-    if candidate.is_absolute():
-        try:
-            base_dir = DatabasePaths.get_user_base_directory(user_id) / "outputs"
-            base_resolved = base_dir.resolve(strict=False)
-        except Exception as exc:
-            raise InvalidStoragePathError("invalid_path") from exc
+    try:
+        base_dir = DatabasePaths.get_user_base_directory(user_id) / "outputs"
+        base_resolved = base_dir.resolve(strict=False)
+    except Exception as exc:
+        raise InvalidStoragePathError("invalid_path") from exc
 
     return normalize_output_storage_filename(
         storage_path=storage_path,
@@ -32,13 +28,14 @@ def normalize_output_storage_path(user_id: int, storage_path: str) -> str:
         reject_relative_with_separators=True,
         expand_user=True,
         base_resolved=base_resolved,
+        check_relative_containment=True,
         require_parent_base=True,
     )
+
 
 def update_output_artifact_db(
     cdb,
     output_id: int,
-    user_id: int,
     new_title: Optional[str],
     new_path: Optional[str],
     new_format: Optional[str],
@@ -64,7 +61,7 @@ def update_output_artifact_db(
         sets.append("retention_until = ?")
         params.append(retention_until)
     if sets:
-        params.extend([output_id, user_id])
+        params.extend([output_id, cdb.user_id])
         q = f"UPDATE outputs SET {', '.join(sets)} WHERE id = ? AND user_id = ? AND deleted = 0"
         try:
             cdb.backend.execute(q, tuple(params))

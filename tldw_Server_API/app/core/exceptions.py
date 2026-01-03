@@ -118,6 +118,13 @@ class InvalidTemplatePathError(TemplateValidationError):
     """Raised when a template path escapes the allowed base directory."""
 
 
+class InvalidSecretRedactionParametersError(ValueError):
+    """Raised when secret redaction parameters are invalid."""
+
+    def __init__(self):
+        super().__init__("head and tail must be non-negative")
+
+
 class ResourceNotFoundError(Exception):
     """Generic resource-not-found error for domain-level lookups."""
 

@@ -2,6 +2,8 @@ import type { ChatMessage } from '@/components/ui/ChatMessageList';
 
 export type Role = 'user' | 'assistant' | 'system' | 'tool';
 
+const VALID_ROLES: Role[] = ['user', 'assistant', 'system', 'tool'];
+
 export type UiMessage = {
   messageId?: string;
   role: Role;
@@ -31,7 +33,12 @@ type ApiPayloadMessage = {
 
 export const mapHistoryMessagesToUi = (messages: ApiHistoryMessage[]): UiMessage[] =>
   messages.map((m) => {
-    const role = (m.role || 'assistant') as Role;
+    const rawRole = m.role || 'assistant';
+    const isValidRole = VALID_ROLES.includes(rawRole as Role);
+    const role = (isValidRole ? rawRole : 'assistant') as Role;
+    if (!isValidRole && process.env.NODE_ENV === 'development') {
+      console.warn(`Unknown message role: ${rawRole}, defaulting to assistant`);
+    }
     const messageId = m.message_id || m.id;
     const name = typeof m.name === 'string' ? m.name : undefined;
     if (role === 'tool') {

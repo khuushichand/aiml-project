@@ -355,6 +355,15 @@ class WatchlistTemplateCreateRequest(BaseModel):
     overwrite: bool = Field(False, description="If false, creation fails when template already exists")
 
 
+class WatchlistTemplateValidationErrorDetail(BaseModel):
+    error: Literal["template_validation_error"] = "template_validation_error"
+    message: str = Field(..., description="Validation error message")
+
+
+class WatchlistTemplateValidationErrorResponse(BaseModel):
+    detail: WatchlistTemplateValidationErrorDetail
+
+
 # --------------------
 # OPML Import/Export
 # --------------------

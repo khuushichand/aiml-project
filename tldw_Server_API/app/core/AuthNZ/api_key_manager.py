@@ -371,6 +371,50 @@ class APIKeyManager:
                 hashes.append(digest)
         return hashes
 
+    async def _verify_new_format_key(
+        self,
+        api_key: str,
+        key_identifier: str,
+        repo: "AuthnzApiKeysRepo",
+    ) -> Optional[tuple[Dict[str, Any], Optional[str]]]:
+        """Verify new-format key with embedded key_id."""
+        result = await repo.fetch_active_by_key_id(key_identifier)
+        if not result:
+            return None
+
+        key_info = dict(result)
+        stored_hash = key_info.get("key_hash")
+        if not stored_hash:
+            return None
+
+        if is_kdf_hash(stored_hash):
+            if not verify_kdf_hash(api_key, stored_hash):
+                return None
+            return key_info, None
+
+        hash_candidates = self.hash_candidates(api_key)
+        if not hash_candidates:
+            return None
+        if not any(hmac.compare_digest(stored_hash, cand) for cand in hash_candidates):
+            return None
+        return key_info, hash_candidates[0]
+
+    async def _verify_legacy_key(
+        self,
+        api_key: str,
+        repo: "AuthnzApiKeysRepo",
+    ) -> Optional[tuple[Dict[str, Any], Optional[str]]]:
+        """Verify legacy key without embedded key_id."""
+        hash_candidates = self.hash_candidates(api_key)
+        if not hash_candidates:
+            return None
+
+        result = await repo.fetch_active_by_hash_candidates(hash_candidates)
+        if not result:
+            return None
+
+        return dict(result), hash_candidates[0]
+
     async def create_api_key(
         self,
         user_id: int,
@@ -564,42 +608,19 @@ class APIKeyManager:
         try:
             repo = self._get_repo()
             key_id_info = parse_api_key(api_key)
-            hash_candidates: List[str] = []
             primary_hash: Optional[str] = None
 
             if key_id_info:
                 key_identifier, _secret = key_id_info
-                result = await repo.fetch_active_by_key_id(key_identifier)
-                if not result:
-                    return None
-
-                key_info = dict(result)
-                stored_hash = key_info.get("key_hash")
-                if not stored_hash:
-                    return None
-
-                if is_kdf_hash(stored_hash):
-                    if not verify_kdf_hash(api_key, stored_hash):
-                        return None
-                else:
-                    hash_candidates = self.hash_candidates(api_key)
-                    if not hash_candidates:
-                        return None
-                    primary_hash = hash_candidates[0]
-                    if not any(hmac.compare_digest(stored_hash, cand) for cand in hash_candidates):
-                        return None
+                verification = await self._verify_new_format_key(api_key, key_identifier, repo)
             else:
-                hash_candidates = self.hash_candidates(api_key)
-                if not hash_candidates:
-                    return None
+                verification = await self._verify_legacy_key(api_key, repo)
 
-                result = await repo.fetch_active_by_hash_candidates(hash_candidates)
-                if not result:
-                    return None
+            if not verification:
+                return None
 
-                key_info = dict(result)
-                stored_hash = key_info.get("key_hash")
-                primary_hash = hash_candidates[0]
+            key_info, primary_hash = verification
+            stored_hash = key_info.get("key_hash")
 
             # Check expiration
             expires_at_raw = key_info.get("expires_at")

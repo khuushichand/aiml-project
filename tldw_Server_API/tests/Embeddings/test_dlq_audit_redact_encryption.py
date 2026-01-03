@@ -129,6 +129,11 @@ def test_dlq_requeue_audited(disable_heavy_startup, admin_user, redis_client, mo
 
 
 def _aesgcm_available() -> bool:
+    """Check if AESGCM cryptography support is available at runtime.
+
+    Returns:
+        bool: True if AESGCM can be imported, False otherwise.
+    """
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         _ = AESGCM

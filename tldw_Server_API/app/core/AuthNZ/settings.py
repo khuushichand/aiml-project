@@ -23,6 +23,30 @@ except Exception:
 
 SECURE_KEY_INIT_COMMAND = "python -m tldw_Server_API.app.core.AuthNZ.initialize"
 SECURE_KEY_GUIDANCE = f"Generate a secure key via:\n  {SECURE_KEY_INIT_COMMAND}"
+SINGLE_USER_KEY_MISSING = (
+    "SINGLE_USER_API_KEY is required for single-user mode but is not configured.\n"
+    f"{SECURE_KEY_GUIDANCE}\n"
+    "and follow the prompts (option \"Generate secure keys\").\n"
+    "Then set SINGLE_USER_API_KEY in your environment or .env file."
+)
+SINGLE_USER_KEY_DEFAULT = (
+    "Default API key detected! Please set SINGLE_USER_API_KEY via environment or .env.\n"
+    f"{SECURE_KEY_GUIDANCE}"
+)
+SINGLE_USER_KEY_TOO_SHORT = (
+    "SINGLE_USER_API_KEY must be at least 16 characters.\n"
+    f"{SECURE_KEY_GUIDANCE}"
+)
+SINGLE_USER_KEY_PRODUCTION_FORMAT = (
+    "In production (tldw_production=true), SINGLE_USER_API_KEY must use the "
+    "server-generated format (tldw_<kid>.<secret>). "
+    f"{SECURE_KEY_GUIDANCE}\n"
+    "or set TLDW_ALLOW_LEGACY_SINGLE_USER_KEY=true to temporarily bypass."
+)
+SINGLE_USER_KEY_PRODUCTION_WEAK = (
+    "In production (tldw_production=true), SINGLE_USER_API_KEY must be set to a secure value (>=24 chars) "
+    f"and must not use defaults.\n{SECURE_KEY_GUIDANCE}"
+)
 
 #######################################################################################################################
 #
@@ -680,12 +704,7 @@ class Settings(BaseSettings):
                     self.SINGLE_USER_API_KEY = test_key
                     logger.debug("Using SINGLE_USER_TEST_API_KEY for deterministic test context")
                 else:
-                    raise ValueError(
-                        "SINGLE_USER_API_KEY is required for single-user mode but is not configured.\n"
-                        f"{SECURE_KEY_GUIDANCE}\n"
-                        "and follow the prompts (option \"Generate secure keys\").\n"
-                        "Then set SINGLE_USER_API_KEY in your environment or .env file."
-                    )
+                    raise ValueError(SINGLE_USER_KEY_MISSING)
             # In test contexts, normalize known placeholder keys to a deterministic test key
             elif in_test_context and (
                 self.SINGLE_USER_API_KEY in {"CHANGE_ME_TO_SECURE_API_KEY", "default-secret-key-for-single-user", "change-me-in-production"}
@@ -695,18 +714,12 @@ class Settings(BaseSettings):
                     self.SINGLE_USER_API_KEY = test_key
                     logger.debug("Normalized SINGLE_USER_API_KEY to SINGLE_USER_TEST_API_KEY for pytest context")
             elif self.SINGLE_USER_API_KEY == "change-me-in-production":
-                raise ValueError(
-                    "Default API key detected! Please set SINGLE_USER_API_KEY via environment or .env.\n"
-                    f"{SECURE_KEY_GUIDANCE}"
-                )
+                raise ValueError(SINGLE_USER_KEY_DEFAULT)
             elif len(self.SINGLE_USER_API_KEY) < 16:
                 # Allow short keys in explicit test contexts to avoid brittle fixtures
                 if in_test_context:
                     return
-                raise ValueError(
-                    "SINGLE_USER_API_KEY must be at least 16 characters.\n"
-                    f"{SECURE_KEY_GUIDANCE}"
-                )
+                raise ValueError(SINGLE_USER_KEY_TOO_SHORT)
 
             # Hard fail in production if key is missing/weak/default
             prod_flag = os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
@@ -722,12 +735,7 @@ class Settings(BaseSettings):
 
                 if not is_new_format and not allow_legacy:
                     if prod_flag:
-                        raise ValueError(
-                            "In production (tldw_production=true), SINGLE_USER_API_KEY must use the "
-                            "server-generated format (tldw_<kid>.<secret>). "
-                            f"{SECURE_KEY_GUIDANCE}\n"
-                            "or set TLDW_ALLOW_LEGACY_SINGLE_USER_KEY=true to temporarily bypass."
-                        )
+                        raise ValueError(SINGLE_USER_KEY_PRODUCTION_FORMAT)
                     logger.warning(
                         "SINGLE_USER_API_KEY uses a legacy format; "
                         "generate a new server-generated key for improved security."
@@ -739,10 +747,7 @@ class Settings(BaseSettings):
                     or len(self.SINGLE_USER_API_KEY) < 24
                 )
                 if weak:
-                    raise ValueError(
-                        "In production (tldw_production=true), SINGLE_USER_API_KEY must be set to a secure value (>=24 chars) "
-                        f"and must not use defaults.\n{SECURE_KEY_GUIDANCE}"
-                    )
+                    raise ValueError(SINGLE_USER_KEY_PRODUCTION_WEAK)
 
     @field_validator("JWT_SECRET_KEY")
     @classmethod

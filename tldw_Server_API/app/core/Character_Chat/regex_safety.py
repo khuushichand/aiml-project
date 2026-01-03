@@ -185,8 +185,7 @@ def validate_regex_safety(pattern: str) -> Tuple[bool, str]:
             return False, f"Pattern too slow: test match took {elapsed_ms:.2f}ms"
     except regex.error as e:
         return False, f"Invalid regex: {e}"
-    except Exception as e:
-        # Catch-all to avoid unexpected exceptions from breaking validation.
+    except (re.error, TypeError, AttributeError) as e:
         logger.debug(f"Unexpected error during regex validation: {e}")
         return False, f"Regex validation error: {e}"
 
@@ -234,7 +233,6 @@ def _safe_compile_regex_impl(
     # Perform a bounded test match using the `regex` module with a real timeout
     test_input = "a" * SAFE_TEST_INPUT_SIZE
     match_start = _time_module.perf_counter()
-    safe_compiled = None
     try:
         safe_compiled = regex.compile(pattern, flags)
         safe_compiled.search(test_input, timeout=MAX_REGEX_VALIDATE_TIME_MS / 1000.0)
@@ -243,9 +241,9 @@ def _safe_compile_regex_impl(
         raise re.error(
             f"Regex pattern too slow: exceeded {MAX_REGEX_VALIDATE_TIME_MS}ms validation timeout"
         )
-    except Exception as e:
-        # Log but don't fail - we primarily care about detecting slow patterns
-        logger.debug(f"Exception during regex test match for pattern '{pattern[:50]}...': {e}")
+    except (TypeError, AttributeError, ValueError) as e:
+        logger.warning(f"Regex test failed for pattern '{pattern[:50]}...': {e}")
+        raise re.error(f"Regex safety test failed: {e}") from e
     match_elapsed_ms = (_time_module.perf_counter() - match_start) * 1000
 
     if match_elapsed_ms > timeout_ms:
@@ -254,7 +252,7 @@ def _safe_compile_regex_impl(
             f"(threshold: {timeout_ms}ms)"
         )
 
-    return safe_compiled or compiled
+    return safe_compiled
 
 
 def safe_compile_regex(

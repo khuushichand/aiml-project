@@ -48,6 +48,7 @@ def _generate_uuid() -> str:
 
 
 def _normalize_user_id_for_records(user_id: str) -> str:
+    """Normalize user IDs for storage; in tests, prefix numeric IDs with test_user_."""
     raw = str(user_id).strip()
     if _is_test_context() and raw.isdigit():
         return f"test_user_{raw}"
@@ -180,7 +181,8 @@ class KanbanDB:
         Args:
             db_path: Path to the SQLite database file. Must resolve within the
                 user-scoped database directory.
-            user_id: The user ID for this database instance.
+            user_id: The user ID for this database instance. In test context,
+                purely numeric IDs are stored as test_user_<id>.
         """
         raw_user_id = str(user_id)
         self.user_id = _normalize_user_id_for_records(raw_user_id)
@@ -291,6 +293,14 @@ class KanbanDB:
         except Exception as e:
             # Ignore errors during cleanup - object is being destroyed anyway.
             logger.debug(f"KanbanDB __del__ cleanup failed: {e}")
+
+    def __enter__(self) -> "KanbanDB":
+        """Enable context-manager use for automatic cleanup."""
+        return self
+
+    def __exit__(self, exc_type, exc, exc_tb) -> None:
+        """Ensure persistent resources are released on exit."""
+        self.close()
 
     def _get_schema_sql(self) -> str:
         """Return the complete schema SQL."""

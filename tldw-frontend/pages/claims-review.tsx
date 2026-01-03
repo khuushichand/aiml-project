@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/Input';
 import { useToast } from '@/components/ui/ToastProvider';
 import { apiClient } from '@/lib/api';
 import { useAuth } from '@/hooks/useAuth';
-import { isAdmin } from '@/lib/authz';
+import { isAdmin, normalizeStringArray } from '@/lib/authz';
 
 type ClaimRow = {
   id: number;
@@ -19,14 +19,6 @@ type ClaimRow = {
 };
 
 const STATUS_OPTIONS = ['pending', 'flagged', 'reassigned', 'approved', 'rejected'];
-
-function normalizeStringArray(input: unknown): string[] {
-  const arr = Array.isArray(input) ? input : (input != null ? [input] : []);
-  return arr
-    .map((v) => (v != null ? String(v) : ''))
-    .filter((s) => s.length > 0)
-    .map((s) => s.toLowerCase());
-}
 
 export default function ClaimsReviewPage() {
   const { show } = useToast();

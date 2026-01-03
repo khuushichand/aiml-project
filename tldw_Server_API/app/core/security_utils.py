@@ -4,15 +4,18 @@ Security-related utilities for redacting secrets in logs.
 
 from __future__ import annotations
 
+from tldw_Server_API.app.core.exceptions import InvalidSecretRedactionParametersError
+
 
 def redact_secret(value: str | None, head: int = 4, tail: int = 4) -> str:
     """Redact a secret string for logs.
 
-    Returns "" for falsy input; masks short strings; keeps head/tail for long values.
-    Example: redact_secret("abcdefghij", 4, 4) -> "abcd...ghij".
+    Returns "" for falsy input; masks short strings; keeps head/tail for long values
+    while ensuring at least one-third remains redacted.
+    Example: redact_secret("abcdefghijkl", 4, 4) -> "abcd...ijkl".
     """
     if head < 0 or tail < 0:
-        raise ValueError("head and tail must be non-negative")
+        raise InvalidSecretRedactionParametersError()
     if not value:
         return ""
     text = str(value)

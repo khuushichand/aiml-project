@@ -1,10 +1,5 @@
-# tldw_Server_API/tests/kanban/conftest.py
-"""
-Pytest fixtures for Kanban database tests.
-"""
-import shutil
-import tempfile
-from typing import Generator
+"""Pytest fixtures for Kanban database tests."""
+from pathlib import Path
 
 import pytest
 
@@ -13,16 +8,12 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
 @pytest.fixture
-def temp_db_dir(monkeypatch: pytest.MonkeyPatch) -> Generator[str, None, None]:
-    """Create a temporary directory that persists for the entire test."""
-    tmpdir = tempfile.mkdtemp()
-    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
-    yield tmpdir
-    # Clean up after the test is completely done
-    try:
-        shutil.rmtree(tmpdir, ignore_errors=True)
-    except Exception:
-        pass
+def temp_db_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> str:
+    """Create a temporary base directory for Kanban database tests."""
+    base_dir = tmp_path / "user_dbs"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
+    return str(base_dir)
 
 
 @pytest.fixture
@@ -32,20 +23,17 @@ def temp_db_path(temp_db_dir: str) -> str:
 
 
 @pytest.fixture
-def kanban_db(temp_db_path: str) -> Generator[KanbanDB, None, None]:
+def kanban_db(temp_db_path: str) -> KanbanDB:
     """Create a KanbanDB instance with a temporary database."""
-    db = KanbanDB(db_path=temp_db_path, user_id="1")
-    yield db
-    # No cleanup needed - temp_db_dir fixture handles it
+    return KanbanDB(db_path=temp_db_path, user_id="1")
 
 
 @pytest.fixture
-def kanban_db_user2(temp_db_dir: str) -> Generator[KanbanDB, None, None]:
+def kanban_db_user2(_temp_db_dir: str) -> KanbanDB:
     """Create a second KanbanDB instance for testing user isolation."""
-    # temp_db_dir fixture sets USER_DB_BASE_DIR for this test.
+    # _temp_db_dir fixture sets USER_DB_BASE_DIR for this test.
     db_path = DatabasePaths.get_kanban_db_path(2)
-    db = KanbanDB(db_path=str(db_path), user_id="2")
-    yield db
+    return KanbanDB(db_path=str(db_path), user_id="2")
 
 
 @pytest.fixture

@@ -27,6 +27,18 @@ EnvVars = dict[str, str]
 
 
 def _parse_args() -> argparse.Namespace:
+    """
+    Parse command-line arguments for the migration script.
+
+    Args:
+        None
+
+    Returns:
+        argparse.Namespace: Parsed arguments including remove_from_config and force.
+
+    Raises:
+        SystemExit: If argument parsing fails or help/version is requested.
+    """
     parser = argparse.ArgumentParser(description="Migrate API keys from config.txt to .env file")
     parser.add_argument(
         "--remove-from-config",
@@ -42,6 +54,18 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _build_key_mappings() -> KeyMapping:
+    """
+    Build the mapping from config sections/keys to environment variable names.
+
+    Args:
+        None
+
+    Returns:
+        KeyMapping: Mapping of (section, key) tuples to environment variable names.
+
+    Raises:
+        None
+    """
     return {
         ("API", "openai_api_key"): "OPENAI_API_KEY",
         ("API", "anthropic_api_key"): "ANTHROPIC_API_KEY",
@@ -82,6 +106,19 @@ def _build_key_mappings() -> KeyMapping:
 
 
 def _backup_config(config_path: Path, script_dir: Path) -> Path:
+    """
+    Create a timestamped backup of config.txt in the script directory.
+
+    Args:
+        config_path (Path): Path to the source config.txt.
+        script_dir (Path): Directory where the backup will be written.
+
+    Returns:
+        Path: Path to the created backup file.
+
+    Raises:
+        SystemExit: If the backup cannot be created.
+    """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_path = script_dir / f"config.txt.backup_{timestamp}"
     try:
@@ -94,12 +131,37 @@ def _backup_config(config_path: Path, script_dir: Path) -> Path:
 
 
 def _read_config(config_path: Path) -> configparser.ConfigParser:
+    """
+    Read a config.txt file into a ConfigParser instance.
+
+    Args:
+        config_path (Path): Path to the config.txt file.
+
+    Returns:
+        configparser.ConfigParser: Loaded configuration (may be empty if file is missing).
+
+    Raises:
+        None
+    """
     config = configparser.ConfigParser()
     config.read(config_path)
     return config
 
 
 def _read_existing_env(env_path: Path, force: bool) -> EnvVars:
+    """
+    Read existing .env values when not forcing overwrites.
+
+    Args:
+        env_path (Path): Path to the .env file.
+        force (bool): Whether to overwrite existing values.
+
+    Returns:
+        EnvVars: Existing environment variables read from the file.
+
+    Raises:
+        SystemExit: If the .env file cannot be read.
+    """
     existing_env: EnvVars = {}
     if env_path.exists() and not force:
         print(f"✓ Found existing .env file at {env_path}")
@@ -123,6 +185,21 @@ def _collect_env_vars(
     existing_env: EnvVars,
     force: bool,
 ) -> tuple[EnvVars, list[FoundKey]]:
+    """
+    Collect API key values from config.txt for migration to .env.
+
+    Args:
+        config (configparser.ConfigParser): Loaded config.txt data.
+        api_key_mappings (KeyMapping): Mapping of config keys to env var names.
+        existing_env (EnvVars): Existing .env values to respect unless forced.
+        force (bool): Whether to overwrite existing .env values.
+
+    Returns:
+        tuple[EnvVars, list[FoundKey]]: New env vars to write and found key metadata.
+
+    Raises:
+        None
+    """
     env_vars: EnvVars = {}
     keys_found: list[FoundKey] = []
     for (section, key), env_name in api_key_mappings.items():
@@ -139,6 +216,19 @@ def _collect_env_vars(
 
 
 def _ensure_env_from_template(env_path: Path, env_template_path: Path) -> None:
+    """
+    Ensure a .env file exists by copying from a template if needed.
+
+    Args:
+        env_path (Path): Destination .env file path.
+        env_template_path (Path): Source .env.template file path.
+
+    Returns:
+        None
+
+    Raises:
+        SystemExit: If the template copy fails.
+    """
     if not env_path.exists() and env_template_path.exists():
         try:
             shutil.copy2(env_template_path, env_path)
@@ -150,6 +240,18 @@ def _ensure_env_from_template(env_path: Path, env_template_path: Path) -> None:
 
 
 def _read_env_lines(env_path: Path) -> list[str]:
+    """
+    Read the .env file into a list of lines for in-place updates.
+
+    Args:
+        env_path (Path): Path to the .env file.
+
+    Returns:
+        list[str]: Lines from the file, or an empty list if the file is missing.
+
+    Raises:
+        SystemExit: If the .env file cannot be read.
+    """
     if not env_path.exists():
         return []
     try:
@@ -162,6 +264,20 @@ def _read_env_lines(env_path: Path) -> list[str]:
 
 
 def _write_env_file(env_path: Path, lines: list[str], env_vars: EnvVars) -> None:
+    """
+    Write updated .env contents, replacing or appending provided variables.
+
+    Args:
+        env_path (Path): Path to the .env file to write.
+        lines (list[str]): Existing lines from the .env file.
+        env_vars (EnvVars): Environment variables to add or update.
+
+    Returns:
+        None
+
+    Raises:
+        SystemExit: If writing the .env file fails.
+    """
     try:
         with env_path.open("w", encoding="utf-8") as f:
             updated_keys = set()
@@ -192,6 +308,19 @@ def _write_env_file(env_path: Path, lines: list[str], env_vars: EnvVars) -> None
 
 
 def _remove_keys_from_config(config_path: Path, keys_found: list[FoundKey]) -> None:
+    """
+    Replace API key values in config.txt with placeholders.
+
+    Args:
+        config_path (Path): Path to the config.txt file to update.
+        keys_found (list[FoundKey]): Keys found during migration.
+
+    Returns:
+        None
+
+    Raises:
+        SystemExit: If the updated config.txt cannot be written.
+    """
     new_config = configparser.ConfigParser()
     new_config.read(config_path)
 
@@ -215,8 +344,18 @@ def main() -> None:
     """
     Migrate API keys from config.txt to a .env file with optional cleanup.
 
-    Supports incremental migration (preserving existing .env values) and
-    creates a timestamped backup of config.txt before any modifications.
+    Supports incremental migration (preserving existing .env values), creates
+    a timestamped backup of config.txt, and optionally removes keys from the
+    source config after a successful migration.
+
+    Args:
+        None
+
+    Returns:
+        None
+
+    Raises:
+        SystemExit: If required files are missing or any file operation fails.
     """
     args = _parse_args()
 

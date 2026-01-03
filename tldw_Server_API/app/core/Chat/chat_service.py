@@ -84,7 +84,11 @@ def _coerce_int(value: Optional[str], default: int) -> int:
 
 
 def _should_include_message_in_llm_payload(role: Optional[str]) -> bool:
-    """Return True when a message role should be included in the LLM payload."""
+    """Return True when a message role is present and non-empty.
+
+    This mirrors should_persist_message_role and does not enforce
+    allowlist/denylist semantics.
+    """
     return should_persist_message_role(role)
 
 
@@ -780,7 +784,7 @@ async def moderate_input_messages(
         if resolved_action == "block":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Input violates moderation policy")
         if resolved_action == "redact":
-            return moderation_service.redact_text(text, eff_policy)
+            return redacted if isinstance(redacted, str) else moderation_service.redact_text(text, eff_policy)
         return text
 
     # Apply moderation across request messages
@@ -879,7 +883,7 @@ async def build_context_and_messages(
     if not conv_id:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to establish conversation context.")
 
-    # History loading (configurable limit/order; filter non-persistable roles, normalize assistant names)
+    # History loading (configurable limit/order; filter missing roles, normalize assistant names)
     requested_history_limit = getattr(request_data, "history_message_limit", None)
     if requested_history_limit is None:
         history_limit = DEFAULT_HISTORY_MESSAGE_LIMIT
@@ -961,7 +965,7 @@ async def build_context_and_messages(
                 try:
                     metadata = await loop.run_in_executor(None, chat_db.get_message_metadata, db_msg.get("id"))
                 except Exception as meta_err:
-                    logger.debug("Metadata lookup failed for message %s: %s", db_msg.get("id"), meta_err)
+                    logger.debug("Metadata lookup failed for message {}: {}", db_msg.get("id"), meta_err)
 
                 tool_calls_meta = None
                 function_call_meta = None
@@ -2243,7 +2247,11 @@ async def execute_non_stream_call(
                             )
                     except Exception:
                         pass
-                    content_to_save = moderation.redact_text(content_to_save, eff_policy)
+                    content_to_save = (
+                        redacted_val
+                        if isinstance(redacted_val, str)
+                        else moderation.redact_text(content_to_save, eff_policy)
+                    )
                     # Update llm_response dict if applicable
                     try:
                         if isinstance(llm_response, dict):

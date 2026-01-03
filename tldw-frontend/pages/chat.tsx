@@ -71,6 +71,7 @@ export default function ChatPage() {
   const [feedbackModalSubmitting, setFeedbackModalSubmitting] = useState(false);
   const dwellTimerRef = useRef<number | null>(null);
   const dwellSentRef = useRef<Set<string>>(new Set());
+  const expandSentRef = useRef<Set<string>>(new Set());
   const [slashMode, setSlashMode] = useState<'system'|'preface'|'replace'>(() => {
     try {
       const s = localStorage.getItem('tldw-slash-mode');
@@ -348,8 +349,10 @@ export default function ChatPage() {
           // On done, optionally store session reference
           const firstUser = newUi.find((m) => m.role === 'user');
           const title = (firstUser?.text || '').slice(0, 60) || 'Chat';
-          const id = conversationId || `local-${Date.now()}`;
-          addSession({ id, title, model, created_at: new Date().toISOString() });
+          const id = conversationId || getOrCreateSessionId();
+          if (id) {
+            addSession({ id, title, model, created_at: new Date().toISOString() });
+          }
         });
         show({ title: 'Response complete', variant: 'success' });
       } else {
@@ -376,8 +379,10 @@ export default function ChatPage() {
         });
         const firstUser = newUi.find((m) => m.role === 'user');
         const title = (firstUser?.text || '').slice(0, 60) || 'Chat';
-        const id = res?.tldw_conversation_id || conversationId || `local-${Date.now()}`;
-        addSession({ id: String(id), title, model, created_at: new Date().toISOString() });
+        const id = res?.tldw_conversation_id || conversationId || getOrCreateSessionId();
+        if (id) {
+          addSession({ id: String(id), title, model, created_at: new Date().toISOString() });
+        }
         show({ title: 'Response ready', variant: 'success' });
       }
     } catch (error: unknown) {
@@ -439,6 +444,7 @@ export default function ChatPage() {
     if (!messageId) return;
     const trimmedNotes = feedbackModalNotes.trim();
     const hasRating = feedbackModalRating > 0;
+    const clampedRating = Math.min(5, Math.max(1, feedbackModalRating));
     const hasIssues = feedbackModalIssues.length > 0;
     const hasNotes = trimmedNotes.length > 0;
     const helpful = feedbackModalHelpful;
@@ -461,7 +467,7 @@ export default function ChatPage() {
         message_id: messageId,
         feedback_type: feedbackType,
         helpful: helpful ?? undefined,
-        relevance_score: hasRating ? feedbackModalRating : undefined,
+        relevance_score: hasRating ? clampedRating : undefined,
         issues: hasIssues ? feedbackModalIssues : undefined,
         user_notes: hasNotes ? trimmedNotes : undefined,
         session_id: getOrCreateSessionId() || undefined,
@@ -891,7 +897,8 @@ export default function ChatPage() {
                       <details
                         onToggle={(event) => {
                           const target = event.currentTarget as HTMLDetailsElement;
-                          if (target.open && msg.messageId) {
+                          if (target.open && msg.messageId && !expandSentRef.current.has(msg.messageId)) {
+                            expandSentRef.current.add(msg.messageId);
                             void sendImplicitFeedback({
                               event_type: 'expand',
                               message_id: msg.messageId,

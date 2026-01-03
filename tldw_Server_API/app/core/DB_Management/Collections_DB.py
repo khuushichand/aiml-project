@@ -1060,7 +1060,7 @@ class CollectionsDatabase:
         return normalize_output_storage_filename(
             storage_path=path_value,
             allow_absolute=False,
-            reject_relative_with_separators=False,
+            reject_relative_with_separators=True,
             base_resolved=base_resolved,
             check_relative_containment=True,
             log_message=logger.warning,

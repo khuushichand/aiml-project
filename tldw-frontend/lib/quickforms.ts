@@ -1,10 +1,13 @@
+import type { JsonSchema } from '@/lib/schema';
+
+const MAX_MESSAGE_LENGTH = 10000;
+const MAX_TOTAL_MESSAGE_LENGTH = 50000;
+
 export type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 export type ApiPath = `/${string}`;
 export type QuickFormValue = string | number | boolean | Record<string, unknown> | Array<unknown> | null | undefined;
 export type QuickFormState = Record<string, QuickFormValue>;
 export type QuickFormBody = Record<string, QuickFormValue>;
-
-import { JsonSchema } from '@/lib/schema';
 
 export interface QuickFormPreset<TState extends QuickFormState = QuickFormState> {
   id: string;
@@ -18,6 +21,10 @@ export interface QuickFormPreset<TState extends QuickFormState = QuickFormState>
   schema?: JsonSchema; // optional JSON schema for request body
 }
 
+/**
+ * Returns the value if it's an array, otherwise returns an empty array.
+ * Used for validation: non-arrays are treated as invalid/empty.
+ */
 const asArray = (value: unknown): QuickFormValue[] => (Array.isArray(value) ? value : []);
 
 export const QUICK_FORMS: QuickFormPreset[] = [
@@ -231,11 +238,16 @@ export const QUICK_FORMS: QuickFormPreset[] = [
       if (messages.length === 0) errs.push('messages must be a non-empty array');
       const last = (messages[messages.length - 1] ?? {}) as QuickFormBody;
       if (last.role !== 'user' || !String(last.content || '').trim()) errs.push('Last message must be a non-empty user message');
-      const maxMessageLength = 10000;
       const totalLength = messages.reduce((sum: number, msg: { content?: QuickFormValue }) => sum + String(msg?.content || '').length, 0);
-      if (totalLength > 50000) errs.push('Total message content exceeds maximum length (50000 characters)');
-      const oversizeIndex = messages.findIndex((msg: { content?: QuickFormValue }) => String(msg?.content || '').length > maxMessageLength);
-      if (oversizeIndex >= 0) errs.push(`Message ${oversizeIndex + 1} exceeds maximum length (${maxMessageLength} characters)`);
+      if (totalLength > MAX_TOTAL_MESSAGE_LENGTH) {
+        errs.push(`Total message content exceeds maximum length (${MAX_TOTAL_MESSAGE_LENGTH} characters)`);
+      }
+      const oversizeIndex = messages.findIndex(
+        (msg: { content?: QuickFormValue }) => String(msg?.content || '').length > MAX_MESSAGE_LENGTH
+      );
+      if (oversizeIndex >= 0) {
+        errs.push(`Message ${oversizeIndex + 1} exceeds maximum length (${MAX_MESSAGE_LENGTH} characters)`);
+      }
       return errs;
     },
     describe: 'OpenAI-compatible chat endpoint with optional streaming and DB persistence.',

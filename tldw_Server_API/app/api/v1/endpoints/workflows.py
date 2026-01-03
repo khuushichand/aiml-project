@@ -1863,6 +1863,7 @@ async def replay_webhook_dlq(
     except HTTPException:
         raise
     except Exception as e:
+        logger.debug("Workflows DLQ replay: delivery failed for dlq_id={}: {}", dlq_id, e)
         try:
             db.update_webhook_dlq_failure(dlq_id=dlq_id, last_error=str(e), next_attempt_at_iso=None)
         except Exception:
