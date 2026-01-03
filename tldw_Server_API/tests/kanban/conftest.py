@@ -19,6 +19,7 @@ def temp_db_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> str:
 @pytest.fixture
 def temp_db_path(temp_db_dir: str) -> str:
     """Create a temporary database file path."""
+    _ = temp_db_dir
     return str(DatabasePaths.get_kanban_db_path(1))
 
 
@@ -29,9 +30,10 @@ def kanban_db(temp_db_path: str) -> KanbanDB:
 
 
 @pytest.fixture
-def kanban_db_user2(_temp_db_dir: str) -> KanbanDB:
+def kanban_db_user2(temp_db_dir: str) -> KanbanDB:
     """Create a second KanbanDB instance for testing user isolation."""
-    # _temp_db_dir fixture sets USER_DB_BASE_DIR for this test.
+    # temp_db_dir fixture sets USER_DB_BASE_DIR for this test.
+    _ = temp_db_dir
     db_path = DatabasePaths.get_kanban_db_path(2)
     return KanbanDB(db_path=str(db_path), user_id="2")
 

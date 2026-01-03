@@ -65,10 +65,20 @@ def _log_sink(message: Any) -> None:
         _BUFFER.append(entry)
 
 
+def _sink_still_present(sink_id: int) -> bool:
+    # Loguru doesn't expose a public API for checking removed sinks.
+    try:
+        core = getattr(logger, "_core", None)
+        handlers = getattr(core, "handlers", None)
+        return isinstance(handlers, dict) and sink_id in handlers
+    except Exception:
+        return False
+
+
 def ensure_system_log_buffer() -> None:
     """Attach a Loguru sink to capture recent logs into an in-memory ring buffer."""
     global _SINK_ID
-    if _SINK_ID is not None:
+    if _SINK_ID is not None and _sink_still_present(_SINK_ID):
         return
     _SINK_ID = logger.add(
         _log_sink,

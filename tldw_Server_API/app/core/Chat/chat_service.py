@@ -83,15 +83,6 @@ def _coerce_int(value: Optional[str], default: int) -> int:
         return default
 
 
-def _should_include_message_in_llm_payload(role: Optional[str]) -> bool:
-    """Return True when a message role is present and non-empty.
-
-    This mirrors should_persist_message_role and does not enforce
-    allowlist/denylist semantics.
-    """
-    return should_persist_message_role(role)
-
-
 _MAX_HISTORY_MESSAGES = max(1, _coerce_int(_chat_config.get("max_history_messages"), 200))
 
 _default_history_limit = 20
@@ -757,7 +748,11 @@ async def moderate_input_messages(
             if not flagged:
                 return text
             resolved_action = eff_policy.input_action
-            redacted = moderation_service.redact_text(text, eff_policy) if resolved_action == "redact" else None
+            redacted = (
+                moderation_service.redact_text(text, eff_policy)
+                if resolved_action == "redact"
+                else None
+            )
 
         if resolved_action == "pass" or (resolved_action == "warn" and sample is None):
             return text
@@ -918,7 +913,7 @@ async def build_context_and_messages(
         for db_msg in raw_hist:
             sender_val = str(db_msg.get("sender", "") or "")
             role = map_sender_to_role(sender_val, character_card.get("name") if character_card else None)
-            if not _should_include_message_in_llm_payload(role):
+            if not should_persist_message_role(role):
                 continue
             char_name_hist = character_card.get("name", "Char") if character_card else "Char"
             text_content = db_msg.get("content", "")
@@ -992,7 +987,7 @@ async def build_context_and_messages(
     # Process current turn messages (persist if needed)
     request_messages: List[Dict[str, Any]] = []
     for msg_model in request_data.messages:
-        if not _should_include_message_in_llm_payload(msg_model.role):
+        if not should_persist_message_role(msg_model.role):
             continue
         request_messages.append(msg_model.model_dump(exclude_none=True))
 

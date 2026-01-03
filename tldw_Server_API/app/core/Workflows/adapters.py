@@ -94,11 +94,12 @@ def _artifacts_base_dir() -> Path:
         if os.getenv("PYTEST_CURRENT_TEST") is not None or os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
             return (Path.cwd() / "Databases" / "artifacts").resolve()
     except Exception:
-        pass
+        logger.exception("Error checking TEST_MODE/PYTEST_CURRENT_TEST for artifacts base dir")
     try:
         from tldw_Server_API.app.core.Utils.Utils import get_project_root
         return (Path(get_project_root()) / "Databases" / "artifacts").resolve()
     except Exception:
+        logger.exception("Error getting project root for artifacts base dir")
         # Fallback to relative path
         return Path("Databases") / "artifacts"
 
@@ -207,7 +208,8 @@ def _workflow_file_base_dir(context: Dict[str, Any], config: Dict[str, Any] | No
             try:
                 from tldw_Server_API.app.core.Utils.Utils import get_project_root
                 base = (Path(get_project_root()) / base).resolve()
-            except Exception:
+            except Exception as exc:
+                logger.debug(f"Workflow file base dir: failed to resolve relative WORKFLOWS_FILE_BASE_DIR {env_override!r}: {exc}")
                 base = base.resolve()
         else:
             base = base.resolve()
@@ -217,10 +219,12 @@ def _workflow_file_base_dir(context: Dict[str, Any], config: Dict[str, Any] | No
         raw_user_id = context.get("user_id") if isinstance(context, dict) else None
         try:
             user_id = int(raw_user_id) if raw_user_id is not None else DatabasePaths.get_single_user_id()
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Workflow file base dir: invalid user_id {raw_user_id!r}; using single-user fallback: {exc}")
             user_id = DatabasePaths.get_single_user_id()
         return DatabasePaths.get_user_base_directory(user_id)
-    except Exception:
+    except Exception as exc:
+        logger.debug(f"Workflow file base dir: failed to resolve per-user base dir; using Databases/: {exc}")
         return Path("Databases").resolve()
 
 
@@ -1368,52 +1372,51 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
             from tldw_Server_API.app.services.web_scraping_service import process_web_scraping_task
         except Exception:
             return {"error": "web_scraping_service_unavailable"}
+        # Extract and sanitize config
+        scrape_method = str(config.get("scrape_method") or "Individual URLs")
+        url_input = str(config.get("url_input") or "").strip()
+        url_level = config.get("url_level")
+        try:
+            url_level = int(url_level) if url_level is not None else None
+        except Exception:
+            url_level = None
+        max_pages = int(config.get("max_pages", 10))
+        max_depth = int(config.get("max_depth", 3))
+        summarize = bool(config.get("summarize") or config.get("summarize_checkbox") or False)
+        custom_prompt = config.get("custom_prompt")
+        api_name = config.get("api_name")
+        system_prompt = config.get("system_prompt")
+        try:
+            temperature = float(config.get("temperature", 0.7))
+        except Exception:
+            temperature = 0.7
+        custom_cookies = config.get("custom_cookies") if isinstance(config.get("custom_cookies"), list) else None
+        user_agent = config.get("user_agent")
+        custom_headers = config.get("custom_headers") if isinstance(config.get("custom_headers"), dict) else None
 
-    # Extract and sanitize config
-    scrape_method = str(config.get("scrape_method") or "Individual URLs")
-    url_input = str(config.get("url_input") or "").strip()
-    url_level = config.get("url_level")
-    try:
-        url_level = int(url_level) if url_level is not None else None
-    except Exception:
-        url_level = None
-    max_pages = int(config.get("max_pages", 10))
-    max_depth = int(config.get("max_depth", 3))
-    summarize = bool(config.get("summarize") or config.get("summarize_checkbox") or False)
-    custom_prompt = config.get("custom_prompt")
-    api_name = config.get("api_name")
-    system_prompt = config.get("system_prompt")
-    try:
-        temperature = float(config.get("temperature", 0.7))
-    except Exception:
-        temperature = 0.7
-    custom_cookies = config.get("custom_cookies") if isinstance(config.get("custom_cookies"), list) else None
-    user_agent = config.get("user_agent")
-    custom_headers = config.get("custom_headers") if isinstance(config.get("custom_headers"), dict) else None
-
-    try:
-        result = await process_web_scraping_task(
-            scrape_method=scrape_method,
-            url_input=url_input,
-            url_level=url_level,
-            max_pages=max_pages,
-            max_depth=max_depth,
-            summarize_checkbox=summarize,
-            custom_prompt=custom_prompt,
-            api_name=api_name,
-            api_key=None,
-            keywords="",
-            custom_titles=None,
-            system_prompt=system_prompt,
-            temperature=temperature,
-            custom_cookies=custom_cookies,
-            mode="ephemeral",
-            user_id=None,
-            user_agent=user_agent,
-            custom_headers=custom_headers,
-        )
-    except Exception as e:
-        return {"error": f"process_media_error:{e}"}
+        try:
+            result = await process_web_scraping_task(
+                scrape_method=scrape_method,
+                url_input=url_input,
+                url_level=url_level,
+                max_pages=max_pages,
+                max_depth=max_depth,
+                summarize_checkbox=summarize,
+                custom_prompt=custom_prompt,
+                api_name=api_name,
+                api_key=None,
+                keywords="",
+                custom_titles=None,
+                system_prompt=system_prompt,
+                temperature=temperature,
+                custom_cookies=custom_cookies,
+                mode="ephemeral",
+                user_id=None,
+                user_agent=user_agent,
+                custom_headers=custom_headers,
+            )
+        except Exception as e:
+            return {"error": f"process_media_error:{e}"}
         # Normalize response
         articles = []
         try:

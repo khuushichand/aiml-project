@@ -154,3 +154,28 @@ def test_explicit_feedback_rag_only_accepts_query(feedback_setup):
     data = resp.json()
     assert data["ok"] is True
     assert data["feedback_id"] is None
+
+
+@pytest.mark.integration
+def test_explicit_feedback_rejects_empty_query(feedback_setup):
+    client, _db, _conversation_id, _message_id = feedback_setup
+
+    payload = {
+        "feedback_type": "helpful",
+        "helpful": True,
+        "query": "   ",
+    }
+
+    resp = client.post("/api/v1/feedback/explicit", json=payload)
+    assert resp.status_code in (status.HTTP_400_BAD_REQUEST, status.HTTP_422_UNPROCESSABLE_ENTITY)
+    detail = resp.json().get("detail")
+    expected = "query is required when message_id is not provided"
+    if isinstance(detail, list):
+        messages = " ".join(
+            item.get("msg", "")
+            for item in detail
+            if isinstance(item, dict)
+        )
+        assert expected in messages
+    else:
+        assert detail == expected

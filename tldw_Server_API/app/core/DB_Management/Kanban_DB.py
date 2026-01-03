@@ -35,6 +35,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths, _is_test_context
+from tldw_Server_API.app.core.exceptions import StorageUnavailableError
 
 # --- Helper Functions ---
 def _utcnow_iso() -> str:
@@ -77,8 +78,10 @@ def _normalize_db_path(
     if user_id:
         try:
             user_dir = DatabasePaths.get_user_base_directory(user_id).resolve()
-        except Exception as exc:
-            raise InputError("Unable to determine user database directory") from exc
+        except StorageUnavailableError as exc:
+            raise KanbanDBError("storage_unavailable") from exc
+        except ValueError as exc:
+            raise InputError("invalid_user_id") from exc
         try:
             resolved.relative_to(user_dir)
         except ValueError as exc:
@@ -201,7 +204,7 @@ class KanbanDB:
 
         # Initialize schema
         self._ensure_schema()
-        logger.debug(f"KanbanDB initialized for user {user_id} at {self.db_path}")
+        logger.debug(f"KanbanDB initialized for user {self.user_id} at {self.db_path}")
 
     def _configure_connection(self, conn: sqlite3.Connection, *, enable_wal: bool = True) -> None:
         conn.row_factory = sqlite3.Row
@@ -226,33 +229,34 @@ class KanbanDB:
 
     def _connect(self) -> sqlite3.Connection:
         """Create and configure a database connection."""
-        if self._is_memory_db:
-            if self._memory_conn is None:
-                # Keep a single shared connection so :memory: schema/data persist.
-                conn = sqlite3.connect(
-                    self.db_path,
-                    timeout=30,
-                    isolation_level=None,
-                    check_same_thread=False,
-                    factory=_KanbanMemoryConnection,
-                )
-                try:
-                    self._configure_connection(conn, enable_wal=False)
-                except Exception:
+        with self._lock:
+            if self._is_memory_db:
+                if self._memory_conn is None:
+                    # Keep a single shared connection so :memory: schema/data persist.
+                    conn = sqlite3.connect(
+                        self.db_path,
+                        timeout=30,
+                        isolation_level=None,
+                        check_same_thread=False,
+                        factory=_KanbanMemoryConnection,
+                    )
                     try:
-                        conn.force_close()
-                    finally:
-                        raise
-                self._memory_conn = conn
-            return self._memory_conn
+                        self._configure_connection(conn, enable_wal=False)
+                    except Exception:
+                        try:
+                            conn.force_close()
+                        finally:
+                            raise
+                    self._memory_conn = conn
+                return self._memory_conn
 
-        conn = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
-        try:
-            self._configure_connection(conn)
-        except Exception:
-            conn.close()
-            raise
-        return conn
+            conn = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
+            try:
+                self._configure_connection(conn)
+            except Exception:
+                conn.close()
+                raise
+            return conn
 
     def _ensure_schema(self) -> None:
         """Create all tables, indexes, and triggers if they don't exist."""

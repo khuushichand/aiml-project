@@ -35,6 +35,31 @@ def pytest_configure(config):
         # If unavailable, tests that require pgvector will be skipped by their own guards
         pass
 
+
+@pytest.fixture(autouse=True)
+def _isolate_semantic_cache(tmp_path, monkeypatch):
+    """Keep semantic cache state isolated between tests."""
+    cache_root = tmp_path / "semantic_cache"
+    cache_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("RAG_SEMANTIC_CACHE_DIR", str(cache_root))
+    monkeypatch.delenv("RAG_CACHE_DIR", raising=False)
+
+    cache_module = None
+    try:
+        from tldw_Server_API.app.core.RAG.rag_service import semantic_cache as cache_module  # type: ignore
+    except Exception:
+        cache_module = None
+
+    if cache_module is not None:
+        cache_module._SHARED_CACHES.clear()
+        cache_module._DEFAULT_CACHE_DIR = None
+
+    yield
+
+    if cache_module is not None:
+        cache_module._SHARED_CACHES.clear()
+        cache_module._DEFAULT_CACHE_DIR = None
+
 # =====================================================================
 # Cross-suite fixtures (mirrors Embeddings fixtures used by RAG tests)
 # =====================================================================

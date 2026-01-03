@@ -945,7 +945,8 @@ async def bulk_create_sources(
                     )
                     errors_count += 1
                     continue
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"bulk_create_sources: group validation error for {s.name}: {exc}")
             items.append(
                 SourcesBulkCreateItem(
                     name=s.name,
@@ -979,7 +980,8 @@ async def bulk_create_sources(
                     )
                     errors_count += 1
                     continue
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"bulk_create_sources: group validation error for {s.name}: {exc}")
             items.append(
                 SourcesBulkCreateItem(
                     name=s.name,
@@ -2454,7 +2456,7 @@ async def create_template(
         raise HTTPException(
             status_code=400,
             detail={"error": "template_validation_error", "message": str(exc)},
-        )
+        ) from exc
     except template_store.TemplateExistsError:
         raise HTTPException(status_code=409, detail="template_exists")
     return WatchlistTemplateDetail(

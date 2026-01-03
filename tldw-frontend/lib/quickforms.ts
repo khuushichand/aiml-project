@@ -25,7 +25,7 @@ export interface QuickFormPreset<TState extends QuickFormState = QuickFormState>
  * Returns the value if it's an array, otherwise returns an empty array.
  * Used for validation: non-arrays are treated as invalid/empty.
  */
-const asArray = (value: unknown): QuickFormValue[] => (Array.isArray(value) ? value : []);
+export const asArray = (value: unknown): QuickFormValue[] => (Array.isArray(value) ? value : []);
 
 export const QUICK_FORMS: QuickFormPreset[] = [
   {

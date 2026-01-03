@@ -78,7 +78,12 @@ def _resolve_user_cache_path(user_id: str) -> Path:
     safe_component = _normalize_user_id_segment(user_id)
     # Construct path using only the sanitized single directory component.
     cache_dir = _USER_DB_BASE / safe_component / "Rewrite_Cache"
-    return cache_dir / "rewrite_cache.jsonl"
+    cache_path = cache_dir / "rewrite_cache.jsonl"
+    base_resolved = _USER_DB_BASE.resolve(strict=False)
+    cache_resolved = cache_path.resolve(strict=False)
+    if not _is_relative_to(cache_resolved, base_resolved):
+        raise ValueError("Resolved rewrite cache path is outside user database base.")
+    return cache_path
 
 
 def _safe_path() -> Path:
@@ -143,18 +148,17 @@ class RewriteCache:
         # Determine storage path (per-user if provided)
         if path is None:
             if user_id:
+                hashed_user_id = _hash_user_id(str(user_id))
                 try:
                     p = _resolve_user_cache_path(str(user_id))
-                except Exception as e:
-                    hashed_user_id = _hash_user_id(str(user_id))
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                except ValueError as e:
                     logger.warning(f"Failed to resolve user cache path for user_id={hashed_user_id}: {e}")
                     self.path = str(_safe_path())
+                except OSError as e:
+                    logger.error(f"Failed to initialize user cache path for user_id={hashed_user_id}: {e}")
+                    raise
                 else:
-                    try:
-                        p.parent.mkdir(parents=True, exist_ok=True)
-                    except Exception as e:
-                        hashed_user_id = _hash_user_id(str(user_id))
-                        logger.warning(f"Failed to create user cache directory for user_id={hashed_user_id}: {e}")
                     self.path = str(p)
             else:
                 self.path = str(_safe_path())

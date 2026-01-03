@@ -20,6 +20,7 @@ from tldw_Server_API.app.core.Character_Chat.constants import (
 
 # Maximum allowed time (in milliseconds) for the validation test match
 MAX_REGEX_VALIDATE_TIME_MS = 50
+REGEX_SAFETY_TEST_FAILED_MSG = "Regex safety test failed: {error}"
 
 
 # =============================================================================
@@ -185,7 +186,7 @@ def validate_regex_safety(pattern: str) -> Tuple[bool, str]:
             return False, f"Pattern too slow: test match took {elapsed_ms:.2f}ms"
     except regex.error as e:
         return False, f"Invalid regex: {e}"
-    except (re.error, TypeError, AttributeError) as e:
+    except (TypeError, AttributeError) as e:
         logger.debug(f"Unexpected error during regex validation: {e}")
         return False, f"Regex validation error: {e}"
 
@@ -243,7 +244,7 @@ def _safe_compile_regex_impl(
         )
     except (TypeError, AttributeError, ValueError) as e:
         logger.warning(f"Regex test failed for pattern '{pattern[:50]}...': {e}")
-        raise re.error(f"Regex safety test failed: {e}") from e
+        raise re.error(REGEX_SAFETY_TEST_FAILED_MSG.format(error=e)) from e
     match_elapsed_ms = (_time_module.perf_counter() - match_start) * 1000
 
     if match_elapsed_ms > timeout_ms:

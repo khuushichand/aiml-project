@@ -110,7 +110,7 @@ async def test_audio_worker_transcribe_normalizes_segments_and_text_tuple(monkey
     # Stub run_stt_job_via_registry so no real STT runs
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
 
-    def _fake_run_stt_job_via_registry(wav_path, model, language):
+    def _fake_run_stt_job_via_registry(wav_path, model, language, base_dir=None):
         segs = [{"Text": "hello worker", "start_seconds": 0.0, "end_seconds": 1.0}]
         return {
             "text": "hello worker",
@@ -194,7 +194,7 @@ async def test_audio_gpu_worker_normalizes_segments_and_text(monkeypatch, tmp_pa
     # Stub run_stt_job_via_registry for GPU worker so no real STT runs
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
 
-    def _fake_run_stt_job_via_registry_gpu(wav_path, model, language):
+    def _fake_run_stt_job_via_registry_gpu(wav_path, model, language, base_dir=None):
         segs = [{"Text": "hello gpu", "start_seconds": 0.0, "end_seconds": 1.0}]
         return {
             "text": "hello gpu",

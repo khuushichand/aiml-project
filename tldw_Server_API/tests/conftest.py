@@ -4,6 +4,8 @@ Pytest configuration for the main test suite.
 Registers shared test plugins and provides common fixtures.
 """
 
+pytest_plugins = ["tldw_Server_API.tests.helpers.pgvector"]
+
 """Local pytest configuration for tests subtree.
 
 Note: pytest>=8 discourages defining `pytest_plugins` outside top-level conftest
@@ -13,6 +15,10 @@ and keep per-suite conftests focused on markers and env overrides.
 
 import os
 from pathlib import Path
+try:
+    from tldw_Server_API.tests.helpers.pgvector import pgvector_dsn, pgvector_temp_table  # noqa: F401
+except Exception:
+    pass
 try:
     # Ensure tests see provider keys from the canonical location
     # Load once at collection time, without overriding explicit env

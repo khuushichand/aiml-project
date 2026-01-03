@@ -1,1 +1,1 @@
-"""Test package root to avoid import name collisions during pytest collection."""
+"""Test package marker for fixture imports."""

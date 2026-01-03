@@ -30,14 +30,8 @@ def _parse_args() -> argparse.Namespace:
     """
     Parse command-line arguments for the migration script.
 
-    Args:
-        None
-
     Returns:
         argparse.Namespace: Parsed arguments including remove_from_config and force.
-
-    Raises:
-        SystemExit: If argument parsing fails or help/version is requested.
     """
     parser = argparse.ArgumentParser(description="Migrate API keys from config.txt to .env file")
     parser.add_argument(
@@ -57,14 +51,8 @@ def _build_key_mappings() -> KeyMapping:
     """
     Build the mapping from config sections/keys to environment variable names.
 
-    Args:
-        None
-
     Returns:
         KeyMapping: Mapping of (section, key) tuples to environment variable names.
-
-    Raises:
-        None
     """
     return {
         ("API", "openai_api_key"): "OPENAI_API_KEY",
@@ -139,9 +127,6 @@ def _read_config(config_path: Path) -> configparser.ConfigParser:
 
     Returns:
         configparser.ConfigParser: Loaded configuration (may be empty if file is missing).
-
-    Raises:
-        None
     """
     config = configparser.ConfigParser()
     config.read(config_path)
@@ -196,9 +181,6 @@ def _collect_env_vars(
 
     Returns:
         tuple[EnvVars, list[FoundKey]]: New env vars to write and found key metadata.
-
-    Raises:
-        None
     """
     env_vars: EnvVars = {}
     keys_found: list[FoundKey] = []
@@ -347,12 +329,6 @@ def main() -> None:
     Supports incremental migration (preserving existing .env values), creates
     a timestamped backup of config.txt, and optionally removes keys from the
     source config after a successful migration.
-
-    Args:
-        None
-
-    Returns:
-        None
 
     Raises:
         SystemExit: If required files are missing or any file operation fails.

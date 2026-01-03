@@ -76,7 +76,6 @@ _PROVIDER_TIMEOUT_DETAIL = "Upstream provider request timed out"
 _PROVIDER_ERROR_DETAIL = "Upstream provider request failed"
 _PROVIDER_UNEXPECTED_DETAIL = "Unexpected provider error"
 _PROVIDER_NOT_CONFIGURED_DETAIL = "Upstream provider not configured"
-_BATCH_ERROR_DETAIL = "Batch ingest failed"
 
 
 async def _download_pdf_bytes(
@@ -1053,7 +1052,7 @@ async def arxiv_ingest(
         # Map non-404 HTTP errors to 502 for lenient external test expectations
         status = getattr(e.response, 'status_code', 502)
         if status == 404:
-            raise HTTPException(status_code=404, detail="viXra PDF returned 404") from e
+            raise HTTPException(status_code=404, detail="arXiv PDF returned 404") from e
         raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL) from e
     except Exception as e:
         logger.error(f"arXiv ingest error: {e}", exc_info=True)
@@ -1196,7 +1195,7 @@ async def eartharxiv_ingest(
     except requests.exceptions.HTTPError as e:
         status = getattr(e.response, 'status_code', 502)
         if status == 404:
-            raise HTTPException(status_code=404, detail="viXra PDF returned 404") from e
+            raise HTTPException(status_code=404, detail="EarthArXiv PDF returned 404") from e
         raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL) from e
     except Exception as e:
         logger.error(f"EarthArXiv ingest error: {e}", exc_info=True)
@@ -2184,15 +2183,26 @@ def _handle_provider_error(err: str) -> None:
     if "timed out" in low:
         raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
     if "http error" in low:
-        match = re.search(r'(?:http\s+)?error[:\s]+(\d{3})', err, re.IGNORECASE)
+        match = re.search(r'(?:http\s+)?error\s*[:\s]*(\d{3})', err, re.IGNORECASE)
         if match:
             code = int(match.group(1))
-            if code < 400 or code >= 600:
+            if not (400 <= code < 600):
                 code = 502
+                logger.warning(
+                    "Extracted HTTP status {} outside 4xx/5xx range; using 502",
+                    match.group(1),
+                )
         else:
             code = 502
-        raise HTTPException(status_code=code, detail=_PROVIDER_ERROR_DETAIL)
-    raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
+            logger.warning("Could not extract HTTP status from error message: {}", err)
+        raise HTTPException(
+            status_code=code,
+            detail={"message": _PROVIDER_ERROR_DETAIL, "provider_error": err},
+        )
+    raise HTTPException(
+        status_code=502,
+        detail={"message": _PROVIDER_ERROR_DETAIL, "provider_error": err},
+    )
 
 
 # ---------------- RePEc / CitEc Endpoints ----------------
@@ -2779,7 +2789,7 @@ async def ingest_by_doi(
     except requests.exceptions.HTTPError as e:
         status = getattr(e.response, 'status_code', 502)
         if status == 404:
-            raise HTTPException(status_code=404, detail="viXra PDF returned 404") from e
+            raise HTTPException(status_code=404, detail="Unpaywall PDF returned 404") from e
         raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL) from e
     except Exception as e:
         logger.error(f"OA ingest by DOI error: {e}", exc_info=True)
@@ -2904,9 +2914,17 @@ async def ingest_batch(
                     pmcid_norm = f"PMC{pmcid_norm}"
                 content, filename, d_err = await loop.run_in_executor(None, PMC_OA.download_pmc_pdf, pmcid_norm)
                 if d_err:
-                    return IngestBatchResultItem(pmcid=pmcid_norm, success=False, error=_BATCH_ERROR_DETAIL)
+                    return IngestBatchResultItem(
+                        pmcid=pmcid_norm,
+                        success=False,
+                        error=f"PMC download error: {d_err}",
+                    )
                 if not content:
-                    return IngestBatchResultItem(pmcid=pmcid_norm, success=False, error=_BATCH_ERROR_DETAIL)
+                    return IngestBatchResultItem(
+                        pmcid=pmcid_norm,
+                        success=False,
+                        error="PMC download returned empty content",
+                    )
                 result = await process_pdf_task(
                     file_bytes=content,
                     filename=filename or f"{pmcid_norm}.pdf",
@@ -3103,9 +3121,23 @@ async def ingest_batch(
                 _, err = (None, None)
                 pdf_url, err = await loop.run_in_executor(None, Unpaywall.resolve_oa_pdf, doi)
                 if err:
-                    return IngestBatchResultItem(doi=doi, pdf_url=None, pmcid=pmcid, arxiv_id=arxiv_id, success=False, error=_BATCH_ERROR_DETAIL)
+                    return IngestBatchResultItem(
+                        doi=doi,
+                        pdf_url=None,
+                        pmcid=pmcid,
+                        arxiv_id=arxiv_id,
+                        success=False,
+                        error=f"DOI resolution error: {err}",
+                    )
             if not pdf_url:
-                return IngestBatchResultItem(doi=doi, pdf_url=None, pmcid=pmcid, arxiv_id=arxiv_id, success=False, error=_BATCH_ERROR_DETAIL)
+                return IngestBatchResultItem(
+                    doi=doi,
+                    pdf_url=None,
+                    pmcid=pmcid,
+                    arxiv_id=arxiv_id,
+                    success=False,
+                    error="DOI resolution returned no PDF URL",
+                )
             # Download PDF
             content = await _download_pdf_bytes(pdf_url)
             # Process & persist
@@ -3166,7 +3198,14 @@ async def ingest_batch(
             return IngestBatchResultItem(doi=doi, pdf_url=pdf_url, pmcid=pmcid, arxiv_id=arxiv_id, success=True, media_id=media_id, media_uuid=media_uuid)
         except Exception as e:
             logger.error(f"Batch ingest error for doi={doi} pmcid={pmcid} arxiv={arxiv_id} pdf={pdf_url}: {e}", exc_info=True)
-            return IngestBatchResultItem(doi=doi, pdf_url=pdf_url, pmcid=pmcid, arxiv_id=arxiv_id, success=False, error=_BATCH_ERROR_DETAIL)
+            return IngestBatchResultItem(
+                doi=doi,
+                pdf_url=pdf_url,
+                pmcid=pmcid,
+                arxiv_id=arxiv_id,
+                success=False,
+                error=f"Batch ingest error: {e}",
+            )
 
     for it in payload.items:
         try:

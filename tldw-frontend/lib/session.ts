@@ -2,6 +2,19 @@ const SESSION_STORAGE_KEY = 'tldw-session-id';
 export const SESSION_HEADER_NAME = 'X-Session-ID';
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const SESSION_PREFIX = 'sess_';
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+type SessionStorageData = {
+  id: string;
+  timestamp: number;
+};
+
+type StoredSessionResult = {
+  data: SessionStorageData;
+  fromLegacy: boolean;
+};
+
+let cachedSession: SessionStorageData | null = null;
 
 function normalizeSessionId(value: unknown): string | null {
   if (typeof value !== 'string') return null;
@@ -10,10 +23,68 @@ function normalizeSessionId(value: unknown): string | null {
   return trimmed;
 }
 
+function isSessionExpired(timestamp: number): boolean {
+  return Date.now() - timestamp > SESSION_TTL_MS;
+}
+
+function normalizeSessionData(value: unknown): SessionStorageData | null {
+  if (!value) return null;
+  if (typeof value === 'string') {
+    const id = normalizeSessionId(value);
+    if (!id) return null;
+    return { id, timestamp: Date.now() };
+  }
+  if (typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const id = normalizeSessionId(record.id);
+  const timestamp = typeof record.timestamp === 'number' ? record.timestamp : Number(record.timestamp);
+  if (!id || !Number.isFinite(timestamp)) return null;
+  return { id, timestamp };
+}
+
+function parseStoredSession(raw: string | null): StoredSessionResult | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    const normalized = normalizeSessionData(parsed);
+    if (normalized) {
+      return { data: normalized, fromLegacy: false };
+    }
+  } catch {}
+  const normalized = normalizeSessionData(raw);
+  return normalized ? { data: normalized, fromLegacy: true } : null;
+}
+
+function persistSession(data: SessionStorageData): void {
+  cachedSession = data;
+  try {
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(data));
+  } catch {
+    // Best-effort storage only.
+  }
+}
+
 export function readSessionId(): string | null {
   if (typeof window === 'undefined') return null;
+  if (cachedSession && !isSessionExpired(cachedSession.timestamp)) {
+    return cachedSession.id;
+  }
   try {
-    return normalizeSessionId(localStorage.getItem(SESSION_STORAGE_KEY));
+    const stored = parseStoredSession(localStorage.getItem(SESSION_STORAGE_KEY));
+    if (!stored) {
+      cachedSession = null;
+      return null;
+    }
+    if (isSessionExpired(stored.data.timestamp)) {
+      cachedSession = null;
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+      return null;
+    }
+    cachedSession = stored.data;
+    if (stored.fromLegacy) {
+      persistSession(stored.data);
+    }
+    return stored.data.id;
   } catch {
     return null;
   }
@@ -21,17 +92,24 @@ export function readSessionId(): string | null {
 
 export function writeSessionId(value: unknown): string | null {
   if (typeof window === 'undefined') return null;
-  const normalized = normalizeSessionId(value);
+  const normalized = normalizeSessionData(value);
   if (!normalized) return null;
   try {
-    const existing = localStorage.getItem(SESSION_STORAGE_KEY);
-    if (existing !== normalized) {
-      localStorage.setItem(SESSION_STORAGE_KEY, normalized);
+    const existing = parseStoredSession(localStorage.getItem(SESSION_STORAGE_KEY));
+    let nextTimestamp = normalized.timestamp;
+    if (existing && existing.data.id === normalized.id && !isSessionExpired(existing.data.timestamp)) {
+      nextTimestamp = existing.data.timestamp;
+    }
+    const next = { id: normalized.id, timestamp: nextTimestamp };
+    if (!existing || existing.data.id !== next.id || existing.data.timestamp !== next.timestamp) {
+      persistSession(next);
+    } else {
+      cachedSession = next;
     }
   } catch {
     // Best-effort storage only.
   }
-  return normalized;
+  return normalized.id;
 }
 
 function generateSessionId(): string | null {
@@ -71,4 +149,20 @@ export function captureSessionIdFromHeaders(
     raw = raw[0];
   }
   return writeSessionId(raw);
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event: StorageEvent) => {
+    if (event.key !== SESSION_STORAGE_KEY) return;
+    const stored = parseStoredSession(event.newValue);
+    if (!stored) {
+      cachedSession = null;
+      return;
+    }
+    if (isSessionExpired(stored.data.timestamp)) {
+      cachedSession = null;
+      return;
+    }
+    cachedSession = stored.data;
+  });
 }

@@ -5,6 +5,7 @@ import pytest
 from tldw_Server_API.app.api.v1.API_Deps import Audit_DB_Deps as audit_deps
 from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.exceptions import ServiceInitializationTimeoutError
 
 
 @pytest.mark.asyncio
@@ -30,7 +31,7 @@ async def test_init_timeout_does_not_duplicate_service(tmp_path, monkeypatch):
     await asyncio.wait_for(started.wait(), timeout=1.0)
 
     try:
-        with pytest.raises(RuntimeError):
+        with pytest.raises(ServiceInitializationTimeoutError):
             await audit_deps.get_or_create_audit_service_for_user_id(123)
 
         assert calls["count"] == 1

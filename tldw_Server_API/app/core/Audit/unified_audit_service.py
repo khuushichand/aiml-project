@@ -1229,9 +1229,10 @@ class UnifiedAuditService:
             self.stats["events_logged"] += 1
             should_flush = len(self.event_buffer) >= self.buffer_size or event.risk_score >= HIGH_RISK_SCORE
 
-        # In test mode we avoid background tasks; flush immediately for determinism.
+        # In test mode we avoid background tasks; flush only when needed.
         if self._test_mode:
-            await self.flush()
+            if should_flush:
+                await self.flush()
         elif should_flush:
             # Task is tracked via _flush_futures in _tracked_flush() for graceful shutdown
             asyncio.create_task(self._tracked_flush())

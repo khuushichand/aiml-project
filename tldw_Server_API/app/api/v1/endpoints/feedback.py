@@ -17,7 +17,7 @@ from tldw_Server_API.app.api.v1.schemas.feedback_schemas import (
     ExplicitFeedbackResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, CharactersRAGDBError
 from tldw_Server_API.app.core.RAG.rag_service.analytics_system import UnifiedFeedbackSystem
 
 router = APIRouter()
@@ -259,7 +259,7 @@ async def submit_explicit_feedback(
                             issues=merged_issues or None,
                             user_notes=updated_notes,
                         )
-                    except Exception as e:
+                    except (CharactersRAGDBError, HTTPException, ValueError) as e:
                         logger.warning("Failed to merge feedback update: {}", e)
             await _update_idempotency_record(dedupe_key, merged_issues, updated_notes)
         return ExplicitFeedbackResponse(ok=True, feedback_id=existing.feedback_id)
@@ -278,9 +278,16 @@ async def submit_explicit_feedback(
             _user_id=current_user.username if current_user else None,
             message_id=payload.message_id,
         )
-    except Exception:  # clear pending idempotency slot on any failure
+    except (HTTPException, ValueError, RuntimeError):
         await _clear_idempotency_record(dedupe_key)
         raise
+    except Exception as exc:
+        await _clear_idempotency_record(dedupe_key)
+        logger.exception("Unexpected error in submit_feedback: {}", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error",
+        ) from exc
 
     if result.get("errors"):
         logger.warning("Explicit feedback errors: {}", result.get("errors"))
@@ -290,18 +297,6 @@ async def submit_explicit_feedback(
         await _clear_idempotency_record(dedupe_key)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Could not record feedback")
 
-    final_issues = existing.issues if existing else issues
-    final_notes = existing.user_notes if existing else payload.user_notes
-    await _finalize_idempotency_record(dedupe_key, feedback_id, final_issues, final_notes)
-    if (
-        feedback_id
-        and collector.user_feedback
-        and (final_issues != issues or final_notes != payload.user_notes)
-    ):
-        await collector.user_feedback.merge_feedback_update(
-            feedback_id,
-            issues=final_issues or None,
-            user_notes=final_notes,
-        )
+    await _finalize_idempotency_record(dedupe_key, feedback_id, issues, payload.user_notes)
 
     return ExplicitFeedbackResponse(ok=True, feedback_id=feedback_id)

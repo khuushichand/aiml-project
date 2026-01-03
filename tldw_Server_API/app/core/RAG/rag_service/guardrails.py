@@ -32,7 +32,7 @@ except Exception:  # pragma: no cover - fallback for tests
 
 
 # Cap regex processing to avoid worst-case CPU on unbounded input.
-_MAX_GUARDRAIL_TEXT = 200_000
+_MAX_GUARDRAIL_TEXT = 10_000
 
 
 def _clip_guardrail_text(text: str, max_len: int = _MAX_GUARDRAIL_TEXT) -> str:

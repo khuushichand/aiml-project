@@ -619,16 +619,15 @@ def _resolve_default_cache_dir() -> Optional[Path]:
     except Exception:
         return None
     return None
-    # Ensure we are working with a resolved base directory path.
-    try:
-        base_dir_resolved = base_dir.expanduser().resolve(strict=False)
-    except Exception:
-        return None
 
 
 def _default_persist_path(namespace_key: str) -> Optional[str]:
     base_dir = _resolve_default_cache_dir()
     if not base_dir:
+        return None
+    try:
+        base_dir_resolved = base_dir.expanduser().resolve(strict=False)
+    except Exception:
         return None
     # Normalize and bound the namespace key before embedding it in the filename.
     safe_key = _normalize_namespace_key_for_filename(namespace_key)

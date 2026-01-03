@@ -21,27 +21,29 @@ interface AjvValidateFunction {
 
 export async function validateWithAjv(data: unknown, schema?: JsonSchema): Promise<string[]> {
   if (!schema) return [];
+  let ajv: AjvInstance;
   try {
     const mod = await import('ajv') as AjvModule;
     const Ajv = mod.default;
     if (!Ajv) {
-      if (typeof console !== 'undefined') {
-        console.warn('[validateWithAjv] AJV unavailable – schema validation skipped');
-      }
-      throw new Error('AJV unavailable: missing default export');
+      throw new Error('missing default export');
     }
-    const ajv = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false });
-    const validate = ajv.compile(schema);
-    const ok = validate(data);
-    if (ok) return [];
-    const errs = (validate.errors || []).map((e: AjvError) => `${e.instancePath || e.schemaPath || ''}: ${e.message ?? 'invalid'}`);
-    return errs;
+    ajv = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false });
   } catch (err) {
     // ajv not installed or failed to initialize; surface to caller
     if (typeof console !== 'undefined') {
-      console.warn('[validateWithAjv] AJV unavailable – schema validation skipped');
+      console.warn('[validateWithAjv] AJV initialization failed – schema validation cannot proceed');
     }
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`AJV unavailable: ${message}`);
   }
+  const validate = ajv.compile(schema);
+  const ok = validate(data);
+  if (ok) return [];
+  const errs = (validate.errors || []).map((e: AjvError) => {
+    const path = e.instancePath || e.schemaPath;
+    const msg = e.message ?? 'invalid';
+    return path ? `${path}: ${msg}` : msg;
+  });
+  return errs;
 }

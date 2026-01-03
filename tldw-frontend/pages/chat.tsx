@@ -36,10 +36,12 @@ interface ProvidersResponse {
   total_configured?: number;
 }
 
+const DEFAULT_SYSTEM_PROMPT = 'System prompt text';
+
 export default function ChatPage() {
   const { show } = useToast();
   const [uiMessages, setUiMessages] = useState<UiMessage[]>([
-    { role: 'system', text: 'System prompt text' },
+    { role: 'system', text: DEFAULT_SYSTEM_PROMPT },
   ]);
   const [composerText, setComposerText] = useState('');
   const [model, setModel] = useState('gpt-3.5-turbo');
@@ -212,7 +214,7 @@ export default function ChatPage() {
 
   const startNewChat = () => {
     setConversationId(null);
-    setUiMessages([{ role: 'system', text: 'System prompt text' }]);
+    setUiMessages([{ role: 'system', text: DEFAULT_SYSTEM_PROMPT }]);
     setPageOffset(0);
     setHasMoreHistory(false);
     setFeedbackById({});
@@ -238,7 +240,7 @@ export default function ChatPage() {
       if (offset > 0) {
         return [...normalized, ...prev];
       }
-      return ensureSystemMessage(normalized, 'System prompt text');
+      return ensureSystemMessage(normalized, DEFAULT_SYSTEM_PROMPT);
     });
     setHasMoreHistory(msgs.length === pageSize);
   }, [pageSize]);
@@ -576,7 +578,7 @@ export default function ChatPage() {
         const userCount = uiMessages.filter((m) => m.role === 'user').length;
         if (userCount === 0 && !conversationId && data?.message) {
           setUiMessages([
-            { role: 'system', text: 'System prompt text' },
+            { role: 'system', text: DEFAULT_SYSTEM_PROMPT },
             { role: 'user', text: String(data.message) }
           ] as UiMessage[]);
         }
@@ -613,7 +615,7 @@ export default function ChatPage() {
   // When conversationId changes, reset view and load first page
   useEffect(() => {
     if (!conversationId) return;
-    setUiMessages([{ role: 'system', text: 'System prompt text' }]);
+    setUiMessages([{ role: 'system', text: DEFAULT_SYSTEM_PROMPT }]);
     setPageOffset(0);
     setFeedbackById({});
     (async () => {
@@ -910,10 +912,10 @@ export default function ChatPage() {
                           <span className="mr-2 inline-flex rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900">
                             System
                           </span>
-                          <span>System prompt text</span>
+                          <span>{text ? 'View system prompt' : DEFAULT_SYSTEM_PROMPT}</span>
                         </summary>
                         <div className="mt-2 whitespace-pre-wrap text-xs text-amber-900">
-                          {text || 'System prompt text'}
+                          {text || '(empty)'}
                         </div>
                       </details>
                     );

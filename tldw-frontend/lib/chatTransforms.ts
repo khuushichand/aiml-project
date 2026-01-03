@@ -2,7 +2,7 @@ import type { ChatMessage } from '@/components/ui/ChatMessageList';
 
 export type Role = 'user' | 'assistant' | 'system' | 'tool';
 
-const VALID_ROLES: Role[] = ['user', 'assistant', 'system', 'tool'];
+export const VALID_ROLES: Role[] = ['user', 'assistant', 'system', 'tool'];
 
 export type UiMessage = {
   messageId?: string;
