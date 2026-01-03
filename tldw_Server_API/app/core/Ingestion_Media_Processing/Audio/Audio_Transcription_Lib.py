@@ -1675,25 +1675,31 @@ def check_model_exists(model_name: str) -> bool:
 
     normalized_path = Path(normalized)
     if normalized_path.is_absolute():
-        # At this point, _normalize_whisper_model_identifier has already
-        # resolved and validated any path-like identifier so that it must
-        # reside under default_root_path and contain no unsafe components
-        # or symlinks. We avoid re-resolving here to prevent constructing
-        # a new filesystem path from user-controlled data.
+        # The normalized path has already been resolved and validated to
+        # reside under default_root_path by _normalize_whisper_model_identifier.
+        # Re-validate it against the allowed root before touching the filesystem
+        # to ensure that any subsequent use cannot escape the sandbox.
         if not _path_is_within(normalized_path, default_root_path):
             logging.warning(
                 "Whisper model path resolved outside allowed base directory; "
                 f"model_name={model_name!r}, path={normalized_path!r}, base={default_root_path!r}"
             )
             return False
-        return normalized_path.exists()
+        safe_path = resolve_safe_local_path(normalized_path, default_root_path)
+        if safe_path is None:
+            logging.warning(
+                "Whisper model path failed final safety check; "
+                f"model_name={model_name!r}, path={normalized_path!r}, base={default_root_path!r}"
+            )
+            return False
+        return safe_path.exists()
 
     # Check in default download directory for relative identifiers
     model_path = default_root_path / normalized
     if model_path.is_dir():
         return True
 
-    # Check if it's a Hub ID that might be cached
+    # Check if it's a Hub ID that might be cached under our managed root.
     if _is_hf_model_id(normalized):
         # Convert Hub ID to potential cache path
         cache_name = normalized.replace('/', '_')
@@ -1701,14 +1707,9 @@ def check_model_exists(model_name: str) -> bool:
         if cache_path.is_dir():
             return True
 
-    # Check faster-whisper's default cache location
-    home_cache = os.path.expanduser("~/.cache/huggingface/hub")
-    if os.path.exists(home_cache):
-        # Look for model in HuggingFace cache
-        pattern = os.path.join(home_cache, f"*{normalized.replace('/', '--')}*")
-        if glob.glob(pattern):
-            return True
-
+    # Do not probe global HuggingFace cache directories based on user-controlled
+    # identifiers; if the model is not present under the configured root, treat
+    # it as absent and allow the normal download mechanisms to handle it.
     return False
 
 def set_model_download_status(model_name: str, status: str, message: str):

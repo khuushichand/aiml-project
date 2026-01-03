@@ -198,7 +198,7 @@ def _remove_keys_from_config(config_path: Path, keys_found: list[FoundKey]) -> N
     for section, key, _env_name in keys_found:
         try:
             new_config.set(section, key, f"<{key}>")
-            print(f"  Removed {key} from [{section}]")
+            print("  Removed an API key entry from config.txt")
         except (configparser.NoSectionError, configparser.NoOptionError) as exc:
             logger.warning(f"migrate_api_keys: failed to remove {key} from [{section}]: {exc}")
 
