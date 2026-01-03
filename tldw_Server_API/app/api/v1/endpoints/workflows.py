@@ -1789,8 +1789,8 @@ async def replay_webhook_dlq(
     if _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"} and _os.getenv("WORKFLOWS_TEST_REPLAY_SUCCESS", "").lower() in {"1", "true", "yes", "on"}:
         try:
             db.delete_webhook_dlq(dlq_id=dlq_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Workflows DLQ replay: failed to delete dlq_id={} in test mode: {}", dlq_id, exc)
         return {"ok": True, "simulated": True}
 
     # Policy
@@ -1800,8 +1800,8 @@ async def replay_webhook_dlq(
             raise HTTPException(status_code=400, detail="Denied by egress policy")
     except HTTPException:
         raise
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Workflows DLQ replay: egress policy check failed for dlq_id={}: {}", dlq_id, exc)
 
     # Attempt delivery with the same headers/signing as engine
     try:
@@ -1846,15 +1846,13 @@ async def replay_webhook_dlq(
                 def __init__(self, status_code):
                     self.status_code = status_code
             resp = _Resp(int(code))
-        try:
-            logger.debug(f"DLQ replay POST to {url} -> {resp.status_code}")
-        except Exception:
-            pass
+        status_code = getattr(resp, "status_code", None)
+        logger.debug("DLQ replay POST to {} -> {}", url, status_code)
         if 200 <= int(resp.status_code) < 400:
             try:
                 db.delete_webhook_dlq(dlq_id=dlq_id)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Workflows DLQ replay: failed to delete dlq_id={}: {}", dlq_id, exc)
             return {"ok": True, "status_code": int(resp.status_code)}
         else:
             # Update attempts/backoff minimally
@@ -1865,7 +1863,8 @@ async def replay_webhook_dlq(
     except Exception as e:
         logger.debug("Workflows DLQ replay: delivery failed for dlq_id={}: {}", dlq_id, e)
         try:
-            db.update_webhook_dlq_failure(dlq_id=dlq_id, last_error=str(e), next_attempt_at_iso=None)
+            error_detail = f"{type(e).__name__}: {e}"
+            db.update_webhook_dlq_failure(dlq_id=dlq_id, last_error=error_detail, next_attempt_at_iso=None)
         except Exception:
             logger.debug("Workflows DLQ replay: failed to update failure record for dlq_id={}", dlq_id)
         return {"ok": False, "error": "delivery_failed"}

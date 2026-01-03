@@ -19,6 +19,7 @@ from typing import Dict, List, Optional
 
 from loguru import logger
 
+from tldw_Server_API.app.core.exceptions import UnsafeUserPathError
 
 DEFAULT_PATH = Path("Databases/Rewrite_Cache/rewrite_cache.jsonl")
 _USER_DB_BASE = Path("Databases/user_databases")
@@ -82,7 +83,7 @@ def _resolve_user_cache_path(user_id: str) -> Path:
     base_resolved = _USER_DB_BASE.resolve(strict=False)
     cache_resolved = cache_path.resolve(strict=False)
     if not _is_relative_to(cache_resolved, base_resolved):
-        raise ValueError("Resolved rewrite cache path is outside user database base.")
+        raise UnsafeUserPathError("Resolved rewrite cache path is outside user database base.")
     return cache_path
 
 

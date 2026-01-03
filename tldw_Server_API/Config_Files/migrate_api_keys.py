@@ -25,6 +25,8 @@ KeyMapping = dict[tuple[str, str], str]
 FoundKey = tuple[str, str, str]
 EnvVars = dict[str, str]
 
+_PLACEHOLDER_VALUES = {"", "None", "your-api-key-here", "your_api_key_here"}
+
 
 def _parse_args() -> argparse.Namespace:
     """
@@ -186,7 +188,7 @@ def _collect_env_vars(
     keys_found: list[FoundKey] = []
     for (section, key), env_name in api_key_mappings.items():
         value = config.get(section, key, fallback=None)
-        if value and value not in ["", "None", f"<{key}>", "your-api-key-here", "your_api_key_here"]:
+        if value and value not in _PLACEHOLDER_VALUES and not value.startswith("<"):
             if env_name in existing_env and not force:
                 print(f"  Skipping {env_name} (already exists in .env, use --force to overwrite)")
             else:

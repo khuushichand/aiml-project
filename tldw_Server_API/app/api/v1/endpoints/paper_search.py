@@ -2179,9 +2179,15 @@ def _handle_provider_error(err: str) -> None:
     low = err.lower()
     logger.error(f"Provider error: {err}")
     if "not configured" in low:
-        raise HTTPException(status_code=501, detail=_PROVIDER_NOT_CONFIGURED_DETAIL)
+        raise HTTPException(
+            status_code=501,
+            detail={"message": _PROVIDER_NOT_CONFIGURED_DETAIL, "provider_error": err},
+        )
     if "timed out" in low:
-        raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
+        raise HTTPException(
+            status_code=504,
+            detail={"message": _PROVIDER_TIMEOUT_DETAIL, "provider_error": err},
+        )
     if "http error" in low:
         match = re.search(r'(?:http\s+)?error\s*[:\s]*(\d{3})', err, re.IGNORECASE)
         if match:

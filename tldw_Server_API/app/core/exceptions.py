@@ -152,6 +152,14 @@ class ServiceInitializationTimeoutError(ServiceInitializationError):
     """Raised when a service initialization exceeds its timeout."""
 
 
+class WorkflowAdapterError(Exception):
+    """Base exception for workflow adapter errors."""
+
+
+class AdapterError(WorkflowAdapterError):
+    """Workflow adapter-specific error."""
+
+
 async def video_processing_exception_handler(request: Request, exc: VideoProcessingError):
     return JSONResponse(
         status_code=500,

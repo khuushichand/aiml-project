@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple, Set, Optional
 from html.parser import HTMLParser
 
+from loguru import logger
+
 try:
     # Prefer the RAG Document type for consistency
     from .types import Document
@@ -36,7 +38,10 @@ _MAX_GUARDRAIL_TEXT = 10_000
 
 
 def _clip_guardrail_text(text: str, max_len: int = _MAX_GUARDRAIL_TEXT) -> str:
+    """Clip text to max_len, preserving head and tail portions for pattern detection."""
     if not isinstance(text, str) or not text:
+        return ""
+    if max_len <= 0:
         return ""
     if len(text) <= max_len:
         return text
@@ -99,10 +104,12 @@ def downweight_injection_docs(docs: List[Document], strength: float = 0.5) -> Di
                 try:
                     s = float(getattr(d, "score", 0.0) or 0.0)
                 except Exception:
+                    logger.debug("Failed to parse doc score for injection downweight", exc_info=True)
                     s = 0.0
                 d.score = s * max(0.05, min(1.0, float(strength)))
                 affected += 1
         except Exception:
+            logger.debug("Guardrail processing failed during injection downweight", exc_info=True)
             continue
     return {"total": total, "affected": affected}
 
@@ -163,7 +170,7 @@ def _extract_numeric_tokens(text: str) -> Set[str]:
             unit = _WORD_MULTIPLIERS.get(word.lower(), "")
             toks.append(f"{num}{unit}")
     except Exception:
-        pass
+        logger.debug("Guardrail numeric word-pair extraction failed", exc_info=True)
     base: Set[str] = set()
     expanded: Set[str] = set()
     for raw in toks:
@@ -183,7 +190,7 @@ def _extract_numeric_tokens(text: str) -> Set[str]:
                 if core and core.isdigit():
                     expanded.add(core)
         except Exception:
-            pass
+            logger.debug("Guardrail numeric canonicalization failed", exc_info=True)
         # Add expansion for k/m/b to canonical integer string for matching against raw numbers
         try:
             unit = nrm[-1] if nrm and nrm[-1] in {"k", "m", "b", "%"} else ""
@@ -197,9 +204,9 @@ def _extract_numeric_tokens(text: str) -> Set[str]:
                     canonical = str(int(round(num * factor)))
                     expanded.add(canonical)
                 except Exception:
-                    pass
+                    logger.debug("Guardrail numeric expansion failed", exc_info=True)
         except Exception:
-            pass
+            logger.debug("Guardrail numeric expansion setup failed", exc_info=True)
     return base | expanded
 
 
@@ -233,7 +240,7 @@ def check_numeric_fidelity(answer: str, docs: List[Document]) -> NumericFidelity
                 factor = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}[unit]
                 out.add(str(int(round(num * factor))))
         except Exception:
-            pass
+            logger.debug("Guardrail numeric alias expansion failed", exc_info=True)
         return out
     present = set()
     for n in answer_nums:
@@ -310,6 +317,7 @@ def build_hard_citations(
                             "end": int(cit.get("end", 0)),
                         })
                     except Exception:
+                        logger.debug("Guardrail citation mapping failed for claim", exc_info=True)
                         continue
                 if entry["citations"]:
                     supported += 1
@@ -339,6 +347,7 @@ def build_hard_citations(
                         "end": int(end),
                     })
             except Exception:
+                logger.debug("Guardrail hard citation mapping failed", exc_info=True)
                 continue
         if entry["citations"]:
             supported += 1
@@ -362,6 +371,7 @@ def _verify_offsets(doc_text: str, start: int, end: int, target: str) -> bool:
             return re.sub(r"\s+", " ", (x or "").strip())
         return _norm(segment) in {_norm(target), _norm(target[: len(segment)])}
     except Exception:
+        logger.debug("Guardrail offset verification failed", exc_info=True)
         return False
 
 
@@ -396,6 +406,7 @@ def build_quote_citations(answer: str, docs: List[Document]) -> Dict[str, Any]:
                         "verified": bool(verified),
                     })
             except Exception:
+                logger.debug("Guardrail quote citation mapping failed", exc_info=True)
                 continue
         if entry["citations"]:
             supported += 1
@@ -512,6 +523,7 @@ def sanitize_html_allowlist(text: str, allowed_tags: Optional[List[str]] = None,
         stripper.feed(text)
         return stripper.get_data()
     except Exception:
+        logger.debug("Guardrail HTML sanitizer failed; falling back to plain text", exc_info=True)
         # On parser failure, return plain text fallback
         return re.sub(r"<[^>]+>", "", text)
 

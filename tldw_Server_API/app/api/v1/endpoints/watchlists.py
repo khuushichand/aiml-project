@@ -946,7 +946,7 @@ async def bulk_create_sources(
                     errors_count += 1
                     continue
         except Exception as exc:
-            logger.debug(f"bulk_create_sources: group validation error for {s.name}: {exc}")
+            logger.debug(f"bulk_create_sources: tag validation error for {s.name}: {exc}")
             items.append(
                 SourcesBulkCreateItem(
                     name=s.name,

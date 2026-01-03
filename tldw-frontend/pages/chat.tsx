@@ -37,6 +37,7 @@ interface ProvidersResponse {
 }
 
 const DEFAULT_SYSTEM_PROMPT = 'System prompt text';
+const DWELL_TIME_THRESHOLD_MS = 3000;
 
 export default function ChatPage() {
   const { show } = useToast();
@@ -710,10 +711,10 @@ export default function ChatPage() {
       dwellSentRef.current.add(lastAssistant.messageId);
       void sendImplicitFeedback({
         event_type: 'dwell_time',
-        dwell_ms: 3000,
+        dwell_ms: DWELL_TIME_THRESHOLD_MS,
         message_id: lastAssistant.messageId,
       });
-    }, 3000);
+    }, DWELL_TIME_THRESHOLD_MS);
 
     return () => {
       if (dwellTimerRef.current) {
@@ -912,10 +913,10 @@ export default function ChatPage() {
                           <span className="mr-2 inline-flex rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900">
                             System
                           </span>
-                          <span>{text ? 'View system prompt' : DEFAULT_SYSTEM_PROMPT}</span>
+                          <span>View system prompt</span>
                         </summary>
                         <div className="mt-2 whitespace-pre-wrap text-xs text-amber-900">
-                          {text || '(empty)'}
+                          {text || DEFAULT_SYSTEM_PROMPT}
                         </div>
                       </details>
                     );

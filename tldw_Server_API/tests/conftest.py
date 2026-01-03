@@ -4,21 +4,29 @@ Pytest configuration for the main test suite.
 Registers shared test plugins and provides common fixtures.
 """
 
-pytest_plugins = ["tldw_Server_API.tests.helpers.pgvector"]
-
-"""Local pytest configuration for tests subtree.
-
-Note: pytest>=8 discourages defining `pytest_plugins` outside top-level conftest
-files. We register shared plugins here to ensure discovery across the suite,
-and keep per-suite conftests focused on markers and env overrides.
-"""
+# Local pytest configuration for tests subtree.
+# Note: pytest>=8 discourages defining `pytest_plugins` outside top-level conftest
+# files. We register shared plugins here to ensure discovery across the suite,
+# and keep per-suite conftests focused on markers and env overrides.
+pytest_plugins = (
+    "tldw_Server_API.tests.helpers.pgvector",
+    "tldw_Server_API.tests._plugins.e2e_fixtures",
+    "tldw_Server_API.tests._plugins.e2e_state_fixtures",
+    "tldw_Server_API.tests._plugins.chat_fixtures",
+    "tldw_Server_API.tests._plugins.media_fixtures",
+    "tldw_Server_API.tests._plugins.postgres",
+)
 
 import os
 from pathlib import Path
 try:
-    from tldw_Server_API.tests.helpers.pgvector import pgvector_dsn, pgvector_temp_table  # noqa: F401
-except Exception:
+    from tldw_Server_API.tests.helpers.pgvector import pgvector_dsn, pgvector_temp_table
+except (ImportError, ModuleNotFoundError):
+    # pgvector helpers are optional; tests that need them will skip gracefully
     pass
+except Exception as e:
+    import logging
+    logging.getLogger(__name__).debug("Failed to import pgvector helpers: %s", e)
 try:
     # Ensure tests see provider keys from the canonical location
     # Load once at collection time, without overriding explicit env
@@ -317,19 +325,9 @@ try:
 except Exception as e:
     # Surface environment setup failures in test output
     _log.exception("Failed to apply test environment setup in conftest.py")
-import pytest
 from fastapi.testclient import TestClient
 import contextlib
 import asyncio
-
-# Register shared test plugins for the whole suite
-pytest_plugins = (
-    "tldw_Server_API.tests._plugins.e2e_fixtures",
-    "tldw_Server_API.tests._plugins.e2e_state_fixtures",
-    "tldw_Server_API.tests._plugins.chat_fixtures",
-    "tldw_Server_API.tests._plugins.media_fixtures",
-    "tldw_Server_API.tests._plugins.postgres",
-)
 
 
 # Skip Jobs-marked tests by default unless explicitly enabled via RUN_JOBS.

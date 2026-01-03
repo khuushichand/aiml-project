@@ -188,6 +188,8 @@ class KanbanDB:
                 purely numeric IDs are stored as test_user_<id>.
         """
         raw_user_id = str(user_id)
+        if not raw_user_id.strip():
+            raise InputError("user_id is required")
         self.user_id = _normalize_user_id_for_records(raw_user_id)
         self._lock = threading.RLock()
         self.db_path, self._is_memory_db = _normalize_db_path(

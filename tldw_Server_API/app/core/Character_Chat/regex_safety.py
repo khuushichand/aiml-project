@@ -186,7 +186,7 @@ def validate_regex_safety(pattern: str) -> Tuple[bool, str]:
             return False, f"Pattern too slow: test match took {elapsed_ms:.2f}ms"
     except regex.error as e:
         return False, f"Invalid regex: {e}"
-    except (TypeError, AttributeError) as e:
+    except (TypeError, AttributeError, ValueError) as e:
         logger.debug(f"Unexpected error during regex validation: {e}")
         return False, f"Regex validation error: {e}"
 
@@ -221,6 +221,7 @@ def _safe_compile_regex_impl(
         raise re.error(f"Regex pattern rejected: {reason}")
 
     # Attempt compilation with timing (best-effort since Python doesn't support compile timeouts)
+    # We compile with standard `re` first to ensure compatibility, then use `regex` for timeout-safe matching.
     start_time = _time_module.perf_counter()
     try:
         compiled = re.compile(pattern, flags)

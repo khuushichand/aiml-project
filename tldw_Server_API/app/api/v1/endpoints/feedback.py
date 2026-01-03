@@ -260,7 +260,16 @@ async def submit_explicit_feedback(
                             user_notes=updated_notes,
                         )
                     except (CharactersRAGDBError, HTTPException, ValueError) as e:
-                        logger.warning("Failed to merge feedback update: {}", e)
+                        logger.exception(
+                            "Failed to merge feedback update for feedback_id={} dedupe_key={}: {}",
+                            existing.feedback_id,
+                            dedupe_key,
+                            e,
+                        )
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="merge_feedback_update_failed",
+                        ) from e
             await _update_idempotency_record(dedupe_key, merged_issues, updated_notes)
         return ExplicitFeedbackResponse(ok=True, feedback_id=existing.feedback_id)
 

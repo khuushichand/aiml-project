@@ -13,6 +13,7 @@ from typing import Dict, Any, Generator
 from unittest.mock import MagicMock, AsyncMock
 
 import pytest
+from loguru import logger
 
 # Import actual MediaDatabase for integration tests
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
@@ -31,9 +32,9 @@ def pytest_configure(config):
     try:
         # Importing the helpers module registers its fixtures for this test package
         import tldw_Server_API.tests.helpers.pgvector  # noqa: F401
-    except Exception:
+    except (ImportError, AttributeError) as e:
         # If unavailable, tests that require pgvector will be skipped by their own guards
-        pass
+        logger.debug(f"pgvector fixtures not available: {e}")
 
 
 @pytest.fixture(autouse=True)
@@ -47,7 +48,9 @@ def _isolate_semantic_cache(tmp_path, monkeypatch):
     cache_module = None
     try:
         from tldw_Server_API.app.core.RAG.rag_service import semantic_cache as cache_module  # type: ignore
-    except Exception:
+    except (ImportError, AttributeError) as e:
+        # Module may not be available in all test environments
+        logger.debug(f"Semantic cache module not available: {e}")
         cache_module = None
 
     if cache_module is not None:

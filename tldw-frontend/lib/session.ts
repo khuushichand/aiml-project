@@ -50,7 +50,11 @@ function parseStoredSession(raw: string | null): StoredSessionResult | null {
     if (normalized) {
       return { data: normalized, fromLegacy: false };
     }
-  } catch {}
+  } catch (err) {
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('[session] Failed to parse stored session', err);
+    }
+  }
   const normalized = normalizeSessionData(raw);
   return normalized ? { data: normalized, fromLegacy: true } : null;
 }
@@ -59,8 +63,10 @@ function persistSession(data: SessionStorageData): void {
   cachedSession = data;
   try {
     localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(data));
-  } catch {
-    // Best-effort storage only.
+  } catch (err) {
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('[session] Failed to persist session', err);
+    }
   }
 }
 
@@ -85,7 +91,10 @@ export function readSessionId(): string | null {
       persistSession(stored.data);
     }
     return stored.data.id;
-  } catch {
+  } catch (err) {
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('[session] Failed to read session', err);
+    }
     return null;
   }
 }
@@ -106,8 +115,10 @@ export function writeSessionId(value: unknown): string | null {
     } else {
       cachedSession = next;
     }
-  } catch {
-    // Best-effort storage only.
+  } catch (err) {
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('[session] Failed to write session', err);
+    }
   }
   return normalized.id;
 }
@@ -131,7 +142,14 @@ export function getOrCreateSessionId(): string | null {
   if (existing) return existing;
   const generated = generateSessionId();
   if (!generated) return null;
-  return writeSessionId(generated) || generated;
+  const stored = writeSessionId(generated);
+  if (!stored) {
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('[session] Failed to persist generated session id');
+    }
+    return null;
+  }
+  return stored;
 }
 
 export function captureSessionIdFromHeaders(

@@ -20,9 +20,20 @@ export function useChatSessions() {
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const lastSessionIdRef = useRef<string | null>(null);
 
-  const persistSessions = useCallback((list: SessionItem[]) => {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(list)); } catch {}
+  const logStorageError = useCallback((action: string, err: unknown) => {
+    if (process.env.NODE_ENV !== 'development') return;
+    if (typeof console === 'undefined') return;
+    const message = err instanceof Error ? err.message : String(err);
+    console.debug(`[useChatSessions] localStorage ${action} failed: ${message}`);
   }, []);
+
+  const persistSessions = useCallback((list: SessionItem[]) => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+    } catch (err) {
+      logStorageError('write', err);
+    }
+  }, [logStorageError]);
 
   const loadSessions = useCallback(() => {
     try {
@@ -36,8 +47,10 @@ export function useChatSessions() {
           }
         }
       }
-    } catch {}
-  }, []);
+    } catch (err) {
+      logStorageError('read', err);
+    }
+  }, [logStorageError]);
 
   useEffect(() => {
     loadSessions();

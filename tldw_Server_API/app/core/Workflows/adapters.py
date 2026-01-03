@@ -12,15 +12,12 @@ from loguru import logger
 import types
 
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
+from tldw_Server_API.app.core.exceptions import AdapterError
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 from tldw_Server_API.app.core.Workflows.subprocess_utils import start_process, terminate_process
 from tldw_Server_API.app.core.Metrics import start_async_span as _start_span
 from tldw_Server_API.app.core.Security.egress import is_url_allowed, is_url_allowed_for_tenant
 from tldw_Server_API.app.core.http_client import create_client as _wf_create_client
-
-
-class AdapterError(Exception):
-    pass
 
 
 def _sanitize_path_component(value: str, default: str, max_len: int = 80) -> str:

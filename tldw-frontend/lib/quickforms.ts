@@ -221,7 +221,7 @@ export const QUICK_FORMS: QuickFormPreset[] = [
     title: 'Chat Completion',
     method: 'POST',
     path: '/chat/completions',
-    defaults: { model: 'auto', prompt: '', stream: true, save_to_db: false },
+    defaults: { model: 'auto', prompt: 'What is the main topic?', stream: true, save_to_db: false },
     toBody: (s) => ({
       model: s.model || 'auto',
       stream: !!s.stream,
@@ -278,7 +278,7 @@ export const QUICK_FORMS: QuickFormPreset[] = [
     title: 'Unified RAG Search',
     method: 'POST',
     path: '/rag/search',
-    defaults: { query: '', top_k: 10, generation: false },
+    defaults: { query: 'What is the main topic?', top_k: 10, generation: false },
     toBody: (s) => ({
       query: String(s.query || ''),
       top_k: Number(s.top_k || 10),
@@ -336,7 +336,7 @@ export const QUICK_FORMS: QuickFormPreset[] = [
     title: 'Media Search (POST)',
     method: 'POST',
     path: '/media/search',
-    defaults: { query: '', page: 1, per_page: 20 },
+    defaults: { query: 'example search', page: 1, per_page: 20 },
     toBody: (s) => ({ query: String(s.query || ''), page: Number(s.page || 1), per_page: Number(s.per_page || 20) }),
     validate: (b) => {
       const errs: string[] = [];

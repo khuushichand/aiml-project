@@ -71,7 +71,7 @@ def _sink_still_present(sink_id: int) -> bool:
         core = getattr(logger, "_core", None)
         handlers = getattr(core, "handlers", None)
         return isinstance(handlers, dict) and sink_id in handlers
-    except Exception:
+    except (AttributeError, TypeError, KeyError):
         return False
 
 

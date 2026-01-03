@@ -608,6 +608,7 @@ def _resolve_default_cache_dir() -> Optional[Path]:
         # Resolve to an absolute path so downstream checks can reliably enforce containment.
         _DEFAULT_CACHE_DIR = Path(base_dir).expanduser().resolve(strict=False)
         return _DEFAULT_CACHE_DIR
+    project_root = None
     try:
         from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
         cfg = load_and_log_configs() or {}
@@ -616,8 +617,19 @@ def _resolve_default_cache_dir() -> Optional[Path]:
             # Use a fixed subdirectory under the project root for cache storage.
             _DEFAULT_CACHE_DIR = (Path(project_root) / "Databases" / "cache").expanduser().resolve(strict=False)
             return _DEFAULT_CACHE_DIR
-    except Exception:
+    except (OSError, RuntimeError, ValueError) as exc:
+        logger.error(
+            "Semantic cache: failed to resolve base dir from PROJECT_ROOT {}: {}",
+            project_root,
+            exc,
+        )
         return None
+    except Exception:
+        logger.exception(
+            "Semantic cache: unexpected error resolving base dir from PROJECT_ROOT {}",
+            project_root,
+        )
+        raise
     return None
 
 
