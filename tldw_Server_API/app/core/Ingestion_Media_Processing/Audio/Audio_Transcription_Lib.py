@@ -1685,16 +1685,18 @@ def check_model_exists(model_name: str) -> bool:
 
     normalized_path = Path(normalized)
     if normalized_path.is_absolute():
-        # Defensive: ensure any absolute path returned by the normalizer is
-        # still confined to the allowed model base directory before accessing it.
-        candidate = normalized_path.resolve(strict=False)
-        if not _path_is_within(candidate, default_root_path):
+        # At this point, _normalize_whisper_model_identifier has already
+        # resolved and validated any path-like identifier so that it must
+        # reside under default_root_path and contain no unsafe components
+        # or symlinks. We avoid re-resolving here to prevent constructing
+        # a new filesystem path from user-controlled data.
+        if not _path_is_within(normalized_path, default_root_path):
             logging.warning(
                 "Whisper model path resolved outside allowed base directory; "
-                f"model_name={model_name!r}, path={candidate!r}, base={default_root_path!r}"
+                f"model_name={model_name!r}, path={normalized_path!r}, base={default_root_path!r}"
             )
             return False
-        return candidate.exists()
+        return normalized_path.exists()
 
     # Check in default download directory for relative identifiers
     model_path = default_root_path / normalized
