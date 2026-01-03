@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Layout } from '@/components/layout/Layout';
 import { Button } from '@/components/ui/Button';
 import { apiClient, getApiBaseUrl, buildAuthHeaders } from '@/lib/api';
+import { getOrCreateSessionId } from '@/lib/session';
 import { cn } from '@/lib/utils';
 import { streamSSE } from '@/lib/sse';
 import { useToast } from '@/components/ui/ToastProvider';
@@ -9,6 +10,16 @@ import JsonEditor from '@/components/ui/JsonEditor';
 import HotkeysOverlay from '@/components/ui/HotkeysOverlay';
 import { ChatComposer } from '@/components/ui/ChatComposer';
 import { ChatMessageList, type ChatMessage } from '@/components/ui/ChatMessageList';
+import { FeedbackModal, type FeedbackIssueOption } from '@/components/chat/FeedbackModal';
+import { useChatSessions, type SessionItem } from '@/hooks/useChatSessions';
+import {
+  buildChatPayloadMessages,
+  ensureSystemMessage,
+  mapHistoryMessagesToUi,
+  normalizeHistoryMessages,
+  toChatMessages,
+  type UiMessage,
+} from '@/lib/chatTransforms';
 
 interface LLMProvider {
   name: string;
@@ -25,21 +36,6 @@ interface ProvidersResponse {
   total_configured?: number;
 }
 
-type Role = 'user'|'assistant'|'system'|'tool';
-type UiMessage = {
-  messageId?: string;
-  role: Role;
-  text?: string;
-  name?: string;
-  tool?: { name?: string; id?: string; content?: string };
-  provider?: string;
-  model?: string;
-  // Flag messages that are UI-only errors; excluded from API payloads
-  error?: boolean;
-};
-
-type SessionItem = { id: string; title: string; model: string; created_at: string };
-
 export default function ChatPage() {
   const { show } = useToast();
   const [uiMessages, setUiMessages] = useState<UiMessage[]>([
@@ -54,8 +50,7 @@ export default function ChatPage() {
   const [saveToDb, setSaveToDb] = useState<boolean>(false);
   const abortRef = useRef<AbortController | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const [sessions, setSessions] = useState<SessionItem[]>([]);
-  const lastSessionIdRef = useRef<string | null>(null);
+  const { sessions, addSession, mergeSessions, migrateSessionId, lastSessionIdRef } = useChatSessions();
   const [preset, setPreset] = useState<'creative'|'balanced'|'precise'|'json'>('balanced');
   const [advanced, setAdvanced] = useState<string>('{}');
   const [recentModels, setRecentModels] = useState<string[]>([]);
@@ -67,7 +62,6 @@ export default function ChatPage() {
   const [scrollLock, setScrollLock] = useState(false);
   const [showJump, setShowJump] = useState(false);
   const [feedbackById, setFeedbackById] = useState<Record<string, { value?: 'up' | 'down'; pending?: boolean }>>({});
-  const chatSessionIdRef = useRef<string | null>(null);
   const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
   const [feedbackModalMessage, setFeedbackModalMessage] = useState<ChatMessage | null>(null);
   const [feedbackModalHelpful, setFeedbackModalHelpful] = useState<boolean | null>(null);
@@ -120,7 +114,7 @@ export default function ChatPage() {
     });
   }, []);
 
-  const issueOptions = useMemo(() => ([
+  const issueOptions: FeedbackIssueOption[] = useMemo(() => ([
     { id: 'incorrect_information', label: 'Incorrect information' },
     { id: 'not_relevant', label: 'Not relevant to my question' },
     { id: 'missing_details', label: 'Missing important details' },
@@ -144,7 +138,7 @@ export default function ChatPage() {
       const query = getLatestUserQuery();
       await apiClient.post('/rag/feedback/implicit', {
         query: query || undefined,
-        session_id: chatSessionIdRef.current || undefined,
+        session_id: getOrCreateSessionId() || undefined,
         conversation_id: conversationId || undefined,
         ...payload,
       });
@@ -197,45 +191,6 @@ export default function ChatPage() {
     return `${webAssetBase}/webui/img/providers/${p}.svg`;
   }, [webAssetBase]);
 
-  const persistSessions = (list: SessionItem[]) => {
-    try { localStorage.setItem('tldw-chat-sessions', JSON.stringify(list)); } catch {}
-  };
-  const loadSessions = () => {
-    try { const s = localStorage.getItem('tldw-chat-sessions'); if (s) setSessions(JSON.parse(s)); } catch {}
-  };
-  useEffect(() => { loadSessions(); }, []);
-  useEffect(() => {
-    const generateSessionId = () => {
-      const hasCrypto = typeof crypto !== 'undefined';
-      if (hasCrypto && 'randomUUID' in crypto) {
-        return crypto.randomUUID();
-      }
-      if (hasCrypto && 'getRandomValues' in crypto) {
-        const bytes = new Uint8Array(16);
-        crypto.getRandomValues(bytes);
-        // Convert bytes to a hex string, keep existing "sess_" prefix
-        return 'sess_' + Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
-      }
-      if (typeof console !== 'undefined') {
-        console.warn('Using timestamp-based chat session id; crypto API unavailable.');
-      }
-      return `sess_${Date.now()}`;
-    };
-    try {
-      const key = 'tldw-chat-session-id';
-      const existing = localStorage.getItem(key);
-      if (existing) {
-        chatSessionIdRef.current = existing;
-        return;
-      }
-      const generated = generateSessionId();
-      localStorage.setItem(key, generated);
-      chatSessionIdRef.current = generated;
-    } catch {
-      chatSessionIdRef.current = generateSessionId();
-    }
-  }, []);
-
   // Recent models helpers
   const loadRecentModels = () => {
     try { const s = localStorage.getItem('tldw-recent-models'); if (s) setRecentModels(JSON.parse(s)); } catch {}
@@ -276,28 +231,13 @@ export default function ChatPage() {
     const data = await apiClient.get<any>(`/chats/${cid}/messages?${qs.toString()}`);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const msgs: any[] = Array.isArray(data?.messages) ? data.messages : [];
-    // Map to UiMessage[]
-    const mapped: UiMessage[] = msgs.map((m) => {
-      const role: Role = (m.role || 'assistant') as Role;
-      const messageId = m.message_id || m.id;
-      const name = typeof m.name === 'string' ? m.name : undefined;
-      if (role === 'tool') {
-        return { role, messageId, tool: { id: m.tool_call_id, name: m.name, content: m.content } };
-      }
-      return { role, messageId, text: m.content, name };
-    });
-    const normalized = offset > 0
-      ? mapped.filter((m) => !(m.role === 'system' && !m.messageId))
-      : mapped;
+    const mapped = mapHistoryMessagesToUi(msgs);
+    const normalized = normalizeHistoryMessages(mapped, offset);
     setUiMessages((prev) => {
       if (offset > 0) {
         return [...normalized, ...prev];
       }
-      const hasSystem = normalized.some((m) => m.role === 'system');
-      if (!hasSystem) {
-        return [{ role: 'system', text: 'System prompt text' }, ...normalized];
-      }
-      return normalized;
+      return ensureSystemMessage(normalized, 'System prompt text');
     });
     setHasMoreHistory(msgs.length === pageSize);
   }, [pageSize]);
@@ -308,16 +248,9 @@ export default function ChatPage() {
     if (!oldId) return;
     if (!conversationId) return;
     if (oldId.startsWith('local-') && oldId !== conversationId) {
-      const changed = sessions.some((s) => s.id === oldId);
-      if (changed) {
-        const updated = sessions.map((s) => s.id === oldId ? { ...s, id: conversationId } : s);
-        setSessions(updated);
-        persistSessions(updated);
-        lastSessionIdRef.current = conversationId;
-      }
+      migrateSessionId(oldId, conversationId);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversationId]);
+  }, [conversationId, migrateSessionId, lastSessionIdRef]);
 
   const sendMessage = async (messageText?: string) => {
     const text = messageText ?? composerText;
@@ -346,18 +279,7 @@ export default function ChatPage() {
         model,
         stream,
         save_to_db: saveToDb,
-        messages: newUi
-          .filter((m) => m.role !== 'system' && !m.error)
-          .map((m) => {
-            const content = m.tool?.content ?? m.text ?? '';
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const out: any = { role: m.role, content };
-            const toolCallId = m.tool?.id;
-            if (toolCallId) out.tool_call_id = toolCallId;
-            const senderName = m.name || m.tool?.name;
-            if (senderName) out.name = senderName;
-            return out;
-          }),
+        messages: buildChatPayloadMessages(newUi),
       };
       try { const extra = JSON.parse(advanced || '{}'); if (extra && typeof extra === 'object') payload = { ...payload, ...extra }; } catch {}
       payload.slash_command_injection_mode = slashMode;
@@ -426,12 +348,8 @@ export default function ChatPage() {
           // On done, optionally store session reference
           const firstUser = newUi.find((m) => m.role === 'user');
           const title = (firstUser?.text || '').slice(0, 60) || 'Chat';
-          const id = conversationId || 'local-' + Date.now();
-          lastSessionIdRef.current = id;
-          if (!sessions.find((s) => s.id === id)) {
-            const next = [{ id, title, model, created_at: new Date().toISOString() }, ...sessions].slice(0, 50);
-            setSessions(next); persistSessions(next);
-          }
+          const id = conversationId || `local-${Date.now()}`;
+          addSession({ id, title, model, created_at: new Date().toISOString() });
         });
         show({ title: 'Response complete', variant: 'success' });
       } else {
@@ -458,12 +376,8 @@ export default function ChatPage() {
         });
         const firstUser = newUi.find((m) => m.role === 'user');
         const title = (firstUser?.text || '').slice(0, 60) || 'Chat';
-        const id = res?.tldw_conversation_id || conversationId || 'local-' + Date.now();
-        lastSessionIdRef.current = String(id);
-        if (!sessions.find((s) => s.id === id)) {
-          const next = [{ id: String(id), title, model, created_at: new Date().toISOString() }, ...sessions].slice(0, 50);
-          setSessions(next); persistSessions(next);
-        }
+        const id = res?.tldw_conversation_id || conversationId || `local-${Date.now()}`;
+        addSession({ id: String(id), title, model, created_at: new Date().toISOString() });
         show({ title: 'Response ready', variant: 'success' });
       }
     } catch (error: unknown) {
@@ -503,7 +417,7 @@ export default function ChatPage() {
         message_id: messageId,
         feedback_type: 'helpful',
         helpful,
-        session_id: chatSessionIdRef.current || undefined,
+        session_id: getOrCreateSessionId() || undefined,
       });
       setFeedbackById((prev) => ({
         ...prev,
@@ -550,7 +464,7 @@ export default function ChatPage() {
         relevance_score: hasRating ? feedbackModalRating : undefined,
         issues: hasIssues ? feedbackModalIssues : undefined,
         user_notes: hasNotes ? trimmedNotes : undefined,
-        session_id: chatSessionIdRef.current || undefined,
+        session_id: getOrCreateSessionId() || undefined,
       });
       if (helpful !== null) {
         setFeedbackById((prev) => ({
@@ -683,14 +597,7 @@ export default function ChatPage() {
           model: c.model || model,
           created_at: c.created_at || new Date().toISOString(),
         }));
-        if (mapped.length) {
-          setSessions((prev) => {
-            const ids = new Set(prev.map((p) => p.id));
-            const merged = [...prev, ...mapped.filter((m) => !ids.has(m.id))];
-            persistSessions(merged);
-            return merged;
-          });
-        }
+        mergeSessions(mapped);
       } catch {}
     };
     fetchSessions();
@@ -724,35 +631,7 @@ export default function ChatPage() {
     })();
     const avatarProvider = currentProvider || providerFromModel;
     const avatarUrl = providerIconUrl(avatarProvider);
-    return uiMessages
-      .map((m) => {
-        if (m.role === 'tool' && m.tool) {
-          return {
-            type: 'tool',
-            position: 'left',
-            content: { name: m.tool.name || 'tool', text: m.tool.content || '' },
-            user: { name: 'Tool' },
-            role: 'tool',
-            messageId: m.messageId,
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          } as any;
-        }
-        const isUser = m.role === 'user';
-        const isSystem = m.role === 'system';
-        const assistantName = m.name || 'Assistant';
-        return {
-          type: 'text',
-          position: isSystem ? 'center' : (isUser ? 'right' : 'left'),
-          content: { text: m.text || '' },
-          user: isUser
-            ? { name: 'You' }
-            : isSystem
-              ? undefined
-              : (avatarUrl ? { name: assistantName, avatar: avatarUrl } : { name: assistantName }),
-          role: m.role,
-          messageId: m.messageId,
-        } as ChatMessage;
-      });
+    return toChatMessages(uiMessages, avatarUrl);
   }, [uiMessages, model, currentProvider, providerIconUrl]);
 
   const renderFeedbackFooter = useCallback((msg: ChatMessage) => {
@@ -1095,100 +974,19 @@ export default function ChatPage() {
           </div>
         </div>
       </div>
-      {feedbackModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={closeFeedbackModal}>
-          <div
-            className="w-full max-w-lg rounded-lg bg-white p-4 shadow-xl"
-            onClick={(event) => event.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-          >
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-gray-900">Feedback</h3>
-              <button
-                type="button"
-                className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-100"
-                onClick={closeFeedbackModal}
-                aria-label="Close feedback dialog"
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="mb-4">
-              <div className="text-sm font-medium text-gray-800">How would you rate this response?</div>
-              <div className="mt-2 flex items-center gap-2">
-                {Array.from({ length: 5 }).map((_, idx) => {
-                  const ratingValue = idx + 1;
-                  const active = ratingValue <= feedbackModalRating;
-                  return (
-                    <button
-                      key={`rating-${ratingValue}`}
-                      type="button"
-                      className={cn(
-                        'h-8 w-8 rounded-full border text-sm font-semibold transition',
-                        active ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-300 text-gray-500 hover:bg-gray-100'
-                      )}
-                      onClick={() => setFeedbackModalRating(ratingValue)}
-                      aria-label={`Rate ${ratingValue} out of 5`}
-                    >
-                      {ratingValue}
-                    </button>
-                  );
-                })}
-                {feedbackModalRating > 0 && (
-                  <span className="text-xs text-gray-500">{feedbackModalRating}/5</span>
-                )}
-              </div>
-            </div>
-
-            <div className="mb-4">
-              <div className="text-sm font-medium text-gray-800">What was the issue? (select all that apply)</div>
-              <div className="mt-2 grid grid-cols-1 gap-2 text-sm text-gray-700 sm:grid-cols-2">
-                {issueOptions.map((issue) => (
-                  <label key={issue.id} className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={feedbackModalIssues.includes(issue.id)}
-                      onChange={() => {
-                        setFeedbackModalIssues((prev) => (
-                          prev.includes(issue.id)
-                            ? prev.filter((item) => item !== issue.id)
-                            : [...prev, issue.id]
-                        ));
-                      }}
-                    />
-                    <span>{issue.label}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            <div className="mb-4">
-              <label className="text-sm font-medium text-gray-800" htmlFor="feedback-notes">
-                Additional comments (optional)
-              </label>
-              <textarea
-                id="feedback-notes"
-                className="mt-2 w-full rounded border border-gray-300 p-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                rows={4}
-                value={feedbackModalNotes}
-                onChange={(event) => setFeedbackModalNotes(event.target.value)}
-                placeholder="Share extra context to help improve responses..."
-              />
-            </div>
-
-            <div className="flex items-center justify-end gap-2">
-              <Button variant="secondary" onClick={closeFeedbackModal} disabled={feedbackModalSubmitting}>
-                Cancel
-              </Button>
-              <Button onClick={handleDetailedFeedbackSubmit} loading={feedbackModalSubmitting}>
-                Submit Feedback
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+      <FeedbackModal
+        open={feedbackModalOpen}
+        rating={feedbackModalRating}
+        issues={feedbackModalIssues}
+        notes={feedbackModalNotes}
+        submitting={feedbackModalSubmitting}
+        issueOptions={issueOptions}
+        onClose={closeFeedbackModal}
+        onSubmit={handleDetailedFeedbackSubmit}
+        onRatingChange={setFeedbackModalRating}
+        onIssuesChange={setFeedbackModalIssues}
+        onNotesChange={setFeedbackModalNotes}
+      />
     </Layout>
   );
 }

@@ -8,17 +8,18 @@ import hashlib
 import os
 import re
 from pathlib import Path
-from typing import Optional, Dict, Union
+from typing import Callable, Dict, Optional, Union
 from loguru import logger
 
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Utils.Utils import get_project_root
-from tldw_Server_API.app.core.exceptions import StorageUnavailableError
+from tldw_Server_API.app.core.exceptions import InvalidStoragePathError, StorageUnavailableError
 
 
 UserId = Union[int, str]
 _SAFE_TEST_USER_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_SAFE_OUTPUT_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 def _is_test_context() -> bool:
@@ -43,6 +44,87 @@ def _normalize_user_id(user_id: UserId) -> str:
         digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
         return f"u_{digest}"
     raise ValueError(f"Invalid user_id for filesystem path: {user_id!r}")
+
+
+def normalize_output_storage_filename(
+    storage_path: str | Path,
+    *,
+    allow_absolute: bool,
+    reject_relative_with_separators: bool,
+    expand_user: bool = False,
+    base_resolved: Optional[Path] = None,
+    check_relative_containment: bool = False,
+    require_parent_base: bool = False,
+    log_message: Optional[Callable[[str], None]] = None,
+    log_prefix: Optional[str] = None,
+) -> str:
+    """Normalize and validate an output storage path, returning a safe filename."""
+    def _log(message: str) -> None:
+        if log_message is None:
+            return
+        if log_prefix:
+            log_message(f"{log_prefix}: {message}")
+        else:
+            log_message(message)
+
+    def _fail(message: str, exc: Optional[Exception] = None) -> None:
+        _log(message)
+        if exc is None:
+            raise InvalidStoragePathError("invalid_path")
+        raise InvalidStoragePathError("invalid_path") from exc
+
+    storage_path_str = str(storage_path)
+
+    if not check_relative_containment and isinstance(storage_path, str):
+        if (
+            _SAFE_OUTPUT_NAME_RE.match(storage_path)
+            and os.sep not in storage_path
+            and (os.altsep is None or os.altsep not in storage_path)
+        ):
+            return storage_path
+
+    candidate = Path(storage_path_str)
+    if expand_user:
+        candidate = candidate.expanduser()
+
+    if candidate.is_absolute():
+        if not allow_absolute:
+            _fail(f"absolute paths are not allowed for outputs: {candidate}")
+    elif reject_relative_with_separators and (
+        os.sep in storage_path_str or (os.altsep and os.altsep in storage_path_str)
+    ):
+        _fail("nested output paths are not allowed")
+
+    candidate_name = candidate.name
+    if not candidate_name:
+        _fail(f"empty output path component from {storage_path!r}")
+    if os.sep in candidate_name or (os.altsep and os.altsep in candidate_name):
+        _fail(f"path separator detected in output filename: {candidate_name!r}")
+    if not _SAFE_OUTPUT_NAME_RE.match(candidate_name):
+        _fail(f"invalid characters in output filename: {candidate_name!r}")
+
+    if candidate.is_absolute():
+        if base_resolved is None:
+            _fail("outputs base directory unavailable for absolute path validation")
+        try:
+            resolved = candidate.resolve(strict=False)
+        except Exception as exc:
+            _fail(f"invalid output path {storage_path}: {exc}", exc)
+        if not resolved.is_relative_to(base_resolved):
+            _fail(f"output path outside base dir: {resolved}")
+        if require_parent_base and resolved.parent != base_resolved:
+            _fail(f"output path outside base dir: {resolved}")
+    elif check_relative_containment:
+        if base_resolved is None:
+            _fail("outputs base directory unavailable for path validation")
+        try:
+            resolved = (base_resolved / candidate_name).resolve(strict=False)
+        except Exception as exc:
+            _fail(f"invalid output path {storage_path}: {exc}", exc)
+        if not resolved.is_relative_to(base_resolved):
+            _fail(f"output path outside base dir: {resolved}")
+
+    return candidate_name
 
 
 
@@ -133,7 +215,7 @@ class DatabasePaths:
             prompts_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             logger.error(f"Failed to create prompts directory {prompts_dir}: {e}")
-            raise
+            raise StorageUnavailableError("Failed to create prompts directory") from e
 
         return prompts_dir / DatabasePaths.PROMPTS_DB_NAME
 
@@ -148,7 +230,7 @@ class DatabasePaths:
             audit_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             logger.error(f"Failed to create audit directory {audit_dir}: {e}")
-            raise
+            raise StorageUnavailableError("Failed to create audit directory") from e
 
         return audit_dir / DatabasePaths.AUDIT_DB_NAME
 
@@ -163,7 +245,7 @@ class DatabasePaths:
             eval_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             logger.error(f"Failed to create evaluations directory {eval_dir}: {e}")
-            raise
+            raise StorageUnavailableError("Failed to create evaluations directory") from e
 
         return eval_dir / DatabasePaths.EVALUATIONS_DB_NAME
 
@@ -183,7 +265,7 @@ class DatabasePaths:
             workflows_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             logger.error(f"Failed to create workflows directory {workflows_dir}: {e}")
-            raise
+            raise StorageUnavailableError("Failed to create workflows directory") from e
         return workflows_dir / DatabasePaths.WORKFLOWS_DB_NAME
 
     @staticmethod
@@ -195,7 +277,7 @@ class DatabasePaths:
             workflows_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             logger.error(f"Failed to create workflows scheduler directory {workflows_dir}: {e}")
-            raise
+            raise StorageUnavailableError("Failed to create workflows scheduler directory") from e
         return workflows_dir / DatabasePaths.WORKFLOWS_SCHEDULER_DB_NAME
 
     @staticmethod

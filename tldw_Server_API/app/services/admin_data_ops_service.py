@@ -38,6 +38,7 @@ from tldw_Server_API.app.core.AuthNZ.retention_policies import (
 )
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
 from tldw_Server_API.app.core.Utils.Utils import get_project_relative_path
+from tldw_Server_API.app.core.Utils.path_utils import safe_join
 
 
 @dataclass(frozen=True)
@@ -84,31 +85,15 @@ def _normalize_user_id(user_id: Optional[int]) -> Optional[int]:
     return value
 
 
+def _backup_path_error(_: Exception | None) -> InvalidBackupPathError:
+    return InvalidBackupPathError("invalid_backup_path")
+
+
 def _safe_join(base_dir: str, name: str) -> str:
-    base_dir_abs = os.path.abspath(base_dir)
-    candidate = os.path.abspath(os.path.join(base_dir_abs, name))
-    base_real = os.path.realpath(base_dir_abs)
-    candidate_real = os.path.realpath(candidate)
-    try:
-        if os.path.commonpath([base_real, candidate_real]) != base_real:
-            raise InvalidBackupPathError("invalid_backup_path")
-        relative = os.path.relpath(candidate, base_dir_abs)
-    except ValueError as exc:
-        raise InvalidBackupPathError("invalid_backup_path") from exc
-    if relative.startswith(os.pardir + os.sep) or relative == os.pardir:
+    resolved = safe_join(base_dir, name, error_factory=_backup_path_error)
+    if resolved is None:
         raise InvalidBackupPathError("invalid_backup_path")
-    if os.path.islink(candidate):
-        raise InvalidBackupPathError("invalid_backup_path")
-    current = base_dir_abs
-    for part in relative.split(os.sep):
-        if part in ("", "."):
-            continue
-        current = os.path.join(current, part)
-        if os.path.islink(current):
-            raise InvalidBackupPathError("invalid_backup_path")
-    if os.path.islink(candidate_real):
-        raise InvalidBackupPathError("invalid_backup_path")
-    return candidate_real
+    return resolved
 
 
 def _backup_dir_for_dataset(dataset: str, user_id: Optional[int]) -> str:

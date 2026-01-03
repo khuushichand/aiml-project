@@ -60,6 +60,13 @@ class TestPropositionStrategy:
         assert len(chunks) >= 1
         assert "(" in chunks[0]
 
+    def test_nested_parentheses_degrade_gracefully(self):
+        strategy = PropositionChunkingStrategy()
+        text = "foo (bar (baz) qux) end"
+        chunks = strategy.chunk(text, max_size=1, overlap=0, aggressiveness=1, min_proposition_length=1)
+        # Index-based scan closes on the first ')' and does not balance nested parentheses.
+        assert chunks == ["foo (bar (baz)", "qux) end"]
+
 
 class TestChunkerIntegration:
     def test_chunker_with_propositions_method(self):

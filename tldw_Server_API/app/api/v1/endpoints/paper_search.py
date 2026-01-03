@@ -3,6 +3,7 @@
 
 import asyncio
 import math
+import re
 from typing import Optional, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -2183,13 +2184,13 @@ def _handle_provider_error(err: str) -> None:
     if "timed out" in low:
         raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
     if "http error" in low:
-        nums = []
-        for s in err.split():
-            if s.isdigit():
-                num = int(s)
-                if 400 <= num < 600:
-                    nums.append(num)
-        code = nums[0] if nums else 502
+        match = re.search(r'(?:http\s+)?error[:\s]+(\d{3})', err, re.IGNORECASE)
+        if match:
+            code = int(match.group(1))
+            if code < 400 or code >= 600:
+                code = 502
+        else:
+            code = 502
         raise HTTPException(status_code=code, detail=_PROVIDER_ERROR_DETAIL)
     raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
 

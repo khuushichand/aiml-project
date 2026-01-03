@@ -17,7 +17,8 @@ from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 
-_HMAC_KDF_SALT = b"tldw_authnz_hmac_kdf_v1"
+_HMAC_KDF_SALT_LEGACY = b"tldw_authnz_hmac_kdf_v1"
+_HMAC_KDF_SALT_PREFIX = b"tldw_authnz_hmac_kdf_v2:"
 _HMAC_KDF_ITERATIONS = 100_000
 _HMAC_KDF_DKLEN = 32
 
@@ -30,20 +31,30 @@ def _ensure_secret_bytes(secret: Optional[str]) -> Optional[bytes]:
     return str(secret).encode("utf-8")
 
 
-def _derive_hmac_key_from_source(source: bytes) -> bytes:
+def _derive_hmac_kdf_salt(source: bytes) -> bytes:
+    # Derive a per-secret salt from a domain-separated fingerprint of the source.
+    return hashlib.sha256(_HMAC_KDF_SALT_PREFIX + hashlib.sha256(source).digest()).digest()
+
+
+def _derive_hmac_key_from_source(source: bytes, *, legacy: bool = False) -> bytes:
     return hashlib.pbkdf2_hmac(
         "sha256",
         source,
-        _HMAC_KDF_SALT,
+        _HMAC_KDF_SALT_LEGACY if legacy else _derive_hmac_kdf_salt(source),
         _HMAC_KDF_ITERATIONS,
         dklen=_HMAC_KDF_DKLEN,
     )
 
 
-def derive_hmac_key_from_source(raw: str | bytes) -> bytes:
-    """Derive a 32-byte HMAC key from raw secret material using the configured KDF."""
+def derive_hmac_key_from_source(raw: str | bytes, *, legacy: bool = False) -> bytes:
+    """Derive a 32-byte HMAC key from raw secret material using the configured KDF.
+
+    Args:
+        raw: Secret material to derive from.
+        legacy: When True, use the fixed legacy salt for backward compatibility.
+    """
     source = raw if isinstance(raw, bytes) else str(raw).encode("utf-8")
-    return _derive_hmac_key_from_source(source)
+    return _derive_hmac_key_from_source(source, legacy=legacy)
 
 
 def derive_hmac_key(settings: Optional[Settings] = None) -> bytes:
@@ -72,6 +83,8 @@ def derive_hmac_key_candidates(settings: Optional[Settings] = None) -> List[byte
 
     Important: Public keys are intentionally excluded from HMAC/encryption key
     derivation to avoid using non-secret material as cryptographic input.
+    Legacy fixed-salt derivations are retained as secondary candidates to
+    preserve verification of stored hashes created before the per-secret salt.
     """
     s = settings or get_settings()
     auth_mode = getattr(s, "AUTH_MODE", "single_user")
@@ -157,6 +170,9 @@ def derive_hmac_key_candidates(settings: Optional[Settings] = None) -> List[byte
         hashed = _derive_hmac_key_from_source(source)
         if hashed not in keys:
             keys.append(hashed)
+        legacy = _derive_hmac_key_from_source(source, legacy=True)
+        if legacy not in keys:
+            keys.append(legacy)
     return keys
 
 

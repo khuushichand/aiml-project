@@ -717,6 +717,7 @@ class Settings(BaseSettings):
 
                     is_new_format = parse_api_key(self.SINGLE_USER_API_KEY) is not None
                 except (ImportError, AttributeError):
+                    logger.debug("Could not import parse_api_key; treating key as legacy format")
                     is_new_format = False
 
                 if not is_new_format and not allow_legacy:

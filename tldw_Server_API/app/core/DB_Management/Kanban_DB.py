@@ -34,8 +34,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.testing import is_test_mode
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths, _is_test_context
 
 # --- Helper Functions ---
 def _utcnow_iso() -> str:
@@ -46,10 +45,6 @@ def _utcnow_iso() -> str:
 def _generate_uuid() -> str:
     """Generate a lowercase hex UUID."""
     return uuid_module.uuid4().hex.lower()
-
-
-def _is_test_context() -> bool:
-    return bool(os.getenv("PYTEST_CURRENT_TEST")) or is_test_mode()
 
 
 def _normalize_user_id_for_records(user_id: str) -> str:
@@ -76,9 +71,8 @@ def _normalize_db_path(
         raise InputError(f"Invalid db_path: {db_path}") from exc
 
     # Always enforce that the database path stays within the user's base directory
-    # when a user_id is provided. This guards
-    # against directory traversal or use of unexpected locations, even if
-    # allow_external_db_path is True.
+    # when a user_id is provided. This guards against directory traversal or use
+    # of unexpected locations.
     if user_id:
         try:
             user_dir = DatabasePaths.get_user_base_directory(user_id).resolve()
@@ -184,9 +178,9 @@ class KanbanDB:
         Initialize the KanbanDB instance.
 
         Args:
-            db_path: Path to the SQLite database file.
+            db_path: Path to the SQLite database file. Must resolve within the
+                user-scoped database directory.
             user_id: The user ID for this database instance.
-                The path must resolve within the user-scoped database directory.
         """
         raw_user_id = str(user_id)
         self.user_id = _normalize_user_id_for_records(raw_user_id)
@@ -233,18 +227,29 @@ class KanbanDB:
         if self._is_memory_db:
             if self._memory_conn is None:
                 # Keep a single shared connection so :memory: schema/data persist.
-                self._memory_conn = sqlite3.connect(
+                conn = sqlite3.connect(
                     self.db_path,
                     timeout=30,
                     isolation_level=None,
                     check_same_thread=False,
                     factory=_KanbanMemoryConnection,
                 )
-                self._configure_connection(self._memory_conn, enable_wal=False)
+                try:
+                    self._configure_connection(conn, enable_wal=False)
+                except Exception:
+                    try:
+                        conn.force_close()
+                    finally:
+                        raise
+                self._memory_conn = conn
             return self._memory_conn
 
         conn = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
-        self._configure_connection(conn)
+        try:
+            self._configure_connection(conn)
+        except Exception:
+            conn.close()
+            raise
         return conn
 
     def _ensure_schema(self) -> None:

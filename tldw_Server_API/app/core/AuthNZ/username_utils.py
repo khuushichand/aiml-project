@@ -1,3 +1,4 @@
+# ruff: noqa: TRY003
 """
 Shared helpers for username validation and normalization.
 """
@@ -15,6 +16,30 @@ class InvalidUsernameError(ValueError):
 
 
 def normalize_admin_username(raw: str) -> str:
+    """
+    Normalize and validate an admin username.
+
+    Args:
+        raw: Raw username input to normalize and validate.
+
+    Returns:
+        str: Normalized username (lowercased, trimmed).
+
+    Raises:
+        InvalidUsernameError: If the username is required but empty after trim.
+        InvalidUsernameError: If the username is shorter than 3 characters.
+        InvalidUsernameError: If the username exceeds 50 characters.
+        InvalidUsernameError: If the username contains invalid characters
+            (allowed: letters, numbers, underscores, hyphens).
+        InvalidUsernameError: If the username is reserved (e.g., "admin", "root").
+
+    Notes:
+        Normalization/validation steps: trim whitespace, lowercase, enforce
+        min/max length, match against the allowed pattern, and reject reserved
+        usernames. There are no side effects; this is a pure helper. Allowed
+        characters are ASCII letters, digits, underscores, and hyphens, and the
+        length bounds are 3-50 characters.
+    """
     candidate = (raw or "").strip().lower()
     if not candidate:
         raise InvalidUsernameError("Username is required")

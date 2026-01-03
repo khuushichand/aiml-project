@@ -1,3 +1,5 @@
+import { captureSessionIdFromHeaders } from '@/lib/session';
+
 export type SSEMessageHandler = (delta: string) => void;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type SSEJSONHandler = (json: any) => void;
@@ -7,6 +9,7 @@ export interface SSEOptions {
   headers?: Record<string, string>;
   body?: string;
   signal?: AbortSignal;
+  credentials?: RequestCredentials;
 }
 
 // Minimal SSE reader using fetch + ReadableStream decoding
@@ -21,9 +24,10 @@ export async function streamSSE(
     method: options.method || 'GET',
     headers: options.headers,
     body: options.body,
-    credentials: 'include',
+    credentials: options.credentials ?? 'include',
     signal: options.signal,
   });
+  captureSessionIdFromHeaders(res.headers);
 
   if (!res.ok || !res.body) {
     throw new Error(`Stream error: ${res.status} ${res.statusText}`);
@@ -72,12 +76,14 @@ export async function streamSSE(
               onDelta(String(choices[0].message.content));
             }
           } catch (parseError: unknown) {
-            // If it's not JSON, treat as plain text
-            if (payload && typeof payload === 'string') {
-              onDelta(payload);
-            } else {
-              throw parseError;
+            // If it's not JSON, treat as plain text; otherwise bubble up errors.
+            if (parseError instanceof SyntaxError) {
+              if (payload && typeof payload === 'string') {
+                onDelta(payload);
+              }
+              continue;
             }
+            throw parseError;
           }
         }
       }

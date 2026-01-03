@@ -36,7 +36,7 @@ type FilePickerOptions = {
   multiple?: boolean;
 };
 
-type PersistDraftFileParams = {
+export type PersistDraftFileParams = {
   draftId: string;
   file: File;
   maxInlineBytes: number;
@@ -128,11 +128,8 @@ export async function persistDraftFileAsset({
     }
   } else {
     record.blob = file;
-    record.kind = handle ? 'handle' : 'blob';
-    if (handle) {
-      record.fileHandle = handle;
-    }
-    storedAs = record.kind;
+    record.kind = 'blob';
+    storedAs = 'blob';
   }
 
   await db.assets.put(record);
@@ -154,9 +151,7 @@ export async function persistDraft(draft: Draft): Promise<void> {
     ...draft,
     updatedAt: new Date().toISOString(),
   };
-  await db.transaction('rw', db.drafts, async () => {
-    await db.drafts.put(record);
-  });
+  await db.drafts.put(record);
 }
 
 export async function loadDrafts(): Promise<Draft[]> {
@@ -205,7 +200,8 @@ export async function getDraftFileForUpload(draftId: string): Promise<DraftFileL
         ...resolved,
         file,
       };
-    } catch {
+    } catch (error) {
+      console.warn('Failed to access file handle:', error);
       return {
         assetStatus: 'missing',
         assetNote: 'File handle unavailable. Reattach before commit.',
@@ -252,7 +248,8 @@ export async function resolveDraftFileAssetStatus(
         assetNote: 'File linked. It will upload on commit.',
         source,
       };
-    } catch {
+    } catch (error) {
+      console.warn('Failed to access file handle:', error);
       return {
         assetStatus: 'missing',
         assetNote: 'File handle unavailable. Reattach before commit.',
@@ -301,6 +298,7 @@ export async function requestFileHandleForFile(
       return null;
     }
     const pickedFile = await handle.getFile();
+    // Validation only checks name and size; this is a best-effort re-select match.
     if (pickedFile.name !== file.name || pickedFile.size !== file.size) {
       return null;
     }

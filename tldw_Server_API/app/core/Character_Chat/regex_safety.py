@@ -208,7 +208,7 @@ def _safe_compile_regex_impl(
         timeout_ms: Maximum time allowed for compilation (best-effort)
 
     Returns:
-        Compiled regex pattern
+        Compiled regex pattern (either re.Pattern or regex.Pattern)
 
     Raises:
         re.error: If pattern is invalid or potentially dangerous

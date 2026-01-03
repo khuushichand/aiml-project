@@ -586,7 +586,7 @@ class APIKeyManager:
                     if not hash_candidates:
                         return None
                     primary_hash = hash_candidates[0]
-                    if not hmac.compare_digest(stored_hash, primary_hash):
+                    if not any(hmac.compare_digest(stored_hash, cand) for cand in hash_candidates):
                         return None
             else:
                 hash_candidates = self.hash_candidates(api_key)

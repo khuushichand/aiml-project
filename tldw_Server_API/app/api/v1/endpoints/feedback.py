@@ -181,7 +181,7 @@ def _ensure_conversation_owner(conversation: dict, current_user: User) -> None:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
     except (TypeError, ValueError):
         if str(conv_client_id) != str(user_id):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation") from None
 
 
 @router.post(

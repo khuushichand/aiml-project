@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { authService } from '../auth';
-import type { LoginCredentials } from '../auth';
+import { authService, type LoginCredentials } from '../auth';
 import { apiClient } from '@/lib/api';
 
 vi.mock('@/lib/api', () => {
@@ -62,6 +61,20 @@ describe('authService.login error handling', () => {
     await expect(authService.login(credentials)).rejects.toThrow(/MFA required/i);
   });
 
+  it('handles network errors gracefully', async () => {
+    mockedApiClient.post.mockRejectedValueOnce(new Error('Network error'));
+
+    await expect(authService.login(credentials)).rejects.toThrow(/network/i);
+  });
+
+  it('handles errors without detail field', async () => {
+    mockedApiClient.post.mockRejectedValueOnce(
+      makeError('Unknown error', 400)
+    );
+
+    await expect(authService.login(credentials)).rejects.toThrow('Unknown error');
+  });
+
   it('returns a clear message for account lockout (423)', async () => {
     mockedApiClient.post.mockRejectedValueOnce(
       makeError('Locked', 423, 'Account locked due to too many failed attempts')
@@ -99,6 +112,16 @@ describe('authService.login error handling', () => {
 
     await expect(authService.login(credentials)).rejects.toThrow(
       'Internal error'
+    );
+  });
+
+  it('returns a fallback message for other server errors (503)', async () => {
+    mockedApiClient.post.mockRejectedValueOnce(
+      makeError('', 503)
+    );
+
+    await expect(authService.login(credentials)).rejects.toThrow(
+      'Authentication service is temporarily unavailable. Please try again later.'
     );
   });
 });

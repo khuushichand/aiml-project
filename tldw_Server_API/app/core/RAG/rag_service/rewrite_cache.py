@@ -77,7 +77,7 @@ def _resolve_user_cache_path(user_id: str) -> Path:
     """
     safe_component = _normalize_user_id_segment(user_id)
     # Construct path using only the sanitized single directory component.
-    cache_dir = base_dir / safe_component / "Rewrite_Cache"
+    cache_dir = _USER_DB_BASE / safe_component / "Rewrite_Cache"
     return cache_dir / "rewrite_cache.jsonl"
 
 
@@ -148,7 +148,8 @@ class RewriteCache:
                     p.parent.mkdir(parents=True, exist_ok=True)
                     self.path = str(p)
                 except Exception as e:
-                    logger.warning(f"Failed to resolve user cache path for user_id={user_id}: {e}")
+                    hashed_user_id = _hash_user_id(str(user_id))
+                    logger.warning(f"Failed to resolve user cache path for user_id={hashed_user_id}: {e}")
                     self.path = str(_safe_path())
             else:
                 self.path = str(_safe_path())

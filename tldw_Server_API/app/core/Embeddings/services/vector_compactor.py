@@ -38,7 +38,7 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 _DB_CLOSE_EXCEPTIONS = (BackendDatabaseError, sqlite3.Error, OSError, RuntimeError)
 _CHROMA_CLOSE_EXCEPTIONS = (RuntimeError, OSError)
 if ChromaError is not None:
-    _CHROMA_CLOSE_EXCEPTIONS = _CHROMA_CLOSE_EXCEPTIONS + (ChromaError,)
+    _CHROMA_CLOSE_EXCEPTIONS = (*_CHROMA_CLOSE_EXCEPTIONS, ChromaError)
 
 
 def _sanitize_media_db_path(user_id: str, db_path: Optional[str]) -> str:

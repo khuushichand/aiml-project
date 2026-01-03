@@ -98,6 +98,26 @@ class InvalidRetentionRangeError(AdminDataOpsError):
     """Raised when a retention policy update is out of range."""
 
 
+class TemplateStoreError(Exception):
+    """Base exception for watchlist template store errors."""
+
+
+class TemplateValidationError(TemplateStoreError, ValueError):
+    """Raised when a watchlist template validation check fails."""
+
+
+class InvalidTemplateNameError(TemplateValidationError):
+    """Raised when a template name fails validation."""
+
+
+class InvalidTemplateFormatError(TemplateValidationError):
+    """Raised when a template format is invalid."""
+
+
+class InvalidTemplatePathError(TemplateValidationError):
+    """Raised when a template path escapes the allowed base directory."""
+
+
 class ResourceNotFoundError(Exception):
     """Generic resource-not-found error for domain-level lookups."""
 

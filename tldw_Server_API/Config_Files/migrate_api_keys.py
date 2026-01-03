@@ -129,11 +129,11 @@ def _collect_env_vars(
         value = config.get(section, key, fallback=None)
         if value and value not in ["", "None", f"<{key}>", "your-api-key-here", "your_api_key_here"]:
             if env_name in existing_env and not force:
-                print("  Skipping existing value in .env (use --force to overwrite)")
+                print(f"  Skipping {env_name} (already exists in .env, use --force to overwrite)")
             else:
                 env_vars[env_name] = value
                 keys_found.append((section, key, env_name))
-                print("  Found API key (value hidden)")
+                print(f"  Found {env_name} (value hidden)")
     return env_vars, keys_found
 
 

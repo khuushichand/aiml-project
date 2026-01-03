@@ -24,16 +24,23 @@ export async function validateWithAjv(data: unknown, schema?: JsonSchema): Promi
   try {
     const mod = await import('ajv') as AjvModule;
     const Ajv = mod.default;
-    if (!Ajv) return [];
+    if (!Ajv) {
+      if (typeof console !== 'undefined') {
+        console.warn('[validateWithAjv] AJV unavailable – schema validation skipped');
+      }
+      return [];
+    }
     const ajv = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false });
     const validate = ajv.compile(schema);
     const ok = validate(data);
     if (ok) return [];
-    const errs = (validate.errors || []).map((e: AjvError) => `${e.instancePath || e.schemaPath}: ${e.message}`);
+    const errs = (validate.errors || []).map((e: AjvError) => `${e.instancePath || e.schemaPath || ''}: ${e.message ?? 'invalid'}`);
     return errs;
   } catch {
     // ajv not installed or failed, return no errors to avoid blocking
+    if (typeof console !== 'undefined') {
+      console.warn('[validateWithAjv] AJV unavailable – schema validation skipped');
+    }
     return [];
   }
 }
-

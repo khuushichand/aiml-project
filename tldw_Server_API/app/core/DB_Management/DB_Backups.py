@@ -13,6 +13,7 @@ from loguru import logger
 # Local Imports:
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Utils.Utils import get_project_relative_path
+from tldw_Server_API.app.core.Utils.path_utils import safe_join
 from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseBackend, BackendType
 #
 # End of Imports
@@ -27,31 +28,7 @@ def _safe_join(base_dir: str, name: str) -> Optional[str]:
 
     Returns the normalized, real path on success, or None on failure.
     """
-    if not name or os.path.isabs(name):
-        return None
-    base_dir_abs = os.path.abspath(base_dir)
-    candidate = os.path.abspath(os.path.join(base_dir_abs, name))
-    try:
-        relative = os.path.relpath(candidate, base_dir_abs)
-    except ValueError:
-        return None
-    if relative.startswith(os.pardir + os.sep) or relative == os.pardir:
-        return None
-    current = base_dir_abs
-    for part in relative.split(os.sep):
-        if part in ("", "."):
-            continue
-        current = os.path.join(current, part)
-        if os.path.islink(current):
-            return None
-    base_real = os.path.realpath(base_dir_abs)
-    candidate_real = os.path.realpath(candidate)
-    try:
-        if os.path.commonpath([base_real, candidate_real]) != base_real:
-            return None
-    except ValueError:
-        return None
-    return candidate_real
+    return safe_join(base_dir, name)
 #######################################################################################################################
 #
 # Functions:
@@ -273,6 +250,7 @@ def restore_single_db_backup(db_path: str, backup_dir: str, db_name: str, backup
         error_msg = f"Failed to restore backup: {str(e)}"
         logger.error(error_msg)
         return error_msg
+
 
 def setup_backup_config(user_id: Optional[int] = None) -> Dict[str, Dict[str, str]]:
     """Setup configuration for database backups using centralized path utils.

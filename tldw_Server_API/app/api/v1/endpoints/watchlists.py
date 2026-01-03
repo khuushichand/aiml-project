@@ -30,6 +30,7 @@ from tldw_Server_API.app.core.Watchlists.fetchers import fetch_rss_feed, fetch_s
 from tldw_Server_API.app.core.Watchlists.filters import normalize_filters as _normalize_job_filters, evaluate_filters as _evaluate_filters
 from tldw_Server_API.app.core.DB_Management.scope_context import get_scope as _get_scope
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool as _get_db_pool
+from tldw_Server_API.app.core.exceptions import TemplateValidationError
 # Lazy/optional notifications import: avoid blocking router load if optional deps fail
 try:
     from tldw_Server_API.app.core.Notifications import NotificationsService  # type: ignore
@@ -2443,7 +2444,7 @@ async def create_template(
             description=payload.description,
             overwrite=payload.overwrite,
         )
-    except ValueError as exc:
+    except TemplateValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except template_store.TemplateExistsError:
         raise HTTPException(status_code=409, detail="template_exists")

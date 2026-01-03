@@ -14,8 +14,6 @@ Notes:
 from __future__ import annotations
 
 import json
-import os
-import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,7 +29,7 @@ from tldw_Server_API.app.core.exceptions import (
 )
 from .backends.base import DatabaseBackend, DatabaseConfig, BackendType, DatabaseError
 from .backends.factory import DatabaseBackendFactory
-from .db_path_utils import DatabasePaths
+from .db_path_utils import DatabasePaths, normalize_output_storage_filename
 
 
 def _utcnow_iso() -> str:
@@ -1048,12 +1046,6 @@ class CollectionsDatabase:
     # ------------------------
     def resolve_output_storage_path(self, path_value: str | Path) -> str:
         """Resolve and validate output storage paths as relative filenames."""
-        def _raise_invalid_path(message: str, exc: Optional[Exception] = None) -> None:
-            logger.warning(message)
-            if exc is None:
-                raise InvalidStoragePathError("invalid_path")
-            raise InvalidStoragePathError("invalid_path") from exc
-
         try:
             user_id = int(self.user_id)
         except (TypeError, ValueError) as exc:
@@ -1065,25 +1057,15 @@ class CollectionsDatabase:
         except Exception as exc:
             logger.error(f"outputs: failed to resolve outputs base dir for user {self.user_id}: {exc}")
             raise StorageUnavailableError("storage_unavailable") from exc
-        candidate = path_value if isinstance(path_value, Path) else Path(path_value)
-        if candidate.is_absolute():
-            _raise_invalid_path(f"outputs: absolute paths are not allowed for outputs: {candidate}")
-
-        candidate_name = candidate.name
-        if not candidate_name:
-            _raise_invalid_path(f"outputs: empty output path component from {path_value!r}")
-        if os.sep in candidate_name or (os.altsep and os.altsep in candidate_name):
-            _raise_invalid_path(f"outputs: path separator detected in output filename: {candidate_name!r}")
-        if not re.match(r"^[A-Za-z0-9_.-]+$", candidate_name):
-            _raise_invalid_path(f"outputs: invalid characters in output filename: {candidate_name!r}")
-
-        try:
-            resolved = (base_resolved / candidate_name).resolve(strict=False)
-        except Exception as exc:
-            _raise_invalid_path(f"outputs: invalid output path {path_value}: {exc}", exc)
-        if not resolved.is_relative_to(base_resolved):
-            _raise_invalid_path(f"outputs: output path outside base dir: {resolved}")
-        return candidate_name
+        return normalize_output_storage_filename(
+            storage_path=path_value,
+            allow_absolute=False,
+            reject_relative_with_separators=False,
+            base_resolved=base_resolved,
+            check_relative_containment=True,
+            log_message=logger.warning,
+            log_prefix="outputs",
+        )
 
     @dataclass
     class OutputArtifactRow:

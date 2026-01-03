@@ -280,7 +280,10 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
                         s.get("id", t),
                         e,
                     )
-                    raise HTTPException(status_code=422, detail=f"Invalid config for step '{s.get('id', t)}'")
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Invalid config for step '{s.get('id', t)}'",
+                    ) from e
 
     # Graph/DAG robustness checks (detect explicit cycles and unknown targets)
     _validate_dag(defn)

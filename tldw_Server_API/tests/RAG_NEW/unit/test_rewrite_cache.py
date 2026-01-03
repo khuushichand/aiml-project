@@ -1,9 +1,13 @@
 from pathlib import Path
 
+import pytest
+
 from tldw_Server_API.app.core.RAG.rag_service.rewrite_cache import (
     RewriteCache,
     _is_relative_to,
 )
+
+pytestmark = pytest.mark.unit
 
 
 def test_rewrite_cache_put_get(tmp_path, monkeypatch):

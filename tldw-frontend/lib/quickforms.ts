@@ -1,21 +1,24 @@
 export type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+export type ApiPath = `/${string}`;
+export type QuickFormValue = string | number | boolean | Record<string, unknown> | Array<unknown> | null | undefined;
+export type QuickFormState = Record<string, QuickFormValue>;
+export type QuickFormBody = Record<string, QuickFormValue>;
 
 import { JsonSchema } from '@/lib/schema';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export interface QuickFormPreset<TState extends Record<string, any> = Record<string, any>> {
+export interface QuickFormPreset<TState extends QuickFormState = QuickFormState> {
   id: string;
   title: string;
   method: Method;
-  path: string; // relative to /api/{version}
+  path: ApiPath; // relative to /api/{version}
   defaults: TState;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  toBody: (state: TState) => any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  validate?: (body: any) => string[]; // return list of errors; empty = valid
+  toBody: (state: TState) => QuickFormBody | undefined;
+  validate?: (body: QuickFormBody) => string[]; // return list of errors; empty = valid
   describe?: string;
   schema?: JsonSchema; // optional JSON schema for request body
 }
+
+const asArray = (value: unknown): QuickFormValue[] => (Array.isArray(value) ? value : []);
 
 export const QUICK_FORMS: QuickFormPreset[] = [
   {
@@ -63,7 +66,8 @@ export const QUICK_FORMS: QuickFormPreset[] = [
     toBody: (s) => ({ queries: s.queries || [], config: s.config || {} }),
     validate: (b) => {
       const errs: string[] = [];
-      if (!Array.isArray(b?.queries) || b.queries.length === 0) errs.push('queries must be non-empty array');
+      const queries = asArray(b?.queries);
+      if (queries.length === 0) errs.push('queries must be non-empty array');
       return errs;
     },
     schema: {
@@ -131,7 +135,8 @@ export const QUICK_FORMS: QuickFormPreset[] = [
     toBody: (s) => ({ images: s.images || [], engine: s.engine || 'auto' }),
     validate: (b) => {
       const errs: string[] = [];
-      if (!Array.isArray(b?.images) || b.images.length === 0) errs.push('images must be a non-empty array');
+      const images = asArray(b?.images);
+      if (images.length === 0) errs.push('images must be a non-empty array');
       return errs;
     },
     schema: {
@@ -153,7 +158,8 @@ export const QUICK_FORMS: QuickFormPreset[] = [
     toBody: (s) => ({ name: s.name || 'response-quality', inputs: s.inputs || [], model: s.model || undefined }),
     validate: (b) => {
       const errs: string[] = [];
-      if (!Array.isArray(b?.inputs) || b.inputs.length === 0) errs.push('inputs must be a non-empty array');
+      const inputs = asArray(b?.inputs);
+      if (inputs.length === 0) errs.push('inputs must be a non-empty array');
       return errs;
     },
     schema: {
@@ -208,7 +214,7 @@ export const QUICK_FORMS: QuickFormPreset[] = [
     title: 'Chat Completion',
     method: 'POST',
     path: '/chat/completions',
-    defaults: { model: '', prompt: '', stream: true, save_to_db: false },
+    defaults: { model: 'auto', prompt: '', stream: true, save_to_db: false },
     toBody: (s) => ({
       model: s.model || 'auto',
       stream: !!s.stream,
@@ -221,9 +227,15 @@ export const QUICK_FORMS: QuickFormPreset[] = [
     validate: (b) => {
       const errs: string[] = [];
       if (!b || typeof b !== 'object') errs.push('Body must be an object');
-      if (!b?.messages || !Array.isArray(b.messages) || b.messages.length === 0) errs.push('messages must be a non-empty array');
-      const last = b?.messages?.[b.messages.length - 1];
-      if (!last || last.role !== 'user' || !String(last.content || '').trim()) errs.push('Last message must be a non-empty user message');
+      const messages = asArray(b?.messages);
+      if (messages.length === 0) errs.push('messages must be a non-empty array');
+      const last = (messages[messages.length - 1] ?? {}) as QuickFormBody;
+      if (last.role !== 'user' || !String(last.content || '').trim()) errs.push('Last message must be a non-empty user message');
+      const maxMessageLength = 10000;
+      const totalLength = messages.reduce((sum: number, msg: { content?: QuickFormValue }) => sum + String(msg?.content || '').length, 0);
+      if (totalLength > 50000) errs.push('Total message content exceeds maximum length (50000 characters)');
+      const oversizeIndex = messages.findIndex((msg: { content?: QuickFormValue }) => String(msg?.content || '').length > maxMessageLength);
+      if (oversizeIndex >= 0) errs.push(`Message ${oversizeIndex + 1} exceeds maximum length (${maxMessageLength} characters)`);
       return errs;
     },
     describe: 'OpenAI-compatible chat endpoint with optional streaming and DB persistence.',
@@ -232,8 +244,8 @@ export const QUICK_FORMS: QuickFormPreset[] = [
       required: ['model', 'messages'],
       properties: {
         model: { type: 'string', description: 'Provider/model identifier' },
-        stream: { type: 'boolean' },
-        save_to_db: { type: 'boolean' },
+        stream: { type: 'boolean', description: 'Enable Server-Sent Events streaming' },
+        save_to_db: { type: 'boolean', description: 'Persist conversation to database' },
         messages: {
           type: 'array',
           items: {
@@ -268,7 +280,7 @@ export const QUICK_FORMS: QuickFormPreset[] = [
       const errs: string[] = [];
       if (!String(b?.query || '').trim()) errs.push('query is required');
       const tk = Number(b?.top_k || 0);
-      if (!Number.isFinite(tk) || tk <= 0) errs.push('top_k must be a positive number');
+      if (!Number.isFinite(tk) || tk <= 0 || tk > 100) errs.push('top_k must be between 1 and 100');
       return errs;
     },
     describe: 'Search across your content with a minimal config. Use the Search page for full options.',
@@ -363,7 +375,8 @@ export const QUICK_FORMS: QuickFormPreset[] = [
     toBody: (s) => ({ tasks: s.tasks || [] }),
     validate: (b) => {
       const errs: string[] = [];
-      if (!Array.isArray(b?.tasks) || b.tasks.length === 0) errs.push('tasks must be non-empty array');
+      const tasks = asArray(b?.tasks);
+      if (tasks.length === 0) errs.push('tasks must be non-empty array');
       return errs;
     },
     schema: {

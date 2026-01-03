@@ -18,6 +18,11 @@ from pathlib import Path
 from loguru import logger
 
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.exceptions import (
+    InvalidTemplateFormatError,
+    InvalidTemplateNameError,
+    InvalidTemplatePathError,
+)
 
 _SLUG_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
 _SUPPORTED_SUFFIXES = {".md", ".html"}
@@ -67,7 +72,7 @@ def _assert_within_base(path: Path, base: Path) -> None:
         base: The base directory that must contain the path.
 
     Raises:
-        ValueError: If the resolved path escapes the base directory.
+        InvalidTemplatePathError: If the resolved path escapes the base directory.
     """
     # Ensure that any path derived from user input stays within the base directory.
     # Using only `path.name` prevents directory traversal via subdirectories.
@@ -77,7 +82,7 @@ def _assert_within_base(path: Path, base: Path) -> None:
         # Ensure the candidate path is within the resolved base directory
         candidate.relative_to(resolved_base)
     except ValueError as err:
-        raise ValueError(_TEMPLATE_PATH_ERROR) from err
+        raise InvalidTemplatePathError(_TEMPLATE_PATH_ERROR) from err
 
 
 def _template_path(name: str, fmt: str) -> Path:
@@ -91,7 +96,8 @@ def _template_path(name: str, fmt: str) -> Path:
         Validated path within the template directory.
 
     Raises:
-        ValueError: If the name is invalid or the path escapes the base directory.
+        InvalidTemplateNameError: If the name is invalid.
+        InvalidTemplatePathError: If the path escapes the base directory.
     """
     name = _sanitize_name(name)
     fmt = fmt.lower()
@@ -112,7 +118,8 @@ def _meta_path(name: str) -> Path:
         Validated path to the .meta.json file within the template directory.
 
     Raises:
-        ValueError: If the name is invalid or the path escapes the base directory.
+        InvalidTemplateNameError: If the name is invalid.
+        InvalidTemplatePathError: If the path escapes the base directory.
     """
     name = _sanitize_name(name)
     base = _resolved_dir()
@@ -128,7 +135,7 @@ def _load_description(meta_file: Path) -> str | None:
         data = json.loads(meta_file.read_text(encoding="utf-8"))
         desc = data.get("description")
         return str(desc) if desc is not None else None
-    except (OSError, json.JSONDecodeError, UnicodeError) as exc:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         logger.debug(f"Failed to read template metadata from {meta_file}: {exc}")
         return None
 
@@ -142,7 +149,7 @@ def _save_description(meta_file: Path, description: str | None) -> None:
 
 def _sanitize_name(name: str) -> str:
     if not _SLUG_RE.fullmatch(name):
-        raise ValueError(_INVALID_TEMPLATE_NAME_ERROR)
+        raise InvalidTemplateNameError(_INVALID_TEMPLATE_NAME_ERROR)
     return name
 
 
@@ -200,7 +207,7 @@ def save_template(
     name = _sanitize_name(name)
     fmt = fmt.lower()
     if fmt not in {"md", "html"}:
-        raise ValueError(_INVALID_TEMPLATE_FORMAT_ERROR)
+        raise InvalidTemplateFormatError(_INVALID_TEMPLATE_FORMAT_ERROR)
     path = _template_path(name, fmt)
     directory = path.parent
 

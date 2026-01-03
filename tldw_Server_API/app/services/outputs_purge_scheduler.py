@@ -134,10 +134,7 @@ async def _purge_for_user(user_id: int, delete_files: bool, grace_days: int) -> 
             try:
                 relative_name = normalize_output_storage_path(user_id, pth)
                 base_dir = DatabasePaths.get_user_base_directory(user_id) / "outputs"
-                base_resolved = base_dir.resolve(strict=False)
-                p = (base_resolved / relative_name).resolve(strict=False)
-                if not p.is_relative_to(base_resolved):
-                    raise StoragePathValidationError("invalid_path")
+                p = base_dir / relative_name
                 if p.exists():
                     p.unlink()
                     files_deleted += 1

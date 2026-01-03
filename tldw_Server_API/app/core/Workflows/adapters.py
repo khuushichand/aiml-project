@@ -55,12 +55,12 @@ def _is_subpath(parent: Path, child: Path) -> bool:
     """
     try:
         parent_resolved = parent.resolve(strict=False)
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError) as e:
         logger.debug(f"Failed to resolve parent path {parent}: {e}")
         parent_resolved = parent
     try:
         child_resolved = child.resolve(strict=False)
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError) as e:
         logger.debug(f"Failed to resolve child path {child}: {e}")
         child_resolved = child
     try:

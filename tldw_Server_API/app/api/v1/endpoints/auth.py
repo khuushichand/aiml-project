@@ -1073,27 +1073,6 @@ async def register(
         _finalize_register_diag(request, response)
         raise
     except Exception as e:
-        # Check if it's a transaction error wrapping a duplicate user error
-        error_msg = str(e).lower()
-        if "username already exists" in error_msg or "email already exists" in error_msg:
-            logger.warning(f"Registration failed - duplicate user (wrapped): {e}")
-            if "username" in error_msg:
-                detail = "Username already exists"
-            else:
-                detail = "Email already exists"
-            log_counter("auth_register_duplicate_wrapped")
-            log_histogram("auth_register_duration", time.perf_counter() - start_time)
-            if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
-                try:
-                    response.headers["X-TLDW-Register-Error"] = "duplicate-user-wrapped"
-                except Exception:
-                    pass
-            _finalize_register_diag(request, response)
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=detail
-            )
-
         logger.error(f"Unexpected registration error: {e}")
         log_counter("auth_register_unexpected_error")
         log_histogram("auth_register_duration", time.perf_counter() - start_time)

@@ -73,6 +73,7 @@ export interface SSEOptions {
   headers?: Record<string, string>;
   body?: string;
   signal?: AbortSignal;
+  credentials?: RequestCredentials;
 }
 
 // ========================================

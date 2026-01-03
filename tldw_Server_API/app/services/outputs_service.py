@@ -1,17 +1,15 @@
 from __future__ import annotations
 
-import os
-import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.db_path_utils import (
+    DatabasePaths,
+    normalize_output_storage_filename,
+)
 from tldw_Server_API.app.core.exceptions import InvalidStoragePathError
-
-
-_SAFE_OUTPUT_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 def normalize_output_storage_path(user_id: int, storage_path: str) -> str:
@@ -19,31 +17,23 @@ def normalize_output_storage_path(user_id: int, storage_path: str) -> str:
     if not storage_path:
         raise InvalidStoragePathError("invalid_path")
 
-    if (
-        _SAFE_OUTPUT_NAME_RE.match(storage_path)
-        and os.sep not in storage_path
-        and (os.altsep is None or os.altsep not in storage_path)
-    ):
-        return storage_path
-
+    base_resolved: Path | None = None
     candidate = Path(storage_path).expanduser()
-    if (os.sep in storage_path or (os.altsep and os.altsep in storage_path)) and not candidate.is_absolute():
-        raise InvalidStoragePathError("invalid_path")
-    candidate_name = candidate.name
-    if not candidate_name or not _SAFE_OUTPUT_NAME_RE.match(candidate_name):
-        raise InvalidStoragePathError("invalid_path")
-
     if candidate.is_absolute():
         try:
             base_dir = DatabasePaths.get_user_base_directory(user_id) / "outputs"
             base_resolved = base_dir.resolve(strict=False)
-            resolved = candidate.resolve(strict=False)
         except Exception as exc:
             raise InvalidStoragePathError("invalid_path") from exc
-        if not resolved.is_relative_to(base_resolved) or resolved.parent != base_resolved:
-            raise InvalidStoragePathError("invalid_path")
 
-    return candidate_name
+    return normalize_output_storage_filename(
+        storage_path=storage_path,
+        allow_absolute=True,
+        reject_relative_with_separators=True,
+        expand_user=True,
+        base_resolved=base_resolved,
+        require_parent_base=True,
+    )
 
 def update_output_artifact_db(
     cdb,

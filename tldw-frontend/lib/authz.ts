@@ -25,8 +25,8 @@ function normalizeStringArray(input: unknown): string[] {
 export function isAdmin(user: AuthUser | null | undefined): boolean {
   try {
     if (!user) return false;
-    if (user.is_admin) return true;
-    if (user.isAdmin) return true;
+    if (user.is_admin === true) return true;
+    if (user.isAdmin === true) return true;
 
     const roleVal = user.role != null ? String(user.role).toLowerCase() : '';
     if (roleVal === 'admin') return true;
@@ -45,4 +45,3 @@ export function isAdmin(user: AuthUser | null | undefined): boolean {
     return false;
   }
 }
-

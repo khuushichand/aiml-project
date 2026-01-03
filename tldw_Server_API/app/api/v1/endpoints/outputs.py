@@ -48,7 +48,7 @@ def _resolve_output_path_for_user(user_id: int, path_value: str | PathlibPath) -
         base_resolved = base_dir.resolve(strict=False)
     except Exception as e:
         logger.error(f"outputs: failed to resolve outputs base dir for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail="storage_unavailable")
+        raise HTTPException(status_code=500, detail="storage_unavailable") from e
 
     # Defense-in-depth: treat path_value as untrusted and reduce to a safe filename under base_dir.
     # Normalize the candidate to a single relative filename component.
@@ -81,7 +81,7 @@ def _resolve_output_path_for_user(user_id: int, path_value: str | PathlibPath) -
         resolved = (base_resolved / safe_candidate).resolve(strict=False)
     except Exception as e:
         logger.warning(f"outputs: invalid output path {path_value}: {e}")
-        raise HTTPException(status_code=400, detail="invalid_path")
+        raise HTTPException(status_code=400, detail="invalid_path") from e
 
     if not resolved.is_relative_to(base_resolved):
         logger.warning(f"outputs: output path outside base dir: {resolved}")
@@ -687,7 +687,6 @@ async def purge_outputs(
 
     removed = 0
     if ids:
-        placeholders = ",".join(["?"] * len(ids))
         try:
             removed = delete_outputs_by_ids(cdb=cdb, user_id=cdb.user_id, ids=list(ids))
         except Exception as e:

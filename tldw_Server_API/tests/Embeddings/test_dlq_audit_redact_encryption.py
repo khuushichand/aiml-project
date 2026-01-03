@@ -195,7 +195,6 @@ def test_dlq_crypto_roundtrip_legacy(monkeypatch):
 
     key_str = "legacy-passphrase"
     monkeypatch.setenv("EMBEDDINGS_DLQ_ENCRYPTION_KEY", key_str)
-    monkeypatch.delenv("EMBEDDINGS_DLQ_SALT", raising=False)
     payload = {"legacy": True, "value": "ok"}
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 

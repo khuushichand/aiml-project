@@ -913,8 +913,6 @@ async def build_context_and_messages(
             raw_hist = list(reversed(raw_hist))
         for db_msg in raw_hist:
             sender_val = str(db_msg.get("sender", "") or "")
-            if not sender_val.strip():
-                continue
             role = map_sender_to_role(sender_val, character_card.get("name") if character_card else None)
             if not _should_include_message_in_llm_payload(role):
                 continue
@@ -1565,6 +1563,7 @@ async def execute_streaming_call(
                 use_transaction=True,
             )
         # Usage logging (estimated) after stream completes
+        total_est = 0
         try:
             pt_est = 0
             try:

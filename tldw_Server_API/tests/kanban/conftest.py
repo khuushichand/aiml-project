@@ -42,7 +42,7 @@ def kanban_db(temp_db_path: str) -> Generator[KanbanDB, None, None]:
 @pytest.fixture
 def kanban_db_user2(temp_db_dir: str) -> Generator[KanbanDB, None, None]:
     """Create a second KanbanDB instance for testing user isolation."""
-    _ = temp_db_dir  # ensure fixture is used for env setup
+    # temp_db_dir fixture sets USER_DB_BASE_DIR for this test.
     db_path = DatabasePaths.get_kanban_db_path(2)
     db = KanbanDB(db_path=str(db_path), user_id="2")
     yield db
