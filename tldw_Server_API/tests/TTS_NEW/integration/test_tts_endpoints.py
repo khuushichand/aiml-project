@@ -492,6 +492,38 @@ class TestErrorHandling:
 
             assert response.status_code in [status.HTTP_503_SERVICE_UNAVAILABLE, status.HTTP_429_TOO_MANY_REQUESTS]
 
+    async def test_missing_provider_credentials_returns_503(self, test_client, auth_headers, monkeypatch):
+        """Missing provider credentials should return 503 with error code."""
+        from tldw_Server_API.app.core.AuthNZ.byok_runtime import ResolvedByokCredentials
+
+        async def _missing(provider, *args, **kwargs):
+            return ResolvedByokCredentials(
+                provider=provider,
+                api_key=None,
+                app_config=None,
+                credential_fields={},
+                source="server",
+                allowlisted=True,
+            )
+
+        monkeypatch.setattr(audio_endpoints, "resolve_byok_credentials", _missing)
+
+        response = test_client.post(
+            "/api/v1/audio/speech",
+            json={
+                "input": "Test missing key",
+                "voice": "alloy",
+                "model": "tts-1",
+                "response_format": "mp3",
+                "stream": False,
+            },
+            headers=auth_headers,
+        )
+
+        assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        detail = response.json().get("detail", {})
+        assert detail.get("error_code") == "missing_provider_credentials"
+
 # ========================================================================
 # Batch Processing Tests
 # ========================================================================

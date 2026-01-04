@@ -207,6 +207,18 @@ _AUDIO_VALIDATION_CACHE: Dict[str, tuple] = {}
 _PRUNE_DISABLED_LOGGED: bool = False
 
 
+def _default_transcript_cache_root() -> Path:
+    """
+    Return the centralized transcript cache root under the system temp directory.
+    """
+    root = Path(tempfile.gettempdir())
+    try:
+        return root.resolve(strict=False)
+    except Exception as exc:
+        logging.debug(f"Failed to resolve temp dir for transcript cache: {exc}")
+        return root
+
+
 def _sanitize_transcription_model_name(model_name: str) -> str:
     """
     Return a filesystem-safe transcription model identifier for cache files.
@@ -258,13 +270,13 @@ def _get_allowed_media_base_dirs() -> List[Path]:
     roots: List[Path] = []
     try:
         roots.append(Path(tempfile.gettempdir()).resolve(strict=False))
-    except Exception as exc:
+    except (OSError, PermissionError, ValueError) as exc:
         logging.debug(f"Could not resolve temp directory for allowed base dirs: {exc}")
     try:
         user_base = settings.get("USER_DB_BASE_DIR")
         if user_base:
             roots.append(Path(user_base).resolve(strict=False))
-    except Exception as exc:
+    except (OSError, PermissionError, ValueError, AttributeError) as exc:
         logging.debug(f"Could not resolve USER_DB_BASE_DIR for allowed base dirs: {exc}")
 
     _ALLOWED_MEDIA_BASE_DIRS = roots
@@ -405,9 +417,9 @@ def _resolve_transcript_cache_dir(
     Resolve and create the transcript cache directory.
 
     When base_dir is provided, creates the cache under that directory.
-    Otherwise, creates the cache alongside the audio file.
+    Otherwise, uses the system temp root for centralized caching.
     """
-    root_dir = base_dir if base_dir is not None else audio_path.parent
+    root_dir = base_dir if base_dir is not None else _default_transcript_cache_root()
     cache_dir = root_dir / TRANSCRIPT_CACHE_DIR_NAME
     _assert_no_symlink(cache_dir, label="Transcript cache directory")
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -1868,7 +1880,7 @@ class WhisperModel(OriginalWhisperModel):
                     # Ensure the candidate directory stays within the allowed root
                     candidate_resolved.relative_to(root_resolved)
                     is_within_root = True
-                except Exception:
+                except (ValueError, OSError):
                     is_within_root = False
                 if is_within_root and candidate_resolved.is_dir():
                     logging.info(
@@ -2488,8 +2500,9 @@ def speech_to_text(
         `transcribe_audio` instead.
 
         When persistence is enabled and a file path is provided, transcript
-        cache files are stored under a dedicated `transcripts_cache` directory
-        within the processing temp root rather than alongside the input file.
+        cache files are stored under a dedicated `transcripts_cache` directory.
+        If `base_dir` is provided, the cache is created under that directory;
+        otherwise it is created under the system temp root.
 
     Raises:
         ValueError: If `audio_input` is not provided or is invalid.

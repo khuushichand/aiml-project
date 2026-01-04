@@ -764,8 +764,8 @@ class TestFullUserWorkflow:
                 data_tracker.add_chat(response["chat_id"])
 
         except (httpx.HTTPStatusError, httpx.ConnectError) as e:
-            # Skip test if API key is not configured (400/503 error)
-            if isinstance(e, httpx.HTTPStatusError) and e.response.status_code in (400, 503):
+            # Skip test if API key is not configured (503 error)
+            if isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 503:
                 error_detail = e.response.json().get("detail", "")
                 if isinstance(error_detail, dict):
                     if error_detail.get("error_code") == "missing_provider_credentials":
@@ -1272,7 +1272,7 @@ class TestFullUserWorkflow:
             print(f"✓ Character chat successful with {character_name}")
 
         except httpx.HTTPStatusError as e:
-            if e.response.status_code in (400, 503):
+            if e.response.status_code == 503:
                 error_detail = e.response.json().get("detail", "")
                 if isinstance(error_detail, dict):
                     if error_detail.get("error_code") == "missing_provider_credentials":

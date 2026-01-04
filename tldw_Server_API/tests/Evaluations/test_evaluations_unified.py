@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi.testclient import TestClient
+from fastapi import status
 from httpx import AsyncClient
 import time
 
@@ -83,6 +84,7 @@ def use_temp_evaluations_db(temp_db_path, monkeypatch, event_loop):
 
     monkeypatch.setattr(EvaluationManager, "_get_db_path", _get_db_path, raising=False)
     monkeypatch.setenv("EVALUATIONS_TEST_DB_PATH", str(temp_db_path))
+    monkeypatch.setenv("OPENAI_API_KEY", TEST_SK_KEY)
 
     service = UnifiedEvaluationService(
         db_path=str(temp_db_path),
@@ -340,6 +342,40 @@ class TestUnifiedEvaluationCRUD:
 class TestTldwSpecificEndpoints:
     """Test tldw-specific evaluation endpoints"""
 
+    def test_geval_missing_provider_credentials_returns_503(
+        self,
+        client,
+        auth_headers,
+        sample_geval_request,
+        monkeypatch,
+    ):
+        """Missing provider credentials should return 503 with error code."""
+        from tldw_Server_API.app.api.v1.endpoints import evaluations_unified as eval_ep
+        from tldw_Server_API.app.core.AuthNZ.byok_runtime import ResolvedByokCredentials
+
+        async def _missing(provider, *args, **kwargs):
+            return ResolvedByokCredentials(
+                provider=provider,
+                api_key=None,
+                app_config=None,
+                credential_fields={},
+                source="server",
+                allowlisted=True,
+            )
+
+        monkeypatch.setattr(eval_ep, "_is_eval_test_mode", lambda: False)
+        monkeypatch.setattr(eval_ep, "resolve_byok_credentials", _missing)
+
+        response = client.post(
+            "/api/v1/evaluations/geval",
+            json=sample_geval_request,
+            headers=auth_headers,
+        )
+
+        assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        detail = response.json().get("detail", {})
+        assert detail.get("error_code") == "missing_provider_credentials"
+
     def test_geval_endpoint(self, client, auth_headers, sample_geval_request):
         """Test G-Eval summarization endpoint"""
         # Mock multiple potential service paths
@@ -386,13 +422,9 @@ class TestTldwSpecificEndpoints:
     async def test_rag_endpoint(self, client, auth_headers, sample_rag_request):
         """Test RAG evaluation endpoint"""
         with patch(
-            'tldw_Server_API.app.api.v1.endpoints.evaluations_unified._resolve_and_validate_eval_provider',
-            new_callable=AsyncMock,
-        ) as mock_provider, patch(
             'tldw_Server_API.app.core.Evaluations.unified_evaluation_service.UnifiedEvaluationService.evaluate_rag',
             new_callable=AsyncMock,
         ) as mock_evaluate:
-            mock_provider.return_value = ("openai", "sk-test", None, None)
             # Mock the RAG evaluation service method
             mock_evaluate.return_value = {
                 "evaluation_id": "rag_123",
@@ -431,13 +463,9 @@ class TestTldwSpecificEndpoints:
     async def test_response_quality_endpoint(self, client, auth_headers):
         """Test response quality evaluation endpoint"""
         with patch(
-            'tldw_Server_API.app.api.v1.endpoints.evaluations_unified._resolve_and_validate_eval_provider',
-            new_callable=AsyncMock,
-        ) as mock_provider, patch(
             'tldw_Server_API.app.core.Evaluations.unified_evaluation_service.UnifiedEvaluationService.evaluate_response_quality',
             new_callable=AsyncMock,
         ) as mock_evaluate:
-            mock_provider.return_value = ("openai", "sk-test", None, None)
             # Mock the response quality evaluation service method
             mock_evaluate.return_value = {
                 "evaluation_id": "quality_123",
@@ -844,10 +872,10 @@ class TestErrorHandling:
         response = client.get("/api/v1/evaluations")
         assert response.status_code == 401
         detail = response.json().get("detail")
-        if isinstance(detail, dict):
-            assert "error" in detail
-        else:
-            assert "not authenticated" in str(detail).lower()
+        assert isinstance(detail, dict)
+        error = detail.get("error")
+        assert isinstance(error, dict)
+        assert "message" in error
 
     def test_invalid_evaluation_type(self, client, auth_headers):
         """Test creating evaluation with invalid type"""

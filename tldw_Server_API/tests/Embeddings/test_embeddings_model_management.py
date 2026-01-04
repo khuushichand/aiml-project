@@ -1,4 +1,5 @@
 import copy
+import logging
 import os
 from unittest.mock import AsyncMock, patch
 
@@ -52,6 +53,7 @@ async def _override_admin_user():
 async def _override_regular_user():
     return _DummyUser(1, False)
 
+
 def _principal_override(user_id: int, is_admin: bool):
     async def _override(request: Request):
         principal = AuthPrincipal(
@@ -74,8 +76,9 @@ def _principal_override(user_id: int, is_admin: bool):
                 user_agent=request.headers.get("User-Agent") if getattr(request, "headers", None) else None,
                 request_id=request.headers.get("X-Request-ID") if getattr(request, "headers", None) else None,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best-effort; setting request.state.auth may fail in some test scenarios.
+            logging.getLogger(__name__).debug("Failed to set request.state.auth: %s", exc)
         return principal
     return _override
 

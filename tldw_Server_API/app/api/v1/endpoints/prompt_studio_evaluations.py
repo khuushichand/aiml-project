@@ -211,7 +211,7 @@ async def create_evaluation(
         if PROVIDER_REQUIRES_KEY.get(provider_key, False) and not provider_api_key and not _is_prompt_studio_test_mode():
             record_byok_missing_credentials(provider_key, operation="prompt_studio")
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={
                     "error_code": "missing_provider_credentials",
                     "message": f"Provider '{provider_name}' requires an API key.",

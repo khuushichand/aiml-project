@@ -5,6 +5,7 @@
 import logging
 import asyncio
 import os
+import threading
 
 #
 # 3rd-party Libraries
@@ -168,6 +169,96 @@ def _safe_log_format(record: dict) -> str:
         "<blue>{name}</blue>:<magenta>{function}</magenta>:<cyan>{line}</cyan> - {message}"
     )
 
+
+class _StderrInterceptor:
+    """Intercept writes to stderr and route through Loguru."""
+
+    def __init__(self, stream):
+        self._stream = stream
+        self._local = threading.local()
+
+    def write(self, message: str) -> None:
+        if message is None:
+            return
+        if getattr(self._local, "in_write", False):
+            try:
+                self._stream.write(message)
+            except Exception:
+                pass
+            return
+        try:
+            self._local.in_write = True
+            buf = getattr(self._local, "buffer", "")
+            buf += message
+            lines = buf.splitlines(keepends=True)
+            new_buf = ""
+            for line in lines:
+                if line.endswith("\n") or line.endswith("\r"):
+                    text = line.rstrip("\r\n")
+                    if text:
+                        self._log_line(text)
+                else:
+                    new_buf += line
+            self._local.buffer = new_buf
+        finally:
+            self._local.in_write = False
+
+    def _log_line(self, text: str) -> None:
+        level = "warning"
+        msg = text
+        for prefix, lvl in (
+            ("WARNING:", "warning"),
+            ("ERROR:", "error"),
+            ("CRITICAL:", "critical"),
+            ("INFO:", "info"),
+            ("DEBUG:", "debug"),
+        ):
+            if text.startswith(prefix):
+                msg = text[len(prefix):].lstrip()
+                level = lvl
+                break
+        try:
+            if level == "warning":
+                logger.warning(msg)
+            elif level == "error":
+                logger.error(msg)
+            elif level == "critical":
+                logger.critical(msg)
+            elif level == "info":
+                logger.info(msg)
+            elif level == "debug":
+                logger.debug(msg)
+            else:
+                logger.info(msg)
+        except Exception:
+            try:
+                self._stream.write(text + "\n")
+            except Exception:
+                pass
+
+    def flush(self) -> None:
+        try:
+            self._stream.flush()
+        except Exception:
+            pass
+
+    def isatty(self) -> bool:
+        try:
+            return bool(getattr(self._stream, "isatty", lambda: False)())
+        except Exception:
+            return False
+
+    @property
+    def encoding(self):
+        return getattr(self._stream, "encoding", None)
+
+    @property
+    def errors(self):
+        return getattr(self._stream, "errors", None)
+
+    def fileno(self):
+        return getattr(self._stream, "fileno", lambda: -1)()
+
 def _redirect_external_loggers() -> None:
     """Ensure third-party loggers route through our Loguru interceptor."""
     try:
@@ -201,6 +292,17 @@ def _redirect_external_loggers() -> None:
                 lgr.handlers = []
                 lgr.propagate = True
                 lgr.setLevel(0)
+    except Exception:
+        pass
+
+
+def _install_stderr_redirect() -> None:
+    try:
+        if os.getenv("TLDW_CAPTURE_STDERR", "1").lower() in {"0", "false", "no", "off"}:
+            return
+        if isinstance(sys.stderr, _StderrInterceptor):
+            return
+        sys.stderr = _StderrInterceptor(sys.stderr)
     except Exception:
         pass
 
@@ -381,6 +483,7 @@ logger.add(
 )
 logger = logger.patch(_trace_log_patcher)
 _redirect_external_loggers()
+_install_stderr_redirect()
 
 _original_logger_remove = logger.remove
 _original_logger_configure = getattr(logger, "configure", None)

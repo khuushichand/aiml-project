@@ -596,7 +596,7 @@ def test_keyless_provider_proceeds_without_key(  # Added default_chat_request_da
         assert response.status_code == status.HTTP_200_OK
         mock_chat_api_call.assert_called_once()
         api_key = mock_chat_api_call.call_args[1].get("api_key")
-        assert api_key in (None, "")
+        assert api_key is None, f"Expected None for keyless provider, got: {api_key!r}"
     # Clean up only the overrides we added (not the auth override from fixture)
     app.dependency_overrides.pop(get_media_db_for_user, None)
     app.dependency_overrides.pop(get_chacha_db_for_user, None)
@@ -683,8 +683,25 @@ def test_chat_api_call_exception_handling_unit(
     # but for these specific exception handlings, detail is expected to be a string.
     assert isinstance(response_detail_text,
                       str), f"Response detail should be a string, got {type(response_detail_text)}"
-    assert expected_detail_substring.lower() in response_detail_text.lower(), \
+    detail_lower = response_detail_text.lower()
+    assert expected_detail_substring.lower() in detail_lower, \
         f"Expected detail '{expected_detail_substring}' not found in actual detail '{response_detail_text}'"
+    if expected_status == status.HTTP_401_UNAUTHORIZED:
+        assert (
+            "key" in detail_lower
+            or "token" in detail_lower
+            or detail_lower.strip() == "unauthorized."
+        ), f"Expected auth error with credential context, got: {response_detail_text}"
+    if expected_status == status.HTTP_429_TOO_MANY_REQUESTS:
+        assert "retry" in detail_lower or "try again" in detail_lower, \
+            f"Expected rate limit error with retry guidance, got: {response_detail_text}"
+    if expected_status == status.HTTP_400_BAD_REQUEST:
+        assert (
+            "input" in detail_lower
+            or "payload" in detail_lower
+            or "parameter" in detail_lower
+            or detail_lower.strip() == "invalid request."
+        ), f"Expected invalid request error with input context, got: {response_detail_text}"
 
     # Clean up only the overrides we added (not the auth override from fixture)
     app.dependency_overrides.pop(get_media_db_for_user, None)

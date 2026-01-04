@@ -16,6 +16,14 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcripti
 import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib as atlib
 
 
+def _patch_transcript_cache_root(monkeypatch, tmp_path) -> Path:
+    temp_root = tmp_path / "temp_root"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(atlib.tempfile, "gettempdir", lambda: str(temp_root))
+    monkeypatch.setattr(atlib, "_ALLOWED_MEDIA_BASE_DIRS", None)
+    return temp_root
+
+
 @pytest.mark.unit
 def test_convert_to_wav_includes_duration(monkeypatch, tmp_path):
     input_file = tmp_path / "input.mp3"
@@ -242,8 +250,12 @@ def test_audio_transcription_lib_processing_choice_safe_when_config_missing(monk
 
 @pytest.mark.unit
 def test_speech_to_text_persists_cache_files(monkeypatch, tmp_path):
-    audio_file = tmp_path / "sample.wav"
+    temp_root = _patch_transcript_cache_root(monkeypatch, tmp_path)
+    audio_dir = temp_root / "inputs"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    audio_file = audio_dir / "sample.wav"
     audio_file.write_bytes(b"\x00" * 2048)
+    cache_dir = temp_root / atlib.TRANSCRIPT_CACHE_DIR_NAME
 
     class _FakeSeg:
         def __init__(self, text="hello"):
@@ -266,7 +278,6 @@ def test_speech_to_text_persists_cache_files(monkeypatch, tmp_path):
     segments = speech_to_text(str(audio_file), whisper_model="tiny", selected_source_lang="en")
     assert segments
 
-    cache_dir = audio_file.parent / atlib.TRANSCRIPT_CACHE_DIR_NAME
     out_file = cache_dir / f"{audio_file.stem}-whisper_model-tiny.segments.json"
     pretty_file = cache_dir / f"{audio_file.stem}-whisper_model-tiny.segments_pretty.json"
 
@@ -278,11 +289,14 @@ def test_speech_to_text_persists_cache_files(monkeypatch, tmp_path):
 
 @pytest.mark.unit
 def test_perform_transcription_regenerates_on_invalid_cache(monkeypatch, tmp_path):
-    audio_file = tmp_path / "sample.wav"
+    temp_root = _patch_transcript_cache_root(monkeypatch, tmp_path)
+    audio_dir = temp_root / "inputs"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    audio_file = audio_dir / "sample.wav"
     audio_file.write_bytes(b"\x00" * 2048)
 
     model_name = "fake-model"
-    cache_dir = audio_file.parent / atlib.TRANSCRIPT_CACHE_DIR_NAME
+    cache_dir = temp_root / atlib.TRANSCRIPT_CACHE_DIR_NAME
     cache_dir.mkdir(parents=True, exist_ok=True)
     model_name_sanitized = atlib._sanitize_transcription_model_name(model_name)
     cache_path = cache_dir / f"{audio_file.stem}-transcription_model-{model_name_sanitized}.segments.json"
@@ -301,10 +315,9 @@ def test_perform_transcription_regenerates_on_invalid_cache(monkeypatch, tmp_pat
         model,
         vad_filter=False,
         selected_source_lang="en",
-        duration_seconds=None,
-        base_dir=None,
+        **kwargs,
     ):
-        _ = (path, vad_filter, duration_seconds, base_dir)  # kept for signature compatibility in tests
+        assert kwargs.get("base_dir") is None
         regen_called["called"] = True
         return {
             "text": "regen",
@@ -371,8 +384,12 @@ def test_prune_transcript_cache_age(monkeypatch, tmp_path):
 
 @pytest.mark.unit
 def test_speech_to_text_respects_persist_toggle(monkeypatch, tmp_path):
-    audio_file = tmp_path / "sample.wav"
+    temp_root = _patch_transcript_cache_root(monkeypatch, tmp_path)
+    audio_dir = temp_root / "inputs"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    audio_file = audio_dir / "sample.wav"
     audio_file.write_bytes(b"\x00" * 2048)
+    cache_dir = temp_root / atlib.TRANSCRIPT_CACHE_DIR_NAME
 
     class _Seg:
         start = 0.0
@@ -393,7 +410,6 @@ def test_speech_to_text_respects_persist_toggle(monkeypatch, tmp_path):
     segments = speech_to_text(str(audio_file), whisper_model="tiny", selected_source_lang="en", persist_segments=False)
     assert segments
 
-    cache_dir = audio_file.parent / atlib.TRANSCRIPT_CACHE_DIR_NAME
     out_file = cache_dir / f"{audio_file.stem}-whisper_model-tiny.segments.json"
     assert not out_file.exists()
 

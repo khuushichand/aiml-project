@@ -122,7 +122,7 @@ async def generate_document(
             else:
                 record_byok_missing_credentials(provider_key, operation="chat_documents")
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail={
                         "error_code": "missing_provider_credentials",
                         "message": f"Provider '{provider_name}' requires an API key.",

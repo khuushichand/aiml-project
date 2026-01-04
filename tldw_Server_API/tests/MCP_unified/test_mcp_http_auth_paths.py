@@ -10,6 +10,7 @@ from tldw_Server_API.app.api.v1.endpoints import mcp_unified_endpoint as mcp_ep
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.MCP_unified.auth import UserRole
+from tldw_Server_API.app.core.MCP_unified import server as mcp_server
 
 
 # Disable HTTP security guard for these tests (IP allowlist/mTLS) to focus on auth behavior.
@@ -349,7 +350,6 @@ async def test_get_current_user_authnz_revoked_does_not_fallback(monkeypatch):
     """
     from fastapi.security.http import HTTPAuthorizationCredentials
     from fastapi import HTTPException, status
-    from tldw_Server_API.app.core.MCP_unified import server as mcp_server
 
     async def _revoked_verify(_request, _token: str):
         raise HTTPException(

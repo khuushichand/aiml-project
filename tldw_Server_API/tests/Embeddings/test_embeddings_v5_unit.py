@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch, Mock
 import pytest
 import numpy as np
 
-from fastapi import HTTPException
+from fastapi import HTTPException, status
 from fastapi.testclient import TestClient
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
@@ -473,6 +473,42 @@ class TestErrorHandling:
             # 503 means service temporarily unavailable
             detail = response.json().get("detail", "")
             assert "unavailable" in detail.lower() or "service" in detail.lower()
+
+    @pytest.mark.unit
+    def test_missing_provider_credentials_returns_503(self, setup, monkeypatch):
+        """Missing provider credentials should return 503 with error code."""
+        def override_user():
+            return setup.regular_user
+
+        app.dependency_overrides[get_request_user] = override_user
+
+        from tldw_Server_API.app.core.AuthNZ.byok_runtime import ResolvedByokCredentials
+        import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as emb_ep
+
+        async def _missing(provider, *args, **kwargs):
+            return ResolvedByokCredentials(
+                provider=provider,
+                api_key=None,
+                app_config=None,
+                credential_fields={},
+                source="server",
+                allowlisted=True,
+            )
+
+        monkeypatch.setattr(emb_ep, "resolve_byok_credentials", _missing)
+
+        response = setup.client.post(
+            "/api/v1/embeddings",
+            headers={**setup.auth_headers, "x-provider": "cohere"},
+            json={
+                "input": "test text",
+                "model": "embed-english-v3.0",
+            },
+        )
+
+        assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        detail = response.json().get("detail", {})
+        assert detail.get("error_code") == "missing_provider_credentials"
 
 
 class TestMockedFlow:

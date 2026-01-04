@@ -419,40 +419,71 @@ def test_process_emails_endpoint_mbox_large_container(client_user_only):
 
 @pytest.mark.requires_pypff
 @pytest.mark.skipif(__import__('importlib').util.find_spec('pypff') is None, reason="pypff is not installed")
-def test_process_emails_endpoint_pst_with_pypff_extraction():
+def test_process_emails_endpoint_pst_with_pypff_extraction(client_user_only):
     # This test only runs when pypff is installed on the system.
-    from tldw_Server_API.app.core.Ingestion_Media_Processing.Email import Email_Processing_Lib as email_lib
     # Use a tiny fake byte buffer; handler will try to open and likely error as invalid PST.
     # The assertion is focused on exercising the pypff code path under real install conditions.
     pst_bytes = b"!pst"
-    results = email_lib.process_pst_bytes(
-        file_bytes=pst_bytes, pst_name="emails.pst", perform_chunking=False
+    files = {
+        "files": ("emails.pst", BytesIO(pst_bytes), "application/octet-stream"),
+    }
+    r = client_user_only.post(
+        "/api/v1/media/process-emails",
+        files=files,
+        data={
+            "accept_pst": "true",
+            "perform_chunking": "false",
+        },
     )
-    assert isinstance(results, list) and len(results) >= 1
+    assert r.status_code in (200, 207)
+    data = r.json()
+    res = data.get("results") or []
+    assert isinstance(res, list) and len(res) >= 1
     # Either we parse some messages or return an 'Invalid PST/OST file' error, but not the feature-flag message.
-    first = results[0]
-    assert 'support not enabled' not in str(first.get('error','')).lower()
+    first = res[0]
+    assert 'support not enabled' not in str(first.get('error', '')).lower()
 
 
 @pytest.mark.requires_pypff
 @pytest.mark.skipif(__import__('os').environ.get('PST_FIXTURE_PATH') in (None, ''), reason="No PST_FIXTURE_PATH provided")
 @pytest.mark.skipif(__import__('importlib').util.find_spec('pypff') is None, reason="pypff is not installed")
-def test_process_emails_endpoint_pst_recipients_and_date_strict():
+def test_process_emails_endpoint_pst_recipients_and_date_strict(client_user_only):
     # Requires a tiny valid PST fixture at PST_FIXTURE_PATH with at least one message
     import os
-    from tldw_Server_API.app.core.Ingestion_Media_Processing.Email import Email_Processing_Lib as email_lib
     pst_path = os.environ.get('PST_FIXTURE_PATH')
     assert os.path.isfile(pst_path), f"Fixture not found: {pst_path}"
     with open(pst_path, 'rb') as f:
         pst_bytes = f.read()
-    results = email_lib.process_pst_bytes(file_bytes=pst_bytes, pst_name="fixture.pst", perform_chunking=False)
-    assert isinstance(results, list) and len(results) >= 1
-    item = results[0]
-    md = item.get('metadata') or {}
-    emd = md.get('email') or {}
+    files = {
+        "files": ("fixture.pst", BytesIO(pst_bytes), "application/octet-stream"),
+    }
+    r = client_user_only.post(
+        "/api/v1/media/process-emails",
+        files=files,
+        data={
+            "accept_pst": "true",
+            "perform_chunking": "false",
+        },
+    )
+    assert r.status_code in (200, 207)
+    data = r.json()
+    res = data.get("results") or []
+    assert isinstance(res, list) and len(res) >= 1
+    item = None
+    for entry in res:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("status") == "Error":
+            continue
+        md = entry.get("metadata") or {}
+        emd = md.get("email") or {}
+        if emd:
+            item = emd
+            break
+    assert item is not None, "No successful email metadata found in PST results"
     # Ensure recipients and date appear (format-agnostic checks)
-    assert (emd.get('to') or emd.get('cc') or emd.get('bcc')), f"No recipients found in metadata: {emd}"
-    assert emd.get('date'), f"No date found in metadata: {emd}"
+    assert (item.get('to') or item.get('cc') or item.get('bcc')), f"No recipients found in metadata: {item}"
+    assert item.get('date'), f"No date found in metadata: {item}"
 
 
 def test_process_emails_endpoint_pst_feature_flag_behavior(client_user_only):

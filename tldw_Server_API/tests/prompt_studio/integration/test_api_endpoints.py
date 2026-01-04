@@ -3,6 +3,7 @@
 
 import pytest
 import json
+from fastapi import status
 from fastapi.testclient import TestClient
 from typing import Dict, Any
 import uuid
@@ -405,6 +406,50 @@ class TestEvaluationEndpoints:
             data = response.json()
             assert "metrics" in data
             assert data["metrics"]["accuracy"] == 0.95
+
+    def test_missing_provider_credentials_returns_503(self, client, auth_headers, mock_user, monkeypatch):
+        """Missing provider credentials should return 503 with error code."""
+        from tldw_Server_API.app.api.v1.endpoints import prompt_studio_evaluations as ps_eval
+        from tldw_Server_API.app.core.AuthNZ.byok_runtime import ResolvedByokCredentials
+
+        async def _missing(provider, *args, **kwargs):
+            return ResolvedByokCredentials(
+                provider=provider,
+                api_key=None,
+                app_config=None,
+                credential_fields={},
+                source="server",
+                allowlisted=True,
+            )
+
+        monkeypatch.setattr(ps_eval, "_is_prompt_studio_test_mode", lambda: False)
+        monkeypatch.setattr(ps_eval, "resolve_byok_credentials", _missing)
+
+        with patch('tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps.get_current_active_user', return_value=mock_user):
+            evaluation_data = {
+                "project_id": 1,
+                "prompt_id": 1,
+                "test_run_id": "run-123",
+                "metrics": {
+                    "accuracy": 0.95,
+                    "f1_score": 0.92,
+                    "latency": 1.5
+                },
+                "config": {
+                    "model": "gpt-4",
+                    "temperature": 0.7
+                }
+            }
+
+            response = client.post(
+                "/api/v1/prompt-studio/evaluations",
+                json=evaluation_data,
+                headers=auth_headers
+            )
+
+            assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+            detail = response.json().get("detail", {})
+            assert detail.get("error_code") == "missing_provider_credentials"
 
     def test_list_evaluations(self, client, auth_headers, mock_user):
         """Test listing evaluations."""

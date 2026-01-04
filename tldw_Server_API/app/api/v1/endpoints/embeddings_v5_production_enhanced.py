@@ -585,7 +585,7 @@ async def _resolve_embeddings_byok(
 def _raise_missing_embeddings_key(provider: str) -> None:
     record_byok_missing_credentials(provider, operation="embeddings")
     raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail={
             "error_code": "missing_provider_credentials",
             "message": f"Embeddings provider '{provider}' requires an API key.",

@@ -1,11 +1,16 @@
-import os
-import math
+from typing import Any, List, Optional
 import numpy as np
 
 from tldw_Server_API.app.core.Embeddings.Embeddings_Server import Embeddings_Create as EC
 
 
-def _stub_openai_batch(texts, model, app_config=None, dimensions=None, **_kwargs):
+def _stub_openai_batch(
+    texts: List[str],
+    model: str,
+    app_config: Optional[Any] = None,
+    dimensions: Optional[int] = None,
+    **_kwargs: Any
+) -> List[List[float]]:
     # Deterministic vector per text; simple small dim for speed
     dim = dimensions or 16
     out = []

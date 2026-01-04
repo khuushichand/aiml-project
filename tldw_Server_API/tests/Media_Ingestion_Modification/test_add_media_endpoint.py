@@ -37,6 +37,9 @@ from tldw_Server_API.tests.test_utils import temp_db
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase # Import Database class
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import (
+    check_transcription_model_status,
+)
 # Import the form model
 from tldw_Server_API.app.api.v1.schemas.media_request_models import AddMediaForm, MediaType # Import AddMediaForm, MediaType
 #
@@ -125,6 +128,9 @@ VALID_TXT_URL = "https://archives.phrack.org/issues/1/1.txt" # Raw text URL (sta
 VALID_MD_URL = "https://raw.githubusercontent.com/rmusser01/tldw/main/README.md" # Raw markdown URL
 INVALID_URL = "http://this.url.does.not.exist/resource.file"
 URL_404 = "https://httpbin.org/status/404" # Reliable 404
+TEST_VIDEO_TRANSCRIPTION_MODEL = "small"
+TEST_VIDEO_START_TIME = "0"
+TEST_VIDEO_END_TIME = "00:00:20"
 
 # --- Fixtures ---
 
@@ -751,6 +757,12 @@ def create_add_media_form_data(**overrides) -> Dict[str, Any]:
     return form_dict
 
 
+def _skip_if_transcription_model_unavailable(model_name: str) -> None:
+    status = check_transcription_model_status(model_name)
+    if not status.get("available"):
+        pytest.skip(status.get("message", "Transcription model not available"))
+
+
 # ##################################################################################################################
 # Test Cases
 # ##################################################################################################################
@@ -813,19 +825,71 @@ def test_add_media_missing_required_form_field(test_api_client, dummy_headers):
 # === Basic Success Path Tests (URL & Upload) ===
 
 @pytest.mark.parametrize("media_type, valid_url, expected_content_present", [
-    pytest.param("video", VALID_VIDEO_URL, True, marks=pytest.mark.skipif(not (HAS_FFMPEG and NETWORK_TESTS_ENABLED), reason="Requires network + ffmpeg for video URL")),
-    ("audio", VALID_AUDIO_URL, True),
-    ("pdf", VALID_PDF_URL, True),
+    pytest.param(
+        "video",
+        VALID_VIDEO_URL,
+        True,
+        marks=pytest.mark.skipif(
+            not (HAS_FFMPEG and NETWORK_TESTS_ENABLED),
+            reason="Requires network + ffmpeg for video URL",
+        ),
+    ),
+    pytest.param(
+        "audio",
+        VALID_AUDIO_URL,
+        True,
+        marks=pytest.mark.skipif(
+            not NETWORK_TESTS_ENABLED,
+            reason="Requires network for audio URL",
+        ),
+    ),
+    pytest.param(
+        "pdf",
+        VALID_PDF_URL,
+        True,
+        marks=pytest.mark.skipif(
+            not NETWORK_TESTS_ENABLED,
+            reason="Requires network for PDF URL",
+        ),
+    ),
     # Skip Ebook URL test for now due to potential download size/time
     # pytest.param("ebook", VALID_EPUB_URL, True, marks=pytest.mark.skip(reason="EPUB URL download can be large/slow"), id="ebook_url"),
-    ("document", VALID_TXT_URL, True),
-    ("document", VALID_MD_URL, True),
+    pytest.param(
+        "document",
+        VALID_TXT_URL,
+        True,
+        marks=pytest.mark.skipif(
+            not NETWORK_TESTS_ENABLED,
+            reason="Requires network for TXT URL",
+        ),
+    ),
+    pytest.param(
+        "document",
+        VALID_MD_URL,
+        True,
+        marks=pytest.mark.skipif(
+            not NETWORK_TESTS_ENABLED,
+            reason="Requires network for Markdown URL",
+        ),
+    ),
 ], ids=["video_url", "audio_url", "pdf_url", "txt_url", "md_url"]) # Removed ebook id
 
 @pytest.mark.timeout(180) # Increased timeout for external downloads/processing
 def test_add_media_single_url_success(test_api_client, db_session, media_type, valid_url, expected_content_present, dummy_headers): # Added db_session
     """Test processing a single valid URL for each media type."""
-    form_data = create_add_media_form_data(media_type=media_type, urls=[valid_url])
+    if media_type == "video":
+        _skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
+        form_data = create_add_media_form_data(
+            media_type=media_type,
+            urls=[valid_url],
+            transcription_model=TEST_VIDEO_TRANSCRIPTION_MODEL,
+            start_time=TEST_VIDEO_START_TIME,
+            end_time=TEST_VIDEO_END_TIME,
+            perform_analysis=False,
+            perform_chunking=False,
+        )
+    else:
+        form_data = create_add_media_form_data(media_type=media_type, urls=[valid_url])
     response = test_api_client.post(ADD_MEDIA_ENDPOINT, data=form_data, headers=dummy_headers)
     # Expect 200 OK for success, or 207 if warnings occurred during processing.
     # In environments without external network/egress, audio URLs may fail to download;
@@ -893,7 +957,18 @@ def test_add_media_single_file_upload_success(test_api_client, db_session, creat
     if not sample_path.exists(): pytest.skip(f"Test file not found: {sample_path}")
 
     file_tuple = create_upload_file(sample_path)
-    form_data = create_add_media_form_data(media_type=media_type)
+    if media_type == "video":
+        _skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
+        form_data = create_add_media_form_data(
+            media_type=media_type,
+            transcription_model=TEST_VIDEO_TRANSCRIPTION_MODEL,
+            start_time=TEST_VIDEO_START_TIME,
+            end_time=TEST_VIDEO_END_TIME,
+            perform_analysis=False,
+            perform_chunking=False,
+        )
+    else:
+        form_data = create_add_media_form_data(media_type=media_type)
 
     # --- CORRECTED TestClient Call ---
     # Pass form data via `data` and files via `files` in the same call
@@ -952,7 +1027,16 @@ def test_add_media_mixed_url_file_success(test_api_client, db_session, create_up
     if not SAMPLE_VIDEO_PATH.exists(): pytest.skip(f"Test file not found: {SAMPLE_VIDEO_PATH}")
 
     file_tuple = create_upload_file(SAMPLE_VIDEO_PATH)
-    form_data = create_add_media_form_data(media_type="video", urls=[VALID_VIDEO_URL])
+    _skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
+    form_data = create_add_media_form_data(
+        media_type="video",
+        urls=[VALID_VIDEO_URL],
+        transcription_model=TEST_VIDEO_TRANSCRIPTION_MODEL,
+        start_time=TEST_VIDEO_START_TIME,
+        end_time=TEST_VIDEO_END_TIME,
+        perform_analysis=False,
+        perform_chunking=False,
+    )
 
     # --- CORRECTED TestClient Call ---
     response = test_api_client.post(
@@ -1263,6 +1347,8 @@ def test_add_media_processor_handles_invalid_format(test_api_client, db_session,
 def test_add_media_pdf_with_analysis_mocked(mock_analyze, test_api_client, db_session, dummy_headers):
     """Test PDF analysis via /add, mocking only the summarize call."""
     if not SAMPLE_PDF_PATH.exists(): pytest.skip(f"Test file not found: {SAMPLE_PDF_PATH}")
+    if not NETWORK_TESTS_ENABLED:
+        pytest.skip("Requires network for PDF URL download")
 
     mock_analysis_text = "Mocked analysis for PDF."
     # Configure the mock to return the desired text directly since analyze is synchronous
@@ -1468,12 +1554,15 @@ def test_process_video_with_analysis_mocked(mock_analyze, test_api_client, db_se
     mock_analysis_text = "Mocked analysis for Video."
     mock_analyze.return_value = mock_analysis_text
 
+    _skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
     form_data_dict = create_add_media_form_data(
         perform_analysis=True,
         perform_chunking=True,
         api_name="mock_llm",
         api_key="mock_key",
-        transcription_model="deepdml/faster-distil-whisper-large-v3.5"
+        transcription_model=TEST_VIDEO_TRANSCRIPTION_MODEL,
+        start_time=TEST_VIDEO_START_TIME,
+        end_time=TEST_VIDEO_END_TIME,
     )
     if 'media_type' in form_data_dict: del form_data_dict['media_type']
     if 'keep_original_file' in form_data_dict: del form_data_dict['keep_original_file']

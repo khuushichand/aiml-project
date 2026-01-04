@@ -2167,6 +2167,20 @@ from tldw_Server_API.app.core.Third_Party import RePEc as RePEc
 
 
 def _extract_http_status(err: str) -> Optional[int]:
+    """Extract HTTP status code from provider error strings.
+
+    Recognizes common formats like:
+    - "HTTP Error 404" or "error 404"
+    - "status code: 502" or "status code 502"
+    - "status 500"
+
+    Args:
+        err: Error message string from a provider adapter.
+
+    Returns:
+        Extracted HTTP status code (400-599) or None if not found.
+        Returns 502 if an extracted code is outside the 4xx/5xx range.
+    """
     patterns = (
         r"(?:http\s+)?error\s*[:\s]*(\d{3})",
         r"status\s*code\s*[:\s]*(\d{3})",

@@ -149,15 +149,15 @@ def _restore_risky_env_and_logging():
 
         JobManager.set_acquire_gate(False)
         JobManager.clear_rls_context()
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.getLogger(__name__).debug("JobManager reset failed: %s", exc)
 
     try:
         from tldw_Server_API.app.core.Logging.system_log_buffer import ensure_system_log_buffer
 
         ensure_system_log_buffer()
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.getLogger(__name__).debug("system_log_buffer reset failed: %s", exc)
 
 
 @pytest.fixture()

@@ -1,5 +1,6 @@
 import datetime
 import pytest
+from fastapi import status
 
 from tldw_Server_API.app.api.v1.API_Deps.chat_documents_deps import get_document_generator_service
 from tldw_Server_API.app.api.v1.endpoints import chat as chat_router
@@ -188,3 +189,32 @@ def test_document_generate_uses_configured_api_key(monkeypatch, authenticated_cl
     assert response.status_code == 200, response.text
     assert captured["api_key"] == "sk-configured"
     assert captured["provider"] == "openai"
+
+
+def test_document_generate_missing_provider_credentials_returns_503(monkeypatch, authenticated_client):
+    from tldw_Server_API.app.api.v1.endpoints import chat_documents as chat_docs
+    from tldw_Server_API.app.core.AuthNZ.byok_runtime import ResolvedByokCredentials
+
+    async def _missing(provider, *args, **kwargs):
+        return ResolvedByokCredentials(
+            provider=provider,
+            api_key=None,
+            app_config=None,
+            credential_fields={},
+            source="server",
+            allowlisted=True,
+        )
+
+    monkeypatch.setattr(chat_docs, "resolve_byok_credentials", _missing)
+
+    payload = _make_payload()
+    payload.pop("api_key", None)
+
+    response = authenticated_client.post(
+        "/api/v1/chat/documents/generate",
+        json=payload,
+    )
+
+    assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    detail = response.json().get("detail", {})
+    assert detail.get("error_code") == "missing_provider_credentials"

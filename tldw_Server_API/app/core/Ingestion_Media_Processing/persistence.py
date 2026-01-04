@@ -501,18 +501,42 @@ async def add_media_orchestrate(
             source_to_ref_map: Dict[str, str] = {src: src for src in url_list}
             source_to_ref_map.update(
                 {
-                    str(pf["path"]): pf["original_filename"]
+                    str(path): pf["original_filename"]
                     for pf in saved_files_info
-                    if pf.get("path")
+                    if (path := pf.get("path"))
                 }
             )
-            source_to_ref_map.update(
-                {
-                    str(FilePath(pf["path"]).resolve(strict=False)): pf["original_filename"]
-                    for pf in saved_files_info
-                    if pf.get("path")
-                }
-            )
+            for pf in saved_files_info:
+                path = pf.get("path")
+                if not path:
+                    continue
+                try:
+                    resolved_path = resolve_safe_local_path(
+                        FilePath(path),
+                        temp_dir_path,
+                    )
+                    if resolved_path is None:
+                        logger.warning(
+                            "Skipping source path %s outside temp dir %s",
+                            path,
+                            temp_dir_path,
+                        )
+                        continue
+                except OSError as exc:
+                    logger.warning(
+                        "Skipping source path %s due to resolve error: %s",
+                        path,
+                        exc,
+                    )
+                    continue
+                except Exception as exc:
+                    logger.warning(
+                        "Skipping source path %s due to unexpected resolve error: %s",
+                        path,
+                        exc,
+                    )
+                    continue
+                source_to_ref_map[str(resolved_path)] = pf["original_filename"]
 
             # --- 6. Process Media based on Type ---
             db_path_for_workers = db.db_path_str

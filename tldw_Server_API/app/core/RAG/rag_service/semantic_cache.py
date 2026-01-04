@@ -613,7 +613,7 @@ def _resolve_default_cache_dir() -> Optional[Path]:
         from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
         cfg = load_and_log_configs() or {}
         project_root = cfg.get("PROJECT_ROOT")
-    except Exception as exc:
+    except (ImportError, AttributeError, KeyError, TypeError) as exc:
         logger.warning("Semantic cache: could not load config for PROJECT_ROOT: {}", exc)
         return None
     if project_root:
@@ -716,7 +716,12 @@ def _sanitize_persist_path(persist_path: Optional[str], namespace_key: str) -> O
         return None
     try:
         base_dir_resolved = base_dir.expanduser().resolve(strict=False)
-    except Exception:
+    except (OSError, RuntimeError, ValueError) as exc:
+        logger.error(
+            "Semantic cache: failed to resolve base cache dir {} in sanitize: {}",
+            base_dir,
+            exc,
+        )
         # If we cannot resolve the base directory safely, use the default path or disable.
         fallback = _default_persist_path(namespace_key)
         if fallback:
@@ -724,15 +729,28 @@ def _sanitize_persist_path(persist_path: Optional[str], namespace_key: str) -> O
             return fallback
         logger.warning("Failed to resolve base cache dir; persistence disabled.")
         return None
+    except Exception:
+        logger.exception(
+            "Semantic cache: unexpected error resolving base cache dir {} in sanitize",
+            base_dir,
+        )
+        raise
     candidate_path = Path(persist_path).expanduser()
     try:
         if candidate_path.is_absolute():
             resolved_path = candidate_path.resolve(strict=False)
         else:
             resolved_path = (base_dir_resolved / candidate_path).resolve(strict=False)
-    except Exception:
+    except (OSError, RuntimeError, ValueError) as exc:
+        logger.error("Semantic cache: failed to resolve persist_path {}: {}", persist_path, exc)
         logger.warning("Failed to resolve semantic cache persist_path; using default cache path.")
         return _default_persist_path(namespace_key)
+    except Exception:
+        logger.exception(
+            "Semantic cache: unexpected error resolving persist_path {}",
+            persist_path,
+        )
+        raise
     if not resolved_path.is_relative_to(base_dir_resolved):
         fallback = _default_persist_path(namespace_key)
         if fallback:

@@ -50,19 +50,7 @@ class TestMediaEndpointContextualIntegration:
             "x-api-key": api_key
         }
 
-    @pytest.fixture
-    def mock_dependencies(self):
-        """Mock all required dependencies."""
-        with patch('tldw_Server_API.app.api.v1.endpoints.media.get_request_user') as mock_user:
-            with patch('tldw_Server_API.app.api.v1.endpoints.media.get_media_db_for_user') as mock_db:
-                mock_user.return_value = Mock(id="test_user")
-                mock_db.return_value = Mock(db_path="/test/path.db")
-                yield {
-                    "user": mock_user,
-                    "db": mock_db
-                }
-
-    def test_add_media_with_contextual_chunking_enabled(self, test_client, mock_dependencies, auth_headers):
+    def test_add_media_with_contextual_chunking_enabled(self, test_client, auth_headers):
         """Test adding media with contextual chunking enabled."""
         # Prepare request data
         form_data = {
@@ -94,7 +82,7 @@ class TestMediaEndpointContextualIntegration:
                 assert chunk_options.get('contextual_llm_model') == "gpt-4"
                 assert chunk_options.get('context_window_size') == 750
 
-    def test_add_media_with_contextual_chunking_disabled(self, test_client, mock_dependencies, auth_headers):
+    def test_add_media_with_contextual_chunking_disabled(self, test_client, auth_headers):
         """Test adding media with contextual chunking explicitly disabled."""
         form_data = {
             "media_type": "document",
@@ -120,7 +108,7 @@ class TestMediaEndpointContextualIntegration:
 
                 assert chunk_options.get('enable_contextual_chunking') == False
 
-    def test_add_media_contextual_defaults_from_config(self, test_client, mock_dependencies, auth_headers):
+    def test_add_media_contextual_defaults_from_config(self, test_client, auth_headers):
         """Test that contextual chunking uses config defaults when not specified."""
         form_data = {
             "media_type": "document",
@@ -149,7 +137,7 @@ class TestMediaEndpointContextualIntegration:
                 assert chunk_options.get('contextual_llm_model') is None
                 assert chunk_options.get('context_window_size') is None
 
-    def test_add_media_file_upload_with_contextual(self, test_client, mock_dependencies):
+    def test_add_media_file_upload_with_contextual(self, test_client):
         """Test file upload with contextual chunking options."""
         # Create a test file
         test_content = b"Test document content for contextual chunking"
@@ -196,7 +184,6 @@ class TestMediaEndpointContextualIntegration:
     def test_contextual_chunking_with_different_media_types(
         self,
         test_client,
-        mock_dependencies,
         auth_headers,
         media_type,
         expected_method
@@ -236,7 +223,7 @@ class TestMediaEndpointContextualIntegration:
                 if media_type == "ebook":
                     assert chunk_options.get('method') == "ebook_chapters"
 
-    def test_batch_media_with_contextual_chunking(self, test_client, mock_dependencies, auth_headers):
+    def test_batch_media_with_contextual_chunking(self, test_client, auth_headers):
         """Test batch media processing with contextual chunking."""
         form_data = {
             "media_type": "document",
@@ -275,7 +262,7 @@ class TestMediaEndpointContextualIntegration:
                 assert chunk_options.get('enable_contextual_chunking') == True
                 assert chunk_options.get('contextual_llm_model') == "claude-opus-4.1"
 
-    def test_contextual_options_validation(self, test_client, mock_dependencies, auth_headers):
+    def test_contextual_options_validation(self, test_client, auth_headers):
         """Test validation of contextual chunking options."""
         # Test with invalid context_window_size (too small)
         form_data = {
@@ -306,7 +293,7 @@ class TestMediaEndpointContextualIntegration:
 
         assert response.status_code == 422
 
-    def test_contextual_chunking_preserves_other_options(self, test_client, mock_dependencies, auth_headers):
+    def test_contextual_chunking_preserves_other_options(self, test_client, auth_headers):
         """Test that contextual options don't interfere with other chunking options."""
         form_data = {
             "media_type": "document",

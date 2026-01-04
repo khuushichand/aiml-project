@@ -23,7 +23,12 @@ from tldw_Server_API.app.core.exceptions import UnsafeUserPathError
 
 DEFAULT_PATH = Path("Databases/Rewrite_Cache/rewrite_cache.jsonl")
 _USER_DB_BASE = Path(os.getenv("USER_DB_BASE", "Databases/user_databases"))
+try:
+    _USER_DB_BASE_RESOLVED = _USER_DB_BASE.resolve(strict=False)
+except Exception:
+    _USER_DB_BASE_RESOLVED = _USER_DB_BASE
 _ALLOWED_USER_ID_CHARS = set(string.ascii_letters + string.digits + "_-")
+_MAX_USER_ID_LEN = 128
 _ERR_MSG_PATH_TRAVERSAL = "Resolved rewrite cache path is outside user database base."
 
 
@@ -49,6 +54,8 @@ def _is_safe_user_id(user_id: str) -> bool:
     """Validate a user_id path segment (str -> bool).
     Rejects empty/relative components and non-allowed chars for safety."""
     if not user_id or user_id in {".", ".."}:
+        return False
+    if len(user_id) > _MAX_USER_ID_LEN:
         return False
     if user_id[0] not in string.ascii_letters + string.digits:
         return False
@@ -90,7 +97,7 @@ def _resolve_user_cache_path(user_id: str) -> Path:
     # Construct path using only the sanitized single directory component.
     cache_dir = _USER_DB_BASE / safe_component / "Rewrite_Cache"
     cache_path = cache_dir / "rewrite_cache.jsonl"
-    base_resolved = _USER_DB_BASE.resolve(strict=False)
+    base_resolved = _USER_DB_BASE_RESOLVED
     cache_resolved = cache_path.resolve(strict=False)
     if not _is_relative_to(cache_resolved, base_resolved):
         raise UnsafeUserPathError(_ERR_MSG_PATH_TRAVERSAL)
@@ -329,4 +336,4 @@ class RewriteCache:
             except Exception:
                 pass
         except Exception as e:
-            logger.debug(f"Failed to persist rewrite cache: {e}")
+            logger.warning(f"Failed to persist rewrite cache: {e}")

@@ -2,7 +2,6 @@
 Integration tests for role normalization and message search placeholder handling.
 """
 
-import os
 import shutil
 import tempfile
 
@@ -12,10 +11,11 @@ import pytest
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
-async def test_get_chat_context_and_prepare_roles_normalized():
+async def test_get_chat_context_and_prepare_roles_normalized(monkeypatch):
     tmpdir = tempfile.mkdtemp(prefix="chacha_roles_")
-    os.environ["USER_DB_BASE_DIR"] = tmpdir
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
     try:
         from tldw_Server_API.app.main import app
         settings = get_settings()
@@ -54,15 +54,16 @@ async def test_get_chat_context_and_prepare_roles_normalized():
             data = r.json()
             roles2 = [m["role"] for m in data["messages"]]
             assert roles2[0] == "system"
-            assert set(roles2[1:]).issubset({"user", "assistant", "system"})
+            assert set(roles2[1:]).issubset({"user", "assistant", "system", "tool"})
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
-async def test_complete_v2_uses_normalized_roles_via_stubbed_provider():
+async def test_complete_v2_uses_normalized_roles_via_stubbed_provider(monkeypatch):
     tmpdir = tempfile.mkdtemp(prefix="chacha_complete_v2_roles_")
-    os.environ["USER_DB_BASE_DIR"] = tmpdir
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
     try:
         from tldw_Server_API.app.main import app
         settings = get_settings()
@@ -76,7 +77,7 @@ async def test_complete_v2_uses_normalized_roles_via_stubbed_provider():
             captured["messages"] = messages_payload
             return {"choices": [{"message": {"content": "ok"}}]}
 
-        mod.perform_chat_api_call = _stub_chat_api_call
+        monkeypatch.setattr(mod, "perform_chat_api_call", _stub_chat_api_call)
 
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -102,10 +103,11 @@ async def test_complete_v2_uses_normalized_roles_via_stubbed_provider():
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
-async def test_get_messages_format_for_completions_roles_and_search_placeholders():
+async def test_get_messages_format_for_completions_roles_and_search_placeholders(monkeypatch):
     tmpdir = tempfile.mkdtemp(prefix="chacha_msgs_roles_")
-    os.environ["USER_DB_BASE_DIR"] = tmpdir
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
     try:
         from tldw_Server_API.app.main import app
         settings = get_settings()
