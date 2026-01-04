@@ -23,6 +23,9 @@ def test_convert_to_wav_includes_duration(monkeypatch, tmp_path):
 
     commands = []
 
+    atlib._FFMPEG_VERSION_CHECKED = False
+    atlib._FFMPEG_CMD_FOR_VERSION = None
+
     def fake_run(cmd, *args, **kwargs):
         commands.append(cmd)
 

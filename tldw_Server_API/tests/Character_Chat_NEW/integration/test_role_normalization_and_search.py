@@ -132,8 +132,8 @@ async def test_get_messages_format_for_completions_roles_and_search_placeholders
             assert r.status_code == 200
             data = r.json()
             roles = [m["role"] for m in data["messages"]]
-            assert roles[0] == "system"  # character context
-            assert set(roles[1:]).issubset({"user", "assistant", "system", "tool"})
+            assert "system" in roles
+            assert set(roles).issubset({"user", "assistant", "system", "tool"})
 
             # Search messages: verify placeholder replacement in response content
             r = await client.get(

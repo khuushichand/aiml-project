@@ -349,6 +349,7 @@ async def test_get_current_user_authnz_revoked_does_not_fallback(monkeypatch):
     """
     from fastapi.security.http import HTTPAuthorizationCredentials
     from fastapi import HTTPException, status
+    from tldw_Server_API.app.core.MCP_unified import server as mcp_server
 
     async def _revoked_verify(_request, _token: str):
         raise HTTPException(
@@ -366,7 +367,7 @@ async def test_get_current_user_authnz_revoked_does_not_fallback(monkeypatch):
             raise AssertionError("MCP JWT fallback should not be attempted")
 
     monkeypatch.setattr(mcp_ep, "verify_jwt_and_fetch_user", _revoked_verify)
-    monkeypatch.setattr(mcp_ep, "get_jwt_service", lambda: _JwtService())
+    monkeypatch.setattr(mcp_server, "get_jwt_service", lambda: _JwtService())
     monkeypatch.setattr(mcp_ep, "get_jwt_manager", lambda: _FailingJwtManager())
 
     creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="revoked.jwt.token")

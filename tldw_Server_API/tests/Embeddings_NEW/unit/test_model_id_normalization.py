@@ -5,9 +5,9 @@ import numpy as np
 from tldw_Server_API.app.core.Embeddings.Embeddings_Server import Embeddings_Create as EC
 
 
-def _stub_openai_batch(texts, model, app_config=None):
+def _stub_openai_batch(texts, model, app_config=None, dimensions=None, **_kwargs):
     # Deterministic vector per text; simple small dim for speed
-    dim = 16
+    dim = dimensions or 16
     out = []
     for t in texts:
         seed = int.from_bytes(t.encode("utf-8"), "little") % (2**32)

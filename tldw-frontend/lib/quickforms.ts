@@ -115,11 +115,13 @@ export const QUICK_FORMS: QuickFormPreset[] = [
     title: 'Audio STT (Transcriptions)',
     method: 'POST',
     path: '/audio/transcriptions',
-    defaults: { model: 'whisper-1', audio_url: 'https://example.com/audio.wav', language: 'en' },
+    defaults: { model: 'whisper-1', audio_url: 'REPLACE_WITH_ACTUAL_AUDIO_URL', language: 'en' },
     toBody: (s) => ({ model: s.model || 'whisper-1', audio_url: s.audio_url || '', language: s.language || 'en' }),
     validate: (b) => {
       const errs: string[] = [];
-      if (!String(b?.audio_url || '').trim()) errs.push('audio_url is required (server must fetch remotely)');
+      const audioUrl = String(b?.audio_url || '').trim();
+      if (!audioUrl) errs.push('audio_url is required (server must fetch remotely)');
+      if (audioUrl === 'REPLACE_WITH_ACTUAL_AUDIO_URL') errs.push('audio_url must be replaced with a real URL');
       return errs;
     },
     schema: {
@@ -138,12 +140,15 @@ export const QUICK_FORMS: QuickFormPreset[] = [
     title: 'Evaluations: OCR (JSON)',
     method: 'POST',
     path: '/evaluations/ocr',
-    defaults: { images: [{ url: 'https://example.com/page1.png' }], engine: 'auto' },
+    defaults: { images: [{ url: 'REPLACE_WITH_ACTUAL_IMAGE_URL' }], engine: 'auto' },
     toBody: (s) => ({ images: s.images || [], engine: s.engine || 'auto' }),
     validate: (b) => {
       const errs: string[] = [];
       const images = asArray(b?.images);
       if (images.length === 0) errs.push('images must be a non-empty array');
+      if (images.some((img) => String(img?.url || '').trim() === 'REPLACE_WITH_ACTUAL_IMAGE_URL')) {
+        errs.push('images.url must be replaced with a real URL');
+      }
       return errs;
     },
     schema: {
@@ -349,7 +354,7 @@ export const QUICK_FORMS: QuickFormPreset[] = [
       required: ['model', 'input'],
       properties: {
         model: { type: 'string' },
-        input: { type: 'string' },
+        input: { type: ['string', 'array'], items: { type: 'string' } },
       },
     },
   },

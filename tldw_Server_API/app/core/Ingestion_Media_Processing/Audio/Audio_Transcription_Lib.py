@@ -306,11 +306,10 @@ def _resolve_safe_input_path(path: Path, *, base_dir: Optional[Path], label: str
     if base_dir is None:
         base_dir = _select_allowed_base_dir_for_path(path, label=label)
     base_resolved = _resolve_allowed_base_dir(base_dir, label=f"{label} base directory")
-    candidate = path if path.is_absolute() else base_resolved / path
-    _assert_no_symlink(candidate, label=label)
     safe_path = resolve_safe_local_path(path, base_resolved)
     if safe_path is None:
         raise ValueError(f"{label} must resolve under {base_resolved}")
+    _assert_no_symlink(safe_path, label=label)
     return safe_path
 
 

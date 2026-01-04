@@ -240,10 +240,7 @@ async def paper_search_biorxiv(
             search_params.recent_count,
         )
         if error_message:
-            logger.error(f"BioRxiv provider error: {error_message}")
-            if "timed out" in error_message.lower():
-                raise HTTPException(status_code=504, detail=_PROVIDER_TIMEOUT_DETAIL)
-            raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL)
+            _handle_provider_error(f"BioRxiv: {error_message}")
         if items is None:
             raise HTTPException(status_code=500, detail="BioRxiv search failed to return data.")
     except HTTPException:
@@ -2169,7 +2166,36 @@ from tldw_Server_API.app.core.Third_Party import HAL as HAL
 from tldw_Server_API.app.core.Third_Party import RePEc as RePEc
 
 
+def _extract_http_status(err: str) -> Optional[int]:
+    patterns = (
+        r"(?:http\s+)?error\s*[:\s]*(\d{3})",
+        r"status\s*code\s*[:\s]*(\d{3})",
+        r"status\s+(\d{3})",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, err, re.IGNORECASE)
+        if not match:
+            continue
+        try:
+            code = int(match.group(1))
+        except (TypeError, ValueError):
+            continue
+        if 400 <= code < 600:
+            return code
+        logger.warning(
+            "Extracted HTTP status {} outside 4xx/5xx range; using 502",
+            match.group(1),
+        )
+        return 502
+    return None
+
+
 def _handle_provider_error(err: str) -> None:
+    """Normalize provider error messages into consistent HTTP responses.
+
+    Recognizes formats like "HTTP Error 404", "status 404 Not Found", or
+    "status code: 502" when extracting provider status codes.
+    """
     if not err:
         return
     low = err.lower()
@@ -2184,19 +2210,8 @@ def _handle_provider_error(err: str) -> None:
             status_code=504,
             detail=_PROVIDER_TIMEOUT_DETAIL,
         )
-    if "http error" in low:
-        match = re.search(r'(?:http\s+)?error\s*[:\s]*(\d{3})', err, re.IGNORECASE)
-        if match:
-            code = int(match.group(1))
-            if not (400 <= code < 600):
-                code = 502
-                logger.warning(
-                    "Extracted HTTP status {} outside 4xx/5xx range; using 502",
-                    match.group(1),
-                )
-        else:
-            code = 502
-            logger.warning("Could not extract HTTP status from error message: {}", err)
+    code = _extract_http_status(err)
+    if code is not None:
         raise HTTPException(
             status_code=code,
             detail=_PROVIDER_ERROR_DETAIL,

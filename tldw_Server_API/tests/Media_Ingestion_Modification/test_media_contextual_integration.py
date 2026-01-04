@@ -9,8 +9,6 @@ import pytest
 from unittest.mock import Mock, MagicMock, patch, AsyncMock
 import pytest
 pytestmark = pytest.mark.unit
-from fastapi.testclient import TestClient
-from fastapi import UploadFile
 import json
 import io
 import tempfile
@@ -24,23 +22,24 @@ class TestMediaEndpointContextualIntegration:
     """Integration tests for media endpoint with contextual chunking."""
 
     @pytest.fixture
-    def test_client(self):
-        """Use the full real application for integration tests."""
-        # Override auth/db dependencies for stable integration behavior
+    def test_client(self, client_user_only):
+        """Use the shared authenticated TestClient with a stub Media DB."""
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user as dep_get_db
-        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user as dep_get_user
-        mock_user = Mock(id="test_user")
+
         mock_db = Mock(db_path="/test/path.db", db_path_str="/test/path.db", client_id="test_client")
-        overrides = {
-            dep_get_user: lambda: mock_user,
-            dep_get_db: lambda: mock_db,
-        }
-        original = real_app.dependency_overrides.copy()
-        real_app.dependency_overrides.update(overrides)
+
+        async def _override_db():
+            yield mock_db
+
+        original_db_override = real_app.dependency_overrides.get(dep_get_db)
+        real_app.dependency_overrides[dep_get_db] = _override_db
         try:
-            yield TestClient(real_app)
+            yield client_user_only
         finally:
-            real_app.dependency_overrides = original
+            if original_db_override is None:
+                real_app.dependency_overrides.pop(dep_get_db, None)
+            else:
+                real_app.dependency_overrides[dep_get_db] = original_db_override
 
     @pytest.fixture
     def auth_headers(self):

@@ -22,7 +22,6 @@ from urllib.parse import urlparse
 import pytest
 import httpx # Keep for mocking specific download errors
 from fastapi import status, Header
-from fastapi.testclient import TestClient
 from loguru import logger
 from io import BytesIO
 import pytest
@@ -47,7 +46,7 @@ from tldw_Server_API.app.api.v1.schemas.media_request_models import AddMediaForm
 
 # --- Use Main App Instance ---
 try:
-    from tldw_Server_API.app.main import app as fastapi_app_instance, app
+    from tldw_Server_API.app.main import app
 except ImportError:
     raise ImportError("Could not locate the main FastAPI app instance. Adjust the import path.")
 
@@ -208,11 +207,8 @@ def override_get_media_db_for_user_dependency(db_fixture):
     return _override
 
 @pytest.fixture(scope="function")
-def test_api_client(db_session_scope): # Depends on the FUNCTION-scoped DB fixture now
-    """
-    RENAMED: Provides a TestClient instance, overriding auth and DB dependencies.
-    Function-scoped to ensure DB isolation per test.
-    """
+def test_api_client(client_user_only, db_session_scope):  # Depends on the FUNCTION-scoped DB fixture now
+    """Provides a shared authenticated TestClient with a per-test Media DB override."""
     logger.debug(f"Setting up test_api_client fixture for FUNCTION (DB: {db_session_scope.db_path_str})...")
 
     # --- File Existence Checks (Keep these or adapt as needed) ---
@@ -226,32 +222,24 @@ def test_api_client(db_session_scope): # Depends on the FUNCTION-scoped DB fixtu
     # Create the override function using the FUNCTION-scoped DB instance
     db_override_func = override_get_media_db_for_user_dependency(db_session_scope)
 
-    # Store original overrides to restore later
-    original_overrides = app.dependency_overrides.copy()
-
-    # Apply overrides
-    app.dependency_overrides[get_request_user] = override_get_request_user
+    # Apply overrides, preserving any existing override for get_media_db_for_user.
+    original_db_override = app.dependency_overrides.get(get_media_db_for_user)
     app.dependency_overrides[get_media_db_for_user] = db_override_func
-    logger.info("Applied dependency overrides for get_request_user and get_media_db_for_user (FUNCTION scope)")
+    logger.info("Applied dependency override for get_media_db_for_user (FUNCTION scope)")
 
-    # Instantiate the TestClient
     try:
-        # Using 'with' ensures client exits cleanly for each function
-        with TestClient(fastapi_app_instance) as test_client_instance:
-            logger.debug("Function-scoped TestClient instance created.")
-            yield test_client_instance
-    except Exception as client_exc:
-        logger.error(f"Failed to create TestClient: {client_exc}", exc_info=True)
-        pytest.fail(f"TestClient instantiation failed: {client_exc}")
+        yield client_user_only
     finally:
-        # Restore original overrides after the function test is done
-        app.dependency_overrides = original_overrides
-        logger.info("Restored original dependency overrides (FUNCTION scope teardown)")
+        if original_db_override is None:
+            app.dependency_overrides.pop(get_media_db_for_user, None)
+        else:
+            app.dependency_overrides[get_media_db_for_user] = original_db_override
+        logger.info("Restored dependency override for get_media_db_for_user (FUNCTION scope teardown)")
 
 @pytest.fixture
 def dummy_headers():
     """Provides headers required by endpoint signature, even if logic is mocked."""
-    # The actual value doesn't matter because get_request_user is mocked
+    # The actual value doesn't matter because auth is overridden in client_user_only.
     return {"token": "dummy_test_token_for_header"}
 
 @pytest.fixture

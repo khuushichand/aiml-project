@@ -104,6 +104,61 @@ _AUTH_ENV_BASELINE_KEYS = (
 
 _AUTH_ENV_BASELINE = {k: os.environ.get(k) for k in _AUTH_ENV_BASELINE_KEYS}
 
+_RISKY_ENV_KEYS = (
+    "JOBS_DB_URL",
+    "JOBS_DB_PATH",
+    "JOBS_ALLOWED_QUEUES",
+    "JOBS_ALLOWED_QUEUES_AUDIO",
+    "JOBS_ALLOWED_QUEUES_EMBEDDINGS",
+    "JOBS_POLL_INTERVAL_SECONDS",
+    "JOBS_LEASE_SECONDS",
+    "JOBS_LEASE_MAX_SECONDS",
+    "JOBS_ENFORCE_LEASE_ACK",
+    "JOBS_DISABLE_LEASE_ENFORCEMENT",
+    "JOBS_REQUIRE_COMPLETION_TOKEN",
+    "JOBS_EVENTS_OUTBOX",
+    "JOBS_COUNTERS_ENABLED",
+    "JOBS_METRICS_GAUGES_ENABLED",
+    "JOBS_METRICS_RECONCILE_ENABLE",
+    "JOBS_WEBHOOKS_ENABLED",
+    "JOBS_SHUTDOWN_WAIT_FOR_LEASES_SEC",
+    "LOGURU_LEVEL",
+    "LOG_LEVEL",
+    "SYSTEM_LOG_LEVEL",
+    "LOG_STREAM",
+    "LOG_COLOR",
+    "FORCE_COLOR",
+    "PY_COLORS",
+)
+
+
+@pytest.fixture(autouse=True)
+def _restore_risky_env_and_logging():
+    """Reset noisy env/logging settings that can leak between tests."""
+    baseline = {k: os.environ.get(k) for k in _RISKY_ENV_KEYS}
+    yield
+
+    for key, baseline_value in baseline.items():
+        if baseline_value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = baseline_value
+
+    try:
+        from tldw_Server_API.app.core.Jobs.manager import JobManager
+
+        JobManager.set_acquire_gate(False)
+        JobManager.clear_rls_context()
+    except Exception:
+        pass
+
+    try:
+        from tldw_Server_API.app.core.Logging.system_log_buffer import ensure_system_log_buffer
+
+        ensure_system_log_buffer()
+    except Exception:
+        pass
+
 
 @pytest.fixture()
 def auth_headers():

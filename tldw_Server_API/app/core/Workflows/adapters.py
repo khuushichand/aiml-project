@@ -253,7 +253,8 @@ def _resolve_workflow_file_path(path_value: str, context: Dict[str, Any], config
     base_dir = _workflow_file_base_dir(context, config)
     try:
         base_resolved = base_dir.resolve(strict=False)
-    except Exception:
+    except Exception as exc:
+        logger.debug(f"Failed to resolve base directory {base_dir}: {exc}")
         base_resolved = base_dir
     candidate = Path(path_value).expanduser()
     if candidate.is_absolute():

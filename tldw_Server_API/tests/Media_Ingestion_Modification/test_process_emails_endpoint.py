@@ -1,16 +1,9 @@
 from io import BytesIO
 import zipfile
 import pytest
-from fastapi.testclient import TestClient
-
-from tldw_Server_API.app.main import app
 
 
-def _client():
-    return TestClient(app)
-
-
-def test_process_emails_endpoint_basic():
+def test_process_emails_endpoint_basic(client_user_only):
     # Build a minimal EML file
     content = (
         b"From: Alice <alice@example.com>\r\n"
@@ -25,16 +18,15 @@ def test_process_emails_endpoint_basic():
         "files": ("test.eml", BytesIO(content), "message/rfc822"),
     }
 
-    with _client() as c:
-        r = c.post("/api/v1/media/process-emails", files=files)
-        assert r.status_code in (200, 207)
-        data = r.json()
-        assert isinstance(data.get("results"), list)
-        assert len(data["results"]) >= 1
-        first = data["results"][0]
-        assert first.get("media_type") == "email"
-        md = first.get("metadata", {})
-        assert md.get("email", {}).get("subject") == "Test Email"
+    r = client_user_only.post("/api/v1/media/process-emails", files=files)
+    assert r.status_code in (200, 207)
+    data = r.json()
+    assert isinstance(data.get("results"), list)
+    assert len(data["results"]) >= 1
+    first = data["results"][0]
+    assert first.get("media_type") == "email"
+    md = first.get("metadata", {})
+    assert md.get("email", {}).get("subject") == "Test Email"
 
 
 def _build_zip_of_emls() -> bytes:
@@ -63,31 +55,30 @@ def _build_zip_of_emls() -> bytes:
     return bio.getvalue()
 
 
-def test_process_emails_endpoint_zip_archive():
+def test_process_emails_endpoint_zip_archive(client_user_only):
     zip_bytes = _build_zip_of_emls()
     files = {
         "files": ("emails.zip", BytesIO(zip_bytes), "application/zip"),
     }
-    with _client() as c:
-        r = c.post(
-            "/api/v1/media/process-emails",
-            files=files,
-            data={
-                "accept_archives": "true",
-                "perform_chunking": "true",
-            },
-        )
-        assert r.status_code in (200, 207)
-        data = r.json()
-        res = data.get("results")
-        assert isinstance(res, list) and len(res) >= 2
-        subjects = sorted([item.get("metadata", {}).get("email", {}).get("subject") for item in res if isinstance(item, dict)])
-        assert subjects[0] == "Zip One" and subjects[1] == "Zip Two"
-        # Assert archive grouping keyword is present on each child
-        for item in res:
-            if isinstance(item, dict):
-                kws = item.get("keywords") or []
-                assert "email_archive:emails" in kws, f"Archive keyword missing in child: {kws}"
+    r = client_user_only.post(
+        "/api/v1/media/process-emails",
+        files=files,
+        data={
+            "accept_archives": "true",
+            "perform_chunking": "true",
+        },
+    )
+    assert r.status_code in (200, 207)
+    data = r.json()
+    res = data.get("results")
+    assert isinstance(res, list) and len(res) >= 2
+    subjects = sorted([item.get("metadata", {}).get("email", {}).get("subject") for item in res if isinstance(item, dict)])
+    assert subjects[0] == "Zip One" and subjects[1] == "Zip Two"
+    # Assert archive grouping keyword is present on each child
+    for item in res:
+        if isinstance(item, dict):
+            kws = item.get("keywords") or []
+            assert "email_archive:emails" in kws, f"Archive keyword missing in child: {kws}"
 
 
 def _build_mbox_two_emails() -> bytes:
@@ -126,34 +117,33 @@ def _build_mbox_two_emails() -> bytes:
             pass
 
 
-def test_process_emails_endpoint_mbox_archive():
+def test_process_emails_endpoint_mbox_archive(client_user_only):
     mbox_bytes = _build_mbox_two_emails()
     files = {
         "files": ("emails.mbox", BytesIO(mbox_bytes), "application/mbox"),
     }
-    with _client() as c:
-        r = c.post(
-            "/api/v1/media/process-emails",
-            files=files,
-            data={
-                "accept_mbox": "true",
-                "perform_chunking": "true",
-            },
-        )
-        assert r.status_code in (200, 207)
-        data = r.json()
-        res = data.get("results")
-        assert isinstance(res, list) and len(res) >= 2
-        subjects = sorted([item.get("metadata", {}).get("email", {}).get("subject") for item in res if isinstance(item, dict)])
-        assert subjects[0] == "Mbox One" and subjects[1] == "Mbox Two"
-        # Assert mbox grouping keyword is present on each child
-        for item in res:
-            if isinstance(item, dict):
-                kws = item.get("keywords") or []
-                assert "email_mbox:emails" in kws, f"MBOX keyword missing in child: {kws}"
+    r = client_user_only.post(
+        "/api/v1/media/process-emails",
+        files=files,
+        data={
+            "accept_mbox": "true",
+            "perform_chunking": "true",
+        },
+    )
+    assert r.status_code in (200, 207)
+    data = r.json()
+    res = data.get("results")
+    assert isinstance(res, list) and len(res) >= 2
+    subjects = sorted([item.get("metadata", {}).get("email", {}).get("subject") for item in res if isinstance(item, dict)])
+    assert subjects[0] == "Mbox One" and subjects[1] == "Mbox Two"
+    # Assert mbox grouping keyword is present on each child
+    for item in res:
+        if isinstance(item, dict):
+            kws = item.get("keywords") or []
+            assert "email_mbox:emails" in kws, f"MBOX keyword missing in child: {kws}"
 
 
-def test_process_emails_endpoint_mbox_guardrail_too_many_messages():
+def test_process_emails_endpoint_mbox_guardrail_too_many_messages(client_user_only):
     # Lower guardrail for internal files to a small number, then exceed it
     import mailbox as _mailbox
     import tempfile as _tempfile
@@ -192,26 +182,25 @@ def test_process_emails_endpoint_mbox_guardrail_too_many_messages():
         files = {
             "files": ("emails.mbox", BytesIO(mbox_bytes), "application/mbox"),
         }
-        with _client() as c:
-            r = c.post(
-                "/api/v1/media/process-emails",
-                files=files,
-                data={
-                    "accept_mbox": "true",
-                    "perform_chunking": "false",
-                },
-            )
-            assert r.status_code in (200, 207)
-            data = r.json()
-            res = data.get("results") or []
-            # Expect at least one Error item indicating too many messages
-            errors = [it for it in res if isinstance(it, dict) and it.get("status") == "Error" and "too many messages" in str(it.get("error", "")).lower()]
-            assert errors, f"Expected guardrail error for too many messages, got: {res}"
+        r = client_user_only.post(
+            "/api/v1/media/process-emails",
+            files=files,
+            data={
+                "accept_mbox": "true",
+                "perform_chunking": "false",
+            },
+        )
+        assert r.status_code in (200, 207)
+        data = r.json()
+        res = data.get("results") or []
+        # Expect at least one Error item indicating too many messages
+        errors = [it for it in res if isinstance(it, dict) and it.get("status") == "Error" and "too many messages" in str(it.get("error", "")).lower()]
+        assert errors, f"Expected guardrail error for too many messages, got: {res}"
     finally:
         archive_cfg['max_internal_files'] = orig_max_files
 
 
-def test_process_emails_endpoint_mbox_guardrail_oversized_bytes():
+def test_process_emails_endpoint_mbox_guardrail_oversized_bytes(client_user_only):
     # Lower size guardrail to 1 MB and build a ~1.5 MB mbox to trigger size error
     import mailbox as _mailbox
     import tempfile as _tempfile
@@ -249,23 +238,22 @@ def test_process_emails_endpoint_mbox_guardrail_oversized_bytes():
         files = {
             "files": ("emails.mbox", BytesIO(mbox_bytes), "application/mbox"),
         }
-        with _client() as c:
-            r = c.post(
-                "/api/v1/media/process-emails",
-                files=files,
-                data={
-                    "accept_mbox": "true",
-                    "perform_chunking": "false",
-                },
-            )
-            assert r.status_code in (200, 207)
-            data = r.json()
-            res = data.get("results") or []
-            # Expect a single error result for size guardrail
-            assert len(res) >= 1 and isinstance(res[0], dict)
-            err = res[0]
-            assert err.get("status") == "Error"
-            assert "exceeds limit" in str(err.get("error", "")).lower()
+        r = client_user_only.post(
+            "/api/v1/media/process-emails",
+            files=files,
+            data={
+                "accept_mbox": "true",
+                "perform_chunking": "false",
+            },
+        )
+        assert r.status_code in (200, 207)
+        data = r.json()
+        res = data.get("results") or []
+        # Expect a single error result for size guardrail
+        assert len(res) >= 1 and isinstance(res[0], dict)
+        err = res[0]
+        assert err.get("status") == "Error"
+        assert "exceeds limit" in str(err.get("error", "")).lower()
     finally:
         archive_cfg['max_internal_uncompressed_size_mb'] = orig_max_size_mb
 
@@ -289,7 +277,7 @@ def _build_zip_with_emls(n: int, payload_size: int = 32) -> bytes:
     return bio.getvalue()
 
 
-def test_process_emails_endpoint_zip_guardrail_too_many_files():
+def test_process_emails_endpoint_zip_guardrail_too_many_files(client_user_only):
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Email import Email_Processing_Lib as email_lib
     archive_cfg = email_lib.DEFAULT_MEDIA_TYPE_CONFIG.get('archive', {})
     orig_max_files = archive_cfg.get('max_internal_files', 100)
@@ -299,26 +287,25 @@ def test_process_emails_endpoint_zip_guardrail_too_many_files():
         files = {
             "files": ("emails.zip", BytesIO(zip_bytes), "application/zip"),
         }
-        with _client() as c:
-            r = c.post(
-                "/api/v1/media/process-emails",
-                files=files,
-                data={
-                    "accept_archives": "true",
-                },
-            )
-            assert r.status_code in (200, 207)
-            data = r.json()
-            res = data.get("results") or []
-            assert len(res) >= 1 and isinstance(res[0], dict)
-            err = res[0]
-            assert err.get("status") == "Error"
-            assert "too many files" in str(err.get("error", "")).lower()
+        r = client_user_only.post(
+            "/api/v1/media/process-emails",
+            files=files,
+            data={
+                "accept_archives": "true",
+            },
+        )
+        assert r.status_code in (200, 207)
+        data = r.json()
+        res = data.get("results") or []
+        assert len(res) >= 1 and isinstance(res[0], dict)
+        err = res[0]
+        assert err.get("status") == "Error"
+        assert "too many files" in str(err.get("error", "")).lower()
     finally:
         archive_cfg['max_internal_files'] = orig_max_files
 
 
-def test_process_emails_endpoint_zip_guardrail_oversize():
+def test_process_emails_endpoint_zip_guardrail_oversize(client_user_only):
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Email import Email_Processing_Lib as email_lib
     archive_cfg = email_lib.DEFAULT_MEDIA_TYPE_CONFIG.get('archive', {})
     orig_max_size_mb = archive_cfg.get('max_internal_uncompressed_size_mb', 200)
@@ -330,27 +317,26 @@ def test_process_emails_endpoint_zip_guardrail_oversize():
         files = {
             "files": ("emails.zip", BytesIO(zip_bytes), "application/zip"),
         }
-        with _client() as c:
-            r = c.post(
-                "/api/v1/media/process-emails",
-                files=files,
-                data={
-                    "accept_archives": "true",
-                },
-            )
-            assert r.status_code in (200, 207)
-            data = r.json()
-            res = data.get("results") or []
-            assert len(res) >= 1 and isinstance(res[0], dict)
-            err = res[0]
-            assert err.get("status") == "Error"
-            assert "exceeds limit" in str(err.get("error", "")).lower()
+        r = client_user_only.post(
+            "/api/v1/media/process-emails",
+            files=files,
+            data={
+                "accept_archives": "true",
+            },
+        )
+        assert r.status_code in (200, 207)
+        data = r.json()
+        res = data.get("results") or []
+        assert len(res) >= 1 and isinstance(res[0], dict)
+        err = res[0]
+        assert err.get("status") == "Error"
+        assert "exceeds limit" in str(err.get("error", "")).lower()
     finally:
         archive_cfg['max_internal_uncompressed_size_mb'] = orig_max_size_mb
 
 
 @pytest.mark.performance
-def test_process_emails_endpoint_zip_large_container():
+def test_process_emails_endpoint_zip_large_container(client_user_only):
     # Build 120 small EMLs and ensure the endpoint expands and processes them
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Email import Email_Processing_Lib as email_lib
     archive_cfg = email_lib.DEFAULT_MEDIA_TYPE_CONFIG.get('archive', {})
@@ -361,26 +347,25 @@ def test_process_emails_endpoint_zip_large_container():
         files = {
             "files": ("emails.zip", BytesIO(zip_bytes), "application/zip"),
         }
-        with _client() as c:
-            r = c.post(
-                "/api/v1/media/process-emails",
-                files=files,
-                data={
-                    "accept_archives": "true",
-                    "perform_chunking": "false",
-                },
-            )
-            assert r.status_code in (200, 207)
-            data = r.json()
-            res = data.get("results") or []
-            # Expect at least 120 children
-            assert isinstance(res, list) and len(res) >= 120
+        r = client_user_only.post(
+            "/api/v1/media/process-emails",
+            files=files,
+            data={
+                "accept_archives": "true",
+                "perform_chunking": "false",
+            },
+        )
+        assert r.status_code in (200, 207)
+        data = r.json()
+        res = data.get("results") or []
+        # Expect at least 120 children
+        assert isinstance(res, list) and len(res) >= 120
     finally:
         archive_cfg['max_internal_files'] = orig_max_files
 
 
 @pytest.mark.performance
-def test_process_emails_endpoint_mbox_large_container():
+def test_process_emails_endpoint_mbox_large_container(client_user_only):
     # Build an mbox with 120 small messages; ensure expansion handles volume
     import mailbox as _mailbox
     import tempfile as _tempfile
@@ -416,19 +401,18 @@ def test_process_emails_endpoint_mbox_large_container():
         files = {
             "files": ("emails.mbox", BytesIO(mbox_bytes), "application/mbox"),
         }
-        with _client() as c:
-            r = c.post(
-                "/api/v1/media/process-emails",
-                files=files,
-                data={
-                    "accept_mbox": "true",
-                    "perform_chunking": "false",
-                },
-            )
-            assert r.status_code in (200, 207)
-            data = r.json()
-            res = data.get("results") or []
-            assert isinstance(res, list) and len(res) >= 120
+        r = client_user_only.post(
+            "/api/v1/media/process-emails",
+            files=files,
+            data={
+                "accept_mbox": "true",
+                "perform_chunking": "false",
+            },
+        )
+        assert r.status_code in (200, 207)
+        data = r.json()
+        res = data.get("results") or []
+        assert isinstance(res, list) and len(res) >= 120
     finally:
         archive_cfg['max_internal_files'] = orig_max_files
 
@@ -471,27 +455,25 @@ def test_process_emails_endpoint_pst_recipients_and_date_strict():
     assert emd.get('date'), f"No date found in metadata: {emd}"
 
 
-def test_process_emails_endpoint_pst_feature_flag_behavior():
+def test_process_emails_endpoint_pst_feature_flag_behavior(client_user_only):
     # Without pypff installed, uploading a small .pst with accept_pst=true should return informative error and grouping keyword
     placeholder = b"!pst placeholder!"  # not a real PST
     files = {
         "files": ("emails.pst", BytesIO(placeholder), "application/octet-stream"),
     }
-    with _client() as c:
-        r = c.post(
-            "/api/v1/media/process-emails",
-            files=files,
-            data={
-                "accept_pst": "true",
-            },
-        )
-        assert r.status_code in (200, 207)
-        data = r.json()
-        res = data.get("results") or []
-        assert len(res) >= 1 and isinstance(res[0], dict)
-        item = res[0]
-        assert item.get("status") == "Error"
-        assert "pst/ost support not enabled" in str(item.get("error", "")).lower()
-        kws = item.get("keywords") or []
-        assert "email_pst:emails" in kws, f"PST grouping keyword missing: {kws}"
-import pytest
+    r = client_user_only.post(
+        "/api/v1/media/process-emails",
+        files=files,
+        data={
+            "accept_pst": "true",
+        },
+    )
+    assert r.status_code in (200, 207)
+    data = r.json()
+    res = data.get("results") or []
+    assert len(res) >= 1 and isinstance(res[0], dict)
+    item = res[0]
+    assert item.get("status") == "Error"
+    assert "pst/ost support not enabled" in str(item.get("error", "")).lower()
+    kws = item.get("keywords") or []
+    assert "email_pst:emails" in kws, f"PST grouping keyword missing: {kws}"

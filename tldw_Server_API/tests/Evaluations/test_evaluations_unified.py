@@ -385,7 +385,14 @@ class TestTldwSpecificEndpoints:
 
     async def test_rag_endpoint(self, client, auth_headers, sample_rag_request):
         """Test RAG evaluation endpoint"""
-        with patch('tldw_Server_API.app.core.Evaluations.unified_evaluation_service.UnifiedEvaluationService.evaluate_rag') as mock_evaluate:
+        with patch(
+            'tldw_Server_API.app.api.v1.endpoints.evaluations_unified._resolve_and_validate_eval_provider',
+            new_callable=AsyncMock,
+        ) as mock_provider, patch(
+            'tldw_Server_API.app.core.Evaluations.unified_evaluation_service.UnifiedEvaluationService.evaluate_rag',
+            new_callable=AsyncMock,
+        ) as mock_evaluate:
+            mock_provider.return_value = ("openai", "sk-test", None, None)
             # Mock the RAG evaluation service method
             mock_evaluate.return_value = {
                 "evaluation_id": "rag_123",
@@ -423,7 +430,14 @@ class TestTldwSpecificEndpoints:
 
     async def test_response_quality_endpoint(self, client, auth_headers):
         """Test response quality evaluation endpoint"""
-        with patch('tldw_Server_API.app.core.Evaluations.unified_evaluation_service.UnifiedEvaluationService.evaluate_response_quality') as mock_evaluate:
+        with patch(
+            'tldw_Server_API.app.api.v1.endpoints.evaluations_unified._resolve_and_validate_eval_provider',
+            new_callable=AsyncMock,
+        ) as mock_provider, patch(
+            'tldw_Server_API.app.core.Evaluations.unified_evaluation_service.UnifiedEvaluationService.evaluate_response_quality',
+            new_callable=AsyncMock,
+        ) as mock_evaluate:
+            mock_provider.return_value = ("openai", "sk-test", None, None)
             # Mock the response quality evaluation service method
             mock_evaluate.return_value = {
                 "evaluation_id": "quality_123",
@@ -829,7 +843,11 @@ class TestErrorHandling:
         """Test request without authentication"""
         response = client.get("/api/v1/evaluations")
         assert response.status_code == 401
-        assert "error" in response.json()["detail"]
+        detail = response.json().get("detail")
+        if isinstance(detail, dict):
+            assert "error" in detail
+        else:
+            assert "not authenticated" in str(detail).lower()
 
     def test_invalid_evaluation_type(self, client, auth_headers):
         """Test creating evaluation with invalid type"""

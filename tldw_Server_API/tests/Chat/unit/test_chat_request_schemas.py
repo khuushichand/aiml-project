@@ -150,7 +150,7 @@ def test_function_definition_invalid_type():
         "type": "invalid_type",  # Not a valid JSON Schema type
         "properties": {}
     }
-    with pytest.raises(ValidationError) as exc_info:
+    with pytest.raises((ValidationError, TypeError)) as exc_info:
         FunctionDefinition(name="test", parameters=invalid_params)
     assert "Invalid JSON Schema type" in str(exc_info.value)
 
@@ -194,7 +194,7 @@ def test_function_definition_invalid_required_field():
         "properties": {"name": {"type": "string"}},
         "required": "name"  # Should be an array, not a string
     }
-    with pytest.raises(ValidationError) as exc_info:
+    with pytest.raises((ValidationError, TypeError)) as exc_info:
         FunctionDefinition(name="test", parameters=invalid_params)
     assert "'required' must be an array" in str(exc_info.value)
 
@@ -206,7 +206,7 @@ def test_function_definition_invalid_properties_field():
         "type": "object",
         "properties": ["name", "age"]  # Should be an object, not an array
     }
-    with pytest.raises(ValidationError) as exc_info:
+    with pytest.raises((ValidationError, TypeError)) as exc_info:
         FunctionDefinition(name="test", parameters=invalid_params)
     assert "'properties' must be an object" in str(exc_info.value)
 

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from loguru import logger
 from typing import Optional
@@ -168,7 +168,7 @@ async def video_processing_exception_handler(
     logger.error("Video processing failed: {}", exc)
     return JSONResponse(
         status_code=500,
-        content={"message": f"An error occurred during video processing: {str(exc)}"},
+        content={"message": f"An error occurred during video processing: {exc!s}"},
     )
 
 

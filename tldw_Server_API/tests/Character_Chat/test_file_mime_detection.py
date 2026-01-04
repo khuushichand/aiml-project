@@ -182,7 +182,7 @@ class TestValidateFileType:
         is_valid, error, file_type = _validate_file_type(yaml_data, "character.yaml")
         assert is_valid is True
         assert error == ""
-        assert file_type == "json"  # YAML is processed as json type
+        assert file_type == "yaml"
 
     def test_valid_yml_extension(self):
         """YAML file with .yml extension should be valid."""
@@ -190,7 +190,7 @@ class TestValidateFileType:
         is_valid, error, file_type = _validate_file_type(yaml_data, "config.yml")
         assert is_valid is True
         assert error == ""
-        assert file_type == "json"
+        assert file_type == "yaml"
 
     def test_valid_markdown_extension(self):
         """Markdown file with .md extension should be valid."""

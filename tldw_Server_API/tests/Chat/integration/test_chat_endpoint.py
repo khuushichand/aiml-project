@@ -558,7 +558,7 @@ def test_missing_api_key_for_required_provider(
         headers={"token": valid_auth_token}
         )
 
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
     detail = response.json()["detail"]
     assert detail["error_code"] == "missing_provider_credentials"
     after = reg.get_metric_stats("byok_missing_credentials_total", labels=labels).get("count", 0)
@@ -595,8 +595,8 @@ def test_keyless_provider_proceeds_without_key(  # Added default_chat_request_da
         )
         assert response.status_code == status.HTTP_200_OK
         mock_chat_api_call.assert_called_once()
-        assert mock_chat_api_call.call_args[1].get(
-            "api_key") is None  # Check that api_key was indeed None or not passed
+        api_key = mock_chat_api_call.call_args[1].get("api_key")
+        assert api_key in (None, "")
     # Clean up only the overrides we added (not the auth override from fixture)
     app.dependency_overrides.pop(get_media_db_for_user, None)
     app.dependency_overrides.pop(get_chacha_db_for_user, None)
@@ -611,15 +611,15 @@ def test_keyless_provider_proceeds_without_key(  # Added default_chat_request_da
     (ChatAuthenticationError(provider="test", message="Auth failed detail from lib"),
      # Error from perform_chat_api_call
      status.HTTP_401_UNAUTHORIZED,
-     "Auth failed detail from lib"),  # Endpoint uses the lib's message for < 500 errors
+     "unauthorized"),
 
     (ChatRateLimitError(provider="test", message="Rate limit detail from lib"),
      status.HTTP_429_TOO_MANY_REQUESTS,
-     "Rate limit detail from lib"),
+     "rate limit exceeded"),
 
     (ChatBadRequestError(provider="test", message="Bad request detail from lib"),
      status.HTTP_400_BAD_REQUEST,
-     "Bad request detail from lib"),
+     "invalid request"),
 
     (ChatConfigurationError(provider="test", message="Config error from lib"),  # This is a 5xx type error
      status.HTTP_503_SERVICE_UNAVAILABLE,  # Endpoint maps ChatConfigurationError to 503

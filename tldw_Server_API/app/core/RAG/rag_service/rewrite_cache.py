@@ -22,7 +22,7 @@ from loguru import logger
 from tldw_Server_API.app.core.exceptions import UnsafeUserPathError
 
 DEFAULT_PATH = Path("Databases/Rewrite_Cache/rewrite_cache.jsonl")
-_USER_DB_BASE = Path("Databases/user_databases")
+_USER_DB_BASE = Path(os.getenv("USER_DB_BASE", "Databases/user_databases"))
 _ALLOWED_USER_ID_CHARS = set(string.ascii_letters + string.digits + "_-")
 _ERR_MSG_PATH_TRAVERSAL = "Resolved rewrite cache path is outside user database base."
 

@@ -500,7 +500,18 @@ async def add_media_orchestrate(
             # Map input sources back to original refs (URL or original filename)
             source_to_ref_map: Dict[str, str] = {src: src for src in url_list}
             source_to_ref_map.update(
-                {str(pf["path"]): pf["original_filename"] for pf in saved_files_info}
+                {
+                    str(pf["path"]): pf["original_filename"]
+                    for pf in saved_files_info
+                    if pf.get("path")
+                }
+            )
+            source_to_ref_map.update(
+                {
+                    str(FilePath(pf["path"]).resolve(strict=False)): pf["original_filename"]
+                    for pf in saved_files_info
+                    if pf.get("path")
+                }
             )
 
             # --- 6. Process Media based on Type ---

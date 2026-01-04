@@ -25,6 +25,11 @@ from starlette.staticfiles import StaticFiles
 import os as _early_os
 
 _early_os.environ.setdefault("MCP_INHERIT_GLOBAL_LOGGER", "1")
+try:
+    # Route warnings through stdlib logging so they inherit the Loguru format.
+    logging.captureWarnings(True)
+except Exception:
+    pass
 
 
 class InterceptHandler(logging.Handler):
@@ -163,6 +168,41 @@ def _safe_log_format(record: dict) -> str:
         "<blue>{name}</blue>:<magenta>{function}</magenta>:<cyan>{line}</cyan> - {message}"
     )
 
+def _redirect_external_loggers() -> None:
+    """Ensure third-party loggers route through our Loguru interceptor."""
+    try:
+        warn_logger = logging.getLogger("py.warnings")
+        warn_logger.handlers = [InterceptHandler()]
+        warn_logger.propagate = False
+        warn_logger.setLevel(0)
+    except Exception:
+        pass
+    # Pre-create known external loggers so they propagate to root interception.
+    prefixes = (
+        "kokoro",
+        "huggingface_hub",
+        "transformers",
+        "torch",
+        "sentence_transformers",
+        "accelerate",
+    )
+    for name in prefixes:
+        try:
+            ext_logger = logging.getLogger(name)
+            ext_logger.handlers = []
+            ext_logger.propagate = True
+            ext_logger.setLevel(0)
+        except Exception:
+            pass
+    # Sweep any dynamically-created external loggers.
+    try:
+        for lname, lgr in list(logging.root.manager.loggerDict.items()):
+            if isinstance(lgr, logging.Logger) and lname.startswith(prefixes):
+                lgr.handlers = []
+                lgr.propagate = True
+                lgr.setLevel(0)
+    except Exception:
+        pass
 
 # Reset Loguru and configure a single, thread-safe sink
 logger.remove()
@@ -226,12 +266,73 @@ def _unwrap_logger_add(func):
         candidate = next_candidate
 
 
+# Guard against third-party loguru reconfiguration.
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]  # tldw_Server_API/
+_ALLOWED_LOGURU_CALLERS = {
+    Path(__file__).resolve(),
+    (_PROJECT_ROOT / "app" / "core" / "Logging" / "system_log_buffer.py").resolve(),
+    (_PROJECT_ROOT / "app" / "core" / "Ingestion_Media_Processing" / "MediaWiki" / "Media_Wiki.py").resolve(),
+}
+
+
+def _caller_in_project() -> bool:
+    frame = logging.currentframe()
+    if frame is not None:
+        frame = frame.f_back
+    while frame is not None:
+        fname = getattr(frame.f_code, "co_filename", "") or ""
+        func_name = getattr(frame.f_code, "co_name", "") or ""
+        if not fname:
+            frame = frame.f_back
+            continue
+        if "loguru" in fname:
+            frame = frame.f_back
+            continue
+        if fname == __file__ and func_name in {"_safe_logger_add", "_safe_logger_remove", "_safe_logger_configure"}:
+            frame = frame.f_back
+            continue
+        try:
+            return Path(fname).resolve().is_relative_to(_PROJECT_ROOT)
+        except Exception:
+            return True
+    return True
+
+
+def _caller_allowed_for_loguru_config() -> bool:
+    if os.getenv("TLDW_ALLOW_LOGURU_RECONFIG", "").lower() in {"1", "true", "yes", "on"}:
+        return True
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return True
+    frame = logging.currentframe()
+    if frame is not None:
+        frame = frame.f_back
+    while frame is not None:
+        fname = getattr(frame.f_code, "co_filename", "") or ""
+        func_name = getattr(frame.f_code, "co_name", "") or ""
+        if not fname:
+            frame = frame.f_back
+            continue
+        if "loguru" in fname:
+            frame = frame.f_back
+            continue
+        if fname == __file__ and func_name in {"_safe_logger_add", "_safe_logger_remove", "_safe_logger_configure"}:
+            frame = frame.f_back
+            continue
+        try:
+            return Path(fname).resolve() in _ALLOWED_LOGURU_CALLERS
+        except Exception:
+            return True
+    return False
+
+
 # Ensure any subsequent logger.add calls wrap raw streams with SafeStreamWrapper
 _original_logger_add = logger.add
 _original_unwrapped_logger_add = _unwrap_logger_add(_original_logger_add)
 
 
 def _safe_logger_add(sink, *args, **kwargs):
+    if not _caller_allowed_for_loguru_config():
+        return None
     try:
         if hasattr(sink, "write") and not isinstance(sink, _SafeStreamWrapper):
             sink = _SafeStreamWrapper(sink)
@@ -279,6 +380,54 @@ logger.add(
     enqueue=False,
 )
 logger = logger.patch(_trace_log_patcher)
+_redirect_external_loggers()
+
+_original_logger_remove = logger.remove
+_original_logger_configure = getattr(logger, "configure", None)
+
+
+def _safe_logger_remove(sink_id=None):
+    if not _caller_allowed_for_loguru_config():
+        return None
+    try:
+        return _original_logger_remove(sink_id)
+    finally:
+        _redirect_external_loggers()
+
+
+def _safe_logger_configure(*args, **kwargs):
+    if not _caller_allowed_for_loguru_config():
+        return None
+    try:
+        if callable(_original_logger_configure):
+            return _original_logger_configure(*args, **kwargs)
+        return None
+    finally:
+        _redirect_external_loggers()
+
+
+logger.remove = _safe_logger_remove  # type: ignore[assignment]
+if callable(_original_logger_configure):
+    logger.configure = _safe_logger_configure  # type: ignore[assignment]
+
+# Prevent third-party stdlib loggers from attaching their own handlers.
+_original_logging_addHandler = logging.Logger.addHandler
+
+
+def _safe_logging_addHandler(self: logging.Logger, hdlr: logging.Handler) -> None:
+    if isinstance(hdlr, InterceptHandler) or _caller_allowed_for_loguru_config():
+        _original_logging_addHandler(self, hdlr)
+    else:
+        # Drop third-party handlers and rely on root interception.
+        try:
+            self.handlers = []
+            self.propagate = True
+            self.setLevel(0)
+        except Exception:
+            pass
+
+
+logging.Logger.addHandler = _safe_logging_addHandler  # type: ignore[assignment]
 
 # Intercept stdlib and uvicorn logs early
 try:
@@ -317,6 +466,7 @@ def _reinstall_intercept_handlers():
             _lg.propagate = False
         except Exception:
             pass
+    _redirect_external_loggers()
 
 
 try:

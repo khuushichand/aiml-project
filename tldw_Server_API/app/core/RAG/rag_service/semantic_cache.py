@@ -614,7 +614,7 @@ def _resolve_default_cache_dir() -> Optional[Path]:
         cfg = load_and_log_configs() or {}
         project_root = cfg.get("PROJECT_ROOT")
     except Exception as exc:
-        logger.debug("Semantic cache: could not load config for PROJECT_ROOT: {}", exc)
+        logger.warning("Semantic cache: could not load config for PROJECT_ROOT: {}", exc)
         return None
     if project_root:
         try:

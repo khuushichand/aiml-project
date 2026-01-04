@@ -36,6 +36,9 @@ try:
 except ImportError as e:
     raise ImportError(f"Could not locate the FastAPI app instance or dependencies: {e}")
 from tldw_Server_API.app.api.v1.schemas.media_request_models import ChunkMethod, MediaType, PdfEngine
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import (
+    check_transcription_model_status,
+)
 
 ######################################################################################################################
 # Constants
@@ -115,6 +118,9 @@ INVALID_URL = "http://this.url.definitely.does.not.exist.invalid/resource.mp4"
 URL_404 = "https://httpbin.org/status/404"
 
 PDF_ENGINES_TO_TEST = ["pymupdf4llm", "pymupdf", "docling"]
+TEST_VIDEO_TRANSCRIPTION_MODEL = "small"
+TEST_VIDEO_START_TIME = "0"
+TEST_VIDEO_END_TIME = "00:00:20"
 
 
 # --- Fixtures ---
@@ -327,6 +333,12 @@ def check_media_item_result(result, expected_status, check_db_fields=False): # D
              f"Expected None or empty error for Success status, got '{result['error']}'"
 
 
+def _skip_if_transcription_model_unavailable(model_name: str) -> None:
+    status = check_transcription_model_status(model_name)
+    if not status.get("available"):
+        pytest.skip(status.get("message", "Transcription model not available"))
+
+
 # --- Test Classes ---
 
 class TestProcessVideos:
@@ -334,7 +346,14 @@ class TestProcessVideos:
 
     def test_process_video_url_success(self, client, dummy_headers):
         """Test processing a single valid video URL."""
-        form_data = {"urls": [VALID_VIDEO_URL], "perform_analysis": "false"}
+        _skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
+        form_data = {
+            "urls": [VALID_VIDEO_URL],
+            "perform_analysis": "false",
+            "transcription_model": TEST_VIDEO_TRANSCRIPTION_MODEL,
+            "start_time": TEST_VIDEO_START_TIME,
+            "end_time": TEST_VIDEO_END_TIME,
+        }
         response = client.post(self.ENDPOINT, data=form_data, headers=dummy_headers)
 
         # YouTube may return 403 errors due to bot protection or other download failures
@@ -356,7 +375,13 @@ class TestProcessVideos:
 
     def test_process_video_upload_success(self, client, dummy_headers):
         """Test processing a single valid video file upload."""
-        form_data = {"perform_analysis": "false"}
+        _skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
+        form_data = {
+            "perform_analysis": "false",
+            "transcription_model": TEST_VIDEO_TRANSCRIPTION_MODEL,
+            "start_time": TEST_VIDEO_START_TIME,
+            "end_time": TEST_VIDEO_END_TIME,
+        }
         with open(SAMPLE_VIDEO_PATH, "rb") as f:
             files = {"files": (SAMPLE_VIDEO_PATH.name, f, "video/mp4")}
             response = client.post(self.ENDPOINT, data=form_data, files=files, headers=dummy_headers)
@@ -374,7 +399,14 @@ class TestProcessVideos:
 
     def test_process_video_multiple_success(self, client, dummy_headers):
         """Test processing multiple valid inputs (URL and Upload)."""
-        form_data = {"urls": [VALID_VIDEO_URL], "perform_analysis": "false"}
+        _skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
+        form_data = {
+            "urls": [VALID_VIDEO_URL],
+            "perform_analysis": "false",
+            "transcription_model": TEST_VIDEO_TRANSCRIPTION_MODEL,
+            "start_time": TEST_VIDEO_START_TIME,
+            "end_time": TEST_VIDEO_END_TIME,
+        }
         with open(SAMPLE_VIDEO_PATH, "rb") as f:
             files = {"files": (SAMPLE_VIDEO_PATH.name, f, "video/mp4")}
             response = client.post(self.ENDPOINT, data=form_data, files=files, headers=dummy_headers)
@@ -399,7 +431,14 @@ class TestProcessVideos:
 
     def test_process_video_multi_status_mixed(self, client, dummy_headers):
         """Test processing one valid URL and one invalid URL -> 207."""
-        form_data = {"urls": [VALID_VIDEO_URL, INVALID_URL], "perform_analysis": "false"}
+        _skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
+        form_data = {
+            "urls": [VALID_VIDEO_URL, INVALID_URL],
+            "perform_analysis": "false",
+            "transcription_model": TEST_VIDEO_TRANSCRIPTION_MODEL,
+            "start_time": TEST_VIDEO_START_TIME,
+            "end_time": TEST_VIDEO_END_TIME,
+        }
         response = client.post(self.ENDPOINT, data=form_data, headers=dummy_headers)
 
         # YouTube may return 403 errors for both URLs
@@ -1015,8 +1054,13 @@ class TestProcessEbooks:
         # For simplicity here, we check if the mocked text is *in* the final result
         assert mock_analysis_text in result["analysis"]
         assert result["chunks"] is not None and len(result["chunks"]) > 0
-        # Check if analysis was added to chunk metadata
-        assert all('analysis' in chunk.get('metadata', {}) for chunk in result["chunks"])
+        # Check if analysis was added to chunk metadata for non-empty chunks
+        chunks_with_text = [chunk for chunk in result["chunks"] if chunk.get("text")]
+        assert chunks_with_text
+        assert all(
+            chunk.get("metadata", {}).get("analysis") == mock_analysis_text
+            for chunk in chunks_with_text
+        )
 
 
 
