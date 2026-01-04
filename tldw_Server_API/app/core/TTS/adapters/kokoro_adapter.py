@@ -473,7 +473,7 @@ class KokoroAdapter(TTSAdapter):
             )
         # Try native Kokoro PyTorch if available
         try:
-            from kokoro import KModel  # type: ignore
+            from kokoro.model import KModel  # type: ignore
             # config.json expected alongside model
             config_path = os.path.join(os.path.dirname(self.model_path), "config.json")
             if not os.path.exists(config_path):
@@ -694,7 +694,7 @@ class KokoroAdapter(TTSAdapter):
             else:
                 # Use Kokoro PyTorch pipeline if available
                 try:
-                    from kokoro import KPipeline  # type: ignore
+                    from kokoro.pipeline import KPipeline  # type: ignore
                 except ImportError:
                     # Cannot proceed without kokoro pipeline
                     raise TTSGenerationError(

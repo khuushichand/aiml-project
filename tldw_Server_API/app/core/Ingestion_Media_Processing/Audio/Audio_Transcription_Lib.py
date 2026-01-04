@@ -2542,6 +2542,11 @@ def speech_to_text(
                     base_dir,
                     label="Audio base directory",
                 )
+            candidate_path = raw_path
+            if not candidate_path.is_absolute() and base_dir_resolved is not None:
+                candidate_path = base_dir_resolved / candidate_path
+            if candidate_path.exists():
+                _assert_no_symlink(candidate_path, label="Audio input path")
             raw_path = _resolve_safe_input_path(
                 raw_path,
                 base_dir=base_dir_resolved,
