@@ -8,7 +8,7 @@ import tempfile
 import httpx
 import pytest
 
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
 
 
 @pytest.mark.integration
@@ -16,6 +16,7 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 async def test_get_chat_context_and_prepare_roles_normalized(monkeypatch):
     tmpdir = tempfile.mkdtemp(prefix="chacha_roles_")
     monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    reset_settings()
     try:
         from tldw_Server_API.app.main import app
         settings = get_settings()
@@ -56,6 +57,7 @@ async def test_get_chat_context_and_prepare_roles_normalized(monkeypatch):
             assert roles2[0] == "system"
             assert set(roles2[1:]).issubset({"user", "assistant", "system", "tool"})
     finally:
+        reset_settings()
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
@@ -64,6 +66,7 @@ async def test_get_chat_context_and_prepare_roles_normalized(monkeypatch):
 async def test_complete_v2_uses_normalized_roles_via_stubbed_provider(monkeypatch):
     tmpdir = tempfile.mkdtemp(prefix="chacha_complete_v2_roles_")
     monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    reset_settings()
     try:
         from tldw_Server_API.app.main import app
         settings = get_settings()
@@ -100,6 +103,7 @@ async def test_complete_v2_uses_normalized_roles_via_stubbed_provider(monkeypatc
             roles = {m.get("role") for m in captured["messages"]}
             assert roles.issubset({"system", "user", "assistant", "tool"})
     finally:
+        reset_settings()
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
@@ -108,6 +112,7 @@ async def test_complete_v2_uses_normalized_roles_via_stubbed_provider(monkeypatc
 async def test_get_messages_format_for_completions_roles_and_search_placeholders(monkeypatch):
     tmpdir = tempfile.mkdtemp(prefix="chacha_msgs_roles_")
     monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    reset_settings()
     try:
         from tldw_Server_API.app.main import app
         settings = get_settings()
@@ -147,4 +152,5 @@ async def test_get_messages_format_for_completions_roles_and_search_placeholders
             res = r.json()
             assert any(m.get("content") == "Hello User" for m in res.get("messages", []))
     finally:
+        reset_settings()
         shutil.rmtree(tmpdir, ignore_errors=True)

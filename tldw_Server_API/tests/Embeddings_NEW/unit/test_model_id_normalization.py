@@ -1,5 +1,7 @@
 from typing import Any, List, Optional
+
 import numpy as np
+import pytest
 
 from tldw_Server_API.app.core.Embeddings.Embeddings_Server import Embeddings_Create as EC
 
@@ -25,6 +27,7 @@ def _stub_openai_batch(
     return out
 
 
+@pytest.mark.unit
 def test_create_embeddings_batch_accepts_provider_prefixed_model_id(monkeypatch):
     # Ensure limiting is bypassed in tests
     monkeypatch.setenv("TESTING", "true")

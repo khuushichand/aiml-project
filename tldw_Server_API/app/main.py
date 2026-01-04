@@ -30,7 +30,7 @@ try:
     # Route warnings through stdlib logging so they inherit the Loguru format.
     logging.captureWarnings(True)
 except Exception:
-    pass
+    logger.debug("Failed to enable warning capture via stdlib logging")
 
 
 class InterceptHandler(logging.Handler):
@@ -257,7 +257,11 @@ class _StderrInterceptor:
         return getattr(self._stream, "errors", None)
 
     def fileno(self):
-        return getattr(self._stream, "fileno", lambda: -1)()
+        fn = getattr(self._stream, "fileno", None)
+        if fn is None:
+            import io
+            raise io.UnsupportedOperation("fileno")
+        return fn()
 
 def _redirect_external_loggers() -> None:
     """Ensure third-party loggers route through our Loguru interceptor."""
@@ -368,7 +372,9 @@ def _unwrap_logger_add(func):
         candidate = next_candidate
 
 
-# Guard against third-party loguru reconfiguration.
+# Guard against third-party loguru reconfiguration. These are the only
+# modules that may reconfigure Loguru sinks in production; allow overrides
+# via TLDW_ALLOW_LOGURU_RECONFIG for local troubleshooting.
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]  # tldw_Server_API/
 _ALLOWED_LOGURU_CALLERS = {
     Path(__file__).resolve(),

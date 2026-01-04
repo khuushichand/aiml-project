@@ -195,7 +195,7 @@ def test_document_generate_missing_provider_credentials_returns_503(monkeypatch,
     from tldw_Server_API.app.api.v1.endpoints import chat_documents as chat_docs
     from tldw_Server_API.app.core.AuthNZ.byok_runtime import ResolvedByokCredentials
 
-    async def _missing(provider, *args, **kwargs):
+    async def _missing(provider, *_args, **_kwargs):
         return ResolvedByokCredentials(
             provider=provider,
             api_key=None,

@@ -33,13 +33,13 @@ from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (  # type: ignore
     process_document_like_item as _process_document_like_item,
 )
-from tldw_Server_API.tests.test_utils import temp_db
+from tldw_Server_API.tests.test_utils import (
+    skip_if_transcription_model_unavailable,
+    temp_db,
+)
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase # Import Database class
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import (
-    check_transcription_model_status,
-)
 # Import the form model
 from tldw_Server_API.app.api.v1.schemas.media_request_models import AddMediaForm, MediaType # Import AddMediaForm, MediaType
 #
@@ -757,10 +757,6 @@ def create_add_media_form_data(**overrides) -> Dict[str, Any]:
     return form_dict
 
 
-def _skip_if_transcription_model_unavailable(model_name: str) -> None:
-    status = check_transcription_model_status(model_name)
-    if not status.get("available"):
-        pytest.skip(status.get("message", "Transcription model not available"))
 
 
 # ##################################################################################################################
@@ -878,7 +874,7 @@ def test_add_media_missing_required_form_field(test_api_client, dummy_headers):
 def test_add_media_single_url_success(test_api_client, db_session, media_type, valid_url, expected_content_present, dummy_headers): # Added db_session
     """Test processing a single valid URL for each media type."""
     if media_type == "video":
-        _skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
+        skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
         form_data = create_add_media_form_data(
             media_type=media_type,
             urls=[valid_url],
@@ -958,7 +954,7 @@ def test_add_media_single_file_upload_success(test_api_client, db_session, creat
 
     file_tuple = create_upload_file(sample_path)
     if media_type == "video":
-        _skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
+        skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
         form_data = create_add_media_form_data(
             media_type=media_type,
             transcription_model=TEST_VIDEO_TRANSCRIPTION_MODEL,
@@ -1027,7 +1023,7 @@ def test_add_media_mixed_url_file_success(test_api_client, db_session, create_up
     if not SAMPLE_VIDEO_PATH.exists(): pytest.skip(f"Test file not found: {SAMPLE_VIDEO_PATH}")
 
     file_tuple = create_upload_file(SAMPLE_VIDEO_PATH)
-    _skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
+    skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
     form_data = create_add_media_form_data(
         media_type="video",
         urls=[VALID_VIDEO_URL],
@@ -1554,7 +1550,7 @@ def test_process_video_with_analysis_mocked(mock_analyze, test_api_client, db_se
     mock_analysis_text = "Mocked analysis for Video."
     mock_analyze.return_value = mock_analysis_text
 
-    _skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
+    skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
     form_data_dict = create_add_media_form_data(
         perform_analysis=True,
         perform_chunking=True,

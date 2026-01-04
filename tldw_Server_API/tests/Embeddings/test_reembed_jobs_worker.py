@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.Embeddings.services import reembed_worker
 @pytest.mark.integration
 def test_reembed_worker_expands_to_embedding_stream(monkeypatch, redis_client, tmp_path):
     # Patch chunk fetch to avoid DB dependencies
-    monkeypatch.setattr(reembed_worker, "_fetch_chunks", lambda db, media_id: [("hello world", 0, 11), ("two", 12, 15)])
+    monkeypatch.setattr(reembed_worker, "_fetch_chunks", lambda _db, _media_id: [("hello world", 0, 11), ("two", 12, 15)])
     monkeypatch.setattr(reembed_worker, "_dev_shortcuts_enabled", lambda: False)
     monkeypatch.setenv("EMBEDDINGS_REDIS_URL", redis_client.url)
 

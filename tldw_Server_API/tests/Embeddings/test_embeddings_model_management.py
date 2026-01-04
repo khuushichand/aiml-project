@@ -1,11 +1,11 @@
 import copy
-import logging
 import os
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import Request
 from fastapi.testclient import TestClient
+from loguru import logger
 
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.api.v1.API_Deps import auth_deps
@@ -76,9 +76,9 @@ def _principal_override(user_id: int, is_admin: bool):
                 user_agent=request.headers.get("User-Agent") if getattr(request, "headers", None) else None,
                 request_id=request.headers.get("X-Request-ID") if getattr(request, "headers", None) else None,
             )
-        except Exception as exc:
+        except (AttributeError, ValueError) as exc:
             # Best-effort; setting request.state.auth may fail in some test scenarios.
-            logging.getLogger(__name__).debug("Failed to set request.state.auth: %s", exc)
+            logger.debug(f"Failed to set request.state.auth: {exc}")
         return principal
     return _override
 
@@ -127,6 +127,9 @@ def test_warmup_requires_admin_and_invokes_backend(restore_embedding_settings):
             headers=_csrf_headers()
         )
         assert r_forbidden.status_code == 403
+
+        app.dependency_overrides.pop(get_request_user, None)
+        app.dependency_overrides.pop(auth_deps.get_auth_principal, None)
 
         # Admin path with backend stub
         app.dependency_overrides[get_request_user] = _override_admin_user

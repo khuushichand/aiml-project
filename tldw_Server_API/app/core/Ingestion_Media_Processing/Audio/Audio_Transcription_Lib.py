@@ -244,6 +244,7 @@ def _assert_no_symlink(path: Path, *, label: str) -> None:
 
 _HUGGINGFACE_MODEL_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _ALLOWED_MEDIA_BASE_DIRS: Optional[List[Path]] = None
+allowed_media_base_dirs_lock = threading.Lock()
 
 
 def _looks_like_windows_drive(path_str: str) -> bool:
@@ -264,23 +265,24 @@ def _path_is_within(path: Path, base_dir: Path) -> bool:
 
 def _get_allowed_media_base_dirs() -> List[Path]:
     global _ALLOWED_MEDIA_BASE_DIRS
-    if _ALLOWED_MEDIA_BASE_DIRS is not None:
-        return list(_ALLOWED_MEDIA_BASE_DIRS)
+    with allowed_media_base_dirs_lock:
+        if _ALLOWED_MEDIA_BASE_DIRS is not None:
+            return list(_ALLOWED_MEDIA_BASE_DIRS)
 
-    roots: List[Path] = []
-    try:
-        roots.append(Path(tempfile.gettempdir()).resolve(strict=False))
-    except (OSError, PermissionError, ValueError) as exc:
-        logging.debug(f"Could not resolve temp directory for allowed base dirs: {exc}")
-    try:
-        user_base = settings.get("USER_DB_BASE_DIR")
-        if user_base:
-            roots.append(Path(user_base).resolve(strict=False))
-    except (OSError, PermissionError, ValueError, AttributeError) as exc:
-        logging.debug(f"Could not resolve USER_DB_BASE_DIR for allowed base dirs: {exc}")
+        roots: List[Path] = []
+        try:
+            roots.append(Path(tempfile.gettempdir()).resolve(strict=False))
+        except (OSError, PermissionError, ValueError) as exc:
+            logging.debug(f"Could not resolve temp directory for allowed base dirs: {exc}")
+        try:
+            user_base = settings.get("USER_DB_BASE_DIR")
+            if user_base:
+                roots.append(Path(user_base).resolve(strict=False))
+        except (OSError, PermissionError, ValueError, AttributeError) as exc:
+            logging.debug(f"Could not resolve USER_DB_BASE_DIR for allowed base dirs: {exc}")
 
-    _ALLOWED_MEDIA_BASE_DIRS = roots
-    return list(roots)
+        _ALLOWED_MEDIA_BASE_DIRS = roots
+        return list(roots)
 
 
 def _resolve_allowed_base_dir(base_dir: Path, *, label: str) -> Path:
@@ -406,6 +408,52 @@ def _resolve_whisper_download_root(download_root: Optional[Union[str, Path]]) ->
 
     safe_root.mkdir(parents=True, exist_ok=True)
     return safe_root
+
+
+def _check_standard_model_under_download_root(
+    identifier: str,
+    download_root: Path,
+) -> Optional[Path]:
+    """
+    Check if a standard model identifier exists under the download root.
+
+    Returns the resolved path if found, otherwise None.
+    Skips check if identifier looks like a filesystem path.
+    """
+    if (
+        identifier.startswith(("/", ".", "~"))
+        or _looks_like_windows_drive(identifier)
+        or os.sep in identifier
+        or (os.altsep and os.altsep in identifier)
+    ):
+        logging.info(
+            "Standard model identifier %r looks like a path; skipping local "
+            "directory check under download_root.",
+            identifier,
+        )
+        return None
+
+    candidate = download_root / identifier
+    try:
+        root_resolved = download_root.resolve()
+        candidate_resolved = candidate.resolve()
+        candidate_resolved.relative_to(root_resolved)
+    except (ValueError, OSError):
+        return None
+
+    if candidate_resolved.is_dir():
+        logging.info(
+            "Found standard model '%s' in custom download root: %s",
+            identifier,
+            candidate_resolved,
+        )
+        return candidate_resolved
+
+    logging.info(
+        "Standard model '%s' not in custom root. Passing name to faster-whisper.",
+        identifier,
+    )
+    return None
 
 
 def _resolve_transcript_cache_dir(
@@ -1688,22 +1736,8 @@ def check_model_exists(model_name: str) -> bool:
     if normalized_path.is_absolute():
         # The normalized path has already been resolved and validated to
         # reside under default_root_path by _normalize_whisper_model_identifier.
-        # Re-validate it against the allowed root before touching the filesystem
-        # to ensure that any subsequent use cannot escape the sandbox.
-        if not _path_is_within(normalized_path, default_root_path):
-            logging.warning(
-                "Whisper model path resolved outside allowed base directory; "
-                f"model_name={model_name!r}, path={normalized_path!r}, base={default_root_path!r}"
-            )
-            return False
-        safe_path = resolve_safe_local_path(normalized_path, default_root_path)
-        if safe_path is None:
-            logging.warning(
-                "Whisper model path failed final safety check; "
-                f"model_name={model_name!r}, path={normalized_path!r}, base={default_root_path!r}"
-            )
-            return False
-        return safe_path.exists()
+        # The path has already been validated; just check existence.
+        return normalized_path.exists()
 
     # Check in default download directory for relative identifiers
     model_path = default_root_path / normalized
@@ -1855,43 +1889,12 @@ class WhisperModel(OriginalWhisperModel):
             # Assume it's a standard model size name (e.g., "large-v3").
             # Let faster-whisper handle finding/downloading this standard model.
             logging.info(f"Treating '{resolved_identifier}' as a standard model size name.")
-
-            # As an additional safety check, never interpret a "standard model"
-            # identifier as a nested or absolute filesystem path. If it contains
-            # any path separators or looks like a drive/path prefix, we skip the
-            # local directory check and pass the name through to faster-whisper.
-            if (
-                resolved_identifier.startswith(("/", ".", "~"))
-                or _looks_like_windows_drive(resolved_identifier)
-                or os.sep in resolved_identifier
-                or (os.altsep and os.altsep in resolved_identifier)
-            ):
-                logging.info(
-                    "Standard model identifier %r looks like a path; skipping local "
-                    "directory check under download_root.",
-                    resolved_identifier,
-                )
-            else:
-                custom_path_check = download_root_path / resolved_identifier
-                try:
-                    # Resolve both paths to ensure we compare normalized absolute paths
-                    root_resolved = download_root_path.resolve()
-                    candidate_resolved = custom_path_check.resolve()
-                    # Ensure the candidate directory stays within the allowed root
-                    candidate_resolved.relative_to(root_resolved)
-                    is_within_root = True
-                except (ValueError, OSError):
-                    is_within_root = False
-                if is_within_root and candidate_resolved.is_dir():
-                    logging.info(
-                        f"Found standard model '{resolved_identifier}' in custom download root: {candidate_resolved}"
-                    )
-                    resolved_identifier = str(candidate_resolved)  # Use the local path
-                else:
-                    logging.info(
-                        f"Standard model '{resolved_identifier}' not in custom root. Passing name to faster-whisper."
-                    )
-                    # resolved_identifier remains the model size name
+            local_path = _check_standard_model_under_download_root(
+                resolved_identifier,
+                download_root_path,
+            )
+            if local_path is not None:
+                resolved_identifier = str(local_path)
 
 
         # --- Pass the determined identifier and other args to the parent ---

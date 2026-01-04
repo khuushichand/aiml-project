@@ -26,7 +26,22 @@ class TestMediaEndpointContextualIntegration:
         """Use the shared authenticated TestClient with a stub Media DB."""
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user as dep_get_db
 
-        mock_db = Mock(db_path="/test/path.db", db_path_str="/test/path.db", client_id="test_client")
+        mock_db = Mock(
+            db_path="/test/path.db",
+            db_path_str="/test/path.db",
+            client_id="test_client",
+            spec=[
+                "db_path",
+                "db_path_str",
+                "client_id",
+                "add_media_with_keywords",
+                "search_media",
+                "insert_media_file",
+                "close_connection",
+            ],
+        )
+        mock_db.add_media_with_keywords.return_value = (123, "test-uuid", "ok")
+        mock_db.search_media.return_value = []
 
         async def _override_db():
             yield mock_db
@@ -219,9 +234,7 @@ class TestMediaEndpointContextualIntegration:
                 chunk_options = call_args[1].get('chunk_options', {})
 
                 assert chunk_options.get('enable_contextual_chunking') == True
-                # Check that the method is appropriate for media type
-                if media_type == "ebook":
-                    assert chunk_options.get('method') == "ebook_chapters"
+                assert chunk_options.get('method') == expected_method
 
     def test_batch_media_with_contextual_chunking(self, test_client, auth_headers):
         """Test batch media processing with contextual chunking."""

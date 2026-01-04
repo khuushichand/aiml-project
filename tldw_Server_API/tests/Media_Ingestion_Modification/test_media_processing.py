@@ -6,13 +6,12 @@
 import hashlib
 import os
 import sqlite3
-import sys
 import uuid
 from pathlib import Path
 import time
 import json # Added for potential debugging
 from typing import Dict
-from unittest.mock import patch, AsyncMock, MagicMock # Added AsyncMock, MagicMock
+from unittest.mock import patch
 
 # 3rd-party Libraries
 import pytest
@@ -22,10 +21,12 @@ from loguru import logger
 #
 # Local Imports
 from tldw_Server_API.app.core.DB_Management.DB_Manager import get_all_document_versions
-from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.tests.MediaDB2.test_sqlite_db import get_entity_version, get_latest_log
 from tldw_Server_API.tests.Media_Ingestion_Modification.test_add_media_endpoint import override_get_request_user
-from tldw_Server_API.tests.test_utils import temp_db
+from tldw_Server_API.tests.test_utils import (
+    skip_if_transcription_model_unavailable,
+    temp_db,
+)
 try:
     # Import app instance and specific dependencies to override
     from tldw_Server_API.app.main import app as fastapi_app_instance, app
@@ -36,9 +37,8 @@ try:
 except ImportError as e:
     raise ImportError(f"Could not locate the FastAPI app instance or dependencies: {e}")
 from tldw_Server_API.app.api.v1.schemas.media_request_models import ChunkMethod, MediaType, PdfEngine
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import (
-    check_transcription_model_status,
-)
+
+pytestmark = pytest.mark.unit
 
 ######################################################################################################################
 # Constants
@@ -218,20 +218,20 @@ def memory_db_factory_local():  # Using a different name to avoid conflicts if o
                     cursor.execute("SELECT 1 FROM media_fts LIMIT 1")
                 except sqlite3.OperationalError as e:
                     if "no such table" in str(e).lower():
-                        logging.warning(
+                        logger.warning(
                             f"FTS tables not found for {db_instance.db_path_str} (client: {unique_client_id}), attempting to create.")
                         if hasattr(MediaDatabase, '_FTS_TABLES_SQL') and MediaDatabase._FTS_TABLES_SQL:
                             conn.executescript(MediaDatabase._FTS_TABLES_SQL)
-                            logging.info(
+                            logger.info(
                                 f"FTS tables created for {db_instance.db_path_str} (client: {unique_client_id}).")
                         else:
-                            logging.error(
+                            logger.error(
                                 "Database._FTS_TABLES_SQL is not defined or is empty. Cannot create FTS tables.")
                             pytest.fail("Cannot create FTS tables: _FTS_TABLES_SQL is missing or empty.")
                     else:
                         raise
         except Exception as schema_exc:
-            logging.error(
+            logger.error(
                 f"Failed to ensure schema for {db_instance.db_path_str} (client: {unique_client_id}): {schema_exc}",
                 exc_info=True)
             pytest.fail(f"Schema creation failed for in-memory DB: {schema_exc}")
@@ -333,12 +333,6 @@ def check_media_item_result(result, expected_status, check_db_fields=False): # D
              f"Expected None or empty error for Success status, got '{result['error']}'"
 
 
-def _skip_if_transcription_model_unavailable(model_name: str) -> None:
-    status_info = check_transcription_model_status(model_name)
-    if not status_info.get("available"):
-        pytest.skip(status_info.get("message", "Transcription model not available"))
-
-
 # --- Test Classes ---
 
 class TestProcessVideos:
@@ -346,7 +340,7 @@ class TestProcessVideos:
 
     def test_process_video_url_success(self, client, dummy_headers):
         """Test processing a single valid video URL."""
-        _skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
+        skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
         form_data = {
             "urls": [VALID_VIDEO_URL],
             "perform_analysis": "false",
@@ -375,7 +369,7 @@ class TestProcessVideos:
 
     def test_process_video_upload_success(self, client, dummy_headers):
         """Test processing a single valid video file upload."""
-        _skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
+        skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
         form_data = {
             "perform_analysis": "false",
             "transcription_model": TEST_VIDEO_TRANSCRIPTION_MODEL,
@@ -399,7 +393,7 @@ class TestProcessVideos:
 
     def test_process_video_multiple_success(self, client, dummy_headers):
         """Test processing multiple valid inputs (URL and Upload)."""
-        _skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
+        skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
         form_data = {
             "urls": [VALID_VIDEO_URL],
             "perform_analysis": "false",
@@ -431,7 +425,7 @@ class TestProcessVideos:
 
     def test_process_video_multi_status_mixed(self, client, dummy_headers):
         """Test processing one valid URL and one invalid URL -> 207."""
-        _skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
+        skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
         form_data = {
             "urls": [VALID_VIDEO_URL, INVALID_URL],
             "perform_analysis": "false",
@@ -1054,7 +1048,8 @@ class TestProcessEbooks:
         # For simplicity here, we check if the mocked text is *in* the final result
         assert mock_analysis_text in result["analysis"]
         assert result["chunks"] is not None and len(result["chunks"]) > 0
-        # Re-chunking in the endpoint can drop analysis metadata; if present, ensure it matches.
+        # Re-chunking in the endpoint may remove analysis metadata from chunks.
+        # Only validate metadata if it's present in any chunks.
         chunks_with_analysis = [
             chunk
             for chunk in result["chunks"]
@@ -1279,7 +1274,7 @@ class TestProcessDocuments:
 
     @pytest.mark.skipif(not SAMPLE_RTF_PATH.exists(), reason="sample.rtf not found")
     @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files.convert_file", side_effect=ValueError("Mocked pandoc failure"))
-    def test_process_doc_rtf_conversion_failure(self, mock_convert, client):
+    def test_process_doc_rtf_conversion_failure(self, _mock_convert, client):
         """Test RTF processing when pandoc conversion fails."""
         form_data = {"perform_analysis": "false"}
         with open(SAMPLE_RTF_PATH, "rb") as f:

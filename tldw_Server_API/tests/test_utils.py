@@ -10,6 +10,8 @@ import tempfile
 import logging # Added for potential logging
 from pathlib import Path
 
+import pytest
+
 #
 # Local Imports
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, DatabaseError
@@ -98,6 +100,17 @@ def create_test_media(db: MediaDatabase, title: str, content: str, content_hash:
     if result:
         return result["id"] if isinstance(result, dict) else result[0]
     raise RuntimeError("Failed to retrieve media id after creating test media.")
+
+
+def skip_if_transcription_model_unavailable(model_name: str) -> None:
+    """Skip test if the specified transcription model is not available."""
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import (
+        check_transcription_model_status,
+    )
+
+    status = check_transcription_model_status(model_name)
+    if not status.get("available"):
+        pytest.skip(status.get("message", "Transcription model not available"))
 
 
 # End of test_utils.py

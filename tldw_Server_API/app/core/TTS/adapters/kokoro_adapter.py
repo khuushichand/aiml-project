@@ -482,7 +482,8 @@ class KokoroAdapter(TTSAdapter):
                     provider=self.provider_name,
                     details={"config_path": config_path}
                 )
-            self.kokoro_pt_model = KModel(config=config_path, model=self.model_path).eval()
+            repo_id = self.config.get("kokoro_repo_id") or os.getenv("KOKORO_REPO_ID") or "hexgrad/Kokoro-82M"
+            self.kokoro_pt_model = KModel(repo_id=repo_id, config=config_path, model=self.model_path).eval()
             # Move to device
             dev = str(self.device).lower()
             if dev.startswith("cuda"):

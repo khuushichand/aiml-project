@@ -485,7 +485,7 @@ class TestErrorHandling:
         from tldw_Server_API.app.core.AuthNZ.byok_runtime import ResolvedByokCredentials
         import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as emb_ep
 
-        async def _missing(provider, *args, **kwargs):
+        async def _missing(provider, *_args, **_kwargs):
             return ResolvedByokCredentials(
                 provider=provider,
                 api_key=None,

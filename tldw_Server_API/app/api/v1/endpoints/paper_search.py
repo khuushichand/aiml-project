@@ -189,7 +189,7 @@ async def paper_search_arxiv(
         raise HTTPException(status_code=500, detail=_PROVIDER_UNEXPECTED_DETAIL) from e
 
     if error_message:
-        _handle_provider_error(f"arXiv: {error_message}")
+        _handle_provider_error(error_message)
     if papers_list is None:
         raise HTTPException(status_code=500, detail="arXiv search failed to return paper data.")
 
@@ -240,7 +240,7 @@ async def paper_search_biorxiv(
             search_params.recent_count,
         )
         if error_message:
-            _handle_provider_error(f"BioRxiv: {error_message}")
+            _handle_provider_error(error_message)
         if items is None:
             raise HTTPException(status_code=500, detail="BioRxiv search failed to return data.")
     except HTTPException:

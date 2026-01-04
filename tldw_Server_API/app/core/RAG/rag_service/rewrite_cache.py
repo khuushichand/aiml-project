@@ -26,6 +26,7 @@ _USER_DB_BASE = Path(os.getenv("USER_DB_BASE", "Databases/user_databases"))
 try:
     _USER_DB_BASE_RESOLVED = _USER_DB_BASE.resolve(strict=False)
 except Exception:
+    logger.exception("Rewrite cache: failed to resolve USER_DB_BASE: {}", _USER_DB_BASE)
     _USER_DB_BASE_RESOLVED = _USER_DB_BASE
 _ALLOWED_USER_ID_CHARS = set(string.ascii_letters + string.digits + "_-")
 _MAX_USER_ID_LEN = 128
@@ -116,9 +117,9 @@ def _safe_path() -> Path:
     except (OSError, RuntimeError, ValueError) as exc:
         logger.error("Rewrite cache: failed to resolve cache path; using default: {}", exc)
         return DEFAULT_PATH
-    except Exception:
-        logger.exception("Rewrite cache: unexpected error resolving cache path; using default")
-        return DEFAULT_PATH
+    except Exception as exc:
+        logger.exception("Rewrite cache: unexpected error resolving cache path: {}", exc)
+        raise
 
 
 def _normalize_query(q: str) -> str:

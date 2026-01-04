@@ -17,6 +17,10 @@ import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcrip
 
 
 def _patch_transcript_cache_root(monkeypatch, tmp_path) -> Path:
+    """
+    Configure an isolated transcript cache root for tests.
+    Disables allowed media base dir checks to simplify test setup.
+    """
     temp_root = tmp_path / "temp_root"
     temp_root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(atlib.tempfile, "gettempdir", lambda: str(temp_root))
@@ -311,9 +315,9 @@ def test_perform_transcription_regenerates_on_invalid_cache(monkeypatch, tmp_pat
     monkeypatch.setattr(atlib, "convert_to_wav", fake_convert_to_wav)
 
     def fake_run_stt(
-        path,
+        _path,
         model,
-        vad_filter=False,
+        _vad_filter=False,
         selected_source_lang="en",
         **kwargs,
     ):
