@@ -372,6 +372,30 @@ def _unwrap_logger_add(func):
         candidate = next_candidate
 
 
+def _unwrap_loguru_wrapper(func):
+    """Follow wrapper attributes to locate the underlying Loguru callable."""
+    seen = set()
+    candidate = func
+    while True:
+        next_candidate = getattr(candidate, "_tldw_safe_original", None) or getattr(candidate, "__wrapped__", None)
+        if not next_candidate or next_candidate is candidate or next_candidate in seen:
+            return candidate
+        seen.add(candidate)
+        candidate = next_candidate
+
+
+def _unwrap_stdlib_wrapper(func):
+    """Follow wrapper attributes to locate the underlying stdlib function."""
+    seen = set()
+    candidate = func
+    while True:
+        next_candidate = getattr(candidate, "_tldw_original", None) or getattr(candidate, "__wrapped__", None)
+        if not next_candidate or next_candidate is candidate or next_candidate in seen:
+            return candidate
+        seen.add(candidate)
+        candidate = next_candidate
+
+
 # Guard against third-party loguru reconfiguration. These are the only
 # modules that may reconfigure Loguru sinks in production; allow overrides
 # via TLDW_ALLOW_LOGURU_RECONFIG for local troubleshooting.
@@ -434,7 +458,8 @@ def _caller_allowed_for_loguru_config() -> bool:
 
 
 # Ensure any subsequent logger.add calls wrap raw streams with SafeStreamWrapper
-_original_logger_add = logger.add
+_ROOT_LOGGER = logger
+_original_logger_add = _ROOT_LOGGER.add
 _original_unwrapped_logger_add = _unwrap_logger_add(_original_logger_add)
 
 
@@ -451,9 +476,9 @@ def _safe_logger_add(sink, *args, **kwargs):
     return target(sink, *args, **kwargs)
 
 
-logger.add = _safe_logger_add  # type: ignore[assignment]
-setattr(logger.add, "_tldw_safe_original", _original_unwrapped_logger_add)
-setattr(logger.add, "__wrapped__", _original_unwrapped_logger_add)
+_ROOT_LOGGER.add = _safe_logger_add  # type: ignore[assignment]
+setattr(_ROOT_LOGGER.add, "_tldw_safe_original", _original_unwrapped_logger_add)
+setattr(_ROOT_LOGGER.add, "__wrapped__", _original_unwrapped_logger_add)
 
 
 # Sink-level filter to guarantee presence of common extra fields
@@ -479,7 +504,7 @@ def _ensure_log_extra_fields(record: dict) -> bool:
     return True
 
 
-logger.add(
+_ROOT_LOGGER.add(
     _SafeStreamWrapper(_sink),
     level=_log_level,
     format=_safe_log_format,
@@ -487,19 +512,30 @@ logger.add(
     filter=_ensure_log_extra_fields,
     enqueue=False,
 )
-logger = logger.patch(_trace_log_patcher)
+logger = _ROOT_LOGGER.patch(_trace_log_patcher)
 _redirect_external_loggers()
 _install_stderr_redirect()
 
-_original_logger_remove = logger.remove
-_original_logger_configure = getattr(logger, "configure", None)
+if not hasattr(_ROOT_LOGGER, "_tldw_original_remove"):
+    setattr(_ROOT_LOGGER, "_tldw_original_remove", _unwrap_loguru_wrapper(_ROOT_LOGGER.remove))
+_original_logger_remove = getattr(_ROOT_LOGGER, "_tldw_original_remove", None)
+_root_configure = getattr(_ROOT_LOGGER, "configure", None)
+if callable(_root_configure) and not hasattr(_ROOT_LOGGER, "_tldw_original_configure"):
+    setattr(_ROOT_LOGGER, "_tldw_original_configure", _unwrap_loguru_wrapper(_root_configure))
+_original_logger_configure = getattr(_ROOT_LOGGER, "_tldw_original_configure", None)
 
 
 def _safe_logger_remove(sink_id=None):
     if not _caller_allowed_for_loguru_config():
         return None
+    target = getattr(_ROOT_LOGGER, "_tldw_original_remove", None)
     try:
-        return _original_logger_remove(sink_id)
+        if target is None or target is _safe_logger_remove:
+            try:
+                return _ROOT_LOGGER.__class__.remove(_ROOT_LOGGER, sink_id)
+            except Exception:
+                return None
+        return target(sink_id)
     finally:
         _redirect_external_loggers()
 
@@ -508,24 +544,40 @@ def _safe_logger_configure(*args, **kwargs):
     if not _caller_allowed_for_loguru_config():
         return None
     try:
-        if callable(_original_logger_configure):
-            return _original_logger_configure(*args, **kwargs)
+        target = getattr(_ROOT_LOGGER, "_tldw_original_configure", None)
+        if callable(target) and target is not _safe_logger_configure:
+            return target(*args, **kwargs)
+        if hasattr(_ROOT_LOGGER.__class__, "configure"):
+            return _ROOT_LOGGER.__class__.configure(_ROOT_LOGGER, *args, **kwargs)
         return None
     finally:
         _redirect_external_loggers()
 
 
+_ROOT_LOGGER.remove = _safe_logger_remove  # type: ignore[assignment]
+if callable(_original_logger_configure):
+    _ROOT_LOGGER.configure = _safe_logger_configure  # type: ignore[assignment]
+setattr(_ROOT_LOGGER.remove, "_tldw_safe_original", _original_logger_remove)
+setattr(_ROOT_LOGGER.remove, "__wrapped__", _original_logger_remove)
+if callable(_original_logger_configure):
+    setattr(_ROOT_LOGGER.configure, "_tldw_safe_original", _original_logger_configure)
+    setattr(_ROOT_LOGGER.configure, "__wrapped__", _original_logger_configure)
 logger.remove = _safe_logger_remove  # type: ignore[assignment]
 if callable(_original_logger_configure):
     logger.configure = _safe_logger_configure  # type: ignore[assignment]
 
 # Prevent third-party stdlib loggers from attaching their own handlers.
-_original_logging_addHandler = logging.Logger.addHandler
+if not hasattr(logging, "_tldw_original_addHandler"):
+    logging._tldw_original_addHandler = logging.Logger.addHandler  # type: ignore[attr-defined]
+_original_logging_addHandler = logging._tldw_original_addHandler  # type: ignore[attr-defined]
 
 
 def _safe_logging_addHandler(self: logging.Logger, hdlr: logging.Handler) -> None:
+    target = getattr(logging, "_tldw_original_addHandler", None)
+    if target is None or target is _safe_logging_addHandler:
+        return
     if isinstance(hdlr, InterceptHandler) or _caller_allowed_for_loguru_config():
-        _original_logging_addHandler(self, hdlr)
+        target(self, hdlr)
     else:
         # Drop third-party handlers and rely on root interception.
         try:
@@ -536,7 +588,10 @@ def _safe_logging_addHandler(self: logging.Logger, hdlr: logging.Handler) -> Non
             pass
 
 
-logging.Logger.addHandler = _safe_logging_addHandler  # type: ignore[assignment]
+if logging.Logger.addHandler is not _safe_logging_addHandler:
+    logging.Logger.addHandler = _safe_logging_addHandler  # type: ignore[assignment]
+    _safe_logging_addHandler.__wrapped__ = _original_logging_addHandler  # type: ignore[attr-defined]
+    _safe_logging_addHandler._tldw_original = _original_logging_addHandler  # type: ignore[attr-defined]
 
 # Intercept stdlib and uvicorn logs early
 try:
@@ -582,38 +637,54 @@ try:
     import logging.config as _logcfg
 
     if not hasattr(logging, "_tldw_original_basicConfig"):
-        logging._tldw_original_basicConfig = logging.basicConfig  # type: ignore[attr-defined]
+        logging._tldw_original_basicConfig = _unwrap_stdlib_wrapper(logging.basicConfig)  # type: ignore[attr-defined]
+    else:
+        _orig_basic = getattr(logging, "_tldw_original_basicConfig", None)
+        if _orig_basic is logging.basicConfig:
+            logging._tldw_original_basicConfig = _unwrap_stdlib_wrapper(logging.basicConfig)  # type: ignore[attr-defined]
     logging._tldw_reinstall = _reinstall_intercept_handlers  # type: ignore[attr-defined]
 
     if not getattr(logging, "_tldw_basic_config_wrapped", False):
 
         def _basic_config_wrapper(*args, **kwargs):
             try:
-                logging._tldw_original_basicConfig(*args, **kwargs)  # type: ignore[attr-defined]
+                _orig = getattr(logging, "_tldw_original_basicConfig", None)
+                if callable(_orig):
+                    _orig(*args, **kwargs)  # type: ignore[misc]
             finally:
                 _maybe_reinstall = getattr(logging, "_tldw_reinstall", None)
                 if callable(_maybe_reinstall):
                     _maybe_reinstall()
 
         logging.basicConfig = _basic_config_wrapper  # type: ignore[assignment]
+        _basic_config_wrapper.__wrapped__ = getattr(logging, "_tldw_original_basicConfig", None)
+        _basic_config_wrapper._tldw_original = getattr(logging, "_tldw_original_basicConfig", None)
         logging._tldw_basic_config_wrapped = True  # type: ignore[attr-defined]
 
     if hasattr(_logcfg, "dictConfig"):
         if not hasattr(_logcfg, "_tldw_original_dictConfig"):
-            _logcfg._tldw_original_dictConfig = _logcfg.dictConfig  # type: ignore[attr-defined]
+            _logcfg._tldw_original_dictConfig = _unwrap_stdlib_wrapper(_logcfg.dictConfig)  # type: ignore[attr-defined]
+        else:
+            _orig_dict = getattr(_logcfg, "_tldw_original_dictConfig", None)
+            if _orig_dict is _logcfg.dictConfig:
+                _logcfg._tldw_original_dictConfig = _unwrap_stdlib_wrapper(_logcfg.dictConfig)  # type: ignore[attr-defined]
         _logcfg._tldw_reinstall = _reinstall_intercept_handlers  # type: ignore[attr-defined]
 
         if not getattr(_logcfg, "_tldw_dict_config_wrapped", False):
 
             def _dict_config_wrapper(config):
                 try:
-                    _logcfg._tldw_original_dictConfig(config)  # type: ignore[attr-defined]
+                    _orig = getattr(_logcfg, "_tldw_original_dictConfig", None)
+                    if callable(_orig):
+                        _orig(config)  # type: ignore[misc]
                 finally:
                     _maybe_reinstall = getattr(_logcfg, "_tldw_reinstall", None)
                     if callable(_maybe_reinstall):
                         _maybe_reinstall()
 
             _logcfg.dictConfig = _dict_config_wrapper  # type: ignore[assignment]
+            _dict_config_wrapper.__wrapped__ = getattr(_logcfg, "_tldw_original_dictConfig", None)
+            _dict_config_wrapper._tldw_original = getattr(_logcfg, "_tldw_original_dictConfig", None)
             _logcfg._tldw_dict_config_wrapped = True  # type: ignore[attr-defined]
 except Exception as _log_wrap_err:
     logger.debug(f"Failed to wrap logging.config.dictConfig for interception: {_log_wrap_err}")
@@ -1325,6 +1396,22 @@ async def lifespan(app: FastAPI):
                 pass
         except Exception as _rg_err:
             logger.warning(f"ResourceGovernor policy loader initialization skipped: {_rg_err}")
+        try:
+            from tldw_Server_API.app.core.config import (
+                rg_enabled as _rg_enabled_flag,
+                rg_policy_path as _rg_policy_path,
+                rg_backend as _rg_backend_sel,
+                rg_policy_store as _rg_store_sel,
+            )
+
+            if bool(_rg_enabled_flag(False)) and getattr(app.state, "rg_governor", None) is None:
+                logger.warning(
+                    "ResourceGovernor enabled but not initialized; rate limiting will fail closed. "
+                    f"policy_path={_rg_policy_path()} backend={_rg_backend_sel()} "
+                    f"store={_rg_store_sel()} cwd={os.getcwd()}"
+                )
+        except Exception as _rg_warn_err:
+            logger.debug(f"ResourceGovernor init warning skipped: {_rg_warn_err}")
 
         # Initialize session manager
         from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager

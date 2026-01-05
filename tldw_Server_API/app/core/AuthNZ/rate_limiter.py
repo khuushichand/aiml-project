@@ -468,18 +468,7 @@ class RateLimiter:
             }
 
         if _rg_authnz_enabled():
-            # Legacy limiter fallback retired: if RG is enabled but we cannot
-            # obtain a decision, fail closed.
-            policy_id = os.getenv("RG_AUTHNZ_POLICY_ID", "authnz.default")
-            return False, {
-                "error": "Rate limit enforcement unavailable (ResourceGovernor not initialized)",
-                "limit": limit if limit is not None else self.default_limit,
-                "remaining": 0,
-                "reset_time": None,
-                "retry_after": 60,
-                "policy_id": policy_id,
-                "rate_limit_source": "resource_governor",
-            }
+            _log_rg_authnz_fallback("rg_decision_unavailable")
 
         # RG disabled: fall through to legacy rate limiting if enabled
         if not self.enabled:
@@ -899,6 +888,62 @@ async def get_rate_limiter() -> RateLimiter:
 _rg_authnz_governor = None
 _rg_authnz_loader = None
 _rg_authnz_lock = asyncio.Lock()
+_rg_authnz_init_error: Optional[str] = None
+_rg_authnz_init_error_logged = False
+_rg_authnz_fallback_logged = False
+
+
+def _rg_authnz_context() -> Dict[str, str]:
+    policy_path = os.getenv(
+        "RG_POLICY_PATH",
+        "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
+    )
+    try:
+        policy_path_resolved = os.path.abspath(policy_path)
+    except Exception:
+        policy_path_resolved = policy_path
+    return {
+        "backend": os.getenv("RG_BACKEND", "memory"),
+        "policy_path": policy_path,
+        "policy_path_resolved": policy_path_resolved,
+        "policy_store": os.getenv("RG_POLICY_STORE", ""),
+        "policy_reload_enabled": os.getenv("RG_POLICY_RELOAD_ENABLED", ""),
+        "policy_reload_interval": os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", ""),
+        "cwd": os.getcwd(),
+    }
+
+
+def _log_rg_authnz_init_failure(exc: Exception) -> None:
+    global _rg_authnz_init_error, _rg_authnz_init_error_logged
+    _rg_authnz_init_error = repr(exc)
+    if _rg_authnz_init_error_logged:
+        return
+    _rg_authnz_init_error_logged = True
+    ctx = _rg_authnz_context()
+    logger.exception(
+        "AuthNZ ResourceGovernor init failed; falling back to legacy limiter. "
+        "backend={backend} policy_path={policy_path} policy_path_resolved={policy_path_resolved} "
+        "policy_store={policy_store} reload_enabled={policy_reload_enabled} "
+        "reload_interval={policy_reload_interval} cwd={cwd}",
+        **ctx,
+    )
+
+
+def _log_rg_authnz_fallback(reason: str) -> None:
+    global _rg_authnz_fallback_logged
+    if _rg_authnz_fallback_logged:
+        return
+    _rg_authnz_fallback_logged = True
+    ctx = _rg_authnz_context()
+    logger.error(
+        "AuthNZ ResourceGovernor unavailable; falling back to legacy limiter. "
+        "reason={} init_error={} backend={backend} policy_path={policy_path} "
+        "policy_path_resolved={policy_path_resolved} policy_store={policy_store} "
+        "reload_enabled={policy_reload_enabled} reload_interval={policy_reload_interval} cwd={cwd}",
+        reason,
+        _rg_authnz_init_error,
+        **ctx,
+    )
 
 
 def _rg_authnz_enabled() -> bool:
@@ -921,6 +966,7 @@ async def _get_authnz_rg_governor():
     if not _rg_authnz_enabled():
         return None
     if RGRequest is None or PolicyLoader is None:
+        _log_rg_authnz_fallback("rg_components_unavailable")
         return None
     async with _rg_authnz_lock:
         if _rg_authnz_governor is not None:
@@ -954,9 +1000,7 @@ async def _get_authnz_rg_governor():
         except Exception as exc:  # noqa: BLE001  # pragma: no cover - optional path
             # Broad catch is intentional: ResourceGovernor integration is
             # strictly optional and failures must never block AuthNZ traffic.
-            logger.debug(
-                "AuthNZ RG governor init failed: {}", exc
-            )
+            _log_rg_authnz_init_failure(exc)
             return None
 
 

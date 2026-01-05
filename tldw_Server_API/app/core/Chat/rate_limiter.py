@@ -325,7 +325,7 @@ class ConversationRateLimiter:
 
         if rg_decision is None:
             # RG unavailable - fallback to legacy limiter instead of failing
-            logger.warning("Chat RG unavailable, falling back to legacy rate limiter")
+            _log_rg_chat_fallback("rg_decision_unavailable")
             return await self._check_legacy_rate_limit(
                 user_id=user_id,
                 conversation_id=conversation_id,
@@ -566,6 +566,62 @@ def initialize_rate_limiter(config: Optional[RateLimitConfig] = None) -> Convers
 _rg_chat_governor = None
 _rg_chat_loader = None
 _rg_chat_lock = asyncio.Lock()
+_rg_chat_init_error: Optional[str] = None
+_rg_chat_init_error_logged = False
+_rg_chat_fallback_logged = False
+
+
+def _rg_chat_context() -> Dict[str, str]:
+    policy_path = os.getenv(
+        "RG_POLICY_PATH",
+        "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
+    )
+    try:
+        policy_path_resolved = os.path.abspath(policy_path)
+    except Exception:
+        policy_path_resolved = policy_path
+    return {
+        "backend": os.getenv("RG_BACKEND", "memory"),
+        "policy_path": policy_path,
+        "policy_path_resolved": policy_path_resolved,
+        "policy_store": os.getenv("RG_POLICY_STORE", ""),
+        "policy_reload_enabled": os.getenv("RG_POLICY_RELOAD_ENABLED", ""),
+        "policy_reload_interval": os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", ""),
+        "cwd": os.getcwd(),
+    }
+
+
+def _log_rg_chat_init_failure(exc: Exception) -> None:
+    global _rg_chat_init_error, _rg_chat_init_error_logged
+    _rg_chat_init_error = repr(exc)
+    if _rg_chat_init_error_logged:
+        return
+    _rg_chat_init_error_logged = True
+    ctx = _rg_chat_context()
+    logger.exception(
+        "Chat ResourceGovernor init failed; falling back to legacy limiter. "
+        "backend={backend} policy_path={policy_path} policy_path_resolved={policy_path_resolved} "
+        "policy_store={policy_store} reload_enabled={policy_reload_enabled} "
+        "reload_interval={policy_reload_interval} cwd={cwd}",
+        **ctx,
+    )
+
+
+def _log_rg_chat_fallback(reason: str) -> None:
+    global _rg_chat_fallback_logged
+    if _rg_chat_fallback_logged:
+        return
+    _rg_chat_fallback_logged = True
+    ctx = _rg_chat_context()
+    logger.error(
+        "Chat ResourceGovernor unavailable; falling back to legacy limiter. "
+        "reason={} init_error={} backend={backend} policy_path={policy_path} "
+        "policy_path_resolved={policy_path_resolved} policy_store={policy_store} "
+        "reload_enabled={policy_reload_enabled} reload_interval={policy_reload_interval} cwd={cwd}",
+        reason,
+        _rg_chat_init_error,
+        **ctx,
+    )
 
 try:  # pragma: no cover - RG is optional
     from tldw_Server_API.app.core.Resource_Governance import (  # type: ignore
@@ -613,6 +669,7 @@ async def _get_chat_rg_governor():
     if not _rg_chat_enabled():
         return None
     if RGRequest is None or PolicyLoader is None:
+        _log_rg_chat_fallback("rg_components_unavailable")
         return None
     if _rg_chat_governor is not None:
         return _rg_chat_governor
@@ -646,10 +703,7 @@ async def _get_chat_rg_governor():
             _rg_chat_governor = gov
             return gov
         except Exception as exc:  # pragma: no cover - optional path
-            logger.debug(
-                "Chat RG governor init failed: {}",
-                exc,
-            )
+            _log_rg_chat_init_failure(exc)
             return None
 
 

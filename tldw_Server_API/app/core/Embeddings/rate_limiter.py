@@ -608,8 +608,15 @@ class AsyncRateLimiter:
 
             return rg_allowed, rg_decision.get("retry_after")
 
-        # Legacy limiter fallback retired; fail closed when RG is enabled but unavailable.
-        return False, 1
+        _log_rg_embeddings_fallback("rg_decision_unavailable")
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            self.executor,
+            self.rate_limiter.check_rate_limit,
+            user_id,
+            cost,
+            ip_address,
+        )
 
     async def record_usage_async(self, user_id: str, cost: int = 1):
         """Record usage asynchronously (for post-processing)"""
@@ -642,6 +649,62 @@ def get_async_rate_limiter() -> AsyncRateLimiter:
 _rg_embeddings_governor = None
 _rg_embeddings_loader = None
 _rg_embeddings_lock = asyncio.Lock()
+_rg_embeddings_init_error: Optional[str] = None
+_rg_embeddings_init_error_logged = False
+_rg_embeddings_fallback_logged = False
+
+
+def _rg_embeddings_context() -> Dict[str, str]:
+    policy_path = os.getenv(
+        "RG_POLICY_PATH",
+        "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
+    )
+    try:
+        policy_path_resolved = os.path.abspath(policy_path)
+    except Exception:
+        policy_path_resolved = policy_path
+    return {
+        "backend": os.getenv("RG_BACKEND", "memory"),
+        "policy_path": policy_path,
+        "policy_path_resolved": policy_path_resolved,
+        "policy_store": os.getenv("RG_POLICY_STORE", ""),
+        "policy_reload_enabled": os.getenv("RG_POLICY_RELOAD_ENABLED", ""),
+        "policy_reload_interval": os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", ""),
+        "cwd": os.getcwd(),
+    }
+
+
+def _log_rg_embeddings_init_failure(exc: Exception) -> None:
+    global _rg_embeddings_init_error, _rg_embeddings_init_error_logged
+    _rg_embeddings_init_error = repr(exc)
+    if _rg_embeddings_init_error_logged:
+        return
+    _rg_embeddings_init_error_logged = True
+    ctx = _rg_embeddings_context()
+    logger.exception(
+        "Embeddings ResourceGovernor init failed; falling back to legacy limiter. "
+        "backend={backend} policy_path={policy_path} policy_path_resolved={policy_path_resolved} "
+        "policy_store={policy_store} reload_enabled={policy_reload_enabled} "
+        "reload_interval={policy_reload_interval} cwd={cwd}",
+        **ctx,
+    )
+
+
+def _log_rg_embeddings_fallback(reason: str) -> None:
+    global _rg_embeddings_fallback_logged
+    if _rg_embeddings_fallback_logged:
+        return
+    _rg_embeddings_fallback_logged = True
+    ctx = _rg_embeddings_context()
+    logger.error(
+        "Embeddings ResourceGovernor unavailable; falling back to legacy limiter. "
+        "reason={} init_error={} backend={backend} policy_path={policy_path} "
+        "policy_path_resolved={policy_path_resolved} policy_store={policy_store} "
+        "reload_enabled={policy_reload_enabled} reload_interval={policy_reload_interval} cwd={cwd}",
+        reason,
+        _rg_embeddings_init_error,
+        **ctx,
+    )
 
 
 def _rg_embeddings_enabled() -> bool:
@@ -659,6 +722,7 @@ async def _get_embeddings_rg_governor():
     if not _rg_embeddings_enabled():
         return None
     if RGRequest is None or PolicyLoader is None:
+        _log_rg_embeddings_fallback("rg_components_unavailable")
         return None
     if _rg_embeddings_governor is not None:
         return _rg_embeddings_governor
@@ -680,7 +744,7 @@ async def _get_embeddings_rg_governor():
             _rg_embeddings_governor = gov
             return gov
         except Exception as exc:  # pragma: no cover - optional path
-            logger.debug(f"Embeddings RG governor init failed: {exc}")
+            _log_rg_embeddings_init_failure(exc)
             return None
 
 

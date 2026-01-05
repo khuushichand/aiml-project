@@ -21,7 +21,7 @@ https://medium.com/@sahin.samia/prompt-compression-in-large-language-models-llms
 https://github.com/open-compass/ProSA
 https://academy.openai.com/public/tags/prompt-packs-6849a0f98c613939acef841c
 https://huggingface.co/papers/2512.15374
-
+https://github.com/solatis/claude-config/blob/main/skills/prompt-engineer/references/prompt-engineering-single-turn.md
 https://ai-sdk.dev/elements/components/prompt-input
 https://dspy.ai/api/optimizers/MIPROv2/
 https://github.com/davidkimai/Context-Engineering

@@ -2066,15 +2066,37 @@ def rg_policy_path_default() -> str:
 
 
 def rg_policy_path() -> str:
+    def _resolve_repo_relative(path: str) -> str:
+        try:
+            p = Path(path).expanduser()
+            if not p.is_absolute():
+                base = Path(__file__).resolve().parents[3]
+                p = (base / p).resolve()
+            return str(p)
+        except Exception:
+            return path
+
     v = os.getenv("RG_POLICY_PATH")
     if v:
-        return v
+        resolved = _resolve_repo_relative(v)
+        try:
+            if not Path(resolved).exists():
+                _log_warning(f"rg_policy_path: policy file not found at {resolved}")
+        except Exception:
+            pass
+        return resolved
     try:
         cp = load_comprehensive_config()
         p = cp.get("ResourceGovernor", "policy_path", fallback=rg_policy_path_default()) if cp else rg_policy_path_default()
-        return p
+        resolved = _resolve_repo_relative(p)
+        try:
+            if not Path(resolved).exists():
+                _log_warning(f"rg_policy_path: policy file not found at {resolved}")
+        except Exception:
+            pass
+        return resolved
     except Exception:
-        return rg_policy_path_default()
+        return _resolve_repo_relative(rg_policy_path_default())
 
 
 @lru_cache(maxsize=1)

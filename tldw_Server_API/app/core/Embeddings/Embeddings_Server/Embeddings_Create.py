@@ -140,18 +140,48 @@ def get_resource_limits():
     try:
         from tldw_Server_API.app.core.config import load_comprehensive_config
         config = load_comprehensive_config()
-        embeddings_config = config.get('Embeddings', {})
+        embeddings_config = None
+        try:
+            if config and hasattr(config, "has_section") and config.has_section("Embeddings"):
+                embeddings_config = config["Embeddings"]
+            elif isinstance(config, dict):
+                embeddings_config = config.get("Embeddings")
+        except Exception:
+            embeddings_config = None
+
+        def _get_value(cfg, key: str, default):
+            if cfg is None:
+                return default
+            try:
+                return cfg.get(key, fallback=default)
+            except TypeError:
+                return cfg.get(key, default)
+            except Exception:
+                return default
+
+        def _as_int(value, default: int) -> int:
+            try:
+                return int(value)
+            except Exception:
+                return default
+
+        def _as_float(value, default: float) -> float:
+            try:
+                return float(value)
+            except Exception:
+                return default
+
         return {
-            'max_models': int(embeddings_config.get('max_models_in_memory', 3)),
-            'max_memory_gb': float(embeddings_config.get('max_model_memory_gb', 8)),
-            'lru_ttl_seconds': int(embeddings_config.get('model_lru_ttl_seconds', 3600))
+            "max_models": _as_int(_get_value(embeddings_config, "max_models_in_memory", 3), 3),
+            "max_memory_gb": _as_float(_get_value(embeddings_config, "max_model_memory_gb", 8), 8.0),
+            "lru_ttl_seconds": _as_int(_get_value(embeddings_config, "model_lru_ttl_seconds", 3600), 3600),
         }
     except Exception as e:
         logging.warning(f"Could not load resource limits from config: {e}. Using defaults.")
         return {
-            'max_models': 3,
-            'max_memory_gb': 8.0,
-            'lru_ttl_seconds': 3600
+            "max_models": 3,
+            "max_memory_gb": 8.0,
+            "lru_ttl_seconds": 3600,
         }
 
 RESOURCE_LIMITS = get_resource_limits()
@@ -322,9 +352,8 @@ class TokenBucketLimiter:
             while True:
                 decision = _maybe_enforce_with_rg_embeddings_server_sync()
                 if decision is None:
-                    raise RuntimeError(
-                        "Embeddings server rate limiting unavailable (ResourceGovernor not initialized)"
-                    )
+                    _log_rg_emb_server_fallback("rg_decision_unavailable")
+                    return fn(*args, **kwargs)
                 if decision.get("allowed", False):
                     return fn(*args, **kwargs)
                 retry_after = decision.get("retry_after")
@@ -343,6 +372,72 @@ class TokenBucketLimiter:
 _rg_emb_server_governor = None
 _rg_emb_server_loader = None
 _rg_emb_server_lock = asyncio.Lock()
+_rg_emb_server_init_error: Optional[str] = None
+_rg_emb_server_init_error_logged = False
+_rg_emb_server_fallback_logged = False
+
+
+def _rg_emb_server_context() -> Dict[str, str]:
+    policy_path = os.getenv(
+        "RG_POLICY_PATH",
+        "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
+    )
+    try:
+        policy_path_resolved = os.path.abspath(policy_path)
+    except Exception:
+        policy_path_resolved = policy_path
+    return {
+        "backend": os.getenv("RG_BACKEND", "memory"),
+        "policy_path": policy_path,
+        "policy_path_resolved": policy_path_resolved,
+        "policy_store": os.getenv("RG_POLICY_STORE", ""),
+        "policy_reload_enabled": os.getenv("RG_POLICY_RELOAD_ENABLED", ""),
+        "policy_reload_interval": os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", ""),
+        "cwd": os.getcwd(),
+    }
+
+
+def _log_rg_emb_server_init_failure(exc: Exception) -> None:
+    global _rg_emb_server_init_error, _rg_emb_server_init_error_logged
+    _rg_emb_server_init_error = repr(exc)
+    if _rg_emb_server_init_error_logged:
+        return
+    _rg_emb_server_init_error_logged = True
+    ctx = _rg_emb_server_context()
+    logging.exception(
+        "Embeddings server ResourceGovernor init failed; falling back to legacy limiter. "
+        "backend=%s policy_path=%s policy_path_resolved=%s policy_store=%s "
+        "reload_enabled=%s reload_interval=%s cwd=%s",
+        ctx["backend"],
+        ctx["policy_path"],
+        ctx["policy_path_resolved"],
+        ctx["policy_store"],
+        ctx["policy_reload_enabled"],
+        ctx["policy_reload_interval"],
+        ctx["cwd"],
+    )
+
+
+def _log_rg_emb_server_fallback(reason: str) -> None:
+    global _rg_emb_server_fallback_logged
+    if _rg_emb_server_fallback_logged:
+        return
+    _rg_emb_server_fallback_logged = True
+    ctx = _rg_emb_server_context()
+    logging.error(
+        "Embeddings server ResourceGovernor unavailable; falling back to legacy limiter. "
+        "reason=%s init_error=%s backend=%s policy_path=%s policy_path_resolved=%s "
+        "policy_store=%s reload_enabled=%s reload_interval=%s cwd=%s",
+        reason,
+        _rg_emb_server_init_error,
+        ctx["backend"],
+        ctx["policy_path"],
+        ctx["policy_path_resolved"],
+        ctx["policy_store"],
+        ctx["policy_reload_enabled"],
+        ctx["policy_reload_interval"],
+        ctx["cwd"],
+    )
 
 try:  # pragma: no cover - RG is optional
     from tldw_Server_API.app.core.Resource_Governance import (  # type: ignore
@@ -382,6 +477,7 @@ async def _get_embeddings_server_rg_governor():
     if not _rg_embeddings_server_enabled():
         return None
     if RGRequest is None or PolicyLoader is None:
+        _log_rg_emb_server_fallback("rg_components_unavailable")
         return None
     if _rg_emb_server_governor is not None:
         return _rg_emb_server_governor
@@ -415,10 +511,7 @@ async def _get_embeddings_server_rg_governor():
             _rg_emb_server_governor = gov
             return gov
         except Exception as exc:  # pragma: no cover - optional path
-            logging.debug(
-                "Embeddings server RG governor init failed: %s",
-                exc,
-            )
+            _log_rg_emb_server_init_failure(exc)
             return None
 
 

@@ -2,11 +2,16 @@
 # Description: Kokoro TTS adapter implementation
 #
 # Imports
+import builtins
 import os
 import sys
 import platform
+import time
+import asyncio
+import concurrent.futures
 from ctypes.util import find_library as _ctypes_find_library
 import re
+from contextlib import contextmanager
 from typing import Optional, Dict, Any, AsyncGenerator, Set, List, Tuple
 #
 # Third-party Imports
@@ -47,6 +52,37 @@ from ..phoneme_overrides import (
 #######################################################################################################################
 #
 # Kokoro TTS Adapter Implementation
+
+_KOKORO_REPO_WARNING_PREFIX = "WARNING: Defaulting repo_id to "
+
+
+@contextmanager
+def _capture_kokoro_repo_warning():
+    """Redirect Kokoro's repo_id print warning into Loguru output."""
+    original_print = builtins.print
+
+    def _print(*args, **kwargs):
+        try:
+            target = kwargs.get("file", None)
+            if target not in (None, sys.stdout):
+                return original_print(*args, **kwargs)
+            sep = kwargs.get("sep", " ")
+            if sep is None:
+                sep = " "
+            msg = sep.join(str(arg) for arg in args)
+        except Exception:
+            return original_print(*args, **kwargs)
+        if msg.startswith(_KOKORO_REPO_WARNING_PREFIX):
+            logger.warning(msg)
+            return
+        return original_print(*args, **kwargs)
+
+    builtins.print = _print
+    try:
+        yield
+    finally:
+        builtins.print = original_print
+
 
 class KokoroAdapter(TTSAdapter):
     """Adapter for Kokoro TTS (ONNX and PyTorch variants)"""
@@ -131,14 +167,42 @@ class KokoroAdapter(TTSAdapter):
         # Determine backend type (ONNX or PyTorch). Default to PyTorch; ONNX is opt-in.
         self.use_onnx = self.config.get("kokoro_use_onnx", False)
         # Device selection with fallback
-        preferred = self.config.get("kokoro_device")
+        preferred = self.config.get("kokoro_device") or os.getenv("KOKORO_DEVICE")
+        probe_timeout_raw = (
+            self.config.get("kokoro_device_probe_timeout_sec")
+            or os.getenv("KOKORO_DEVICE_PROBE_TIMEOUT_SEC")
+        )
         try:
-            import torch  # type: ignore
-            cuda_avail = torch.cuda.is_available()
-            mps_avail = hasattr(torch.backends, 'mps') and getattr(torch.backends.mps, 'is_available', lambda: False)()
+            self.device_probe_timeout_sec = float(probe_timeout_raw) if probe_timeout_raw is not None else 2.0
         except Exception:
+            self.device_probe_timeout_sec = 2.0
+        cuda_avail = False
+        mps_avail = False
+
+        def _probe_devices() -> tuple[bool, bool]:
+            try:
+                import torch  # type: ignore
+                cuda_ok = torch.cuda.is_available()
+                mps_ok = hasattr(torch.backends, 'mps') and getattr(torch.backends.mps, 'is_available', lambda: False)()
+                return cuda_ok, mps_ok
+            except Exception:
+                return False, False
+
+        if preferred and str(preferred).lower() == "cpu":
             cuda_avail = False
             mps_avail = False
+        else:
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(_probe_devices)
+                    cuda_avail, mps_avail = future.result(timeout=self.device_probe_timeout_sec)
+            except concurrent.futures.TimeoutError:
+                logger.warning(f"{self.provider_name}: Device probe timed out; defaulting to CPU")
+                cuda_avail = False
+                mps_avail = False
+            except Exception:
+                cuda_avail = False
+                mps_avail = False
         if preferred:
             pref = str(preferred).lower()
             if pref == "cuda":
@@ -200,6 +264,14 @@ class KokoroAdapter(TTSAdapter):
 
         # Performance settings
         self.sample_rate = self.config.get("sample_rate", 24000)
+        init_timeout_raw = (
+            self.config.get("kokoro_init_timeout_sec")
+            or os.getenv("KOKORO_INIT_TIMEOUT_SEC")
+        )
+        try:
+            self.init_timeout_sec = float(init_timeout_raw) if init_timeout_raw is not None else None
+        except Exception:
+            self.init_timeout_sec = None
         # Pause insertion pacing (configurable)
         try:
             self.pause_interval_words = int(
@@ -237,7 +309,14 @@ class KokoroAdapter(TTSAdapter):
             if self.use_onnx:
                 success = await self._load_onnx_model()
             else:
-                success = await self._load_pytorch_model()
+                if self.init_timeout_sec:
+                    try:
+                        success = await asyncio.wait_for(self._load_pytorch_model(), timeout=self.init_timeout_sec)
+                    except asyncio.TimeoutError:
+                        logger.error(f"{self.provider_name}: Initialization timed out after {self.init_timeout_sec}s")
+                        success = False
+                else:
+                    success = await self._load_pytorch_model()
 
             # Load dynamic voices if available
             try:
@@ -483,7 +562,17 @@ class KokoroAdapter(TTSAdapter):
                     details={"config_path": config_path}
                 )
             repo_id = self.config.get("kokoro_repo_id") or os.getenv("KOKORO_REPO_ID") or "hexgrad/Kokoro-82M"
-            self.kokoro_pt_model = KModel(repo_id=repo_id, config=config_path, model=self.model_path).eval()
+            logger.info(f"{self.provider_name}: Loading Kokoro PyTorch model (repo_id={repo_id})")
+            start = time.time()
+            def _load_model():
+                return KModel(repo_id=repo_id, config=config_path, model=self.model_path).eval()
+            try:
+                with _capture_kokoro_repo_warning():
+                    self.kokoro_pt_model = await asyncio.to_thread(_load_model)
+            except Exception:
+                # Fallback to sync load if threading fails in constrained envs
+                with _capture_kokoro_repo_warning():
+                    self.kokoro_pt_model = _load_model()
             # Move to device
             dev = str(self.device).lower()
             if dev.startswith("cuda"):
@@ -499,7 +588,7 @@ class KokoroAdapter(TTSAdapter):
                     self.kokoro_pt_model = self.kokoro_pt_model.cpu()
             else:
                 self.kokoro_pt_model = self.kokoro_pt_model.cpu()
-            logger.info(f"{self.provider_name}: Kokoro PyTorch model loaded on {dev}")
+            logger.info(f"{self.provider_name}: Kokoro PyTorch model loaded on {dev} (t={time.time() - start:.2f}s)")
             return True
         except ImportError:
             # Fallback: generic torch.load
@@ -719,11 +808,14 @@ class KokoroAdapter(TTSAdapter):
                 lang_code = self._get_kpipeline_lang_code(voice_id if isinstance(voice_id, str) else "", lang)
                 key = lang_code
                 if key not in self.kokoro_pt_pipelines:
-                    self.kokoro_pt_pipelines[key] = KPipeline(
-                        lang_code=key,
-                        model=self.kokoro_pt_model,
-                        device=str(self.device)
-                    )
+                    repo_id = self.config.get("kokoro_repo_id") or os.getenv("KOKORO_REPO_ID") or "hexgrad/Kokoro-82M"
+                    with _capture_kokoro_repo_warning():
+                        self.kokoro_pt_pipelines[key] = KPipeline(
+                            lang_code=key,
+                            repo_id=repo_id,
+                            model=self.kokoro_pt_model,
+                            device=str(self.device)
+                        )
                 pipeline = self.kokoro_pt_pipelines[key]
 
                 # Define a sync generator wrapper to async iterate

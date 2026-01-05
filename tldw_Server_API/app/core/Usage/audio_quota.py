@@ -139,6 +139,88 @@ _rg_stream_handles: Dict[int, List[str]] = {}
 _rg_job_handles: Dict[int, List[str]] = {}
 _rg_job_handle_locks: Dict[int, asyncio.Lock] = {}
 _rg_job_handle_locks_lock = asyncio.Lock()
+_rg_audio_init_error: Optional[str] = None
+_rg_audio_init_error_logged = False
+_rg_audio_fallback_logged = False
+
+
+def _rg_audio_context() -> Dict[str, str]:
+    try:
+        backend = rg_backend() if rg_backend else os.getenv("RG_BACKEND", "memory")  # type: ignore[operator]
+    except Exception:
+        backend = os.getenv("RG_BACKEND", "memory")
+    try:
+        store = rg_policy_store() if rg_policy_store else os.getenv("RG_POLICY_STORE", "")  # type: ignore[operator]
+    except Exception:
+        store = os.getenv("RG_POLICY_STORE", "")
+    try:
+        policy_path = rg_policy_path() if rg_policy_path else os.getenv(  # type: ignore[operator]
+            "RG_POLICY_PATH",
+            "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
+        )
+    except Exception:
+        policy_path = os.getenv(
+            "RG_POLICY_PATH",
+            "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
+        )
+    try:
+        policy_path_resolved = os.path.abspath(policy_path)
+    except Exception:
+        policy_path_resolved = policy_path
+    try:
+        reload_enabled = (
+            rg_policy_reload_enabled() if rg_policy_reload_enabled else os.getenv("RG_POLICY_RELOAD_ENABLED", "")
+        )  # type: ignore[operator]
+    except Exception:
+        reload_enabled = os.getenv("RG_POLICY_RELOAD_ENABLED", "")
+    try:
+        reload_interval = (
+            rg_policy_reload_interval_sec() if rg_policy_reload_interval_sec else os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", "")
+        )  # type: ignore[operator]
+    except Exception:
+        reload_interval = os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", "")
+    return {
+        "backend": str(backend),
+        "policy_path": str(policy_path),
+        "policy_path_resolved": str(policy_path_resolved),
+        "policy_store": str(store),
+        "policy_reload_enabled": str(reload_enabled),
+        "policy_reload_interval": str(reload_interval),
+        "cwd": os.getcwd(),
+    }
+
+
+def _log_rg_audio_init_failure(exc: Exception) -> None:
+    global _rg_audio_init_error, _rg_audio_init_error_logged
+    _rg_audio_init_error = repr(exc)
+    if _rg_audio_init_error_logged:
+        return
+    _rg_audio_init_error_logged = True
+    ctx = _rg_audio_context()
+    logger.exception(
+        "Audio ResourceGovernor init failed; falling back to legacy behavior. "
+        "backend={backend} policy_path={policy_path} policy_path_resolved={policy_path_resolved} "
+        "policy_store={policy_store} reload_enabled={policy_reload_enabled} "
+        "reload_interval={policy_reload_interval} cwd={cwd}",
+        **ctx,
+    )
+
+
+def _log_rg_audio_fallback(reason: str) -> None:
+    global _rg_audio_fallback_logged
+    if _rg_audio_fallback_logged:
+        return
+    _rg_audio_fallback_logged = True
+    ctx = _rg_audio_context()
+    logger.error(
+        "Audio ResourceGovernor unavailable; falling back to legacy behavior. "
+        "reason={} init_error={} backend={backend} policy_path={policy_path} "
+        "policy_path_resolved={policy_path_resolved} policy_store={policy_store} "
+        "reload_enabled={policy_reload_enabled} reload_interval={policy_reload_interval} cwd={cwd}",
+        reason,
+        _rg_audio_init_error,
+        **ctx,
+    )
 
 
 def _reset_in_process_counters_for_tests() -> None:
@@ -170,6 +252,7 @@ async def _get_audio_rg_governor():
         return None
     # If RG is not available in this environment, keep legacy behavior.
     if RGRequest is None or PolicyLoader is None or PolicyReloadConfig is None or rg_policy_store is None:
+        _log_rg_audio_fallback("rg_components_unavailable")
         return None
     if _rg_audio_governor is not None:
         return _rg_audio_governor
@@ -204,7 +287,7 @@ async def _get_audio_rg_governor():
             _rg_audio_governor = gov
             return gov
         except Exception as e:
-            logger.debug(f"Audio quotas: ResourceGovernor initialization failed: {e}")
+            _log_rg_audio_init_failure(e)
             _rg_audio_governor = None
             _rg_audio_loader = None
             return None
@@ -743,11 +826,12 @@ async def can_start_job(user_id: int) -> Tuple[bool, str]:
                 _metrics_set_gauge("audio_jobs_active", float(len(handles)), {"user_id": str(user_key)})
             return True, "OK"
         except Exception as e:
-            logger.debug(f"RG error in can_start_job: {e}")
-            return False, "Rate limit enforcement unavailable"
+            _log_rg_audio_fallback("rg_reserve_failed_jobs")
+            return True, "OK"
 
     if _rg_audio_enabled():
-        return False, "Rate limit enforcement unavailable (ResourceGovernor not initialized)"
+        _log_rg_audio_fallback("rg_governor_unavailable_jobs")
+        return True, "OK"
 
     # RG disabled → treat as unlimited.
     return True, "OK"
@@ -824,11 +908,12 @@ async def can_start_stream(user_id: int) -> Tuple[bool, str]:
             _metrics_set_gauge("audio_streaming_active", float(len(handles)), {"user_id": str(int(user_id))})
             return True, "OK"
         except Exception as e:
-            logger.debug(f"RG error in can_start_stream: {e}")
-            return False, "Rate limit enforcement unavailable"
+            _log_rg_audio_fallback("rg_reserve_failed_streams")
+            return True, "OK"
 
     if _rg_audio_enabled():
-        return False, "Rate limit enforcement unavailable (ResourceGovernor not initialized)"
+        _log_rg_audio_fallback("rg_governor_unavailable_streams")
+        return True, "OK"
 
     # RG disabled → treat as unlimited.
     return True, "OK"
