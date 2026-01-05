@@ -136,6 +136,41 @@ def resolve_model_storage_base_dir(
 
     return "./models/embedding_models_data/"
 
+# Default resource limits
+DEFAULT_MAX_MODELS = 3
+DEFAULT_MAX_MEMORY_GB = 8.0
+DEFAULT_LRU_TTL_SECONDS = 3600
+
+
+def _get_config_value(cfg, key: str, default):
+    """Safely retrieve a value from config, supporting both ConfigParser and dict."""
+    if cfg is None:
+        return default
+    try:
+        return cfg.get(key, fallback=default)
+    except TypeError:
+        return cfg.get(key, default)
+    except (AttributeError, KeyError, ValueError, configparser.Error) as exc:
+        logging.debug(f"Config read failed for {key}: {exc}")
+        return default
+
+
+def _coerce_int(value, default: int) -> int:
+    """Coerce value to int with fallback."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_float(value, default: float) -> float:
+    """Coerce value to float with fallback."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 # Resource limits - loaded from config or use defaults
 def get_resource_limits():
     """Get resource limits from config file."""
@@ -152,40 +187,26 @@ def get_resource_limits():
             logging.debug(f"Embeddings resource limits: failed to access Embeddings section: {exc}")
             embeddings_config = None
 
-        def _get_value(cfg, key: str, default):
-            if cfg is None:
-                return default
-            try:
-                return cfg.get(key, fallback=default)
-            except TypeError:
-                return cfg.get(key, default)
-            except (AttributeError, KeyError, ValueError, configparser.Error) as exc:
-                logging.debug(f"Embeddings resource limits: failed to read {key}: {exc}")
-                return default
-
-        def _as_int(value, default: int) -> int:
-            try:
-                return int(value)
-            except (TypeError, ValueError):
-                return default
-
-        def _as_float(value, default: float) -> float:
-            try:
-                return float(value)
-            except (TypeError, ValueError):
-                return default
-
         return {
-            "max_models": _as_int(_get_value(embeddings_config, "max_models_in_memory", 3), 3),
-            "max_memory_gb": _as_float(_get_value(embeddings_config, "max_model_memory_gb", 8), 8.0),
-            "lru_ttl_seconds": _as_int(_get_value(embeddings_config, "model_lru_ttl_seconds", 3600), 3600),
+            "max_models": _coerce_int(
+                _get_config_value(embeddings_config, "max_models_in_memory", DEFAULT_MAX_MODELS),
+                DEFAULT_MAX_MODELS,
+            ),
+            "max_memory_gb": _coerce_float(
+                _get_config_value(embeddings_config, "max_model_memory_gb", DEFAULT_MAX_MEMORY_GB),
+                DEFAULT_MAX_MEMORY_GB,
+            ),
+            "lru_ttl_seconds": _coerce_int(
+                _get_config_value(embeddings_config, "model_lru_ttl_seconds", DEFAULT_LRU_TTL_SECONDS),
+                DEFAULT_LRU_TTL_SECONDS,
+            ),
         }
     except (OSError, TypeError, ValueError, configparser.Error) as e:
         logging.warning(f"Could not load resource limits from config: {e}. Using defaults.")
         return {
-            "max_models": 3,
-            "max_memory_gb": 8.0,
-            "lru_ttl_seconds": 3600,
+            "max_models": DEFAULT_MAX_MODELS,
+            "max_memory_gb": DEFAULT_MAX_MEMORY_GB,
+            "lru_ttl_seconds": DEFAULT_LRU_TTL_SECONDS,
         }
 
 RESOURCE_LIMITS = get_resource_limits()
@@ -349,6 +370,7 @@ class TokenBucketLimiter:
             # When ResourceGovernor is enabled, prefer ResourceGovernor as
             # the primary enforcement path. The legacy in-process token bucket
             # is retired; when RG is disabled, this decorator becomes a no-op.
+            # Ensure RG is enabled in production if you rely on rate limiting.
             if not _rg_embeddings_server_enabled():
                 return fn(*args, **kwargs)
 
@@ -376,12 +398,19 @@ class TokenBucketLimiter:
 _rg_emb_server_governor = None
 _rg_emb_server_loader = None
 _rg_emb_server_lock = asyncio.Lock()
+_rg_emb_server_log_lock = threading.Lock()
 _rg_emb_server_init_error: Optional[str] = None
 _rg_emb_server_init_error_logged = False
 _rg_emb_server_fallback_logged = False
 
 
 def _rg_emb_server_context() -> Dict[str, str]:
+    """
+    Build RG context dictionary with environment variables and resolved paths.
+
+    Returns:
+        Dict containing backend, policy paths, and configuration settings.
+    """
     policy_path = os.getenv("RG_POLICY_PATH")
     if policy_path:
         try:
@@ -405,9 +434,10 @@ def _rg_emb_server_context() -> Dict[str, str]:
 def _log_rg_emb_server_init_failure(exc: Exception) -> None:
     global _rg_emb_server_init_error, _rg_emb_server_init_error_logged
     _rg_emb_server_init_error = repr(exc)
-    if _rg_emb_server_init_error_logged:
-        return
-    _rg_emb_server_init_error_logged = True
+    with _rg_emb_server_log_lock:
+        if _rg_emb_server_init_error_logged:
+            return
+        _rg_emb_server_init_error_logged = True
     ctx = _rg_emb_server_context()
     logging.exception(
         "Embeddings server ResourceGovernor init failed; falling back to legacy limiter. "
@@ -425,9 +455,10 @@ def _log_rg_emb_server_init_failure(exc: Exception) -> None:
 
 def _log_rg_emb_server_fallback(reason: str) -> None:
     global _rg_emb_server_fallback_logged
-    if _rg_emb_server_fallback_logged:
-        return
-    _rg_emb_server_fallback_logged = True
+    with _rg_emb_server_log_lock:
+        if _rg_emb_server_fallback_logged:
+            return
+        _rg_emb_server_fallback_logged = True
     ctx = _rg_emb_server_context()
     logging.error(
         "Embeddings server ResourceGovernor unavailable; falling back to legacy limiter. "
@@ -466,14 +497,48 @@ except Exception:  # pragma: no cover - safe fallback when RG not installed
     rg_enabled = None  # type: ignore
 
 
+def _should_enforce_rg_in_production() -> bool:
+    env = (os.getenv("ENVIRONMENT") or os.getenv("APP_ENV") or os.getenv("ENV") or "dev").lower()
+    if env not in {"prod", "production"}:
+        return False
+    test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
+    pytest_active = bool(os.getenv("PYTEST_CURRENT_TEST"))
+    return not (test_mode or pytest_active)
+
+
+def _assert_rg_enabled_in_production() -> None:
+    if not _should_enforce_rg_in_production():
+        return
+    if rg_enabled is None:
+        raise RuntimeError(
+            "Resource Governor is unavailable in production; embeddings rate limiting depends on RG. "
+            "Install RG dependencies and set RG_ENABLED=true."
+        )
+    try:
+        enabled = bool(rg_enabled(True))  # type: ignore[func-returns-value]
+    except Exception as exc:
+        raise RuntimeError(
+            "Resource Governor config check failed in production; embeddings rate limiting depends on RG."
+        ) from exc
+    if not enabled:
+        raise RuntimeError(
+            "Resource Governor is disabled in production; embeddings rate limiting depends on RG. "
+            "Set RG_ENABLED=true or [ResourceGovernor].enabled=true."
+        )
+
+
 def _rg_embeddings_server_enabled() -> bool:
     """Return True when RG should gate standalone embeddings server requests."""
+    _assert_rg_enabled_in_production()
     if rg_enabled is not None:
         try:
             return bool(rg_enabled(True))  # type: ignore[func-returns-value]
         except Exception:
             return False
     return False
+
+
+_assert_rg_enabled_in_production()
 
 
 async def _get_embeddings_server_rg_governor():

@@ -193,8 +193,8 @@ class _StderrInterceptor:
         if getattr(self._local, "in_write", False):
             try:
                 self._stream.write(message)
-            except Exception:
-                pass
+            except Exception as exc:
+                _safe_debug(f"StderrInterceptor direct write failed: {exc}")
             return
         try:
             self._local.in_write = True
@@ -243,8 +243,14 @@ class _StderrInterceptor:
         except Exception:
             try:
                 self._stream.write(text + "\n")
-            except Exception:
-                pass
+            except Exception as exc:
+                _safe_debug(f"StderrInterceptor fallback write failed: {exc}")
+
+    def writelines(self, lines) -> None:
+        if lines is None:
+            return
+        for line in lines:
+            self.write(line)
 
     def flush(self) -> None:
         try:
@@ -252,16 +258,16 @@ class _StderrInterceptor:
             if buf:
                 try:
                     self._local.buffer = ""
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _safe_debug(f"StderrInterceptor failed to clear buffer: {exc}")
                 text = buf.rstrip("\r\n")
                 if text:
                     in_write = getattr(self._local, "in_write", False)
                     if in_write:
                         try:
                             self._stream.write(text + "\n")
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            _safe_debug(f"StderrInterceptor buffer flush write failed: {exc}")
                     else:
                         try:
                             self._local.in_write = True
@@ -269,18 +275,19 @@ class _StderrInterceptor:
                         except Exception:
                             try:
                                 self._stream.write(text + "\n")
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                _safe_debug(f"StderrInterceptor buffer fallback write failed: {exc}")
                         finally:
                             self._local.in_write = False
             self._stream.flush()
-        except Exception:
-            pass
+        except Exception as exc:
+            _safe_debug(f"StderrInterceptor flush failed: {exc}")
 
     def isatty(self) -> bool:
         try:
             return bool(getattr(self._stream, "isatty", lambda: False)())
         except Exception:
+            _safe_debug("StderrInterceptor isatty check failed")
             return False
 
     @property
@@ -297,6 +304,9 @@ class _StderrInterceptor:
             import io
             raise io.UnsupportedOperation("fileno")
         return fn()
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
 
 def _redirect_external_loggers() -> None:
     """Ensure third-party loggers route through our Loguru interceptor."""
@@ -442,29 +452,6 @@ _ALLOWED_LOGURU_CALLERS = {
 }
 
 
-def _caller_in_project() -> bool:
-    frame = logging.currentframe()
-    if frame is not None:
-        frame = frame.f_back
-    while frame is not None:
-        fname = getattr(frame.f_code, "co_filename", "") or ""
-        func_name = getattr(frame.f_code, "co_name", "") or ""
-        if not fname:
-            frame = frame.f_back
-            continue
-        if "loguru" in fname:
-            frame = frame.f_back
-            continue
-        if fname == __file__ and func_name in {"_safe_logger_add", "_safe_logger_remove", "_safe_logger_configure"}:
-            frame = frame.f_back
-            continue
-        try:
-            return Path(fname).resolve().is_relative_to(_PROJECT_ROOT)
-        except Exception:
-            return True
-    return True
-
-
 def _caller_allowed_for_loguru_config() -> bool:
     if os.getenv("TLDW_ALLOW_LOGURU_RECONFIG", "").lower() in {"1", "true", "yes", "on"}:
         return True
@@ -487,8 +474,9 @@ def _caller_allowed_for_loguru_config() -> bool:
             continue
         try:
             return Path(fname).resolve() in _ALLOWED_LOGURU_CALLERS
-        except Exception:
-            return True
+        except Exception as exc:
+            _safe_debug(f"Failed to resolve Loguru config caller path: {exc}")
+            return False
     return False
 
 
@@ -512,8 +500,8 @@ def _safe_logger_add(sink, *args, **kwargs):
 
 
 _ROOT_LOGGER.add = _safe_logger_add  # type: ignore[assignment]
-setattr(_ROOT_LOGGER.add, "_tldw_safe_original", _original_unwrapped_logger_add)
-setattr(_ROOT_LOGGER.add, "__wrapped__", _original_unwrapped_logger_add)
+_ROOT_LOGGER.add._tldw_safe_original = _original_unwrapped_logger_add  # type: ignore[attr-defined]
+_ROOT_LOGGER.add.__wrapped__ = _original_unwrapped_logger_add  # type: ignore[attr-defined]
 
 
 # Sink-level filter to guarantee presence of common extra fields
@@ -552,11 +540,11 @@ _redirect_external_loggers()
 _install_stderr_redirect()
 
 if not hasattr(_ROOT_LOGGER, "_tldw_original_remove"):
-    setattr(_ROOT_LOGGER, "_tldw_original_remove", _unwrap_loguru_wrapper(_ROOT_LOGGER.remove))
+    _ROOT_LOGGER._tldw_original_remove = _unwrap_loguru_wrapper(_ROOT_LOGGER.remove)  # type: ignore[attr-defined]
 _original_logger_remove = getattr(_ROOT_LOGGER, "_tldw_original_remove", None)
 _root_configure = getattr(_ROOT_LOGGER, "configure", None)
 if callable(_root_configure) and not hasattr(_ROOT_LOGGER, "_tldw_original_configure"):
-    setattr(_ROOT_LOGGER, "_tldw_original_configure", _unwrap_loguru_wrapper(_root_configure))
+    _ROOT_LOGGER._tldw_original_configure = _unwrap_loguru_wrapper(_root_configure)  # type: ignore[attr-defined]
 _original_logger_configure = getattr(_ROOT_LOGGER, "_tldw_original_configure", None)
 
 
@@ -586,6 +574,7 @@ def _safe_logger_configure(*args, **kwargs):
             return target(*args, **kwargs)
         if hasattr(_ROOT_LOGGER.__class__, "configure"):
             return _ROOT_LOGGER.__class__.configure(_ROOT_LOGGER, *args, **kwargs)
+        _safe_debug("Loguru configure target unavailable; skipping")
         return None
     finally:
         _redirect_external_loggers()
@@ -594,11 +583,11 @@ def _safe_logger_configure(*args, **kwargs):
 _ROOT_LOGGER.remove = _safe_logger_remove  # type: ignore[assignment]
 if callable(_original_logger_configure):
     _ROOT_LOGGER.configure = _safe_logger_configure  # type: ignore[assignment]
-setattr(_ROOT_LOGGER.remove, "_tldw_safe_original", _original_logger_remove)
-setattr(_ROOT_LOGGER.remove, "__wrapped__", _original_logger_remove)
+_ROOT_LOGGER.remove._tldw_safe_original = _original_logger_remove  # type: ignore[attr-defined]
+_ROOT_LOGGER.remove.__wrapped__ = _original_logger_remove  # type: ignore[attr-defined]
 if callable(_original_logger_configure):
-    setattr(_ROOT_LOGGER.configure, "_tldw_safe_original", _original_logger_configure)
-    setattr(_ROOT_LOGGER.configure, "__wrapped__", _original_logger_configure)
+    _ROOT_LOGGER.configure._tldw_safe_original = _original_logger_configure  # type: ignore[attr-defined]
+    _ROOT_LOGGER.configure.__wrapped__ = _original_logger_configure  # type: ignore[attr-defined]
 logger.remove = _safe_logger_remove  # type: ignore[assignment]
 if callable(_original_logger_configure):
     logger.configure = _safe_logger_configure  # type: ignore[assignment]
@@ -612,6 +601,7 @@ _original_logging_addHandler = logging._tldw_original_addHandler  # type: ignore
 def _safe_logging_addHandler(self: logging.Logger, hdlr: logging.Handler) -> None:
     target = getattr(logging, "_tldw_original_addHandler", None)
     if target is None or target is _safe_logging_addHandler:
+        _safe_debug("Stdlib addHandler hook unavailable; dropping handler to preserve Loguru interception")
         return
     if isinstance(hdlr, InterceptHandler) or _caller_allowed_for_loguru_config():
         target(self, hdlr)
