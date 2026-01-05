@@ -238,6 +238,31 @@ class _StderrInterceptor:
 
     def flush(self) -> None:
         try:
+            buf = getattr(self._local, "buffer", "")
+            if buf:
+                try:
+                    self._local.buffer = ""
+                except Exception:
+                    pass
+                text = buf.rstrip("\r\n")
+                if text:
+                    in_write = getattr(self._local, "in_write", False)
+                    if in_write:
+                        try:
+                            self._stream.write(text + "\n")
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            self._local.in_write = True
+                            self._log_line(text)
+                        except Exception:
+                            try:
+                                self._stream.write(text + "\n")
+                            except Exception:
+                                pass
+                        finally:
+                            self._local.in_write = False
             self._stream.flush()
         except Exception:
             pass
@@ -4325,8 +4350,6 @@ elif _MINIMAL_TEST_APP:
         logger.debug(f"Skipping rag_unified router in minimal test app: {_rag_min_err}")
     # Explicit feedback endpoints (shared chat/RAG)
     try:
-        from tldw_Server_API.app.api.v1.endpoints.feedback import router as feedback_router
-
         app.include_router(feedback_router, prefix=f"{API_V1_PREFIX}/feedback", tags=["feedback"])
     except Exception as _feedback_min_err:
         logger.debug(f"Skipping feedback router in minimal test app: {_feedback_min_err}")

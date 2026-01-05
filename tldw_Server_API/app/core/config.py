@@ -2060,7 +2060,11 @@ def rg_redis_fail_mode(default: str = "fallback_memory") -> str:
 def rg_policy_path_default() -> str:
     try:
         base = Path(__file__).resolve().parents[3]
-        return str(base / "Config_Files" / "resource_governor_policies.yaml")
+        primary = base / "Config_Files" / "resource_governor_policies.yaml"
+        if primary.exists():
+            return str(primary)
+        fallback = base / "tldw_Server_API" / "Config_Files" / "resource_governor_policies.yaml"
+        return str(fallback)
     except Exception:
         return "resource_governor_policies.yaml"
 

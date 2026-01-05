@@ -11,14 +11,40 @@ import yaml
 from tldw_Server_API.app.core.Resource_Governance.policy_admin import AuthNZPolicyAdmin
 
 
+def _resolve_policy_path(path: Path) -> Path:
+    try:
+        resolved = path.expanduser()
+    except Exception:
+        return path
+    if resolved.exists():
+        return resolved
+    base = Path(__file__).resolve().parents[4]
+    candidates: list[Path] = []
+    if not resolved.is_absolute():
+        try:
+            candidates.append((base / resolved).resolve())
+        except Exception:
+            pass
+    name = resolved.name or "resource_governor_policies.yaml"
+    candidates.append(base / "Config_Files" / name)
+    candidates.append(base / "tldw_Server_API" / "Config_Files" / name)
+    for candidate in candidates:
+        try:
+            if candidate.exists():
+                print(f"RG policy file not found at {resolved}; using {candidate}")
+                return candidate
+        except Exception:
+            continue
+    return resolved
+
+
 def _default_policy_path() -> Path:
     base = Path(__file__).resolve().parents[4]
-    return Path(
-        os.getenv(
-            "RG_POLICY_PATH",
-            str(base / "Config_Files" / "resource_governor_policies.yaml"),
-        )
+    raw = os.getenv(
+        "RG_POLICY_PATH",
+        str(base / "Config_Files" / "resource_governor_policies.yaml"),
     )
+    return _resolve_policy_path(Path(raw))
 
 
 def _iter_route_map_policy_ids(route_map: Dict[str, Any]) -> Iterable[str]:
@@ -102,7 +128,11 @@ async def seed_db_policies_from_yaml(
             f"{missing_sorted}"
         )
     if not seed_all and referenced:
-        missing_in_db = sorted(pid for pid in referenced if not await admin.get_policy_record(pid))
+        missing_in_db: list[str] = []
+        for pid in sorted(referenced):
+            rec = await admin.get_policy_record(pid)
+            if not rec:
+                missing_in_db.append(pid)
         if missing_in_db:
             missing_sorted = ", ".join(missing_in_db)
             print(
@@ -142,7 +172,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return asyncio.run(
             seed_db_policies_from_yaml(
-                yaml_path=Path(args.yaml_path),
+                yaml_path=_resolve_policy_path(Path(args.yaml_path)),
                 seed_all=bool(args.seed_all),
             )
         )

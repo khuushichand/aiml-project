@@ -158,15 +158,14 @@ class CharacterRateLimiter:
         Check if user has exceeded rate limit using ResourceGovernor.
 
         When ResourceGovernor is enabled, this method delegates rate limiting to RG.
-        When RG is disabled, the method is permissive (no rate limiting applied).
+        When RG is disabled or unavailable, the legacy limiter (Redis or in-memory) is enforced.
 
         Args:
             user_id: User ID to check
             operation: Type of operation (for logging/tagging)
 
         Returns:
-            Tuple of (allowed, remaining_operations). When RG is disabled,
-            always returns (True, max_operations).
+            Tuple of (allowed, remaining_operations).
 
         Raises:
             HTTPException(429): If rate limit exceeded (RG denied the request)
@@ -236,6 +235,7 @@ class CharacterRateLimiter:
         return await self._check_legacy_rate_limit(user_id=user_id)
 
     async def _check_legacy_rate_limit(self, user_id: int) -> Tuple[bool, int]:
+        # Fallback enforcement when RG is disabled or cannot provide a decision.
         if not self.enabled:
             return True, self.max_operations
 

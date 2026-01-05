@@ -1,41 +1,13 @@
-import asyncio
-import os
-import sqlite3
-import time
-from pathlib import Path
-
 import pytest
 from fastapi.testclient import TestClient
 
-
-async def _await_audit_action(audit_db: Path, action: str, timeout_s: float = 5.0) -> int:
-    deadline = time.monotonic() + timeout_s
-    count = 0
-    while time.monotonic() < deadline:
-        with sqlite3.connect(str(audit_db)) as con:
-            cur = con.execute("SELECT COUNT(*) FROM audit_events WHERE action = ?", (action,))
-            count = cur.fetchone()[0]
-        if count >= 1:
-            break
-        await asyncio.sleep(0.05)
-    return count
-
-
-def _flush_audit_events(client: TestClient, user_id: int) -> None:
-    async def _flush(uid: int) -> None:
-        from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_or_create_audit_service_for_user_id
-
-        svc = await get_or_create_audit_service_for_user_id(uid)
-        await svc.flush()
-
-    if getattr(client, "portal", None) is not None:
-        client.portal.call(_flush, int(user_id))
+from tldw_Server_API.tests.helpers.audit_helpers import await_audit_action, flush_audit_events
 
 
 @pytest.mark.real_audit
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_org_membership_audit_events_postgres(tmp_path, real_audit_service, test_db_pool, monkeypatch):
+async def test_org_membership_audit_events_postgres(real_audit_service, test_db_pool):
     # Use Postgres pool from fixture
     pool = test_db_pool
 
@@ -109,35 +81,36 @@ async def test_org_membership_audit_events_postgres(tmp_path, real_audit_service
 
     app.dependency_overrides[get_auth_principal] = _principal_override
 
-    with TestClient(app) as client:
-        # Create org
-        r = client.post("/api/v1/admin/orgs", json={"name": "Audit Org PG Org"})
-        assert r.status_code == 200, r.text
-        org = r.json()
+    try:
+        with TestClient(app) as client:
+            # Create org
+            r = client.post("/api/v1/admin/orgs", json={"name": "Audit Org PG Org"})
+            assert r.status_code == 200, r.text
+            org = r.json()
 
-        # Add org member (org_member.add)
-        r = client.post(
-            f"/api/v1/admin/orgs/{org['id']}/members",
-            json={"user_id": int(target_id), "role": "member"},
-        )
-        assert r.status_code == 200, r.text
+            # Add org member (org_member.add)
+            r = client.post(
+                f"/api/v1/admin/orgs/{org['id']}/members",
+                json={"user_id": int(target_id), "role": "member"},
+            )
+            assert r.status_code == 200, r.text
 
-        # Update org member role (org_member.update)
-        r = client.patch(
-            f"/api/v1/admin/orgs/{org['id']}/members/{int(target_id)}",
-            json={"role": "admin"},
-        )
-        assert r.status_code == 200, r.text
+            # Update org member role (org_member.update)
+            r = client.patch(
+                f"/api/v1/admin/orgs/{org['id']}/members/{int(target_id)}",
+                json={"role": "admin"},
+            )
+            assert r.status_code == 200, r.text
 
-        # Remove org member (org_member.remove)
-        r = client.delete(
-            f"/api/v1/admin/orgs/{org['id']}/members/{int(target_id)}",
-        )
-        assert r.status_code == 200, r.text
+            # Remove org member (org_member.remove)
+            r = client.delete(
+                f"/api/v1/admin/orgs/{org['id']}/members/{int(target_id)}",
+            )
+            assert r.status_code == 200, r.text
 
-        _flush_audit_events(client, int(admin_id))
-
-    app.dependency_overrides.pop(get_auth_principal, None)
+            flush_audit_events(client, int(admin_id))
+    finally:
+        app.dependency_overrides.pop(get_auth_principal, None)
 
     # Verify audit events for the acting user in their per-user audit DB
     from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import shutdown_all_audit_services
@@ -148,5 +121,5 @@ async def test_org_membership_audit_events_postgres(tmp_path, real_audit_service
     assert audit_db.exists(), f"Audit DB not found: {audit_db}"
 
     for action in ("org_member.add", "org_member.update", "org_member.remove"):
-        cnt = await _await_audit_action(audit_db, action)
+        cnt = await await_audit_action(audit_db, action)
         assert cnt >= 1, f"Expected >=1 audit events for action {action}"

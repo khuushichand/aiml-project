@@ -410,7 +410,20 @@ async def _attach_api_key_metadata(
         if api_key_info.get("team_id") is not None:
             metadata["team_id"] = api_key_info.get("team_id")
 
+    _attach_rg_ingress_metadata(metadata, http_request)
     return metadata
+
+
+def _attach_rg_ingress_metadata(metadata: Dict[str, Any], http_request: Optional[Request]) -> None:
+    if not http_request:
+        return
+    try:
+        policy_id = getattr(http_request.state, "rg_policy_id", None)
+        if policy_id:
+            metadata["rg_ingress_enforced"] = True
+            metadata["rg_policy_id"] = str(policy_id)
+    except Exception:
+        pass
 
 
 async def require_user(
@@ -726,6 +739,7 @@ async def list_tools(
     catalog_id: Optional[int] = Query(None, description="Filter by tool catalog id"),
     user: Optional[TokenData] = Depends(get_current_user),
     _guard: None = Depends(enforce_http_security),
+    http_request: Request = None,
 ):
     """
     List available MCP tools.
@@ -755,6 +769,7 @@ async def list_tools(
             metadata["roles"] = user.roles
         if user.permissions:
             metadata["permissions"] = user.permissions
+    _attach_rg_ingress_metadata(metadata, http_request)
 
     response = await server.handle_http_request(
         request,
@@ -778,6 +793,7 @@ async def execute_tool(
     request: ToolExecutionRequest,
     user: TokenData = Depends(require_user),
     _guard: None = Depends(enforce_http_security),
+    http_request: Request = None,
 ):
     """
     Execute a specific tool (requires authentication).
@@ -805,6 +821,7 @@ async def execute_tool(
         metadata["roles"] = user.roles
     if user.permissions:
         metadata["permissions"] = user.permissions
+    _attach_rg_ingress_metadata(metadata, http_request)
 
     derived_user_id = _get_derived_user_id(user)
 
@@ -868,6 +885,7 @@ async def execute_tool(
 async def list_modules(
     user: Optional[TokenData] = Depends(get_current_user),
     _guard: None = Depends(enforce_http_security),
+    http_request: Request = None,
 ):
     """
     List registered MCP modules.
@@ -889,6 +907,7 @@ async def list_modules(
             metadata["roles"] = user.roles
         if user.permissions:
             metadata["permissions"] = user.permissions
+    _attach_rg_ingress_metadata(metadata, http_request)
 
     response = await server.handle_http_request(
         request,
@@ -911,6 +930,7 @@ async def list_modules(
 async def get_modules_health(
     principal: AuthPrincipal = Depends(require_permissions(SYSTEM_LOGS)),
     _guard: None = Depends(enforce_http_security),
+    http_request: Request = None,
 ):
     """
     Get detailed health status of all modules; requires `system.logs` permission (or admin).
@@ -928,6 +948,7 @@ async def get_modules_health(
         meta["roles"] = principal.roles
     if principal.permissions:
         meta["permissions"] = principal.permissions
+    _attach_rg_ingress_metadata(meta, http_request)
 
     response = await server.handle_http_request(request, user_id=principal.principal_id, metadata=meta)
 
@@ -946,6 +967,7 @@ async def get_modules_health(
 async def list_resources(
     user: Optional[TokenData] = Depends(get_current_user),
     _guard: None = Depends(enforce_http_security),
+    http_request: Request = None,
 ):
     """
     List available MCP resources.
@@ -967,6 +989,7 @@ async def list_resources(
             metadata["roles"] = user.roles
         if user.permissions:
             metadata["permissions"] = user.permissions
+    _attach_rg_ingress_metadata(metadata, http_request)
 
     response = await server.handle_http_request(
         request,
@@ -989,6 +1012,7 @@ async def list_resources(
 async def list_prompts(
     user: Optional[TokenData] = Depends(get_current_user),
     _guard: None = Depends(enforce_http_security),
+    http_request: Request = None,
 ):
     """
     List available MCP prompts.
@@ -1010,6 +1034,7 @@ async def list_prompts(
             metadata["roles"] = user.roles
         if user.permissions:
             metadata["permissions"] = user.permissions
+    _attach_rg_ingress_metadata(metadata, http_request)
 
     response = await server.handle_http_request(
         request,

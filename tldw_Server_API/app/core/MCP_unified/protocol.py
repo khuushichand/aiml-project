@@ -375,11 +375,18 @@ class MCPProtocol:
 
         start_ts = time.time()
         try:
-            # Check rate limit
-            if context.user_id:
-                await self.rate_limiter.check_rate_limit(f"user:{context.user_id}")
-            elif context.client_id:
-                await self.rate_limiter.check_rate_limit(f"client:{context.client_id}")
+            # Check rate limit (skip when ingress RG already enforced)
+            skip_rate_limit = False
+            try:
+                if context.metadata and context.metadata.get("rg_ingress_enforced"):
+                    skip_rate_limit = True
+            except Exception:
+                skip_rate_limit = False
+            if not skip_rate_limit:
+                if context.user_id:
+                    await self.rate_limiter.check_rate_limit(f"user:{context.user_id}")
+                elif context.client_id:
+                    await self.rate_limiter.check_rate_limit(f"client:{context.client_id}")
 
             # Validate JSON-RPC version
             if request.jsonrpc != "2.0":

@@ -689,6 +689,8 @@ class RateLimiter:
                 raise RateLimitExceeded(rg_decision.get("retry_after") or 1)
             return
 
+        _log_rg_mcp_fallback("rg_decision_unavailable")
+
         allowed, retry_after = await limiter.is_allowed(key)
         if not allowed:
             raise RateLimitExceeded(retry_after)
@@ -800,6 +802,74 @@ async def shutdown_rate_limiter() -> None:
 _rg_mcp_governor = None
 _rg_mcp_loader = None
 _rg_mcp_lock = asyncio.Lock()
+_rg_mcp_init_error: Optional[str] = None
+_rg_mcp_init_error_logged = False
+_rg_mcp_fallback_logged = False
+
+
+def _rg_mcp_context() -> Dict[str, str]:
+    policy_path = os.getenv(
+        "RG_POLICY_PATH",
+        "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
+    )
+    try:
+        policy_path_resolved = os.path.abspath(policy_path)
+    except Exception:
+        policy_path_resolved = policy_path
+    return {
+        "backend": os.getenv("RG_BACKEND", "memory"),
+        "policy_path": policy_path,
+        "policy_path_resolved": policy_path_resolved,
+        "policy_store": os.getenv("RG_POLICY_STORE", ""),
+        "policy_reload_enabled": os.getenv("RG_POLICY_RELOAD_ENABLED", ""),
+        "policy_reload_interval": os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", ""),
+        "cwd": os.getcwd(),
+    }
+
+
+def _log_rg_mcp_init_failure(exc: Exception) -> None:
+    global _rg_mcp_init_error, _rg_mcp_init_error_logged
+    _rg_mcp_init_error = repr(exc)
+    if _rg_mcp_init_error_logged:
+        return
+    _rg_mcp_init_error_logged = True
+    ctx = _rg_mcp_context()
+    logger.exception(
+        "MCP ResourceGovernor init failed; falling back to legacy limiter. "
+        "backend={backend} policy_path={policy_path} policy_path_resolved={policy_path_resolved} "
+        "policy_store={policy_store} reload_enabled={policy_reload_enabled} "
+        "reload_interval={policy_reload_interval} cwd={cwd}",
+        **ctx,
+    )
+
+
+def _log_rg_mcp_fallback(reason: str) -> None:
+    global _rg_mcp_fallback_logged
+    if _rg_mcp_fallback_logged:
+        return
+    _rg_mcp_fallback_logged = True
+    ctx = _rg_mcp_context()
+    logger.error(
+        "MCP ResourceGovernor unavailable; falling back to legacy limiter. "
+        "reason={} init_error={} backend={backend} policy_path={policy_path} "
+        "policy_path_resolved={policy_path_resolved} policy_store={policy_store} "
+        "reload_enabled={policy_reload_enabled} reload_interval={policy_reload_interval} cwd={cwd}",
+        reason,
+        _rg_mcp_init_error,
+        **ctx,
+    )
+
+
+def _rg_mcp_entity_from_key(key: str) -> str:
+    if not key:
+        return "entity:unknown"
+    try:
+        scope = key.split(":", 1)[0]
+        if scope in {"user", "client", "api_key", "ip", "service", "entity"}:
+            return key
+    except Exception:
+        pass
+    return f"client:{key}"
 
 
 def _rg_mcp_enabled() -> bool:
@@ -845,6 +915,7 @@ async def _get_mcp_rg_governor():
     if not _rg_mcp_enabled():
         return None
     if RGRequest is None or PolicyLoader is None:
+        _log_rg_mcp_fallback("rg_components_unavailable")
         return None
     if _rg_mcp_governor is not None:
         return _rg_mcp_governor
@@ -866,7 +937,7 @@ async def _get_mcp_rg_governor():
             _rg_mcp_governor = gov
             return gov
         except Exception as exc:  # pragma: no cover - optional
-            logger.debug(f"MCP RG governor init failed: {exc}")
+            _log_rg_mcp_init_failure(exc)
             return None
 
 
@@ -879,7 +950,7 @@ async def _maybe_enforce_with_rg_mcp(*, key: str, category: str) -> Optional[Dic
     try:
         decision, handle = await gov.reserve(
             RGRequest(
-                entity=f"client:{key}",
+                entity=_rg_mcp_entity_from_key(key),
                 categories={"requests": {"units": 1}},
                 tags={"policy_id": policy_id, "module": "mcp", "category": category},
             ),

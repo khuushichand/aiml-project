@@ -244,8 +244,8 @@ async def _get_audio_rg_governor():
     Lazily initialize a process-local ResourceGovernor instance for audio
     streams/jobs using the same configuration helpers as app.main.
 
-    On failure, returns None and callers either fail closed (when RG is enabled)
-    or treat concurrency limiting as disabled (when RG is disabled).
+    On failure, returns None and callers treat concurrency limiting as disabled
+    (fail-open), even when RG is enabled.
     """
     global _rg_audio_governor, _rg_audio_loader
     if not _rg_audio_enabled():
@@ -794,7 +794,10 @@ async def can_start_job(user_id: int) -> Tuple[bool, str]:
     """
     Determine whether a new concurrent audio job may be started for the given user and, if allowed, increment the active-job counter.
 
-    If a concurrency limit exists for the user's tier the function enforces it using Redis when available (falling back to an in-process counter). It also emits quota and active-job metrics. When the limit is exceeded the function does not increment the counter and reports a descriptive message.
+    If RG-based concurrency is available, the function enforces it and updates metrics. When RG is
+    enabled but unavailable or reserve fails, the function logs a fallback and allows the job
+    (fail-open, no concurrency tracking). When the limit is exceeded the function reports a
+    descriptive message.
 
     Returns:
         (bool, str): `True` and `"OK"` if the job may start and the active-job counter was incremented; `False` and an explanatory message like `"Concurrent job limit reached (<max>)"` if starting the job would exceed the user's concurrency limit.
@@ -883,7 +886,9 @@ async def can_start_stream(user_id: int) -> Tuple[bool, str]:
     """
     Determines whether the user may start a new concurrent audio stream and reserves a slot if allowed.
 
-    Attempts to allocate a concurrent-stream slot for the given user; if a slot is available the function records the reservation and returns success, otherwise it reports the denial reason.
+    Attempts to allocate a concurrent-stream slot for the given user; if a slot is available the
+    function records the reservation and returns success, otherwise it reports the denial reason.
+    When RG is enabled but unavailable or reserve fails, the function allows the stream (fail-open).
 
     Returns:
         (bool, str): `True` and `"OK"` if a slot was reserved and the stream may start, `False` and a human-readable reason (e.g., "Concurrent streams limit reached (<n>)") otherwise.
