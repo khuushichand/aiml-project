@@ -20,6 +20,7 @@ import numpy as np
 import onnxruntime as ort
 import requests
 from huggingface_hub import model_info  # Assuming this is used in _ensure_hf_revision
+from loguru import logger
 from pydantic import BaseModel, Field
 from prometheus_client import Counter, Gauge  # Assuming these are defined elsewhere or used directly
 # NOTE: Avoid importing heavy deps (torch, transformers) at module import time.
@@ -151,7 +152,7 @@ def _get_config_value(cfg, key: str, default):
     except TypeError:
         return cfg.get(key, default)
     except (AttributeError, KeyError, ValueError, configparser.Error) as exc:
-        logging.debug(f"Config read failed for {key}: {exc}")
+        logger.debug(f"Config read failed for {key}: {exc}")
         return default
 
 
@@ -184,7 +185,7 @@ def get_resource_limits():
             elif isinstance(config, dict):
                 embeddings_config = config.get("Embeddings")
         except (AttributeError, KeyError, TypeError, configparser.Error) as exc:
-            logging.debug(f"Embeddings resource limits: failed to access Embeddings section: {exc}")
+            logger.debug(f"Embeddings resource limits: failed to access Embeddings section: {exc}")
             embeddings_config = None
 
         return {
@@ -202,7 +203,7 @@ def get_resource_limits():
             ),
         }
     except (OSError, TypeError, ValueError, configparser.Error) as e:
-        logging.warning(f"Could not load resource limits from config: {e}. Using defaults.")
+        logger.warning(f"Could not load resource limits from config: {e}. Using defaults.")
         return {
             "max_models": DEFAULT_MAX_MODELS,
             "max_memory_gb": DEFAULT_MAX_MEMORY_GB,
@@ -439,10 +440,10 @@ def _log_rg_emb_server_init_failure(exc: Exception) -> None:
             return
         _rg_emb_server_init_error_logged = True
     ctx = _rg_emb_server_context()
-    logging.exception(
+    logger.exception(
         "Embeddings server ResourceGovernor init failed; falling back to legacy limiter. "
-        "backend=%s policy_path=%s policy_path_resolved=%s policy_store=%s "
-        "reload_enabled=%s reload_interval=%s cwd=%s",
+        "backend={} policy_path={} policy_path_resolved={} policy_store={} "
+        "reload_enabled={} reload_interval={} cwd={}",
         ctx["backend"],
         ctx["policy_path"],
         ctx["policy_path_resolved"],
@@ -460,10 +461,10 @@ def _log_rg_emb_server_fallback(reason: str) -> None:
             return
         _rg_emb_server_fallback_logged = True
     ctx = _rg_emb_server_context()
-    logging.error(
+    logger.error(
         "Embeddings server ResourceGovernor unavailable; falling back to legacy limiter. "
-        "reason=%s init_error=%s backend=%s policy_path=%s policy_path_resolved=%s "
-        "policy_store=%s reload_enabled=%s reload_interval=%s cwd=%s",
+        "reason={} init_error={} backend={} policy_path={} policy_path_resolved={} "
+        "policy_store={} reload_enabled={} reload_interval={} cwd={}",
         reason,
         _rg_emb_server_init_error,
         ctx["backend"],
