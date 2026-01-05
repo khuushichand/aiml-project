@@ -170,6 +170,16 @@ def _safe_log_format(record: dict) -> str:
     )
 
 
+def _safe_debug(message: str) -> None:
+    try:
+        logger.debug(message)
+    except Exception:
+        try:
+            sys.__stderr__.write(message + "\n")
+        except Exception:
+            pass
+
+
 class _StderrInterceptor:
     """Intercept writes to stderr and route through Loguru."""
 
@@ -295,8 +305,8 @@ def _redirect_external_loggers() -> None:
         warn_logger.handlers = [InterceptHandler()]
         warn_logger.propagate = False
         warn_logger.setLevel(0)
-    except Exception:
-        pass
+    except Exception as exc:
+        _safe_debug(f"Failed to configure warning logger interception: {exc}")
     # Pre-create known external loggers so they propagate to root interception.
     prefixes = (
         "kokoro",
@@ -312,8 +322,8 @@ def _redirect_external_loggers() -> None:
             ext_logger.handlers = []
             ext_logger.propagate = True
             ext_logger.setLevel(0)
-        except Exception:
-            pass
+        except Exception as exc:
+            _safe_debug(f"Failed to redirect logger '{name}': {exc}")
     # Sweep any dynamically-created external loggers.
     try:
         for lname, lgr in list(logging.root.manager.loggerDict.items()):
@@ -321,8 +331,8 @@ def _redirect_external_loggers() -> None:
                 lgr.handlers = []
                 lgr.propagate = True
                 lgr.setLevel(0)
-    except Exception:
-        pass
+    except Exception as exc:
+        _safe_debug(f"Failed to sweep external loggers for redirection: {exc}")
 
 
 def _install_stderr_redirect() -> None:
@@ -332,8 +342,8 @@ def _install_stderr_redirect() -> None:
         if isinstance(sys.stderr, _StderrInterceptor):
             return
         sys.stderr = _StderrInterceptor(sys.stderr)
-    except Exception:
-        pass
+    except Exception as exc:
+        _safe_debug(f"Failed to install stderr redirect: {exc}")
 
 # Reset Loguru and configure a single, thread-safe sink
 logger.remove()
@@ -490,13 +500,13 @@ _original_unwrapped_logger_add = _unwrap_logger_add(_original_logger_add)
 
 def _safe_logger_add(sink, *args, **kwargs):
     if not _caller_allowed_for_loguru_config():
+        _safe_debug("Blocked Loguru add from unauthorized caller")
         return None
     try:
         if hasattr(sink, "write") and not isinstance(sink, _SafeStreamWrapper):
             sink = _SafeStreamWrapper(sink)
-    except Exception:
-        # Fall back to original sink if inspection failed
-        pass
+    except Exception as exc:
+        _safe_debug(f"Failed to wrap Loguru sink; using original sink: {exc}")
     target = _unwrap_logger_add(_original_logger_add)
     return target(sink, *args, **kwargs)
 
@@ -552,6 +562,7 @@ _original_logger_configure = getattr(_ROOT_LOGGER, "_tldw_original_configure", N
 
 def _safe_logger_remove(sink_id=None):
     if not _caller_allowed_for_loguru_config():
+        _safe_debug("Blocked Loguru remove from unauthorized caller")
         return None
     target = getattr(_ROOT_LOGGER, "_tldw_original_remove", None)
     try:
@@ -567,6 +578,7 @@ def _safe_logger_remove(sink_id=None):
 
 def _safe_logger_configure(*args, **kwargs):
     if not _caller_allowed_for_loguru_config():
+        _safe_debug("Blocked Loguru configure from unauthorized caller")
         return None
     try:
         target = getattr(_ROOT_LOGGER, "_tldw_original_configure", None)
@@ -609,8 +621,9 @@ def _safe_logging_addHandler(self: logging.Logger, hdlr: logging.Handler) -> Non
             self.handlers = []
             self.propagate = True
             self.setLevel(0)
-        except Exception:
-            pass
+            _safe_debug(f"Dropped handler from stdlib logger '{self.name}' to preserve Loguru interception")
+        except Exception as exc:
+            _safe_debug(f"Failed to drop stdlib logger handlers for '{self.name}': {exc}")
 
 
 if logging.Logger.addHandler is not _safe_logging_addHandler:
@@ -638,23 +651,23 @@ def _reinstall_intercept_handlers():
     try:
         logging.root.handlers = [InterceptHandler()]
         logging.root.setLevel(0)
-    except Exception:
-        pass
+    except Exception as exc:
+        _safe_debug(f"Failed to reinstall root intercept handler: {exc}")
     # Replace handlers on all known loggers to avoid mixed formats
     try:
         for _lname, _logger in list(logging.root.manager.loggerDict.items()):
             if isinstance(_logger, logging.Logger):
                 _logger.handlers = [InterceptHandler()]
                 _logger.propagate = False
-    except Exception:
-        pass
+    except Exception as exc:
+        _safe_debug(f"Failed to reinstall intercept handlers for stdlib loggers: {exc}")
     for _name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
         try:
             _lg = logging.getLogger(_name)
             _lg.handlers = [InterceptHandler()]
             _lg.propagate = False
-        except Exception:
-            pass
+        except Exception as exc:
+            _safe_debug(f"Failed to reinstall intercept handler for logger '{_name}': {exc}")
     _redirect_external_loggers()
 
 

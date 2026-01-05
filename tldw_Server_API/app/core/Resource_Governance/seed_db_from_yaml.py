@@ -49,6 +49,9 @@ def _default_policy_path() -> Path:
     return _resolve_policy_path(Path(raw))
 
 
+_DEFAULT_POLICY_PATH = _default_policy_path()
+
+
 def _iter_route_map_policy_ids(route_map: Dict[str, Any]) -> Iterable[str]:
     by_path = route_map.get("by_path") or {}
     if isinstance(by_path, dict):
@@ -107,10 +110,12 @@ async def seed_db_policies_from_yaml(
     created = 0
     skipped_existing = 0
     missing_in_yaml: list[str] = []
+    known_in_db: Set[str] = set()
 
     for policy_id in sorted(to_seed):
         rec = await admin.get_policy_record(policy_id)
         if rec:
+            known_in_db.add(policy_id)
             skipped_existing += 1
             continue
         payload = policies.get(policy_id)
@@ -121,6 +126,7 @@ async def seed_db_policies_from_yaml(
             raise ValueError(f"Policy payload for {policy_id!r} must be a mapping")
         await admin.upsert_policy(policy_id, payload, version=1)
         created += 1
+        known_in_db.add(policy_id)
 
     print(f"RG DB seed complete: created={created} skipped_existing={skipped_existing} yaml={yaml_path}")
     if missing_in_yaml:
@@ -130,11 +136,7 @@ async def seed_db_policies_from_yaml(
             f"{missing_sorted}"
         )
     if not seed_all and referenced:
-        missing_in_db: list[str] = []
-        for pid in sorted(referenced):
-            rec = await admin.get_policy_record(pid)
-            if not rec:
-                missing_in_db.append(pid)
+        missing_in_db = [pid for pid in sorted(referenced) if pid not in known_in_db]
         if missing_in_db:
             missing_sorted = ", ".join(missing_in_db)
             print(
@@ -157,7 +159,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--yaml",
         dest="yaml_path",
         type=Path,
-        default=_default_policy_path(),
+        default=_DEFAULT_POLICY_PATH,
         help="Path to resource_governor_policies.yaml (defaults to RG_POLICY_PATH or repo default).",
     )
     p.add_argument(
@@ -172,9 +174,12 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
+        yaml_path = args.yaml_path
+        if yaml_path != _DEFAULT_POLICY_PATH:
+            yaml_path = _resolve_policy_path(yaml_path)
         return asyncio.run(
             seed_db_policies_from_yaml(
-                yaml_path=_resolve_policy_path(Path(args.yaml_path)),
+                yaml_path=yaml_path,
                 seed_all=bool(args.seed_all),
             )
         )

@@ -54,6 +54,7 @@ from tldw_Server_API.app.core.Embeddings.audit_adapter import (
     log_model_evicted,
     log_memory_limit_exceeded,
 )
+from tldw_Server_API.app.core.config import rg_policy_path, resolve_repo_relative_path
 
 #
 ########################################################################################################################
@@ -381,14 +382,15 @@ _rg_emb_server_fallback_logged = False
 
 
 def _rg_emb_server_context() -> Dict[str, str]:
-    policy_path = os.getenv(
-        "RG_POLICY_PATH",
-        "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
-    )
-    try:
-        policy_path_resolved = os.path.abspath(policy_path)
-    except Exception:
-        policy_path_resolved = policy_path
+    policy_path = os.getenv("RG_POLICY_PATH")
+    if policy_path:
+        try:
+            policy_path_resolved = resolve_repo_relative_path(policy_path)
+        except (OSError, TypeError, ValueError):
+            policy_path_resolved = policy_path
+    else:
+        policy_path_resolved = rg_policy_path()
+        policy_path = policy_path_resolved
     return {
         "backend": os.getenv("RG_BACKEND", "memory"),
         "policy_path": policy_path,
@@ -492,10 +494,7 @@ async def _get_embeddings_server_rg_governor():
                 default_policy_loader()
                 if default_policy_loader
                 else PolicyLoader(
-                    os.getenv(
-                        "RG_POLICY_PATH",
-                        "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
-                    ),
+                    rg_policy_path(),
                     PolicyReloadConfig(
                         enabled=True,
                         interval_sec=int(

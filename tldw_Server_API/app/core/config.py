@@ -2111,8 +2111,8 @@ def rg_policy_path() -> str:
         try:
             if not Path(resolved).exists():
                 _log_warning(f"rg_policy_path: policy file not found at {resolved}")
-        except OSError as exc:
-            _log_debug(f"rg_policy_path: failed to stat policy file at {resolved}: {exc}")
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            _log_debug(f"rg_policy_path: unable to check existence of {resolved}: {exc}")
         return resolved
     try:
         cp = load_comprehensive_config()
@@ -2121,8 +2121,8 @@ def rg_policy_path() -> str:
         try:
             if not Path(resolved).exists():
                 _log_warning(f"rg_policy_path: policy file not found at {resolved}")
-        except OSError as exc:
-            _log_debug(f"rg_policy_path: failed to stat policy file at {resolved}: {exc}")
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            _log_debug(f"rg_policy_path: unable to check existence of {resolved}: {exc}")
         return resolved
     except (FileNotFoundError, configparser.Error, OSError, RuntimeError, ValueError) as exc:
         _log_debug(f"rg_policy_path: config load failed, using default: {exc}")

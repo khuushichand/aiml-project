@@ -214,8 +214,8 @@ class CharacterRateLimiter:
                             legacy=legacy_dec,
                             rg=rg_dec,
                         )
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001 - shadow comparison is best-effort
+                    logger.debug("Character chat shadow mismatch check failed: {}", exc)
 
             if not rg_allowed:
                 retry_after = rg_decision.get("retry_after") or 60
@@ -905,8 +905,8 @@ def get_character_rate_limiter() -> CharacterRateLimiter:
             if configured_value is not None:
                 try:
                     return bool(configured_value)
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001 - config values may be non-coercible
+                    logger.debug("Character rate limit enabled flag coercion failed: {}", exc)
             return fallback
 
         single_user_mode = bool(settings.get("SINGLE_USER_MODE", False))

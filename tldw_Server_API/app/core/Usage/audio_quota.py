@@ -145,41 +145,43 @@ _rg_audio_init_error_logged = False
 _rg_audio_fallback_logged = False
 
 
-def _rg_audio_context() -> Dict[str, str]:
-    def _safe_value(name: str, func, fallback: str) -> str:
-        if not callable(func):
-            return fallback
-        try:
-            return func()
-        except (AttributeError, OSError, TypeError, ValueError, configparser.Error) as exc:
-            logger.debug(f"RG audio context failed to resolve {name}: {exc}")
-            return fallback
+def _safe_config_or_env(name: str, config_fn, env_key: str, default: str = "") -> str:
+    """Safely retrieve a config value or fall back to an environment variable."""
+    if not callable(config_fn):
+        return os.getenv(env_key, default)
+    try:
+        return str(config_fn())
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError, configparser.Error) as exc:
+        logger.debug(f"RG audio context failed to resolve {name}: {exc}")
+        return os.getenv(env_key, default)
 
-    backend = _safe_value("backend", rg_backend, os.getenv("RG_BACKEND", "memory"))  # type: ignore[arg-type]
-    store = _safe_value("policy_store", rg_policy_store, os.getenv("RG_POLICY_STORE", ""))  # type: ignore[arg-type]
-    policy_path = _safe_value(  # type: ignore[arg-type]
+
+def _rg_audio_context() -> Dict[str, str]:
+    backend = _safe_config_or_env("backend", rg_backend, "RG_BACKEND", "memory")  # type: ignore[arg-type]
+    store = _safe_config_or_env("policy_store", rg_policy_store, "RG_POLICY_STORE", "")  # type: ignore[arg-type]
+    policy_path = _safe_config_or_env(
         "policy_path",
         rg_policy_path,
-        os.getenv(
-            "RG_POLICY_PATH",
-            "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
-        ),
+        "RG_POLICY_PATH",
+        "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
     )
     try:
         policy_path_resolved = os.path.abspath(policy_path)
     except OSError as exc:
         logger.debug(f"RG audio context failed to resolve policy_path_resolved: {exc}")
         policy_path_resolved = policy_path
-    reload_enabled = _safe_value(  # type: ignore[arg-type]
+    reload_enabled = _safe_config_or_env(
         "policy_reload_enabled",
         rg_policy_reload_enabled,
-        os.getenv("RG_POLICY_RELOAD_ENABLED", ""),
-    )
-    reload_interval = _safe_value(  # type: ignore[arg-type]
+        "RG_POLICY_RELOAD_ENABLED",
+        "",
+    )  # type: ignore[arg-type]
+    reload_interval = _safe_config_or_env(
         "policy_reload_interval",
         rg_policy_reload_interval_sec,
-        os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", ""),
-    )
+        "RG_POLICY_RELOAD_INTERVAL_SEC",
+        "",
+    )  # type: ignore[arg-type]
     try:
         cwd = os.getcwd()
     except OSError as exc:
@@ -356,8 +358,8 @@ def _get_stream_ttl_seconds() -> int:
         try:
             v = int(val_env)
             return max(30, min(3600, v))
-        except Exception:
-            pass
+        except (TypeError, ValueError) as exc:
+            logger.debug(f"Audio stream TTL: invalid AUDIO_STREAM_TTL_SECONDS='{val_env}': {exc}")
     # 2) Config default
     try:
         from tldw_Server_API.app.core.config import load_comprehensive_config  # lazy import
@@ -365,11 +367,12 @@ def _get_stream_ttl_seconds() -> int:
         if cfg and cfg.has_section('Audio-Quota'):
             try:
                 v = int(cfg.get('Audio-Quota', 'stream_ttl_seconds', fallback='120'))
-            except Exception:
+            except (TypeError, ValueError, configparser.Error) as exc:
+                logger.debug(f"Audio stream TTL: invalid config value: {exc}")
                 v = 120
             return max(30, min(3600, v))
-    except Exception:
-        pass
+    except (OSError, RuntimeError, configparser.Error, TypeError, ValueError) as exc:
+        logger.debug(f"Audio stream TTL: failed to load config: {exc}")
     # 3) Hard default
     return 120
 
@@ -843,6 +846,7 @@ async def can_start_job(user_id: int) -> Tuple[bool, str]:
         # Fail-open is intentional: if RG is temporarily unavailable, don't deny audio jobs.
         # Operators control overall service availability via infrastructure decisions, not exceptions here.
         except Exception as e:
+            logger.debug(f"RG reserve failed for jobs, failing open: {e}")
             await _log_rg_audio_fallback("rg_reserve_failed_jobs")
             return True, "OK"
 
@@ -927,6 +931,7 @@ async def can_start_stream(user_id: int) -> Tuple[bool, str]:
             _metrics_set_gauge("audio_streaming_active", float(len(handles)), {"user_id": str(int(user_id))})
             return True, "OK"
         except Exception as e:
+            logger.debug(f"RG reserve failed for streams, failing open: {e}")
             await _log_rg_audio_fallback("rg_reserve_failed_streams")
             return True, "OK"
 
@@ -1053,8 +1058,8 @@ def _get_job_ttl_seconds() -> int:
         try:
             v = int(val_env)
             return max(30, min(3600, v))
-        except Exception:
-            pass
+        except (TypeError, ValueError) as exc:
+            logger.debug(f"Audio job TTL: invalid AUDIO_JOB_TTL_SECONDS='{val_env}': {exc}")
     try:
         from tldw_Server_API.app.core.config import load_comprehensive_config  # lazy import
 
@@ -1062,11 +1067,12 @@ def _get_job_ttl_seconds() -> int:
         if cfg and cfg.has_section("Audio-Quota"):
             try:
                 v = int(cfg.get("Audio-Quota", "job_ttl_seconds", fallback="600"))
-            except Exception:
+            except (TypeError, ValueError, configparser.Error) as exc:
+                logger.debug(f"Audio job TTL: invalid config value: {exc}")
                 v = 600
             return max(30, min(3600, v))
-    except Exception:
-        pass
+    except (OSError, RuntimeError, configparser.Error, TypeError, ValueError) as exc:
+        logger.debug(f"Audio job TTL: failed to load config: {exc}")
     return 600
 
 
@@ -1172,8 +1178,10 @@ def _apply_tier_overrides_from_config(base: Dict[str, Dict[str, Optional[float]]
                         else:
                             try:
                                 merged[tier][key] = float(val) if key == "daily_minutes" else int(val)
-                            except Exception:
-                                pass
+                            except (TypeError, ValueError) as exc:
+                                logger.debug(
+                                    f"Audio-Quota override parse failed for {tier}.{key}={val!r}: {exc}"
+                                )
     except Exception as e:
         logger.debug(f"Audio-Quota config overrides failed: {e}")
     return merged
