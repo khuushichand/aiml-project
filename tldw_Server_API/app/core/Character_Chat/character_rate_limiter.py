@@ -18,6 +18,11 @@ try:  # pragma: no cover - environment-dependent
 except Exception:  # ImportError or environment issues
     redis = None  # type: ignore
 
+if redis is not None:
+    REDIS_EXCEPTIONS = (redis.RedisError, ConnectionError, TimeoutError)
+else:
+    REDIS_EXCEPTIONS = (ConnectionError, TimeoutError)
+
 from fastapi import HTTPException, status
 from loguru import logger
 
@@ -256,7 +261,7 @@ class CharacterRateLimiter:
                 return allowed, remaining
             except HTTPException:
                 raise
-            except Exception as e:
+            except REDIS_EXCEPTIONS as e:
                 logger.warning("Redis rate limit check failed, falling back to memory: {}", e)
                 # Fall through to memory-based limiting
 
@@ -643,7 +648,7 @@ def _rg_character_context() -> Dict[str, str]:
     )
     try:
         policy_path_resolved = os.path.abspath(policy_path)
-    except Exception:
+    except (OSError, ValueError):
         policy_path_resolved = policy_path
     return {
         "backend": os.getenv("RG_BACKEND", "memory"),

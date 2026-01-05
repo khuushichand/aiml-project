@@ -415,6 +415,7 @@ async def _attach_api_key_metadata(
 
 
 def _attach_rg_ingress_metadata(metadata: Dict[str, Any], http_request: Optional[Request]) -> None:
+    """Attach RG ingress metadata when policy has been enforced upstream."""
     if not http_request:
         return
     try:
@@ -422,8 +423,12 @@ def _attach_rg_ingress_metadata(metadata: Dict[str, Any], http_request: Optional
         if policy_id:
             metadata["rg_ingress_enforced"] = True
             metadata["rg_policy_id"] = str(policy_id)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug(
+            "Failed to read rg_policy_id from request state",
+            error=str(exc),
+            exc_info=True,
+        )
 
 
 async def require_user(

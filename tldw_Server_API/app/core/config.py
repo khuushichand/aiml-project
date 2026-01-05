@@ -532,8 +532,6 @@ def load_settings():
             return default
         return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
-    implicit_feedback_enabled_value = _to_bool(os.getenv("IMPLICIT_FEEDBACK_ENABLED"), True)
-
     def _safe_int(value: object, default: int) -> int:
         try:
             if value is None:
@@ -1214,7 +1212,7 @@ def load_settings():
                 ))(load_comprehensive_config())
             )
         ))(),
-        "IMPLICIT_FEEDBACK_ENABLED": implicit_feedback_enabled_value,
+        "IMPLICIT_FEEDBACK_ENABLED": implicit_feedback_enabled(default=True),
 
         # RAG LLM reranker configuration (provider/model)
         "RAG_LLM_RERANKER_PROVIDER": (lambda _env, _cp: (
@@ -1609,7 +1607,7 @@ def load_comprehensive_config():
             )
             _env_default(
                 'IMPLICIT_FEEDBACK_ENABLED',
-                config_parser.get('RAG', 'implicit_feedback_enabled', fallback='true')
+                str(implicit_feedback_enabled(default=True, config_parser=config_parser)).lower()
             )
     except Exception as _rag_env_err:
         _log_debug(f"RAG env propagation skipped: {_rag_env_err}")
@@ -1818,7 +1816,10 @@ def rag_agentic_cache_ttl_sec(default: int = 600) -> int:
         return default
 
 
-def implicit_feedback_enabled(default: bool = True) -> bool:
+def implicit_feedback_enabled(
+    default: bool = True,
+    config_parser: Optional[configparser.ConfigParser] = None,
+) -> bool:
     """
     Check if implicit feedback collection is enabled.
 
@@ -1832,13 +1833,24 @@ def implicit_feedback_enabled(default: bool = True) -> bool:
     """
     v = os.getenv("IMPLICIT_FEEDBACK_ENABLED")
     if v is None:
-        try:
-            cp = load_comprehensive_config()
-            v = cp.get("RAG", "implicit_feedback_enabled", fallback=str(default)) if cp else str(default)
-        except (FileNotFoundError, configparser.Error) as exc:
-            _log_debug(
-                f"implicit_feedback_enabled: config load failed, falling back to default={default}: {exc}"
-            )
+        cp = config_parser
+        if cp is None:
+            try:
+                cp = load_comprehensive_config()
+            except (FileNotFoundError, configparser.Error) as exc:
+                _log_debug(
+                    f"implicit_feedback_enabled: config load failed, falling back to default={default}: {exc}"
+                )
+                cp = None
+        if cp is not None:
+            try:
+                v = cp.get("RAG", "implicit_feedback_enabled", fallback=str(default))
+            except (configparser.Error, AttributeError, TypeError, ValueError) as exc:
+                _log_debug(
+                    f"implicit_feedback_enabled: config read failed, falling back to default={default}: {exc}"
+                )
+                v = str(default)
+        else:
             v = str(default)
     return _as_bool(v, default)
 
@@ -2057,50 +2069,64 @@ def rg_redis_fail_mode(default: str = "fallback_memory") -> str:
     return s if s in ("fail_closed", "fail_open", "fallback_memory") else default
 
 
+def rg_repo_root() -> Path:
+    """Return the repository root used for RG policy path resolution."""
+    return Path(__file__).resolve().parents[3]
+
+
+def resolve_repo_relative_path(path: str, base: Optional[Path] = None) -> str:
+    """
+    Resolve a path relative to the repository root when it is not absolute.
+
+    Falls back to the original path if resolution fails, logging a debug message.
+    """
+    try:
+        p = Path(path).expanduser()
+        if not p.is_absolute():
+            root = base or rg_repo_root()
+            p = (root / p).resolve()
+        return str(p)
+    except (OSError, RuntimeError, ValueError) as exc:
+        _log_debug(f"resolve_repo_relative_path: failed to resolve '{path}': {exc}")
+        return path
+
+
 def rg_policy_path_default() -> str:
     try:
-        base = Path(__file__).resolve().parents[3]
+        base = rg_repo_root()
         primary = base / "Config_Files" / "resource_governor_policies.yaml"
         if primary.exists():
             return str(primary)
         fallback = base / "tldw_Server_API" / "Config_Files" / "resource_governor_policies.yaml"
         return str(fallback)
-    except Exception:
+    except (OSError, RuntimeError, ValueError) as exc:
+        _log_debug(f"rg_policy_path_default: failed to resolve default policy path: {exc}")
         return "resource_governor_policies.yaml"
 
 
 def rg_policy_path() -> str:
-    def _resolve_repo_relative(path: str) -> str:
-        try:
-            p = Path(path).expanduser()
-            if not p.is_absolute():
-                base = Path(__file__).resolve().parents[3]
-                p = (base / p).resolve()
-            return str(p)
-        except Exception:
-            return path
-
     v = os.getenv("RG_POLICY_PATH")
     if v:
-        resolved = _resolve_repo_relative(v)
+        resolved = resolve_repo_relative_path(v)
         try:
             if not Path(resolved).exists():
                 _log_warning(f"rg_policy_path: policy file not found at {resolved}")
-        except Exception:
-            pass
+        except OSError as exc:
+            _log_debug(f"rg_policy_path: failed to stat policy file at {resolved}: {exc}")
         return resolved
     try:
         cp = load_comprehensive_config()
         p = cp.get("ResourceGovernor", "policy_path", fallback=rg_policy_path_default()) if cp else rg_policy_path_default()
-        resolved = _resolve_repo_relative(p)
+        resolved = resolve_repo_relative_path(p)
         try:
             if not Path(resolved).exists():
                 _log_warning(f"rg_policy_path: policy file not found at {resolved}")
-        except Exception:
-            pass
+        except OSError as exc:
+            _log_debug(f"rg_policy_path: failed to stat policy file at {resolved}: {exc}")
         return resolved
-    except Exception:
-        return _resolve_repo_relative(rg_policy_path_default())
+    except (FileNotFoundError, configparser.Error, OSError, RuntimeError, ValueError) as exc:
+        _log_debug(f"rg_policy_path: config load failed, using default: {exc}")
+        return resolve_repo_relative_path(rg_policy_path_default())
 
 
 @lru_cache(maxsize=1)

@@ -421,8 +421,8 @@ class DistributedRateLimiter(BaseRateLimiter):
         try:
             from ..monitoring.metrics import get_metrics_collector
             get_metrics_collector().record_rate_limit_fallback("redis")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to record Redis fallback metric: {}", exc)
 
     async def _use_fallback(self, key: str) -> tuple[bool, int]:
         limiter = await self._fallback_limiter()
@@ -867,8 +867,8 @@ def _rg_mcp_entity_from_key(key: str) -> str:
         scope = key.split(":", 1)[0]
         if scope in {"user", "client", "api_key", "ip", "service", "entity"}:
             return key
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to parse entity key '{}': {}", key, exc)
     return f"client:{key}"
 
 

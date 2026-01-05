@@ -6,6 +6,7 @@
 from __future__ import annotations
 #
 import asyncio
+import configparser
 import os
 import time
 import threading
@@ -146,7 +147,8 @@ def get_resource_limits():
                 embeddings_config = config["Embeddings"]
             elif isinstance(config, dict):
                 embeddings_config = config.get("Embeddings")
-        except Exception:
+        except (AttributeError, KeyError, TypeError, configparser.Error) as exc:
+            logging.debug(f"Embeddings resource limits: failed to access Embeddings section: {exc}")
             embeddings_config = None
 
         def _get_value(cfg, key: str, default):
@@ -156,19 +158,20 @@ def get_resource_limits():
                 return cfg.get(key, fallback=default)
             except TypeError:
                 return cfg.get(key, default)
-            except Exception:
+            except (AttributeError, KeyError, ValueError, configparser.Error) as exc:
+                logging.debug(f"Embeddings resource limits: failed to read {key}: {exc}")
                 return default
 
         def _as_int(value, default: int) -> int:
             try:
                 return int(value)
-            except Exception:
+            except (TypeError, ValueError):
                 return default
 
         def _as_float(value, default: float) -> float:
             try:
                 return float(value)
-            except Exception:
+            except (TypeError, ValueError):
                 return default
 
         return {
@@ -176,7 +179,7 @@ def get_resource_limits():
             "max_memory_gb": _as_float(_get_value(embeddings_config, "max_model_memory_gb", 8), 8.0),
             "lru_ttl_seconds": _as_int(_get_value(embeddings_config, "model_lru_ttl_seconds", 3600), 3600),
         }
-    except Exception as e:
+    except (OSError, TypeError, ValueError, configparser.Error) as e:
         logging.warning(f"Could not load resource limits from config: {e}. Using defaults.")
         return {
             "max_models": 3,

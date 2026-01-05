@@ -380,7 +380,11 @@ class MCPProtocol:
             try:
                 if context.metadata and context.metadata.get("rg_ingress_enforced"):
                     skip_rate_limit = True
-            except Exception:
+            except Exception as exc:
+                log.debug(
+                    "Failed to read rg_ingress_enforced from metadata; rate limit will be enforced",
+                    error=str(exc),
+                )
                 skip_rate_limit = False
             if not skip_rate_limit:
                 if context.user_id:

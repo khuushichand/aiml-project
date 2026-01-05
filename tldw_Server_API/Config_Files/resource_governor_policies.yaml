@@ -28,6 +28,10 @@ templates:
     requests: { rpm: 120, burst: 1.2 }
     scopes: [global, user, api_key, ip]
     fail_mode: fallback_memory
+  mcp_base: &mcp_base
+    requests: { rpm: 60, burst: 1.0 }
+    scopes: [global, user, client, api_key]
+    fail_mode: fallback_memory  # acceptable local over-admission during outages
 
 policies:
   # Core defaults for endpoints without explicit module-level policies.
@@ -43,19 +47,14 @@ policies:
 
   # MCP ingestion/read paths
   mcp.ingestion:
-    requests: { rpm: 60, burst: 1.0 }
-    scopes: [global, user, client, api_key]
-    fail_mode: fallback_memory  # acceptable local over-admission during outages
+    <<: *mcp_base
 
   mcp.default:
-    requests: { rpm: 60, burst: 1.0 }
-    scopes: [global, user, client, api_key]
-    fail_mode: fallback_memory
+    <<: *mcp_base
 
   mcp.read:
-    requests: { rpm: 120, burst: 1.0 }
-    scopes: [global, user, client, api_key]
-    fail_mode: fallback_memory
+    <<: *mcp_base
+    requests: { rpm: 120, burst: 1.0 }  # Higher limit for read ops
 
   # AuthNZ guardrails (login, reset-password, etc.)
   # NOTE: These policies are used by module-level RG integrations (not ingress route_map).

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Set
 
 import yaml
+from loguru import logger
 
 from tldw_Server_API.app.core.Resource_Governance.policy_admin import AuthNZPolicyAdmin
 
@@ -14,7 +15,8 @@ from tldw_Server_API.app.core.Resource_Governance.policy_admin import AuthNZPoli
 def _resolve_policy_path(path: Path) -> Path:
     try:
         resolved = path.expanduser()
-    except Exception:
+    except Exception as exc:
+        logger.opt(exception=exc).debug("Failed to expand RG policy path: {}", path)
         return path
     if resolved.exists():
         return resolved
@@ -23,18 +25,18 @@ def _resolve_policy_path(path: Path) -> Path:
     if not resolved.is_absolute():
         try:
             candidates.append((base / resolved).resolve())
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.opt(exception=exc).debug("Failed to resolve RG policy candidate from {}", resolved)
     name = resolved.name or "resource_governor_policies.yaml"
     candidates.append(base / "Config_Files" / name)
     candidates.append(base / "tldw_Server_API" / "Config_Files" / name)
     for candidate in candidates:
         try:
             if candidate.exists():
-                print(f"RG policy file not found at {resolved}; using {candidate}")
+                logger.info("RG policy file not found at {}; using {}", resolved, candidate)
                 return candidate
-        except Exception:
-            continue
+        except Exception as exc:
+            logger.opt(exception=exc).debug("Failed to stat RG policy candidate {}", candidate)
     return resolved
 
 
