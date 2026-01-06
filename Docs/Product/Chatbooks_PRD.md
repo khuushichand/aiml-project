@@ -138,7 +138,7 @@ Team Facilitator and Compliance Officer / Admin personas operate within this per
    - Per content-type binary size limits define what qualifies as a small/attached binary for bundling in v1; these limits are enforced during export and recorded in the manifest to make bundling decisions auditable.
    - Missing or inconsistent references (for example, manifests referring to media or embeddings that are not present in the archive) are treated as validation errors and surfaced as per-item failures in job results rather than being silently dropped.
    - Evaluation exports respect a configurable per-run row cap (`CHATBOOKS_EVAL_EXPORT_MAX_ROWS`, default 200). When truncation occurs, both manifest entries and API responses flag `truncated: true` and record the applied `max_rows`, and the export returns continuation data so clients can resume the same chatbook export rather than generating multiple chatbooks.
-   - Rate limiting (default 5 exports/minute and 5 imports/minute per user) via SlowAPI limiter; configurable overrides for privileged roles and service accounts.
+   - Rate limiting (default 5 exports/minute and 5 imports/minute per user) via RG ingress policies; configurable overrides for privileged roles and service accounts.
 
 ## 8. Non-Functional Requirements
 

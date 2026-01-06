@@ -23,10 +23,6 @@ from fastapi import (
     status,
     UploadFile
 )
-# API Rate Limiter/Caching via Redis
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.middleware import SlowAPIMiddleware
-from slowapi.util import get_remote_address
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user

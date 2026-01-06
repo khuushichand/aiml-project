@@ -36,7 +36,7 @@ admin-panel/
 ├── components/                   # React components
 │   ├── ui/                      # UI components (button, card, input, etc.)
 │   ├── Sidebar.tsx              # Navigation sidebar
-│   └── ProtectedRoute.tsx       # Authentication wrapper
+│   └── PermissionGuard.tsx      # Route and permission gating
 ├── lib/                         # Utility libraries
 │   ├── auth.ts                  # Authentication logic
 │   ├── api-client.ts            # API client for backend
@@ -189,7 +189,7 @@ All components are built with Tailwind CSS and follow the Shadcn design system:
 ### Layout Components
 
 - **Sidebar**: Navigation menu with active state and logout
-- **ProtectedRoute**: HOC for authenticating routes
+- **PermissionGuard**: Route and permission gating
 
 ## Styling
 

@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 from typing import List, Union, Optional, Dict, Any, Tuple
 from enum import Enum
 import numpy as np
-from functools import lru_cache, wraps
+from functools import lru_cache
 import atexit
 import os
 import uuid
@@ -85,8 +85,6 @@ from tldw_Server_API.app.core.Embeddings.circuit_breaker import (
 )
 
 # Rate limiting
-from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
-
 # Monitoring
 from prometheus_client import Counter, Histogram, Gauge
 import redis.asyncio as aioredis
@@ -950,19 +948,6 @@ def get_or_create_circuit_breaker(provider: str) -> CircuitBreaker:
 
 embedding_cache = TTLCache()
 connection_manager = ConnectionPoolManager()
-
-# Helper to conditionally apply rate limiting
-def apply_rate_limit(limit_string: str):
-    """No-op by default; enable via env EMBEDDINGS_RATE_LIMIT=on"""
-    def decorator(f):
-        @wraps(f)
-        async def wrapper(*args, **kwargs):
-            if os.getenv("EMBEDDINGS_RATE_LIMIT", "off").lower() == "on":
-                limited_func = limiter.limit(limit_string)(f)
-                return await limited_func(*args, **kwargs)
-            return await f(*args, **kwargs)
-        return wrapper
-    return decorator
 
 @asynccontextmanager
 async def _embeddings_router_lifespan(app):
@@ -1844,7 +1829,6 @@ async def create_embeddings_batch_async(
     summary="Create embeddings (enhanced with circuit breaker)",
     dependencies=[Depends(rbac_rate_limit("embeddings.create"))]
 )
-@apply_rate_limit("5/second")
 async def create_embedding_endpoint(
     request: Request,
     embedding_request: CreateEmbeddingRequest = Body(...),

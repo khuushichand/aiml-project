@@ -152,7 +152,7 @@ The following additional step types are available and surfaced via `/step-types`
 
 - AuthNZ: All HTTP endpoints use standard API auth; WS requires a JWT and enforces run-owner equality (subject must match `run.user_id`).
 - Tenant Isolation: Read operations enforce tenant boundaries, and HTTP reads now enforce run-owner or admin (consistent with WS).
-- Rate Limits: Ad-hoc runs and run-saved endpoints are rate-limited via `slowapi` if available.
+- Rate Limits: Ad-hoc runs and run-saved endpoints are rate-limited via RG policies.
   - Tests/CI can bypass limits by setting `WORKFLOWS_DISABLE_RATE_LIMITS=true` (auto-detected under pytest).
 - Egress Controls: Webhook step checks URL via `is_url_allowed` to block private IPs/SSRF; optional HMAC signature header.
 - Artifact Downloads: Only `file://` URIs; size and MIME allowlists enforced; basic path containment checks.
@@ -247,7 +247,7 @@ In single-user mode, the fixed user is exposed with admin-like claims for compat
   - `POST /api/v1/workflows/runs/{run_id}/artifacts/verify-batch` with `{items:[{artifact_id, expected_sha256?}]}` returns calculated hashes and mismatch status. If `expected_sha256` is not provided, the recorded checksum is used when present.
 
 - Quotas and rate limits:
-  - Endpoint rate-limits (slowapi) remain as before and are disabled in tests.
+  - Endpoint rate-limits (RG) remain as before and are disabled in tests.
   - Per-user quotas at run start (saved and ad-hoc):
     - Burst: `WORKFLOWS_QUOTA_BURST_PER_MIN` (default 60/min).
     - Daily: `WORKFLOWS_QUOTA_DAILY_PER_USER` (default 1000/day).
@@ -354,7 +354,7 @@ Ordering is stable with a tie-breaker (`run_id` for runs; `event_id` for events)
   - SQLite DB path (fallback): `Databases/workflows.db` (config key `workflows_path`).
 
 - Rate limits and quotas (disabled in tests automatically)
-  - Endpoint rate limits (slowapi): disabled with `WORKFLOWS_DISABLE_RATE_LIMITS=true`.
+  - Endpoint rate limits (RG): disabled by turning off RG or using permissive policies in tests.
   - Quotas at run start: `WORKFLOWS_QUOTA_BURST_PER_MIN` (60), `WORKFLOWS_QUOTA_DAILY_PER_USER` (1000), disable with `WORKFLOWS_DISABLE_QUOTAS=true`.
 
 - Engine concurrency

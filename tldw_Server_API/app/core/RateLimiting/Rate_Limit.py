@@ -174,7 +174,7 @@ def _resolve_policy_id(request: Request, override: Optional[str] = None) -> str:
                     return str(by_tag[tag])
     except Exception:
         pass
-    return os.getenv("RG_RATE_LIMIT_POLICY_ID", "slowapi.default")
+    return os.getenv("RG_RATE_LIMIT_POLICY_ID", "core.default")
 
 
 def _build_rate_limit_headers(limit: Optional[int], remaining: Optional[int], retry_after: Optional[int]) -> Dict[str, str]:

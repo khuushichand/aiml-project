@@ -1,9 +1,6 @@
 'use client';
 
-// API configuration - supports tldw_server API
-const API_HOST = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-const API_VERSION = process.env.NEXT_PUBLIC_API_VERSION || 'v1';
-const API_URL = `${API_HOST.replace(/\/$/, '')}/api/${API_VERSION}`;
+import { buildApiUrl } from './api-config';
 
 // In-memory storage for single-user API key to avoid clear-text persistence
 let inMemoryApiKey: string | null = null;
@@ -75,7 +72,7 @@ export async function loginWithPassword(
     formData.append('username', username);
     formData.append('password', password);
 
-    const response = await fetch(`${API_URL}/auth/login`, {
+    const response = await fetch(buildApiUrl('/auth/login'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -107,7 +104,7 @@ export async function loginWithPassword(
 export async function loginWithApiKey(apiKey: string): Promise<boolean> {
   try {
     // Validate the API key by calling a protected endpoint
-    const response = await fetch(`${API_URL}/users/me`, {
+    const response = await fetch(buildApiUrl('/users/me'), {
       method: 'GET',
       headers: {
         'X-API-KEY': apiKey,
@@ -133,7 +130,7 @@ export async function loginWithApiKey(apiKey: string): Promise<boolean> {
  */
 async function fetchAndStoreUser(token: string): Promise<AdminUser | null> {
   try {
-    const response = await fetch(`${API_URL}/users/me`, {
+    const response = await fetch(buildApiUrl('/users/me'), {
       headers: {
         'Authorization': `Bearer ${token}`,
       },
@@ -159,7 +156,7 @@ export async function logout(): Promise<void> {
     const token = getJWTToken();
     if (token) {
       // Try to invalidate token on server (optional - tldw_server may not have this endpoint)
-      await fetch(`${API_URL}/auth/logout`, {
+      await fetch(buildApiUrl('/auth/logout'), {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -177,55 +174,4 @@ export async function logout(): Promise<void> {
       sessionStorage.removeItem('x_api_key');
     }
   }
-}
-
-/**
- * Get current user from localStorage
- */
-export function getCurrentUser(): AdminUser | null {
-  if (typeof window === 'undefined') return null;
-  const user = localStorage.getItem('user');
-  return user ? JSON.parse(user) : null;
-}
-
-/**
- * Check if user is authenticated (either JWT or API key)
- */
-export function isAuthenticated(): boolean {
-  return !!(getJWTToken() || getApiKey());
-}
-
-/**
- * Check if current user has admin role
- */
-export function isAdmin(): boolean {
-  const user = getCurrentUser();
-  return user?.role === 'admin' || user?.role === 'owner' || user?.role === 'super_admin';
-}
-
-/**
- * Check if current user is owner/super_admin
- */
-export function isOwner(): boolean {
-  const user = getCurrentUser();
-  return user?.role === 'owner' || user?.role === 'super_admin';
-}
-
-/**
- * Get auth headers for API requests
- */
-export function getAuthHeaders(): Record<string, string> {
-  const headers: Record<string, string> = {};
-
-  const token = getJWTToken();
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-
-  const apiKey = getApiKey();
-  if (apiKey) {
-    headers['X-API-KEY'] = apiKey;
-  }
-
-  return headers;
 }

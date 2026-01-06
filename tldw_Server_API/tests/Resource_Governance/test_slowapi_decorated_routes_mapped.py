@@ -25,19 +25,17 @@ def _resolve_policy_id_for_path(by_path: dict[str, str], path: str) -> str | Non
 
 
 @pytest.mark.asyncio
-async def test_slowapi_decorated_routes_have_rg_route_map_entries():
+async def test_rg_route_map_covers_rate_limited_paths():
     """
-    When RGSimpleMiddleware is installed, SlowAPI's key_func intentionally
-    returns None, making decorators effectively no-ops. Ensure every known
-    SlowAPI-decorated endpoint is covered by RG route_map so limits remain
-    enforced.
+    Ensure every ingress-limited endpoint is covered by RG route_map so
+    request caps remain enforced via Resource Governor.
     """
     loader = PolicyLoader(_repo_policy_path(), PolicyReloadConfig(enabled=False, interval_sec=999))
     await loader.load_once()
     snap = loader.get_snapshot()
     by_path = dict((snap.route_map or {}).get("by_path") or {})
 
-    # Minimal representative set of SlowAPI-decorated routes:
+    # Minimal representative set of ingress-limited routes:
     # - audio.py (multiple endpoints) -> /api/v1/audio/*
     # - chatbooks.py export/import/preview/download -> explicit mappings
     # - media/listing.py search -> /api/v1/media/*
@@ -53,5 +51,5 @@ async def test_slowapi_decorated_routes_have_rg_route_map_entries():
 
     for path in decorated_paths:
         policy_id = _resolve_policy_id_for_path(by_path, path)
-        assert policy_id is not None, f"RG route_map missing coverage for SlowAPI-decorated path: {path}"
+        assert policy_id is not None, f"RG route_map missing coverage for ingress path: {path}"
         assert loader.get_policy(policy_id) is not None, f"RG policy_id referenced by route_map is missing: {policy_id}"

@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.Resource_Governance.middleware_simple import RGSimpleMiddleware
 
 
 pytestmark = pytest.mark.integration
@@ -14,22 +15,22 @@ def client_with_user(monkeypatch):
     async def override_user():
         return User(id=913, username="wluser", email=None, is_active=True)
 
-    # Avoid TEST_MODE so limiter can be enabled; we also patch the helper to force enable
+    # Avoid TEST_MODE so RG policies are applied consistently.
     base_dir = Path.cwd() / "Databases" / "test_user_dbs_rate_limits"
     base_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
     # Ensure TEST_MODE not set
     monkeypatch.delenv("TEST_MODE", raising=False)
     monkeypatch.delenv("TLDW_TEST_MODE", raising=False)
+    policy_path = Path(__file__).resolve().parents[2] / "Config_Files" / "resource_governor_policies.yaml"
+    monkeypatch.setenv("RG_POLICY_PATH", str(policy_path))
 
     from fastapi import FastAPI
     from tldw_Server_API.app.core.config import API_V1_PREFIX
     from tldw_Server_API.app.api.v1.endpoints import watchlists as wl
 
-    # Force-enable limits by patching the helper to False inside the module
-    monkeypatch.setattr(wl, "_limits_disabled_now", lambda: False, raising=True)
-
     app = FastAPI()
+    app.add_middleware(RGSimpleMiddleware)
     app.include_router(wl.router, prefix=f"{API_V1_PREFIX}")
     app.dependency_overrides[get_request_user] = override_user
     with TestClient(app) as client:

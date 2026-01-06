@@ -120,47 +120,6 @@ def _normalize_filters_payload(raw_json: Optional[str]) -> Optional[Dict[str, An
     return None
 
 
-# ---- Rate limit helpers (test-aware) ----
-import functools
-from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter as _limiter
-
-
-def _limits_disabled_now() -> bool:
-    try:
-        return (
-            os.getenv("WATCHLISTS_DISABLE_RATE_LIMITS", "").strip().lower() in {"1", "true", "yes", "on"}
-            or os.getenv("PYTEST_CURRENT_TEST") is not None
-            or os.getenv("TLDW_TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
-            or os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
-        )
-    except Exception:
-        return False
-
-
-def _optional_limit(rate: str):
-    def _decorator(func):
-        if _limiter is None or _limits_disabled_now():
-            return func
-        wrapped = _limiter.limit(rate)(func)
-
-        @functools.wraps(func)
-        async def _inner(*args, **kwargs):  # type: ignore
-            if _limits_disabled_now():
-                return await func(*args, **kwargs)
-            req = kwargs.get("request", None)
-            try:
-                from starlette.requests import Request as _StarReq  # type: ignore
-                if not isinstance(req, _StarReq):
-                    return await func(*args, **kwargs)
-            except Exception:
-                return await func(*args, **kwargs)
-            return await wrapped(*args, **kwargs)
-
-        return _inner
-
-    return _decorator
-
-
 # ---- Helpers ----
 _EMAIL_TAG_RE = re.compile(r"<[^>]+>")
 
@@ -675,7 +634,6 @@ async def export_sources_opml(
 
 
 @router.post("/sources/import", response_model=SourcesImportResponse, summary="Import sources from OPML")
-@_optional_limit("10/minute")
 async def import_sources_opml(
     request: Request,
     file: UploadFile = File(...),
@@ -720,26 +678,7 @@ async def import_sources_opml(
         except Exception as exc:
             items.append(SourcesImportItem(url=url_str, name=e.name, status="skipped", error=str(exc)))
             skipped += 1
-    # Best-effort rate-limit header
-    if not _limits_disabled_now():
-        try:
-            if response is not None:
-                response.headers.setdefault("X-RateLimit-Limit", "10/minute")
-                return SourcesImportResponse(items=items, total=(created + skipped + errors), created=created, skipped=skipped, errors=errors)
-        except Exception:
-            pass
-        try:
-            from fastapi.responses import JSONResponse
-            payload = {
-                "items": [i.model_dump() if hasattr(i, "model_dump") else dict(i) for i in items],
-                "total": (created + skipped + errors),
-                "created": created,
-                "skipped": skipped,
-                "errors": errors,
-            }
-            return JSONResponse(content=payload, headers={"X-RateLimit-Limit": "10/minute"})
-        except Exception:
-            pass
+    return SourcesImportResponse(items=items, total=(created + skipped + errors), created=created, skipped=skipped, errors=errors)
     return SourcesImportResponse(items=items, total=(created + skipped + errors), created=created, skipped=skipped, errors=errors)
 
 # (moved above /sources/{source_id})
@@ -1662,7 +1601,6 @@ async def delete_job(
 
 
 @router.patch("/jobs/{job_id}/filters", response_model=WatchlistFiltersPayload, summary="Replace job filters")
-@_optional_limit("30/minute")
 async def replace_job_filters(
     request: Request,
     job_id: int = Path(..., ge=1),
@@ -1681,17 +1619,10 @@ async def replace_job_filters(
         parsed = json.loads(updated.job_filters_json or "{}") if getattr(updated, "job_filters_json", None) else {"filters": []}
     except Exception:
         parsed = {"filters": []}
-    # Best-effort rate-limit header for visibility
-    try:
-        if response is not None and not _limits_disabled_now():
-            response.headers.setdefault("X-RateLimit-Limit", "30/minute")
-    except Exception:
-        pass
     return WatchlistFiltersPayload(**parsed) if isinstance(parsed, dict) else WatchlistFiltersPayload(filters=[])
 
 
 @router.post("/jobs/{job_id}/filters:add", response_model=WatchlistFiltersPayload, summary="Append job filters")
-@_optional_limit("30/minute")
 async def append_job_filters(
     request: Request,
     job_id: int = Path(..., ge=1),
@@ -1708,11 +1639,6 @@ async def append_job_filters(
     to_add = payload.filters or []
     new_filters = existing + [f.model_dump() if hasattr(f, "model_dump") else f for f in to_add]
     db.set_job_filters(job_id, {"filters": new_filters})
-    try:
-        if response is not None and not _limits_disabled_now():
-            response.headers.setdefault("X-RateLimit-Limit", "30/minute")
-    except Exception:
-        pass
     return WatchlistFiltersPayload(filters=[WatchlistFilter(**f) if isinstance(f, dict) else f for f in new_filters])
 
 

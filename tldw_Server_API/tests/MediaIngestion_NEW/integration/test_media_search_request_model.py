@@ -1,12 +1,7 @@
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from slowapi import _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
-from slowapi.middleware import SlowAPIMiddleware
-
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter as _global_limiter
 from tldw_Server_API.app.api.v1.endpoints.media import listing as listing_endpoint
 from tldw_Server_API.app.core.config import API_V1_PREFIX
 
@@ -23,9 +18,6 @@ class _FakeMediaDB:
 def media_search_client(monkeypatch):
     monkeypatch.setenv("TEST_MODE", "true")
     app = FastAPI()
-    app.state.limiter = _global_limiter
-    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-    app.add_middleware(SlowAPIMiddleware)
     app.include_router(listing_endpoint.router, prefix=f"{API_V1_PREFIX}/media")
     app.dependency_overrides[get_media_db_for_user] = lambda: _FakeMediaDB()
     with TestClient(app) as client:

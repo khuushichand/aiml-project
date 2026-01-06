@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import ProtectedRoute from '@/components/ProtectedRoute';
+import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -12,6 +12,7 @@ import { Pagination } from '@/components/ui/pagination';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import { RefreshCw, Wallet } from 'lucide-react';
 import { api } from '@/lib/api-client';
+import { formatDateTime } from '@/lib/format';
 import { useOrgContext } from '@/components/OrgContextSwitcher';
 import { useUrlMultiState } from '@/lib/use-url-state';
 
@@ -175,13 +176,14 @@ const formatTokens = (value?: number | null) => {
   return value.toLocaleString();
 };
 
-const formatDate = (value?: string | null) => {
-  if (!value) return '—';
-  return new Date(value).toLocaleString('en-US', {
+const formatBudgetDate = (value?: string | null) => formatDateTime(value, {
+  fallback: '—',
+  locale: 'en-US',
+  options: {
     dateStyle: 'medium',
     timeStyle: 'short',
-  });
-};
+  },
+});
 
 const formatPercentList = (values: number[]) =>
   values.map((value) => `${value}%`).join(', ');
@@ -314,7 +316,7 @@ export default function BudgetsPage() {
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
 
   return (
-    <ProtectedRoute>
+    <PermissionGuard variant="route" requireAuth>
       <ResponsiveLayout>
         <div className="p-4 lg:p-8">
           <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -400,7 +402,7 @@ export default function BudgetsPage() {
                             <TableCell>{renderBudgetCaps(item)}</TableCell>
                             <TableCell className="text-sm">{formatThresholds(item.budgets?.alert_thresholds)}</TableCell>
                             <TableCell className="text-sm">{formatEnforcement(item.budgets?.enforcement_mode)}</TableCell>
-                            <TableCell className="text-sm">{formatDate(item.updated_at)}</TableCell>
+                            <TableCell className="text-sm">{formatBudgetDate(item.updated_at)}</TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -423,6 +425,6 @@ export default function BudgetsPage() {
           </Card>
         </div>
       </ResponsiveLayout>
-    </ProtectedRoute>
+    </PermissionGuard>
   );
 }

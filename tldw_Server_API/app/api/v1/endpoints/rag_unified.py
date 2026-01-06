@@ -65,12 +65,6 @@ from tldw_Server_API.app.core.Billing.enforcement import LimitCategory
 router = APIRouter(prefix="/api/v1/rag", tags=["rag-unified"])
 
 # Use central limiter instance for consistency across the app
-from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
-
-limit_search = limiter.limit("30/minute")
-limit_read = limiter.limit("60/minute")
-limit_batch = limiter.limit("10/minute")
-
 
 async def _log_rag_queries_for_org(
     request_raw: Request,

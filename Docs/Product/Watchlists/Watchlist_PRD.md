@@ -222,7 +222,7 @@ Concurrency & Scheduling
 
 ## 15) Security & Compliance
 - Respect robots.txt by default; explicit opt-out shows warning
-- Rate limiting with slowapi or internal limiter for endpoints that trigger runs
+- Rate limiting with Resource Governor (RG) for endpoints that trigger runs
 - Input validation for URLs/types; sanitize selectors; size limits on responses
 - Never log secrets; redact URLs with tokens if any
 

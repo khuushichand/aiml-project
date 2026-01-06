@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import ProtectedRoute from '@/components/ProtectedRoute';
+import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,6 +16,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import { ArrowLeft, Key, Save, Building2, Users, Shield, Monitor, RefreshCw, Trash2 } from 'lucide-react';
 import { api, ApiError } from '@/lib/api-client';
+import { formatDateTime } from '@/lib/format';
 import { canEditFromMemberships } from '@/lib/permissions';
 import { User } from '@/types';
 import Link from 'next/link';
@@ -283,10 +284,8 @@ export default function UserDetailPage() {
     }
   };
 
-  const formatDate = (dateStr?: string) => {
-    if (!dateStr) return 'Never';
-    return new Date(dateStr).toLocaleString();
-  };
+  const formatDate = (dateStr?: string) =>
+    formatDateTime(dateStr, { fallback: 'Never' });
 
   const formatStorage = (usedMb: number, quotaMb: number) => {
     const percentage = quotaMb > 0 ? (usedMb / quotaMb) * 100 : 0;
@@ -299,20 +298,20 @@ export default function UserDetailPage() {
 
   if (loading) {
     return (
-      <ProtectedRoute>
+      <PermissionGuard variant="route" requireAuth>
         <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             <div className="text-center text-muted-foreground py-8">Loading user...</div>
           </div>
         </ResponsiveLayout>
-      </ProtectedRoute>
+      </PermissionGuard>
     );
   }
 
   if (!user) {
     if (!isAuthorized) {
       return (
-        <ProtectedRoute>
+        <PermissionGuard variant="route" requireAuth>
           <ResponsiveLayout>
             <div className="p-4 lg:p-8">
               <Alert variant="destructive">
@@ -324,11 +323,11 @@ export default function UserDetailPage() {
               </Button>
             </div>
           </ResponsiveLayout>
-        </ProtectedRoute>
+        </PermissionGuard>
       );
     }
     return (
-      <ProtectedRoute>
+      <PermissionGuard variant="route" requireAuth>
         <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             <Alert variant="destructive">
@@ -340,14 +339,14 @@ export default function UserDetailPage() {
             </Button>
           </div>
         </ResponsiveLayout>
-      </ProtectedRoute>
+      </PermissionGuard>
     );
   }
 
   const storage = formatStorage(user.storage_used_mb || 0, user.storage_quota_mb || 0);
 
   return (
-    <ProtectedRoute>
+    <PermissionGuard variant="route" requireAuth>
       <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             {/* Header */}
@@ -687,6 +686,6 @@ export default function UserDetailPage() {
             </div>
           </div>
       </ResponsiveLayout>
-    </ProtectedRoute>
+    </PermissionGuard>
   );
 }

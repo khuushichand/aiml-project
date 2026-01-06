@@ -22,7 +22,7 @@ def client(tmp_path_factory):
     db_path = tmp_dir / "ChaChaNotes.db"
     db_instance = CharactersRAGDB(db_path=str(db_path), client_id="chatbooks-cancel-test")
 
-    # Ensure SlowAPI limiter bypasses tests
+    # Keep tests permissive by disabling rate limiting
     os.environ["TEST_MODE"] = "true"
 
     async def override_user():

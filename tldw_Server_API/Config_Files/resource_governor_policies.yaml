@@ -57,7 +57,7 @@ policies:
     requests: { rpm: 120, burst: 1.0 }  # Higher limit for read ops
 
   # AuthNZ guardrails (login, reset-password, etc.)
-  # NOTE: These policies are used by module-level RG integrations (not ingress route_map).
+  # Applied by RG ingress via /api/v1/auth* route_map entries.
   authnz.default:
     requests: { rpm: 60, burst: 1.0 }
     scopes: [global, entity]
@@ -83,11 +83,6 @@ policies:
     minutes: { daily_cap: 120, rounding: ceil }
     scopes: [user, api_key, ip]
     fail_mode: fail_closed
-
-  # SlowAPI façade defaults (ingress IP-based when auth scopes unavailable)
-  slowapi.default:
-    requests: { rpm: 300, burst: 2.0 }
-    scopes: [ip]
 
   # Character Chat / Characters module (legacy per-user limiter compat)
   character_chat.default:
@@ -160,14 +155,14 @@ policies:
     requests: { rpm: 60, burst: 1.2 }
     scopes: [user, api_key]
 
-  # Chatbooks import/export endpoints (SlowAPI compat → RG).
+  # Chatbooks import/export endpoints (legacy ingress compat → RG).
   # Covers `/api/v1/chatbooks/*` used for conversation backup/restore and bulk
   # user-data transfer (export/import). Limits are intentionally conservative
   # (5 rpm, no burst) to prevent accidental or abusive bulk operations that
   # can create heavy DB/file I/O and large payloads. Preview/download are
   # slightly higher to support iterative validation and retrieval of prepared
   # artifacts. Include `ip` in scope as an additional safety valve for shared
-  # API keys and to align with legacy SlowAPI behavior.
+  # API keys and to align with legacy ingress behavior.
   chatbooks.export:
     requests: { rpm: 5, burst: 1.0 }
     scopes: [user, api_key, ip]
@@ -269,7 +264,6 @@ route_map:
     mcp-catalogs-scope: mcp.default
     mcp.ingestion: mcp.ingestion
     embeddings_server: embeddings_server.default
-    slowapi: slowapi.default
     character_chat: character_chat.default
     web_scraping: web_scraping.default
     workflows: workflows.default

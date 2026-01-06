@@ -75,7 +75,7 @@ Quick commands:
 **Goal**: When `RG_ENABLED=1`, RG is the sole enforcer and legacy paths do not double-enforce.
 
 - [x] Global RG middleware enablement uses `RG_ENABLED` only (no legacy `RG_ENABLE_*` aliases).
-- [x] Audio SlowAPI key function becomes RG-aware to prevent SlowAPI double-enforcement under RG.
+- [x] Audio ingress now relies on RG only; legacy ingress limiter path removed to prevent double-enforcement.
 - [x] MCP shadow mismatch comparisons use `peek_allowed` (no legacy consumption) and `TokenBucketRateLimiter.peek_allowed` is side-effect free.
 - [x] Audit remaining RG-first modules for any legacy limiter “shadow” evaluation that writes/consumes counters in a way that could surprise operators:
   - [x] Chat: `tldw_Server_API/app/core/Chat/rate_limiter.py`

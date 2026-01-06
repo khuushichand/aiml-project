@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import ProtectedRoute from '@/components/ProtectedRoute';
+import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
@@ -161,18 +161,18 @@ export default function TeamDetailPage() {
 
   if (loading) {
     return (
-      <ProtectedRoute>
+      <PermissionGuard variant="route" requireAuth>
         <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             <div className="text-center text-muted-foreground py-8">Loading...</div>
           </div>
         </ResponsiveLayout>
-      </ProtectedRoute>
+      </PermissionGuard>
     );
   }
 
   return (
-    <ProtectedRoute>
+    <PermissionGuard variant="route" requireAuth>
       <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             {/* Header */}
@@ -361,6 +361,6 @@ export default function TeamDetailPage() {
             </Card>
           </div>
       </ResponsiveLayout>
-    </ProtectedRoute>
+    </PermissionGuard>
   );
 }

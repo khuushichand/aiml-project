@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import ProtectedRoute from '@/components/ProtectedRoute';
+import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import { api } from '@/lib/api-client';
+import { formatDateTime } from '@/lib/format';
 import { RefreshCw, Trash2 } from 'lucide-react';
 
 type MaintenanceState = {
@@ -105,12 +106,8 @@ const parseEmailList = (value: string): ParsedList<string> => {
   return { values, invalid };
 };
 
-const formatDate = (value?: string | null) => {
-  if (!value) return '—';
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleString();
-};
+const formatFlagDate = (value?: string | null) =>
+  formatDateTime(value, { fallback: '—' });
 
 export default function FlagsPage() {
   const confirm = useConfirm();
@@ -328,7 +325,7 @@ export default function FlagsPage() {
   const isRefreshing = maintenanceLoading || flagLoading;
 
   return (
-    <ProtectedRoute>
+    <PermissionGuard variant="route" requireAuth>
       <ResponsiveLayout>
         <div className="flex flex-col gap-6 p-6">
           <div className="flex items-center justify-between">
@@ -357,7 +354,7 @@ export default function FlagsPage() {
                 <Label htmlFor="maintenance-enabled">Enabled</Label>
                 {maintenance?.updated_at && (
                   <Badge variant="outline" className="ml-2">
-                    Updated {formatDate(maintenance.updated_at)}
+                    Updated {formatFlagDate(maintenance.updated_at)}
                   </Badge>
                 )}
               </div>
@@ -573,7 +570,7 @@ export default function FlagsPage() {
                                 ? `Org ${flag.org_id}`
                                 : `User ${flag.user_id}`}
                           </TableCell>
-                          <TableCell>{formatDate(flag.updated_at)}</TableCell>
+                          <TableCell>{formatFlagDate(flag.updated_at)}</TableCell>
                           <TableCell>
                             <details className="text-xs text-muted-foreground">
                               <summary className="cursor-pointer">
@@ -586,7 +583,7 @@ export default function FlagsPage() {
                                       {entry.enabled ? 'Enabled' : 'Disabled'}
                                     </div>
                                     <div>
-                                      {formatDate(entry.timestamp)}{' '}
+                                      {formatFlagDate(entry.timestamp)}{' '}
                                       {entry.actor ? `· ${entry.actor}` : ''}
                                     </div>
                                     {entry.note ? <div>Note: {entry.note}</div> : null}
@@ -614,6 +611,6 @@ export default function FlagsPage() {
           </Card>
         </div>
       </ResponsiveLayout>
-    </ProtectedRoute>
+    </PermissionGuard>
   );
 }

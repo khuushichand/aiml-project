@@ -235,7 +235,7 @@ Tip: These views are intended for admin triage only and reflect the same data re
 
 ### CI Focused Suites (rate-limiter on)
 
-- Ensure global SlowAPI middleware is active (unset `TEST_MODE`/`TESTING`).
+- Ensure RG ingress is active (`RG_ENABLED=1`) and tests are not in TEST_MODE.
 - Run focused Watchlists tests that assert headers and pagination metadata:
   - `python -m pytest -q tldw_Server_API/tests/Watchlists/test_rate_limit_headers_real.py`
   - `python -m pytest -q tldw_Server_API/tests/Watchlists/test_runs_csv_export.py tldw_Server_API/tests/Watchlists/test_runs_csv_has_more_header.py`

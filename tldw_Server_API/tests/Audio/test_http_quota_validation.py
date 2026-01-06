@@ -11,7 +11,7 @@ def test_http_file_size_limit_exceeded(monkeypatch, bypass_api_limits):
     from tldw_Server_API.app.main import app
     # Disable Resource Governor middleware entirely for this test
     # Apply bypass for RG middleware and per-route limiter
-    ctx = bypass_api_limits(app, limiters=(audio_ep.limiter,))
+    ctx = bypass_api_limits(app)
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     settings = get_settings()
 
@@ -46,7 +46,7 @@ def test_http_concurrent_jobs_cap(monkeypatch, bypass_api_limits):
         return False, "Concurrent job limit reached (1)"
 
     monkeypatch.setattr(audio_ep, "can_start_job", _reject)
-    ctx = bypass_api_limits(app, limiters=(audio_ep.limiter,))
+    ctx = bypass_api_limits(app)
 
     # Small valid content under size limit
     content = b"0" * (64 * 1024)

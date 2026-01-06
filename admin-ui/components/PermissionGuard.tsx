@@ -4,6 +4,8 @@ import { createContext, useCallback, useContext, useEffect, useState, ReactNode 
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api-client';
 import { User } from '@/types';
+import { hasRoleAccess, isAdminRole, isSuperAdminRole } from '@/lib/roles';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 
 // UI gating only; backend must enforce authorization and never trust client permissions.
 interface PermissionContextType {
@@ -58,15 +60,15 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
       setUser(userData);
 
       // UI-only role hints. Backend authorization must enforce real permissions.
-      // Extract role
-      const userRoles = userData.role ? [userData.role] : [];
+      const userRole = userData.role || '';
+      const userRoles = userRole ? [userRole] : [];
       setRoles(userRoles);
 
       const derivedPermissions: string[] = [];
 
-      if (userRoles.includes('super_admin') || userRoles.includes('owner')) {
+      if (isSuperAdminRole(userRole)) {
         derivedPermissions.push('*'); // Wildcard for all permissions
-      } else if (userRoles.includes('admin')) {
+      } else if (userRole === 'admin') {
         derivedPermissions.push(
           'read:users', 'write:users',
           'read:orgs', 'write:orgs',
@@ -74,7 +76,7 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
           'read:api_keys', 'write:api_keys',
           'read:audit', 'read:config'
         );
-      } else if (userRoles.includes('member')) {
+      } else if (userRole === 'member') {
         derivedPermissions.push('read:users', 'read:orgs', 'read:teams');
       }
 
@@ -112,8 +114,9 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
   };
 
   const hasRole = (role: string | string[]): boolean => {
-    const checkRoles = Array.isArray(role) ? role : [role];
-    return checkRoles.some((r) => roles.includes(r));
+    const currentRole = roles[0];
+    const requiredRoles = Array.isArray(role) ? role : [role];
+    return hasRoleAccess(currentRole, requiredRoles);
   };
 
   const hasAnyPermission = (perms: string[]): boolean => {
@@ -126,13 +129,9 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
     return perms.every((p) => permissions.includes(p));
   };
 
-  const isAdmin = (): boolean => {
-    return hasRole(['admin', 'super_admin', 'owner']);
-  };
+  const isAdmin = (): boolean => isAdminRole(roles[0]);
 
-  const isSuperAdmin = (): boolean => {
-    return hasRole(['super_admin', 'owner']);
-  };
+  const isSuperAdmin = (): boolean => isSuperAdminRole(roles[0]);
 
   return (
     <PermissionContext.Provider
@@ -165,6 +164,9 @@ interface PermissionGuardProps {
   role?: string | string[];
   fallback?: ReactNode;
   showLoading?: boolean;
+  requireAuth?: boolean;
+  redirectTo?: string;
+  variant?: 'inline' | 'route';
 }
 
 export function PermissionGuard({
@@ -175,24 +177,65 @@ export function PermissionGuard({
   role,
   fallback = null,
   showLoading = false,
+  requireAuth = false,
+  redirectTo = '/login',
+  variant = 'inline',
 }: PermissionGuardProps) {
-  const { hasPermission, hasAnyPermission, hasAllPermissions, hasRole, loading } = usePermissions();
+  const { hasPermission, hasAnyPermission, hasAllPermissions, hasRole, loading, user } = usePermissions();
+  const router = useRouter();
 
-  if (loading && showLoading) {
-    return <div className="animate-pulse bg-muted h-8 rounded" />;
-  }
+  useEffect(() => {
+    if (!loading && requireAuth && !user && redirectTo) {
+      router.push(redirectTo);
+    }
+  }, [loading, requireAuth, user, redirectTo, router]);
+
+  const renderRouteLoading = () => (
+    <div className="flex h-screen items-center justify-center">
+      <div className="text-muted-foreground">Loading...</div>
+    </div>
+  );
+
+  const renderRouteDenied = () => (
+    <div className="flex h-screen items-center justify-center p-8">
+      <Alert variant="destructive" className="max-w-md">
+        <AlertDescription>
+          You do not have permission to access this page.
+        </AlertDescription>
+      </Alert>
+    </div>
+  );
 
   if (loading) {
+    if (variant === 'route') {
+      return renderRouteLoading();
+    }
+    if (showLoading) {
+      return <div className="animate-pulse bg-muted h-8 rounded" />;
+    }
     return null;
+  }
+
+  if (requireAuth && !user) {
+    if (variant === 'route') {
+      return renderRouteLoading();
+    }
+    return <>{fallback}</>;
   }
 
   // Check role first if specified
   if (role && !hasRole(role)) {
+    if (variant === 'route') {
+      return renderRouteDenied();
+    }
     return <>{fallback}</>;
   }
 
   // Check single permission
   if (permission && !hasPermission(permission)) {
+    if (variant === 'route') {
+      return renderRouteDenied();
+    }
     return <>{fallback}</>;
   }
 
@@ -203,6 +246,9 @@ export function PermissionGuard({
       : hasAnyPermission(requiredPermissions);
 
     if (!hasAccess) {
+      if (variant === 'route') {
+        return renderRouteDenied();
+      }
       return <>{fallback}</>;
     }
   }
@@ -270,7 +316,7 @@ interface AdminOnlyProps {
 
 export function AdminOnly({ children, fallback = null }: AdminOnlyProps) {
   return (
-    <PermissionGuard role={['admin', 'super_admin', 'owner']} fallback={fallback}>
+    <PermissionGuard role="admin" fallback={fallback}>
       {children}
     </PermissionGuard>
   );
@@ -279,7 +325,7 @@ export function AdminOnly({ children, fallback = null }: AdminOnlyProps) {
 // Utility component for super-admin-only content
 export function SuperAdminOnly({ children, fallback = null }: AdminOnlyProps) {
   return (
-    <PermissionGuard role={['super_admin', 'owner']} fallback={fallback}>
+    <PermissionGuard role="super_admin" fallback={fallback}>
       {children}
     </PermissionGuard>
   );

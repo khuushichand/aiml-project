@@ -634,12 +634,12 @@ def bypass_api_limits(monkeypatch):
     """Context manager to bypass ingress rate limiting for a given FastAPI app.
 
     Usage:
-        with bypass_api_limits(app, limiters=(audio_ep.limiter,)):
+        with bypass_api_limits(app):
             ... make requests ...
 
     - Sets TEST_MODE=true for deterministic behavior
     - Disables RGSimpleMiddleware by removing it from app.user_middleware
-    - Disables any provided SlowAPI limiter(s) during the context
+    - Disables any provided legacy limiter(s) during the context
     """
 
     @contextlib.contextmanager
@@ -660,7 +660,7 @@ def bypass_api_limits(monkeypatch):
         except Exception:
             pass
 
-        # Disable provided SlowAPI limiter(s)
+        # Disable provided legacy limiter(s)
         limiter_states = []
         for lim in limiters or ():
             try:

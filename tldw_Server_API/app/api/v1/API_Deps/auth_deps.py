@@ -376,8 +376,66 @@ async def get_session_manager_dep() -> SessionManager:
     return await get_session_manager()
 
 
-async def get_rate_limiter_dep() -> RateLimiter:
-    """Get rate limiter dependency"""
+class _RGBypassRateLimiter:
+    """Pass-through for auth lockout tracking while bypassing request limits."""
+
+    def __init__(self, limiter: RateLimiter):
+        self._limiter = limiter
+        self.enabled = getattr(limiter, "enabled", False)
+        self._initialized = getattr(limiter, "_initialized", False)
+
+    async def _delegate(self, method: str, default, *args, **kwargs):
+        limiter = self._limiter
+        if limiter is None:
+            return default
+        fn = getattr(limiter, method, None)
+        if fn is None:
+            return default
+        try:
+            return await fn(*args, **kwargs)
+        except Exception:
+            return default
+
+    async def check_rate_limit(self, *_args, **_kwargs):
+        return True, {}
+
+    async def check_user_rate_limit(self, *_args, **_kwargs):
+        return True, {}
+
+    async def wait_for_capacity(self, *_args, **_kwargs):
+        return True, {}
+
+    async def get_usage_summary(self, *_args, **_kwargs):
+        return {"tier": "rg", "limits": {}, "usage": {}, "remaining": {}}
+
+    async def get_usage_stats(self, *_args, **_kwargs):
+        return {}
+
+    async def check_lockout(self, *args, **kwargs):
+        return await self._delegate("check_lockout", (False, None), *args, **kwargs)
+
+    async def record_failed_attempt(self, *args, **kwargs):
+        return await self._delegate(
+            "record_failed_attempt",
+            {"is_locked": False, "remaining_attempts": 5},
+            *args,
+            **kwargs,
+        )
+
+    async def reset_failed_attempts(self, *args, **kwargs):
+        return await self._delegate("reset_failed_attempts", None, *args, **kwargs)
+
+
+async def get_rate_limiter_dep(request: Request) -> RateLimiter:
+    """Get rate limiter dependency."""
+    is_auth_path = False
+    try:
+        if request is not None:
+            p = request.url.path or ""
+            is_auth_path = p.startswith("/api/v1/auth")
+    except Exception:
+        is_auth_path = False
+
     # In TEST_MODE, avoid touching the database by returning a disabled, initialized limiter
     try:
         if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
@@ -385,14 +443,38 @@ async def get_rate_limiter_dep() -> RateLimiter:
             rl = _RL(db_pool=None)
             rl.enabled = False
             rl._initialized = True
-            return rl
+            limiter = rl
+        else:
+            limiter = None
     except Exception as exc:
         # Fall back to normal path if any issue
         logger.debug(
             "get_rate_limiter_dep: TEST_MODE stub resolution failed; using real RateLimiter: {}",
             exc,
         )
-    return await get_rate_limiter()
+        limiter = None
+
+    # When RG is enabled, bypass per-endpoint checks while keeping auth lockout tracking.
+    try:
+        from tldw_Server_API.app.core.config import rg_enabled as _rg_enabled
+
+        if _rg_enabled(False):
+            if not is_auth_path:
+                return _RGBypassRateLimiter(limiter)
+    except Exception:
+        pass
+
+    # If RG already enforced this request, avoid double enforcement.
+    try:
+        if (not is_auth_path) and request is not None and getattr(request.state, "rg_policy_id", None):
+            return _RGBypassRateLimiter(limiter)
+    except Exception:
+        pass
+
+    if limiter is None:
+        limiter = await get_rate_limiter()
+
+    return limiter
 
 
 async def get_registration_service_dep() -> RegistrationService:
@@ -1262,6 +1344,17 @@ async def check_rate_limit(
     if _is_test_mode():
         return  # Skip enforcement in test environments
 
+    # When RG is enabled globally, ingress middleware owns request limits.
+    try:
+        from tldw_Server_API.app.core.config import rg_enabled as _rg_enabled
+
+        if _rg_enabled(False):
+            if not getattr(request.state, "rg_policy_id", None):
+                logger.debug("AuthNZ rate-limit skipped: RG enabled but no policy_id on request")
+            return
+    except Exception as exc:
+        logger.debug("AuthNZ rate-limit bypass: RG enablement check failed: {}", exc)
+
     # If ResourceGovernor ingress has already governed this route, avoid
     # double-enforcement via legacy AuthNZ rate limiter.
     try:
@@ -1328,6 +1421,25 @@ async def check_auth_rate_limit(
     # In test mode, bypass rate limiting entirely for deterministic tests
     if _is_test_mode():
         return
+
+    # When RG is enabled globally, ingress middleware owns request limits.
+    try:
+        from tldw_Server_API.app.core.config import rg_enabled as _rg_enabled
+
+        if _rg_enabled(False):
+            if not getattr(request.state, "rg_policy_id", None):
+                logger.debug("AuthNZ auth-rate-limit skipped: RG enabled but no policy_id on request")
+            return
+    except Exception as exc:
+        logger.debug("AuthNZ auth-rate-limit bypass: RG enablement check failed: {}", exc)
+
+    # If ResourceGovernor ingress has already governed this route, avoid
+    # double-enforcement via legacy AuthNZ rate limiter.
+    try:
+        if getattr(request.state, "rg_policy_id", None):
+            return
+    except Exception as exc:
+        logger.debug("AuthNZ auth-rate-limit bypass: unable to read request.state.rg_policy_id: {}", exc)
 
     # Additional bypass: allow the bootstrapped single-user admin principal
     # to skip auth-specific IP rate limits. Detection is principal/claim-first

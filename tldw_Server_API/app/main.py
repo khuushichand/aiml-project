@@ -1422,6 +1422,66 @@ async def lifespan(app: FastAPI):
                 rg_loader.add_on_change(_on_rg_change)
             except Exception:
                 pass
+
+            # Best-effort audit: warn on API routes not covered by RG route_map.
+            try:
+                def _should_audit_rg_route_map() -> bool:
+                    raw = os.getenv("RG_ROUTE_MAP_AUDIT", "true").strip().lower()
+                    return raw in {"1", "true", "yes", "on"}
+
+                def _route_map_matches(path: str, by_path: dict) -> bool:
+                    for pat in by_path.keys():
+                        pat = str(pat)
+                        if pat.endswith("*"):
+                            if path.startswith(pat[:-1]):
+                                return True
+                        elif path == pat:
+                            return True
+                    return False
+
+                if _should_audit_rg_route_map():
+                    snap = rg_loader.get_snapshot()
+                    route_map = getattr(snap, "route_map", {}) or {}
+                    by_path = dict(route_map.get("by_path") or {})
+                    by_tag = dict(route_map.get("by_tag") or {})
+                    if by_path or by_tag:
+                        skip_prefixes = ("/docs", "/openapi.json", "/redoc", "/static", "/webui", "/favicon.ico")
+                        missing: list[tuple[str, list[str]]] = []
+                        seen_paths: set[str] = set()
+                        for route in getattr(app, "routes", []):
+                            path = getattr(route, "path", None)
+                            if not path or path in seen_paths:
+                                continue
+                            if path.startswith(skip_prefixes):
+                                continue
+                            # Focus on API-ish endpoints and health/setup roots.
+                            if not (
+                                path.startswith("/api/")
+                                or path.startswith("/v1/")
+                                or path.startswith("/health")
+                                or path.startswith("/readyz")
+                                or path.startswith("/metrics")
+                                or path.startswith("/setup")
+                            ):
+                                continue
+                            if _route_map_matches(path, by_path):
+                                seen_paths.add(path)
+                                continue
+                            tags = list(getattr(route, "tags", []) or [])
+                            if tags and any(t in by_tag for t in tags):
+                                seen_paths.add(path)
+                                continue
+                            missing.append((path, tags))
+                            seen_paths.add(path)
+                        if missing:
+                            sample = ", ".join(
+                                f"{p} (tags={tags})" for p, tags in missing[:10]
+                            )
+                            logger.warning(
+                                f"RG route_map missing coverage for {len(missing)} routes; sample: {sample}"
+                            )
+            except Exception as _rg_audit_err:
+                logger.debug(f"RG route_map audit skipped: {_rg_audit_err}")
         except Exception as _rg_err:
             logger.warning(f"ResourceGovernor policy loader initialization skipped: {_rg_err}")
         try:
@@ -1580,6 +1640,13 @@ async def lifespan(app: FastAPI):
 
     async def _init_rate_limiter(*, deferred: bool) -> None:
         try:
+            from tldw_Server_API.app.core.config import rg_enabled as _rg_enabled_flag
+            if _rg_enabled_flag(False):
+                logger.info(
+                    ("Deferred startup: " if deferred else "App Startup: ")
+                    + "Rate limiter skipped (RG enabled)"
+                )
+                return
             from tldw_Server_API.app.core.config import load_comprehensive_config
             from tldw_Server_API.app.core.Chat.rate_limiter import initialize_rate_limiter, RateLimitConfig
 
@@ -3539,45 +3606,6 @@ def custom_openapi():
 
 
 app.openapi = custom_openapi
-
-# Global SlowAPI rate limiting (skip in test mode)
-import os as _os_mod
-
-# Skip global rate limiter when running tests: honor either TESTING=true or TEST_MODE=true
-if _os_mod.getenv("TESTING", "").lower() != "true" and _os_mod.getenv("TEST_MODE", "").lower() != "true":
-    # If ResourceGovernor ingress middleware is present, keep SlowAPI off.
-    # SlowAPI decorators remain as legacy config carriers for non-RG deployments.
-    _rg_simple_present = False
-    try:
-        from tldw_Server_API.app.core.Resource_Governance.middleware_simple import (  # noqa: E402
-            RGSimpleMiddleware as _RGMw,
-        )
-
-        _rg_simple_present = any(
-            getattr(m, "cls", None) is _RGMw for m in getattr(app, "user_middleware", [])
-        )
-    except Exception:
-        _rg_simple_present = False
-
-    if _rg_simple_present:
-        logger.info("RGSimpleMiddleware present: skipping global SlowAPI middleware")
-    else:
-        try:
-            from slowapi import _rate_limit_exceeded_handler
-            from slowapi.errors import RateLimitExceeded
-            from slowapi.middleware import SlowAPIMiddleware
-
-            # Use the central limiter instance so decorators and middleware share the same limiter
-            from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter as _global_limiter
-
-            app.state.limiter = _global_limiter
-            app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-            app.add_middleware(SlowAPIMiddleware)
-            logger.info("Global rate limiter initialized (SlowAPI)")
-        except Exception as _e:
-            logger.warning(f"Global rate limiter not initialized: {_e}")
-else:
-    logger.info("Test mode detected: Skipping global rate limiter initialization (TESTING/TEST_MODE)")
 
 # Display API key information on startup for single user mode
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode

@@ -363,7 +363,7 @@ Security events are logged to `logs/embeddings_audit.jsonl`:
 
 ### Rate Limiting
 
-Rate limiting is disabled by default. When enabled (`EMBEDDINGS_RATE_LIMIT=on`), the create-embeddings endpoint applies a limit of `5/second` using SlowAPI. Adjust the limit string in code if you need different rates.
+Rate limiting is disabled by default. When enabled via RG policies, the create-embeddings endpoint applies limits defined in `resource_governor_policies.yaml`.
 
 ---
 

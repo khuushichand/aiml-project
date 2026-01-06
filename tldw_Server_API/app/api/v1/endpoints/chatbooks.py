@@ -20,7 +20,6 @@ from fastapi.responses import FileResponse
 from loguru import logger
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
-from slowapi.util import get_remote_address
 
 # Unified audit service
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditContext
@@ -54,8 +53,6 @@ from ..schemas.chatbook_schemas import (
 router = APIRouter(prefix="/chatbooks", tags=["chatbooks"])
 
 # Use central limiter instance
-from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
-
 
 def _safe_increment_metric(metric_name: str, labels: dict, error_context: str = "") -> None:
     """Safely increment a metric, logging failures without raising."""
@@ -174,7 +171,6 @@ async def chatbooks_health():
 
 
 @router.post("/export", response_model=CreateChatbookResponse)
-@limiter.limit("5/minute")  # Rate limit: 5 exports per minute
 async def create_chatbook(
     request_data: CreateChatbookRequest,
     background_tasks: BackgroundTasks,
@@ -363,7 +359,6 @@ async def create_chatbook(
 
 
 @router.post("/import", response_model=ImportChatbookResponse)
-@limiter.limit("5/minute")  # Rate limit: 5 imports per minute
 async def import_chatbook(
     background_tasks: BackgroundTasks,
     request: Request,
@@ -548,7 +543,6 @@ async def import_chatbook(
 
 
 @router.post("/preview", response_model=PreviewChatbookResponse)
-@limiter.limit("10/minute")  # Rate limit: 10 previews per minute
 async def preview_chatbook(
     request: Request,
     file: UploadFile = File(...),
@@ -707,7 +701,6 @@ async def preview_chatbook(
 
 
 @router.get("/export/jobs", response_model=ListExportJobsResponse)
-@limiter.limit("30/minute")  # Rate limit: 30 list requests per minute
 async def list_export_jobs(
     request: Request,  # Required for rate limiting
     limit: int = Query(100, ge=1, le=1000),
@@ -833,7 +826,6 @@ async def get_export_job(
 
 
 @router.get("/import/jobs", response_model=ListImportJobsResponse)
-@limiter.limit("30/minute")  # Rate limit: 30 list requests per minute
 async def list_import_jobs(
     request: Request,  # Required for rate limiting
     limit: int = Query(100, ge=1, le=1000),
@@ -943,7 +935,6 @@ async def get_import_job(
 
 
 @router.get("/download/{job_id}")
-@limiter.limit("20/minute")  # Rate limit: 20 downloads per minute
 async def download_chatbook(
     job_id: str,
     request: Request,

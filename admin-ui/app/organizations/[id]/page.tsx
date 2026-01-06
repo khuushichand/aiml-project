@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import ProtectedRoute from '@/components/ProtectedRoute';
+import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -271,19 +271,19 @@ export default function OrganizationDetailPage() {
 
   if (loading) {
     return (
-      <ProtectedRoute>
+      <PermissionGuard variant="route" requireAuth>
         <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             <div className="text-center text-muted-foreground py-8">Loading...</div>
           </div>
         </ResponsiveLayout>
-      </ProtectedRoute>
+      </PermissionGuard>
     );
   }
 
   if (!org) {
     return (
-      <ProtectedRoute>
+      <PermissionGuard variant="route" requireAuth>
         <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             <Alert variant="destructive">
@@ -295,12 +295,12 @@ export default function OrganizationDetailPage() {
             </Button>
           </div>
         </ResponsiveLayout>
-      </ProtectedRoute>
+      </PermissionGuard>
     );
   }
 
   return (
-    <ProtectedRoute>
+    <PermissionGuard variant="route" requireAuth>
       <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             {/* Header */}
@@ -746,6 +746,6 @@ export default function OrganizationDetailPage() {
             </div>
           </div>
       </ResponsiveLayout>
-    </ProtectedRoute>
+    </PermissionGuard>
   );
 }

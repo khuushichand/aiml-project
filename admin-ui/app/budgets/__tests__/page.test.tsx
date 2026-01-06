@@ -10,7 +10,8 @@ const setPageMock = vi.hoisted(() => vi.fn());
 const setPageSizeMock = vi.hoisted(() => vi.fn());
 const resetPaginationMock = vi.hoisted(() => vi.fn());
 
-vi.mock('@/components/ProtectedRoute', () => ({
+vi.mock('@/components/PermissionGuard', () => ({
+  PermissionGuard: ({ children }: { children: ReactNode }) => <>{children}</>,
   default: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 

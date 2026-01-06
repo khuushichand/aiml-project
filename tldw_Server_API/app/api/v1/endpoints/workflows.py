@@ -80,62 +80,6 @@ def _get_db() -> WorkflowsDatabase:
     return create_workflows_database(backend=backend)
 
 
-"""Rate limits and size constraints (PRD defaults).
-
-To keep tests deterministic, rate limits are automatically disabled when
-running under pytest or TEST_MODE/TLDW_TEST_MODE. This check is evaluated at
-call time to avoid import-order issues.
-"""
-import functools
-from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter as _limiter
-
-def _limits_disabled_now() -> bool:
-    try:
-        return (
-            os.getenv("WORKFLOWS_DISABLE_RATE_LIMITS", "").strip().lower() in {"1", "true", "yes", "on"}
-            or os.getenv("PYTEST_CURRENT_TEST") is not None
-            or os.getenv("TLDW_TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
-            or os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
-        )
-    except Exception:
-        return False
-
-def _optional_limit(rate: str):
-    def _decorator(func):
-        # If slowapi isn't available or limits disabled, no-op to preserve signature
-        if _limiter is None or _limits_disabled_now():
-            return func
-        # Use slowapi's wrapped function, but guard against direct invocation
-        wrapped = _limiter.limit(rate)(func)
-
-        @functools.wraps(func)
-        async def _inner(*args, **kwargs):  # type: ignore
-            # If limits are disabled at call time, bypass
-            if _limits_disabled_now():
-                return await func(*args, **kwargs)
-            # If FastAPI didn't supply a proper Request (e.g., direct call in tests), bypass
-            req = kwargs.get("request", None)
-            try:
-                from starlette.requests import Request as _StarReq  # type: ignore
-                if not isinstance(req, _StarReq):
-                    # Fallback: try positional args for request.
-                    req = next((a for a in args if isinstance(a, _StarReq)), None)
-                if not isinstance(req, _StarReq):
-                    return await func(*args, **kwargs)
-            except Exception:
-                return await func(*args, **kwargs)
-            return await wrapped(*args, **kwargs)
-
-        return _inner
-    return _decorator
-
-# Public decorators used on endpoints
-def limit_adhoc(func):
-    return _optional_limit("5/minute")(func)
-
-def limit_run_saved(func):
-    return _optional_limit("15/minute")(func)
-
 MAX_DEFINITION_BYTES = 256 * 1024
 MAX_STEPS = 50
 MAX_STEP_CONFIG_BYTES = 32 * 1024
@@ -884,7 +828,6 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
     response_model=WorkflowRunResponse,
     dependencies=[Depends(require_token_scope("workflows", require_if_present=True, endpoint_id="workflows.run_saved", count_as="run"))],
 )
-@limit_run_saved
 async def run_saved(
     workflow_id: int,
     request: Request,
@@ -1337,7 +1280,6 @@ async def list_runs(
 
 
 @router.post("/run", response_model=WorkflowRunResponse)
-@limit_adhoc
 async def run_adhoc(
     request: Request,
     mode: str = Query("async", description="Execution mode: async|sync"),

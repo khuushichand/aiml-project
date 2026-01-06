@@ -24,7 +24,7 @@ Post‑v0.1 tracker:
   - Enforced via `ResourceGovernor` policies (memory/Redis backends + DB), or
   - Explicitly documented as intentionally out-of-scope for v0.1 (with rationale).
 - Legacy limiters called out in `AuthNZ-Refactor-Implementation-Plan.md` Stage 6 (“Remaining Work”) are handled as follows:
-  - Chat `ConversationRateLimiter`, embeddings `UserRateLimiter`, Evaluations/AuthNZ/Character-Chat/Web-Scraping shims, legacy SlowAPI counters, and non-RG audio concurrency counters are either removed, wrapped around `ResourceGovernor`, or explicitly gated behind compatibility flags that default to RG-first behavior.
+  - Chat `ConversationRateLimiter`, embeddings `UserRateLimiter`, Evaluations/AuthNZ/Character-Chat/Web-Scraping shims, legacy ingress counters, and non-RG audio concurrency counters are either removed, wrapped around `ResourceGovernor`, or explicitly gated behind compatibility flags that default to RG-first behavior.
 - For each major ingress surface (at minimum: `/api/v1/chat/completions`, `/api/v1/embeddings*`, `/api/v1/rag/*`, `/api/v1/media/*`, `/api/v1/research/*`, `/api/v1/workflows/*`, `/api/v1/prompt-studio/*`, `/api/v1/audio/*`, `/api/v1/auth/*`), the `route_map` / policy configuration:
   - Either has a concrete RG policy entry (per-principal and/or per-tenant) with documented defaults, or
   - Is documented in `Resource_Governor_PRD.md` as explicitly RG-free for v0.1 (e.g., low-risk or local-only routes).
@@ -59,10 +59,10 @@ Post‑v0.1 tracker:
 - Audio quotas and concurrency:
   - Audio stream concurrency is governed via ResourceGovernor “streams” leases in `audio_quota.can_start_stream/finish_stream/heartbeat_stream`, with Redis/in-process counters as explicit fallbacks when RG is unavailable; RG behavior is locked in by `tldw_Server_API/tests/Audio/test_audio_quota_rg_and_ledger.py`.
   - Daily minutes caps use the shared `ResourceDailyLedger` first (`_ledger_remaining_minutes`), with legacy `audio_usage_daily` enforcement as a fallback; the ledger path is covered by the same test module.
-- SlowAPI ingress:
-  - Global SlowAPI middleware uses a test-aware key function (`get_test_aware_remote_address`) that:
-    - Bypasses limits when `TEST_MODE`/`TLDW_TEST_MODE` is set.
-    - Returns `None` when `RGSimpleMiddleware` is attached, so ingress enforcement is handled by ResourceGovernor while SlowAPI decorators act purely as config carriers. This behavior is validated by `tldw_Server_API/tests/RateLimiting/test_slowapi_rg_key_func.py` and the RG ingress e2e tests in `tldw_Server_API/tests/Resource_Governance/test_e2e_chat_audio_headers.py`.
+- Ingress limiting:
+  - `RGSimpleMiddleware` enforces ingress request limits using route_map/policy tags.
+  - When RG is enabled, ingress enforcement is RG-only and legacy decorator-based limiters are removed.
+  - Coverage is validated by `tldw_Server_API/tests/Resource_Governance/test_middleware_simple.py` and the RG ingress e2e tests in `tldw_Server_API/tests/Resource_Governance/test_e2e_chat_audio_headers.py`.
 - High-value domains that were RG-free in v0.1 are now governed at ingress in v1.1:
   - Default policies and `route_map.by_path` entries exist for `/api/v1/research/*`, `/api/v1/workflows/*` (and `/api/v1/scheduler/workflows/*`), `/api/v1/prompt-studio/*`, `/api/v1/rag/*`, and `/api/v1/media/*`.
   - Legacy ingress limiters are bypassed on RG-governed routes so ResourceGovernor is the single source for request-rate enforcement.

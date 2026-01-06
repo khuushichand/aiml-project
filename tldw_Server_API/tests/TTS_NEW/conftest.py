@@ -380,7 +380,7 @@ def test_client(test_env_vars, bypass_api_limits):
 
     app.dependency_overrides[get_request_user] = _override_user
     try:
-        with bypass_api_limits(app, limiters=(audio_endpoints.limiter,)), TestClient(app) as client:
+        with bypass_api_limits(app), TestClient(app) as client:
             yield client
     finally:
         app.dependency_overrides.pop(get_request_user, None)

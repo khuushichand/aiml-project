@@ -40,12 +40,10 @@
   - Monitoring module can emit topic alerts from content (see Monitoring README).
 
 - Rate Limiting
-  - Optional per-route SlowAPI limits with test-aware bypass: helpers at tldw_Server_API/app/api/v1/endpoints/watchlists.py:129–162
-  - Global limiter: tldw_Server_API/app/api/v1/API_Deps/rate_limiting.py:1
+  - Ingress rate limits are enforced by Resource Governor policies and route_map.
 
 - Configuration
   - Default retention/TTL via `WATCHLIST_OUTPUT_DEFAULT_TTL_SECONDS` and `WATCHLIST_OUTPUT_TEMP_TTL_SECONDS` env vars.
-  - Optional `WATCHLISTS_DISABLE_RATE_LIMITS` for local/dev testing.
 
 ## 3. Developer-Related/Relevant Information for Contributors
 
@@ -60,4 +58,4 @@
   - Runs listing/pagination: tldw_Server_API/tests/Watchlists/test_runs_list_global.py:49–73
 - Local Dev Tips
   - Use OPML import to seed sources quickly; test preview before running long jobs.
-  - For dev, disable rate limits and set temporary output TTLs to keep data tidy.
+  - For dev, use permissive RG policies and set temporary output TTLs to keep data tidy.

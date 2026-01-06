@@ -16,9 +16,7 @@ from unittest.mock import AsyncMock, patch
 @pytest.fixture(autouse=True)
 def disable_rate_limiting():
     """Disable rate limiting for all tests in this module"""
-    with patch('tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.limiter.limit',
-               lambda *args, **kwargs: lambda f: f):
-        yield
+    yield
 
 
 # Use the shared fixtures from conftest.py

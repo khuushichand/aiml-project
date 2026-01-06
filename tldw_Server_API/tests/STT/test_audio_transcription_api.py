@@ -38,7 +38,7 @@ async def test_transcription_endpoint(bypass_api_limits):
         tmp_path = tmp_file.name
 
     try:
-        ctx = bypass_api_limits(app, limiters=(audio_endpoints.limiter,))
+        ctx = bypass_api_limits(app)
         transport = httpx.ASGITransport(app=app)
         with ctx:
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -90,7 +90,7 @@ async def test_transcription_with_parakeet(bypass_api_limits):
         tmp_path = tmp_file.name
 
     try:
-        ctx = bypass_api_limits(app, limiters=(audio_endpoints.limiter,))
+        ctx = bypass_api_limits(app)
         transport = httpx.ASGITransport(app=app)
         with ctx:
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -137,7 +137,7 @@ async def test_transcription_formats(bypass_api_limits):
         tmp_path = tmp_file.name
 
     try:
-        ctx = bypass_api_limits(app, limiters=(audio_endpoints.limiter,))
+        ctx = bypass_api_limits(app)
         transport = httpx.ASGITransport(app=app)
         with ctx:
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -202,7 +202,7 @@ async def test_translation_endpoint(bypass_api_limits):
         tmp_path = tmp_file.name
 
     try:
-        ctx = bypass_api_limits(app, limiters=(audio_endpoints.limiter,))
+        ctx = bypass_api_limits(app)
         transport = httpx.ASGITransport(app=app)
         with ctx:
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -239,7 +239,7 @@ def test_sync_transcription(bypass_api_limits):
     """Test synchronous transcription using TestClient."""
     from tldw_Server_API.app.main import app
 
-    with bypass_api_limits(app, limiters=(audio_endpoints.limiter,)), TestClient(app) as client:
+    with bypass_api_limits(app), TestClient(app) as client:
         # Create test audio
         audio_data, sample_rate = create_test_audio()
 

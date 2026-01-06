@@ -36,7 +36,7 @@ def _make_wav_bytes(duration_sec: float = 0.1, sr: int = 16000, freq: float = 44
 
 
 def test_transcriptions_requires_auth_401(bypass_api_limits):
-    ctx = bypass_api_limits(app, limiters=(audio_endpoints.limiter,))
+    ctx = bypass_api_limits(app)
     with ctx, TestClient(app) as client:
         wav_bytes = _make_wav_bytes()
         files = {"file": ("test.wav", wav_bytes, "audio/wav")}
@@ -46,7 +46,7 @@ def test_transcriptions_requires_auth_401(bypass_api_limits):
 
 
 def test_transcriptions_ok_with_override(monkeypatch, bypass_api_limits):
-    ctx = bypass_api_limits(app, limiters=(audio_endpoints.limiter,))
+    ctx = bypass_api_limits(app)
     with ctx, TestClient(app) as client:
         async def _override_user():
             return User(id=1, username="tester", email="t@example.com", is_active=True)
@@ -97,7 +97,7 @@ def test_transcriptions_ok_with_override(monkeypatch, bypass_api_limits):
 
 
 def test_translations_requires_auth_401(bypass_api_limits):
-    ctx = bypass_api_limits(app, limiters=(audio_endpoints.limiter,))
+    ctx = bypass_api_limits(app)
     with ctx, TestClient(app) as client:
         wav_bytes = _make_wav_bytes()
         files = {"file": ("test.wav", wav_bytes, "audio/wav")}
@@ -107,7 +107,7 @@ def test_translations_requires_auth_401(bypass_api_limits):
 
 
 def test_translations_ok_with_override(monkeypatch, bypass_api_limits):
-    ctx = bypass_api_limits(app, limiters=(audio_endpoints.limiter,))
+    ctx = bypass_api_limits(app)
     with ctx, TestClient(app) as client:
         async def _override_user():
             return User(id=1, username="tester", email="t@example.com", is_active=True)
@@ -158,7 +158,7 @@ def test_translations_ok_with_override(monkeypatch, bypass_api_limits):
 
 def test_transcriptions_parakeet_variant_routes_to_parakeet(monkeypatch, bypass_api_limits):
     """Model strings like 'parakeet-mlx' should route to the Parakeet provider, not Whisper."""
-    ctx = bypass_api_limits(app, limiters=(audio_endpoints.limiter,))
+    ctx = bypass_api_limits(app)
     with ctx, TestClient(app) as client:
         async def _override_user():
             return User(id=1, username="tester", email="t@example.com", is_active=True)
@@ -205,7 +205,7 @@ def test_transcriptions_parakeet_variant_routes_to_parakeet(monkeypatch, bypass_
 
 def test_transcriptions_qwen2audio_variant_routes_to_qwen2audio(monkeypatch, bypass_api_limits):
     """Model strings like 'qwen2audio-test' should route to Qwen2Audio provider, not Whisper."""
-    ctx = bypass_api_limits(app, limiters=(audio_endpoints.limiter,))
+    ctx = bypass_api_limits(app)
     with ctx, TestClient(app) as client:
         async def _override_user():
             return User(id=1, username="tester", email="t@example.com", is_active=True)
@@ -249,7 +249,7 @@ def test_transcriptions_whisper_model_unavailable_returns_503(monkeypatch, bypas
     /audio/transcriptions should surface a structured 503 instead of
     returning a pseudo-transcript that clients might persist.
     """
-    ctx = bypass_api_limits(app, limiters=(audio_endpoints.limiter,))
+    ctx = bypass_api_limits(app)
     with ctx, TestClient(app) as client:
         async def _override_user():
             return User(id=1, username="tester", email="t@example.com", is_active=True)

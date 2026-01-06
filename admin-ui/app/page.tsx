@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import ProtectedRoute from '@/components/ProtectedRoute';
+import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -81,14 +81,7 @@ const processUsers = (result: PromiseSettledResult<unknown>): User[] => {
   if (result.status !== 'fulfilled') {
     return [];
   }
-  if (Array.isArray(result.value)) {
-    return result.value;
-  }
-  if (result.value && typeof result.value === 'object') {
-    const users = (result.value as { users?: User[] }).users;
-    return Array.isArray(users) ? users : [];
-  }
-  return [];
+  return Array.isArray(result.value) ? result.value : [];
 };
 
 const processOrganizations = (result: PromiseSettledResult<unknown>): Organization[] => {
@@ -617,7 +610,7 @@ export default function DashboardPage() {
   const registrationBlocked = registrationSettings?.self_registration_allowed === false && registrationEnabled;
 
   return (
-    <ProtectedRoute>
+    <PermissionGuard variant="route" requireAuth>
       <ResponsiveLayout>
         <div className="p-4 lg:p-8">
           <DashboardHeader
@@ -934,6 +927,6 @@ export default function DashboardPage() {
             </div>
         </div>
       </ResponsiveLayout>
-    </ProtectedRoute>
+    </PermissionGuard>
   );
 }

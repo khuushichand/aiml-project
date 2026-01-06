@@ -188,7 +188,7 @@ Phase 5 — Optional packaging & release (0.5–1d)
 ## 12) Performance & Resource Limits
 - Preserve current connection caps and metrics.
 - Ensure adapters do not add overhead in hot paths; favor direct function calls.
-- Rate limiter semantics unchanged; adapter can wrap existing `slowapi`/custom implementation.
+- Rate limiter semantics unchanged; adapter can wrap RG or other custom implementations.
 
 ## 13) Deployment & Packaging
 - In-repo subpackage with its own `pyproject.toml` and `py.typed`.

@@ -350,7 +350,7 @@
   - `RAG_LLM_MAX_CONCURRENT_CALLS` (default 20), `RAG_LLM_TIMEOUT_SEC` (default 60-120)
 
 - Rate Limiting & Security
-  - Reuse existing rate-limit decorators (slowapi/module limiters) for new endpoints.
+  - Reuse existing RG policies/route_map for new endpoints (ingress rate limits are RG-owned).
   - Enforce AuthNZ dependency; redact PII in logs via existing middleware.
 
 - Observability

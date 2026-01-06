@@ -21,7 +21,6 @@ from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import (
     ChromaDBManager,
     store_in_chroma
 )
-from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
 from tldw_Server_API.app.core.config import settings, load_comprehensive_config
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.Chunking.base import ChunkerConfig

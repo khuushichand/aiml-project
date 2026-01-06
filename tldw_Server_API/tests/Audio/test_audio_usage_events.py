@@ -50,7 +50,7 @@ def client_with_overrides(bypass_api_limits):
     fastapi_app.dependency_overrides[get_usage_event_logger] = override_logger
     fastapi_app.dependency_overrides[get_tts_service] = override_tts
 
-    with bypass_api_limits(fastapi_app, limiters=(audio_endpoints.limiter,)), TestClient(fastapi_app) as client:
+    with bypass_api_limits(fastapi_app), TestClient(fastapi_app) as client:
         yield client, dummy
 
     fastapi_app.dependency_overrides.clear()

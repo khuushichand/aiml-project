@@ -7,7 +7,7 @@ Notes on conventions used here:
 - Base API prefix is `/api/v1`.
 - Authentication uses either `X-API-KEY` (single-user) or `Authorization: Bearer <JWT>` (multi-user).
 - Pagination uses `limit` and `offset` where applicable and responses include a `total` field in the body (no page/per_page headers).
-- Rate limits are applied per-endpoint via SlowAPI decorators and may differ by route.
+- Rate limits are applied via RG ingress policies and may differ by route.
 
 ## Table of Contents
 1. [Chat Dictionary API](#chat-dictionary-api)
@@ -838,7 +838,7 @@ Endpoints return standard FastAPI error responses with meaningful HTTP status co
 
 ## Rate Limiting
 
-Endpoint-specific limits are enforced with SlowAPI where applied:
+Endpoint-specific limits are enforced with RG policies where applied:
 - Chatbooks `POST /export`: 5/minute
 - Chatbooks `POST /import`: 5/minute
 - Chatbooks `POST /preview`: 10/minute

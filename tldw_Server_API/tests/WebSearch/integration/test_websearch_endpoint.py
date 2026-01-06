@@ -7,7 +7,7 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
-# Disable rate limiting before importing app (avoids slowapi decorator errors)
+# Disable rate limiting before importing app (keeps tests permissive)
 os.environ["TEST_MODE"] = "true"
 
 from fastapi import FastAPI

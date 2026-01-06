@@ -472,7 +472,7 @@ async def verify_api_key(credentials: HTTPAuthorizationCredentials = Security(se
 - **27 test cases** covering all major functionality
 
 ### Rate Limiting Implementation
-- **Using slowapi** for FastAPI rate limiting
+- **Using Resource Governor (RG)** for ingress rate limiting
 - **Configured Limits**:
   - Create operations: 10/minute
   - Read operations: 100/minute

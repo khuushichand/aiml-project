@@ -36,8 +36,6 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse, Response, JSONResponse
 from starlette import status  # For status codes
-from slowapi.util import get_remote_address
-from fastapi import Request as _FastAPIRequest  # for rate limit key typing
 from loguru import logger
 
 #
@@ -78,7 +76,6 @@ from tldw_Server_API.app.core.Usage.audio_quota import (
     add_daily_minutes,
     bytes_to_seconds,
 )
-
 # Quota helpers for status/limits and TTL heartbeat
 try:
     from tldw_Server_API.app.core.Usage.audio_quota import (
@@ -300,41 +297,6 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.Streaming import speech_chat_service
 
-# Initialize rate limiter
-from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import (
-    limiter,
-    get_test_aware_remote_address as _test_mode_key_func,
-)
-
-
-def _rate_limit_key(request: _FastAPIRequest) -> Optional[str]:
-    """Rate limit key that prefers authenticated user id over IP.
-
-    - Multi-user: per-user limits (fairness across users)
-    - Single-user or unauthenticated: fall back to client IP
-    """
-    # Keep SlowAPI as a pure config carrier when RGSimpleMiddleware is installed
-    # (and bypass limits entirely in TEST_MODE) by delegating to the shared
-    # test/RG-aware key resolver first.
-    try:
-        key = _test_mode_key_func(request)
-        if key is None:
-            return None
-    except Exception as exc:
-        logger.debug(f"rate_limit_key: shared key resolver failed; falling back to local resolution: {exc}")
-        key = None
-    try:
-        uid = getattr(request.state, "user_id", None)
-        if uid is not None:
-            return f"user:{uid}"
-    except Exception as e:
-        logger.debug(f"rate_limit_key: failed to read user_id from request.state: error={e}")
-    return key or get_remote_address(request)
-
-
-# Use central limiter instance; override key_func per-route where needed
-
-
 router = APIRouter(
     tags=["Audio"],
     responses={
@@ -524,7 +486,6 @@ async def get_tts_service() -> TTSServiceV2:
         Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.speech", count_as="call"))
     ],
 )
-@limiter.limit("10/minute", key_func=_rate_limit_key)  # Rate limit: 10 requests per minute per user/IP
 async def create_speech(
     request_data: OpenAISpeechRequest,  # FastAPI will parse JSON body into this
     request: Request,  # Required for rate limiter and to check for client disconnects
@@ -832,7 +793,6 @@ async def create_speech(
         )
     ],
 )
-@limiter.limit("20/minute", key_func=_rate_limit_key)  # Rate limit: 20 requests per minute
 async def create_transcription(
     request: Request,
     file: UploadFile = File(..., description="The audio file to transcribe"),
@@ -1458,7 +1418,6 @@ async def create_transcription(
         Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.translations", count_as="call"))
     ],
 )
-@limiter.limit("20/minute", key_func=_rate_limit_key)
 async def create_translation(
     request: Request,
     file: UploadFile = File(..., description="The audio file to translate"),
@@ -1525,7 +1484,6 @@ async def create_translation(
         )
     ],
 )
-@limiter.limit("10/minute", key_func=_rate_limit_key)
 async def audio_chat_turn(
     request_data: SpeechChatRequest,
     request: Request,
@@ -1600,7 +1558,6 @@ async def audio_chat_turn(
 
 
 @router.post("/segment/transcript", summary="Segment a transcript into coherent blocks (TreeSeg)")
-@limiter.limit("30/minute", key_func=_rate_limit_key)
 async def segment_transcript(
     req: TranscriptSegmentationRequest,
     request: Request,
@@ -3808,7 +3765,6 @@ async def test_streaming():
 
 
 @router.post("/voices/upload", summary="Upload a custom voice sample")
-@limiter.limit("5/hour", key_func=_rate_limit_key)  # Rate limit: 5 uploads per hour
 async def upload_voice(
     request: Request,
     file: UploadFile = File(..., description="Voice sample audio file (WAV, MP3, FLAC, OGG)"),
@@ -3951,7 +3907,6 @@ async def delete_voice(
 
 
 @router.post("/voices/{voice_id}/preview", summary="Generate voice preview")
-@limiter.limit("10/minute", key_func=_rate_limit_key)  # Rate limit: 10 previews per minute
 async def preview_voice(
     request: Request,
     voice_id: str = Path(..., description="Voice ID to preview"),

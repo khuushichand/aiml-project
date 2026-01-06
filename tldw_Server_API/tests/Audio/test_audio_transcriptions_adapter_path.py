@@ -90,7 +90,7 @@ def test_audio_transcriptions_uses_adapter_base_dir(
     app.dependency_overrides[get_request_user] = _fake_get_request_user
     app.include_router(audio_router, prefix="/api/v1/audio")
 
-    with bypass_api_limits(app, limiters=(audio_ep.limiter,)), TestClient(app) as client:
+    with bypass_api_limits(app), TestClient(app) as client:
         wav_bytes = _make_wav_bytes()
         headers = {"X-API-KEY": TEST_API_KEY}
         files = {"file": ("sample.wav", io.BytesIO(wav_bytes), "audio/wav")}

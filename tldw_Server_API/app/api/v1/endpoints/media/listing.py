@@ -18,7 +18,6 @@ from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import (
     get_media_db_for_user,
     try_get_media_db_for_user,
 )
-from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
 from tldw_Server_API.app.api.v1.schemas.media_request_models import SearchRequest
 from tldw_Server_API.app.api.v1.schemas.media_response_models import (
     MediaListItem,
@@ -534,7 +533,6 @@ async def get_by_identifier(
     summary="Search Media Items",
     response_model=MediaListResponse,
 )
-@limiter.limit(_SEARCH_RATE_LIMIT)
 async def search_media_items(
     request: Request,
     search_params: SearchRequest = Body(...),

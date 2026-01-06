@@ -93,7 +93,7 @@ Navigation:
   - Expiry enforced when `CHATBOOKS_ENFORCE_EXPIRY=true`.
 - Upload hardening:
   - Per‑user temp directory under system temp; sanitizes `user.id` and filenames; rejects symlinks and traversal. Preview/import delete temp files on completion.
-- Rate limits: SlowAPI decorators on endpoints (export/import/preview/download) + per‑user quotas. Default limits: export/import 5/min, preview 10/min, download 20/min.
+- Rate limits: RG ingress policies + per-user quotas. Defaults live in RG policy config (export/import 5/min, preview 10/min, download 20/min).
 
 **Quotas**
 - Managed by `QuotaManager` with tiered limits (free/premium/enterprise): storage (MB), daily exports/imports, max concurrent jobs, file size caps, chatbook count.

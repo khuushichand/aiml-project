@@ -221,7 +221,7 @@ async def chat_stream_passthru():
 
 ## Rate Limiting
 
-- Global SlowAPI middleware (production) provides coarse IP-based limits.
+- Resource Governor (RG) middleware (production) provides ingress request limits via policy + route_map.
 - Chat limiter enforces per-user, per-conversation, and tokens-per-minute limits and is the primary control.
 - RBAC dependency guards `chat.create`.
 

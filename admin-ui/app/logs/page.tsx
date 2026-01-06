@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import ProtectedRoute from '@/components/ProtectedRoute';
+import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -14,6 +14,7 @@ import { Badge } from '@/components/ui/badge';
 import { Pagination } from '@/components/ui/pagination';
 import { api } from '@/lib/api-client';
 import { useUrlPagination } from '@/lib/use-url-state';
+import { formatDateTime } from '@/lib/format';
 import { RefreshCw } from 'lucide-react';
 
 type SystemLogEntry = {
@@ -60,12 +61,8 @@ const getLevelBadgeProps = (level?: string | null) => {
   return { variant: 'outline' as const };
 };
 
-const formatDateTime = (value?: string | null) => {
-  if (!value) return '—';
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleString();
-};
+const formatLogDateTime = (value?: string | null) =>
+  formatDateTime(value, { fallback: '—' });
 
 const toIsoIfSet = (value: string) => {
   if (!value) return '';
@@ -197,7 +194,7 @@ export default function LogsPage() {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
-    <ProtectedRoute>
+    <PermissionGuard variant="route" requireAuth>
       <ResponsiveLayout>
         <div className="flex flex-col gap-6 p-6">
           <div className="flex items-center justify-between">
@@ -349,7 +346,7 @@ export default function LogsPage() {
                         }
                       >
                         <TableCell className="whitespace-nowrap">
-                          {formatDateTime(entry.timestamp)}
+                          {formatLogDateTime(entry.timestamp)}
                         </TableCell>
                         <TableCell>
                           <Badge {...getLevelBadgeProps(entry.level)}>
@@ -395,6 +392,6 @@ export default function LogsPage() {
           />
         </div>
       </ResponsiveLayout>
-    </ProtectedRoute>
+    </PermissionGuard>
   );
 }

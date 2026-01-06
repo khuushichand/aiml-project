@@ -544,7 +544,9 @@ class AsyncRateLimiter:
     """Async wrapper for UserRateLimiter"""
 
     def __init__(self, rate_limiter: Optional[UserRateLimiter] = None):
-        self.rate_limiter = rate_limiter or get_rate_limiter()
+        self.rate_limiter = rate_limiter
+        if self.rate_limiter is None and not _rg_embeddings_enabled():
+            self.rate_limiter = get_rate_limiter()
         self.executor = None
         # Shadow-mode flag for comparing legacy vs RG behavior without breaking callers
         self.shadow_enabled = (
@@ -570,6 +572,8 @@ class AsyncRateLimiter:
             Tuple of (allowed, retry_after_seconds)
         """
         if not _rg_embeddings_enabled():
+            if self.rate_limiter is None:
+                self.rate_limiter = get_rate_limiter()
             # RG disabled: fall back to legacy limiter behavior.
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(
@@ -593,7 +597,7 @@ class AsyncRateLimiter:
 
             # Shadow comparison (best-effort): simulate legacy decision and record
             # mismatches between legacy allow/deny and RG allow/deny.
-            if self.shadow_enabled and record_shadow_mismatch is not None:
+            if self.shadow_enabled and record_shadow_mismatch is not None and self.rate_limiter is not None:
                 try:
                     loop = asyncio.get_running_loop()
                     if rg_allowed:
@@ -628,14 +632,7 @@ class AsyncRateLimiter:
             return rg_allowed, rg_decision.get("retry_after")
 
         _log_rg_embeddings_fallback("rg_decision_unavailable")
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            self.executor,
-            self.rate_limiter.check_rate_limit,
-            user_id,
-            cost,
-            ip_address,
-        )
+        return True, None
 
     async def record_usage_async(self, user_id: str, cost: int = 1):
         """Record usage asynchronously (for post-processing)"""
@@ -644,6 +641,8 @@ class AsyncRateLimiter:
 
     async def get_user_usage_async(self, user_id: str) -> Dict[str, any]:
         """Get user usage statistics asynchronously"""
+        if self.rate_limiter is None:
+            return {}
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             self.executor,

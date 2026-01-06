@@ -33,7 +33,6 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_storage_service_dep,
     require_api_key_scope,
 )
-from tldw_Server_API.app.api.v1.API_Deps.rate_limiting import limiter
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager
 from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService
@@ -273,7 +272,6 @@ async def list_api_keys(
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_api_key_scope("write"))],
 )
-@limiter.limit("10/minute")
 async def create_api_key(
     payload: APIKeyCreateRequest,
     request: Request,
@@ -314,7 +312,6 @@ class SelfVirtualAPIKeyRequest(BaseModel):
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_api_key_scope("write"))],
 )
-@limiter.limit("10/minute")
 async def create_virtual_api_key(
     payload: SelfVirtualAPIKeyRequest,
     request: Request,
@@ -345,7 +342,6 @@ async def create_virtual_api_key(
     response_model=APIKeyCreateResponse,
     dependencies=[Depends(require_api_key_scope("write"))],
 )
-@limiter.limit("10/minute")
 async def rotate_api_key(
     key_id: int,
     payload: APIKeyRotateRequest,
@@ -367,7 +363,6 @@ async def rotate_api_key(
     response_model=MessageResponse,
     dependencies=[Depends(require_api_key_scope("write"))],
 )
-@limiter.limit("10/minute")
 async def revoke_api_key(
     key_id: int,
     request: Request,

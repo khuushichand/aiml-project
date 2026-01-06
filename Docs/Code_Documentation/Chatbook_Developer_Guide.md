@@ -529,7 +529,7 @@ async def create_chatbook(
 ### Rate Limiting
 - Export/Import endpoints: 5 requests per minute (per IP)
 - Download endpoint: 20 requests per minute (per IP)
-- Implemented via SlowAPI; disabled in tests by `TEST_MODE`/`TESTING` envs
+- Implemented via Resource Governor (RG) ingress policies; tests typically disable RG via `TEST_MODE`
 
 ## Testing
 

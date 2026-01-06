@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import ProtectedRoute from '@/components/ProtectedRoute';
+import { PermissionGuard } from '@/components/PermissionGuard';
 import { ResponsiveLayout } from '@/components/ResponsiveLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -95,13 +95,7 @@ export default function ApiKeysPage() {
         params.search = searchQuery;
       }
       const data = await api.getUsers(Object.keys(params).length ? params : undefined);
-      if (Array.isArray(data)) {
-        setUsers(data);
-      } else if (data && typeof data === 'object' && Array.isArray((data as { users?: UserWithKeyCount[] }).users)) {
-        setUsers((data as { users: UserWithKeyCount[] }).users);
-      } else {
-        setUsers([]);
-      }
+      setUsers(data);
     } catch (err: unknown) {
       console.error('Failed to load users:', err);
       const message = err instanceof Error && err.message ? err.message : 'Failed to load users';
@@ -177,7 +171,7 @@ export default function ApiKeysPage() {
   };
 
   return (
-    <ProtectedRoute>
+    <PermissionGuard variant="route" requireAuth>
       <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             <div className="mb-8">
@@ -367,6 +361,6 @@ export default function ApiKeysPage() {
             </Card>
           </div>
       </ResponsiveLayout>
-    </ProtectedRoute>
+    </PermissionGuard>
   );
 }
