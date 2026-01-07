@@ -386,7 +386,7 @@ async def get_embeddings_status(
         # Check if embeddings exist by querying the per-user collection in ChromaDB
         user_id = resolve_user_id_for_request(
             current_user,
-            error_status=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            error_status=http_status.HTTP_400_BAD_REQUEST,
         )
         manager = ChromaDBManager(user_id=user_id, user_embedding_config=_user_embedding_config())
         collection_name = f"user_{user_id}_media_embeddings"
@@ -476,13 +476,13 @@ async def generate_embeddings(
                                 embedding_count=result.get('embedding_count'),
                                 chunks_processed=result.get('chunks_processed'))
                 except Exception as e:
-                    logger.debug(f"media_embeddings: failed to remove orphaned embedding row {row_id}: {e}")
+                    logger.debug(f"media_embeddings: failed to update job status for {job_id}: {e}")
             except Exception as e:
                 logger.error(f"Background embeddings generation failed for media {media_id}: {e}")
                 try:
                     jobs_update(job_id=job_id, user_id=user_id, status='failed', error=str(e))
                 except Exception as e:
-                    logger.debug(f"media_embeddings: failed to update embedding status for {row_id}: {e}")
+                    logger.debug(f"media_embeddings: failed to update job status for {job_id}: {e}")
 
         # Schedule the job on the current event loop; avoid creating tasks from non-async background thread
         asyncio.create_task(_run_job())
@@ -612,7 +612,10 @@ async def search_embeddings(
         )
     except Exception as exc:
         logger.error(f"Failed to embed search query: {exc}")
-        raise HTTPException(status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE, detail="Embedding service unavailable")
+        raise HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Embedding service unavailable",
+        ) from exc
 
     if not query_embeddings or not query_embeddings[0]:
         return EmbeddingsSearchResponse(results=[], count=0)
@@ -623,7 +626,10 @@ async def search_embeddings(
     try:
         collection = manager.client.get_collection(name=collection_name)
     except Exception:
-        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=f"Collection '{collection_name}' not found")
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail=f"Collection '{collection_name}' not found",
+        ) from None
 
     include = ["metadatas", "documents", "distances"]
     try:
@@ -635,7 +641,10 @@ async def search_embeddings(
         )
     except Exception as exc:
         logger.error(f"Chroma query failed for collection {collection_name}: {exc}")
-        raise HTTPException(status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Search failed")
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Search failed",
+        ) from exc
 
     ids = (query_result.get("ids") or [[]])[0]
     documents = (query_result.get("documents") or [[]])[0]
@@ -680,7 +689,7 @@ async def delete_embeddings(
         # Delete embeddings from per-user collection using a where filter
         user_id = resolve_user_id_for_request(
             current_user,
-            error_status=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            error_status=http_status.HTTP_400_BAD_REQUEST,
         )
         manager = ChromaDBManager(user_id=user_id, user_embedding_config=_user_embedding_config())
         collection_name = f"user_{user_id}_media_embeddings"
@@ -715,11 +724,13 @@ async def get_media_embedding_job(
     job_id: str,
     current_user: User = Depends(get_request_user)
 ):
-    uid = resolve_user_id_for_request(
+    user_id = resolve_user_id_for_request(
         current_user,
-        error_status=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+        error_status=http_status.HTTP_400_BAD_REQUEST,
     )
-    rec = jobs_get(job_id, uid)
+    # Ensure the jobs table exists for this user before querying.
+    jobs_init_db(user_id)
+    rec = jobs_get(job_id, user_id)
     if not rec:
         raise HTTPException(status_code=404, detail="Job not found")
     return rec
@@ -732,9 +743,11 @@ async def list_media_embedding_jobs(
     offset: int = 0,
     current_user: User = Depends(get_request_user)
 ):
-    uid = resolve_user_id_for_request(
+    user_id = resolve_user_id_for_request(
         current_user,
-        error_status=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+        error_status=http_status.HTTP_400_BAD_REQUEST,
     )
-    rows = jobs_list(user_id=uid, status=status, limit=limit, offset=offset)
+    # Ensure the jobs table exists for this user before listing.
+    jobs_init_db(user_id)
+    rows = jobs_list(user_id=user_id, status=status, limit=limit, offset=offset)
     return {"data": rows, "pagination": {"limit": limit, "offset": offset, "count": len(rows)}}

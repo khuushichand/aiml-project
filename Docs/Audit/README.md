@@ -66,9 +66,11 @@ Notes:
 
 ### Initialize (usually via DI)
 
+Note: When using dependency injection (the recommended approach in multi-user scenarios), the service is initialized with a per-user path under `<USER_DB_BASE_DIR>/<user_id>/audit/`. The example below shows direct instantiation for single-user or testing scenarios.
+
 ```python
 from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService
-svc = UnifiedAuditService(db_path="./Databases/unified_audit.db")
+svc = UnifiedAuditService(db_path="./Databases/unified_audit.db")  # Non-DI usage
 await svc.initialize()
 ```
 

@@ -298,7 +298,7 @@ export default function UserDetailPage() {
 
   if (loading) {
     return (
-      <PermissionGuard variant="route" requireAuth>
+      <PermissionGuard variant="route" requireAuth role="admin">
         <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             <div className="text-center text-muted-foreground py-8">Loading user...</div>
@@ -311,7 +311,7 @@ export default function UserDetailPage() {
   if (!user) {
     if (!isAuthorized) {
       return (
-        <PermissionGuard variant="route" requireAuth>
+        <PermissionGuard variant="route" requireAuth role="admin">
           <ResponsiveLayout>
             <div className="p-4 lg:p-8">
               <Alert variant="destructive">
@@ -327,7 +327,7 @@ export default function UserDetailPage() {
       );
     }
     return (
-      <PermissionGuard variant="route" requireAuth>
+      <PermissionGuard variant="route" requireAuth role="admin">
         <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             <Alert variant="destructive">
@@ -346,7 +346,7 @@ export default function UserDetailPage() {
   const storage = formatStorage(user.storage_used_mb || 0, user.storage_quota_mb || 0);
 
   return (
-    <PermissionGuard variant="route" requireAuth>
+    <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             {/* Header */}

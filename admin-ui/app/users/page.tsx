@@ -451,7 +451,7 @@ function UsersPageContent() {
   };
 
   return (
-    <PermissionGuard variant="route" requireAuth>
+    <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             <div className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -841,7 +841,7 @@ function UsersPageContent() {
 export default function UsersPage() {
   return (
     <Suspense fallback={
-      <PermissionGuard variant="route" requireAuth>
+      <PermissionGuard variant="route" requireAuth role="admin">
         <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             <div className="mb-8">

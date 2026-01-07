@@ -5,8 +5,10 @@ Implements minimal definition CRUD and run lifecycle with a no-op engine.
 """
 
 import asyncio
+import errno
 import json
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional, Set
 from uuid import uuid4
@@ -87,6 +89,86 @@ def _get_db() -> WorkflowsDatabase:
 MAX_DEFINITION_BYTES = 256 * 1024
 MAX_STEPS = 50
 MAX_STEP_CONFIG_BYTES = 32 * 1024
+
+_JSONSCHEMA_REQUIRED_RE = re.compile(r"'([^']+)' is a required property")
+_JSONSCHEMA_ADDITIONAL_RE = re.compile(r"'([^']+)' was unexpected")
+
+
+def _safe_jsonschema_detail(exc: Exception) -> str:
+    try:
+        from jsonschema.exceptions import ValidationError  # type: ignore
+    except Exception:
+        return "schema validation failed"
+    if not isinstance(exc, ValidationError):
+        return "schema validation failed"
+
+    path = ".".join(str(p) for p in exc.path) if exc.path else ""
+    validator = str(exc.validator or "")
+    message = None
+
+    if validator == "required":
+        missing = None
+        match = _JSONSCHEMA_REQUIRED_RE.search(str(exc.message))
+        if match:
+            missing = match.group(1)
+        message = f"missing required field '{missing}'" if missing else "missing required field"
+    elif validator == "additionalProperties":
+        extra = None
+        match = _JSONSCHEMA_ADDITIONAL_RE.search(str(exc.message))
+        if match:
+            extra = match.group(1)
+        message = f"unknown field '{extra}'" if extra else "unknown field"
+    elif validator == "type":
+        expected = exc.validator_value
+        message = f"expected type '{expected}'" if expected else "invalid type"
+
+    if message is None:
+        message = " ".join(str(exc.message or "schema validation failed").split())
+        if len(message) > 200:
+            message = f"{message[:200]}..."
+
+    if path:
+        return f"{message} at '{path}'"
+    return message
+
+
+def _classify_db_error(exc: Exception) -> str:
+    exc_name = type(exc).__name__
+    if isinstance(exc, sqlite3.IntegrityError) or exc_name in {"IntegrityError", "UniqueViolation", "ForeignKeyViolation", "CheckViolation"}:
+        return "constraint_violation"
+    if isinstance(exc, sqlite3.Error) or exc_name in {"OperationalError", "DatabaseError", "InterfaceError"}:
+        return "database_error"
+    if isinstance(exc, TimeoutError):
+        return "transient_error"
+    return "internal_error"
+
+
+def _classify_webhook_exception(exc: Exception) -> str:
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+        return "transient_error"
+    if isinstance(exc, PermissionError):
+        return "permanent_error"
+    if isinstance(exc, OSError):
+        if getattr(exc, "errno", None) in {errno.EACCES, errno.EPERM}:
+            return "permanent_error"
+        return "transient_error"
+    try:
+        import httpx
+        if isinstance(exc, httpx.TimeoutException):
+            return "transient_error"
+        if isinstance(exc, httpx.RequestError):
+            return "transient_error"
+        if isinstance(exc, httpx.InvalidURL):
+            return "permanent_error"
+    except Exception:
+        pass
+    return "unknown_error"
+
+
+def _classify_webhook_status(status_code: int) -> str:
+    if status_code in {408, 425, 429} or 500 <= status_code < 600:
+        return "transient_error"
+    return "permanent_error"
 
 
 def _validate_definition_payload(defn: Dict[str, Any]) -> None:
@@ -224,13 +306,15 @@ def _validate_definition_payload(defn: Dict[str, Any]) -> None:
                     jsonschema.validate(cfg, schema)  # type: ignore[attr-defined]
                 except Exception as e:  # pragma: no cover - depends on optional dep
                     logger.debug(
-                        "Workflows validation: invalid config for step {}: {}",
+                        "Workflows validation: invalid config for step {}: {} - {}",
                         s.get("id", t),
+                        type(e).__name__,
                         e,
                     )
+                    detail = _safe_jsonschema_detail(e)
                     raise HTTPException(
                         status_code=422,
-                        detail=f"Invalid config for step '{s.get('id', t)}'",
+                        detail=f"Invalid config for step '{s.get('id', t)}': {detail}",
                     ) from e
 
     # Graph/DAG robustness checks (detect explicit cycles and unknown targets)
@@ -1727,7 +1811,13 @@ async def replay_webhook_dlq(
     tenant_id = str(target.get("tenant_id") or "default")
     try:
         body = json.loads(target.get("body_json") or "{}")
-    except Exception:
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        logger.debug(
+            "Workflows DLQ replay: failed to parse body_json for dlq_id={}: {} - {}",
+            dlq_id,
+            type(exc).__name__,
+            exc,
+        )
         body = {}
 
     # Test-mode short-circuit
@@ -1735,8 +1825,20 @@ async def replay_webhook_dlq(
     if _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"} and _os.getenv("WORKFLOWS_TEST_REPLAY_SUCCESS", "").lower() in {"1", "true", "yes", "on"}:
         try:
             db.delete_webhook_dlq(dlq_id=dlq_id)
+        except sqlite3.Error as exc:
+            logger.debug(
+                "Workflows DLQ replay: failed to delete dlq_id={} in test mode: {} - {}",
+                dlq_id,
+                type(exc).__name__,
+                exc,
+            )
         except Exception as exc:
-            logger.debug("Workflows DLQ replay: failed to delete dlq_id={} in test mode: {}", dlq_id, exc)
+            logger.debug(
+                "Workflows DLQ replay: failed to delete dlq_id={} in test mode: {} - {}",
+                dlq_id,
+                type(exc).__name__,
+                exc,
+            )
         return {"ok": True, "simulated": True}
 
     # Policy
@@ -1747,7 +1849,12 @@ async def replay_webhook_dlq(
     except HTTPException:
         raise
     except Exception as exc:
-        logger.debug("Workflows DLQ replay: egress policy check failed for dlq_id={}: {}", dlq_id, exc)
+        logger.debug(
+            "Workflows DLQ replay: egress policy check failed for dlq_id={}: {} - {}",
+            dlq_id,
+            type(exc).__name__,
+            exc,
+        )
 
     # Attempt delivery with the same headers/signing as engine
     try:
@@ -1766,17 +1873,7 @@ async def replay_webhook_dlq(
             headers["X-Workflows-Signature"] = sig
             headers["X-Hub-Signature-256"] = f"sha256={sig}"
         timeout = float(_os.getenv("WORKFLOWS_WEBHOOK_TIMEOUT", "10"))
-        resp = None
-        try:
-            import types as _types
-            _is_module = isinstance(httpx, _types.ModuleType)
-            if not _is_module or not hasattr(httpx, "Client"):
-                raise RuntimeError("httpx appears monkeypatched; falling back to urllib")
-            from tldw_Server_API.app.core.http_client import create_client
-            with create_client(timeout=timeout) as client:
-                resp = client.post(url, data=raw, headers=headers)
-        except Exception:
-            # Robust fallback using urllib with proxies disabled
+        def _post_via_urllib() -> Any:
             import urllib.request as _ur
             import ssl as _ssl
             req = _ur.Request(url, data=raw.encode("utf-8"), headers=headers, method="POST")
@@ -1791,29 +1888,115 @@ async def replay_webhook_dlq(
             class _Resp:
                 def __init__(self, status_code):
                     self.status_code = status_code
-            resp = _Resp(int(code))
+            return _Resp(int(code))
+
+        resp = None
+        try:
+            import types as _types
+            _is_module = isinstance(httpx, _types.ModuleType)
+            if not _is_module or not hasattr(httpx, "Client"):
+                raise RuntimeError("httpx appears monkeypatched; falling back to urllib")
+            from tldw_Server_API.app.core.http_client import create_client
+            with create_client(timeout=timeout) as client:
+                resp = client.post(url, data=raw, headers=headers)
+        except httpx.HTTPError as exc:
+            logger.debug(
+                "Workflows DLQ replay: httpx error for dlq_id={}: {} - {}",
+                dlq_id,
+                type(exc).__name__,
+                exc,
+            )
+            resp = _post_via_urllib()
+        except Exception as exc:
+            logger.debug(
+                "Workflows DLQ replay: httpx fallback for dlq_id={}: {} - {}",
+                dlq_id,
+                type(exc).__name__,
+                exc,
+            )
+            resp = _post_via_urllib()
         status_code = getattr(resp, "status_code", None)
         logger.debug("DLQ replay POST to {} -> {}", url, status_code)
         if 200 <= int(resp.status_code) < 400:
             try:
                 db.delete_webhook_dlq(dlq_id=dlq_id)
+            except sqlite3.Error as exc:
+                logger.debug(
+                    "Workflows DLQ replay: failed to delete dlq_id={}: {} - {}",
+                    dlq_id,
+                    type(exc).__name__,
+                    exc,
+                )
             except Exception as exc:
-                logger.debug("Workflows DLQ replay: failed to delete dlq_id={}: {}", dlq_id, exc)
+                logger.debug(
+                    "Workflows DLQ replay: failed to delete dlq_id={}: {} - {}",
+                    dlq_id,
+                    type(exc).__name__,
+                    exc,
+                )
             return {"ok": True, "status_code": int(resp.status_code)}
         else:
             # Update attempts/backoff minimally
-            db.update_webhook_dlq_failure(dlq_id=dlq_id, last_error=f"status={resp.status_code}", next_attempt_at_iso=None)
-            return {"ok": False, "status_code": int(resp.status_code)}
+            error_category = _classify_webhook_status(int(resp.status_code))
+            try:
+                db.update_webhook_dlq_failure(
+                    dlq_id=dlq_id,
+                    last_error=f"status={resp.status_code}",
+                    next_attempt_at_iso=None,
+                )
+            except sqlite3.Error as exc:
+                logger.debug(
+                    "Workflows DLQ replay: failed to update failure record for dlq_id={}: {} - {}",
+                    dlq_id,
+                    type(exc).__name__,
+                    exc,
+                )
+            except Exception as exc:
+                logger.debug(
+                    "Workflows DLQ replay: failed to update failure record for dlq_id={}: {} - {}",
+                    dlq_id,
+                    type(exc).__name__,
+                    exc,
+                )
+            return {
+                "ok": False,
+                "status_code": int(resp.status_code),
+                "error": "delivery_failed",
+                "error_category": error_category,
+            }
     except HTTPException:
         raise
     except Exception as e:
-        logger.debug("Workflows DLQ replay: delivery failed for dlq_id={}: {}", dlq_id, e)
+        error_category = _classify_webhook_exception(e)
+        logger.debug(
+            "Workflows DLQ replay: delivery failed for dlq_id={}: {} - {}",
+            dlq_id,
+            type(e).__name__,
+            e,
+        )
         try:
             error_detail = f"{type(e).__name__}: {e}"
             db.update_webhook_dlq_failure(dlq_id=dlq_id, last_error=error_detail, next_attempt_at_iso=None)
-        except Exception:
-            logger.debug("Workflows DLQ replay: failed to update failure record for dlq_id={}", dlq_id)
-        return {"ok": False, "error": "delivery_failed"}
+        except sqlite3.Error as exc:
+            logger.debug(
+                "Workflows DLQ replay: failed to update failure record for dlq_id={}: {} - {}",
+                dlq_id,
+                type(exc).__name__,
+                exc,
+            )
+        except Exception as exc:
+            logger.debug(
+                "Workflows DLQ replay: failed to update failure record for dlq_id={}: {} - {}",
+                dlq_id,
+                type(exc).__name__,
+                exc,
+            )
+        return {
+            "ok": False,
+            "error": "delivery_failed",
+            "error_type": type(e).__name__,
+            "error_category": error_category,
+        }
 
 
 @router.get(
@@ -1982,8 +2165,18 @@ async def verify_artifacts_batch(
                 "recorded": recorded,
             })
         except Exception as e:
-            logger.debug("Workflows artifact verify: hash failed for artifact_id={}: {}", aid, e)
-            results.append({"artifact_id": aid, "ok": False, "error": "hash_error"})
+            logger.debug(
+                "Workflows artifact verify: hash failed for artifact_id={}: {} - {}",
+                aid,
+                type(e).__name__,
+                e,
+            )
+            results.append({
+                "artifact_id": aid,
+                "ok": False,
+                "error": "hash_error",
+                "error_type": type(e).__name__,
+            })
 
     return {"results": results}
 
@@ -3042,12 +3235,22 @@ async def approve_step(
     try:
         db.approve_step_decision(run_id=run_id, step_id=step_id, approved_by=str(current_user.id), comment=payload.comment or "")
     except Exception as exc:
+        error_category = _classify_db_error(exc)
         logger.exception(
-            "Workflows approval: failed to persist decision for run_id={} step_id={}",
+            "Workflows approval: failed to persist decision for run_id={} step_id={} error_category={}",
             run_id,
             step_id,
+            error_category,
         )
-        raise HTTPException(status_code=500, detail="Failed to approve step") from exc
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "approval_failed",
+                "message": "Failed to approve step",
+                "error_category": error_category,
+                "error_type": type(exc).__name__,
+            },
+        ) from exc
 
     # Resume run from next step
     engine = WorkflowEngine(db)
@@ -3079,17 +3282,176 @@ async def reject_step(
     is_admin = bool(getattr(current_user, "is_admin", False))
     if str(run.user_id) != str(current_user.id) and not is_admin:
         raise HTTPException(status_code=404, detail="Run not found")
-    try:
-        db.reject_step_decision(run_id=run_id, step_id=step_id, approved_by=str(current_user.id), comment=payload.comment or "")
-        db.update_run_status(run_id, status="failed", status_reason="rejected_by_human", ended_at=_utcnow_iso())
-        db.append_event(str(getattr(current_user, 'tenant_id', 'default')), run_id, "human_rejected", {"step_id": step_id})
-    except Exception as exc:
-        logger.exception(
-            "Workflows rejection: failed to persist decision for run_id={} step_id={}",
-            run_id,
-            step_id,
-        )
-        raise HTTPException(status_code=500, detail="Failed to reject step") from exc
+    if db.backend:
+        try:
+            with db.backend.transaction() as conn:  # type: ignore[union-attr]
+                try:
+                    db.reject_step_decision(
+                        run_id=run_id,
+                        step_id=step_id,
+                        approved_by=str(current_user.id),
+                        comment=payload.comment or "",
+                        connection=conn,
+                    )
+                except Exception as exc:
+                    error_category = _classify_db_error(exc)
+                    logger.exception(
+                        "Workflows rejection: failed to record decision for run_id={} step_id={} error_category={}",
+                        run_id,
+                        step_id,
+                        error_category,
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail={
+                            "error": "rejection_failed",
+                            "message": "Failed to record step rejection",
+                            "error_category": error_category,
+                            "error_type": type(exc).__name__,
+                        },
+                    ) from exc
+                try:
+                    db.update_run_status(
+                        run_id,
+                        status="failed",
+                        status_reason="rejected_by_human",
+                        ended_at=_utcnow_iso(),
+                        connection=conn,
+                    )
+                except Exception as exc:
+                    error_category = _classify_db_error(exc)
+                    logger.exception(
+                        "Workflows rejection: failed to mark run rejected for run_id={} step_id={} error_category={}",
+                        run_id,
+                        step_id,
+                        error_category,
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail={
+                            "error": "rejection_failed",
+                            "message": "Failed to mark run as rejected",
+                            "error_category": error_category,
+                            "error_type": type(exc).__name__,
+                        },
+                    ) from exc
+                try:
+                    db.append_event(
+                        str(getattr(current_user, "tenant_id", "default")),
+                        run_id,
+                        "human_rejected",
+                        {"step_id": step_id},
+                        connection=conn,
+                    )
+                except Exception as exc:
+                    error_category = _classify_db_error(exc)
+                    logger.exception(
+                        "Workflows rejection: failed to append event for run_id={} step_id={} error_category={}",
+                        run_id,
+                        step_id,
+                        error_category,
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail={
+                            "error": "rejection_failed",
+                            "message": "Failed to append workflow event",
+                            "error_category": error_category,
+                            "error_type": type(exc).__name__,
+                        },
+                    ) from exc
+        except HTTPException:
+            raise
+        except Exception as exc:
+            error_category = _classify_db_error(exc)
+            logger.exception(
+                "Workflows rejection: failed to start transaction for run_id={} step_id={} error_category={}",
+                run_id,
+                step_id,
+                error_category,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "rejection_failed",
+                    "message": "Failed to record step rejection",
+                    "error_category": error_category,
+                    "error_type": type(exc).__name__,
+                },
+            ) from exc
+    else:
+        try:
+            db.reject_step_decision(
+                run_id=run_id,
+                step_id=step_id,
+                approved_by=str(current_user.id),
+                comment=payload.comment or "",
+            )
+        except Exception as exc:
+            error_category = _classify_db_error(exc)
+            logger.exception(
+                "Workflows rejection: failed to record decision for run_id={} step_id={} error_category={}",
+                run_id,
+                step_id,
+                error_category,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "rejection_failed",
+                    "message": "Failed to record step rejection",
+                    "error_category": error_category,
+                    "error_type": type(exc).__name__,
+                },
+            ) from exc
+        try:
+            db.update_run_status(
+                run_id,
+                status="failed",
+                status_reason="rejected_by_human",
+                ended_at=_utcnow_iso(),
+            )
+        except Exception as exc:
+            error_category = _classify_db_error(exc)
+            logger.exception(
+                "Workflows rejection: failed to mark run rejected for run_id={} step_id={} error_category={}",
+                run_id,
+                step_id,
+                error_category,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "rejection_failed",
+                    "message": "Failed to mark run as rejected",
+                    "error_category": error_category,
+                    "error_type": type(exc).__name__,
+                },
+            ) from exc
+        try:
+            db.append_event(
+                str(getattr(current_user, "tenant_id", "default")),
+                run_id,
+                "human_rejected",
+                {"step_id": step_id},
+            )
+        except Exception as exc:
+            error_category = _classify_db_error(exc)
+            logger.exception(
+                "Workflows rejection: failed to append event for run_id={} step_id={} error_category={}",
+                run_id,
+                step_id,
+                error_category,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "rejection_failed",
+                    "message": "Failed to append workflow event",
+                    "error_category": error_category,
+                    "error_type": type(exc).__name__,
+                },
+            ) from exc
     return {"ok": True}
 
 

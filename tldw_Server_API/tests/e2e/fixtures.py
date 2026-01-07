@@ -55,8 +55,17 @@ def _build_inprocess_httpx_client() -> httpx.Client:
             db_path = tmp_dir / "users.db"
             _INPROCESS_DB_URL = f"sqlite:///{db_path}"
             os.environ["DATABASE_URL"] = _INPROCESS_DB_URL
+    os.environ.setdefault("ENABLE_REGISTRATION", "true")
+    os.environ.setdefault("REQUIRE_REGISTRATION_CODE", "false")
+    os.environ.setdefault("REGISTRATION_ENABLED", os.environ["ENABLE_REGISTRATION"])
+    os.environ.setdefault("REGISTRATION_REQUIRE_CODE", os.environ["REQUIRE_REGISTRATION_CODE"])
 
     # Import lazily to avoid heavy init unless needed
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+        reset_settings()
+    except Exception:
+        pass
     from tldw_Server_API.app.main import app
     try:
         transport = httpx.ASGITransport(app=app, lifespan="on")

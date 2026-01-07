@@ -76,10 +76,10 @@
       - multi_user: set AUTH_MODE=multi_user, validate DATABASE_URL, offer to run AuthNZ initializer (`python -m tldw_Server_API.app.core.AuthNZ.initialize`).
   - DB initialization
       - SQLite: ensure on-disk structure exists per-user conventions. Confirm writeability. Canonical defaults:
-          - Content (Media DB v2): `<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`
-          - Notes/Chats: `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`
-          - Evaluations: `Databases/evaluations.db`
-          - AuthNZ users (if SQLite): `Databases/users.db` (PostgreSQL recommended for multi-user)
+          - Content (Media DB v2, per-user): `<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`
+          - Notes/Chats (per-user): `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`
+          - Evaluations (shared): `Databases/evaluations.db`
+          - AuthNZ users (shared when SQLite): `Databases/users.db` (PostgreSQL recommended for multi-user)
       - PostgreSQL: validate connection and permissions; print migration helper instructions (no implicit destructive ops). For tests, reuse the AuthNZ Postgres fixture rather than rolling your own.
   - Providers
       - Prompt for LLM/STT/TTS keys (OpenAI, Anthropic, local); prefer `.env` as the source of truth. Generate/update `Config_Files/config.txt` only when missing or explicitly requested.

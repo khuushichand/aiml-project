@@ -257,6 +257,8 @@ Database design is covered in depth in:
 
 This section gives the quick mental model.
 
+Note: `<USER_DB_BASE_DIR>` defaults to `Databases/user_databases/` and can be overridden via the `USER_DB_BASE_DIR` setting.
+
 **AuthNZ DB**
 - Default (single-user): SQLite file configured by `DATABASE_URL` (defaults to `sqlite:///<USER_DB_BASE_DIR>/<SINGLE_USER_FIXED_ID>/tldw.db`).
 - Multi-user deployments typically use PostgreSQL.
@@ -303,7 +305,7 @@ tldw_server supports two primary auth modes:
 Per-user data:
 
 - User identity (from API key or JWT) is mapped to a **user_id**.
-- Per-user DB paths are derived from this user_id under `Databases/user_databases/`.
+- Per-user DB paths are derived from this user_id under `<USER_DB_BASE_DIR>/` (defaults to `Databases/user_databases/` unless configured).
 - RAG, notes, prompts, and vector stores all use these per-user roots to keep content logically isolated.
 
 See:

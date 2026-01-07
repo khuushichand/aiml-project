@@ -14,7 +14,7 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { api } from '@/lib/api-client';
 import { formatBytes, formatDateTime } from '@/lib/format';
 import { useUrlPagination } from '@/lib/use-url-state';
-import { usePagedResource } from '@/lib/use-paged-resource';
+import { usePagedResource, type LoadOptions } from '@/lib/use-paged-resource';
 import type { BackupItem } from '@/types';
 import { Database } from 'lucide-react';
 import { Field } from '@/components/data-ops/Field';
@@ -39,7 +39,6 @@ const BACKUP_TYPES = [
 
 const formatBackupDate = (value?: string | null) => formatDateTime(value, {
   fallback: '—',
-  locale: 'en-US',
   options: {
     year: 'numeric',
     month: '2-digit',
@@ -75,7 +74,7 @@ export const BackupsSection = ({ refreshSignal }: BackupsSectionProps) => {
     return params;
   }, [listDataset, listUserId, page, pageSize]);
 
-  const loadBackups = useCallback(({ signal }: { signal?: AbortSignal } = {}) =>
+  const loadBackups = useCallback(({ signal }: LoadOptions = {}) =>
     api.getBackups(backupParams, signal ? { signal } : undefined), [backupParams]);
 
   const {

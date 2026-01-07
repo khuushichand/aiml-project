@@ -9,7 +9,7 @@ workflow jobs.
 
 ## Prerequisites
 
-- Back up all SQLite databases (`<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`, `Databases/workflows.db`, `<USER_DB_BASE_DIR>/*/ChaChaNotes.db`, `Analytics.db`).
+- Back up all SQLite databases (`<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`, `Databases/workflows.db`, `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`, `Analytics.db`). If you have multiple users, repeat for each `<user_id>`.
 - Install PostgreSQL and ensure the target database is accessible (local host or remote).
 - Install the Python dependency `psycopg` (listed under pyproject extras, e.g., `.[multiplayer]`). For convenience use the binary extra:
   - pip install "psycopg[binary]"
@@ -38,17 +38,20 @@ for the main media database and optionally pass `--chacha-sqlite`, `--analytics-
 same pass.
 
 ```bash
-python -m tldw_Server_API.app.core.DB_Management.migration_tools \
-      --content-sqlite <USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db \
-      --chacha-sqlite <USER_DB_BASE_DIR>/default/ChaChaNotes.db \
-      --analytics-sqlite Analytics.db \
-      --workflows-sqlite Databases/workflows.db \
-      --pg-host "$PGHOST" \
-      --pg-port "$PGPORT" \
-      --pg-database "$PGDATABASE" \
-      --pg-user "$PGUSER" \
-      --pg-password "$PGPASSWORD" \
-      --batch-size 500
+# Repeat per user_id (single-user installs typically use the fixed default user_id).
+for user_id in $(ls -1 "$USER_DB_BASE_DIR"); do
+  python -m tldw_Server_API.app.core.DB_Management.migration_tools \
+        --content-sqlite "<USER_DB_BASE_DIR>/${user_id}/Media_DB_v2.db" \
+        --chacha-sqlite "<USER_DB_BASE_DIR>/${user_id}/ChaChaNotes.db" \
+        --analytics-sqlite Analytics.db \
+        --workflows-sqlite Databases/workflows.db \
+        --pg-host "$PGHOST" \
+        --pg-port "$PGPORT" \
+        --pg-database "$PGDATABASE" \
+        --pg-user "$PGUSER" \
+        --pg-password "$PGPASSWORD" \
+        --batch-size 500
+done
 ```
 
 The script performs the following actions for each supplied database:

@@ -9,6 +9,7 @@ import type {
   RegistrationCode,
   RetentionPoliciesResponse,
   User,
+  UserWithKeyCount,
 } from '@/types';
 export { ApiError };
 
@@ -78,7 +79,7 @@ export const api = {
   getUsers: async (params?: Record<string, string>) => {
     const queryParams = params ? new URLSearchParams(params).toString() : '';
     const response = await requestJson(`/admin/users${queryParams ? `?${queryParams}` : ''}`);
-    return normalizeListResponse<User>(response, ['users', 'items']);
+    return normalizeListResponse<UserWithKeyCount>(response, ['users', 'items']);
   },
   createUser: (data: Record<string, unknown>) => requestJson('/admin/users', {
     method: 'POST',

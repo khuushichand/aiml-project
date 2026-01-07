@@ -8,6 +8,7 @@ import asyncio
 import threading
 import re
 import os
+import time
 from weakref import WeakKeyDictionary
 #
 # 3rd-party imports
@@ -61,6 +62,8 @@ _TEST_SESSION_STATE: dict = {"sid": 1000, "sessions": {}}
 _TEST_SESSION_LOCKS: "WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = WeakKeyDictionary()
 _TEST_SESSION_LOCK_GUARD = threading.Lock()
 _TEST_SESSION_STATE_GUARD = threading.Lock()
+_TEST_EPHEMERAL_STATE: dict = {"values": {}}
+_TEST_EPHEMERAL_STATE_GUARD = threading.Lock()
 
 _SENSITIVE_USER_KEY_PATTERN = re.compile(
     r"(password|secret|token|api[_-]?key|ssn|totp|otp|mfa|backup_codes|recovery_codes)",
@@ -367,6 +370,28 @@ async def get_session_manager_dep() -> SessionManager:
                                     changed += 1
                             return changed
 
+                async def store_ephemeral_value(self, key: str, value: str, ttl_seconds: int) -> None:
+                    ttl = max(int(ttl_seconds), 1)
+                    expires_at = time.monotonic() + ttl
+                    with _TEST_EPHEMERAL_STATE_GUARD:
+                        _TEST_EPHEMERAL_STATE["values"][key] = (value, expires_at)
+
+                async def get_ephemeral_value(self, key: str) -> Optional[str]:
+                    now = time.monotonic()
+                    with _TEST_EPHEMERAL_STATE_GUARD:
+                        entry = _TEST_EPHEMERAL_STATE["values"].get(key)
+                        if not entry:
+                            return None
+                        value, expires_at = entry
+                        if expires_at <= now:
+                            _TEST_EPHEMERAL_STATE["values"].pop(key, None)
+                            return None
+                        return value
+
+                async def delete_ephemeral_value(self, key: str) -> None:
+                    with _TEST_EPHEMERAL_STATE_GUARD:
+                        _TEST_EPHEMERAL_STATE["values"].pop(key, None)
+
             return _StubSessionManager()  # type: ignore[return-value]
     except Exception as exc:
         logger.debug(
@@ -662,8 +687,11 @@ async def get_current_user(
             if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
                 try:
                     extra_headers["X-TLDW-Auth-Reason"] = f"auth-error:{exc.detail}"
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(
+                        "get_current_user: failed to set TEST_MODE auth-error diagnostic header: {}",
+                        exc,
+                    )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Authentication required",
@@ -683,8 +711,11 @@ async def get_current_user(
         if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
             try:
                 extra_headers["X-TLDW-Auth-Reason"] = f"auth-error:{e}"
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(
+                    "get_current_user: failed to set TEST_MODE auth-error diagnostic header: {}",
+                    exc,
+                )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
@@ -1231,6 +1262,29 @@ async def get_optional_current_user(
 #
 # Rate Limiting Dependencies
 
+def _rg_enabled_for_request(request: Request) -> bool:
+    try:
+        if getattr(request.state, "rg_policy_id", None):
+            return True
+    except Exception:
+        pass
+    try:
+        from tldw_Server_API.app.core.config import rg_enabled as _rg_enabled_flag
+    except Exception as exc:
+        logger.debug("RG enablement check failed; falling back to legacy limiter: {}", exc)
+        _rg_enabled_flag = None
+    if _rg_enabled_flag is not None:
+        try:
+            return bool(_rg_enabled_flag(False))
+        except Exception as exc:
+            logger.debug("RG enablement check failed; falling back to legacy limiter: {}", exc)
+            return False
+    env_val = os.getenv("RG_ENABLED")
+    if env_val is None:
+        return False
+    return env_val.strip().lower() in {"1", "true", "yes", "on", "y"}
+
+
 async def check_rate_limit(request: Request) -> None:
     """
     No-op rate limit dependency.
@@ -1238,14 +1292,91 @@ async def check_rate_limit(request: Request) -> None:
     Resource Governor enforces ingress limits; keep this dependency to avoid
     touching call sites while migrating off legacy AuthNZ limiters.
     """
-    _ = request
-    return
+    # TODO: remove legacy fallback once RG migration is confirmed in production.
+    if _rg_enabled_for_request(request):
+        return
+
+    settings = get_settings()
+    if not getattr(settings, "RATE_LIMIT_ENABLED", True):
+        return
+
+    try:
+        rate_limiter = await get_rate_limiter()
+    except Exception as exc:
+        logger.debug("Legacy rate limiter unavailable; skipping rate limit check: {}", exc)
+        return
+
+    if not getattr(rate_limiter, "enabled", False):
+        return
+
+    endpoint = request.url.path if getattr(request, "url", None) else "unknown"
+    client_ip = request.client.host if getattr(request, "client", None) else "unknown"
+    user_id = getattr(request.state, "user_id", None)
+    try:
+        if user_id is not None:
+            allowed, meta = await rate_limiter.check_user_rate_limit(
+                int(user_id),
+                endpoint,
+                limit=settings.RATE_LIMIT_PER_MINUTE,
+                window_minutes=1,
+            )
+        else:
+            allowed, meta = await rate_limiter.check_rate_limit(
+                identifier=f"ip:{client_ip}",
+                endpoint=endpoint,
+                limit=settings.RATE_LIMIT_PER_MINUTE,
+                window_minutes=1,
+            )
+    except Exception as exc:
+        logger.debug("Legacy rate limiter check failed; skipping rate limit check: {}", exc)
+        return
+
+    if not allowed:
+        detail = meta.get("error") if isinstance(meta, dict) else None
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=detail or "Rate limit exceeded.",
+        )
 
 
 async def check_auth_rate_limit(request: Request) -> None:
     """No-op auth rate limit dependency (RG handles ingress limits)."""
-    _ = request
-    return
+    # TODO: remove legacy fallback once RG migration is confirmed in production.
+    if _rg_enabled_for_request(request):
+        return
+
+    settings = get_settings()
+    if not getattr(settings, "RATE_LIMIT_ENABLED", True):
+        return
+
+    try:
+        rate_limiter = await get_rate_limiter()
+    except Exception as exc:
+        logger.debug("Legacy rate limiter unavailable; skipping auth rate limit check: {}", exc)
+        return
+
+    if not getattr(rate_limiter, "enabled", False):
+        return
+
+    endpoint = request.url.path if getattr(request, "url", None) else "auth"
+    client_ip = request.client.host if getattr(request, "client", None) else "unknown"
+    try:
+        allowed, meta = await rate_limiter.check_rate_limit(
+            identifier=f"ip:{client_ip}",
+            endpoint=f"auth:{endpoint}",
+            limit=settings.RATE_LIMIT_PER_MINUTE,
+            window_minutes=1,
+        )
+    except Exception as exc:
+        logger.debug("Legacy auth rate limiter check failed; skipping auth rate limit check: {}", exc)
+        return
+
+    if not allowed:
+        detail = meta.get("error") if isinstance(meta, dict) else None
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=detail or "Rate limit exceeded.",
+        )
 
 
 # ---------------------------------------------------------------------------------
@@ -1342,8 +1473,11 @@ def rbac_rate_limit(resource: str):
         await enforce_rbac_rate_limit(request, resource, db_pool)
     try:
         setattr(_dep, "_tldw_rate_limit_resource", resource)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug(
+            "rbac_rate_limit: unable to attach rate-limit metadata to dependency: {}",
+            exc,
+        )
     return _dep
 
 
@@ -1390,9 +1524,12 @@ def require_token_scope(
                 jwt_service = await get_jwt_service_dep()
             if isinstance(db_pool, _Depends) or db_pool is None:
                 db_pool = await get_db_pool()
-        except Exception:
+        except Exception as exc:
             # Best effort: if resolution fails, leave as-is; downstream code handles missing services.
-            pass
+            logger.debug(
+                "require_token_scope: dependency resolution failed; continuing with provided services: {}",
+                exc,
+            )
 
         # If we have Authorization bearer, apply JWT-based checks; otherwise, try X-API-KEY checks
         if credentials:
@@ -1405,8 +1542,11 @@ def require_token_scope(
             try:
                 if allow_admin_bypass and str(payload.get("role", "")) == "admin":
                     return None
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(
+                    "require_token_scope: admin bypass check failed; continuing: {}",
+                    exc,
+                )
             tok_scope = str(payload.get("scope") or "").strip()
             if tok_scope:
                 try:
@@ -1427,8 +1567,11 @@ def require_token_scope(
                             raise HTTPException(status_code=403, detail="Forbidden: endpoint not permitted for token")
             except HTTPException:
                 raise
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(
+                    "require_token_scope: endpoint allowlist enforcement failed; continuing: {}",
+                    exc,
+                )
 
             # Enforce HTTP method allowlist
             try:
@@ -1439,8 +1582,11 @@ def require_token_scope(
                         raise HTTPException(status_code=403, detail="Forbidden: method not permitted for token")
             except HTTPException:
                 raise
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(
+                    "require_token_scope: method allowlist enforcement failed; continuing: {}",
+                    exc,
+                )
 
             # Enforce path prefix allowlist
             try:
@@ -1451,8 +1597,11 @@ def require_token_scope(
                         raise HTTPException(status_code=403, detail="Forbidden: path not permitted for token")
             except HTTPException:
                 raise
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(
+                    "require_token_scope: path allowlist enforcement failed; continuing: {}",
+                    exc,
+                )
 
             # Quotas: simple per-token counters (DB-backed; fallback to process-local)
             try:
@@ -1485,8 +1634,11 @@ def require_token_scope(
                                 _VK_USAGE[key] = cur + 1
             except HTTPException:
                 raise
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(
+                    "require_token_scope: token constraints evaluation failed; continuing: {}",
+                    exc,
+                )
 
             if require_schedule_match:
                 try:
@@ -1594,8 +1746,11 @@ def require_token_scope(
         setattr(_checker, "_tldw_scope_name", scope)
         setattr(_checker, "_tldw_token_scope", True)
         setattr(_checker, "_tldw_token_scope_required", str(scope))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug(
+            "require_token_scope: unable to attach metadata to dependency: {}",
+            exc,
+        )
 
     return _checker
 #

@@ -36,7 +36,7 @@ router = APIRouter(
 )
 
 _SENSITIVE_KEY_PATTERN = re.compile(
-    r"(api[_-]?key|token|secret|password|key)",
+    r"(api[_-]?key|access[_-]?key|token|secret|password|private[_-]?key|signing[_-]?key|encryption[_-]?key)",
     re.IGNORECASE,
 )
 _ALLOWED_SOURCES = {"env", "config", "yaml", "default"}
@@ -179,7 +179,7 @@ async def get_effective_config(
         prompts_dir = resolve_prompts_dir()
     except FileNotFoundError as exc:
         logger.debug("Effective config resolution failed: {}", exc)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
     tts_yaml = resolve_module_yaml("tts")
     embeddings_yaml = resolve_module_yaml(

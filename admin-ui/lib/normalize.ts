@@ -26,8 +26,8 @@ export const normalizePagedResponse = <T>(
 ): { items: T[]; total: number; limit?: number; offset?: number } => {
   const items = normalizeListResponse<T>(data, keys);
   const record = data && typeof data === 'object' ? (data as ListContainer) : {};
-  const total = typeof record.total === 'number' ? Number(record.total) : items.length;
-  const limit = typeof record.limit === 'number' ? Number(record.limit) : undefined;
-  const offset = typeof record.offset === 'number' ? Number(record.offset) : undefined;
+  const total = typeof record.total === 'number' ? record.total : items.length;
+  const limit = typeof record.limit === 'number' ? record.limit : undefined;
+  const offset = typeof record.offset === 'number' ? record.offset : undefined;
   return { items, total, limit, offset };
 };

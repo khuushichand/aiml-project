@@ -1799,9 +1799,17 @@ async def admin_list_team_members(
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> list[TeamMemberResponse]:
     try:
-        await _get_scoped_team(team_id, principal, require_admin=True)
+        team = await _get_scoped_team(team_id, principal, require_admin=True)
         rows = await list_team_members(team_id)
-        return [TeamMemberResponse(**r) for r in rows]
+        org_id = team.get("org_id") if isinstance(team, dict) else None
+        items = []
+        for row in rows:
+            payload = dict(row)
+            payload.setdefault("team_id", team_id)
+            if org_id is not None:
+                payload.setdefault("org_id", org_id)
+            items.append(TeamMemberResponse(**payload))
+        return items
     except Exception as e:
         logger.error(f"Failed to list team members: {e}")
         raise HTTPException(status_code=500, detail="Failed to list team members")

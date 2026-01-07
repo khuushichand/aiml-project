@@ -642,7 +642,7 @@ class AsyncRateLimiter:
     async def get_user_usage_async(self, user_id: str) -> Dict[str, any]:
         """Get user usage statistics asynchronously"""
         if self.rate_limiter is None:
-            return {}
+            return {"available": False, "reason": "rate_limiter_disabled"}
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             self.executor,

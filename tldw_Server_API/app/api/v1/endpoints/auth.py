@@ -112,12 +112,25 @@ async def _ensure_mfa_available():
     try:
         is_pg = await is_postgres_backend()
     except Exception:
+        logger.debug("Failed to determine database backend for MFA check", exc_info=True)
         is_pg = False
     if not is_pg:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="MFA requires a PostgreSQL database backend",
         )
+
+
+def _mfa_setup_cache_key(user_id: int) -> str:
+    return f"mfa:setup:{user_id}"
+
+
+def _get_mfa_setup_ttl_seconds() -> int:
+    try:
+        ttl = int(os.getenv("MFA_SETUP_TTL_SECONDS", "600"))
+    except (TypeError, ValueError):
+        ttl = 600
+    return max(ttl, 60)
 
 
 #######################################################################################################################
@@ -1467,6 +1480,7 @@ async def resend_verification(
 async def setup_mfa(
     current_user=Depends(get_current_active_user),
     db=Depends(get_db_transaction),
+    session_manager: SessionManager = Depends(get_session_manager_dep),
 ) -> MFASetupResponse:
     """
     Initialize MFA setup for current user.
@@ -1501,6 +1515,19 @@ async def setup_mfa(
         # Generate backup codes
         backup_codes = mfa_service.generate_backup_codes()
 
+        try:
+            await session_manager.store_ephemeral_value(
+                _mfa_setup_cache_key(current_user.id),
+                secret,
+                _get_mfa_setup_ttl_seconds(),
+            )
+        except Exception as exc:
+            logger.error("Failed to cache MFA setup secret: {}", exc)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to setup MFA",
+            )
+
         return MFASetupResponse(
             secret=secret,
             qr_code=f"data:image/png;base64,{qr_code_base64}",
@@ -1523,6 +1550,7 @@ async def verify_mfa_setup(
     request: Request,
     current_user=Depends(get_current_active_user),
     rate_limiter=Depends(get_rate_limiter_dep),
+    session_manager: SessionManager = Depends(get_session_manager_dep),
 ) -> Dict[str, Any]:
     """
     Verify and enable MFA with TOTP token.
@@ -1533,12 +1561,11 @@ async def verify_mfa_setup(
         await _ensure_mfa_available()
         mfa_service = _get_mfa_service()
 
-        # Get secret from request (in production, get from session/cache)
-        secret = request.headers.get("X-MFA-Secret")
+        secret = await session_manager.get_ephemeral_value(_mfa_setup_cache_key(current_user.id))
         if not secret:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="MFA secret not found. Please restart setup.",
+                detail="MFA setup not found or expired. Please restart setup.",
             )
 
         # Basic per-user rate limit for MFA verification attempts
@@ -1573,6 +1600,8 @@ async def verify_mfa_setup(
                 detail="Failed to enable MFA",
             )
 
+        await session_manager.delete_ephemeral_value(_mfa_setup_cache_key(current_user.id))
+
         # Send email with backup codes
         email_service = _get_email_service()
         client_ip = request.client.host if request.client else "unknown"
@@ -1601,6 +1630,8 @@ async def verify_mfa_setup(
 async def disable_mfa(
     current_user=Depends(get_current_active_user),
     password: str = Form(..., description="Current password for verification"),
+    db=Depends(get_db_transaction),
+    password_service: PasswordService = Depends(get_password_service_dep),
 ) -> Dict[str, str]:
     """
     Disable MFA for current user.
@@ -1609,11 +1640,35 @@ async def disable_mfa(
     """
     try:
         await _ensure_mfa_available()
-        # TODO: Verify password (placeholder retained for future hardening).
-        _ = password
+        user_id = getattr(current_user, "id", None)
+        if user_id is None and isinstance(current_user, dict):
+            user_id = current_user.get("id")
+        if user_id is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
+        user_record = await fetch_active_user_by_id(db, int(user_id))
+        if not isinstance(user_record, dict):
+            try:
+                user_record = dict(user_record) if user_record is not None else None
+            except Exception:
+                user_record = None
+        if not user_record:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
+        password_hash = user_record.get("password_hash")
+        if not isinstance(password_hash, str) or not password_hash:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
+        try:
+            password_service.hasher.verify(password_hash, password)
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials",
+            ) from None
 
         mfa_service = _get_mfa_service()
-        success = await mfa_service.disable_mfa(current_user.id)
+        success = await mfa_service.disable_mfa(int(user_id))
 
         if not success:
             raise HTTPException(

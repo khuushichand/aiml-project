@@ -286,7 +286,7 @@ export default function JobsPage() {
   };
 
   return (
-    <PermissionGuard variant="route" requireAuth>
+    <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
         <div className="p-4 lg:p-8">
           <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">

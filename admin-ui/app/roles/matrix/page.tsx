@@ -74,7 +74,7 @@ export default function PermissionMatrixPage() {
   };
 
   return (
-    <PermissionGuard variant="route" requireAuth>
+    <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             {/* Header */}

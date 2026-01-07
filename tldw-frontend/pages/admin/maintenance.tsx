@@ -19,53 +19,72 @@ export default function AdminMaintenancePage() {
     // no-op: placeholder for any preflight admin checks later
   }, []);
 
-  const resolveUrl = (path: string) => `${base}${path.startsWith('/') ? '' : '/'}${path}`;
+  const resolveUrl = (path: string) => {
+    const normalizedBase = base.endsWith('/') ? base : `${base}/`;
+    const normalizedPath = path.startsWith('/') ? path.slice(1) : path;
+    return new URL(normalizedPath, normalizedBase).toString();
+  };
 
-  const callPost = async (path: string, label: string) => {
+  const apiFetch = async <T>({
+    path,
+    method,
+    label,
+    onSuccess,
+    onError,
+    successMessage,
+  }: {
+    path: string;
+    method: 'GET' | 'POST';
+    label: string;
+    onSuccess?: (data: T | string) => void;
+    onError?: (errorMessage: string) => void;
+    successMessage?: string;
+  }) => {
     setBusy(label);
     try {
       const url = resolveUrl(path);
-      const resp = await fetch(url, { method: 'POST', headers: buildAuthHeaders('POST') });
-      const ok = resp.ok;
+      const resp = await fetch(url, { method, headers: buildAuthHeaders(method) });
       const text = await resp.text();
-      let _data: unknown = null;
-      try { _data = JSON.parse(text); } catch { _data = text; }
-      show({ title: ok ? 'Success' : 'Request failed', description: ok ? `${label} completed` : `${resp.status} ${resp.statusText}`, variant: ok ? 'success' : 'warning' });
+      let data: T | string = text;
+      try { data = JSON.parse(text) as T; } catch { data = text; }
+
+      if (!resp.ok) {
+        const errorMessage = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+        onError?.(errorMessage);
+        show({ title: 'Request failed', description: `${resp.status} ${resp.statusText}`, variant: 'warning' });
+        return;
+      }
+
+      onSuccess?.(data);
+      show({ title: 'Success', description: successMessage ?? `${label} completed`, variant: 'success' });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Unknown error';
+      onError?.(message);
       show({ title: 'Request error', description: message, variant: 'danger' });
     } finally {
       setBusy(null);
     }
   };
 
+  const callPost = (path: string, label: string) =>
+    apiFetch({ path, method: 'POST', label });
+
   const fetchEffectiveConfig = async () => {
     const label = 'Fetch Effective Config';
-    setBusy(label);
     setEffectiveConfigError(null);
-    try {
-      const url = resolveUrl(effectiveConfigPath);
-      const resp = await fetch(url, { method: 'GET', headers: buildAuthHeaders('GET') });
-      const ok = resp.ok;
-      const text = await resp.text();
-      let data: EffectiveConfigResponse | string = text;
-      try { data = JSON.parse(text) as EffectiveConfigResponse; } catch { data = text; }
-      if (!ok) {
+    await apiFetch<EffectiveConfigResponse>({
+      path: effectiveConfigPath,
+      method: 'GET',
+      label,
+      successMessage: 'Effective config fetched',
+      onSuccess: (data) => {
+        setEffectiveConfig(typeof data === 'string' ? data : JSON.stringify(data, null, 2));
+      },
+      onError: (errorMessage) => {
         setEffectiveConfig(null);
-        setEffectiveConfigError(typeof data === 'string' ? data : JSON.stringify(data, null, 2));
-        show({ title: 'Request failed', description: `${resp.status} ${resp.statusText}`, variant: 'warning' });
-        return;
-      }
-      setEffectiveConfig(typeof data === 'string' ? data : JSON.stringify(data, null, 2));
-      show({ title: 'Success', description: 'Effective config fetched', variant: 'success' });
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      setEffectiveConfig(null);
-      setEffectiveConfigError(message);
-      show({ title: 'Request error', description: message, variant: 'danger' });
-    } finally {
-      setBusy(null);
-    }
+        setEffectiveConfigError(errorMessage);
+      },
+    });
   };
 
   if (!isAdmin) {

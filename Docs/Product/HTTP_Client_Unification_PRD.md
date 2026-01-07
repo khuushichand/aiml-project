@@ -33,6 +33,9 @@ Examples:
 - Simplify tests: patch a single client factory.
 
 Success Metrics:
+- Migration checkpoints (acceptable interim state):
+  - End of Phase 2: >= 80% of in-scope modules migrated; remaining modules listed in a short-lived allowlist.
+  - End of Phase 3: 100% of in-scope modules migrated; direct usage only inside adapters/vendor SDKs.
 - No direct requests/httpx/aiohttp usage in business logic modules (vendor SDKs exempt).
 - Egress policy is enforced on all outbound requests.
 - Consistent metrics and logging for outbound traffic.
@@ -60,8 +63,8 @@ Success Metrics:
   - `files` follows httpx/requests multipart conventions: mapping or sequence of
     (field, (filename, file-like or bytes, content_type)). Adapters do not accept
     file paths or open files; callers supply file-like objects. File-like objects
-    must be seekable if retries are enabled. Upload buffering/streaming is delegated
-    to the transport.
+    must be seekable if retries are enabled; otherwise raise a clear validation error.
+    Upload buffering/streaming is delegated to the transport.
   - RequestOptions object for request options (preferred to limit signature growth)
   - RetryPolicy object for retries (defaults sourced from [HTTP] config / HTTP_* env vars)
   - request_json(...) with content-type validation; allow override for mismatched or missing
@@ -99,6 +102,9 @@ Success Metrics:
     (env: `HTTP_CONNECT_TIMEOUT|HTTP_READ_TIMEOUT|HTTP_WRITE_TIMEOUT|HTTP_POOL_TIMEOUT`).
   - Retries map to `[HTTP]` `retry_attempts|backoff_base_ms|backoff_cap_s`
     (env: `HTTP_RETRY_ATTEMPTS|HTTP_BACKOFF_BASE_MS|HTTP_BACKOFF_CAP_S`).
+  - Rationale: connect=5s fails fast on dead endpoints, 30s read/write/pool
+    reflects conservative provider latency envelopes; per-provider overrides
+    remain available and are documented in the config reference.
 
 ### 6.4 Streaming Semantics
 - Streaming returns SSE events or raw bytes with explicit no-retry after first byte.
@@ -124,6 +130,10 @@ Success Metrics:
   - Optional `stream_max_duration_s` caps total stream runtime.
   - Optional `expected_heartbeat_s` or `heartbeat_event_names` define keepalive; if not
     observed within the idle window, raise a streaming timeout.
+- Backpressure and resource limits:
+  - Cap buffered SSE data per event and per stream; abort with a clear error on overflow.
+  - Idle-timeout tracking should update on chunk boundaries, not per-byte, to avoid overhead.
+  - Heartbeats reset idle timers until a done sentinel is emitted; after done, the stream ends.
 
 ### 6.5 Testing and Mocking
 - Provide a single injection point for tests (transport adapter or client factory).
@@ -158,6 +168,7 @@ Success Metrics:
 - Replace direct requests/httpx/aiohttp calls with http_client (or RequestOptions).
 - Confirm timeouts/retry overrides for non-idempotent calls and streaming endpoints.
 - Map per-provider `*_api_timeout|*_api_retry|*_api_retry_delay` settings to RetryPolicy overrides where still needed.
+- Update provider docs and config examples to point at the unified HTTP settings.
 - Ensure streaming callers handle SSE events per defined parsing rules.
 - Verify adapters use shared clients and are closed via app lifecycle hooks.
 
@@ -172,6 +183,7 @@ Success Metrics:
 - Unit tests for transport adapter enforcement of egress policy and retries.
 - Integration tests for streaming endpoints and web scraping flows.
 - Regression tests for known provider behaviors.
+- Observability tests: metrics emitted on request/retry/failure with stable label sets across adapters.
 - Streaming timeout tests for first-byte timeout, idle timeout reset, and heartbeat
   enforcement.
 - Proxy allowlist enforcement tests, including IP-literal blocking for direct and
@@ -196,6 +208,13 @@ Success Metrics:
 
 ## 12. Open Questions
 - Do any modules require transport-specific features not supported by httpx/aiohttp?
+- Rollback plan: if aiohttp has a critical vulnerability, what is the path to
+  temporarily fall back to httpx without reintroducing direct usage?
+- Deprecation comms: how will legacy sync paths be announced and enforced?
+- Performance baselines: what target throughput/latency deltas vs current direct usage
+  are acceptable?
+- Monitoring strategy: where are outbound HTTP metrics aggregated, and what alerts
+  catch retry storms or egress policy violations?
 
 ## 13. Config Reference
 - HTTP client defaults and environment variable mappings live in `tldw_Server_API/Config_Files/README.md`.

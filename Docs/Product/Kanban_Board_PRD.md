@@ -515,6 +515,11 @@ CREATE TRIGGER kanban_cards_au AFTER UPDATE ON kanban_cards BEGIN
 END;
 ```
 
+Notes on FTS sync behavior:
+- Restore/unarchive operations (transition to deleted=0 and archived=0) re-index via `kanban_cards_au`; tests should assert this path.
+- If a card is archived and later soft-deleted, restoring deleted=0 while archived=1 keeps it out of FTS until unarchived; only the (deleted=0, archived=0) state is searchable.
+- Edge case to test: archived=1 -> deleted=1 -> deleted=0 should still be excluded from FTS until archived=0.
+
 ### ChromaDB Collection
 - Collection name: `kanban_user_{user_id}` (underscore for compatibility)
 - Document: Card title + description + label names + checklist item names
@@ -538,11 +543,13 @@ END;
 - Enables safe retries and offline-first sync patterns
 
 ### Rate Limiting
-- `kanban.boards.create`: 10/minute
-- `kanban.cards.create`: 60/minute
-- `kanban.cards.bulk_*`: 20/minute (bulk move, archive, label operations)
-- `kanban.search`: 30/minute
+- `kanban.boards.create`: 10/minute (conservative; assumes 1-2 boards/day per user)
+- `kanban.cards.create`: 60/minute (assumes ~3-5 cards/min during active work)
+- `kanban.cards.bulk_*`: 20/minute (bulk move, archive, label operations; supports batch workflows)
+- `kanban.search`: 30/minute (interactive search without heavy load)
 - Others: default limits
+
+Tuning guidance: start conservative, monitor 429s and DB load, then raise limits via RG policy as usage patterns stabilize.
 
 ### Response Format
 All responses follow existing tldw_server patterns:
@@ -1183,7 +1190,7 @@ Error response format:
 
 - Unit: Board/list/card CRUD, position reordering, activity logging
 - Integration: Full API endpoint tests with auth
-- Property-based: Position ordering invariants, FTS sync
+- Property-based: Position ordering invariants; FTS sync invariants across archive/delete transitions (restore/unarchive re-indexing, archived-only restores stay excluded)
 - Mocks: ChromaDB for embedding tests
 - Markers: `unit`, `integration`
 - Coverage target: >= 80%
@@ -1275,7 +1282,16 @@ KANBAN_EMBEDDING_QUEUE=redis    # redis or sync
 
 ---
 
-## 18. Open Questions
+## 18. Deployment & Migration
+
+- **First-run initialization**: auto-create `USER_DB_BASE_DIR`, per-user directories, and `<USER_DB_BASE_DIR>/<user_id>/Kanban.db` on first access; fail fast with a clear error if permissions prevent creation.
+- **Legacy path migration**: if an earlier Kanban path or shared DB existed, provide a one-time migration helper to move/merge into per-user databases.
+- **Schema versioning/migrations**: maintain a schema version (e.g., `PRAGMA user_version` or a migrations table) and apply idempotent migrations at startup or first access.
+- **Upgrade/rollback**: take a backup before migrations; on failure, restore the backup and surface a clear operator message. Provide a CLI migration helper for controlled rollouts.
+
+---
+
+## 19. Design Decisions (FAQ)
 
 1. **Position strategy**: Use integer positions (0, 1, 2...) with gap rebalancing, or fractional positions (1.0, 1.5, 2.0) for fewer updates?
    - **Decision**: Integer with rebalancing on conflict; simpler to reason about
@@ -1298,7 +1314,7 @@ KANBAN_EMBEDDING_QUEUE=redis    # redis or sync
 
 ---
 
-## 19. Acceptance Criteria
+## 20. Acceptance Criteria
 
 ### Core CRUD
 - [ ] User can create, view, update, and archive/restore boards

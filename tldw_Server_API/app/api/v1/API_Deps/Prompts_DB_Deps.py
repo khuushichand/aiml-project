@@ -33,7 +33,6 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 # --- Configuration ---
 SERVER_CLIENT_ID = settings.get("SERVER_CLIENT_ID")
 if not SERVER_CLIENT_ID:
-    logger.error("CRITICAL: SERVER_CLIENT_ID is not configured in settings.")
     SERVER_CLIENT_ID = "default_server_client_id_prompts" # Unique default
     logger.warning(f"SERVER_CLIENT_ID not set for prompts, using placeholder: {SERVER_CLIENT_ID}")
 
@@ -49,7 +48,7 @@ def _get_prompts_db_path_for_user(user_id: int, salt: Optional[str] = None) -> P
     Determines the Prompts database file path for a given user ID.
     Ensures the user's specific directory exists.
     Path: USER_DB_BASE_DIR / <user_id> / prompts_user_dbs / user_prompts_v2.sqlite
-    (salted suffix is used in tests when provided)
+    When salt is provided: USER_DB_BASE_DIR / <user_id> / prompts_user_dbs / user_prompts_v2_{salt}.sqlite
     """
     db_file = DatabasePaths.get_prompts_db_path(user_id, salt=salt)
     logger.info(f"Ensured Prompts DB directory for user {user_id}: {db_file.parent}")

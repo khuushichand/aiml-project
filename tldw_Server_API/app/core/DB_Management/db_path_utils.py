@@ -42,7 +42,7 @@ def _normalize_user_id(user_id: UserId) -> str:
         ):
             return raw
         digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
-        return f"u_{digest}"
+        return f"user_{digest}"
     raise ValueError(f"Invalid user_id for filesystem path: {user_id!r}")
 
 
@@ -223,7 +223,24 @@ class DatabasePaths:
 
     @staticmethod
     def get_user_db_base_dir(*, allow_legacy_alias: bool = False) -> Path:
-        user_db_base = os.getenv("USER_DB_BASE_DIR") or settings.get("USER_DB_BASE_DIR")
+        env_user_db_base = os.getenv("USER_DB_BASE_DIR")
+        settings_user_db_base = settings.get("USER_DB_BASE_DIR")
+        user_db_base = env_user_db_base or settings_user_db_base
+        project_root = Path(get_project_root())
+        default_base = (project_root / "Databases" / "user_databases").resolve()
+        if _is_test_context() and not env_user_db_base:
+            try:
+                candidate = Path(settings_user_db_base) if settings_user_db_base else None
+                if candidate is not None:
+                    candidate = candidate.expanduser()
+                    if not candidate.is_absolute():
+                        candidate = (project_root / candidate).resolve()
+                    else:
+                        candidate = candidate.resolve()
+            except Exception:
+                candidate = None
+            if candidate is None or candidate == default_base:
+                user_db_base = None
         if not user_db_base and allow_legacy_alias:
             legacy_base = os.getenv("USER_DB_BASE") or settings.get("USER_DB_BASE")
             if legacy_base:
@@ -232,10 +249,13 @@ class DatabasePaths:
                     "Rewrite cache will stop honoring USER_DB_BASE in a future release."
                 )
                 user_db_base = legacy_base
-        project_root = Path(get_project_root())
         if not user_db_base:
-            base_path = (project_root / "Databases" / "user_databases").resolve()
-            logger.warning(f"USER_DB_BASE_DIR not configured, using fallback: {base_path}")
+            if _is_test_context():
+                base_path = (Path.cwd() / "Databases" / "user_databases").resolve()
+                logger.warning(f"USER_DB_BASE_DIR not configured in tests, using cwd fallback: {base_path}")
+            else:
+                base_path = (project_root / "Databases" / "user_databases").resolve()
+                logger.warning(f"USER_DB_BASE_DIR not configured, using fallback: {base_path}")
         else:
             base_path = _normalize_user_db_base_dir(Path(user_db_base))
         _ensure_dir(base_path, label="user database base")

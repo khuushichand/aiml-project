@@ -381,14 +381,15 @@ async def _run_redis_benchmark(args: argparse.Namespace, texts: List[str], run_i
                 info = await manager.get_job_status(job_id)
                 if not info:
                     continue
-                status = str(info.status)
-                status_counts[status] = status_counts.get(status, 0) + 1
-                if last_status.get(job_id) != status:
-                    last_status[job_id] = status
-                    if status not in {"pending"}:
+                status = info.status
+                status_value = status.value
+                status_counts[status_value] = status_counts.get(status_value, 0) + 1
+                if last_status.get(job_id) != status_value:
+                    last_status[job_id] = status_value
+                    if status != JobStatus.PENDING:
                         last_progress = _now_s()
                 if status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}:
-                    done[job_id] = status
+                    done[job_id] = status_value
                     latency = (_now_s() - created[job_id]) * 1000.0
                     latencies_ms.append(latency)
                     if status == JobStatus.COMPLETED:

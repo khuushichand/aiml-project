@@ -34,7 +34,8 @@ flowchart LR
 - Server entry: `tldw_Server_API/app/main.py`
 - API endpoints: `tldw_Server_API/app/api/v1/endpoints/`
 - Core logic: `tldw_Server_API/app/core/`
-- Web UI: `tldw_Server_API/WebUI/` (served at `/webui`)
+- Web UI (current): `tldw-frontend/` (Next.js client)
+- Web UI (legacy): `tldw_Server_API/WebUI/` (served at `/webui`)
 - Config files: `tldw_Server_API/Config_Files/`
 - Databases: `Databases/` (top-level) and `tldw_Server_API/Databases/` (runtime)
 - Tests: `tldw_Server_API/tests/`
@@ -131,4 +132,4 @@ Note: All paths can be overridden by environment or config. `USER_DB_BASE_DIR` c
 
 - CORS configured in `main.py` (adjust for deployment)
 - Auth mode and keys set via env or `Config_Files/`
-- Web UI lives under `/webui` and interacts with the same API
+- The Next.js UI lives under `tldw-frontend/`; the legacy WebUI is served at `/webui`

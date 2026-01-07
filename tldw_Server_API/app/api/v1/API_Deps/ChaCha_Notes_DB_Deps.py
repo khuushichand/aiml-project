@@ -1,4 +1,4 @@
-# tldw_Server_API/app/core/DB_Management/ChaChaNotes_DB_Deps.py
+# tldw_Server_API/app/api/v1/API_Deps/ChaCha_Notes_DB_Deps.py
 import asyncio
 import faulthandler
 import inspect
@@ -11,14 +11,18 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, Optional, Set
 
-from cachetools import LRUCache
 from fastapi import Depends, HTTPException, status
 from loguru import logger
+try:
+    from cachetools import LRUCache
+    _HAS_CACHETOOLS = True
+except ImportError:
+    _HAS_CACHETOOLS = False
+    logger.warning(
+        "cachetools not found. ChaChaNotes DB instance cache will grow indefinitely. "
+        "Install with: pip install cachetools"
+    )
 
-#
-#    logging.warning("cachetools not found. ChaChaNotes DB instance cache will grow indefinitely. "
-#                    "Install with: pip install cachetools")
-#
 # Local Imports
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
@@ -37,7 +41,6 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
 # --- Configuration ---
-_HAS_CACHETOOLS = True
 _CHACHA_EXECUTOR: ThreadPoolExecutor | None = None
 _CHACHA_EXECUTOR_SHUTDOWN: bool = False
 _CHACHA_EXECUTOR_LOCK = threading.Lock()
@@ -147,7 +150,7 @@ DEFAULT_CHARACTER_NAME = "Helpful AI Assistant"
 DEFAULT_CHARACTER_DESCRIPTION = "A default, friendly assistant created automatically by the system."
 
 # --- Global Cache for ChaChaNotes DB Instances ---
-MAX_CACHED_CHACHA_DB_INSTANCES = settings.get("MAX_CACHED_CHACHA_DB_INSTANCES", 20)
+MAX_CACHED_CHACHA_DB_INSTANCES = int(settings.get("MAX_CACHED_CHACHA_DB_INSTANCES", "20"))
 
 if _HAS_CACHETOOLS:
     _chacha_db_instances: LRUCache = LRUCache(maxsize=MAX_CACHED_CHACHA_DB_INSTANCES)
@@ -311,7 +314,7 @@ async def _is_instance_healthy(db_instance: CharactersRAGDB) -> bool:
 
 async def _get_or_init_db_instance(user_id: int, client_id: str) -> CharactersRAGDB:
     user_dir = DatabasePaths.get_user_base_directory(user_id)
-    cache_key = f"{user_dir!s}"
+    cache_key = str(user_dir)
     with _chacha_db_lock:
         db_instance = _chacha_db_instances.get(cache_key)
     if db_instance:

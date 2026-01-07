@@ -263,12 +263,15 @@ class TestMultiUserIsolation:
         assert key, vk.text
 
         # Use X-API-KEY only to access a protected route (media list)
-        with httpx.Client(base_url=base, timeout=30) as hc:
-            r = hc.get("/api/v1/media/", headers={"X-API-KEY": key})
+        vk_client = APIClient(base)
+        try:
+            r = vk_client.client.get("/api/v1/media/", headers={"X-API-KEY": key})
             assert r.status_code == 200
             data = r.json()
             assert isinstance(data, dict)
             # Structure may vary; just ensure we have a response payload without 401/403
+        finally:
+            vk_client.close()
 
 
 class TestAdminMintedVirtualKeyConstraints:
@@ -300,6 +303,7 @@ class TestAdminMintedVirtualKeyConstraints:
             json={
                 "name": "vk-rag-only",
                 "expires_in_days": 1,
+                "allowed_endpoints": ["rag.search"],
                 "allowed_paths": ["/api/v1/rag"],
                 "allowed_methods": ["POST"],
             },
@@ -309,29 +313,33 @@ class TestAdminMintedVirtualKeyConstraints:
         key = mk.json().get("key")
         assert key, mk.text
 
-        # Allowed: POST unified RAG search
-        r_ok = user.client.post(
-            "/api/v1/rag/search",
-            json={"query": "test", "sources": ["media_db"], "top_k": 1},
-            headers={"X-API-KEY": key},
-        )
-        assert r_ok.status_code in (200, 404), r_ok.text  # Accept 404 if RAG not wired, but not 401/403
-        assert r_ok.status_code not in (401, 403)
+        vk_client = APIClient(base)
+        try:
+            # Allowed: POST unified RAG search
+            r_ok = vk_client.client.post(
+                "/api/v1/rag/search",
+                json={"query": "test", "sources": ["media_db"], "top_k": 1},
+                headers={"X-API-KEY": key},
+            )
+            assert r_ok.status_code in (200, 404), r_ok.text  # Accept 404 if RAG not wired, but not 401/403
+            assert r_ok.status_code not in (401, 403)
 
-        # Forbidden by path: chat not permitted
-        r_forbid_path = user.client.post(
-            "/api/v1/chat/completions",
-            json={"messages": [{"role": "user", "content": "hi"}], "model": "noop"},
-            headers={"X-API-KEY": key},
-        )
-        assert r_forbid_path.status_code in (401, 403)
+            # Forbidden by path: chat not permitted
+            r_forbid_path = vk_client.client.post(
+                "/api/v1/chat/completions",
+                json={"messages": [{"role": "user", "content": "hi"}], "model": "noop"},
+                headers={"X-API-KEY": key},
+            )
+            assert r_forbid_path.status_code in (401, 403)
 
-        # Forbidden by method: GET on rag path (unified is POST-only)
-        r_forbid_method = user.client.get(
-            "/api/v1/rag/search",
-            headers={"X-API-KEY": key},
-        )
-        assert r_forbid_method.status_code in (401, 403, 405)
+            # Forbidden by method: GET on rag path (unified is POST-only)
+            r_forbid_method = vk_client.client.get(
+                "/api/v1/rag/search",
+                headers={"X-API-KEY": key},
+            )
+            assert r_forbid_method.status_code in (401, 403, 405)
+        finally:
+            vk_client.close()
 
     def test_21_virtual_key_org_team_metadata_propagation(self, api_client):
         _require_multi_user(api_client)
@@ -546,21 +554,25 @@ class TestAdminMintedVirtualKeyConstraints:
         key = mk.json().get("key")
         assert key
 
-        # Chat should be blocked (path not allowed)
-        r_chat = u.client.post(
-            "/api/v1/chat/completions",
-            json={"messages": [{"role": "user", "content": "hello"}], "model": "noop"},
-            headers={"X-API-KEY": key},
-        )
-        assert r_chat.status_code in (401, 403)
+        vk_client = APIClient(base)
+        try:
+            # Chat should be blocked (path not allowed)
+            r_chat = vk_client.client.post(
+                "/api/v1/chat/completions",
+                json={"messages": [{"role": "user", "content": "hello"}], "model": "noop"},
+                headers={"X-API-KEY": key},
+            )
+            assert r_chat.status_code in (401, 403)
 
-        # Audio TTS should be blocked (path not allowed)
-        r_tts = u.client.post(
-            "/api/v1/audio/speech",
-            json={"model": "tts-1", "input": "hello world", "voice": "alloy", "response_format": "mp3"},
-            headers={"X-API-KEY": key},
-        )
-        assert r_tts.status_code in (401, 403)
+            # Audio TTS should be blocked (path not allowed)
+            r_tts = vk_client.client.post(
+                "/api/v1/audio/speech",
+                json={"model": "tts-1", "input": "hello world", "voice": "alloy", "response_format": "mp3"},
+                headers={"X-API-KEY": key},
+            )
+            assert r_tts.status_code in (401, 403)
+        finally:
+            vk_client.close()
 
     def test_25_team_scoped_key_non_member_access_patterns(self, api_client):
         """Team-scoped API key for a user not in the team: endpoints that rely on team membership use JWT and deny accordingly.

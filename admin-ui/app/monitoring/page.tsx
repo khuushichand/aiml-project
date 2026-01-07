@@ -376,7 +376,7 @@ export default function MonitoringPage() {
   const activeAlerts = alerts.filter((a) => !a.acknowledged);
 
   return (
-    <PermissionGuard variant="route" requireAuth>
+    <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             <div className="mb-8 flex items-center justify-between">

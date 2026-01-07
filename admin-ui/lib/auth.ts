@@ -173,5 +173,6 @@ export async function logout(): Promise<void> {
     if (typeof sessionStorage !== 'undefined') {
       sessionStorage.removeItem('x_api_key');
     }
+    inMemoryApiKey = null;
   }
 }

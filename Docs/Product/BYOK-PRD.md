@@ -225,7 +225,8 @@ Additional table for shared keys (name illustrative):
 - For unknown/custom providers, default to requiring auth unless explicitly marked otherwise in config.
 
 ## Error Handling
-- 400 for invalid providers, malformed payloads, or missing required provider credentials at runtime (`error_code=missing_provider_credentials`).
+- 400 for invalid providers or malformed payloads.
+- 503 for missing required provider credentials at runtime (`error_code=missing_provider_credentials`).
 - 403 when BYOK is disabled, provider is disallowed, or in single-user mode for key management endpoints.
 - 404 for delete requests when a user key does not exist, and for `/keys/test` when no stored key exists for the provider.
 - 401/403 for `/keys/test` when provider rejects credentials; 502 for provider outage/timeouts.

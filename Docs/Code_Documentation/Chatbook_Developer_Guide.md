@@ -1039,15 +1039,25 @@ CHATBOOK_ENABLE_COMPRESSION=true
 CHATBOOK_COMPRESSION_LEVEL=6
 ```
 
+`DATABASE_URL` points to the central auth/users database (SQLite or Postgres). `USER_DB_BASE_DIR` is the per-user
+storage root used by `tldw_Server_API/app/core/config.py` and
+`tldw_Server_API/app/core/DB_Management/db_path_utils.py` to locate user-specific SQLite DBs and storage
+directories (for example, `Media_DB_v2.db`, `ChaChaNotes.db`, and chatbook exports/imports). The defaults can vary
+by environment: `Dockerfiles/docker-compose.yml` sets `DATABASE_URL=sqlite:///./Databases/users.db`, while
+`config.py` falls back to `Databases/user_databases/<SINGLE_USER_FIXED_ID>/tldw.db` if `DATABASE_URL` is unset.
+
 ### Docker Configuration
 
-```dockerfile
-# In Dockerfile
-RUN mkdir -p /app/Databases/user_databases && \
-    chmod 700 /app/Databases/user_databases
-
-VOLUME ["/app/Databases/user_databases"]
+```yaml
+# docker-compose.yml (app service)
+volumes:
+  - app-data:/app/Databases
+  - chroma-data:/app/Databases/user_databases
 ```
+
+Volume setup is environment-specific (dev vs prod). `Dockerfiles/Dockerfile.prod` copies `Databases/` into
+`/app/Databases`, while `Dockerfiles/Dockerfile.worker` runs `mkdir -p /app/Databases`. See
+`Dockerfiles/docker-compose.yml` and `Dockerfiles/docker-compose.embeddings.yml` for the current volume mappings.
 
 ### Backup Strategy
 

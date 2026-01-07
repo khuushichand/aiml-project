@@ -40,6 +40,22 @@ def _safe_path() -> Path:
         raise
 
 
+def _is_relative_to(path: Path, base: Path) -> bool:
+    try:
+        resolved_path = path.resolve()
+        resolved_base = base.resolve()
+    except Exception:
+        return False
+    try:
+        return resolved_path.is_relative_to(resolved_base)
+    except AttributeError:
+        try:
+            resolved_path.relative_to(resolved_base)
+            return True
+        except ValueError:
+            return False
+
+
 def _normalize_query(q: str) -> str:
     try:
         q = (q or "").strip().lower()

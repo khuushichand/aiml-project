@@ -5,6 +5,7 @@ import base64
 import gzip
 import os
 from fastapi import APIRouter, Depends, HTTPException, Request
+from loguru import logger
 from pydantic import BaseModel, Field, ConfigDict
 #
 try:
@@ -1433,7 +1434,7 @@ async def stale_processing_endpoint(
             try:
                 conn.close()
             except Exception:
-                pass
+                logger.opt(exception=True).debug("Failed to close connection in list_stale_groups")
         return out
     except HTTPException:
         raise
@@ -1498,7 +1499,7 @@ async def get_job_detail(
         try:
             conn.close()
         except Exception:
-            pass
+            logger.opt(exception=True).debug("Failed to close connection in get_job_detail")
 
 
 class BatchCancelRequest(BaseModel):

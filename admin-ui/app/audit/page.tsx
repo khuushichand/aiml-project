@@ -212,7 +212,7 @@ function AuditPageContent() {
   };
 
   return (
-    <PermissionGuard variant="route" requireAuth>
+    <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             <div className="mb-8 flex items-center justify-between">
@@ -502,7 +502,7 @@ function AuditPageContent() {
 export default function AuditPage() {
   return (
     <Suspense fallback={
-      <PermissionGuard variant="route" requireAuth>
+      <PermissionGuard variant="route" requireAuth role="admin">
         <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             <div className="mb-8">

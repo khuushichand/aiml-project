@@ -33,7 +33,7 @@ export const formatBytes = (
   value?: number | null,
   { fallback = '-', precision = 1 }: FormatNumberOptions = {}
 ): string => {
-  if (value === null || value === undefined) return fallback;
+  if (value === null || value === undefined || !Number.isFinite(value) || value < 0) return fallback;
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   let size = value;
   let idx = 0;
@@ -48,6 +48,6 @@ export const formatLatency = (
   value?: number | null,
   { fallback = '-', precision = 1 }: FormatNumberOptions = {}
 ): string => {
-  if (value === null || value === undefined) return fallback;
+  if (value === null || value === undefined || !Number.isFinite(value)) return fallback;
   return `${value.toFixed(precision)} ms`;
 };

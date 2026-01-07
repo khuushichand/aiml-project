@@ -610,7 +610,7 @@ export default function DashboardPage() {
   const registrationBlocked = registrationSettings?.self_registration_allowed === false && registrationEnabled;
 
   return (
-    <PermissionGuard variant="route" requireAuth>
+    <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
         <div className="p-4 lg:p-8">
           <DashboardHeader

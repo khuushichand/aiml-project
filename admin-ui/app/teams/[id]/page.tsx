@@ -161,7 +161,7 @@ export default function TeamDetailPage() {
 
   if (loading) {
     return (
-      <PermissionGuard variant="route" requireAuth>
+      <PermissionGuard variant="route" requireAuth role="admin">
         <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             <div className="text-center text-muted-foreground py-8">Loading...</div>
@@ -172,7 +172,7 @@ export default function TeamDetailPage() {
   }
 
   return (
-    <PermissionGuard variant="route" requireAuth>
+    <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             {/* Header */}

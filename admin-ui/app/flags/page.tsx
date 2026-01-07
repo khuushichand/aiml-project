@@ -325,7 +325,7 @@ export default function FlagsPage() {
   const isRefreshing = maintenanceLoading || flagLoading;
 
   return (
-    <PermissionGuard variant="route" requireAuth>
+    <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
         <div className="flex flex-col gap-6 p-6">
           <div className="flex items-center justify-between">

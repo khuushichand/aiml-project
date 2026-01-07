@@ -165,7 +165,8 @@ DELETE /api/v1/admin/keys/shared/{scope_type}/{scope_id}/{provider}
 
 ## Error Codes
 
-- `400` invalid payloads or missing provider credentials.
+- `400` invalid payloads.
+- `503` missing provider credentials (`error_code=missing_provider_credentials`).
 - `403` BYOK disabled or provider disallowed.
 - `404` deleting a key that does not exist.
 - `401/403` for `/keys/test` when provider rejects credentials.

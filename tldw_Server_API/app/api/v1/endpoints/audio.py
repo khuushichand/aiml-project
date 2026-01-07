@@ -970,6 +970,7 @@ async def create_transcription(
                 convert_to_wav as _convert_to_wav,
             )
 
+            # Convert to canonical WAV; base_dir constrains conversion output location
             canonical_path = _convert_to_wav(
                 temp_audio_path,
                 offset=0,
@@ -979,6 +980,7 @@ async def create_transcription(
         except Exception as e:
             logger.debug(f"convert_to_wav failed; using original temp file: path={temp_audio_path}, error={e}")
             canonical_path = temp_audio_path
+        # Recalculate base_dir from canonical path parent for downstream operations
         base_dir = PathLib(canonical_path).parent
 
         # Load canonical audio

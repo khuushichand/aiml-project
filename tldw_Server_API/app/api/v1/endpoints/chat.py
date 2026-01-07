@@ -1239,7 +1239,7 @@ async def create_chat_completion(
 
         except ValueError as e:
             logger.warning(f"Input validation error: {e}")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid request.")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid request.") from e
 
         # Slash command handling: compute, moderate, then optionally inject
         try:
@@ -1438,7 +1438,7 @@ async def create_chat_completion(
             validate_request_size(request_json)
         except ValueError as e:
             logger.warning(f"Input validation error: {e}")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid request.") from e
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid request.") from None
 
         # Apply rate limiting after slash command mutation so estimates are accurate.
         #
@@ -2099,7 +2099,7 @@ async def create_chat_completion(
                     raise HTTPException(
                         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                         detail="Rate limit exceeded. Please retry.",
-                    )
+                    ) from e
                 except Exception as e:
                     # Treat unexpected queue errors as service unavailable
                     logger.error(

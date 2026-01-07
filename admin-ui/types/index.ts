@@ -6,6 +6,7 @@ export interface User {
   username: string;
   email: string;
   role: string;
+  roles?: string[];
   is_active: boolean;
   is_verified: boolean;
   storage_quota_mb: number;
@@ -13,6 +14,10 @@ export interface User {
   created_at: string;
   updated_at: string;
   last_login?: string;
+}
+
+export interface UserWithKeyCount extends User {
+  api_key_count?: number;
 }
 
 export interface Organization {

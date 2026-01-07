@@ -271,7 +271,7 @@ export default function OrganizationDetailPage() {
 
   if (loading) {
     return (
-      <PermissionGuard variant="route" requireAuth>
+      <PermissionGuard variant="route" requireAuth role="admin">
         <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             <div className="text-center text-muted-foreground py-8">Loading...</div>
@@ -283,7 +283,7 @@ export default function OrganizationDetailPage() {
 
   if (!org) {
     return (
-      <PermissionGuard variant="route" requireAuth>
+      <PermissionGuard variant="route" requireAuth role="admin">
         <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             <Alert variant="destructive">
@@ -300,7 +300,7 @@ export default function OrganizationDetailPage() {
   }
 
   return (
-    <PermissionGuard variant="route" requireAuth>
+    <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             {/* Header */}

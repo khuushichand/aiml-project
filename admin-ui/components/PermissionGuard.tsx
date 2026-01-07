@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useState, ReactNode 
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api-client';
 import { User } from '@/types';
-import { hasRoleAccess, isAdminRole, isSuperAdminRole } from '@/lib/roles';
+import { getRoleRank, hasRoleAccess, isAdminRole, isSuperAdminRole } from '@/lib/roles';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
 // UI gating only; backend must enforce authorization and never trust client permissions.
@@ -42,6 +42,27 @@ export function usePermissions() {
   return useContext(PermissionContext);
 }
 
+const normalizeRoles = (userData: User): string[] => {
+  const extraRoles = Array.isArray(userData.roles) ? userData.roles : [];
+  const combined = [userData.role, ...extraRoles]
+    .map((role) => (typeof role === 'string' ? role.trim() : ''))
+    .filter((role) => role.length > 0);
+  return Array.from(new Set(combined));
+};
+
+const getHighestRole = (roles: string[]): string | undefined => {
+  let bestRole: string | undefined;
+  let bestRank = -1;
+  for (const role of roles) {
+    const rank = getRoleRank(role);
+    if (rank !== undefined && rank > bestRank) {
+      bestRank = rank;
+      bestRole = role;
+    }
+  }
+  return bestRole;
+};
+
 interface PermissionProviderProps {
   children: ReactNode;
 }
@@ -60,9 +81,9 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
       setUser(userData);
 
       // UI-only role hints. Backend authorization must enforce real permissions.
-      const userRole = userData.role || '';
-      const userRoles = userRole ? [userRole] : [];
+      const userRoles = normalizeRoles(userData);
       setRoles(userRoles);
+      const userRole = getHighestRole(userRoles) ?? userRoles[0] ?? '';
 
       const derivedPermissions: string[] = [];
 
@@ -114,9 +135,11 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
   };
 
   const hasRole = (role: string | string[]): boolean => {
-    const currentRole = roles[0];
     const requiredRoles = Array.isArray(role) ? role : [role];
-    return hasRoleAccess(currentRole, requiredRoles);
+    if (roles.length === 0) {
+      return false;
+    }
+    return roles.some((userRole) => hasRoleAccess(userRole, requiredRoles));
   };
 
   const hasAnyPermission = (perms: string[]): boolean => {
@@ -129,9 +152,9 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
     return perms.every((p) => permissions.includes(p));
   };
 
-  const isAdmin = (): boolean => isAdminRole(roles[0]);
+  const isAdmin = (): boolean => roles.some((role) => isAdminRole(role));
 
-  const isSuperAdmin = (): boolean => isSuperAdminRole(roles[0]);
+  const isSuperAdmin = (): boolean => roles.some((role) => isSuperAdminRole(role));
 
   return (
     <PermissionContext.Provider

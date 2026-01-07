@@ -59,19 +59,27 @@ const toApiErrorMessage = (detail: unknown): string => {
   return 'Request failed';
 };
 
+const buildRequestHeaders = (method: string, overrides?: HeadersInit): Headers => {
+  const headers = new Headers(buildAuthHeaders(method));
+  if (overrides) {
+    const overrideHeaders = new Headers(overrides);
+    overrideHeaders.forEach((value, key) => {
+      headers.set(key, value);
+    });
+  }
+  return headers;
+};
+
 const requestRaw = async <T>(
   endpoint: string,
   responseType: ResponseType,
   options: RequestInit = {}
 ): Promise<T> => {
   const method = options.method || 'GET';
-  const headers = {
-    ...buildAuthHeaders(method),
-    ...options.headers,
-  } as Record<string, string>;
+  const headers = buildRequestHeaders(method, options.headers);
 
-  if (responseType === 'json' && !headers['Content-Type']) {
-    headers['Content-Type'] = 'application/json';
+  if (responseType === 'json' && typeof options.body === 'string' && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
   }
 
   const response = await fetch(buildApiUrl(endpoint), {

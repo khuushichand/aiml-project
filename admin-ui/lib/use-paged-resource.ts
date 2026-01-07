@@ -2,16 +2,16 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
-type LoadOptions = {
+export type LoadOptions = {
   signal?: AbortSignal;
 };
 
-type PagedResponse<T> = {
+export type PagedResponse<T> = {
   items: T[];
   total: number;
 };
 
-type UsePagedResourceOptions<T> = {
+export type UsePagedResourceOptions<T> = {
   load: (options?: LoadOptions) => Promise<PagedResponse<T>>;
   deps?: unknown[];
   enabled?: boolean;
@@ -21,7 +21,7 @@ type UsePagedResourceOptions<T> = {
   resetOnError?: boolean;
 };
 
-type UsePagedResourceResult<T> = {
+export type UsePagedResourceResult<T> = {
   items: T[];
   total: number;
   loading: boolean;

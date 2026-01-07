@@ -18,14 +18,10 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import { Key, Search, ExternalLink, BookmarkPlus, BookmarkX } from 'lucide-react';
 import { api } from '@/lib/api-client';
-import { User } from '@/types';
+import { UserWithKeyCount } from '@/types';
 import Link from 'next/link';
 import { useOrgContext } from '@/components/OrgContextSwitcher';
 import { useUrlPagination, useUrlState } from '@/lib/use-url-state';
-
-interface UserWithKeyCount extends User {
-  api_key_count?: number;
-}
 
 type SavedKeyView = {
   id: string;
@@ -171,7 +167,7 @@ export default function ApiKeysPage() {
   };
 
   return (
-    <PermissionGuard variant="route" requireAuth>
+    <PermissionGuard variant="route" requireAuth role="admin">
       <ResponsiveLayout>
           <div className="p-4 lg:p-8">
             <div className="mb-8">

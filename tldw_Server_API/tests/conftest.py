@@ -4,19 +4,6 @@ Pytest configuration for the main test suite.
 Registers shared test plugins and provides common fixtures.
 """
 
-# Local pytest configuration for tests subtree.
-# Note: pytest>=8 discourages defining `pytest_plugins` outside top-level conftest
-# files. We register shared plugins here to ensure discovery across the suite,
-# and keep per-suite conftests focused on markers and env overrides.
-pytest_plugins = (
-    "tldw_Server_API.tests.helpers.pgvector",
-    "tldw_Server_API.tests._plugins.e2e_fixtures",
-    "tldw_Server_API.tests._plugins.e2e_state_fixtures",
-    "tldw_Server_API.tests._plugins.chat_fixtures",
-    "tldw_Server_API.tests._plugins.media_fixtures",
-    "tldw_Server_API.tests._plugins.postgres",
-)
-
 import os
 from pathlib import Path
 try:

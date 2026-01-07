@@ -7,14 +7,9 @@ that simulates real user interactions with the application.
 
 import pytest
 import os
+import asyncio
+import uuid
 from typing import Dict, Any, Optional
-
-pytest_plugins = (
-    "tldw_Server_API.tests._plugins.e2e_fixtures",
-    "tldw_Server_API.tests._plugins.e2e_state_fixtures",
-    "tldw_Server_API.tests._plugins.chat_fixtures",
-    "tldw_Server_API.tests._plugins.media_fixtures",
-)
 
 # Disable rate limiting for all e2e tests
 @pytest.fixture(autouse=True, scope="session")
@@ -136,11 +131,103 @@ def pytest_addoption(parser):
         help="Include tests marked as slow"
     )
 
+
+def _env_truthy(name: str) -> bool:
+    return os.getenv(name, "").lower() in {"1", "true", "yes", "on"}
+
 # Attach the shared test results dict to config so sessionfinish can print a summary
 @pytest.fixture(scope="session", autouse=True)
 def _attach_results_to_config(test_results, request):
     request.config._test_results = test_results  # type: ignore[attr-defined]
     yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _ensure_inprocess_admin_bearer(disable_rate_limiting):
+    if not _env_truthy("E2E_INPROCESS"):
+        yield
+        return
+    if os.getenv("E2E_ADMIN_BEARER"):
+        yield
+        return
+
+    from tldw_Server_API.tests.e2e.fixtures import APIClient
+    from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
+    from tldw_Server_API.app.core.DB_Management.Users_DB import (
+        get_users_db,
+        DuplicateUserError,
+        ensure_user_directories,
+    )
+    from tldw_Server_API.app.core.AuthNZ.username_utils import (
+        normalize_admin_username,
+        InvalidUsernameError,
+    )
+
+    admin_username_raw = os.getenv("E2E_ADMIN_USERNAME", "e2e_admin")
+    try:
+        admin_username = normalize_admin_username(admin_username_raw)
+    except InvalidUsernameError:
+        admin_username = "e2e_admin"
+
+    admin_email = os.getenv("E2E_ADMIN_EMAIL", f"{admin_username}@example.com")
+    admin_password = os.getenv("E2E_ADMIN_PASSWORD", "Tlp9!ZxVq8@M")
+
+    api_client = APIClient()
+    try:
+        try:
+            health = api_client.health_check()
+        except Exception as exc:
+            pytest.fail(f"❌ Failed to initialize in-process API for admin token minting: {exc}")
+        auth_mode = str(health.get("auth_mode") or os.getenv("AUTH_MODE", "")).lower()
+        if auth_mode not in {"multi_user", "multi-user", "multiuser"}:
+            yield
+            return
+
+        async def _ensure_admin_user():
+            users_db = await get_users_db()
+            password_hash = PasswordService().hash_password(admin_password)
+            existing = await users_db.get_user_by_username(admin_username)
+            if existing:
+                updated = await users_db.update_user(
+                    int(existing["id"]),
+                    password_hash=password_hash,
+                    role="admin",
+                    is_superuser=True,
+                    is_active=True,
+                    is_verified=True,
+                )
+                await ensure_user_directories(int(updated["id"]))
+                return updated
+
+            for email_candidate in (
+                admin_email,
+                f"{admin_username}+{uuid.uuid4().hex[:6]}@example.com",
+            ):
+                try:
+                    created = await users_db.create_user(
+                        username=admin_username,
+                        email=email_candidate,
+                        password_hash=password_hash,
+                        role="admin",
+                        is_active=True,
+                        is_verified=True,
+                        is_superuser=True,
+                    )
+                    await ensure_user_directories(int(created["id"]))
+                    return created
+                except DuplicateUserError:
+                    continue
+
+            raise RuntimeError("Unable to create or update in-process admin user for E2E tests.")
+
+        asyncio.run(_ensure_admin_user())
+        api_client.login(admin_username, admin_password)
+        if not api_client.token:
+            pytest.fail("❌ Failed to mint E2E_ADMIN_BEARER: login did not return access_token")
+        os.environ["E2E_ADMIN_BEARER"] = api_client.token
+        yield
+    finally:
+        api_client.close()
 
 # For tests that validate rate limiting, temporarily disable the global TEST_MODE
 # env that turns off rate limits. Controlled via @pytest.mark.rate_limits
