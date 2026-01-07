@@ -985,37 +985,34 @@ class RedisResourceGovernor(ResourceGovernor):
                 elif category in ("streams", "jobs"):
                     limit = int((pol.get(category) or {}).get("max_concurrent") or 0)
                     ttl_sec = int((pol.get(category) or {}).get("ttl_sec") or 60)
-                    allowed = True
-                    retry_after = 0
                     cat_fail = self._effective_fail_mode(pol, category)
-                    for sc, ev in (("global", "*"), (entity_scope, entity_value)):
-                        if sc not in self._scopes(pol) and not (sc == entity_scope and "entity" in self._scopes(pol)):
-                            continue
+                    scopes = self._scopes(pol)
+                    scope_keys: list[tuple[str, str]] = []
+                    if "global" in scopes:
+                        scope_keys.append(("global", "*"))
+                    if entity_scope in scopes or "entity" in scopes:
+                        scope_keys.append((entity_scope, entity_value))
+
+                    remainings: list[int] = []
+                    retry_after_candidates: list[int] = []
+                    for sc, ev in scope_keys:
                         key = self._keys.lease(policy_id, category, sc, ev)
                         # Use stub leases and, when available, real Redis ZSET counts
                         active_stub = self._stub_lease_purge_and_count(key=key, now=now)
-                    active_real = 0
-                    try:
-                        client = await self._client_get()
-                        # Purge expired and count active members in real Redis
-                        await client.zremrangebyscore(key, float("-inf"), now)
-                        active_real = int(await client.zcard(key))
-                    except Exception as exc:
-                        if cat_fail == "fallback_memory":
-                            raise _FallbackToMemory from exc
                         active_real = 0
-                        active = max(active_stub, active_real)
                         try:
-                            logger.debug(
-                                "RG concurrency check: policy_id={pid} scope={sc} entity={ev} active={active} limit={limit}",
-                                pid=policy_id,
-                                sc=sc,
-                                ev=ev,
-                                active=active,
-                                limit=limit,
-                            )
-                        except Exception:
-                            pass
+                            client = await self._client_get()
+                            # Purge expired and count active members in real Redis
+                            await client.zremrangebyscore(key, float("-inf"), now)
+                            active_real = int(await client.zcard(key))
+                        except Exception as exc:
+                            if cat_fail == "fallback_memory":
+                                raise _FallbackToMemory from exc
+                            active_real = 0
+                        active = max(active_stub, active_real)
+                        remaining = max(0, limit - active)
+                        remainings.append(remaining)
+                        retry_after_candidates.append(ttl_sec if remaining < units else 0)
                         # Update gauge to reflect any TTL purge effects
                         reg = self._reg()
                         if reg:
@@ -1027,11 +1024,17 @@ class RedisResourceGovernor(ResourceGovernor):
                                 )
                             except Exception:
                                 pass
-                    remaining = max(0, limit - active)
-                    if remaining < units:
-                        allowed = False
-                        retry_after = max(retry_after, ttl_sec)
-                    per_category[category] = {"allowed": allowed, "limit": limit, "retry_after": retry_after, "ttl_sec": ttl_sec}
+
+                    effective_remaining = min(remainings) if remainings else 0
+                    allowed = effective_remaining >= units
+                    retry_after = max(retry_after_candidates) if retry_after_candidates else 0
+                    per_category[category] = {
+                        "allowed": allowed,
+                        "limit": limit,
+                        "remaining": int(effective_remaining),
+                        "retry_after": retry_after,
+                        "ttl_sec": ttl_sec,
+                    }
                 else:
                     allowed = True
                     retry_after = 0

@@ -34,7 +34,7 @@ Central data stores and database abstractions for content, prompts, notes, evalu
   - Content backend config: `content_backend.py` resolves `sqlite` vs `postgresql` via env/config and returns a shared backend for Postgres content mode; SQLite uses per-user file paths instead of a shared pool.
   - Factories: `DB_Manager.py` creates `MediaDatabase`, `CharactersRAGDB` (ChaCha), `PromptStudioDatabase`, `EvaluationsDatabase`, `WorkflowsDatabase`, wiring the right backend.
   - Scope: `scope_context.py` records per-request user/org/team scope for row-level filtering and Postgres RLS policies.
-  - Path management: `db_path_utils.py` centralizes per-user DB locations under `Databases/user_databases/<user_id>/...`.
+  - Path management: `db_path_utils.py` centralizes per-user DB locations under `<USER_DB_BASE_DIR>/<user_id>/...` (defaults to `Databases/user_databases` under repo root; `USER_DB_BASE` is a deprecated alias for rewrite cache resolution).
 - Key Classes/Modules:
   - `Media_DB_v2.MediaDatabase` — content store with schema versioning, FTS, chunking, claims, sync logs, soft deletes, and versioned entities.
   - `ChaChaNotes_DB.CharactersRAGDB` — notes/characters/messages with search and content helpers.

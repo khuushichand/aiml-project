@@ -5,6 +5,7 @@ Provides dynamic configuration loading and reloading from YAML files,
 environment-specific overrides, and runtime configuration updates.
 """
 
+import copy
 import os
 import yaml
 import asyncio
@@ -15,6 +16,15 @@ from datetime import datetime, timezone
 from loguru import logger
 import threading
 import hashlib
+
+from tldw_Server_API.app.core.config import get_config_section
+from tldw_Server_API.app.core.config_paths import resolve_module_yaml
+from tldw_Server_API.app.core.config_utils import (
+    apply_default_sources,
+    load_module_yaml,
+    merge_config_layers,
+    section_to_nested_dict,
+)
 
 
 @dataclass
@@ -91,8 +101,13 @@ class EvaluationsConfigManager:
             enable_hot_reload: Whether to watch for config file changes
         """
         if config_path is None:
-            config_dir = Path(__file__).parent.parent.parent.parent / "Config_Files"
-            config_path = config_dir / "evaluations_config.yaml"
+            env_path = os.getenv("EVALUATIONS_CONFIG_PATH")
+            if env_path:
+                config_path = Path(env_path).expanduser()
+            else:
+                config_path = resolve_module_yaml("evaluations")
+        if config_path is None:
+            config_path = Path("evaluations_config.yaml")
 
         self.config_path = Path(config_path)
         self.environment = environment or os.getenv("ENVIRONMENT", "development")
@@ -100,6 +115,7 @@ class EvaluationsConfigManager:
 
         # Configuration cache
         self._config: Dict[str, Any] = {}
+        self._config_sources: Dict[str, Any] = {}
         self._config_hash: Optional[str] = None
         self._last_loaded: Optional[datetime] = None
         self._lock = threading.RLock()
@@ -160,21 +176,35 @@ class EvaluationsConfigManager:
             if self._config_hash == new_hash:
                 return True
 
-            # Load YAML configuration
-            with open(self.config_path, 'r') as f:
-                config = yaml.safe_load(f)
-
-            if not config:
-                logger.error("Empty or invalid configuration file")
-                return False
-
             with self._lock:
-                self._config = config
+                yaml_config, _ = load_module_yaml(
+                    "evaluations", filename_override=str(self.config_path)
+                )
+                if not yaml_config:
+                    logger.error("Empty or invalid configuration file")
+                    return False
+
+                self._config = yaml_config
                 self._config_hash = new_hash
                 self._last_loaded = datetime.now(timezone.utc)
 
                 # Apply environment-specific overrides
                 self._apply_environment_overrides()
+
+                config_txt_overrides = section_to_nested_dict(
+                    get_config_section("Evaluations")
+                )
+                env_overrides = self._load_env_overrides()
+                merged, sources = merge_config_layers(
+                    [
+                        ("yaml", dict(self._config)),
+                        ("config", config_txt_overrides),
+                        ("env", env_overrides),
+                    ]
+                )
+                self._config = merged
+                self._config_sources = apply_default_sources(self._config, sources)
+                logger.debug(f"Evaluations config sources: {self._config_sources}")
 
                 # Parse specialized configurations
                 self._parse_rate_limit_configs()
@@ -196,6 +226,21 @@ class EvaluationsConfigManager:
         if env_config:
             logger.info(f"Applying {self.environment} environment overrides")
             self._deep_merge(self._config, env_config)
+
+    def _load_env_overrides(self) -> Dict[str, Any]:
+        """Load env-provided config overrides (YAML/JSON payload)."""
+        raw = os.getenv("EVALUATIONS_CONFIG_OVERRIDES")
+        if not raw:
+            return {}
+        try:
+            data = yaml.safe_load(raw)
+        except Exception as exc:
+            logger.warning(f"Invalid EVALUATIONS_CONFIG_OVERRIDES payload: {exc}")
+            return {}
+        if not isinstance(data, dict):
+            logger.warning("EVALUATIONS_CONFIG_OVERRIDES must be a mapping")
+            return {}
+        return data
 
     def _deep_merge(self, base: Dict[str, Any], override: Dict[str, Any]):
         """Recursively merge override config into base config."""
@@ -393,6 +438,15 @@ class EvaluationsConfigManager:
                 "config_sections": list(self._config.keys()) if self._config else []
             }
 
+    def get_config_snapshot(self) -> Dict[str, Any]:
+        """Return a snapshot of the effective config and source tags."""
+        with self._lock:
+            return {
+                "config": copy.deepcopy(self._config),
+                "sources": copy.deepcopy(self._config_sources),
+                "config_path": str(self.config_path),
+            }
+
     def reload(self) -> bool:
         """Force reload configuration from file."""
         self._config_hash = None  # Force reload
@@ -475,6 +529,11 @@ def get_rate_limit_config(tier: str) -> Optional[RateLimitTierConfig]:
 def get_circuit_breaker_config(provider: str) -> Optional[CircuitBreakerConfig]:
     """Get circuit breaker configuration for a provider."""
     return config_manager.get_circuit_breaker_config(provider)
+
+
+def get_config_snapshot() -> Dict[str, Any]:
+    """Get the current evaluations config and source tags."""
+    return config_manager.get_config_snapshot()
 
 
 def get_config(path: str, default: Any = None) -> Any:

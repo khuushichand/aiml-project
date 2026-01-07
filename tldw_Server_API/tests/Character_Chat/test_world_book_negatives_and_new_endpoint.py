@@ -149,6 +149,8 @@ async def test_world_book_process_endpoint_handles_new_return_shape():
 
 @pytest.mark.asyncio
 async def test_rate_limits_max_messages_and_chats_and_completions_endpoint():
+    if os.getenv("RG_ENABLED", "").lower() not in {"1", "true", "yes", "on"}:
+        pytest.skip("Character chat rate limits are enforced by Resource Governor when enabled.")
     # Enforce only when TEST_MODE is disabled; otherwise the limiter is permissive
     if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}:
         pytest.skip("Rate-limit enforcement test requires TEST_MODE=0")

@@ -18,6 +18,7 @@ from tldw_Server_API.app.core.Workflows.subprocess_utils import start_process, t
 from tldw_Server_API.app.core.Metrics import start_async_span as _start_span
 from tldw_Server_API.app.core.Security.egress import is_url_allowed, is_url_allowed_for_tenant
 from tldw_Server_API.app.core.http_client import create_client as _wf_create_client
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import resolve_user_id_value
 
 
 def _sanitize_path_component(value: str, default: str, max_len: int = 80) -> str:
@@ -65,6 +66,11 @@ def _is_subpath(parent: Path, child: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _resolve_context_user_id(context: Dict[str, Any]) -> Optional[str]:
+    raw = context.get("user_id") or context.get("inputs", {}).get("user_id")
+    return resolve_user_id_value(raw, allow_none=True)
 
 
 def _artifacts_base_dir() -> Path:
@@ -1696,7 +1702,9 @@ async def run_embed_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> 
             return {"error": "no_text"}
         texts = [txt]
 
-    user_id = str(context.get("user_id") or "1")
+    user_id = _resolve_context_user_id(context)
+    if not user_id:
+        return {"error": "missing_user_id"}
     collection = str(config.get("collection") or f"user_{user_id}_workflows")
     model_id = str(config.get("model_id") or "") or None
     md_global = config.get("metadata") if isinstance(config.get("metadata"), dict) else {}
@@ -2184,7 +2192,9 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
             return {k: _inject_json_specials(v) for k, v in obj.items()}
         return obj
     from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
-    user_id = str(context.get("user_id") or context.get("inputs", {}).get("user_id") or "1")
+    user_id = _resolve_context_user_id(context)
+    if not user_id:
+        return {"dispatched": False, "error": "missing_user_id"}
     event_name = str(config.get("event") or "workflow.event")
     payload = config.get("data") or {"context": list(context.keys())}
     url = str(config.get("url") or "").strip()

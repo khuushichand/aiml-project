@@ -258,28 +258,28 @@ Database design is covered in depth in:
 This section gives the quick mental model.
 
 **AuthNZ DB**
-- Default (single-user): SQLite file configured by `DATABASE_URL` (defaults to `sqlite:///Databases/user_databases/<SINGLE_USER_FIXED_ID>/tldw.db`).
+- Default (single-user): SQLite file configured by `DATABASE_URL` (defaults to `sqlite:///<USER_DB_BASE_DIR>/<SINGLE_USER_FIXED_ID>/tldw.db`).
 - Multi-user deployments typically use PostgreSQL.
 - Stores users, credentials, permissions, and related auth data.
 
 **Content / Media DB v2**
-- Per-user SQLite DB under `Databases/user_databases/<user_id>/Media_DB_v2.db`.
+- Per-user SQLite DB under `<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`.
 - Stores media items, chunks, metadata, and FTS indexes.
 - Root-level path `Databases/Media_DB_v2.db` is deprecated; always go through the DB helpers.
 
 **Notes / Chats / Characters**
-- Per-user `ChaChaNotes.db` under `Databases/user_databases/<user_id>/ChaChaNotes.db`.
+- Per-user `ChaChaNotes.db` under `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`.
 - Stores notes, chat history, and character data.
 
 **Prompt Studio and related artifacts**
-- Per-user prompts DB under `Databases/user_databases/<user_id>/prompts_user_dbs/user_prompts_v2.sqlite`.
+- Per-user prompts DB under `<USER_DB_BASE_DIR>/<user_id>/prompts_user_dbs/user_prompts_v2.sqlite`.
 
 **Evaluations DB**
 - `Databases/evaluations.db`.
 - Centralized schema for evaluations, metrics, and audit logs.
 
 **Vector Store**
-- Default: ChromaDB, usually per-user under `Databases/user_databases/<user_id>/chroma_storage/`.
+- Default: ChromaDB, usually per-user under `<USER_DB_BASE_DIR>/<user_id>/chroma_storage/`.
 - Optionally: PostgreSQL with pgvector, configured via `config.txt` and env vars.
 
 All DB access should go through the abstractions in `core/DB_Management/` and the vector store wrappers in `core/Embeddings/` and `core/RAG/`.

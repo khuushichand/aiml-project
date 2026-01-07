@@ -41,7 +41,7 @@ See also: `tldw_Server_API/app/core/Character_Chat/README.md` for a focused modu
 Each router resolves the per-user DB via `get_chacha_db_for_user` and the authenticated user via `get_request_user`.
 
 ## Core Concepts & Data Flow
-- Per-user isolation and storage path: Every request uses a user-scoped `CharactersRAGDB`. Character Chat resolves the base directory from `USER_DB_BASE_DIR` and stores the DB at `USER_DB_BASE_DIR/<user_id>/ChaChaNotes.db`. If not configured, Character Chat falls back to `./app_data/user_databases_fallback/<user_id>/ChaChaNotes.db`. Other modules that use `DatabasePaths` may default to `Databases/user_databases/<user_id>/ChaChaNotes.db` when unset. For consistency across modules, set `USER_DB_BASE_DIR` in settings or env.
+- Per-user isolation and storage path: Every request uses a user-scoped `CharactersRAGDB`. Character Chat resolves the base directory from `USER_DB_BASE_DIR` and stores the DB at `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`. When unset, the default base is `Databases/user_databases` under the repo root via `db_path_utils`. For consistency across modules, set `USER_DB_BASE_DIR` in settings or env.
 - Characters: Stored with textual fields and optional image bytes. JSON-like fields (`alternate_greetings`, `tags`, `extensions`) are normalized when stored.
 - Placeholders: Strings may contain `{{char}}`, `{{user}}`, `<CHAR>`, `<USER>`. Utilities replace them at render time.
 - Conversations & Messages: Conversations are UUID-identified. Messages reference `conversation_id` and keep `sender` as a string; utilities map sender→role.

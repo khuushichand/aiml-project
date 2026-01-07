@@ -31,9 +31,6 @@ try:  # pragma: no cover - RG is optional
         RedisResourceGovernor,
         RGRequest,
     )
-    from tldw_Server_API.app.core.Resource_Governance.metrics_rg import (  # type: ignore
-        record_shadow_mismatch,
-    )
     from tldw_Server_API.app.core.Resource_Governance.policy_loader import (  # type: ignore
         PolicyLoader,
         PolicyReloadConfig,
@@ -44,7 +41,6 @@ except Exception:  # pragma: no cover - safe fallback when RG not installed
     MemoryResourceGovernor = None  # type: ignore
     RedisResourceGovernor = None  # type: ignore
     RGRequest = None  # type: ignore
-    record_shadow_mismatch = None  # type: ignore
     PolicyLoader = None  # type: ignore
     PolicyReloadConfig = None  # type: ignore
     default_policy_loader = None  # type: ignore
@@ -264,88 +260,49 @@ class UserRateLimiter:
             - is_allowed: Whether request is allowed
             - metadata: Rate limit information and headers
         """
-        rg_decision = await _maybe_enforce_with_rg_evaluations(
-            user_id=user_id,
-            endpoint=endpoint,
-            is_batch=is_batch,
-            tokens_requested=tokens_requested,
-            estimated_cost=estimated_cost,
-        )
-        if rg_decision is not None:
-            if not rg_decision["allowed"]:
-                # ResourceGovernor denials take precedence over legacy limits.
+        config = await self._get_user_config(user_id)
+
+        if _rg_evaluations_enabled() and config.tier != UserTier.CUSTOM:
+            policy_id = _policy_id_for_config(config, is_batch=is_batch)
+            rg_decision = await _maybe_enforce_with_rg_evaluations(
+                user_id=user_id,
+                endpoint=endpoint,
+                is_batch=is_batch,
+                tokens_requested=tokens_requested,
+                estimated_cost=estimated_cost,
+                policy_id=policy_id,
+            )
+            if rg_decision is not None:
+                if not rg_decision["allowed"]:
+                    retry_after = rg_decision.get("retry_after") or 1
+                    return False, {
+                        "error": "Rate limit exceeded (ResourceGovernor)",
+                        "policy_id": rg_decision.get("policy_id", policy_id),
+                        "retry_after": retry_after,
+                        "rate_limit_source": "resource_governor",
+                    }
+
+                # Enforce cost caps locally (RG does not handle cost limits).
+                cost_ok, cost_meta = await self._check_cost_limits(user_id, estimated_cost, config)
+                if not cost_ok:
+                    return False, cost_meta
+
+                # Record the request (usage + ledger shadow writes).
                 try:
-                    # Shadow comparison for observability: if legacy would allow, record mismatch.
-                    legacy_allowed = True
-                    config = await self._get_user_config(user_id)
-                    minute_ok, _ = await self._check_minute_limit(user_id, endpoint, is_batch, config)
-                    daily_ok, _ = await self._check_daily_limits(user_id, tokens_requested, estimated_cost, config)
-                    legacy_allowed = bool(minute_ok and daily_ok)
-                    if legacy_allowed and record_shadow_mismatch is not None:
-                        record_shadow_mismatch(
-                            module="evaluations",
-                            route=str(endpoint),
-                            policy_id=str(rg_decision.get("policy_id", "evals.default")),
-                            legacy="allow",
-                            rg="deny",
-                        )
+                    await self._record_request(user_id, endpoint, tokens_requested, estimated_cost)
                 except Exception:
-                    # Best-effort only; never block denial path.
+                    # Best-effort only; never block allow path.
                     pass
-                retry_after = rg_decision.get("retry_after") or 1
-                return False, {
-                    "error": "Rate limit exceeded (ResourceGovernor)",
-                    "policy_id": rg_decision.get("policy_id", "evals.default"),
-                    "retry_after": retry_after,
+
+                metadata: Dict[str, Any] = {
+                    "policy_id": rg_decision.get("policy_id", policy_id),
                     "rate_limit_source": "resource_governor",
                 }
+                return True, metadata
 
-            # RG allowed → RG is the sole enforcer. Legacy checks are best-effort
-            # shadow signals only (for drift metrics and legacy-style headers).
-            config = None
-            minute_meta: Dict[str, Any] = {}
-            daily_meta: Dict[str, Any] = {}
-            try:
-                config = await self._get_user_config(user_id)
-                minute_ok, minute_meta = await self._check_minute_limit(user_id, endpoint, is_batch, config)
-                daily_ok, daily_meta = await self._check_daily_limits(user_id, tokens_requested, estimated_cost, config)
-                if not (minute_ok and daily_ok) and record_shadow_mismatch is not None:
-                    record_shadow_mismatch(
-                        module="evaluations",
-                        route=str(endpoint),
-                        policy_id=str(rg_decision.get("policy_id", "evals.default")),
-                        legacy="deny",
-                        rg="allow",
-                    )
-            except Exception:
-                config = None
-
-            # Record the request (usage + ledger shadow writes).
-            try:
-                await self._record_request(user_id, endpoint, tokens_requested, estimated_cost)
-            except Exception:
-                # Best-effort only; never block allow path.
-                pass
-
-            # Preserve legacy header shape where possible, but always annotate
-            # the response as RG-governed.
-            if config is not None:
-                metadata = self._generate_rate_limit_headers(user_id, config, minute_meta, daily_meta)
-            else:
-                metadata = {}
-            try:
-                metadata = dict(metadata or {})
-                metadata.setdefault("policy_id", rg_decision.get("policy_id", "evals.default"))
-                metadata.setdefault("rate_limit_source", "resource_governor")
-            except Exception:
-                pass
-            return True, metadata
-
-        if _rg_evaluations_enabled():
             _log_rg_evals_fallback("rg_decision_unavailable")
 
         # RG disabled → use legacy per-user limits and headers.
-        config = await self._get_user_config(user_id)
         minute_ok, minute_meta = await self._check_minute_limit(user_id, endpoint, is_batch, config)
         if not minute_ok:
             return False, minute_meta
@@ -681,11 +638,52 @@ class UserRateLimiter:
                     "resets_at": (datetime.combine(today + timedelta(days=1), datetime.min.time())).isoformat()
                 }
 
-            return True, {
-                "evaluations_remaining": config.evaluations_per_day - total_evaluations - 1,
-                "tokens_remaining": config.total_tokens_per_day - total_tokens - tokens_requested,
-                "cost_remaining": config.max_cost_per_day - total_cost - estimated_cost
+        return True, {
+            "evaluations_remaining": config.evaluations_per_day - total_evaluations - 1,
+            "tokens_remaining": config.total_tokens_per_day - total_tokens - tokens_requested,
+            "cost_remaining": config.max_cost_per_day - total_cost - estimated_cost
+        }
+
+    async def _check_cost_limits(
+        self,
+        user_id: str,
+        estimated_cost: float,
+        config: RateLimitConfig,
+    ) -> Tuple[bool, Dict[str, Any]]:
+        """Check daily cost limits only (RG handles evaluations/tokens)."""
+        try:
+            cost = float(estimated_cost or 0.0)
+        except Exception:
+            cost = 0.0
+        if cost <= 0:
+            return True, {}
+
+        today = datetime.now(timezone.utc).date()
+        day_str = str(today)
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT total_cost FROM daily_usage WHERE user_id = ? AND date = ?",
+                (user_id, day_str),
+            )
+            row = cursor.fetchone()
+            total_cost = float(row[0] or 0.0) if row else 0.0
+
+        if total_cost + cost > float(config.max_cost_per_day):
+            reset_at = datetime.combine(today + timedelta(days=1), datetime.min.time())
+            retry_after = max(1, int((reset_at - datetime.now(timezone.utc)).total_seconds()))
+            return False, {
+                "error": "Daily cost limit exceeded",
+                "limit": config.max_cost_per_day,
+                "used": total_cost,
+                "requested": cost,
+                "retry_after": retry_after,
+                "resets_at": reset_at.isoformat(),
             }
+
+        return True, {
+            "cost_remaining": float(config.max_cost_per_day) - total_cost - cost,
+        }
 
     async def _record_request(
         self,
@@ -1003,6 +1001,19 @@ def _rg_evals_context() -> Dict[str, str]:
     }
 
 
+def _policy_id_for_config(config: RateLimitConfig, *, is_batch: bool) -> str:
+    override = os.getenv("RG_EVALUATIONS_POLICY_ID")
+    if override:
+        return override
+    tier = getattr(config.tier, "value", str(config.tier))
+    suffix = "batch" if is_batch else None
+    if tier:
+        if suffix:
+            return f"evals.{tier}.batch"
+        return f"evals.{tier}"
+    return "evals.default"
+
+
 def _log_rg_evals_init_failure(exc: Exception) -> None:
     global _rg_evals_init_error, _rg_evals_init_error_logged
     _rg_evals_init_error = repr(exc)
@@ -1102,6 +1113,7 @@ async def _maybe_enforce_with_rg_evaluations(
     is_batch: bool,
     tokens_requested: int,
     estimated_cost: float,
+    policy_id: str,
 ) -> Optional[Dict[str, object]]:
     """
     Optionally enforce Evaluations request limits via ResourceGovernor.
@@ -1112,7 +1124,6 @@ async def _maybe_enforce_with_rg_evaluations(
     gov = await _get_evaluations_rg_governor()
     if gov is None:
         return None
-    policy_id = os.getenv("RG_EVALUATIONS_POLICY_ID", "evals.default")
     op_id = f"evals-{user_id}-{time.time_ns()}"
     try:
         categories: Dict[str, Dict[str, int]] = {

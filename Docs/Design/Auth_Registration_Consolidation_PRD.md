@@ -3,7 +3,7 @@
 ## Summary
 Consolidate authentication endpoints into a single router and make the AuthNZ
 DB pool RegistrationService the only registration path. Remove duplicate auth
-modules and the unused registration_service_updated implementation to reduce
+modules and the unused legacy registration service implementation to reduce
 maintenance overhead and behavioral drift.
 
 ## Goals
@@ -18,15 +18,15 @@ maintenance overhead and behavioral drift.
 - Major schema migrations beyond consolidation needs.
 
 ## Background / Problem
-Auth endpoints live in separate modules (auth.py and auth_enhanced.py) with
+Auth endpoints previously lived in separate modules (auth.py plus a legacy enhanced router) with
 overlapping paths and shared dependencies. Registration has two service
 implementations with the same class name, only one of which is wired in. This
 creates drift risk, test complexity, and confusion over the authoritative path.
 
 ## Scope
-- Merge auth_enhanced endpoints into auth.py (or a single shared module).
-- Remove auth_enhanced router inclusion from app startup.
-- Remove registration_service_updated.py and any dead wiring.
+- Ensure password reset, email verification, and MFA endpoints live in auth.py.
+- Ensure only the auth router is included at app startup.
+- Remove unused legacy registration service wiring.
 - Update dependencies and tests to use the single RegistrationService.
 
 ## Functional Requirements
@@ -68,7 +68,7 @@ creates drift risk, test complexity, and confusion over the authoritative path.
 - Stage 2: Remove old module and update docs/imports.
 
 ## Risks
-- Test fixtures that import auth_enhanced directly.
+- Test fixtures that import legacy auth modules directly.
 - Subtle differences in error handling between modules.
 
 ## Open Questions

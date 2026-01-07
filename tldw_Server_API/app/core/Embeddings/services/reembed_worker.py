@@ -58,6 +58,7 @@ from tldw_Server_API.app.core.Embeddings.messages import (
     CURRENT_VERSION,
 )
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+from tldw_Server_API.app.core.Embeddings.messages import encode_stream_fields
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
@@ -219,18 +220,12 @@ async def _enqueue_embedding(client: aioredis.Redis, message: EmbeddingMessage) 
     except Exception:
         q = "embeddings:embedding"
     payload = model_dump_compat(message)
-    try:
-        fields = {k: (v if isinstance(v, str) else json.dumps(v)) for k, v in payload.items()}
-    except Exception:
-        fields = {k: str(v) for k, v in payload.items()}
+    fields = encode_stream_fields(payload)
     await client.xadd(q, fields)
     # Also mirror to default queue in tests to satisfy readers that expect the fixed stream
     try:
         if _is_test_env() and q != "embeddings:embedding":
-            try:
-                mirror_fields = {k: (v if isinstance(v, str) else json.dumps(v)) for k, v in payload.items()}
-            except Exception:
-                mirror_fields = {k: str(v) for k, v in payload.items()}
+            mirror_fields = encode_stream_fields(payload)
             await client.xadd("embeddings:embedding", mirror_fields)
     except Exception:
         pass

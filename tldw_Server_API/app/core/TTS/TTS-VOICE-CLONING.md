@@ -356,7 +356,7 @@ def validate_voice_sample(audio_path):
 
 - Voice uploads and processed samples are stored under the per-user data root:
   - Default (when `USER_DB_BASE_DIR` is not configured):
-    - `Databases/user_databases/<user_id>/voices/`
+    - `<repo_root>/Databases/user_databases/<user_id>/voices/`
   - Recommended for production:
     - Set `USER_DB_BASE_DIR` (in `Config_Files/config.txt` or environment) to a dedicated volume with sufficient capacity, backups, and appropriate filesystem ACLs.
 - Optional strict duration enforcement:

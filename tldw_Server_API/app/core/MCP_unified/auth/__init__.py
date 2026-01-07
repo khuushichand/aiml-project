@@ -4,7 +4,7 @@ Authentication and authorization for unified MCP module
 
 from .jwt_manager import JWTManager, create_access_token, verify_token
 from .rbac import RBACPolicy, UserRole, Permission, Resource
-from .rate_limiter import RateLimiter, DistributedRateLimiter
+from .rate_limiter import RateLimiter
 
 __all__ = [
     "JWTManager",
@@ -15,5 +15,4 @@ __all__ = [
     "Permission",
     "Resource",
     "RateLimiter",
-    "DistributedRateLimiter",
 ]

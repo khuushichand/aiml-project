@@ -31,6 +31,7 @@ RATE_LIMIT_RETRY_DELAY = float(os.getenv("E2E_RATE_LIMIT_DELAY", "0.5"))  # Dela
 MAX_RETRIES = int(os.getenv("E2E_MAX_RETRIES", "3"))  # Max retries for rate limit errors
 SERVER_STARTUP_TIMEOUT = int(os.getenv("E2E_SERVER_STARTUP_TIMEOUT", "30"))  # Max time to wait for server
 E2E_INPROCESS = os.getenv("E2E_INPROCESS", "").lower() in {"1", "true", "yes", "on"}
+_INPROCESS_DB_URL: Optional[str] = None
 
 
 def _build_inprocess_httpx_client() -> httpx.Client:
@@ -40,9 +41,32 @@ def _build_inprocess_httpx_client() -> httpx.Client:
     This allows running e2e tests without opening a network socket (useful in
     restricted CI sandboxes) while exercising the real FastAPI application.
     """
+    # Ensure a fresh AuthNZ DB for in-process runs to avoid stale schemas.
+    global _INPROCESS_DB_URL
+    if _INPROCESS_DB_URL is None:
+        override = os.getenv("E2E_INPROCESS_DB_URL")
+        if override:
+            _INPROCESS_DB_URL = override
+            os.environ.setdefault("DATABASE_URL", override)
+        elif os.getenv("DATABASE_URL"):
+            _INPROCESS_DB_URL = os.environ["DATABASE_URL"]
+        else:
+            tmp_dir = Path(tempfile.mkdtemp(prefix="tldw_e2e_authnz_"))
+            db_path = tmp_dir / "users.db"
+            _INPROCESS_DB_URL = f"sqlite:///{db_path}"
+            os.environ["DATABASE_URL"] = _INPROCESS_DB_URL
+
     # Import lazily to avoid heavy init unless needed
     from tldw_Server_API.app.main import app
-    transport = httpx.ASGITransport(app=app, lifespan="on")
+    try:
+        transport = httpx.ASGITransport(app=app, lifespan="on")
+    except TypeError:
+        # Older httpx releases do not accept the lifespan kwarg.
+        transport = httpx.ASGITransport(app=app)
+    if not hasattr(transport, "handle_request"):
+        # Older httpx ASGITransport is async-only; fall back to TestClient.
+        from starlette.testclient import TestClient
+        return TestClient(app, base_url="http://testserver")
     return httpx.Client(transport=transport, base_url="http://testserver", timeout=TEST_TIMEOUT)
 
 
@@ -120,7 +144,7 @@ class APIClient:
         """Login and obtain tokens."""
         response = self.client.post(
             f"{API_PREFIX}/auth/login",
-            json={
+            data={
                 "username": username,
                 "password": password
             }
@@ -752,7 +776,7 @@ def test_user_credentials():
     return {
         "username": f"e2e_test_user_{timestamp}",
         "email": f"e2e_test_{timestamp}@example.com",
-        "password": "TestPassword123!"
+        "password": "Tlp9!ZxVq8@M"
     }
 
 

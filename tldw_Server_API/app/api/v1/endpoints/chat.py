@@ -9,7 +9,11 @@ import os
 # ---------------------------------------------------------------------------
 # Imports
 # ---------------------------------------------------------------------------
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
+    get_request_user,
+    User,
+    resolve_user_id_for_request,
+)
 from tldw_Server_API.app.core.AuthNZ.byok_config import merge_app_config_overrides
 from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
     validate_provider_override,
@@ -1517,7 +1521,11 @@ async def create_chat_completion(
                         "Chat RG: entity split failed, using user fallback: {}",
                         exc,
                     )
-                    entity_scope, entity_value = "user", str(getattr(current_user, "id", "1"))
+                    user_id = resolve_user_id_for_request(
+                        current_user,
+                        error_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+                    entity_scope, entity_value = "user", str(user_id)
 
                 # Best-effort backfill: if a tokens.daily_cap is configured,
                 # mirror today's legacy llm_usage_log totals into the ledger

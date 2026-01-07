@@ -30,7 +30,7 @@ from .base_worker import BaseWorker, WorkerConfig
 from fnmatch import fnmatch
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
-from ..messages import normalize_message
+from ..messages import encode_stream_fields, normalize_message
 from ..hyde import generate_questions, question_hash, normalize_question
 from tldw_Server_API.app.core.Metrics import increment_counter
 import json as _json
@@ -620,10 +620,7 @@ class EmbeddingWorker(BaseWorker):
 
         payload = model_dump_compat(result)
         # Ensure Redis stream field values are strings (encode nested types as JSON)
-        try:
-            fields = {k: (v if isinstance(v, str) else _json.dumps(v)) for k, v in payload.items()}
-        except Exception:
-            fields = {k: str(v) for k, v in payload.items()}
+        fields = encode_stream_fields(payload)
         await self.redis_client.xadd(target_queue, fields)
         logger.debug(f"Sent job {result.job_id} to storage queue")
 

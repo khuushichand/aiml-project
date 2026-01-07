@@ -741,21 +741,12 @@ _HAS_WORKFLOWS = False
 _HAS_UNIFIED_EVALUATIONS = False
 _HAS_SCHEDULER_WF = False
 _HAS_JOBS_ADMIN = False
-_HAS_AUTH_ENHANCED = False
 _HAS_CHUNKING = False
 _HAS_NOTES_GRAPH = False
 _HAS_READING_HIGHLIGHTS = False
 _HAS_KANBAN = False
 
 from tldw_Server_API.app.api.v1.endpoints.auth import router as auth_router
-
-try:
-    from tldw_Server_API.app.api.v1.endpoints.auth_enhanced import router as auth_enhanced_router
-
-    _HAS_AUTH_ENHANCED = True
-except Exception as _auth_enh_import_err:  # noqa: BLE001
-    logger.warning(f"Enhanced auth endpoints unavailable; skipping import: {_auth_enh_import_err}")
-    _HAS_AUTH_ENHANCED = False
 
 # Minimal test-app gating: when enabled, skip importing heavy routers
 from os import getenv as _getenv_min
@@ -4491,12 +4482,6 @@ elif _MINIMAL_TEST_APP:
         app.include_router(auth_router, prefix=f"{API_V1_PREFIX}", tags=["authentication"])
     except Exception as _auth_min_err:
         logger.debug(f"Skipping auth router in minimal test app: {_auth_min_err}")
-    # Enhanced auth endpoints (MFA, password reset) when available
-    try:
-        if _HAS_AUTH_ENHANCED:
-            app.include_router(auth_enhanced_router, prefix=f"{API_V1_PREFIX}", tags=["authentication-enhanced"])
-    except Exception as _auth_enh_min_err:
-        logger.debug(f"Skipping enhanced auth router in minimal test app: {_auth_enh_min_err}")
     # Users endpoints (sessions, change-password, storage, me)
     try:
         from tldw_Server_API.app.api.v1.endpoints.users import router as users_router
@@ -4537,6 +4522,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(config_info_router, prefix=f"{API_V1_PREFIX}", tags=["config"])
     except Exception as _config_min_err:
         logger.debug(f"Skipping config_info router in minimal test app: {_config_min_err}")
+    # Admin config diagnostics endpoint (effective config)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.config_admin import router as config_admin_router
+
+        app.include_router(config_admin_router, prefix=f"{API_V1_PREFIX}", tags=["config", "admin"])
+    except Exception as _config_admin_min_err:
+        logger.debug(f"Skipping config_admin router in minimal test app: {_config_admin_min_err}")
     # Flashcards endpoints (ChaChaNotes-backed) for integration tests
     try:
         from tldw_Server_API.app.api.v1.endpoints.flashcards import router as flashcards_router
@@ -4711,10 +4703,6 @@ else:
 
     _include_if_enabled("audit", audit_router, prefix=f"{API_V1_PREFIX}", tags=["audit"])
     _include_if_enabled("auth", auth_router, prefix=f"{API_V1_PREFIX}", tags=["authentication"])
-    if _HAS_AUTH_ENHANCED:
-        _include_if_enabled(
-            "auth-enhanced", auth_enhanced_router, prefix=f"{API_V1_PREFIX}", tags=["authentication-enhanced"]
-        )
     _include_if_enabled("users", users_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
     _include_if_enabled("users", user_keys_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
 
@@ -4992,6 +4980,12 @@ else:
             pass
     _include_if_enabled("setup", setup_router, prefix=f"{API_V1_PREFIX}", tags=["setup"])
     _include_if_enabled("config", config_info_router, prefix=f"{API_V1_PREFIX}", tags=["config"])
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.config_admin import router as config_admin_router
+
+        _include_if_enabled("config", config_admin_router, prefix=f"{API_V1_PREFIX}", tags=["config", "admin"])
+    except Exception as _config_admin_err:
+        logger.warning(f"Admin config endpoint unavailable; skipping import: {_config_admin_err}")
     # Resource Governor policy snapshot endpoint
     try:
         from tldw_Server_API.app.api.v1.endpoints.resource_governor import router as resource_governor_router

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from typing import Any, Dict
+from enum import Enum
 
 from loguru import logger
 
@@ -51,6 +52,42 @@ _SCHEMAS = {
     }
 }
 
+def _decode_json_fields(data: Dict[str, Any], keys: tuple[str, ...]) -> None:
+    for key in keys:
+        val = data.get(key)
+        if isinstance(val, bytes):
+            try:
+                val = val.decode("utf-8")
+            except Exception:
+                continue
+        if not isinstance(val, str):
+            continue
+        s = val.strip()
+        if not s or s[0] not in "{[":
+            continue
+        try:
+            decoded = json.loads(s)
+        except Exception:
+            continue
+        if isinstance(decoded, (dict, list)):
+            data[key] = decoded
+
+def encode_stream_fields(payload: Dict[str, Any]) -> Dict[str, str]:
+    """Encode payload fields for Redis streams without lossy fallbacks."""
+    out: Dict[str, str] = {}
+    for key, val in (payload or {}).items():
+        if val is None:
+            continue
+        if isinstance(val, Enum):
+            val = val.value
+        if isinstance(val, str):
+            out[key] = val
+        elif isinstance(val, (dict, list)):
+            out[key] = json.dumps(val, default=str)
+        else:
+            out[key] = str(val)
+    return out
+
 def validate_schema(stage: str, data: Dict[str, Any]) -> None:
     """Validate basic envelope with bundled JSON Schema.
 
@@ -70,6 +107,15 @@ def validate_schema(stage: str, data: Dict[str, Any]) -> None:
     d.setdefault("msg_version", CURRENT_VERSION)
     d.setdefault("msg_schema", CURRENT_SCHEMA)
     d.setdefault("schema_url", CURRENT_SCHEMA_URL)
+    # Coerce numeric envelope fields from Redis string values
+    for key in ("msg_version", "retry_count", "max_retries"):
+        val = d.get(key)
+        if isinstance(val, str):
+            try:
+                d[key] = int(val.strip())
+            except Exception:
+                # Leave as-is; schema validation will raise if invalid
+                pass
     try:
         jsonschema.validate(d, schema)  # type: ignore
     except Exception as e:
@@ -109,6 +155,14 @@ def normalize_message(stage: str, data: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         # Ignore when jsonschema is not present
         pass
+
+    # Decode JSON-encoded fields from Redis streams for stage-specific payloads.
+    if stage == "chunking":
+        _decode_json_fields(data, ("chunking_config", "source_metadata"))
+    elif stage == "embedding":
+        _decode_json_fields(data, ("chunks", "embedding_model_config"))
+    elif stage == "storage":
+        _decode_json_fields(data, ("embeddings", "metadata"))
 
     # Conditionally validate with the appropriate stage model only when core fields are present
     def _to_dict(model) -> Dict[str, Any]:

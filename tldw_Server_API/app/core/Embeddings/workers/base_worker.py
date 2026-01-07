@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from ..queue_schemas import EmbeddingJobMessage, JobInfo, JobStatus, WorkerMetrics
 from prometheus_client import Histogram
 from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager
-from ..messages import build_dedupe_key, classify_failure, validate_schema
+from ..messages import build_dedupe_key, classify_failure, encode_stream_fields, validate_schema
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 from ..dlq_crypto import encrypt_payload_if_configured
 from tldw_Server_API.app.core.Infrastructure.redis_factory import (
@@ -48,6 +48,10 @@ class WorkerConfig(BaseModel):
     heartbeat_interval: int = 30
     shutdown_timeout: int = 30
     metrics_interval: int = 60
+    allow_signal_handlers: bool = Field(
+        default=True,
+        description="Install SIGINT/SIGTERM handlers for standalone workers",
+    )
 
 
 class BaseWorker(ABC):
@@ -72,7 +76,7 @@ class BaseWorker(ABC):
         # Setup signal handlers only on main thread to avoid test runner issues
         try:
             import threading as _threading
-            if _threading.current_thread() is _threading.main_thread():
+            if self.config.allow_signal_handlers and _threading.current_thread() is _threading.main_thread():
                 signal.signal(signal.SIGINT, self._signal_handler)
                 signal.signal(signal.SIGTERM, self._signal_handler)
         except Exception:
@@ -455,10 +459,7 @@ class BaseWorker(ABC):
                         await self.redis_client.zadd(f"{self.config.queue_name}:delayed", {json.dumps(payload, default=str): score})
                     except Exception as _zerr:
                         logger.warning(f"Fallback delayed scheduling failed ({_zerr}); requeue live")
-                        try:
-                            _fields = {k: (v if isinstance(v, str) else json.dumps(v, default=str)) for k, v in (payload or {}).items()}
-                        except Exception:
-                            _fields = {k: str(v) for k, v in (payload or {}).items()}
+                        _fields = encode_stream_fields(payload or {})
                         try:
                             await self.redis_client.xadd(self.config.queue_name, _fields)
                         except Exception:
@@ -777,8 +778,5 @@ class BaseWorker(ABC):
                 await asyncio.sleep(max(0.001, min(3.0, delay_ms / 1000.0)))
             except Exception:
                 pass
-            try:
-                _fields = {k: (v if isinstance(v, str) else json.dumps(v, default=str)) for k, v in (payload or {}).items()}
-            except Exception:
-                _fields = {k: str(v) for k, v in (payload or {}).items()}
+            _fields = encode_stream_fields(payload or {})
             await self.redis_client.xadd(self.config.queue_name, _fields)

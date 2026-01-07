@@ -783,11 +783,13 @@ async def unified_rag_pipeline(
                         intent_label = None
                 if RewriteCache:
                     try:
-                        rc = RewriteCache(user_id=user_id or "anon")
+                        rc = RewriteCache(user_id=user_id)
                         cached = rc.get(query, intent=intent_label, corpus=index_namespace)
                         if cached:
                             cached_rewrites = [c for c in cached if isinstance(c, str) and c.strip()]
                             expanded_queries = list({q.strip(): None for q in ([query] + cached_rewrites)}.keys())
+                    except ValueError as exc:
+                        logger.debug(f"Rewrite cache disabled for user_id={user_id}: {exc}")
                     except Exception:
                         pass
                 strategies = (expansion_strategies or ["acronym", "synonym"]).copy()
@@ -806,8 +808,10 @@ async def unified_rag_pipeline(
                     if RewriteCache and len(expanded_queries) > 1:
                         rew = [q for q in expanded_queries if q != query][:5]
                         if rew:
-                            rc = RewriteCache(user_id=user_id or "anon")
+                            rc = RewriteCache(user_id=user_id)
                             rc.put(query, rewrites=rew, intent=intent_label, corpus=index_namespace)
+                except ValueError as exc:
+                    logger.debug(f"Rewrite cache write disabled for user_id={user_id}: {exc}")
                 except Exception:
                     pass
                 result.expanded_queries = [q for q in expanded_queries if q != query]
@@ -1967,6 +1971,8 @@ async def unified_rag_pipeline(
                 store = UserPersonalizationStore(feedback_user_id or user_id)
                 result.documents = store.boost_documents(result.documents, corpus=index_namespace)
                 result.metadata.setdefault("personalization", {})["boost_applied_pre_rerank"] = True
+        except ValueError as exc:
+            logger.debug(f"Personalization boost disabled for user_id={feedback_user_id or user_id}: {exc}")
         except Exception:
             pass
 
@@ -3251,6 +3257,8 @@ async def unified_rag_pipeline(
                             if UserPersonalizationStore:
                                 store = UserPersonalizationStore(feedback_user_id or user_id)
                                 result.documents = store.boost_documents(result.documents, corpus=index_namespace)
+                        except ValueError as exc:
+                            logger.debug(f"Personalization boost disabled for user_id={feedback_user_id or user_id}: {exc}")
                         except Exception:
                             pass
                     # Record anonymized search analytics

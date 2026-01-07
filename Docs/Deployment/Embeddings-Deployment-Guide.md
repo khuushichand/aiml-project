@@ -86,7 +86,7 @@ export MISTRAL_API_KEY="..."
 export VOYAGE_API_KEY="..."
 
 # Optional: user DB base directory (default: Databases/user_databases)
-export USER_DB_BASE_DIR="$(pwd)/Databases/user_databases"
+export USER_DB_BASE_DIR="$(pwd)/Databases/user_databases"  # USER_DB_BASE is deprecated alias
 
 # Optional: enable endpoint rate limiting guard on embeddings
 export EMBEDDINGS_RATE_LIMIT=on   # Uses built-in limit in the API endpoint

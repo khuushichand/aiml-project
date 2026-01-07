@@ -126,7 +126,7 @@ v1 Enhancements (in progress)
 - Privacy: no telemetry; logs are local; do not store credentials
 
 ## 11) Data Model (Current Implementation)
-All tables live in each user’s primary SQLite Media DB (`Databases/user_databases/<user_id>/Media_DB_v2.db`). Postgres parity is future work.
+All tables live in each user’s primary SQLite Media DB (`<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`). Postgres parity is future work.
 
 | Table | Purpose | Key Columns |
 | --- | --- | --- |

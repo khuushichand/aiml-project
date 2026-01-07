@@ -1,0 +1,152 @@
+import json
+
+import pytest
+
+from tldw_Server_API.app.core import config as core_config
+from tldw_Server_API.app.core.Embeddings import simplified_config
+from tldw_Server_API.app.core.TTS.tts_config import TTSConfigManager
+
+
+@pytest.fixture(autouse=True)
+def _reset_config_cache(monkeypatch):
+    core_config.clear_config_cache()
+    for key in (
+        "TLDW_CONFIG_FILE",
+        "TLDW_CONFIG_PATH",
+        "TLDW_CONFIG_DIR",
+        "EMBEDDINGS_CONFIG_PATH",
+        "EMBEDDINGS_DEFAULT_PROVIDER",
+        "EMBEDDINGS_PROVIDER",
+        "EMBEDDINGS_DEFAULT_MODEL",
+        "EMBEDDINGS_MODEL",
+        "EMBEDDINGS_CHUNK_SIZE",
+        "EMBEDDINGS_CHUNK_OVERLAP",
+        "EMBEDDINGS_API_URL",
+        "EMBEDDINGS_LOCAL_API_URL",
+        "TTS_DEFAULT_PROVIDER",
+        "EVALUATIONS_CONFIG_OVERRIDES",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    yield
+    core_config.clear_config_cache()
+
+
+def test_merge_layers_sources():
+    from tldw_Server_API.app.core.config_utils import merge_config_layers
+
+    merged, sources = merge_config_layers(
+        [
+            ("yaml", {"a": 1, "nested": {"x": 1}}),
+            ("config", {"nested": {"x": 2, "y": 3}}),
+            ("env", {"a": 9}),
+        ]
+    )
+
+    assert merged["a"] == 9
+    assert merged["nested"]["x"] == 2
+    assert sources["a"] == "env"
+    assert sources["nested"]["x"] == "config"
+
+
+def test_tts_precedence_env_over_config_and_yaml(tmp_path, monkeypatch):
+    yaml_path = tmp_path / "tts_providers_config.yaml"
+    yaml_path.write_text("default_provider: yaml_provider\nproviders: {}\n", encoding="utf-8")
+
+    config_path = tmp_path / "config.txt"
+    config_path.write_text(
+        "[TTS-Settings]\ndefault_tts_provider = config_provider\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("TTS_DEFAULT_PROVIDER", "env_provider")
+
+    manager = TTSConfigManager(yaml_path=yaml_path, config_txt_path=config_path)
+    cfg = manager.get_config()
+
+    assert cfg.default_provider == "env_provider"
+
+
+def test_embeddings_precedence_env_over_config_over_yaml(tmp_path, monkeypatch):
+    config_dir = tmp_path
+    yaml_path = config_dir / "embeddings_config.yaml"
+    yaml_path.write_text(
+        "\n".join(
+            [
+                "providers:",
+                "  - name: local",
+                "    api_url: http://yaml.local",
+                "default_provider: yaml_provider",
+                "default_model: yaml_model",
+                "chunk_size: 111",
+                "chunk_overlap: 222",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config_path = config_dir / "config.txt"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[Embeddings]",
+                "embedding_provider = config_provider",
+                "chunk_size = 333",
+                "overlap = 444",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("TLDW_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("EMBEDDINGS_PROVIDER", "env_provider")
+    monkeypatch.setenv("EMBEDDINGS_CHUNK_SIZE", "555")
+
+    cfg = simplified_config.load_config()
+
+    assert cfg.default_provider == "env_provider"
+    assert cfg.chunk_size == 555
+    assert cfg.chunk_overlap == 444
+
+
+def test_evaluations_precedence_env_over_config_over_yaml(tmp_path, monkeypatch):
+    yaml_path = tmp_path / "evaluations_config.yaml"
+    yaml_path.write_text(
+        "\n".join(
+            [
+                "rate_limiting:",
+                "  global:",
+                "    default_tier: free",
+                "  tiers:",
+                "    free:",
+                "      evaluations_per_minute: 1",
+                "      batch_evaluations_per_minute: 1",
+                "      evaluations_per_day: 1",
+                "      total_tokens_per_day: 1",
+                "      burst_size: 1",
+                "      max_cost_per_day: 1.0",
+                "      max_cost_per_month: 1.0",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config_path = tmp_path / "config.txt"
+    config_path.write_text(
+        "[Evaluations]\nrate_limiting.global.default_tier = premium\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("TLDW_CONFIG_FILE", str(config_path))
+    monkeypatch.setenv(
+        "EVALUATIONS_CONFIG_OVERRIDES",
+        json.dumps({"rate_limiting": {"global": {"default_tier": "env"}}}),
+    )
+
+    from tldw_Server_API.app.core.Evaluations.config_manager import EvaluationsConfigManager
+
+    manager = EvaluationsConfigManager(config_path=yaml_path, enable_hot_reload=False)
+
+    assert manager.get_config("rate_limiting.global.default_tier") == "env"

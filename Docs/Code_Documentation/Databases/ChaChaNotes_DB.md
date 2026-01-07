@@ -696,7 +696,7 @@ The library uses Loguru (`from loguru import logger`) for structured logging. Co
 ## 9. Integration & Storage Path
 
 - FastAPI dependency: `get_chacha_db_for_user` (`app/api/v1/API_Deps/ChaCha_Notes_DB_Deps.py`) resolves a per-user DB instance based on `USER_DB_BASE_DIR` and caches instances in an LRU.
-- Per-user DB location: `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db` (directories auto-created).
+- Per-user DB location: `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db` (directories auto-created). In multi-user mode, user_id must be provided; non-numeric ids are test-only.
 - On first use per user, a default character card is ensured.
 
 ---

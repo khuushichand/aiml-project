@@ -1,4 +1,3 @@
-import asyncio
 import pytest
 
 from typing import Dict, Any
@@ -93,12 +92,8 @@ class _CategoryProbeLimiter:
         self.last_category = None
 
     async def check_rate_limit(self, *args, **kwargs):
+        self.last_category = kwargs.get("category")
         return True
-
-    def get_category_limiter(self, category: str):
-        # Probe which category is chosen by protocol
-        self.last_category = category
-        return None
 
 
 class _CategoryModule(BaseModule):

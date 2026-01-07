@@ -2,13 +2,11 @@ import sqlite3
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional, List
-from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
-def _db_path(user_id: str) -> Path:
-    base_dir: Path = settings.get("USER_DB_BASE_DIR")
-    user_dir = base_dir / str(user_id) / 'vector_store'
-    user_dir.mkdir(parents=True, exist_ok=True)
+def _db_path(user_id: Optional[str]) -> Path:
+    user_dir = DatabasePaths.get_user_vector_store_dir(user_id)
     return user_dir / 'media_embedding_jobs.db'
 
 
@@ -24,11 +22,11 @@ def _prime(conn: sqlite3.Connection) -> sqlite3.Connection:
     return conn
 
 
-def _connect(user_id: str) -> sqlite3.Connection:
+def _connect(user_id: Optional[str]) -> sqlite3.Connection:
     return _prime(sqlite3.connect(_db_path(user_id), check_same_thread=False))
 
 
-def init_db(user_id: str) -> None:
+def init_db(user_id: Optional[str]) -> None:
     with _connect(user_id) as conn:
         conn.execute(
             """
@@ -51,8 +49,7 @@ def init_db(user_id: str) -> None:
 
 def create_job(job_id: str, media_id: int, user_id: Optional[str], embedding_model: str, status: str = 'processing') -> None:
     ts = int(time.time())
-    uid = str(user_id) if user_id is not None else '1'
-    with _connect(uid) as conn:
+    with _connect(user_id) as conn:
         conn.execute(
             """
             INSERT OR REPLACE INTO media_embedding_jobs
@@ -70,7 +67,7 @@ def create_job(job_id: str, media_id: int, user_id: Optional[str], embedding_mod
         conn.commit()
 
 
-def update_job(job_id: str, user_id: str, status: Optional[str] = None, embedding_count: Optional[int] = None,
+def update_job(job_id: str, user_id: Optional[str], status: Optional[str] = None, embedding_count: Optional[int] = None,
                chunks_processed: Optional[int] = None, error: Optional[str] = None) -> None:
     fields = []
     values: List[Any] = []
@@ -91,13 +88,13 @@ def update_job(job_id: str, user_id: str, status: Optional[str] = None, embeddin
     values.append(job_id)
     if not fields:
         return
-    with _connect(str(user_id)) as conn:
+    with _connect(user_id) as conn:
         conn.execute(f"UPDATE media_embedding_jobs SET {', '.join(fields)} WHERE id = ?", values)
         conn.commit()
 
 
-def get_job(job_id: str, user_id: str) -> Optional[Dict[str, Any]]:
-    with _connect(str(user_id)) as conn:
+def get_job(job_id: str, user_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    with _connect(user_id) as conn:
         cur = conn.execute(
             """
             SELECT id, media_id, user_id, status, embedding_model, embedding_count, chunks_processed, error, created_at, updated_at
@@ -122,7 +119,7 @@ def get_job(job_id: str, user_id: str) -> Optional[Dict[str, Any]]:
         }
 
 
-def list_jobs(user_id: str, status: Optional[str] = None, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+def list_jobs(user_id: Optional[str], status: Optional[str] = None, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
     query = (
         "SELECT id, media_id, user_id, status, embedding_model, embedding_count, chunks_processed, error, created_at, updated_at "
         "FROM media_embedding_jobs"
@@ -133,7 +130,7 @@ def list_jobs(user_id: str, status: Optional[str] = None, limit: int = 50, offse
         params.append(status)
     query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
     params.extend([limit, offset])
-    with _connect(str(user_id)) as conn:
+    with _connect(user_id) as conn:
         cur = conn.execute(query, params)
         rows = cur.fetchall()
         return [

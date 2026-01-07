@@ -118,7 +118,7 @@ Team Facilitator and Compliance Officer / Admin personas operate within this per
    - `merge`: Applies per-type semantics as described in the identity/merge table above; where `merge` is unsupported or ambiguous for a type, it degrades to `rename`.
 
 3. **Storage & Security**
-   - Per-user directories under `TLDW_USER_DATA_PATH` (default `/var/lib/tldw/user_data/users/<id>/chatbooks/{exports,imports,temp}`) with sanitized names and 0700 permissions.
+   - Per-user directories under `USER_DB_BASE_DIR/<user_id>/chatbooks/{exports,imports,temp}` with sanitized names and 0700 permissions.
    - HMAC-signed download URLs (`CHATBOOKS_SIGNED_URLS`, `CHATBOOKS_SIGNING_SECRET`); in `AUTH_MODE=multi_user` or when org features are enabled, signed URLs are required and default to enabled with 1-hour expiry (`expires_at`), extendable by privileged roles up to a configured maximum.
    - Access control ensures users interact only with their own jobs/files by default; team leads can act on their team, org owners on their org, and admins across all users, with all cross-user operations emitting audit events including actor and target scopes. Imported entities are always materialized under the importing user’s account; at higher scopes, organizations are considered owners of all team and user artifacts within their hierarchy, and teams own artifacts created by their members.
    - Cleanup and cross-user job operations (`POST /api/v1/chatbooks/cleanup`, job deletion for other users, org- or team-wide listing) are always authenticated and subject to these role scopes to avoid unbounded cleanup scans or job enumeration.
@@ -155,7 +155,7 @@ Team Facilitator and Compliance Officer / Admin personas operate within this per
 - Media/storage subsystems for referenced artifacts.
 - Authentication & authorization (user id, tier) for scoping quotas and access.
 - Unified audit service for compliance logging.
-- Environment configuration: `CHATBOOKS_*`, `TLDW_USER_DATA_PATH`, job tuning variables.
+- Environment configuration: `CHATBOOKS_*`, `USER_DB_BASE_DIR`, job tuning variables.
 
 ## 10. Success Metrics
 

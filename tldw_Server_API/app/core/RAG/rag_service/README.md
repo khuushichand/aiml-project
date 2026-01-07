@@ -479,9 +479,9 @@ Same as tldw_server (GPLv3)
 
 ## Feedback & Learning (New)
 
-- Implicit feedback loop: the WebUI emits click/expand/copy signals for the result list. The backend records these via `POST /api/v1/rag/feedback/implicit` and updates per-user priors and pairwise preferences (learning-to-rank). Data are stored per-user under `Databases/user_databases/<user_id>/` and never cross tenants.
+- Implicit feedback loop: the WebUI emits click/expand/copy signals for the result list. The backend records these via `POST /api/v1/rag/feedback/implicit` and updates per-user priors and pairwise preferences (learning-to-rank). Data are stored per-user under `<USER_DB_BASE_DIR>/<user_id>/` and never cross tenants.
 - Personalization: the unified pipeline can apply a light boost using historical priors when `collect_feedback=true` and `apply_feedback_boost=true` are present in the request. Override the user id with `feedback_user_id`.
-- Query→rewrite caching: effective rewrites are cached per intent cluster and corpus to reduce cost and improve stability. The cache persists to `Databases/Rewrite_Cache/rewrite_cache.jsonl` and decays over time.
+- Query→rewrite caching: effective rewrites are cached per user under `<USER_DB_BASE_DIR>/<user_id>/Rewrite_Cache/rewrite_cache.jsonl` (USER_DB_BASE is a deprecated alias). The cache decays over time.
 
 ## Observability & SLOs (New)
 

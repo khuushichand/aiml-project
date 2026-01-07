@@ -174,7 +174,7 @@ Note: HTTP streaming applies to JSON/JSONL only (CSV+stream returns 400). Progra
 - Retention: `retention_days` (constructor) controls cleanup.
 - Flush/cleanup: `buffer_size`, `flush_interval` tune background activity.
 - Database location:
-  - When using DI (single or multi-user), the audit DB path is per-user under `Databases/user_databases/<user_id>/audit/unified_audit.db`.
+  - When using DI (single or multi-user), the audit DB path is per-user under `<USER_DB_BASE_DIR>/<user_id>/audit/unified_audit.db`.
   - If you construct the service directly without DI, the default `db_path` is `./Databases/unified_audit.db`.
 - `USER_DB_BASE_DIR` (settings): per-user DB root directory; defaults to `Databases/user_databases/` under the project root.
 

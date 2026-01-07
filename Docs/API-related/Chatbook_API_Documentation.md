@@ -334,7 +334,7 @@ Lightweight liveness check for the Chatbooks subsystem.
   "status": "healthy|degraded|unhealthy",
   "timestamp": "2024-01-15T10:30:00Z",
   "components": {
-    "storage_base": {"path": "/var/lib/tldw/user_data", "exists": true, "writable": true}
+    "storage_base": {"path": "<USER_DB_BASE_DIR>", "exists": true, "writable": true}
   }
 }
 ```

@@ -20,7 +20,7 @@ See also: `tldw_Server_API/app/core/AuthNZ/README.md` and `Docs/Code_Documentati
 - Guardrails/middleware: `tldw_Server_API/app/core/AuthNZ/rate_limiter.py`, `tldw_Server_API/app/core/AuthNZ/llm_budget_middleware.py`, `tldw_Server_API/app/core/AuthNZ/llm_budget_guard.py`, `tldw_Server_API/app/core/AuthNZ/csrf_protection.py`, `tldw_Server_API/app/core/AuthNZ/security_headers.py`, `tldw_Server_API/app/core/AuthNZ/usage_logging_middleware.py`
 - Auth flows/support: `tldw_Server_API/app/core/AuthNZ/password_service.py`, `tldw_Server_API/app/core/AuthNZ/mfa_service.py`, `tldw_Server_API/app/core/AuthNZ/email_service.py`
 - Endpoint DI (use these): `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py`
-- Auth endpoints: `tldw_Server_API/app/api/v1/endpoints/auth.py`, `tldw_Server_API/app/api/v1/endpoints/auth_enhanced.py`
+- Auth endpoints: `tldw_Server_API/app/api/v1/endpoints/auth.py`
 - Admin + RBAC mgmt: `tldw_Server_API/app/api/v1/endpoints/admin.py`, `.../users.py`, `.../privileges.py`, `.../register.py`
 - Debug helpers: `tldw_Server_API/app/api/v1/endpoints/authnz_debug.py`
 
@@ -443,7 +443,7 @@ Notes:
 - Virtual key features can be toggled via `VIRTUAL_KEYS_ENABLED` in settings (enabled by default).
 - Security alerts sinks (file/webhook/email) are configured via `SECURITY_ALERTS_*` settings; see the AuthNZ settings section for details.
 - Registration toggles: `ENABLE_REGISTRATION` and `REQUIRE_REGISTRATION_CODE` control whether registration is exposed and whether codes are required.
- - MFA prerequisites: enforced via `_ensure_mfa_available` — `tldw_Server_API.app.api.v1.endpoints.auth_enhanced._ensure_mfa_available`
+- MFA prerequisites: enforced via `_ensure_mfa_available` — `tldw_Server_API.app.api.v1.endpoints.auth._ensure_mfa_available`
  - Virtual key feature and budget settings: `VIRTUAL_KEYS_ENABLED`, `LLM_BUDGET_ENFORCE`, `LLM_BUDGET_ENDPOINTS` — see `VIRTUAL_KEYS_ENABLED`, `LLM_BUDGET_ENFORCE`, and `LLM_BUDGET_ENDPOINTS` on `tldw_Server_API.app.core.AuthNZ.settings.Settings`
 
 Auth Endpoints (summary):
@@ -451,16 +451,16 @@ Auth Endpoints (summary):
 - `POST /api/v1/auth/refresh` – Refresh JWT (multi-user) — `tldw_Server_API.app.api.v1.endpoints.auth.refresh_token`
 - `POST /api/v1/auth/logout` – Logout; optional all devices (multi-user) — `tldw_Server_API.app.api.v1.endpoints.auth.logout`
 - `POST /api/v1/auth/register` – Registration flow (if enabled by settings) — `tldw_Server_API.app.api.v1.endpoints.auth.register`
-- `POST /api/v1/auth/forgot-password` – Send password reset email (multi-user) — `tldw_Server_API.app.api.v1.endpoints.auth_enhanced.forgot_password`
-- `POST /api/v1/auth/reset-password` – Reset password with token (multi-user) — `tldw_Server_API.app.api.v1.endpoints.auth_enhanced.reset_password`
-- `GET /api/v1/auth/verify-email` – Verify email (multi-user) — `tldw_Server_API.app.api.v1.endpoints.auth_enhanced.verify_email`
-- `POST /api/v1/auth/resend-verification` – Resend verification email (multi-user) — `tldw_Server_API.app.api.v1.endpoints.auth_enhanced.resend_verification`
-- `POST /api/v1/auth/mfa/setup` | `POST /mfa/verify` | `POST /mfa/disable` – MFA endpoints; MFA is available only in multi-user deployments with PostgreSQL — see `setup_mfa`, `verify_mfa_setup`, and `disable_mfa` in `tldw_Server_API.app.api.v1.endpoints.auth_enhanced`
+- `POST /api/v1/auth/forgot-password` – Send password reset email (multi-user) — `tldw_Server_API.app.api.v1.endpoints.auth.forgot_password`
+- `POST /api/v1/auth/reset-password` – Reset password with token (multi-user) — `tldw_Server_API.app.api.v1.endpoints.auth.reset_password`
+- `GET /api/v1/auth/verify-email` – Verify email (multi-user) — `tldw_Server_API.app.api.v1.endpoints.auth.verify_email`
+- `POST /api/v1/auth/resend-verification` – Resend verification email (multi-user) — `tldw_Server_API.app.api.v1.endpoints.auth.resend_verification`
+- `POST /api/v1/auth/mfa/setup` | `POST /mfa/verify` | `POST /mfa/disable` – MFA endpoints; MFA is available only in multi-user deployments with PostgreSQL — see `setup_mfa`, `verify_mfa_setup`, and `disable_mfa` in `tldw_Server_API.app.api.v1.endpoints.auth`
 - `POST /api/v1/auth/virtual-key` – Mint scoped virtual JWT; multi-user only — `tldw_Server_API.app.api.v1.endpoints.auth.mint_self_virtual_key`
 
 References:
 - `tldw_Server_API.app.api.v1.endpoints.auth.mint_self_virtual_key`
-- `tldw_Server_API.app.api.v1.endpoints.auth_enhanced`
+- `tldw_Server_API.app.api.v1.endpoints.auth`
 
 Operator references:
 - JWT rotation runbook: `Docs/Deployment/Operations/JWT_Rotation_Runbook.md`

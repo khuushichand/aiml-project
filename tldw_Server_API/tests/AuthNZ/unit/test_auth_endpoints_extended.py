@@ -50,25 +50,25 @@ async def test_reset_password_weak_and_success(monkeypatch):
         def hash_password(self, pwd: str) -> str:
             return "HASHED"
 
-    import tldw_Server_API.app.api.v1.endpoints.auth_enhanced as _auth_enh
+    import tldw_Server_API.app.api.v1.endpoints.auth as _auth
 
     async def _fake_is_pg() -> bool:
         return False
 
-    monkeypatch.setattr(_auth_enh, "is_postgres_backend", _fake_is_pg)
+    monkeypatch.setattr(_auth, "is_postgres_backend", _fake_is_pg)
 
     # Weak password
     with pytest.raises(Exception):
-        await _auth_enh.reset_password(
-            data=_auth_enh.ResetPasswordRequest(token="tok", new_password="weak"),
+        await _auth.reset_password(
+            data=_auth.ResetPasswordRequest(token="tok", new_password="weak"),
             db=_StubDB(),
             jwt_service=_StubJWT(),
             password_service=_StubPwd(weak=True),
         )
 
     # Success path
-    out = await _auth_enh.reset_password(
-        data=_auth_enh.ResetPasswordRequest(token="tok", new_password="Strong@12345"),
+    out = await _auth.reset_password(
+        data=_auth.ResetPasswordRequest(token="tok", new_password="Strong@12345"),
         db=_StubDB(),
         jwt_service=_StubJWT(),
         password_service=_StubPwd(weak=False),
@@ -82,7 +82,7 @@ async def test_logout_uses_utc_expiry(monkeypatch):
         pytest.skip("tzset not available on this platform")
     reset_settings()
 
-    import tldw_Server_API.app.api.v1.endpoints.auth_enhanced as auth_enh
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
 
     exp_ts = 1_700_000_000
     captured = {"expires_at": None, "revoked_sessions": []}
@@ -126,9 +126,9 @@ async def test_logout_uses_utc_expiry(monkeypatch):
                 ("single", {"session_id": session_id, "revoked_by": revoked_by, "reason": reason})
             )
 
-    monkeypatch.setattr(auth_enh, "JWTService", StubJWT)
+    monkeypatch.setattr(auth, "JWTService", StubJWT)
     stub_blacklist = StubBlacklist()
-    monkeypatch.setattr(auth_enh, "get_token_blacklist", lambda: stub_blacklist)
+    monkeypatch.setattr(auth, "get_token_blacklist", lambda: stub_blacklist)
 
     scope = {
         "type": "http",
@@ -141,19 +141,21 @@ async def test_logout_uses_utc_expiry(monkeypatch):
         "server": ("testserver", 80),
     }
     request = Request(scope)
-    data = auth_enh.LogoutRequest(all_devices=False)
+    data = auth.LogoutRequest(all_devices=False)
     current_user = SimpleNamespace(id=99)
     session_manager = StubSessionManager()
+    jwt_service = StubJWT()
 
     original_tz = os.environ.get("TZ")
     try:
         os.environ["TZ"] = "US/Pacific"
         time.tzset()
-        result = await auth_enh.logout(
+        result = await auth.logout(
             data=data,
             request=request,
             current_user=current_user,
             session_manager=session_manager,
+            jwt_service=jwt_service,
         )
     finally:
         if original_tz is None:
@@ -162,7 +164,7 @@ async def test_logout_uses_utc_expiry(monkeypatch):
             os.environ["TZ"] = original_tz
         time.tzset()
 
-    assert result["message"] == "Logged out successfully"
+    assert result.message == "Successfully logged out"
     assert captured["expires_at"] == datetime.utcfromtimestamp(exp_ts)
     assert captured["token_type"] == "access"
     assert captured["revoked_sessions"][0][0] == "single"

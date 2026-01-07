@@ -13,7 +13,7 @@
 Enable single-user deployments that rely on SQLite to perform complete exports (and later re-imports) of the Media and ChaChaNotes databases through supported server workflows. Today users must stop the service and copy raw `.db` files; this feature delivers a first-class, automated export path that integrates with existing authentication, job management, and storage policies.
 
 ### 1.2 Motivation & Background
-- Single-user mode defaults to SQLite files (`Media_DB_v2.db`, `ChaChaNotes.db`) located under `Databases/` and `Databases/user_databases/<uid>/`.
+- Single-user mode defaults to SQLite files (`Media_DB_v2.db`, `ChaChaNotes.db`) located under `Databases/` and `<USER_DB_BASE_DIR>/<uid>/`.
 - There is no supported API or UI to capture full backups; Chatbooks export/import covers curated content but not full fidelity DB snapshots.
 - Operational docs recommend manual filesystem copies, which is error-prone, does not scale to headless deployments, and offers no progress or integrity guarantees.
 - Users migrating between machines or preparing for upgrades have asked for a turnkey, documented backup workflow.

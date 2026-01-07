@@ -18,7 +18,7 @@ async def test_reset_password_integration_success(monkeypatch):
     - Forces Postgres code path in the endpoint for simpler branches
     - Overrides password service to accept and hash new password
     """
-    # Ensure MFA import path is stubbed prior to auth_enhanced import
+    # Ensure MFA import path is stubbed prior to auth import
     class _StubMFA:
         def generate_secret(self) -> str:
             return "IGNORED"
@@ -33,14 +33,14 @@ async def test_reset_password_integration_success(monkeypatch):
     app = reloaded.app
 
     # Force Postgres branch inside endpoint
-    import tldw_Server_API.app.api.v1.endpoints.auth_enhanced as auth_enh
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
     # Ensure we have the freshest route definitions (reflecting any code changes)
-    auth_enh = importlib.reload(auth_enh)
+    auth = importlib.reload(auth)
 
     async def _is_pg() -> bool:
         return True
 
-    auth_enh.is_postgres_backend = _is_pg  # type: ignore
+    auth.is_postgres_backend = _is_pg  # type: ignore
 
     # Override DB transaction dep with a stub
     class _StubDB:
@@ -146,12 +146,12 @@ async def test_mfa_setup_verify_disable_integration(isolated_test_environment, m
         async def send_mfa_enabled_email(self, to_email: str, username: str, backup_codes, ip_address: str):
             return True
 
-    import tldw_Server_API.app.api.v1.endpoints.auth_enhanced as auth_enh
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
 
     # Monkeypatch service resolvers to avoid optional dependencies
     stub_mfa_instance = _StubMFA()
-    monkeypatch.setattr(auth_enh, "_get_mfa_service", lambda: stub_mfa_instance)
-    monkeypatch.setattr(auth_enh, "_get_email_service", lambda: _StubEmail())
+    monkeypatch.setattr(auth, "_get_mfa_service", lambda: stub_mfa_instance)
+    monkeypatch.setattr(auth, "_get_email_service", lambda: _StubEmail())
 
     # Override get_current_active_user to bypass authentication
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
@@ -164,7 +164,7 @@ async def test_mfa_setup_verify_disable_integration(isolated_test_environment, m
     previous_override_main = app.dependency_overrides.get(get_current_active_user)
     app.dependency_overrides[get_current_active_user] = _active_user
     # Ensure override binds to the exact reference used in the router
-    app.dependency_overrides[auth_enh.get_current_active_user] = _active_user  # type: ignore[attr-defined]
+    app.dependency_overrides[auth.get_current_active_user] = _active_user  # type: ignore[attr-defined]
 
     try:
         # Setup
@@ -199,4 +199,4 @@ async def test_mfa_setup_verify_disable_integration(isolated_test_environment, m
             app.dependency_overrides[get_current_active_user] = previous_override_main
         else:
             app.dependency_overrides.pop(get_current_active_user, None)
-        app.dependency_overrides.pop(auth_enh.get_current_active_user, None)  # type: ignore[attr-defined]
+        app.dependency_overrides.pop(auth.get_current_active_user, None)  # type: ignore[attr-defined]

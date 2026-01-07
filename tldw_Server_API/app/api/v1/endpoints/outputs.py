@@ -11,7 +11,11 @@ from pydantic import BaseModel
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.schemas.outputs_schemas import OutputArtifact, OutputCreateRequest, OutputListResponse, OutputUpdateRequest
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
+    User,
+    get_request_user,
+    resolve_user_id_for_request,
+)
 from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.endpoints.outputs_templates import _build_items_context_from_media_ids, _select_media_ids_for_run
@@ -31,7 +35,7 @@ router = APIRouter(prefix="/outputs", tags=["outputs"])
 
 
 def _outputs_dir_for_user(user_id: int) -> PathlibPath:
-    return DatabasePaths.get_user_base_directory(user_id) / "outputs"
+    return DatabasePaths.get_user_outputs_dir(user_id)
 
 
 def _resolve_output_path_for_user(user_id: int, path_value: str | PathlibPath) -> PathlibPath:
@@ -136,7 +140,12 @@ async def list_outputs(
         try:
             storage_path = _normalize_output_storage_path_for_user(
                 cdb=cdb,
-                user_id=int(_current_user.id or 0),
+                user_id=resolve_user_id_for_request(
+                    _current_user,
+                    as_int=True,
+                    error_status=500,
+                    invalid_detail="invalid user_id",
+                ),
                 output_id=r.id,
                 storage_path=r.storage_path,
             )
@@ -171,7 +180,12 @@ async def list_deleted_outputs(
         try:
             storage_path = _normalize_output_storage_path_for_user(
                 cdb=cdb,
-                user_id=int(_current_user.id or 0),
+                user_id=resolve_user_id_for_request(
+                    _current_user,
+                    as_int=True,
+                    error_status=500,
+                    invalid_detail="invalid user_id",
+                ),
                 output_id=r.id,
                 storage_path=r.storage_path,
                 update_db=False,
@@ -248,7 +262,12 @@ async def create_output(
         raise HTTPException(status_code=422, detail="render_failed")
 
     # Persist to file under user outputs dir
-    user_id = int(current_user.id or 0)
+    user_id = resolve_user_id_for_request(
+        current_user,
+        as_int=True,
+        error_status=500,
+        invalid_detail="invalid user_id",
+    )
     out_dir = _outputs_dir_for_user(user_id)
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -390,7 +409,12 @@ async def download_output(
     except KeyError:
         raise HTTPException(status_code=404, detail="output_not_found")
 
-    user_id = int(current_user.id or 0)
+    user_id = resolve_user_id_for_request(
+        current_user,
+        as_int=True,
+        error_status=500,
+        invalid_detail="invalid user_id",
+    )
     storage_name = _normalize_output_storage_path_for_user(
         cdb=cdb,
         user_id=user_id,
@@ -425,7 +449,12 @@ async def download_output_by_name(
         row = cdb.get_output_artifact_by_title(title, format_=(format if format else None))
     except KeyError:
         raise HTTPException(status_code=404, detail="output_not_found")
-    user_id = int(current_user.id or 0)
+    user_id = resolve_user_id_for_request(
+        current_user,
+        as_int=True,
+        error_status=500,
+        invalid_detail="invalid user_id",
+    )
     storage_name = _normalize_output_storage_path_for_user(
         cdb=cdb,
         user_id=user_id,
@@ -458,7 +487,12 @@ async def head_download_output(
         row = cdb.get_output_artifact(output_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="output_not_found")
-    user_id = int(current_user.id or 0)
+    user_id = resolve_user_id_for_request(
+        current_user,
+        as_int=True,
+        error_status=500,
+        invalid_detail="invalid user_id",
+    )
     storage_name = _normalize_output_storage_path_for_user(
         cdb=cdb,
         user_id=user_id,
@@ -489,7 +523,12 @@ async def delete_output(
     cdb = Depends(get_collections_db_for_user),
 ):
     # If hard delete and delete_file requested, remove file first
-    user_id = int(current_user.id or 0)
+    user_id = resolve_user_id_for_request(
+        current_user,
+        as_int=True,
+        error_status=500,
+        invalid_detail="invalid user_id",
+    )
     fs_deleted = False
     if hard and delete_file:
         try:
@@ -538,7 +577,12 @@ async def update_output(
     except KeyError:
         raise HTTPException(status_code=404, detail="output_not_found")
 
-    user_id = int(current_user.id or 0)
+    user_id = resolve_user_id_for_request(
+        current_user,
+        as_int=True,
+        error_status=500,
+        invalid_detail="invalid user_id",
+    )
     storage_name = _normalize_output_storage_path_for_user(
         cdb=cdb,
         user_id=user_id,
@@ -646,7 +690,12 @@ async def purge_outputs(
     current_user: User = Depends(get_request_user),
     cdb = Depends(get_collections_db_for_user),
 ):
-    user_id = int(current_user.id or 0)
+    user_id = resolve_user_id_for_request(
+        current_user,
+        as_int=True,
+        error_status=500,
+        invalid_detail="invalid user_id",
+    )
     now = datetime.utcnow().replace(microsecond=0).isoformat()
     ids: set[int] = set()
     paths: dict[int, str] = {}

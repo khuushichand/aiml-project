@@ -2,7 +2,6 @@
 # Worker for processing text chunking tasks
 
 import hashlib
-import json as _json
 import os
 import re
 from typing import Any, Dict, List, Optional
@@ -27,7 +26,7 @@ from ..queue_schemas import (
 )
 from .base_worker import BaseWorker, WorkerConfig
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
-from ..messages import normalize_message
+from ..messages import encode_stream_fields, normalize_message
 from tldw_Server_API.app.core.Chunking.constants import (
     ensure_frontmatter_metadata,
     prepend_frontmatter,
@@ -172,10 +171,7 @@ class ChunkingWorker(BaseWorker):
             target_queue = self.embedding_queue
 
         payload = model_dump_compat(result)
-        try:
-            fields = {k: (v if isinstance(v, str) else _json.dumps(v)) for k, v in payload.items()}
-        except Exception:
-            fields = {k: str(v) for k, v in payload.items()}
+        fields = encode_stream_fields(payload)
         await self.redis_client.xadd(target_queue, fields)
         logger.debug(f"Sent job {result.job_id} to embedding queue")
 

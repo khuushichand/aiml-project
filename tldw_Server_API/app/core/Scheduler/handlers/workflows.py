@@ -21,11 +21,19 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     get_content_backend_instance,
 )
 from tldw_Server_API.app.core.Workflows.daily_ledger import record_workflow_run
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import resolve_user_id_value
 
 
 def _get_wf_db() -> WorkflowsDatabase:
     backend = get_content_backend_instance()
     return create_workflows_database(backend=backend)
+
+
+def _resolve_payload_user_id(payload: Dict[str, Any]) -> str:
+    return resolve_user_id_value(
+        payload.get("user_id"),
+        missing_detail="workflow_run: user_id is required in multi-user mode",
+    )
 
 
 @task(name="workflow_run", max_retries=0, timeout=3600, queue="workflows")
@@ -52,7 +60,7 @@ async def workflow_run(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(inputs, dict):
         raise ValueError("workflow_run: inputs must be a dict")
 
-    user_id = str(payload.get("user_id") or "1")
+    user_id = _resolve_payload_user_id(payload)
     tenant_id = str(payload.get("tenant_id") or "default")
     workflow_id = payload.get("workflow_id")
     definition_snapshot = payload.get("definition_snapshot")

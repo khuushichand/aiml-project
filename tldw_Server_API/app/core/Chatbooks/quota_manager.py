@@ -11,7 +11,6 @@ Manages user quotas for storage, export/import operations, and rate limits.
 import sys
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger
@@ -19,6 +18,7 @@ from loguru import logger
 # Sentinel value for unlimited quotas (avoids arithmetic overflow issues with sys.maxsize)
 UNLIMITED_QUOTA = -1
 
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 
@@ -259,18 +259,7 @@ class QuotaManager:
         # In production, query database for actual usage
         # For now, calculate from user's data directory
         try:
-            import os
-            import tempfile
-
-            # Use environment variable, or temp dir for testing, or system default
-            if os.environ.get('TLDW_USER_DATA_PATH'):
-                base_dir = Path(os.environ.get('TLDW_USER_DATA_PATH'))
-            elif os.environ.get('PYTEST_CURRENT_TEST') or os.environ.get('CI'):
-                base_dir = Path(tempfile.gettempdir()) / 'tldw_test_data'
-            else:
-                base_dir = Path('/var/lib/tldw/user_data')
-
-            user_dir = base_dir / 'users' / str(self.user_id)
+            user_dir = DatabasePaths.get_user_chatbooks_dir(self.user_id)
 
             if user_dir.exists():
                 total_size = 0
@@ -402,18 +391,7 @@ class QuotaManager:
             Number of files deleted
         """
         try:
-            import os
-            import tempfile
-
-            # Use environment variable, or temp dir for testing, or system default
-            if os.environ.get('TLDW_USER_DATA_PATH'):
-                base_dir = Path(os.environ.get('TLDW_USER_DATA_PATH'))
-            elif os.environ.get('PYTEST_CURRENT_TEST') or os.environ.get('CI'):
-                base_dir = Path(tempfile.gettempdir()) / 'tldw_test_data'
-            else:
-                base_dir = Path('/var/lib/tldw/user_data')
-
-            user_export_dir = base_dir / 'users' / str(self.user_id) / 'chatbooks' / 'exports'
+            user_export_dir = DatabasePaths.get_user_chatbooks_exports_dir(self.user_id)
 
             if not user_export_dir.exists():
                 return 0

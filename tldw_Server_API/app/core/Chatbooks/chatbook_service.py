@@ -229,47 +229,17 @@ class ChatbookService:
         self._media_db: Optional["MediaDatabase"] = None
         self._evaluations_db: Optional["EvaluationsDatabase"] = None
 
-        # Secure user-specific directory using application data path
-        # Get base path from environment or use appropriate default
-        import os
-        import tempfile
-        import re
-
-        # Sanitize user_id to prevent path traversal
-        # Only allow alphanumeric characters, hyphens, and underscores
-        safe_user_id = re.sub(r'[^a-zA-Z0-9_-]', '_', str(self.user_id))
-        # Remove any path separators or dangerous patterns
-        safe_user_id = safe_user_id.replace('..', '_').replace('/', '_').replace('\\', '_')
-        # Limit length to prevent excessively long paths
-        safe_user_id = safe_user_id[:255]
-
-        # Use environment variable, or temp dir for testing, or system default
-        if os.environ.get('TLDW_USER_DATA_PATH'):
-            base_data_dir = Path(os.environ.get('TLDW_USER_DATA_PATH'))
-        elif os.environ.get('PYTEST_CURRENT_TEST') or os.environ.get('CI'):
-            # Use temp directory during tests or CI
-            base_data_dir = Path(tempfile.gettempdir()) / 'tldw_test_data'
-        else:
-            # Production default
-            base_data_dir = Path('/var/lib/tldw/user_data')
-
-        # Create secure user-specific directory with restricted permissions
-        self.user_data_dir = base_data_dir / 'users' / safe_user_id / 'chatbooks'
-        try:
-            self.user_data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        except PermissionError:
-            # Fallback to temp directory if system path is not writable
-            base_data_dir = Path(tempfile.gettempdir()) / 'tldw_data'
-            self.user_data_dir = base_data_dir / 'users' / safe_user_id / 'chatbooks'
-            self.user_data_dir.mkdir(parents=True, exist_ok=True)
-
-        # Separate directories for exports and imports
-        self.export_dir = self.user_data_dir / 'exports'
-        self.import_dir = self.user_data_dir / 'imports'
-        self.temp_dir = self.user_data_dir / 'temp'
-
-        for directory in [self.export_dir, self.import_dir, self.temp_dir]:
-            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # Secure user-specific directory under the configured user DB base.
+        user_id_value = self.user_id_int if self.user_id_int is not None else self.user_id
+        self.user_data_dir = DatabasePaths.get_user_chatbooks_dir(user_id_value)
+        self.export_dir = DatabasePaths.get_user_chatbooks_exports_dir(user_id_value)
+        self.import_dir = DatabasePaths.get_user_chatbooks_imports_dir(user_id_value)
+        self.temp_dir = DatabasePaths.get_user_chatbooks_temp_dir(user_id_value)
+        for directory in (self.user_data_dir, self.export_dir, self.import_dir, self.temp_dir):
+            try:
+                directory.chmod(0o700)
+            except OSError:
+                logger.debug(f"Chatbooks: unable to set permissions on {directory}")
 
         # Jobs backend selection (domain override > module default), legacy flag supported
         backend = (os.getenv("CHATBOOKS_JOBS_BACKEND") or os.getenv("TLDW_JOBS_BACKEND") or "").strip().lower()

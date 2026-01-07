@@ -13,6 +13,7 @@ from typing import Optional, Dict, Any, Set
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 
+from tldw_Server_API.app.core.config_paths import resolve_config_file
 
 #
 # 3rd-party Libraries
@@ -28,6 +29,14 @@ def _safe_json_dict(raw: Optional[str]) -> dict:
     except Exception:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+# Config.txt adapter cache + metadata
+_CONFIG_PARSER_CACHE: Optional[configparser.ConfigParser] = None
+_CONFIG_SOURCE_METADATA: dict[str, Any] = {
+    "source": "config",
+    "path": None,
+    "loaded": False,
+}
 
 # Guard logging during module import so Loguru does not enqueue records before
 # the import lock is released. Messages emitted before `_LOGGER_READY` flips to
@@ -101,6 +110,75 @@ def _load_env_files_early() -> None:
     except Exception:
         # Never fail early due to env file loading issues
         pass
+
+
+def _record_config_source(path: Optional[Path], loaded: bool) -> None:
+    _CONFIG_SOURCE_METADATA.update(
+        {
+            "source": "config",
+            "path": str(path) if path else None,
+            "loaded": loaded,
+        }
+    )
+
+
+def _load_config_parser(*, reload: bool = False) -> configparser.ConfigParser:
+    global _CONFIG_PARSER_CACHE
+    if _CONFIG_PARSER_CACHE is not None and not reload:
+        return _CONFIG_PARSER_CACHE
+
+    config_path_obj = resolve_config_file()
+    config_parser = configparser.ConfigParser()
+
+    if not config_path_obj.exists():
+        _log_warning(
+            f"Config file not found at {str(config_path_obj)}; using empty config"
+        )
+        _record_config_source(config_path_obj, loaded=False)
+        _CONFIG_PARSER_CACHE = config_parser
+        return config_parser
+
+    try:
+        config_parser.read(config_path_obj)
+    except configparser.Error as e:
+        _log_error(
+            f"Error parsing config file {str(config_path_obj)}: {e}",
+            exc_info=True,
+        )
+        raise
+
+    _record_config_source(config_path_obj, loaded=True)
+    _CONFIG_PARSER_CACHE = config_parser
+    return config_parser
+
+
+def get_config_section(section_name: str, *, reload: bool = False) -> Dict[str, str]:
+    """Return a config.txt section as a plain dict."""
+    if reload:
+        refresh_config_cache()
+    parser = _load_config_parser()
+    if not parser.has_section(section_name):
+        return {}
+    return dict(parser.items(section_name))
+
+
+def get_config_value(
+    section: str,
+    key: str,
+    default: Optional[str] = None,
+    *,
+    reload: bool = False,
+) -> Optional[str]:
+    """Return a config.txt value with a default fallback."""
+    if reload:
+        refresh_config_cache()
+    parser = _load_config_parser()
+    return parser.get(section, key, fallback=default)
+
+
+def get_config_source_metadata() -> Dict[str, Any]:
+    """Return cached config source metadata for logging/diagnostics."""
+    return dict(_CONFIG_SOURCE_METADATA)
 
 # Local Imports
 # Local Imports
@@ -588,12 +666,12 @@ def load_settings():
     else:
         redis_url = f"redis://{redis_host}:{redis_port}/{redis_db}"
 
-    # Base directory for all user-specific data: ACTUAL_PROJECT_ROOT/Databases/user_databases/
+    # Base directory for all user-specific data (USER_DB_BASE_DIR default): ACTUAL_PROJECT_ROOT/Databases/user_databases/
     default_user_data_base_dir = ACTUAL_PROJECT_ROOT / "Databases" / "user_databases"
     user_data_base_dir_str = os.getenv("USER_DB_BASE_DIR", str(default_user_data_base_dir.resolve()))
     user_data_base_dir = Path(user_data_base_dir_str)
 
-    # Main/central SQLite database: ACTUAL_PROJECT_ROOT/Databases/user_databases/databases/tldw.db
+    # Main/central SQLite database: ACTUAL_PROJECT_ROOT/Databases/user_databases/<SINGLE_USER_FIXED_ID>/tldw.db
     default_main_db_path = (ACTUAL_PROJECT_ROOT / "Databases" / "user_databases" / f"{single_user_fixed_id}" / "tldw.db").resolve()
     default_database_url = f"sqlite:///{default_main_db_path}"
     database_url = os.getenv("DATABASE_URL", default_database_url)
@@ -1548,20 +1626,10 @@ def load_comprehensive_config():
             f"No .env/.ENV file found in {project_root} or {project_root / 'Config_Files'}; using config.txt and system env"
         )
 
-    config_path_obj = project_root / 'Config_Files' / 'config.txt'
-
+    config_path_obj = resolve_config_file()
     _log_info(f"Attempting to load comprehensive config from: {str(config_path_obj)}")
 
-    if not config_path_obj.exists():
-        _log_error(f"Config file not found at {str(config_path_obj)}")
-        raise FileNotFoundError(f"Config file not found at {str(config_path_obj)}")
-
-    config_parser = configparser.ConfigParser()
-    try:
-        config_parser.read(config_path_obj)  # configparser can read Path objects directly
-    except configparser.Error as e:
-        _log_error(f"Error parsing config file {str(config_path_obj)}: {e}", exc_info=True)
-        raise  # Re-raise the parsing error to be caught by load_and_log_configs
+    config_parser = _load_config_parser()
 
     _log_info(f"load_comprehensive_config(): Sections found in config: {config_parser.sections()}")
 
@@ -3969,9 +4037,17 @@ _LOGGER_READY = True
 _flush_startup_logs()
 
 
+def refresh_config_cache() -> None:
+    """Refresh cached config.txt data (for tests or dynamic reloads)."""
+    global _CONFIG_PARSER_CACHE
+    _CONFIG_PARSER_CACHE = None
+    _CONFIG_SOURCE_METADATA.update({"path": None, "loaded": False})
+    load_comprehensive_config.cache_clear()
+
+
 def clear_config_cache() -> None:
     """Clear cached configuration loaders (for tests or dynamic reloads)."""
-    load_comprehensive_config.cache_clear()
+    refresh_config_cache()
     global default_api_endpoint
     default_api_endpoint = "openai"
     object.__setattr__(settings, "_data", None)

@@ -2,7 +2,7 @@
 Per-user lightweight personalization store for RAG.
 
 - Stores doc-level priors and implicit interactions (click/expand/copy)
-  under Databases/user_databases/<user_id>/rag_personalization.json
+  under <USER_DB_BASE_DIR>/<user_id>/rag_personalization.json (defaults to repo-root Databases/user_databases)
 - Provides a simple boosting function to adjust document scores.
 
 This avoids cross-tenant leakage by isolating data per user.
@@ -10,19 +10,15 @@ This avoids cross-tenant leakage by isolating data per user.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import time
-import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-from tldw_Server_API.app.core.exceptions import UnsafeUserPathError
-from tldw_Server_API.app.core.Utils.path_utils import resolve_path
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
 @dataclass
@@ -32,46 +28,14 @@ class Prior:
     corpus: Optional[str] = None
 
 
-_DEFAULT_USER_ID = "anon"
-_SAFE_USER_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
-
-
 def _empty_store() -> Dict[str, Any]:
     return {"priors": {}, "events": {}, "pairs": {}}
 
 
-def _normalize_user_id(raw_user_id: Optional[str]) -> str:
-    raw = str(raw_user_id or _DEFAULT_USER_ID).strip()
-    if not raw:
-        return _DEFAULT_USER_ID
-    if _SAFE_USER_ID_RE.fullmatch(raw):
-        return raw
-    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
-    return f"u_{digest}"
-
-
-def _get_user_base_dir() -> Path:
-    base = resolve_path(Path("Databases/user_databases"))
-    base.mkdir(parents=True, exist_ok=True)
-    return base
-
-
-def _safe_user_dir(user_id: str) -> Path:
-    base = _get_user_base_dir()
-    candidate = resolve_path(base / user_id)
-    try:
-        candidate.relative_to(base)
-    except ValueError as exc:
-        raise UnsafeUserPathError("Unsafe user_id path for personalization store") from exc
-    return candidate
-
-
 class UserPersonalizationStore:
     def __init__(self, user_id: Optional[str]) -> None:
-        self.user_id = _normalize_user_id(user_id)
-        base = _safe_user_dir(self.user_id)
-        base.mkdir(parents=True, exist_ok=True)
-        self.path = base / "rag_personalization.json"
+        self.user_id = user_id
+        self.path = DatabasePaths.get_user_rag_personalization_path(user_id)
         self._data: Dict[str, Any] = {}
         self._load()
 

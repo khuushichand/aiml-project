@@ -29,7 +29,6 @@ async def test_authnz_rate_limits_repo_lockout_postgres(test_db_pool):
 
     limiter = RateLimiter(db_pool=pool, settings=settings)
     await limiter.initialize()
-    limiter.redis_client = None
 
     identifier = "pg-lockout-user"
 

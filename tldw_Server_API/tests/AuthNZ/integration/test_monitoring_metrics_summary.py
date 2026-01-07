@@ -118,5 +118,4 @@ async def test_scheduler_monitor_queries_sqlite(monkeypatch):
 
     await scheduler._monitor_auth_failures()
     await scheduler._monitor_api_usage()
-    await scheduler._monitor_rate_limits()
     await reset_db_pool()

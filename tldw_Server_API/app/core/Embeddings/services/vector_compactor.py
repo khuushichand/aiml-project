@@ -150,17 +150,25 @@ async def run(stop_event: Optional[asyncio.Event] = None) -> None:
 
     Environment variables:
     - EMBEDDINGS_COMPACTOR_INTERVAL_SECONDS (default: 1800)
-    - COMPACTOR_USER_ID (default: SINGLE_USER_FIXED_ID from settings or "1")
+    - COMPACTOR_USER_ID (required in multi-user mode; defaults to SINGLE_USER_FIXED_ID in single-user)
     - MEDIA_DB_PATH (optional)
     """
     try:
         from tldw_Server_API.app.core.config import settings
+        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import is_single_user_mode
+        from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
     except Exception as e:  # pragma: no cover
         logger.error(f"Compactor settings load failed: {e}")
         return
 
     interval = int(os.getenv("EMBEDDINGS_COMPACTOR_INTERVAL_SECONDS", "1800") or 1800)
-    user_id = os.getenv("COMPACTOR_USER_ID") or str(settings.get("SINGLE_USER_FIXED_ID", "1"))
+    user_id = os.getenv("COMPACTOR_USER_ID")
+    if not user_id:
+        if is_single_user_mode():
+            user_id = str(DatabasePaths.get_single_user_id())
+        else:
+            logger.error("Compactor requires COMPACTOR_USER_ID in multi-user mode; exiting")
+            return
     logger.info(f"Starting Embeddings Vector Compactor for user_id={user_id}, interval={interval}s")
 
     while True:

@@ -76,7 +76,7 @@
    - Schema conflicts fixed with separate tables
 
 7. **Database Configuration** - FIXED ✅ (2025-08-16)
-   - Default path: per-user under `Databases/user_databases/<user_id>/evaluations/evaluations.db`
+   - Default path: per-user under `<USER_DB_BASE_DIR>/<user_id>/evaluations/evaluations.db`
    - Separated OpenAI and internal evaluation tables
    - No more schema conflicts
 

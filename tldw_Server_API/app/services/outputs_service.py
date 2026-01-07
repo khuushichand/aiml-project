@@ -17,7 +17,7 @@ def normalize_output_storage_path(user_id: int, storage_path: str) -> str:
         raise InvalidStoragePathError("invalid_path")
 
     try:
-        base_dir = DatabasePaths.get_user_base_directory(user_id) / "outputs"
+        base_dir = DatabasePaths.get_user_outputs_dir(user_id)
         base_resolved = base_dir.resolve(strict=False)
     except Exception as exc:
         raise InvalidStoragePathError("invalid_path") from exc

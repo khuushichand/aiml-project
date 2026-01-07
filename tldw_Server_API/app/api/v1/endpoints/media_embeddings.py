@@ -7,7 +7,7 @@
 # - Delete embeddings for a media item
 
 from typing import Optional, Dict, Any, List
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status as http_status
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from pydantic import ConfigDict
@@ -16,7 +16,11 @@ from loguru import logger
 # Local imports
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
+    get_request_user,
+    User,
+    resolve_user_id_for_request,
+)
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import (
     ChromaDBManager,
     store_in_chroma
@@ -138,7 +142,7 @@ async def get_media_content(media_id: int, db: MediaDatabase) -> Dict[str, Any]:
         media_item = db.get_media_by_id(media_id)
         if not media_item:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=http_status.HTTP_404_NOT_FOUND,
                 detail=f"Media item {media_id} not found"
             )
 
@@ -146,7 +150,7 @@ async def get_media_content(media_id: int, db: MediaDatabase) -> Dict[str, Any]:
         content = media_item  # The get_media_by_id returns all data including content
         if not content:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=http_status.HTTP_404_NOT_FOUND,
                 detail=f"No content found for media item {media_id}"
             )
 
@@ -160,7 +164,7 @@ async def get_media_content(media_id: int, db: MediaDatabase) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error retrieving media content: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error retrieving media content: {str(e)}"
         )
 
@@ -375,12 +379,15 @@ async def get_embeddings_status(
         media_item = db.get_media_by_id(media_id)
         if not media_item:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=http_status.HTTP_404_NOT_FOUND,
                 detail=f"Media item {media_id} not found"
             )
 
         # Check if embeddings exist by querying the per-user collection in ChromaDB
-        user_id = str(getattr(current_user, 'id', '1'))
+        user_id = resolve_user_id_for_request(
+            current_user,
+            error_status=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
         manager = ChromaDBManager(user_id=user_id, user_embedding_config=_user_embedding_config())
         collection_name = f"user_{user_id}_media_embeddings"
 
@@ -418,7 +425,7 @@ async def get_embeddings_status(
     except Exception as e:
         logger.error(f"Error checking embeddings status: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error checking embeddings status: {str(e)}"
         )
 
@@ -496,7 +503,7 @@ async def generate_embeddings(
     except Exception as e:
         logger.error(f"Error generating embeddings: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error generating embeddings: {str(e)}"
         )
 
@@ -504,7 +511,7 @@ async def generate_embeddings(
 @router.post(
     "/embeddings/batch",
     response_model=BatchMediaEmbeddingsResponse,
-    status_code=status.HTTP_202_ACCEPTED
+    status_code=http_status.HTTP_202_ACCEPTED
 )
 async def generate_embeddings_batch(
     request: BatchMediaEmbeddingsRequest,
@@ -515,7 +522,7 @@ async def generate_embeddings_batch(
 
     media_ids = list(dict.fromkeys(request.media_ids))
     if not media_ids:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="media_ids must not be empty")
+        raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail="media_ids must not be empty")
 
     embedding_model = request.embedding_model or settings.get("embedding_model", DEFAULT_EMBEDDING_MODEL)
     embedding_provider = request.embedding_provider or settings.get("embedding_provider", DEFAULT_EMBEDDING_PROVIDER)
@@ -576,7 +583,7 @@ async def generate_embeddings_batch(
 @router.post(
     "/embeddings/search",
     response_model=EmbeddingsSearchResponse,
-    status_code=status.HTTP_200_OK
+    status_code=http_status.HTTP_200_OK
 )
 async def search_embeddings(
     request: EmbeddingsSearchRequest,
@@ -585,7 +592,7 @@ async def search_embeddings(
     """Search stored embeddings using the provided query text."""
 
     if not request.query or not request.query.strip():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="query must not be empty")
+        raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail="query must not be empty")
 
     user_id = str(current_user.id)
     embedding_model = request.embedding_model or settings.get("embedding_model", DEFAULT_EMBEDDING_MODEL)
@@ -605,7 +612,7 @@ async def search_embeddings(
         )
     except Exception as exc:
         logger.error(f"Failed to embed search query: {exc}")
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Embedding service unavailable")
+        raise HTTPException(status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE, detail="Embedding service unavailable")
 
     if not query_embeddings or not query_embeddings[0]:
         return EmbeddingsSearchResponse(results=[], count=0)
@@ -616,7 +623,7 @@ async def search_embeddings(
     try:
         collection = manager.client.get_collection(name=collection_name)
     except Exception:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Collection '{collection_name}' not found")
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=f"Collection '{collection_name}' not found")
 
     include = ["metadatas", "documents", "distances"]
     try:
@@ -628,7 +635,7 @@ async def search_embeddings(
         )
     except Exception as exc:
         logger.error(f"Chroma query failed for collection {collection_name}: {exc}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Search failed")
+        raise HTTPException(status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Search failed")
 
     ids = (query_result.get("ids") or [[]])[0]
     documents = (query_result.get("documents") or [[]])[0]
@@ -666,12 +673,15 @@ async def delete_embeddings(
         media_item = db.get_media_by_id(media_id)
         if not media_item:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=http_status.HTTP_404_NOT_FOUND,
                 detail=f"Media item {media_id} not found"
             )
 
         # Delete embeddings from per-user collection using a where filter
-        user_id = str(getattr(current_user, 'id', '1'))
+        user_id = resolve_user_id_for_request(
+            current_user,
+            error_status=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
         manager = ChromaDBManager(user_id=user_id, user_embedding_config=_user_embedding_config())
         collection_name = f"user_{user_id}_media_embeddings"
         collection = manager.get_or_create_collection(collection_name)
@@ -695,7 +705,7 @@ async def delete_embeddings(
     except Exception as e:
         logger.error(f"Error deleting embeddings: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error deleting embeddings: {str(e)}"
         )
 
@@ -705,7 +715,10 @@ async def get_media_embedding_job(
     job_id: str,
     current_user: User = Depends(get_request_user)
 ):
-    uid = str(getattr(current_user, 'id', '1'))
+    uid = resolve_user_id_for_request(
+        current_user,
+        error_status=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+    )
     rec = jobs_get(job_id, uid)
     if not rec:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -719,6 +732,9 @@ async def list_media_embedding_jobs(
     offset: int = 0,
     current_user: User = Depends(get_request_user)
 ):
-    uid = str(getattr(current_user, 'id', '1'))
+    uid = resolve_user_id_for_request(
+        current_user,
+        error_status=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+    )
     rows = jobs_list(user_id=uid, status=status, limit=limit, offset=offset)
     return {"data": rows, "pagination": {"limit": limit, "offset": offset, "count": len(rows)}}

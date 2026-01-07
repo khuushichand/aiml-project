@@ -49,8 +49,8 @@ Navigation:
 
 **Architecture & Data Flow**
 - Per-user isolation
-  - `ChatbookService(user_id, CharactersRAGDB, user_id_int)` creates a secure per‑user storage root under `<base>/users/<safe_user_id>/chatbooks/{exports,imports,temp}`.
-  - Base path selection: `TLDW_USER_DATA_PATH` → test/CI temp → `/var/lib/tldw/user_data`.
+  - `ChatbookService(user_id, CharactersRAGDB, user_id_int)` creates a secure per‑user storage root under `USER_DB_BASE_DIR/<user_id>/chatbooks/{exports,imports,temp}`.
+  - Base path selection: `USER_DB_BASE_DIR` (env/config) with default `Databases/user_databases` under the repo root.
 - Export (sync)
   - Validate metadata and quotas → collect selected content → write `manifest.json` + content tree → zip to `exports/` → persist completed ExportJob with `download_url` + `expires_at`.
 - Export (async)
@@ -92,7 +92,7 @@ Navigation:
   - Job ownership enforced; `output_path` must reside under the user’s export dir; optional HMAC‑signed URLs.
   - Expiry enforced when `CHATBOOKS_ENFORCE_EXPIRY=true`.
 - Upload hardening:
-  - Per‑user temp directory under system temp; sanitizes `user.id` and filenames; rejects symlinks and traversal. Preview/import delete temp files on completion.
+  - Per‑user temp directory under `USER_DB_BASE_DIR/<user_id>/chatbooks/temp`; sanitizes `user.id` and filenames; rejects symlinks and traversal. Preview/import delete temp files on completion.
 - Rate limits: RG ingress policies + per-user quotas. Defaults live in RG policy config (export/import 5/min, preview 10/min, download 20/min).
 
 **Quotas**
@@ -115,9 +115,8 @@ Navigation:
   - `service.list_export_jobs()`, `service.get_export_job(job_id)`, `service.cancel_export_job(job_id)`; analogous import methods.
 
 **Storage & Paths**
-- Base directory selection:
-  - `TLDW_USER_DATA_PATH` if set; else test/CI temp; else `/var/lib/tldw/user_data`.
-- Per user: `<base>/users/<safe_user_id>/chatbooks/{exports,imports,temp}` with `0700` perms when possible.
+- Base directory selection: `USER_DB_BASE_DIR` (env/config) with default `Databases/user_databases` under the repo root.
+- Per user: `USER_DB_BASE_DIR/<user_id>/chatbooks/{exports,imports,temp}` with `0700` perms when possible.
 - Archives: ZIP packages with `manifest.json` and content folders. Exports use `.zip` by default; imports accept `.zip` and `.chatbook`.
 
 **Configuration (Selected)**
@@ -160,7 +159,7 @@ Navigation:
 - PS backend does not start local processing; ensure an external PS worker processes jobs.
 - When adding new content types, update: `ContentType` enums, export collectors, import handlers, schemas, and tests.
 - Don’t expose internal `output_path` in APIs; use `download_url` built from job id.
-- For tests, CI paths default to temp; set `TLDW_USER_DATA_PATH` when verifying on disk.
+- For tests, set `USER_DB_BASE_DIR` to isolate chatbooks storage under a temp or test-specific directory.
 - Embeddings export currently derives from media rows when `include_embeddings=true`. Explicit embedding exports beyond media vectors are pending in service TODOs.
 - Prompts/Evaluations/Media DBs are optional in some builds; the service will skip those sections if their DBs aren’t available.
 

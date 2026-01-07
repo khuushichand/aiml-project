@@ -69,7 +69,7 @@ Contributors must support new media types, improve processing fidelity, and conn
 - Downstream hooks include embeddings enqueue, claims extraction, watchlist output generation, and optional notifications.
 
 ## 8. Data Model (SQLite default, Postgres optional)
-- **Media DB v2 (per-user `Databases/user_databases/<user_id>/Media_DB_v2.db`):**
+- **Media DB v2 (per-user `<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`):**
   - `Media`: canonical item record (title, url, type, status, metadata, favorite, soft delete).
   - `DocumentVersions`: versioned content body plus `safe_metadata`, prompts, analysis payloads.
   - `MediaChunks`: chunked text with embeddings metadata; triggers maintain `media_fts`.

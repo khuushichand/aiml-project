@@ -2,7 +2,7 @@
 # Job manager for coordinating embedding pipeline jobs
 
 import asyncio
-import json
+import os
 import uuid
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
@@ -20,6 +20,7 @@ from .queue_schemas import (
     UserTier,
 )
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+from tldw_Server_API.app.core.Embeddings.messages import encode_stream_fields
 from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager
 from tldw_Server_API.app.core.Infrastructure.redis_factory import (
     create_async_redis_client,
@@ -152,6 +153,25 @@ class EmbeddingJobManager:
         self.quota_manager: Optional[UserQuotaManager] = None
         self.priority_calculator: Optional[PriorityCalculator] = None
 
+    def _priority_enabled(self) -> bool:
+        return str(os.getenv("EMBEDDINGS_PRIORITY_ENABLED", "false")).lower() in ("1", "true", "yes")
+
+    def _priority_bucket(self, priority: int) -> str:
+        if priority >= 75:
+            return "high"
+        if priority <= 25:
+            return "low"
+        return "normal"
+
+    def _normalize_job_data(self, job_data: Dict[str, str]) -> Dict[str, str]:
+        for key in ("started_at", "completed_at", "created_at", "updated_at", "error_message", "current_stage"):
+            val = job_data.get(key)
+            if val is None:
+                continue
+            if isinstance(val, str) and val.strip().lower() in {"none", "null", ""}:
+                job_data[key] = None  # type: ignore[assignment]
+        return job_data
+
     async def initialize(self):
         """Initialize Redis connection and sub-managers"""
         self.redis_client = await create_async_redis_client(
@@ -220,12 +240,11 @@ class EmbeddingJobManager:
             updated_at=created_at
         )
 
-        # Store job info
+        # Store job info (Redis requires scalar values)
         job_key = f"job:{job_id}"
-        await self.redis_client.hset(
-            job_key,
-            mapping=model_dump_compat(job_info)
-        )
+        _job_payload = model_dump_compat(job_info)
+        _job_fields = encode_stream_fields(_job_payload)
+        await self.redis_client.hset(job_key, mapping=_job_fields)
         await self.redis_client.expire(job_key, self.config.job_ttl_seconds)
 
         # Track user's active jobs
@@ -259,11 +278,21 @@ class EmbeddingJobManager:
 
         # Add to chunking queue (ensure string values)
         _payload = model_dump_compat(chunking_message)
-        try:
-            _fields = {k: (v if isinstance(v, str) else json.dumps(v)) for k, v in _payload.items()}
-        except Exception:
-            _fields = {k: str(v) for k, v in _payload.items()}
-        await self.redis_client.xadd(self.config.chunking_queue, _fields)
+        _fields = encode_stream_fields(_payload)
+        target_queue = self.config.chunking_queue
+        if self._priority_enabled():
+            pr = None
+            try:
+                key = f"embeddings:priority:override:{job_id}"
+                pr = await self.redis_client.get(key)
+            except Exception:
+                pr = None
+            if pr:
+                pr = str(pr).strip().lower()
+            if not pr:
+                pr = self._priority_bucket(int(effective_priority or 0))
+            target_queue = f"{self.config.chunking_queue}:{pr}"
+        await self.redis_client.xadd(target_queue, _fields)
 
         logger.info(f"Created job {job_id} for user {user_id} with priority {effective_priority}")
 
@@ -277,7 +306,7 @@ class EmbeddingJobManager:
         if not job_data:
             return None
 
-        return JobInfo(**job_data)
+        return JobInfo(**self._normalize_job_data(job_data))
 
     async def cancel_job(self, job_id: str, user_id: str) -> bool:
         """Cancel a job"""
@@ -332,7 +361,7 @@ class EmbeddingJobManager:
                 for key in keys:
                     job_data = await self.redis_client.hgetall(key)
                     if job_data and job_data.get("user_id") == user_id:
-                        jobs.append(JobInfo(**job_data))
+                        jobs.append(JobInfo(**self._normalize_job_data(job_data)))
 
                 if cursor == 0:
                     break
@@ -389,18 +418,22 @@ class EmbeddingJobManager:
             (self.config.embedding_queue, "embedding-workers"),
             (self.config.storage_queue, "storage-workers")
         ]
+        priority_enabled = self._priority_enabled()
 
         for queue_name, group_name in queues:
-            try:
-                await self.redis_client.xgroup_create(
-                    queue_name, group_name, id='0'
-                )
-                logger.info(f"Created consumer group {group_name} for {queue_name}")
-            except redis.ResponseError as e:
-                if "BUSYGROUP" in str(e):
-                    # Group already exists
-                    pass
-                else:
+            names = [queue_name]
+            if priority_enabled:
+                names.extend([f"{queue_name}:high", f"{queue_name}:normal", f"{queue_name}:low"])
+            for stream_name in names:
+                try:
+                    await self.redis_client.xgroup_create(
+                        stream_name, group_name, id='0', mkstream=True
+                    )
+                    logger.info(f"Created consumer group {group_name} for {stream_name}")
+                except redis.ResponseError as e:
+                    if "BUSYGROUP" in str(e):
+                        # Group already exists
+                        continue
                     raise
 
     async def _track_user_job(self, user_id: str, job_id: str):

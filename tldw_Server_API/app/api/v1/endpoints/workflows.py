@@ -28,7 +28,11 @@ from tldw_Server_API.app.api.v1.schemas.workflows import (
     WorkflowRunListItem,
     WorkflowRunListResponse,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
+    get_request_user,
+    User,
+    resolve_user_id_for_request,
+)
 from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     create_workflows_database,
     get_content_backend_instance,
@@ -400,7 +404,7 @@ async def _enforce_workflows_daily_cap(
             "Workflows quota: entity derivation failed, using user fallback: {}",
             exc,
         )
-        entity = f"user:{getattr(current_user, 'id', '1')}"
+        entity = f"user:{resolve_user_id_for_request(current_user, error_status=500)}"
     try:
         entity_scope, entity_value = entity.split(":", 1)
     except Exception as exc:
@@ -408,7 +412,7 @@ async def _enforce_workflows_daily_cap(
             "Workflows quota: entity split failed, using user fallback: {}",
             exc,
         )
-        entity_scope, entity_value = "user", str(getattr(current_user, "id", "1"))
+        entity_scope, entity_value = "user", resolve_user_id_for_request(current_user, error_status=500)
 
     policy_id = None
     try:
@@ -539,7 +543,7 @@ async def _record_workflow_run_usage(
         if request is not None:
             entity = derive_entity_key(request)
         else:
-            entity = f"user:{getattr(current_user, 'id', '1')}"
+            entity = f"user:{resolve_user_id_for_request(current_user, error_status=500)}"
         entity_scope, entity_value = entity.split(":", 1)
         await record_workflow_run(
             entity_scope=entity_scope,

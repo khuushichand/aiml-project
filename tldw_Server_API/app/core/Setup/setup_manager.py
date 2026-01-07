@@ -18,9 +18,12 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from loguru import logger
 
+from tldw_Server_API.app.core.config_paths import resolve_config_file, resolve_config_root
+
 SETUP_SECTION = "Setup"
 CONFIG_FILENAME = "config.txt"
-CONFIG_RELATIVE_PATH = Path("Config_Files") / CONFIG_FILENAME
+# Legacy compatibility: install_manager expects a module-level config path constant.
+CONFIG_RELATIVE_PATH = resolve_config_root() / CONFIG_FILENAME
 REMOTE_ACCESS_FIELD = "allow_remote_setup_access"
 
 SENSITIVE_KEY_MARKERS = ("key", "token", "secret", "password", "api_key")
@@ -244,9 +247,7 @@ def _score_entry(query_lower: str, query_tokens: List[str], *candidates: str) ->
 
 def get_config_file_path() -> Path:
     """Return the full filesystem path to ``config.txt``."""
-    current_file = Path(__file__).resolve()
-    project_root = current_file.parent.parent.parent.parent
-    return project_root / CONFIG_RELATIVE_PATH
+    return resolve_config_file(CONFIG_FILENAME)
 
 
 def _load_config_parser() -> ConfigParser:

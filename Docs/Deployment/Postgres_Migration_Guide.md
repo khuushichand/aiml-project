@@ -9,7 +9,7 @@ workflow jobs.
 
 ## Prerequisites
 
-- Back up all SQLite databases (`Databases/user_databases/<user_id>/Media_DB_v2.db`, `Databases/workflows.db`, `Databases/user_databases/*/ChaChaNotes.db`, `Analytics.db`).
+- Back up all SQLite databases (`<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`, `Databases/workflows.db`, `<USER_DB_BASE_DIR>/*/ChaChaNotes.db`, `Analytics.db`).
 - Install PostgreSQL and ensure the target database is accessible (local host or remote).
 - Install the Python dependency `psycopg` (listed under pyproject extras, e.g., `.[multiplayer]`). For convenience use the binary extra:
   - pip install "psycopg[binary]"
@@ -39,8 +39,8 @@ same pass.
 
 ```bash
 python -m tldw_Server_API.app.core.DB_Management.migration_tools \
-      --content-sqlite Databases/user_databases/<user_id>/Media_DB_v2.db \
-      --chacha-sqlite Databases/user_databases/default/ChaChaNotes.db \
+      --content-sqlite <USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db \
+      --chacha-sqlite <USER_DB_BASE_DIR>/default/ChaChaNotes.db \
       --analytics-sqlite Analytics.db \
       --workflows-sqlite Databases/workflows.db \
       --pg-host "$PGHOST" \
@@ -75,7 +75,7 @@ Use `--skip-table <table_name>` to omit auxiliary tables (for example, to skip l
   ```
 
   ```bash
-  sqlite3 Databases/user_databases/<user_id>/Media_DB_v2.db 'SELECT COUNT(*) FROM Media;'
+  sqlite3 <USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db 'SELECT COUNT(*) FROM Media;'
   sqlite3 Databases/workflows.db 'SELECT COUNT(*) FROM workflow_runs;'
   ```
 

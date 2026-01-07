@@ -97,7 +97,7 @@ Scope & Work Items
 - Configuration: `RAG_AGENTIC_CACHE_BACKEND`, `RAG_AGENTIC_CACHE_TTL_SEC`.
 
 Deliverables
-- SQLite backend stored under per-user dir (e.g., `Databases/user_databases/<user_id>/Agentic_Cache/`).
+- SQLite backend stored under per-user dir (e.g., `<USER_DB_BASE_DIR>/<user_id>/Agentic_Cache/`).
 - Invalidation hooks invoked from write paths and soft deletes.
 
 Acceptance Criteria
@@ -280,7 +280,7 @@ Implementation steps
 ### Phase 3 - Persistent Agentic Cache (SQLite)
 Implementation steps
 - Cache backend
-  - Define a pluggable cache interface and add a `sqlite` backend stored under `Databases/user_databases/<user_id>/Agentic_Cache/`.
+  - Define a pluggable cache interface and add a `sqlite` backend stored under `<USER_DB_BASE_DIR>/<user_id>/Agentic_Cache/`.
   - Extend cache key: `user:{user_id}:ver:{content_version_or_hash}:q:{sha256(query)}`.
   - Files: `tldw_Server_API/app/core/RAG/rag_service/advanced_cache.py`.
 - Invalidation hooks

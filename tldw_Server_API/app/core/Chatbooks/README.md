@@ -37,7 +37,7 @@ Developer Code Guide: `Docs/Code_Documentation/Guides/Chatbooks_Code_Guide.md:1`
 
 - Architecture & Flow:
   - API → Service (`chatbook_service.py`) → Validators/Quota → ZIP/manifest I/O → Jobs backend (core or Prompt Studio)
-  - Per-user directories under `TLDW_USER_DATA_PATH` (or defaults) with strict path sanitization and safe file handling
+  - Per-user directories under `USER_DB_BASE_DIR/<user_id>/chatbooks` with strict path sanitization and safe file handling
 
   Request/Job Flow (ASCII):
   ```text
@@ -75,7 +75,7 @@ Developer Code Guide: `Docs/Code_Documentation/Guides/Chatbooks_Code_Guide.md:1`
 - Configuration:
   - `CHATBOOKS_JOBS_BACKEND` (`core` default). Precedence: `CHATBOOKS_JOBS_BACKEND` > `TLDW_JOBS_BACKEND` > deprecated `TLDW_USE_PROMPT_STUDIO_QUEUE`.
   - `CHATBOOKS_CORE_WORKER_ENABLED`: `true|false` controls starting the core worker when backend=`core` (default true).
-  - `TLDW_USER_DATA_PATH`, `CHATBOOKS_SIGNED_URLS`, `CHATBOOKS_SIGNING_SECRET`, `CHATBOOKS_URL_TTL_SECONDS`, `CHATBOOKS_ENFORCE_EXPIRY`
+  - `CHATBOOKS_SIGNED_URLS`, `CHATBOOKS_SIGNING_SECRET`, `CHATBOOKS_URL_TTL_SECONDS`, `CHATBOOKS_ENFORCE_EXPIRY`
   - Core jobs tuning: `JOBS_POLL_INTERVAL_SECONDS`, `JOBS_LEASE_SECONDS`, `JOBS_LEASE_RENEW_SECONDS`, `JOBS_LEASE_RENEW_JITTER_SECONDS`
 - Concurrency & Performance:
   - BackgroundTasks for async paths; worker-based job execution; quotas prevent abuse
@@ -112,10 +112,7 @@ Developer Code Guide: `Docs/Code_Documentation/Guides/Chatbooks_Code_Guide.md:1`
 - API schema mirror in `app/api/v1/schemas/chatbook_schemas.py`.
 
 **Storage Layout**
-- Base path resolution in service and quota manager:
-  - `TLDW_USER_DATA_PATH` → `<base>/users/<sanitized_user_id>/chatbooks/{exports,imports,temp}`
-  - Test/CI → system temp dir under `tldw_test_data`
-  - Otherwise → `/var/lib/tldw/user_data`
+- Chatbooks storage lives under `USER_DB_BASE_DIR/<user_id>/chatbooks/{exports,imports,temp}`.
 - File and directory creation uses 0700 perms where possible. Names are sanitized to avoid traversal or unsafe characters.
 
 **Job Backends**
@@ -176,7 +173,7 @@ Developer Code Guide: `Docs/Code_Documentation/Guides/Chatbooks_Code_Guide.md:1`
 - `TLDW_USE_PROMPT_STUDIO_QUEUE`: legacy boolean; deprecated.
 - Precedence: `CHATBOOKS_JOBS_BACKEND` overrides `TLDW_JOBS_BACKEND`, which supersedes deprecated `TLDW_USE_PROMPT_STUDIO_QUEUE`.
 - `CHATBOOKS_CORE_WORKER_ENABLED`: `true|false` controls starting the core worker when backend=`core` (default true).
-- `TLDW_USER_DATA_PATH`: base path for per-user data (useful for dev/testing).
+- `USER_DB_BASE_DIR`: base path for per-user data (chatbooks live under `<USER_DB_BASE_DIR>/<user_id>/chatbooks`).
 - `CHATBOOKS_URL_TTL_SECONDS`: download URL expiry TTL (default 86400).
 - `CHATBOOKS_ENFORCE_EXPIRY`: `true|false` enforce expiry at download.
 - `CHATBOOKS_SIGNED_URLS`: `true|false` enable HMAC signing of download URLs (token = HMAC-SHA256 of `"{job_id}:{exp}"`).
@@ -186,7 +183,7 @@ Developer Code Guide: `Docs/Code_Documentation/Guides/Chatbooks_Code_Guide.md:1`
 **Local Development Tips**
 - Start API: `python -m uvicorn tldw_Server_API.app.main:app --reload`
 - Health check: `GET /api/v1/chatbooks/health`
-- Use `TLDW_USER_DATA_PATH` to direct per-user storage somewhere writable in dev.
+- Set `USER_DB_BASE_DIR` to direct per-user storage somewhere writable in dev.
 - Async exports: ensure core Jobs worker is enabled via app startup, or switch to sync for quick iteration.
 
 **Testing**

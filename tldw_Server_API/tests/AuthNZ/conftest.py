@@ -1552,8 +1552,6 @@ async def rate_limiter():
     """Create a rate limiter instance for testing."""
     limiter = RateLimiter()
     yield limiter
-    # Cleanup
-    await limiter.cleanup()
 
 
 @pytest_asyncio.fixture

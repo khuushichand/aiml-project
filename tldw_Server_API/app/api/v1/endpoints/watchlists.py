@@ -21,7 +21,11 @@ from fastapi.responses import PlainTextResponse, HTMLResponse, Response
 from loguru import logger
 from jinja2.sandbox import SandboxedEnvironment
 
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
+    get_request_user,
+    User,
+    resolve_user_id_for_request,
+)
 from tldw_Server_API.app.api.v1.API_Deps.Watchlists_DB_Deps import get_watchlists_db_for_user
 from tldw_Server_API.app.core.Watchlists.pipeline import run_watchlist_job
 from tldw_Server_API.app.core.Watchlists import template_store
@@ -2164,7 +2168,12 @@ async def create_output(
     output = _row_to_output(row)
 
     notifications = NotificationsService(
-        user_id=int(current_user.id or 0),
+        user_id=resolve_user_id_for_request(
+            current_user,
+            as_int=True,
+            error_status=500,
+            invalid_detail="invalid user_id",
+        ),
         user_email=getattr(current_user, "email", None),
     )
     delivery_results: List[Dict[str, Any]] = []

@@ -9,12 +9,21 @@ import pytest
 import os
 from typing import Dict, Any, Optional
 
+pytest_plugins = (
+    "tldw_Server_API.tests._plugins.e2e_fixtures",
+    "tldw_Server_API.tests._plugins.e2e_state_fixtures",
+    "tldw_Server_API.tests._plugins.chat_fixtures",
+    "tldw_Server_API.tests._plugins.media_fixtures",
+)
+
 # Disable rate limiting for all e2e tests
 @pytest.fixture(autouse=True, scope="session")
 def disable_rate_limiting():
     """Disable rate limiting for all tests in e2e suite"""
     os.environ["TESTING"] = "true"  # For embeddings endpoint
     os.environ["TEST_MODE"] = "true"  # For regular limiter
+    os.environ.setdefault("ENABLE_REGISTRATION", "true")
+    os.environ.setdefault("REQUIRE_REGISTRATION_CODE", "false")
     yield
     # Clean up after tests
     if "TESTING" in os.environ:

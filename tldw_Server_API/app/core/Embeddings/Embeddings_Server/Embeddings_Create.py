@@ -380,7 +380,10 @@ class TokenBucketLimiter:
                 decision = _maybe_enforce_with_rg_embeddings_server_sync()
                 if decision is None:
                     _log_rg_emb_server_fallback("rg_decision_unavailable")
-                    return fn(*args, **kwargs)
+                    raise RuntimeError(
+                        "Embeddings server ResourceGovernor unavailable while RG_ENABLED=1. "
+                        "Ensure RG policy loader and backend are configured."
+                    )
                 if decision.get("allowed", False):
                     return fn(*args, **kwargs)
                 retry_after = decision.get("retry_after")

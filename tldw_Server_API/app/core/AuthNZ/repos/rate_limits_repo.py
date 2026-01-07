@@ -371,7 +371,7 @@ class AuthnzRateLimitsRepo:
         Return aggregated rate-limit buckets that exceed the given threshold.
 
         The result mirrors the query used by the AuthNZ scheduler's
-        ``_monitor_rate_limits`` job and is intentionally backend-agnostic.
+        Legacy scheduler monitoring used this helper; it remains backend-agnostic.
 
         Each returned row is a mapping with keys:
         - ``identifier``

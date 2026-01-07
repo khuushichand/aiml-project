@@ -1,328 +1,109 @@
 import asyncio
+
 import pytest
 
 from fastapi import HTTPException
 
+from tldw_Server_API.app.core.Character_Chat import character_rate_limiter as crl
 from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import CharacterRateLimiter
-from tldw_Server_API.app.core.config import clear_config_cache, settings
 
 
-class _FailingPipeline:
-    def zremrangebyscore(self, *args, **kwargs):
-        return self
+class _FakeGovernor:
+    def __init__(self, payload):
+        self.payload = payload
+        self.peek_calls = []
 
-    def zcard(self, *args, **kwargs):
-        return self
+    async def reserve(self, *_args, **_kwargs):
+        class _Decision:
+            def __init__(self, allowed, retry_after):
+                self.allowed = allowed
+                self.retry_after = retry_after
 
-    def zadd(self, *args, **kwargs):
-        return self
+        return _Decision(self.payload["allowed"], self.payload.get("retry_after")), "handle"
 
-    def expire(self, *args, **kwargs):
-        return self
+    async def commit(self, *_args, **_kwargs):
+        return None
 
-    def execute(self):
-        raise RuntimeError("redis unavailable")
-
-
-class _FailingRedis:
-    def pipeline(self):
-        return _FailingPipeline()
-
-
-class _InMemoryRedisPipeline:
-    def __init__(self, store):
-        self.store = store
-        self.ops = []
-
-    def zremrangebyscore(self, key, min_score, max_score):
-        self.ops.append(("zremrange", key, min_score, max_score))
-        return self
-
-    def zcard(self, key):
-        self.ops.append(("zcard", key))
-        return self
-
-    def zadd(self, key, mapping):
-        self.ops.append(("zadd", key, mapping))
-        return self
-
-    def expire(self, key, seconds):
-        self.ops.append(("expire", key, seconds))
-        return self
-
-    def execute(self):
-        results = []
-        for op in self.ops:
-            name = op[0]
-            if name == "zremrange":
-                key, min_score, max_score = op[1], op[2], op[3]
-                bucket = self.store.setdefault(key, {})
-                to_remove = [member for member, score in bucket.items() if min_score <= score <= max_score]
-                for member in to_remove:
-                    bucket.pop(member, None)
-                results.append(len(to_remove))
-            elif name == "zcard":
-                key = op[1]
-                bucket = self.store.setdefault(key, {})
-                results.append(len(bucket))
-            elif name == "zadd":
-                key, mapping = op[1], op[2]
-                bucket = self.store.setdefault(key, {})
-                added = 0
-                for member, score in mapping.items():
-                    if member not in bucket:
-                        added += 1
-                    bucket[member] = score
-                results.append(added)
-            elif name == "expire":
-                results.append(True)
-        self.ops = []
-        return results
-
-
-class _InMemoryRedis:
-    def __init__(self):
-        self.store = {}
-
-    def pipeline(self):
-        return _InMemoryRedisPipeline(self.store)
-
-    def zrem(self, key, member):
-        bucket = self.store.get(key)
-        if not bucket:
-            return 0
-        return 1 if bucket.pop(member, None) is not None else 0
-
-    def zremrangebyscore(self, key, min_score, max_score):
-        bucket = self.store.get(key, {})
-        to_remove = [
-            member for member, score in list(bucket.items())
-            if _as_float(score) >= _as_float(min_score) and _as_float(score) <= _as_float(max_score)
-        ]
-        for member in to_remove:
-            bucket.pop(member, None)
-        return len(to_remove)
-
-    def zcount(self, key, min_score, max_score):
-        bucket = self.store.get(key, {})
-        min_val = _as_float(min_score)
-        max_val = _as_float(max_score)
-        return sum(1 for score in bucket.values() if min_val <= _as_float(score) <= max_val)
-
-    def zrange(self, key, start, end, withscores=False):
-        bucket = self.store.get(key, {})
-        sorted_items = sorted(bucket.items(), key=lambda item: item[1])
-        slice_items = sorted_items[start:end + 1 if end != -1 else None]
-        if withscores:
-            return [(member, score) for member, score in slice_items]
-        return [member for member, _ in slice_items]
-
-
-def _as_float(value):
-    if value in ("+inf", float("inf")):
-        return float("inf")
-    if value in ("-inf", float("-inf")):
-        return float("-inf")
-    return float(value)
+    async def peek_with_policy(self, entity: str, categories: list[str], policy_id: str):
+        self.peek_calls.append((entity, categories, policy_id))
+        return {"requests": {"remaining": 7, "reset": 0}}
 
 
 @pytest.mark.unit
-def test_rate_limiter_memory_fallback_allows_operations_without_redis():
-    limiter = CharacterRateLimiter(redis_client=None, max_operations=3, window_seconds=60)
+def test_rate_limiter_allows_when_rg_disabled(monkeypatch):
+    monkeypatch.setattr(crl, "_rg_character_enabled", lambda: False)
+    limiter = CharacterRateLimiter(enabled=True)
 
-    async def run_checks():
-        ok1, rem1 = await limiter.check_rate_limit(user_id=123, operation="test")
-        ok2, rem2 = await limiter.check_rate_limit(user_id=123, operation="test")
-        ok3, rem3 = await limiter.check_rate_limit(user_id=123, operation="test")
-        assert ok1 and ok2 and ok3
-        assert rem1 == 2 and rem2 == 1 and rem3 == 0
+    allowed, remaining = asyncio.run(limiter.check_rate_limit(user_id=123, operation="test"))
 
-    asyncio.run(run_checks())
+    assert allowed is True
+    assert remaining == 0
 
 
 @pytest.mark.unit
-def test_rate_limiter_per_minute_specific_operation_limits():
-    limiter = CharacterRateLimiter(redis_client=None, max_message_sends_per_minute=2)
+def test_rate_limiter_denies_when_rg_denies(monkeypatch):
+    monkeypatch.setattr(crl, "_rg_character_enabled", lambda: True)
+    monkeypatch.setenv("RG_CHARACTER_CHAT_ENFORCE_REQUESTS", "1")
+    async def _deny(**_kwargs):
+        return {"allowed": False, "retry_after": 5, "policy_id": "character_chat.default"}
 
-    async def run_checks():
-        ok1, rem1 = await limiter.check_message_send_rate(user_id=999)
-        ok2, rem2 = await limiter.check_message_send_rate(user_id=999)
-        assert ok1 and ok2
-        assert rem1 == 1 and rem2 == 0
-        with pytest.raises(Exception):
-            await limiter.check_message_send_rate(user_id=999)
+    monkeypatch.setattr(crl, "_maybe_enforce_with_rg_character", _deny)
 
-    asyncio.run(run_checks())
+    limiter = CharacterRateLimiter(enabled=True)
 
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(limiter.check_rate_limit(user_id=42, operation="test"))
 
-@pytest.mark.unit
-def test_rate_limiter_falls_back_when_redis_pipeline_fails():
-    limiter = CharacterRateLimiter(redis_client=_FailingRedis(), max_operations=3, window_seconds=60)
-
-    async def run_checks():
-        ok1, rem1 = await limiter.check_rate_limit(user_id=42, operation="test")
-        ok2, rem2 = await limiter.check_rate_limit(user_id=42, operation="test")
-        assert ok1 and ok2
-        assert rem1 == 2
-        assert rem2 == 1
-
-    asyncio.run(run_checks())
+    assert exc.value.status_code == 429
+    assert exc.value.headers.get("Retry-After") == "5"
 
 
 @pytest.mark.unit
-def test_rate_limiter_redis_remaining_aligns_with_memory_path():
-    limiter = CharacterRateLimiter(redis_client=_InMemoryRedis(), max_operations=3, window_seconds=60)
+def test_rate_limiter_allows_when_rg_allows(monkeypatch):
+    monkeypatch.setattr(crl, "_rg_character_enabled", lambda: True)
+    monkeypatch.setenv("RG_CHARACTER_CHAT_ENFORCE_REQUESTS", "1")
+    async def _allow(**_kwargs):
+        return {"allowed": True, "retry_after": None, "policy_id": "character_chat.default"}
 
-    async def run_checks():
-        ok1, rem1 = await limiter.check_rate_limit(user_id=7, operation="test")
-        ok2, rem2 = await limiter.check_rate_limit(user_id=7, operation="test")
-        ok3, rem3 = await limiter.check_rate_limit(user_id=7, operation="test")
-        assert ok1 and ok2
-        assert rem1 == 2 and rem2 == 1
-        assert ok3 and rem3 == 0
-        with pytest.raises(Exception):
-            await limiter.check_rate_limit(user_id=7, operation="test")
+    monkeypatch.setattr(crl, "_maybe_enforce_with_rg_character", _allow)
 
-    asyncio.run(run_checks())
+    limiter = CharacterRateLimiter(enabled=True)
 
-@pytest.mark.unit
-def test_rate_limiter_redis_path_cleans_up_on_rejection():
-    redis = _InMemoryRedis()
-    limiter = CharacterRateLimiter(redis_client=redis, max_operations=2, window_seconds=60)
+    allowed, remaining = asyncio.run(limiter.check_rate_limit(user_id=7, operation="test"))
 
-    async def run_checks():
-        await limiter.check_rate_limit(user_id=55, operation="test")
-        await limiter.check_rate_limit(user_id=55, operation="test")
-        with pytest.raises(HTTPException):
-            await limiter.check_rate_limit(user_id=55, operation="test")
-
-    asyncio.run(run_checks())
-    stored = redis.store.get("rate_limit:character:55", {})
-    assert len(stored) == 2
+    assert allowed is True
+    assert remaining == 0
 
 
 @pytest.mark.unit
-def test_message_send_rate_redis_path_reports_remaining_consistently():
-    limiter = CharacterRateLimiter(redis_client=_InMemoryRedis(), max_message_sends_per_minute=2)
+def test_character_guardrails_raise():
+    limiter = CharacterRateLimiter(max_characters=2, max_import_size_mb=1, max_chats_per_user=1, max_messages_per_chat=1)
 
-    async def run_checks():
-        ok1, rem1 = await limiter.check_message_send_rate(user_id=11)
-        ok2, rem2 = await limiter.check_message_send_rate(user_id=11)
-        assert ok1 and ok2
-        assert rem1 == 1 and rem2 == 0
-        with pytest.raises(Exception):
-            await limiter.check_message_send_rate(user_id=11)
+    with pytest.raises(HTTPException):
+        asyncio.run(limiter.check_character_limit(user_id=1, current_count=2))
 
-    asyncio.run(run_checks())
+    with pytest.raises(HTTPException):
+        limiter.check_import_size(2 * 1024 * 1024)
 
+    with pytest.raises(HTTPException):
+        asyncio.run(limiter.check_chat_limit(user_id=1, current_chat_count=1))
 
-@pytest.mark.unit
-def test_message_send_rate_redis_path_cleans_up_on_rejection():
-    redis = _InMemoryRedis()
-    limiter = CharacterRateLimiter(
-        redis_client=redis,
-        max_message_sends_per_minute=2
-    )
-
-    async def run_checks():
-        await limiter.check_message_send_rate(user_id=77)
-        await limiter.check_message_send_rate(user_id=77)
-        with pytest.raises(HTTPException):
-            await limiter.check_message_send_rate(user_id=77)
-
-    asyncio.run(run_checks())
-    stored = redis.store.get("rate_limit:message_send:77", {})
-    assert len(stored) == 2
+    with pytest.raises(HTTPException):
+        asyncio.run(limiter.check_message_limit(chat_id="c1", current_message_count=1))
 
 
 @pytest.mark.unit
-def test_get_usage_stats_memory_reports_true_reset_time(monkeypatch):
-    limiter = CharacterRateLimiter(redis_client=None, max_operations=5, window_seconds=60)
-    base_time = 1_000_000.0
-    monkeypatch.setattr(
-        "tldw_Server_API.app.core.Character_Chat.character_rate_limiter.time.time",
-        lambda: base_time,
-    )
-    limiter.memory_store[123] = [base_time - 30, base_time - 5]
+def test_get_usage_stats_peeks_rg(monkeypatch):
+    fake = _FakeGovernor({"allowed": True})
+    monkeypatch.setattr(crl, "_rg_character_enabled", lambda: True)
+    async def _get_fake():
+        return fake
 
-    stats = asyncio.run(limiter.get_usage_stats(123))
-    assert stats["operations_used"] == 2
-    assert stats["operations_remaining"] == 3
-    assert stats["reset_time"] == pytest.approx(base_time + 30)
+    monkeypatch.setattr(crl, "_get_character_rg_governor", _get_fake)
 
+    limiter = CharacterRateLimiter(enabled=True)
 
-@pytest.mark.unit
-def test_get_usage_stats_redis_reports_true_reset_time(monkeypatch):
-    redis = _InMemoryRedis()
-    limiter = CharacterRateLimiter(redis_client=redis, max_operations=5, window_seconds=60)
-    base_time = 2_000_000.0
-    redis.store["rate_limit:character:456"] = {
-        "entry1": base_time - 45,
-        "entry2": base_time - 10,
-    }
-    monkeypatch.setattr(
-        "tldw_Server_API.app.core.Character_Chat.character_rate_limiter.time.time",
-        lambda: base_time,
-    )
+    stats = asyncio.run(limiter.get_usage_stats(99))
 
-    stats = asyncio.run(limiter.get_usage_stats(456))
-    assert stats["operations_used"] == 2
-    assert stats["operations_remaining"] == 3
-    assert stats["reset_time"] == pytest.approx(base_time + 15)
-
-
-@pytest.mark.unit
-def test_character_limit_uses_existing_count_before_creation():
-    """check_character_limit expects the current character count (before create)."""
-    limiter = CharacterRateLimiter(redis_client=None, max_characters=2)
-
-    async def run_checks():
-        ok0 = await limiter.check_character_limit(user_id=1, current_count=0)
-        ok1 = await limiter.check_character_limit(user_id=1, current_count=1)
-        assert ok0 and ok1
-        with pytest.raises(HTTPException):
-            # When current_count equals max_characters, creating another should be rejected.
-            await limiter.check_character_limit(user_id=1, current_count=2)
-
-    asyncio.run(run_checks())
-
-
-@pytest.mark.unit
-def test_chat_limit_uses_existing_count_before_creation():
-    """check_chat_limit expects the current chat count (before create)."""
-    limiter = CharacterRateLimiter(redis_client=None, max_chats_per_user=2)
-
-    async def run_checks():
-        ok0 = await limiter.check_chat_limit(user_id=1, current_chat_count=0)
-        ok1 = await limiter.check_chat_limit(user_id=1, current_chat_count=1)
-        assert ok0 and ok1
-        with pytest.raises(HTTPException):
-            # When current_chat_count equals max_chats_per_user, creating another should be rejected.
-            await limiter.check_chat_limit(user_id=1, current_chat_count=2)
-
-    asyncio.run(run_checks())
-
-
-@pytest.mark.unit
-def test_get_character_rate_limiter_tolerates_invalid_numeric_overrides(monkeypatch):
-    import importlib
-    module = importlib.import_module("tldw_Server_API.app.core.Character_Chat.character_rate_limiter")
-
-    # Ensure test-mode bypass does not apply so we exercise config parsing
-    monkeypatch.delenv("TEST_MODE", raising=False)
-    monkeypatch.setenv("CHARACTER_RATE_LIMIT_OPS", "not-a-number")
-    clear_config_cache()
-    module._rate_limiter = None
-    limiter = module.get_character_rate_limiter()
-    assert limiter.max_operations == 100
-    module._rate_limiter = None
-    monkeypatch.delenv("CHARACTER_RATE_LIMIT_OPS", raising=False)
-
-    clear_config_cache()
-    module._rate_limiter = None
-    monkeypatch.setitem(settings, "CHARACTER_RATE_LIMIT_OPS", "still-invalid")
-    limiter = module.get_character_rate_limiter()
-    assert limiter.max_operations == 100
-    module._rate_limiter = None
-    settings.pop("CHARACTER_RATE_LIMIT_OPS", None)
-    clear_config_cache()
+    assert stats["requests"]["remaining"] == 7
+    assert fake.peek_calls

@@ -637,8 +637,10 @@ class UnifiedFeedbackSystem:
             # Update per-user store (isolated per tenant)
             try:
                 from .user_personalization_store import UserPersonalizationStore  # lazy import
-                store = UserPersonalizationStore(user_id or "anon")
+                store = UserPersonalizationStore(user_id)
                 store.record_event(event_type=event_type, doc_id=doc_id, corpus=corpus, impression=impression or [])
+            except ValueError as e:
+                logger.debug(f"Personalization store update skipped for user_id={user_id}: {e}")
             except Exception as e:
                 logger.debug(f"Personalization store update failed: {e}")
 
@@ -834,8 +836,11 @@ async def apply_feedback_boost(context: Any, **kwargs) -> Any:
     try:
         user_id = context.config.get("user_id")
         from .user_personalization_store import UserPersonalizationStore
-        store = UserPersonalizationStore(user_id or "anon")
+        store = UserPersonalizationStore(user_id)
         context.documents = store.boost_documents(context.documents, corpus=context.config.get("index_namespace"))
+        return context
+    except ValueError as e:
+        logger.debug(f"Feedback boost skipped for user_id={user_id}: {e}")
         return context
     except Exception as e:
         logger.debug(f"Feedback boost failed: {e}")

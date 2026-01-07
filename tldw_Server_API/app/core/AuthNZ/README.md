@@ -17,8 +17,7 @@ Note: This README follows the project-wide template to help contributors quickly
   - Inputs: credentials (username/password, TOTP/backup codes), API keys, JWTs, CSRF cookie/header for WebUI.
   - Outputs: token responses, user/session info, success messages for reset/verify flows.
 - Related Endpoints (mounted under `/api/v1`):
-  - Core auth: `tldw_Server_API/app/api/v1/endpoints/auth.py:1`
-  - Enhanced flows (reset, verify, MFA): `tldw_Server_API/app/api/v1/endpoints/auth_enhanced.py:1`
+  - Core auth + enhanced flows (reset, verify, MFA): `tldw_Server_API/app/api/v1/endpoints/auth.py:1`
   - Admin (RBAC, orgs/teams, users): `tldw_Server_API/app/api/v1/endpoints/admin.py:1`, `tldw_Server_API/app/api/v1/endpoints/users.py:1`, `tldw_Server_API/app/api/v1/endpoints/privileges.py:1`, `tldw_Server_API/app/api/v1/endpoints/register.py:1`
   - Debug helpers: `tldw_Server_API/app/api/v1/endpoints/authnz_debug.py:1`
   - Dependencies used by endpoints: `tldw_Server_API/app/api/v1/API_Deps/auth_deps.py:1`

@@ -86,7 +86,7 @@ export MISTRAL_API_KEY="..."
 export VOYAGE_API_KEY="..."
 
 # Optional: user DB base directory (default: Databases/user_databases)
-export USER_DB_BASE_DIR="$(pwd)/Databases/user_databases"
+export USER_DB_BASE_DIR="$(pwd)/Databases/user_databases"  # USER_DB_BASE is deprecated alias
 
 # Optional: enable endpoint rate limiting guard on embeddings
 export EMBEDDINGS_RATE_LIMIT=on   # Uses built-in limit in the API endpoint
@@ -496,8 +496,8 @@ You can enable two optional maintenance features to harden indexing integrity an
   - Environment flags:
     - `EMBEDDINGS_COMPACTOR_ENABLED` = `true|false` (default: false)
     - `EMBEDDINGS_COMPACTOR_INTERVAL_SECONDS` (default: 1800)
-    - `COMPACTOR_USER_ID` (default: `SINGLE_USER_FIXED_ID`; in multi-user deployments, run one compactor instance per user, or extend to iterate users as needed)
-    - `MEDIA_DB_PATH` (optional; default: per-user `Databases/user_databases/<user_id>/Media_DB_v2.db`)
+    - `COMPACTOR_USER_ID` (defaults to `SINGLE_USER_FIXED_ID` in single-user mode; required in multi-user deployments. Run one compactor instance per user, or extend to iterate users as needed.)
+    - `MEDIA_DB_PATH` (optional; default: per-user `<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`)
 
 Example (single-user):
 ```bash

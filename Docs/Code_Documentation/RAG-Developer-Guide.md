@@ -620,7 +620,7 @@ EMBEDDING_PROVIDER=huggingface
 EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
 
 # Database paths
-USER_DB_BASE_DIR=/path/to/user/databases
+USER_DB_BASE_DIR=/path/to/user/databases  # per-user DB root; USER_DB_BASE is deprecated alias
 CHROMA_DB_PATH=/path/to/chroma
 
 # API configuration

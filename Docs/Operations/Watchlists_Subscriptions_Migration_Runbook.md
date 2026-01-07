@@ -27,7 +27,7 @@ Note: The current API fully supports sources, groups/tags, jobs, runs, items, ou
 
 - Version: tldw_server v0.2.x with Watchlists endpoints enabled.
 - AuthNZ: single-user API key or multi-user JWT configured.
-- Backups: snapshot per-user DBs (`Databases/user_databases/<user_id>/Media_DB_v2.db`) and app state.
+- Backups: snapshot per-user DBs (`<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`) and app state.
 - Test env: perform migration in staging before production.
 - Dependencies: ffmpeg installed; outbound HTTP allowed for feeds/sites.
 
@@ -248,7 +248,7 @@ Known unrelated: `tests/sandbox/test_ws_heartbeat_seq.py` can hang in some local
 
 - Stop scheduled jobs (PATCH job `active=false`).
 - Delete created sources/jobs if reverting (`DELETE /watchlists/sources/{id}`, `/watchlists/jobs/{id}`).
-- Restore DB backups of affected user(s): `Databases/user_databases/<user_id>/Media_DB_v2.db`.
+- Restore DB backups of affected user(s): `<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`.
 - Re-run sanity checks.
 
 ## 8) Scripts Plan (for Engineering)

@@ -759,10 +759,7 @@ def get_user_chromadb_path(user_id: int) -> str:
     Returns:
         Path to the user's ChromaDB directory
     """
-    base_dir = DatabasePaths.get_user_base_directory(user_id)
-    chroma_path = base_dir / "chroma_storage"
-    chroma_path.mkdir(parents=True, exist_ok=True)
-    return str(chroma_path)
+    return str(DatabasePaths.get_user_chroma_dir(user_id))
 
 
 async def get_user_media_db(user_id: int, db_name: str = "media"):

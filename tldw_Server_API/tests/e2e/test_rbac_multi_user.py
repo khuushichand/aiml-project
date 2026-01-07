@@ -20,6 +20,8 @@ import pytest
 
 from fixtures import APIClient, create_test_file, cleanup_test_file, AssertionHelpers
 
+TEST_PASSWORD = "Tlp9!ZxVq8@M"
+
 
 def _require_multi_user(api_client: APIClient):
     info = api_client.health_check()
@@ -37,7 +39,7 @@ class TestRBACAdminAccess:
         creds = {
             "username": f"e2e_rbac_user_{int(time.time())}",
             "email": f"e2e_rbac_{uuid.uuid4().hex[:8]}@example.com",
-            "password": "Password123!",
+            "password": TEST_PASSWORD,
         }
         try:
             api_client.register(**creds)
@@ -134,7 +136,7 @@ class TestMultiUserIsolation:
         ua = {
             "username": f"userA_{int(time.time())}",
             "email": f"userA_{uuid.uuid4().hex[:6]}@ex.com",
-            "password": "Password123!",
+            "password": TEST_PASSWORD,
         }
         try:
             client_a.register(**ua)
@@ -146,7 +148,7 @@ class TestMultiUserIsolation:
         ub = {
             "username": f"userB_{int(time.time())}",
             "email": f"userB_{uuid.uuid4().hex[:6]}@ex.com",
-            "password": "Password123!",
+            "password": TEST_PASSWORD,
         }
         try:
             client_b.register(**ub)
@@ -203,8 +205,8 @@ class TestMultiUserIsolation:
 
         # Login/register both users
         n = int(time.time())
-        ua = {"username": f"userA_jobs_{n}", "email": f"userA_jobs_{n}@ex.com", "password": "Password123!"}
-        ub = {"username": f"userB_jobs_{n}", "email": f"userB_jobs_{n}@ex.com", "password": "Password123!"}
+        ua = {"username": f"userA_jobs_{n}", "email": f"userA_jobs_{n}@ex.com", "password": TEST_PASSWORD}
+        ub = {"username": f"userB_jobs_{n}", "email": f"userB_jobs_{n}@ex.com", "password": TEST_PASSWORD}
         for c, creds in ((client_a, ua), (client_b, ub)):
             try:
                 c.register(**creds)
@@ -244,7 +246,7 @@ class TestMultiUserIsolation:
         c = APIClient(base)
         _require_multi_user(c)
 
-        creds = {"username": f"vk_{int(time.time())}", "email": f"vk_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        creds = {"username": f"vk_{int(time.time())}", "email": f"vk_{uuid.uuid4().hex[:6]}@ex.com", "password": TEST_PASSWORD}
         try:
             c.register(**creds)
         except httpx.HTTPStatusError:
@@ -281,7 +283,7 @@ class TestAdminMintedVirtualKeyConstraints:
         base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
         # Target user
         user = APIClient(base)
-        creds = {"username": f"vk_admin_{int(time.time())}", "email": f"vk_admin_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        creds = {"username": f"vk_admin_{int(time.time())}", "email": f"vk_admin_{uuid.uuid4().hex[:6]}@ex.com", "password": TEST_PASSWORD}
         try:
             user.register(**creds)
         except httpx.HTTPStatusError:
@@ -340,7 +342,7 @@ class TestAdminMintedVirtualKeyConstraints:
 
         base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
         u = APIClient(base)
-        creds = {"username": f"vk_scope_{int(time.time())}", "email": f"vk_scope_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        creds = {"username": f"vk_scope_{int(time.time())}", "email": f"vk_scope_{uuid.uuid4().hex[:6]}@ex.com", "password": TEST_PASSWORD}
         try:
             u.register(**creds)
         except httpx.HTTPStatusError:
@@ -422,7 +424,7 @@ class TestAdminMintedVirtualKeyConstraints:
 
         base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
         u = APIClient(base)
-        creds = {"username": f"vk_org_only_{int(time.time())}", "email": f"vk_org_only_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        creds = {"username": f"vk_org_only_{int(time.time())}", "email": f"vk_org_only_{uuid.uuid4().hex[:6]}@ex.com", "password": TEST_PASSWORD}
         try:
             u.register(**creds)
         except httpx.HTTPStatusError:
@@ -471,7 +473,7 @@ class TestAdminMintedVirtualKeyConstraints:
 
         base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
         u = APIClient(base)
-        creds = {"username": f"vk_team_only_{int(time.time())}", "email": f"vk_team_only_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        creds = {"username": f"vk_team_only_{int(time.time())}", "email": f"vk_team_only_{uuid.uuid4().hex[:6]}@ex.com", "password": TEST_PASSWORD}
         try:
             u.register(**creds)
         except httpx.HTTPStatusError:
@@ -526,7 +528,7 @@ class TestAdminMintedVirtualKeyConstraints:
 
         base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
         u = APIClient(base)
-        creds = {"username": f"vk_mismatch_{int(time.time())}", "email": f"vk_mismatch_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        creds = {"username": f"vk_mismatch_{int(time.time())}", "email": f"vk_mismatch_{uuid.uuid4().hex[:6]}@ex.com", "password": TEST_PASSWORD}
         try:
             u.register(**creds)
         except httpx.HTTPStatusError:
@@ -579,7 +581,7 @@ class TestAdminMintedVirtualKeyConstraints:
 
         base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
         u = APIClient(base)
-        creds = {"username": f"vk_team_nm_{int(time.time())}", "email": f"vk_team_nm_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        creds = {"username": f"vk_team_nm_{int(time.time())}", "email": f"vk_team_nm_{uuid.uuid4().hex[:6]}@ex.com", "password": TEST_PASSWORD}
         try:
             u.register(**creds)
         except httpx.HTTPStatusError:
@@ -643,7 +645,7 @@ class TestAdminMintedVirtualKeyConstraints:
 
         base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
         u = APIClient(base)
-        creds = {"username": f"vk_team_role_{int(time.time())}", "email": f"vk_team_role_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        creds = {"username": f"vk_team_role_{int(time.time())}", "email": f"vk_team_role_{uuid.uuid4().hex[:6]}@ex.com", "password": TEST_PASSWORD}
         try:
             u.register(**creds)
         except httpx.HTTPStatusError:
@@ -707,7 +709,7 @@ class TestAdminMintedVirtualKeyConstraints:
 
         base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
         u = APIClient(base)
-        creds = {"username": f"vk_list_{int(time.time())}", "email": f"vk_list_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        creds = {"username": f"vk_list_{int(time.time())}", "email": f"vk_list_{uuid.uuid4().hex[:6]}@ex.com", "password": TEST_PASSWORD}
         try:
             u.register(**creds)
         except httpx.HTTPStatusError:
@@ -781,7 +783,7 @@ class TestOrgsTeamsRBAC:
 
         # Create two users and obtain their IDs
         for cli, prefix in ((u1, "orgA"), (u2, "orgB")):
-            creds = {"username": f"{prefix}_{int(time.time())}", "email": f"{prefix}_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+            creds = {"username": f"{prefix}_{int(time.time())}", "email": f"{prefix}_{uuid.uuid4().hex[:6]}@ex.com", "password": TEST_PASSWORD}
             try:
                 cli.register(**creds)
             except httpx.HTTPStatusError:
@@ -870,7 +872,7 @@ class TestAdminRoleAssignment:
 
         base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
         user = APIClient(base)
-        creds = {"username": f"role_toggle_{int(time.time())}", "email": f"role_{uuid.uuid4().hex[:6]}@ex.com", "password": "Password123!"}
+        creds = {"username": f"role_toggle_{int(time.time())}", "email": f"role_{uuid.uuid4().hex[:6]}@ex.com", "password": TEST_PASSWORD}
         try:
             user.register(**creds)
         except httpx.HTTPStatusError:

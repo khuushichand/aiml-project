@@ -709,7 +709,7 @@ result = await unified_rag_pipeline(
     query="...",
     # Prefer per-user default Media DB path; override as needed
     media_db_path=str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id())),
-    character_db_path="Databases/user_databases/<uid>/ChaChaNotes.db",
+    character_db_path="<USER_DB_BASE_DIR>/<uid>/ChaChaNotes.db",
     media_db=media_db_instance,       # required in production
     chacha_db=chacha_db_instance,     # required in production
 )

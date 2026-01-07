@@ -1320,66 +1320,6 @@ class JobDetailResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
-@router.get("/jobs/{job_id}", response_model=JobDetailResponse)
-async def get_job_detail(
-    job_id: int,
-    principal: AuthPrincipal = Depends(get_auth_principal),
-    domain: Optional[str] = None,
-) -> JobDetailResponse:
-    admin_user = _enforce_domain_scope_unified(principal, domain)
-    db_url = os.getenv("JOBS_DB_URL")
-    backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
-    if backend == "postgres":
-        _set_pg_rls_for_user(admin_user, domain)
-    jm = JobManager(backend=backend, db_url=db_url)
-    job = jm.get_job(job_id)
-    if job:
-        if domain and job.get("domain") != domain:
-            raise HTTPException(status_code=404, detail="Job not found")
-        job["archived"] = False
-        return JobDetailResponse(**job)
-
-    conn = jm._connect()
-    try:
-        row = None
-        if jm.backend == "postgres":
-            with jm._pg_cursor(conn) as cur:
-                if domain:
-                    cur.execute("SELECT * FROM jobs_archive WHERE id = %s AND domain = %s", (int(job_id), domain))
-                else:
-                    cur.execute("SELECT * FROM jobs_archive WHERE id = %s", (int(job_id),))
-                row = cur.fetchone()
-        else:
-            if domain:
-                row = conn.execute(
-                    "SELECT * FROM jobs_archive WHERE id = ? AND domain = ?",
-                    (int(job_id), domain),
-                ).fetchone()
-            else:
-                row = conn.execute(
-                    "SELECT * FROM jobs_archive WHERE id = ?",
-                    (int(job_id),),
-                ).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Job not found")
-        job_data = dict(row)
-        payload = _parse_json_value(job_data.get("payload"))
-        result = _parse_json_value(job_data.get("result"))
-        if payload is None:
-            payload = _decode_archive_blob(job_data.get("payload_compressed"))
-        if result is None:
-            result = _decode_archive_blob(job_data.get("result_compressed"))
-        job_data["payload"] = jm._maybe_decrypt_json(payload)
-        job_data["result"] = jm._maybe_decrypt_json(result)
-        job_data["archived"] = True
-        return JobDetailResponse(**job_data)
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-
 @router.get("/jobs/list", response_model=list[JobItem])
 async def list_jobs_endpoint(
     domain: Optional[str] = None,
@@ -1499,6 +1439,66 @@ async def stale_processing_endpoint(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Stale groups failed: {e}")
+
+
+@router.get("/jobs/{job_id}", response_model=JobDetailResponse)
+async def get_job_detail(
+    job_id: int,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    domain: Optional[str] = None,
+) -> JobDetailResponse:
+    admin_user = _enforce_domain_scope_unified(principal, domain)
+    db_url = os.getenv("JOBS_DB_URL")
+    backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
+    if backend == "postgres":
+        _set_pg_rls_for_user(admin_user, domain)
+    jm = JobManager(backend=backend, db_url=db_url)
+    job = jm.get_job(job_id)
+    if job:
+        if domain and job.get("domain") != domain:
+            raise HTTPException(status_code=404, detail="Job not found")
+        job["archived"] = False
+        return JobDetailResponse(**job)
+
+    conn = jm._connect()
+    try:
+        row = None
+        if jm.backend == "postgres":
+            with jm._pg_cursor(conn) as cur:
+                if domain:
+                    cur.execute("SELECT * FROM jobs_archive WHERE id = %s AND domain = %s", (int(job_id), domain))
+                else:
+                    cur.execute("SELECT * FROM jobs_archive WHERE id = %s", (int(job_id),))
+                row = cur.fetchone()
+        else:
+            if domain:
+                row = conn.execute(
+                    "SELECT * FROM jobs_archive WHERE id = ? AND domain = ?",
+                    (int(job_id), domain),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT * FROM jobs_archive WHERE id = ?",
+                    (int(job_id),),
+                ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Job not found")
+        job_data = dict(row)
+        payload = _parse_json_value(job_data.get("payload"))
+        result = _parse_json_value(job_data.get("result"))
+        if payload is None:
+            payload = _decode_archive_blob(job_data.get("payload_compressed"))
+        if result is None:
+            result = _decode_archive_blob(job_data.get("result_compressed"))
+        job_data["payload"] = jm._maybe_decrypt_json(payload)
+        job_data["result"] = jm._maybe_decrypt_json(result)
+        job_data["archived"] = True
+        return JobDetailResponse(**job_data)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 class BatchCancelRequest(BaseModel):

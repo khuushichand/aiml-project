@@ -700,6 +700,11 @@ async def reset_db_pool():
     except Exception as e:
         logger.debug(f"reset_db_pool: ignoring API key manager reset error: {e}")
     try:
+        from tldw_Server_API.app.core.DB_Management.Users_DB import reset_users_db as _reset_users_db
+        await _reset_users_db()
+    except Exception as e:
+        logger.debug(f"reset_db_pool: ignoring UsersDB reset error: {e}")
+    try:
         from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
             set_llm_provider_overrides_cache_for_tests as _reset_llm_overrides_cache,
         )

@@ -1010,7 +1010,7 @@ class MCPProtocol:
                 category = 'ingestion' if tool_name in ingestion_tools else 'read'
             key_owner = f"user:{context.user_id}" if context.user_id else (f"client:{context.client_id}" if context.client_id else "anon")
             rl_key = f"{key_owner}:tool:{tool_name}:cat:{category}"
-            await self.rate_limiter.check_rate_limit(rl_key, limiter=self.rate_limiter.get_category_limiter(category))
+            await self.rate_limiter.check_rate_limit(rl_key, category=category)
         except RateLimitExceeded:
             raise
         except Exception:

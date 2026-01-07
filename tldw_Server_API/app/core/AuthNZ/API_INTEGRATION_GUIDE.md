@@ -906,7 +906,7 @@ app.add_middleware(
     max_age=3600  # Cache preflight requests
 )
 
-Note: Enhanced endpoints such as MFA and password reset are implemented in `auth_enhanced.py`. Ensure they are routed in `main.py` if you plan to expose them.
+Note: MFA and password reset endpoints live in `auth.py` and are routed by default via the main auth router.
 ```
 
 ---

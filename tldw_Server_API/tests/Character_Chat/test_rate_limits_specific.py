@@ -143,6 +143,8 @@ async def test_max_chats_per_user_limit():
 
 @pytest.mark.asyncio
 async def test_chat_completion_per_minute_rate_limit():
+    if os.getenv("RG_ENABLED", "").lower() not in {"1", "true", "yes", "on"}:
+        pytest.skip("Character chat rate limits are enforced by Resource Governor when enabled.")
     tmpdir = tempfile.mkdtemp(prefix="chacha_limit_complete_")
     env_overrides = {
         "USER_DB_BASE_DIR": tmpdir,

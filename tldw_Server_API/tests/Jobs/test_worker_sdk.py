@@ -155,3 +155,81 @@ async def test_run_cancellation_check(monkeypatch, tmp_path):
     await asyncio.wait_for(run_task, timeout=1)
 
     assert cancel_called["count"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_run_success_completes_job(monkeypatch, tmp_path):
+    db_path = tmp_path / "jobs_wsdk_success.db"
+    ensure_jobs_tables(db_path)
+    jm = JobManager(db_path)
+    job = jm.create_job(domain="chatbooks", queue="default", job_type="t", payload={}, owner_user_id="u")
+
+    cfg = WorkerConfig(domain="chatbooks", queue="default", worker_id="w-success", lease_seconds=5, renew_threshold_seconds=1, renew_jitter_seconds=0)
+    sdk = WorkerSDK(jm, cfg)
+
+    # Capture completion and still allow real completion side effects
+    calls = []
+    orig_complete = jm.complete_job
+
+    def spy_complete(job_id, **kwargs):
+        calls.append({"job_id": job_id, **kwargs})
+        return orig_complete(job_id, **kwargs)
+
+    monkeypatch.setattr(jm, "complete_job", spy_complete)
+
+    # Use stub sleep for fast loop exit
+    _orig_sleep = asyncio.sleep
+    sdk._sleep = DummySleep(_orig_sleep)
+
+    async def handler(job_row):
+        sdk.stop()
+        return {"ok": True}
+
+    await asyncio.wait_for(sdk.run(handler=handler), timeout=1)
+
+    assert calls and int(calls[0]["job_id"]) == int(job["id"])
+    stored = jm.get_job(int(job["id"]))
+    assert stored["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_run_non_retryable_failure_marks_failed(monkeypatch, tmp_path):
+    db_path = tmp_path / "jobs_wsdk_fail.db"
+    ensure_jobs_tables(db_path)
+    jm = JobManager(db_path)
+    job = jm.create_job(domain="chatbooks", queue="default", job_type="t", payload={}, owner_user_id="u")
+
+    cfg = WorkerConfig(domain="chatbooks", queue="default", worker_id="w-fail", lease_seconds=5, renew_threshold_seconds=1, renew_jitter_seconds=0)
+    sdk = WorkerSDK(jm, cfg)
+
+    # Capture failure args and signal completion
+    calls = []
+    done = asyncio.Event()
+    orig_fail = jm.fail_job
+
+    def spy_fail(job_id, **kwargs):
+        calls.append({"job_id": job_id, **kwargs})
+        ok = orig_fail(job_id, **kwargs)
+        done.set()
+        return ok
+
+    monkeypatch.setattr(jm, "fail_job", spy_fail)
+
+    # Use stub sleep for fast loop exit
+    _orig_sleep = asyncio.sleep
+    sdk._sleep = DummySleep(_orig_sleep)
+
+    class NonRetryableErr(Exception):
+        retryable = False
+
+    async def handler(job_row):
+        raise NonRetryableErr("boom")
+
+    task = asyncio.create_task(sdk.run(handler=handler))
+    await asyncio.wait_for(done.wait(), timeout=1)
+    sdk.stop()
+    await asyncio.wait_for(task, timeout=1)
+
+    assert any(c.get("retryable") is False for c in calls)
+    stored = jm.get_job(int(job["id"]))
+    assert stored["status"] == "failed"

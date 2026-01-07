@@ -25,6 +25,7 @@ from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.rbac_repo import AuthnzRbacRepo
 from tldw_Server_API.app.core.exceptions import InactiveUserError
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 # Utils
 from loguru import logger
 # API Dependencies
@@ -264,6 +265,94 @@ def is_single_user_mode() -> bool:
         return get_settings().AUTH_MODE == "single_user"
     except Exception:
         return False
+
+
+def _is_test_context() -> bool:
+    """Return True when running in pytest or explicit test-mode contexts."""
+    try:
+        if getattr(get_settings(), "TEST_MODE", False):
+            return True
+    except Exception:
+        pass
+    if os.getenv("PYTEST_CURRENT_TEST") is not None:
+        return True
+    for flag in ("TEST_MODE", "TLDW_TEST_MODE", "TESTING"):
+        if os.getenv(flag, "").lower() in {"1", "true", "yes", "on"}:
+            return True
+    return False
+
+
+def _raise_user_id_error(detail: str, *, status_code: int, raise_http: bool) -> None:
+    if raise_http:
+        raise HTTPException(status_code=status_code, detail=detail)
+    raise ValueError(detail)
+
+
+def resolve_user_id_value(
+    user_id: Optional[Union[int, str]],
+    *,
+    allow_none: bool = False,
+    as_int: bool = False,
+    allow_test_user_ids: Optional[bool] = None,
+    error_status: int = status.HTTP_400_BAD_REQUEST,
+    missing_detail: str = "user_id is required in multi-user mode",
+    invalid_detail: str = "invalid user_id",
+    raise_http: bool = False,
+) -> Optional[Union[int, str]]:
+    """Normalize user_id values with single-user fallback and test-friendly rules."""
+    if allow_test_user_ids is None:
+        allow_test_user_ids = _is_test_context()
+
+    missing = user_id is None or (isinstance(user_id, str) and not user_id.strip())
+    if missing:
+        if is_single_user_mode():
+            user_id = DatabasePaths.get_single_user_id()
+        elif allow_none:
+            return None
+        else:
+            _raise_user_id_error(missing_detail, status_code=error_status, raise_http=raise_http)
+
+    if as_int:
+        try:
+            return int(user_id)  # type: ignore[arg-type]
+        except Exception:
+            if is_single_user_mode():
+                return DatabasePaths.get_single_user_id()
+            _raise_user_id_error(invalid_detail, status_code=error_status, raise_http=raise_http)
+
+    if not allow_test_user_ids:
+        try:
+            int(user_id)  # type: ignore[arg-type]
+        except Exception:
+            if is_single_user_mode():
+                return str(DatabasePaths.get_single_user_id())
+            _raise_user_id_error(invalid_detail, status_code=error_status, raise_http=raise_http)
+
+    return str(user_id)
+
+
+def resolve_user_id_for_request(
+    current_user: Optional["User"],
+    *,
+    allow_none: bool = False,
+    as_int: bool = False,
+    allow_test_user_ids: Optional[bool] = None,
+    error_status: int = status.HTTP_400_BAD_REQUEST,
+    missing_detail: str = "user_id is required in multi-user mode",
+    invalid_detail: str = "invalid user_id",
+) -> Optional[Union[int, str]]:
+    """Normalize current_user.id for HTTP requests and raise HTTPException on errors."""
+    user_id = getattr(current_user, "id", None)
+    return resolve_user_id_value(
+        user_id,
+        allow_none=allow_none,
+        as_int=as_int,
+        allow_test_user_ids=allow_test_user_ids,
+        error_status=error_status,
+        missing_detail=missing_detail,
+        invalid_detail=invalid_detail,
+        raise_http=True,
+    )
 
 #######################################################################################################################
 

@@ -62,7 +62,7 @@ def service(mock_db, tmp_path, monkeypatch):
     """Create a ChatbookService instance with mocked database and temp directories."""
     # Set environment variable to use temp directory for tests
     monkeypatch.setenv('PYTEST_CURRENT_TEST', 'test')
-    monkeypatch.setenv('TLDW_USER_DATA_PATH', str(tmp_path))
+    monkeypatch.setenv('USER_DB_BASE_DIR', str(tmp_path))
 
     mock_db.execute_query.return_value = []
     connection = MagicMock()
@@ -120,7 +120,7 @@ class TestChatbookService:
     def test_init_creates_tables(self, mock_db, tmp_path, monkeypatch):
         """Test that initialization creates necessary tables."""
         monkeypatch.setenv('PYTEST_CURRENT_TEST', 'test')
-        monkeypatch.setenv('TLDW_USER_DATA_PATH', str(tmp_path))
+        monkeypatch.setenv('USER_DB_BASE_DIR', str(tmp_path))
 
         mock_db.execute_query.return_value = []
 

@@ -229,10 +229,10 @@ async def test_concurrency_streams_units_enforced():
     assert d3.allowed and h3
 
     # Commit should release just this handle's leases via ZREM
-    await rg.commit(h1)
+    await rg.commit(h3)
 
-    d3, h3 = await rg.reserve(req)
-    assert d3.allowed and h3
+    d4, h4 = await rg.reserve(req_two)
+    assert d4.allowed and h4
 
 
 @pytest.mark.asyncio

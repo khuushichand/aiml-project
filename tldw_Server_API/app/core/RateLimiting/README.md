@@ -40,7 +40,6 @@
 ## 3. Developer-Related/Relevant Information for Contributors
 
 - Folder Structure
-  - `Rate_Limit.py` — legacy utilities (to be removed).
   - `app/api/v1/API_Deps/auth_deps.py` — `rbac_rate_limit` and `require_token_scope` dependencies.
 - Extension Points
 - Use RG policy entries + route_map for new endpoints. For resource-scoped behavior, add `Depends(rbac_rate_limit("<resource>"))`.

@@ -12,97 +12,15 @@ import json
 import os
 import time
 import hashlib
-import string
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from loguru import logger
 
-from tldw_Server_API.app.core.exceptions import UnsafeUserPathError
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 DEFAULT_PATH = Path("Databases/Rewrite_Cache/rewrite_cache.jsonl")
-_USER_DB_BASE = Path(os.getenv("USER_DB_BASE", "Databases/user_databases"))
-try:
-    _USER_DB_BASE_RESOLVED = _USER_DB_BASE.resolve(strict=False)
-except Exception:
-    logger.exception("Rewrite cache: failed to resolve USER_DB_BASE: {}", _USER_DB_BASE)
-    _USER_DB_BASE_RESOLVED = _USER_DB_BASE
-_ALLOWED_USER_ID_CHARS = set(string.ascii_letters + string.digits + "_-")
-_MAX_USER_ID_LEN = 128
-_ERR_MSG_PATH_TRAVERSAL = "Resolved rewrite cache path is outside user database base."
-
-
-def _is_relative_to(path: Path, base: Path) -> bool:
-    """Return True if path is safely contained in base (Path, Path -> bool).
-    Uses Path.relative_to for containment; avoids traversal edge cases."""
-    try:
-        path.relative_to(base)
-    except ValueError:
-        return False
-    else:
-        return True
-
-
-def _hash_user_id(value: str) -> str:
-    """Hash a user_id into a stable directory name (str -> str).
-    Uses SHA256 prefix to avoid leaking raw IDs to disk paths."""
-    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
-    return f"user_{digest}"
-
-
-def _is_safe_user_id(user_id: str) -> bool:
-    """Validate a user_id path segment (str -> bool).
-    Rejects empty/relative components and non-allowed chars for safety."""
-    if not user_id or user_id in {".", ".."}:
-        return False
-    if len(user_id) > _MAX_USER_ID_LEN:
-        return False
-    if user_id[0] not in string.ascii_letters + string.digits:
-        return False
-    if user_id[-1] not in string.ascii_letters + string.digits:
-        return False
-    return all(ch in _ALLOWED_USER_ID_CHARS for ch in user_id)
-
-
-def _normalize_user_id_segment(user_id: Optional[str]) -> str:
-    """Normalize user_id into a safe path segment (Optional[str] -> str).
-    Returns raw if safe; otherwise returns a hashed fallback (e.g., user_<hash>)."""
-    raw = str(user_id or "").strip()
-    if not raw:
-        return "anon"
-    if _is_safe_user_id(raw):
-        return raw
-    return _hash_user_id(raw)
-
-
-def _resolve_user_cache_path(user_id: str) -> Path:
-    """
-    Resolve a per-user cache file path confined under `_USER_DB_BASE`.
-
-    The user_id is first normalized to a single safe path segment (alphanumeric,
-    '_', or '-') or a short hash. This prevents injection of path separators or
-    traversal sequences. The resulting directory layout is:
-        Databases/user_databases/<safe_component>/Rewrite_Cache/rewrite_cache.jsonl
-
-    Args:
-        user_id: User identifier to create cache path for.
-
-    Returns:
-        Path: Validated cache file path.
-
-    Raises:
-        UnsafeUserPathError: If resolved path is outside user database base.
-    """
-    safe_component = _normalize_user_id_segment(user_id)
-    # Construct path using only the sanitized single directory component.
-    cache_dir = _USER_DB_BASE / safe_component / "Rewrite_Cache"
-    cache_path = cache_dir / "rewrite_cache.jsonl"
-    base_resolved = _USER_DB_BASE_RESOLVED
-    cache_resolved = cache_path.resolve(strict=False)
-    if not _is_relative_to(cache_resolved, base_resolved):
-        raise UnsafeUserPathError(_ERR_MSG_PATH_TRAVERSAL)
-    return cache_path
 
 
 def _safe_path() -> Path:
@@ -174,19 +92,9 @@ class RewriteCache:
     ) -> None:
         # Determine storage path (per-user if provided)
         if path is None:
-            if user_id:
-                hashed_user_id = _hash_user_id(str(user_id))
-                try:
-                    p = _resolve_user_cache_path(str(user_id))
-                    p.parent.mkdir(parents=True, exist_ok=True)
-                except (ValueError, UnsafeUserPathError) as e:
-                    logger.warning(f"Failed to resolve user cache path for user_id={hashed_user_id}: {e}")
-                    self.path = str(_safe_path())
-                except OSError as e:
-                    logger.error(f"Failed to initialize user cache path for user_id={hashed_user_id}: {e}")
-                    raise
-                else:
-                    self.path = str(p)
+            if user_id is not None:
+                p = DatabasePaths.get_user_rewrite_cache_path(user_id)
+                self.path = str(p)
             else:
                 self.path = str(_safe_path())
         else:

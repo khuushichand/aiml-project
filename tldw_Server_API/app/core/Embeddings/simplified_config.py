@@ -1,6 +1,7 @@
 # simplified_config.py
 # Simplified configuration system for embeddings module
 
+import copy
 import os
 import yaml
 from typing import Dict, Any, Optional, List
@@ -9,6 +10,13 @@ from pathlib import Path
 
 from loguru import logger
 from pydantic import BaseModel, Field, validator
+
+from tldw_Server_API.app.core.config import get_config_section
+from tldw_Server_API.app.core.config_utils import (
+    apply_default_sources,
+    load_module_yaml,
+    merge_config_layers,
+)
 
 
 @dataclass
@@ -237,44 +245,173 @@ def load_config(path: Optional[str] = None) -> EmbeddingsConfig:
     Returns:
         EmbeddingsConfig instance
     """
-    # Try loading from path
-    if path and Path(path).exists():
-        try:
-            config = EmbeddingsConfig.from_yaml(path)
-            logger.info(f"Loaded embeddings config from {path}")
-            return config
-        except Exception as e:
-            logger.error(f"Failed to load config from {path}: {e}")
+    override_path = path or os.getenv("EMBEDDINGS_CONFIG_PATH")
+    if override_path:
+        override_obj = Path(override_path).expanduser()
+        if not override_obj.exists():
+            logger.warning(f"Embeddings config override not found: {override_obj}")
 
-    # Try loading from environment variable
-    env_path = os.getenv("EMBEDDINGS_CONFIG_PATH")
-    if env_path and Path(env_path).exists():
-        try:
-            config = EmbeddingsConfig.from_yaml(env_path)
-            logger.info(f"Loaded embeddings config from environment: {env_path}")
-            return config
-        except Exception as e:
-            logger.error(f"Failed to load config from environment: {e}")
+    yaml_config, yaml_path = load_module_yaml("embeddings", filename_override=override_path)
+    if yaml_config:
+        base_data = dict(yaml_config)
+        base_source = "yaml"
+        logger.info(f"Loaded embeddings config from {yaml_path}")
+    else:
+        base_data = create_default_config().to_dict()
+        base_source = "default"
+        if yaml_path:
+            logger.info(f"Using default embeddings configuration (no YAML at {yaml_path})")
+        else:
+            logger.info("Using default embeddings configuration")
 
-    # Try default locations
-    default_paths = [
-        "./embeddings_config.yaml",
-        "./config/embeddings.yaml",
-        "./Config_Files/embeddings_config.yaml"
-    ]
+    cfg_txt = _load_config_txt_overrides()
+    env_overrides = _load_env_overrides()
+    providers = base_data.pop("providers", [])
+    if isinstance(providers, dict):
+        normalized: List[Dict[str, Any]] = []
+        for name, provider_cfg in providers.items():
+            if isinstance(provider_cfg, dict):
+                entry = dict(provider_cfg)
+                entry.setdefault("name", name)
+                normalized.append(entry)
+        providers = normalized
+    if providers is None:
+        providers = []
+    provider_overrides: List[tuple[str, str, Dict[str, Any]]] = []
+    provider_overrides.extend(_provider_updates_from_config_txt())
+    provider_overrides.extend(_provider_updates_from_env())
+    for source, name, updates in provider_overrides:
+        if isinstance(providers, list):
+            _apply_provider_override(providers, name, updates)
 
-    for default_path in default_paths:
-        if Path(default_path).exists():
-            try:
-                config = EmbeddingsConfig.from_yaml(default_path)
-                logger.info(f"Loaded embeddings config from {default_path}")
-                return config
-            except Exception as e:
-                logger.error(f"Failed to load config from {default_path}: {e}")
+    merged, sources = merge_config_layers(
+        [
+            (base_source, base_data),
+            ("config", cfg_txt),
+            ("env", env_overrides),
+        ]
+    )
+    merged["providers"] = providers
+    if provider_overrides:
+        sources["providers"] = "env" if any(s == "env" for s, _, _ in provider_overrides) else "config"
+    else:
+        sources["providers"] = base_source
 
-    # Create default config
-    logger.info("Using default embeddings configuration")
-    return create_default_config()
+    config = EmbeddingsConfig.from_dict(merged)
+    sources = apply_default_sources(config.to_dict(), sources)
+    global _config_sources
+    _config_sources = sources
+    logger.debug(f"Embeddings config sources: {sources}")
+    return config
+
+
+def _coerce_int(value: Optional[str]) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_float(value: Optional[str]) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _apply_provider_override(
+    providers: List[Dict[str, Any]],
+    name: str,
+    updates: Dict[str, Any],
+) -> None:
+    for provider in providers:
+        if provider.get("name") == name:
+            provider.update(updates)
+            return
+    providers.append({"name": name, **updates})
+
+
+def _load_config_txt_overrides() -> Dict[str, Any]:
+    section = get_config_section("Embeddings")
+    if not section:
+        return {}
+
+    overrides: Dict[str, Any] = {}
+    provider = section.get("embedding_provider")
+    model = section.get("embedding_model")
+    chunk_size = _coerce_int(section.get("chunk_size"))
+    overlap = _coerce_int(section.get("overlap"))
+
+    if provider:
+        overrides["default_provider"] = provider
+    if model:
+        overrides["default_model"] = model
+    if chunk_size is not None:
+        overrides["chunk_size"] = chunk_size
+    if overlap is not None:
+        overrides["chunk_overlap"] = overlap
+
+    max_models = _coerce_int(section.get("max_models_in_memory"))
+    max_memory = _coerce_float(section.get("max_model_memory_gb"))
+    ttl_seconds = _coerce_int(section.get("model_lru_ttl_seconds"))
+    if max_models is not None or max_memory is not None or ttl_seconds is not None:
+        resources = overrides.setdefault("resources", {})
+        if max_models is not None:
+            resources["max_models_in_memory"] = max_models
+        if max_memory is not None:
+            resources["max_memory_gb"] = max_memory
+        if ttl_seconds is not None:
+            resources["model_ttl_seconds"] = ttl_seconds
+
+    return overrides
+
+
+def _provider_updates_from_config_txt() -> List[tuple[str, str, Dict[str, Any]]]:
+    section = get_config_section("Embeddings")
+    if not section:
+        return []
+    api_url = section.get("embedding_api_url")
+    if not api_url:
+        return []
+    return [("config", "local", {"api_url": api_url})]
+
+
+def _load_env_overrides() -> Dict[str, Any]:
+    overrides: Dict[str, Any] = {}
+
+    def _env_first(*names: str) -> Optional[str]:
+        for name in names:
+            value = os.getenv(name)
+            if value:
+                return value
+        return None
+
+    provider = _env_first("EMBEDDINGS_DEFAULT_PROVIDER", "EMBEDDINGS_PROVIDER")
+    model = _env_first("EMBEDDINGS_DEFAULT_MODEL", "EMBEDDINGS_MODEL")
+    chunk_size = _coerce_int(_env_first("EMBEDDINGS_CHUNK_SIZE"))
+    overlap = _coerce_int(_env_first("EMBEDDINGS_CHUNK_OVERLAP"))
+
+    if provider:
+        overrides["default_provider"] = provider
+    if model:
+        overrides["default_model"] = model
+    if chunk_size is not None:
+        overrides["chunk_size"] = chunk_size
+    if overlap is not None:
+        overrides["chunk_overlap"] = overlap
+
+    return overrides
+
+
+def _provider_updates_from_env() -> List[tuple[str, str, Dict[str, Any]]]:
+    api_url = os.getenv("EMBEDDINGS_API_URL") or os.getenv("EMBEDDINGS_LOCAL_API_URL")
+    if not api_url:
+        return []
+    return [("env", "local", {"api_url": api_url})]
 
 
 # Example YAML configuration
@@ -368,6 +505,7 @@ def create_example_config(path: str = "./embeddings_config.yaml"):
 
 # Global configuration instance
 _config: Optional[EmbeddingsConfig] = None
+_config_sources: Dict[str, Any] = {}
 
 
 def get_config() -> EmbeddingsConfig:
@@ -376,6 +514,14 @@ def get_config() -> EmbeddingsConfig:
     if _config is None:
         _config = load_config()
     return _config
+
+
+def get_config_sources() -> Dict[str, Any]:
+    """Get source tags for the current configuration."""
+    global _config
+    if not _config_sources:
+        _config = load_config()
+    return copy.deepcopy(_config_sources)
 
 
 def reload_config(path: Optional[str] = None):

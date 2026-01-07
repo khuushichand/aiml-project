@@ -51,7 +51,11 @@ from tldw_Server_API.app.core.Usage.usage_tracker import (
 from pydantic import BaseModel, Field
 
 # Authentication
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
+    get_request_user,
+    User,
+    resolve_user_id_for_request,
+)
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     rbac_rate_limit,
     require_roles,
@@ -2037,7 +2041,11 @@ async def create_embedding_endpoint(
                 try:
                     entity_scope, entity_value = entity.split(":", 1)
                 except Exception:
-                    entity_scope, entity_value = "user", str(getattr(current_user, "id", "1"))
+                    user_id = resolve_user_id_for_request(
+                        current_user,
+                        error_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+                    entity_scope, entity_value = "user", str(user_id)
 
                 daily_cap = 0
                 try:

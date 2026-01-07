@@ -20,6 +20,10 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 - `LOG_LEVEL`: Application log level (`DEBUG|INFO|WARNING|ERROR`).
 - `MAGIC_FILE_PATH`: Path to `magic.mgc` for `python-magic` if needed.
 
+## Storage
+- `USER_DB_BASE_DIR`: Base directory for per-user DBs and assets. Defaults to `Databases/user_databases` under the repo root; relative paths resolve from repo root and `~` expands.
+- `USER_DB_BASE`: Deprecated alias for `USER_DB_BASE_DIR` (used only by rewrite cache resolution).
+
 ## Testing & CI Controls
 - `TEST_MODE`: Enables test-friendly behaviors (`true|1|yes`). Used across modules to:
   - Relax or bypass certain rate limiter keys (e.g., client IP) to avoid false positives in tests.
@@ -43,7 +47,7 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 - `RAG_LLM_RERANK_TOTAL_BUDGET_SEC`: Total time budget for LLM reranking per query (seconds). Default `20`.
 - `RAG_LLM_RERANK_MAX_DOCS`: Cap on number of documents scored by LLM reranker per query. Default `20`.
  - `RAG_TRANSFORMERS_RERANKER_MODEL`: Cross-encoder model id for fast reranking (stage 1). Default `BAAI/bge-reranker-v2-m3`.
- - `RAG_REWRITE_CACHE_PATH`: Optional path for query→rewrite cache JSONL (default `Databases/Rewrite_Cache/rewrite_cache.jsonl`).
+ - `RAG_REWRITE_CACHE_PATH`: Optional path for legacy/global query→rewrite cache JSONL (default `Databases/Rewrite_Cache/rewrite_cache.jsonl`); per-user cache uses `USER_DB_BASE_DIR`/`USER_DB_BASE`.
 
 ### RAG Guardrails (Production Defaults)
 - `RAG_GUARDRAILS_STRICT`: When `true`, enable strict guardrails in the unified pipeline (enables numeric fidelity and hard citations by default). Useful for non-prod environments where you still want strict behavior.

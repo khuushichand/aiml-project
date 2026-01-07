@@ -114,7 +114,7 @@ Legend
 | Capability | Status | Notes | Links |
 |---|---|---|---|
 | Single-user (X-API-KEY) | Working | Simple local deployments | [docs](API-related/AuthNZ-API-Guide.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/auth.py) |
-| Multi-user JWT + RBAC | Working | Users/roles/permissions | [docs](API-related/AuthNZ-API-Guide.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/auth_enhanced.py) |
+| Multi-user JWT + RBAC | Working | Users/roles/permissions | [docs](API-related/AuthNZ-API-Guide.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/auth.py) |
 | API keys manager | Working | Create/rotate/audit | [docs](API-related/AuthNZ-API-Guide.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/admin.py) |
 | Egress + SSRF guards | Working | Centralized guards | [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/web_scraping.py) |
 | Audit logging & alerts | Working | Unified audit + alerts | [docs](https://github.com/rmusser01/tldw_server/blob/main/Docs/API-related/Audit_Configuration.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/admin.py) |

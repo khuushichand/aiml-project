@@ -306,7 +306,7 @@ Primary value: Visual task organization that integrates with tldw_server's knowl
 
 - Performance: Board load (with all lists/cards) < 500ms for typical boards
 - Reliability: Soft delete for all entities; optimistic locking via version field
-- Storage: Per-user SQLite database at `Databases/user_databases/<user_id>/Kanban.db`
+- Storage: Per-user SQLite database at `<USER_DB_BASE_DIR>/<user_id>/Kanban.db`
 - Concurrency: Thread-safe database access with proper connection management
 - Limits: Configurable via environment variables (KANBAN_MAX_BOARDS, etc.)
 
@@ -314,7 +314,7 @@ Primary value: Visual task organization that integrates with tldw_server's knowl
 
 ## 10. Data Model
 
-### Database: `Databases/user_databases/<user_id>/Kanban.db`
+### Database: `<USER_DB_BASE_DIR>/<user_id>/Kanban.db`
 
 ```sql
 -- Boards

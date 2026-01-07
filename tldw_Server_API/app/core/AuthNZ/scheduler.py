@@ -16,12 +16,10 @@ from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
-from tldw_Server_API.app.core.AuthNZ.rate_limiter import get_rate_limiter
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.alerting import get_security_alert_dispatcher
 from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
 from tldw_Server_API.app.core.AuthNZ.repos.monitoring_repo import AuthnzMonitoringRepo
-from tldw_Server_API.app.core.AuthNZ.repos.rate_limits_repo import AuthnzRateLimitsRepo
 from tldw_Server_API.app.core.Metrics import set_gauge
 
 #######################################################################################################################
@@ -75,14 +73,12 @@ class AuthNZScheduler:
             # Register cleanup jobs
             self._register_session_cleanup()
             self._register_api_key_cleanup()
-            self._register_rate_limit_cleanup()
             self._register_audit_log_cleanup()
             self._register_expired_registration_cleanup()
 
             # Register monitoring jobs
             self._register_auth_failure_monitor()
             self._register_api_usage_monitor()
-            self._register_rate_limit_monitor()
             # Evaluations: idempotency keys cleanup
             self._register_evaluations_idempotency_cleanup()
 
@@ -159,18 +155,6 @@ class AuthNZScheduler:
             max_instances=1
         )
         logger.debug("Registered API key cleanup job (daily at 2 AM)")
-
-    def _register_rate_limit_cleanup(self):
-        """Register job to clean up old rate limit entries"""
-        self.scheduler.add_job(
-            self._cleanup_old_rate_limits,
-            trigger=IntervalTrigger(hours=6),  # Every 6 hours
-            id='rate_limit_cleanup',
-            name='Clean up old rate limit entries',
-            replace_existing=True,
-            max_instances=1
-        )
-        logger.debug("Registered rate limit cleanup job (every 6 hours)")
 
     def _register_audit_log_cleanup(self):
         """Register job to prune old audit logs"""
@@ -287,18 +271,6 @@ class AuthNZScheduler:
         )
         logger.debug("Registered API usage monitor (hourly)")
 
-    def _register_rate_limit_monitor(self):
-        """Register job to monitor rate limit violations"""
-        self.scheduler.add_job(
-            self._monitor_rate_limits,
-            trigger=IntervalTrigger(minutes=15),  # Every 15 minutes
-            id='rate_limit_monitor',
-            name='Monitor rate limit violations',
-            replace_existing=True,
-            max_instances=1
-        )
-        logger.debug("Registered rate limit monitor (every 15 minutes)")
-
     def _register_evaluations_idempotency_cleanup(self):
         """Register job to cleanup stale idempotency keys in Evaluations DBs."""
         # Daily at 4:00 AM
@@ -372,15 +344,6 @@ class AuthNZScheduler:
             logger.info("Completed API key expiration check")
         except Exception as e:
             logger.error(f"Failed to cleanup expired API keys: {e}")
-
-    async def _cleanup_old_rate_limits(self):
-        """Remove old rate limit entries"""
-        try:
-            rate_limiter = await get_rate_limiter()
-            await rate_limiter.cleanup_old_entries(hours=24)  # Remove entries older than 24 hours
-            logger.info("Cleaned up old rate limit entries")
-        except Exception as e:
-            logger.error(f"Failed to cleanup rate limits: {e}")
 
     async def _prune_audit_logs(self):
         """Prune audit logs older than retention period"""
@@ -720,44 +683,6 @@ class AuthNZScheduler:
 
         except Exception as e:
             logger.error(f"Failed to monitor API usage: {e}")
-
-    async def _monitor_rate_limits(self):
-        """Monitor rate limit violations"""
-        try:
-            db_pool = await get_db_pool()
-            time_window = datetime.now(timezone.utc) - timedelta(minutes=15)
-            rate_threshold = self.settings.RATE_LIMIT_PER_MINUTE * 15  # 15 minute threshold
-            repo = AuthnzRateLimitsRepo(db_pool)
-            results = await repo.list_recent_violations(
-                cutoff=time_window,
-                rate_threshold=rate_threshold,
-                limit=20,
-            )
-
-            if results:
-                logger.warning(f"Rate limit violations detected for {len(results)} identifiers")
-
-                for row in results:
-                    logger.warning(
-                        f"Rate limit violation: {row['identifier']} on {row['endpoint']} "
-                        f"({row['total_requests']} requests in 15 minutes)"
-                    )
-
-                # Send alert if there are many violations
-                if len(results) > 10:
-                    await self._send_security_alert(
-                        "Multiple Rate Limit Violations",
-                        f"{len(results)} identifiers exceeding rate limits",
-                        severity="high",
-                        metadata={
-                            "identifier_count": len(results),
-                            "threshold": rate_threshold,
-                            "window_minutes": 15,
-                        },
-                    )
-
-        except Exception as e:
-            logger.error(f"Failed to monitor rate limits: {e}")
 
     async def _send_security_alert(
         self,

@@ -26,6 +26,7 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType,
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 
 from ....core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from ....core.DB_Management.db_path_utils import DatabasePaths
 from ....core.Chatbooks.chatbook_service import ChatbookService
 from ....core.Chatbooks.chatbook_models import ContentType, ConflictResolution, ExportStatus, ExportJob
 from ....core.Chatbooks.quota_manager import QuotaManager
@@ -78,33 +79,13 @@ def _setup_secure_temp_directory(user_id: str) -> Path:
     Raises:
         HTTPException: If directory setup fails or security checks fail
     """
-    import tempfile
-
-    base_temp = Path(tempfile.gettempdir()).resolve(strict=False)
-
-    # Use SHA256 hash of user_id for directory naming (collision-resistant, always safe)
-    safe_user_id = hashlib.sha256(str(user_id).encode('utf-8')).hexdigest()
-
-    # Establish a fixed uploads root under the system temp and ensure it's not a symlink
-    uploads_root = base_temp / "tldw_uploads"
-    uploads_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if uploads_root.is_symlink():
-        raise HTTPException(status_code=400, detail="Insecure temporary upload directory")
-    uploads_root_resolved = uploads_root.resolve(strict=True)
-
-    # Verify uploads_root is within the expected base temp directory using commonpath
-    base_temp_resolved = base_temp.resolve(strict=False)
-    if os.path.commonpath([str(uploads_root_resolved), str(base_temp_resolved)]) != str(base_temp_resolved):
-        raise HTTPException(status_code=400, detail="Invalid temporary directory base")
-
-    # Create and validate per-user directory
-    temp_dir = uploads_root_resolved / safe_user_id
-    temp_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temp_dir = DatabasePaths.get_user_chatbooks_temp_dir(user_id)
     if temp_dir.is_symlink():
-        raise HTTPException(status_code=400, detail="Insecure user temporary directory")
+        raise HTTPException(status_code=400, detail="Insecure chatbooks temp directory")
     temp_dir = temp_dir.resolve(strict=True)
-    if os.path.commonpath([str(temp_dir), str(uploads_root_resolved)]) != str(uploads_root_resolved):
-        raise HTTPException(status_code=400, detail="Invalid temporary directory path")
+    base_dir = DatabasePaths.get_user_chatbooks_dir(user_id).resolve(strict=True)
+    if os.path.commonpath([str(temp_dir), str(base_dir)]) != str(base_dir):
+        raise HTTPException(status_code=400, detail="Invalid chatbooks temp directory path")
 
     return temp_dir
 
@@ -122,9 +103,6 @@ def get_chatbook_service(
 async def chatbooks_health():
     """Lightweight health endpoint for the Chatbooks subsystem."""
     from datetime import datetime, timezone
-    from pathlib import Path
-    import os
-    import tempfile
 
     health = {
         "service": "chatbooks",
@@ -134,13 +112,7 @@ async def chatbooks_health():
     }
 
     try:
-        # Mirror base path selection logic from service
-        if os.environ.get('TLDW_USER_DATA_PATH'):
-            base_data_dir = Path(os.environ.get('TLDW_USER_DATA_PATH'))
-        elif os.environ.get('PYTEST_CURRENT_TEST') or os.environ.get('CI'):
-            base_data_dir = Path(tempfile.gettempdir()) / 'tldw_test_data'
-        else:
-            base_data_dir = Path('/var/lib/tldw/user_data')
+        base_data_dir = DatabasePaths.get_user_db_base_dir()
 
         exists = base_data_dir.exists()
         writable = False

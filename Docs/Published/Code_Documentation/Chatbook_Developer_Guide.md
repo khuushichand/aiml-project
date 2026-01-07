@@ -391,20 +391,14 @@ Use `ChatbookValidator.validate_zip_file(path)` which performs:
 
 2. **Directory Setup** (in `ChatbookService.__init__`):
 ```python
-import tempfile, os, re
-from pathlib import Path
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
-safe_user_id = re.sub(r'[^a-zA-Z0-9_-]', '_', str(user_id))[:255]
-if os.environ.get('TLDW_USER_DATA_PATH'):
-    base_data_dir = Path(os.environ['TLDW_USER_DATA_PATH'])
-elif os.environ.get('PYTEST_CURRENT_TEST') or os.environ.get('CI'):
-    base_data_dir = Path(tempfile.gettempdir()) / 'tldw_test_data'
-else:
-    base_data_dir = Path('/var/lib/tldw/user_data')
-
-user_data_dir = base_data_dir / 'users' / safe_user_id / 'chatbooks'
-for sub in ('exports','imports','temp'):
-    (user_data_dir / sub).mkdir(parents=True, exist_ok=True, mode=0o700)
+user_data_dir = DatabasePaths.get_user_chatbooks_dir(user_id)
+exports_dir = DatabasePaths.get_user_chatbooks_exports_dir(user_id)
+imports_dir = DatabasePaths.get_user_chatbooks_imports_dir(user_id)
+temp_dir = DatabasePaths.get_user_chatbooks_temp_dir(user_id)
+for directory in (user_data_dir, exports_dir, imports_dir, temp_dir):
+    directory.chmod(0o700)
 ```
 
 3. **Filename Sanitization**:
@@ -1033,8 +1027,8 @@ async def health_check(
 
 ```bash
 # Required
-TLDW_USER_DATA_PATH=/var/lib/tldw/user_data
-DATABASE_URL=sqlite:///var/lib/tldw/db/main.db
+USER_DB_BASE_DIR=/app/Databases/user_databases
+DATABASE_URL=sqlite:////app/Databases/users.db
 
 # Optional
 CHATBOOK_MAX_FILE_SIZE=104857600  # 100MB
@@ -1048,10 +1042,10 @@ CHATBOOK_COMPRESSION_LEVEL=6
 
 ```dockerfile
 # In Dockerfile
-RUN mkdir -p /var/lib/tldw/user_data && \
-    chmod 700 /var/lib/tldw/user_data
+RUN mkdir -p /app/Databases/user_databases && \
+    chmod 700 /app/Databases/user_databases
 
-VOLUME ["/var/lib/tldw/user_data"]
+VOLUME ["/app/Databases/user_databases"]
 ```
 
 ### Backup Strategy

@@ -25,7 +25,7 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.factory import (
 )
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
-from ..messages import normalize_message
+from ..messages import encode_stream_fields, normalize_message
 import os
 import json
 
@@ -303,10 +303,7 @@ class StorageWorker(BaseWorker):
                                         'new_embedder_version': cur_ver,
                                         'job_id': message.job_id,
                                     }
-                                    try:
-                                        _enc = {k: (v if isinstance(v, str) else json.dumps(v)) for k, v in _map.items()}
-                                    except Exception:
-                                        _enc = {k: str(v) for k, v in _map.items()}
+                                    _enc = encode_stream_fields(_map)
                                     await self.redis_client.xadd('embeddings:reembed:requests', _enc)
                             except Exception:
                                 pass

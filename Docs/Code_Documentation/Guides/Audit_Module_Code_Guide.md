@@ -65,7 +65,7 @@ This guide helps project developers understand the Audit module’s architecture
 
 ## Data Model & Storage
 
-When using DI (single or multi-user), the audit DB path is per-user under `Databases/user_databases/<user_id>/audit/unified_audit.db`. If you construct the service directly without DI, the default path is `./Databases/unified_audit.db`.
+When using DI (single or multi-user), the audit DB path is per-user under `<USER_DB_BASE_DIR>/<user_id>/audit/unified_audit.db`. If you construct the service directly without DI, the default path is `./Databases/unified_audit.db`.
 
 Tables:
 - `audit_events` (primary table):

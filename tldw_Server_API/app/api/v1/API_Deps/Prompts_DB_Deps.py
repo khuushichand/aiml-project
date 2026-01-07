@@ -24,20 +24,13 @@ from tldw_Server_API.app.core.Prompt_Management.Prompts_Interop import (
 )
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 #
 ########################################################################################################################
 #
 # Functions:
 
 # --- Configuration ---
-DEFAULT_PROMPTS_DB_SUBDIR = "prompts_user_dbs"
-MAIN_USER_DATA_BASE_DIR = settings.get("USER_DB_BASE_DIR")
-
-if not MAIN_USER_DATA_BASE_DIR:
-    logger.critical("CRITICAL: USER_DB_BASE_DIR is not configured in settings. Cannot determine Prompts DB path structure.")
-    MAIN_USER_DATA_BASE_DIR = Path("./app_data/user_databases_fallback").resolve() # Fallback
-    logger.error(f"USER_DB_BASE_DIR missing from settings, using emergency fallback: {MAIN_USER_DATA_BASE_DIR}")
-
 SERVER_CLIENT_ID = settings.get("SERVER_CLIENT_ID")
 if not SERVER_CLIENT_ID:
     logger.error("CRITICAL: SERVER_CLIENT_ID is not configured in settings.")
@@ -55,22 +48,11 @@ def _get_prompts_db_path_for_user(user_id: int, salt: Optional[str] = None) -> P
     """
     Determines the Prompts database file path for a given user ID.
     Ensures the user's specific directory exists.
-    Path: USER_DB_BASE_DIR / <user_id> / prompts_user_dbs / user_prompts.sqlite
+    Path: USER_DB_BASE_DIR / <user_id> / prompts_user_dbs / user_prompts_v2.sqlite
+    (salted suffix is used in tests when provided)
     """
-    user_dir_name = str(user_id)
-    user_specific_prompts_base_dir = MAIN_USER_DATA_BASE_DIR / user_dir_name / DEFAULT_PROMPTS_DB_SUBDIR
-    # Optional per-app-instance salt for test isolation
-    filename = "user_prompts_v2.sqlite" if not salt else f"user_prompts_v2_{salt}.sqlite"
-    db_file = user_specific_prompts_base_dir / filename  # Added v2 to filename
-
-    try:
-        user_specific_prompts_base_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Ensured Prompts DB directory for user {user_id}: {user_specific_prompts_base_dir}")
-    except OSError as e:
-        logger.error(
-            f"Could not create Prompts DB directory for user_id {user_id} at {user_specific_prompts_base_dir}: {e}",
-            exc_info=True)
-        raise IOError(f"Could not initialize Prompts storage directory for user {user_id}.") from e
+    db_file = DatabasePaths.get_prompts_db_path(user_id, salt=salt)
+    logger.info(f"Ensured Prompts DB directory for user {user_id}: {db_file.parent}")
     return db_file
 
 # --- Main Dependency Function ---

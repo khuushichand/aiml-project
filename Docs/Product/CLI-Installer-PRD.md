@@ -76,8 +76,8 @@
       - multi_user: set AUTH_MODE=multi_user, validate DATABASE_URL, offer to run AuthNZ initializer (`python -m tldw_Server_API.app.core.AuthNZ.initialize`).
   - DB initialization
       - SQLite: ensure on-disk structure exists per-user conventions. Confirm writeability. Canonical defaults:
-          - Content (Media DB v2): `Databases/user_databases/<user_id>/Media_DB_v2.db`
-          - Notes/Chats: `Databases/user_databases/<user_id>/ChaChaNotes.db`
+          - Content (Media DB v2): `<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`
+          - Notes/Chats: `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`
           - Evaluations: `Databases/evaluations.db`
           - AuthNZ users (if SQLite): `Databases/users.db` (PostgreSQL recommended for multi-user)
       - PostgreSQL: validate connection and permissions; print migration helper instructions (no implicit destructive ops). For tests, reuse the AuthNZ Postgres fixture rather than rolling your own.

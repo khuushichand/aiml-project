@@ -29,6 +29,7 @@ from .workers import (
     WorkerConfig,
 )
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+from .messages import encode_stream_fields
 
 
 # Prometheus metrics
@@ -80,8 +81,18 @@ class WorkerPool:
         for task in self.workers:
             task.cancel()
 
-        # Wait for all to complete
-        await asyncio.gather(*self.workers, return_exceptions=True)
+        # Wait for all to complete (bounded)
+        if self.workers:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*self.workers, return_exceptions=True),
+                    timeout=self.config.shutdown_timeout,
+                )
+            except asyncio.TimeoutError:
+                pending = sum(1 for task in self.workers if not task.done())
+                logger.warning(
+                    f"Timed out stopping {self.config.worker_type} workers; {pending} still running"
+                )
 
         self.workers.clear()
         WORKER_COUNT.labels(worker_type=self.config.worker_type).set(0)
@@ -111,7 +122,17 @@ class WorkerPool:
             for task in workers_to_stop:
                 task.cancel()
 
-            await asyncio.gather(*workers_to_stop, return_exceptions=True)
+            if workers_to_stop:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*workers_to_stop, return_exceptions=True),
+                        timeout=self.config.shutdown_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    pending = sum(1 for task in workers_to_stop if not task.done())
+                    logger.warning(
+                        f"Timed out scaling down {self.config.worker_type}; {pending} workers still running"
+                    )
 
             logger.info(f"Scaled down: stopped {len(workers_to_stop)} workers")
 
@@ -131,6 +152,7 @@ class WorkerPool:
             heartbeat_interval=self.config.heartbeat_interval,
             shutdown_timeout=self.config.shutdown_timeout,
             metrics_interval=self.config.metrics_interval,
+            allow_signal_handlers=False,
         )
 
         if isinstance(self.config, ChunkingWorkerPoolConfig):
@@ -549,10 +571,7 @@ class WorkerOrchestrator:
                             except Exception:
                                 payload = None
                             if payload:
-                                try:
-                                    fields = {k: (v if isinstance(v, str) else json.dumps(v)) for k, v in payload.items()}
-                                except Exception:
-                                    fields = {k: str(v) for k, v in (payload or {}).items()}
+                                fields = encode_stream_fields(payload)
                                 try:
                                     await client.xadd(q, fields)
                                 except Exception:
