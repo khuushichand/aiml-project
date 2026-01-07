@@ -35,33 +35,71 @@ import asyncio
 import json
 import math
 import os
-import sys
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from loguru import logger
 import redis.asyncio as redis
 
 def _now_s() -> float:
+    """Return a monotonic wall-clock timestamp in seconds.
+
+    Returns:
+        float: Current time from time.perf_counter(), in seconds.
+    """
     return time.perf_counter()
 
 
 def _percentile(values: List[float], pct: float) -> float:
+    """Return the pct-th percentile from a list of floats.
+
+    Args:
+        values (List[float]): Numeric samples to evaluate.
+        pct (float): Percentile to compute; clamped to [0, 100].
+
+    Returns:
+        float: Percentile value from the sorted list; returns 0.0 when values is empty.
+
+    Notes:
+        Selection uses round((pct/100) * (len(values) - 1)) on the sorted list.
+    """
     if not values:
         return 0.0
     pct = max(0.0, min(100.0, pct))
-    idx = int(round((pct / 100.0) * (len(values) - 1)))
+    idx = round((pct / 100.0) * (len(values) - 1))
     return sorted(values)[idx]
 
 
 def _estimate_chunks(text_len: int, chunk_size: int) -> int:
+    """Estimate the number of chunks for a given text length and chunk size.
+
+    Args:
+        text_len (int): Length of the text in bytes/characters.
+        chunk_size (int): Requested chunk size; values < 1 are treated as 1.
+
+    Returns:
+        int: Estimated chunk count (>= 1), computed via ceiling division.
+    """
     size = max(1, int(chunk_size))
-    return max(1, int(math.ceil(text_len / size)))
+    return max(1, math.ceil(text_len / size))
 
 
 async def _ensure_redis_groups(redis_url: str, queues: List[Tuple[str, str]]) -> None:
+    """Ensure Redis stream consumer groups exist for the provided queues.
+
+    Args:
+        redis_url (str): Redis connection URL.
+        queues (List[Tuple[str, str]]): Queue name + group name pairs to create.
+
+    Returns:
+        None
+
+    Notes:
+        BUSYGROUP errors are ignored when the group already exists.
+    """
     client = redis.from_url(redis_url, decode_responses=True)
     try:
         for queue_name, group_name in queues:
@@ -74,11 +112,20 @@ async def _ensure_redis_groups(redis_url: str, queues: List[Tuple[str, str]]) ->
     finally:
         try:
             await client.aclose()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(f"_ensure_redis_groups: failed to close client for {redis_url}: {exc}")
 
 
 async def _reset_redis_user_keys(redis_url: str, user_id: str) -> None:
+    """Delete Redis bookkeeping keys for a benchmark user.
+
+    Args:
+        redis_url (str): Redis connection URL.
+        user_id (str): User identifier whose active/recent job keys are reset.
+
+    Returns:
+        None
+    """
     client = redis.from_url(redis_url, decode_responses=True)
     try:
         keys = [
@@ -90,8 +137,10 @@ async def _reset_redis_user_keys(redis_url: str, user_id: str) -> None:
     finally:
         try:
             await client.aclose()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                f"_reset_redis_user_keys: failed to close client for {redis_url} user_id={user_id}: {exc}"
+            )
 
 
 async def _dump_redis_debug(
@@ -100,6 +149,16 @@ async def _dump_redis_debug(
     base_queues: List[Tuple[str, str]],
     priority_enabled: bool,
 ) -> None:
+    """Emit Redis debug state for embeddings queues and workers.
+
+    Args:
+        redis_url (str): Redis connection URL to inspect.
+        base_queues (List[Tuple[str, str]]): Base queue + group name pairs.
+        priority_enabled (bool): Whether priority queues are enabled.
+
+    Returns:
+        None
+    """
     client = redis.from_url(redis_url, decode_responses=True)
     try:
         paused = {}
@@ -107,7 +166,8 @@ async def _dump_redis_debug(
             key = f"embeddings:stage:{stage}:paused"
             try:
                 val = await client.get(key)
-            except Exception:
+            except Exception as exc:
+                logger.warning(f"_dump_redis_debug: failed to read {key} from {redis_url}: {exc}")
                 val = None
             paused[stage] = str(val).lower() in ("1", "true", "yes")
 
@@ -122,14 +182,16 @@ async def _dump_redis_debug(
         for q in queues_to_check:
             try:
                 queue_lengths[q] = int(await client.xlen(q))
-            except Exception:
+            except Exception as exc:
+                logger.warning(f"_dump_redis_debug: failed to read xlen for {q} from {redis_url}: {exc}")
                 queue_lengths[q] = -1
 
         group_info: Dict[str, List[Dict[str, Any]]] = {}
         for base, _group in base_queues:
             try:
                 group_info[base] = await client.xinfo_groups(base)
-            except Exception:
+            except Exception as exc:
+                logger.warning(f"_dump_redis_debug: failed to read groups for {base} from {redis_url}: {exc}")
                 group_info[base] = []
 
         worker_entries: List[str] = []
@@ -140,28 +202,46 @@ async def _dump_redis_debug(
             if cursor == 0 or len(worker_entries) >= 200:
                 break
 
-        print("redis debug:")
-        print(f"  redis_url={redis_url}")
-        print(f"  priority_enabled={priority_enabled}")
-        print(f"  stage_paused={paused}")
-        print(f"  queue_lengths={queue_lengths}")
+        logger.info(f"redis debug: redis_url={redis_url} priority_enabled={priority_enabled}")
+        logger.info(f"  stage_paused={paused}")
+        logger.info(f"  queue_lengths={queue_lengths}")
         if group_info:
             for base, groups in group_info.items():
                 summary = ", ".join(
                     f"{g.get('name')} pending={g.get('pending')} consumers={g.get('consumers')}"
                     for g in groups
                 )
-                print(f"  groups[{base}]={summary}")
+                logger.info(f"  groups[{base}]={summary}")
         if worker_entries:
-            print(f"  worker_metrics_keys={len(worker_entries)} sample={worker_entries[:5]}")
+            logger.info(f"  worker_metrics_keys={len(worker_entries)} sample={worker_entries[:5]}")
     finally:
         try:
             await client.aclose()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(f"_dump_redis_debug: failed to close client for {redis_url}: {exc}")
 
 
 def _load_corpus(corpus_path: Optional[str], job_count: int, text_bytes: int) -> List[str]:
+    """Load or generate benchmark text samples.
+
+    Args:
+        corpus_path (Optional[str]): Path to a UTF-8 corpus file, or None to generate text.
+        job_count (int): Number of strings to return.
+        text_bytes (int): Desired byte/character length for generated text; values <= 0
+            default to the base Lorem ipsum length.
+
+    Returns:
+        List[str]: List of length job_count containing text samples.
+
+    Behavior:
+        - Reads UTF-8 lines from corpus_path, stripping empty lines.
+        - Cycles non-empty lines to reach job_count.
+        - Raises ValueError if the corpus file is empty after filtering.
+        - When corpus_path is None, generates repeated Lorem ipsum text.
+
+    Example:
+        texts = _load_corpus(None, job_count=3, text_bytes=120)
+    """
     if corpus_path:
         lines: List[str] = []
         with open(corpus_path, "r", encoding="utf-8") as f:
@@ -187,6 +267,19 @@ def _load_corpus(corpus_path: Optional[str], job_count: int, text_bytes: int) ->
 
 @dataclass
 class RunResult:
+    """Container for a single benchmark run's metrics and configuration.
+
+    Fields:
+        mode (str): Benchmark mode label (e.g., "redis", "jobs").
+        job_count (int): Total jobs submitted for the run.
+        completed (int): Number of jobs completed successfully.
+        failed (int): Number of jobs that failed or were cancelled.
+        total_chunks (int): Total chunks processed across completed jobs.
+        duration_s (float): Run duration in seconds.
+        latencies_ms (List[float]): Per-job latency measurements in milliseconds.
+        timed_out (bool): True if the run exceeded the timeout before completion.
+        config (Dict[str, Any]): Run configuration snapshot for reporting.
+    """
     mode: str
     job_count: int
     completed: int
@@ -198,6 +291,16 @@ class RunResult:
     config: Dict[str, Any] = field(default_factory=dict)
 
     def summary(self) -> Dict[str, Any]:
+        """Return a rounded summary of throughput and latency statistics.
+
+        Computes per-second throughput for jobs and chunks, plus latency
+        percentiles (p50/p95/p99) derived from latencies_ms. Rounds values to
+        match report expectations (duration/throughput to 3 decimals; latency
+        percentiles to 1 decimal).
+
+        Returns:
+            Dict[str, Any]: Summary metrics keyed by name.
+        """
         throughput_jobs = self.completed / self.duration_s if self.duration_s > 0 else 0.0
         throughput_chunks = self.total_chunks / self.duration_s if self.duration_s > 0 else 0.0
         return {
@@ -224,6 +327,19 @@ def _write_reports(
     out_md: Optional[str],
     run_id: str,
 ) -> None:
+    """Write JSON and Markdown benchmark reports to disk.
+
+    Args:
+        results (List[RunResult]): Run results to serialize.
+        report_dir (Optional[str]): Directory for auto-generated output paths.
+        report_prefix (str): Prefix for auto-generated report filenames.
+        out_json (Optional[str]): Explicit JSON output path override.
+        out_md (Optional[str]): Explicit Markdown output path override.
+        run_id (str): Unique run identifier used in report contents/names.
+
+    Returns:
+        None
+    """
     payload = {
         "run_id": run_id,
         "generated_at": time.time(),
@@ -247,7 +363,7 @@ def _write_reports(
         Path(out_json).parent.mkdir(parents=True, exist_ok=True)
         with open(out_json, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
-        print(f"Saved JSON report to {out_json}")
+        logger.info(f"Saved JSON report to {out_json}")
 
     if out_md:
         Path(out_md).parent.mkdir(parents=True, exist_ok=True)
@@ -288,10 +404,26 @@ def _write_reports(
 
         with open(out_md, "w", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
-        print(f"Saved Markdown report to {out_md}")
+        logger.info(f"Saved Markdown report to {out_md}")
 
 
 async def _run_redis_benchmark(args: argparse.Namespace, texts: List[str], run_id: str) -> RunResult:
+    """Run the Redis-backed embeddings pipeline benchmark.
+
+    Args:
+        args (argparse.Namespace): Benchmark options (redis_url, user_id, user_tier,
+            job_count, text_bytes, chunk_size, chunk_overlap, poll_interval,
+            timeout_seconds, progress_log_every, no_progress_seconds).
+        texts (List[str]): Input text samples to enqueue for processing.
+        run_id (str): Unique run identifier for tagging jobs/metrics.
+
+    Returns:
+        RunResult: Metrics summary for the Redis pipeline run.
+
+    Side Effects:
+        Ensures Redis consumer groups exist, submits jobs via EmbeddingJobManager,
+        polls job status until completion or timeout, and emits progress logs.
+    """
     try:
         from tldw_Server_API.app.core.Embeddings.job_manager import (
             EmbeddingJobManager,
@@ -400,13 +532,13 @@ async def _run_redis_benchmark(args: argparse.Namespace, texts: List[str], run_i
             now = _now_s()
             if args.progress_log_every > 0 and (now - last_report) >= args.progress_log_every:
                 status_line = ", ".join(f"{k}={v}" for k, v in sorted(status_counts.items()))
-                print(
+                logger.info(
                     f"redis progress: done={len(done)}/{len(created)} "
                     f"status_counts=[{status_line}]"
                 )
                 last_report = now
             if args.no_progress_seconds > 0 and (now - last_progress) >= args.no_progress_seconds:
-                print(
+                logger.warning(
                     "redis progress stalled: no jobs left pending for too long; "
                     "check orchestrator/workers and stage pause flags."
                 )
@@ -447,6 +579,23 @@ async def _run_redis_benchmark(args: argparse.Namespace, texts: List[str], run_i
 
 
 async def _run_jobs_benchmark(args: argparse.Namespace, texts: List[str], run_id: str) -> RunResult:
+    """Run the Jobs-based three-stage benchmark pipeline.
+
+    Args:
+        args (argparse.Namespace): Benchmark options (jobs_queues, jobs_db_url/jobs_db_path,
+            jobs_workers, stage_sleep_ms, timeout_seconds, chunk_size, chunk_overlap,
+            job_count, text_bytes, jobs_owner_id).
+        texts (List[str]): Input text samples to enqueue for processing.
+        run_id (str): Unique run identifier for tagging jobs/metrics.
+
+    Returns:
+        RunResult: Metrics summary for the Jobs pipeline run.
+
+    Side Effects:
+        Creates a JobManager, sets JOBS_ALLOWED_QUEUES_EMBEDDINGS, starts WorkerSDK
+        workers, and submits jobs via jm.create_job. Uses _estimate_chunks/_now_s and
+        waits with a timeout; timeouts yield a RunResult marked timed_out.
+    """
     from tldw_Server_API.app.core.Jobs.manager import JobManager
     from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerConfig, WorkerSDK
 
@@ -473,6 +622,12 @@ async def _run_jobs_benchmark(args: argparse.Namespace, texts: List[str], run_id
     lock = asyncio.Lock()
 
     class _BenchStageError(Exception):
+        """Non-retryable benchmark stage failure.
+
+        The `retryable` attribute signals whether callers should retry this
+        exception; keep it False for deterministic stage failures and raise
+        it to abort the current stage without retries.
+        """
         retryable = False
 
     async def mark_done(root_id: str, chunk_count: int, ok: bool) -> None:
@@ -508,7 +663,7 @@ async def _run_jobs_benchmark(args: argparse.Namespace, texts: List[str], run_id
             )
         except Exception as exc:
             await mark_done(root_id, chunk_count, ok=False)
-            raise _BenchStageError(str(exc))
+            raise _BenchStageError(str(exc)) from exc
         return {"chunk_count": chunk_count}
 
     async def embedding_handler(job: Dict[str, Any]) -> Dict[str, Any]:
@@ -527,7 +682,7 @@ async def _run_jobs_benchmark(args: argparse.Namespace, texts: List[str], run_id
             )
         except Exception as exc:
             await mark_done(root_id, chunk_count, ok=False)
-            raise _BenchStageError(str(exc))
+            raise _BenchStageError(str(exc)) from exc
         return {"chunk_count": chunk_count}
 
     async def storage_handler(job: Dict[str, Any]) -> Dict[str, Any]:
@@ -609,6 +764,14 @@ async def _run_jobs_benchmark(args: argparse.Namespace, texts: List[str], run_id
 
 
 def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    """Parse CLI arguments for the embeddings jobs-vs-redis benchmark.
+
+    Args:
+        argv: Optional argv override for testing or programmatic use.
+
+    Returns:
+        argparse.Namespace: Parsed benchmark configuration options.
+    """
     parser = argparse.ArgumentParser(description="Embeddings pipeline benchmark: Jobs vs Redis")
     parser.add_argument("--mode", choices=("redis", "jobs", "compare"), default="compare")
     parser.add_argument("--job-count", type=int, default=200)
@@ -644,6 +807,16 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 
 async def _main_async(args: argparse.Namespace) -> int:
+    """Run the async benchmark workflow for the selected mode(s).
+
+    Executes Redis/jobs runs, prints progress, and writes report files.
+
+    Args:
+        args: Parsed CLI arguments controlling benchmark behavior.
+
+    Returns:
+        int: Process exit code (0 on success).
+    """
     texts = _load_corpus(args.corpus_file, args.job_count, args.text_bytes)
     run_id = uuid.uuid4().hex[:12]
     if args.auto_user_id and args.user_id == "bench_user":
@@ -655,15 +828,15 @@ async def _main_async(args: argparse.Namespace) -> int:
     if args.mode in {"redis", "compare"}:
         if args.reset_user_keys:
             await _reset_redis_user_keys(args.redis_url, args.user_id)
-        print("Running redis baseline...")
+        logger.info("Running redis baseline...")
         results.append(await _run_redis_benchmark(args, texts, run_id))
     if args.mode in {"jobs", "compare"}:
-        print("Running jobs candidate...")
+        logger.info("Running jobs candidate...")
         results.append(await _run_jobs_benchmark(args, texts, run_id))
 
     for res in results:
         s = res.summary()
-        print(
+        logger.info(
             f"{s['mode']}: jobs={s['job_count']} completed={s['completed']} failed={s['failed']} "
             f"duration={s['duration_s']}s jobs/s={s['throughput_jobs_s']} chunks/s={s['throughput_chunks_s']} "
             f"p50={s['latency_p50_ms']}ms p95={s['latency_p95_ms']}ms timed_out={s['timed_out']}"
@@ -681,13 +854,24 @@ async def _main_async(args: argparse.Namespace) -> int:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    """Run the synchronous CLI entrypoint for the benchmark script.
+
+    Calls asyncio.run on _main_async and converts KeyboardInterrupt/Exception
+    into conventional exit codes.
+
+    Args:
+        argv: Optional argv override for testing or programmatic use.
+
+    Returns:
+        int: Process exit code (0 on success, 130 on interrupt, 1 on failure).
+    """
     args = _parse_args(argv)
     try:
         return asyncio.run(_main_async(args))
     except KeyboardInterrupt:
         return 130
     except Exception as exc:
-        print(f"Benchmark failed: {exc}", file=sys.stderr)
+        logger.error(f"Benchmark failed: {exc}")
         return 1
 
 

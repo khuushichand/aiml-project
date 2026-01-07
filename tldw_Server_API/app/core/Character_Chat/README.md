@@ -49,7 +49,7 @@ Character_Chat/
 ---
 
 ### Data & Persistence Model
-- Storage is handled by `CharactersRAGDB` (`ChaChaNotes_DB`), which produces per-user SQLite (default) or Postgres databases located under `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db` (defaults to `Databases/user_databases` under repo root).
+- Storage is handled by `CharactersRAGDB` (`ChaChaNotes_DB`), which produces per-user SQLite (default) or Postgres databases located under `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db` (defaults to `Databases/user_databases` under repo root). `USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` and can be overridden via environment variable or `Config_Files/config.txt`.
 - Tables include `character_cards`, `conversations`, `messages`, `world_books`, `world_book_entries`, `chat_dictionary_groups`, and `chat_dictionary_entries`.
 - All functions accept an explicit `CharactersRAGDB` instance (dependency-injected in FastAPI endpoints). There is no global state or implicit connections.
 - JSON-like fields (alternate greetings, tags, extensions, metadata) are stored as JSON text in the DB and materialized as Python objects inside the library helpers.

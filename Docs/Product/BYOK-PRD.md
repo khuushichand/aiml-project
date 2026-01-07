@@ -33,7 +33,7 @@ In multi-user environments, all provider calls currently rely on server-level ke
 - **Credential resolution order**
   - user BYOK -> team shared -> org shared -> server default (scope from token claims).
   - Per-request override keys are not supported.
-  - If no credential exists for a provider that requires auth, return a 400 with a clear message.
+  - If no credential exists for a provider that requires auth, return a 503 with a clear message (`error_code=missing_provider_credentials`).
 - **Scope resolution**
   - Resolve `team_ids` and `org_ids` from token claims. If multiple are present, use `active_team_id`/`active_org_id`; if no active scope is set, skip shared-key lookup.
 - **API endpoints**

@@ -13,15 +13,7 @@ from typing import Any, Dict, Optional, Set
 
 from fastapi import Depends, HTTPException, status
 from loguru import logger
-try:
-    from cachetools import LRUCache
-    _HAS_CACHETOOLS = True
-except ImportError:
-    _HAS_CACHETOOLS = False
-    logger.warning(
-        "cachetools not found. ChaChaNotes DB instance cache will grow indefinitely. "
-        "Install with: pip install cachetools"
-    )
+from cachetools import LRUCache
 
 # Local Imports
 from tldw_Server_API.app.core.config import settings
@@ -152,11 +144,8 @@ DEFAULT_CHARACTER_DESCRIPTION = "A default, friendly assistant created automatic
 # --- Global Cache for ChaChaNotes DB Instances ---
 MAX_CACHED_CHACHA_DB_INSTANCES = int(settings.get("MAX_CACHED_CHACHA_DB_INSTANCES", "20"))
 
-if _HAS_CACHETOOLS:
-    _chacha_db_instances: LRUCache = LRUCache(maxsize=MAX_CACHED_CHACHA_DB_INSTANCES)
-    logger.info(f"Using LRUCache for ChaChaNotes DB instances (maxsize={MAX_CACHED_CHACHA_DB_INSTANCES}).")
-else:
-    _chacha_db_instances: Dict[str, CharactersRAGDB] = {}
+_chacha_db_instances: LRUCache = LRUCache(maxsize=MAX_CACHED_CHACHA_DB_INSTANCES)
+logger.info(f"Using LRUCache for ChaChaNotes DB instances (maxsize={MAX_CACHED_CHACHA_DB_INSTANCES}).")
 
 _chacha_db_lock = threading.Lock()
 _chacha_default_char_tasks: Set[asyncio.Task] = set()

@@ -289,7 +289,7 @@ from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     get_usage_event_logger,
     UsageEventLogger,
 )
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit, require_token_scope
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, get_ps_logger
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
     get_chacha_db_for_user,
@@ -483,7 +483,8 @@ async def get_tts_service() -> TTSServiceV2:
     "/speech",
     summary="Generates audio from text input.",
     dependencies=[
-        Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.speech", count_as="call"))
+        Depends(check_rate_limit),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.speech", count_as="call")),
     ],
 )
 async def create_speech(
@@ -788,6 +789,7 @@ async def create_speech(
     "/transcriptions",
     summary="Transcribes audio into text (OpenAI Compatible)",
     dependencies=[
+        Depends(check_rate_limit),
         Depends(
             require_token_scope("any", require_if_present=True, endpoint_id="audio.transcriptions", count_as="call")
         )
@@ -968,19 +970,24 @@ async def create_transcription(
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
                 convert_to_wav as _convert_to_wav,
+                ConversionError,
             )
-
-            # Convert to canonical WAV; base_dir constrains conversion output location
-            canonical_path = _convert_to_wav(
-                temp_audio_path,
-                offset=0,
-                overwrite=False,
-                base_dir=PathLib(temp_audio_path).parent,
-            )
-        except Exception as e:
-            logger.debug(f"convert_to_wav failed; using original temp file: path={temp_audio_path}, error={e}")
+        except ImportError as e:
+            logger.debug(f"convert_to_wav import failed; using original temp file: path={temp_audio_path}, error={e}")
             canonical_path = temp_audio_path
-        # Recalculate base_dir from canonical path parent for downstream operations
+        else:
+            try:
+                canonical_path = _convert_to_wav(
+                    temp_audio_path,
+                    offset=0,
+                    overwrite=False,
+                    base_dir=PathLib(temp_audio_path).parent,
+                )
+            except (ConversionError, OSError, RuntimeError, ValueError) as e:
+                logger.debug(f"convert_to_wav failed; using original temp file: path={temp_audio_path}, error={e}")
+                canonical_path = temp_audio_path
+
+        # Always recalculate base_dir from the path we'll actually use
         base_dir = PathLib(canonical_path).parent
 
         # Load canonical audio
@@ -1417,7 +1424,8 @@ async def create_transcription(
     "/translations",
     summary="Translates audio into English (OpenAI Compatible)",
     dependencies=[
-        Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.translations", count_as="call"))
+        Depends(check_rate_limit),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.translations", count_as="call")),
     ],
 )
 async def create_translation(

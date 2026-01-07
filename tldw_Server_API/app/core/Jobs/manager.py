@@ -652,6 +652,52 @@ class JobManager:
             return obj
         return obj
 
+    @staticmethod
+    def _parse_json_value(value: Any) -> Any:
+        """Normalize JSON-ish values from DB rows into Python objects."""
+        if value is None:
+            return None
+        if isinstance(value, (dict, list)):
+            return value
+        if isinstance(value, memoryview):
+            value = value.tobytes()
+        if isinstance(value, (bytes, bytearray)):
+            try:
+                return JobManager._parse_json_value(bytes(value).decode("utf-8"))
+            except Exception:
+                return value
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except Exception:
+                return value
+        return value
+
+    @staticmethod
+    def _decode_archive_blob(value: Any) -> Any:
+        """Decode compressed archive payload/result values."""
+        if value is None:
+            return None
+        if isinstance(value, memoryview):
+            value = value.tobytes()
+        if isinstance(value, (bytes, bytearray)):
+            try:
+                import gzip
+                decoded = gzip.decompress(bytes(value)).decode("utf-8")
+                return JobManager._parse_json_value(decoded)
+            except Exception:
+                return JobManager._parse_json_value(value)
+        if isinstance(value, str) and value.startswith("gzip64:"):
+            try:
+                import base64
+                import gzip
+                payload = value[len("gzip64:"):]
+                decoded = gzip.decompress(base64.b64decode(payload)).decode("utf-8")
+                return JobManager._parse_json_value(decoded)
+            except Exception:
+                return JobManager._parse_json_value(value)
+        return JobManager._parse_json_value(value)
+
     # --- Secret hygiene helpers ---
     def _secret_patterns(self) -> Tuple[List[re.Pattern], List[str]]:
         """Return compiled regex patterns and sensitive keys for secret detection."""
@@ -1350,6 +1396,59 @@ class JobManager:
                 except Exception:
                     pass
                 return d
+        finally:
+            conn.close()
+
+    def get_job_or_archived(
+        self,
+        job_id: int,
+        domain: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Fetch a job from the active table or the archive table.
+
+        Returns a job dict with normalized payload/result and an "archived" flag.
+        """
+        job = self.get_job(job_id)
+        if job:
+            if domain and job.get("domain") != domain:
+                return None
+            job["archived"] = False
+            return job
+
+        conn = self._connect()
+        try:
+            row = None
+            if self.backend == "postgres":
+                with self._pg_cursor(conn) as cur:
+                    if domain:
+                        cur.execute("SELECT * FROM jobs_archive WHERE id = %s AND domain = %s", (int(job_id), domain))
+                    else:
+                        cur.execute("SELECT * FROM jobs_archive WHERE id = %s", (int(job_id),))
+                    row = cur.fetchone()
+            else:
+                if domain:
+                    row = conn.execute(
+                        "SELECT * FROM jobs_archive WHERE id = ? AND domain = ?",
+                        (int(job_id), domain),
+                    ).fetchone()
+                else:
+                    row = conn.execute(
+                        "SELECT * FROM jobs_archive WHERE id = ?",
+                        (int(job_id),),
+                    ).fetchone()
+            if not row:
+                return None
+            job_data = dict(row)
+            payload = self._parse_json_value(job_data.get("payload"))
+            result = self._parse_json_value(job_data.get("result"))
+            if payload is None:
+                payload = self._decode_archive_blob(job_data.get("payload_compressed"))
+            if result is None:
+                result = self._decode_archive_blob(job_data.get("result_compressed"))
+            job_data["payload"] = self._maybe_decrypt_json(payload)
+            job_data["result"] = self._maybe_decrypt_json(result)
+            job_data["archived"] = True
+            return job_data
         finally:
             conn.close()
 

@@ -33,6 +33,11 @@ def _require_multi_user(api_client: APIClient):
         pytest.skip("Not in multi_user mode")
 
 
+def _chatbooks_health(base: str) -> httpx.Response:
+    with httpx.Client(base_url=base, timeout=30) as client:
+        return client.get("/api/v1/chatbooks/health")
+
+
 @pytest.mark.critical
 def test_chatbooks_export_import_two_users_subset_scoping_counts(api_client):
     """Two-user roundtrip: export subset as A, import as B; verify scoping and counts."""
@@ -42,7 +47,7 @@ def test_chatbooks_export_import_two_users_subset_scoping_counts(api_client):
 
     # Check chatbooks subsystem availability
     try:
-        h = httpx.Client(base_url=base, timeout=30).get("/api/v1/chatbooks/health")
+        h = _chatbooks_health(base)
         if h.status_code not in (200, 207):
             pytest.skip(f"Chatbooks health not OK: {h.status_code}")
     except httpx.HTTPError as e:
@@ -203,7 +208,7 @@ def test_chatbooks_export_import_two_users_async_jobs(api_client):
 
     # Check chatbooks subsystem availability
     try:
-        h = httpx.Client(base_url=base, timeout=30).get("/api/v1/chatbooks/health")
+        h = _chatbooks_health(base)
         if h.status_code not in (200, 207):
             pytest.skip(f"Chatbooks health not OK: {h.status_code}")
     except httpx.HTTPError as e:
@@ -386,7 +391,7 @@ def test_chatbooks_export_cancel_midflight_if_possible(api_client):
 
     # Check chatbooks subsystem availability
     try:
-        h = httpx.Client(base_url=base, timeout=30).get("/api/v1/chatbooks/health")
+        h = _chatbooks_health(base)
         if h.status_code not in (200, 207):
             pytest.skip(f"Chatbooks health not OK: {h.status_code}")
     except httpx.HTTPError as e:
@@ -456,7 +461,7 @@ def test_chatbooks_import_cancel_midflight_if_possible(api_client):
 
     # Check chatbooks subsystem availability
     try:
-        h = httpx.Client(base_url=base, timeout=30).get("/api/v1/chatbooks/health")
+        h = _chatbooks_health(base)
         if h.status_code not in (200, 207):
             pytest.skip(f"Chatbooks health not OK: {h.status_code}")
     except httpx.HTTPError as e:
@@ -591,7 +596,7 @@ def test_chatbooks_export_cancel_reflected_in_job_list(api_client):
 
     base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
     # Health
-    hh = httpx.Client(base_url=base, timeout=30).get("/api/v1/chatbooks/health")
+    hh = _chatbooks_health(base)
     if hh.status_code not in (200, 207):
         pytest.skip("Chatbooks health not OK")
 
@@ -651,7 +656,7 @@ def test_chatbooks_admin_cannot_cancel_other_users_jobs(api_client):
 
     base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
     # Health
-    hh = httpx.Client(base_url=base, timeout=30).get("/api/v1/chatbooks/health")
+    hh = _chatbooks_health(base)
     if hh.status_code not in (200, 207):
         pytest.skip("Chatbooks health not OK")
 
@@ -684,9 +689,10 @@ def test_chatbooks_admin_cannot_cancel_other_users_jobs(api_client):
 
     # Attempt to cancel using admin bearer on the same endpoint (no admin override exists)
     headers = {"Authorization": f"Bearer {admin_token}"}
-    cancel_as_admin = httpx.Client(base_url=base, timeout=30).delete(
-        f"/api/v1/chatbooks/export/jobs/{job_id}", headers=headers
-    )
+    with httpx.Client(base_url=base, timeout=30) as client:
+        cancel_as_admin = client.delete(
+            f"/api/v1/chatbooks/export/jobs/{job_id}", headers=headers
+        )
     # Expect denial or not found, since jobs are user-scoped
     assert cancel_as_admin.status_code in (401, 403, 404)
 
@@ -704,7 +710,7 @@ def test_chatbooks_import_cancel_reflected_in_job_list(api_client):
 
     base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
     # Health
-    hh = httpx.Client(base_url=base, timeout=30).get("/api/v1/chatbooks/health")
+    hh = _chatbooks_health(base)
     if hh.status_code not in (200, 207):
         pytest.skip("Chatbooks health not OK")
 

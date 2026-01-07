@@ -173,7 +173,7 @@ Developer Code Guide: `Docs/Code_Documentation/Guides/Chatbooks_Code_Guide.md:1`
 - `TLDW_USE_PROMPT_STUDIO_QUEUE`: legacy boolean; deprecated.
 - Precedence: `CHATBOOKS_JOBS_BACKEND` overrides `TLDW_JOBS_BACKEND`, which supersedes deprecated `TLDW_USE_PROMPT_STUDIO_QUEUE`.
 - `CHATBOOKS_CORE_WORKER_ENABLED`: `true|false` controls starting the core worker when backend=`core` (default true).
-- `USER_DB_BASE_DIR`: base path for per-user data (chatbooks live under `<USER_DB_BASE_DIR>/<user_id>/chatbooks`).
+- `USER_DB_BASE_DIR` (from `tldw_Server_API.app.core.config`): base path for per-user data (chatbooks live under `<USER_DB_BASE_DIR>/<user_id>/chatbooks`); defaults to `Databases/user_databases/` under the project root. Override via environment variable or `Config_Files/config.txt` as needed.
 - `CHATBOOKS_URL_TTL_SECONDS`: download URL expiry TTL (default 86400).
 - `CHATBOOKS_ENFORCE_EXPIRY`: `true|false` enforce expiry at download.
 - `CHATBOOKS_SIGNED_URLS`: `true|false` enable HMAC signing of download URLs (token = HMAC-SHA256 of `"{job_id}:{exp}"`).
@@ -183,7 +183,7 @@ Developer Code Guide: `Docs/Code_Documentation/Guides/Chatbooks_Code_Guide.md:1`
 **Local Development Tips**
 - Start API: `python -m uvicorn tldw_Server_API.app.main:app --reload`
 - Health check: `GET /api/v1/chatbooks/health`
-- Set `USER_DB_BASE_DIR` to direct per-user storage somewhere writable in dev.
+- Set `USER_DB_BASE_DIR` (via environment variable or `Config_Files/config.txt`) to direct per-user storage somewhere writable in dev.
 - Async exports: ensure core Jobs worker is enabled via app startup, or switch to sync for quick iteration.
 
 **Testing**

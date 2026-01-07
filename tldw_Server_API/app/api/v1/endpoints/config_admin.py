@@ -98,13 +98,15 @@ def _build_config_txt_values() -> Dict[str, ConfigValue]:
 
     try:
         sections = config_parser.sections()
-    except Exception:
+    except Exception as exc:
+        logger.exception("Error reading config sections: {}", exc)
         sections = []
 
     for section in sections:
         try:
             items = config_parser.items(section)
-        except Exception:
+        except Exception as exc:
+            logger.exception("Error reading items for section {}: {}", section, exc)
             items = []
         for key, raw_value in items:
             path = f"{section}.{key}"

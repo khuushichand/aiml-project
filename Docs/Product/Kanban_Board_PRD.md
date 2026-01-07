@@ -544,12 +544,16 @@ Notes on FTS sync behavior:
 
 ### Rate Limiting
 - `kanban.boards.create`: 10/minute (conservative; assumes 1-2 boards/day per user)
-- `kanban.cards.create`: 60/minute (assumes ~3-5 cards/min during active work)
+- `kanban.cards.create`: 60/minute (~1/sec burst). Typical active work is ~3-5 cards/min; headroom allows quick-capture bursts and sync replays while staying low enough to protect DB/FTS load.
 - `kanban.cards.bulk_*`: 20/minute (bulk move, archive, label operations; supports batch workflows)
 - `kanban.search`: 30/minute (interactive search without heavy load)
 - Others: default limits
 
-Tuning guidance: start conservative, monitor 429s and DB load, then raise limits via RG policy as usage patterns stabilize.
+Tuning guidance: start conservative.
+- Monitor 429 response rates and DB query latency (target P95 < 200ms for card creation).
+- If <1% of requests hit 429 and DB latency is healthy, increase limits by 50% increments via RG policy.
+- All limits are per-user (no cross-user quota sharing).
+- Expect short bursts from power users to hit limits briefly; keep as acceptable UX or raise after observing sustained 429s.
 
 ### Response Format
 All responses follow existing tldw_server patterns:
@@ -1195,6 +1199,36 @@ Error response format:
 - Markers: `unit`, `integration`
 - Coverage target: >= 80%
 
+Example property-based tests (Hypothesis; illustrative):
+
+```python
+# tldw_Server_API/tests/kanban/property/test_kanban_properties.py
+import pytest
+from hypothesis import HealthCheck, given, settings, strategies as st
+
+
+@pytest.mark.unit
+@settings(suppress_health_check=[HealthCheck.function_scoped_fixture], max_examples=50)
+@given(st.lists(st.integers(min_value=1, max_value=10000), min_size=2, max_size=20, unique=True))
+def test_positions_monotonic_after_reorder(db, seeded_kanban_list, card_ids):
+    list_id = seeded_kanban_list(db, card_ids)
+    new_order = list(reversed(card_ids))
+    db.reorder_cards(list_id=list_id, card_ids=new_order)
+    positions = [c.position for c in db.list_cards(list_id=list_id)]
+    assert positions == sorted(positions)
+
+
+@pytest.mark.unit
+@settings(suppress_health_check=[HealthCheck.function_scoped_fixture], max_examples=50)
+@given(st.lists(st.tuples(st.booleans(), st.booleans()), min_size=1, max_size=6))
+def test_fts_visibility_matches_state(db, seeded_card, transitions):
+    card_id = seeded_card(db, title="needle", description="needle")
+    for archived, deleted in transitions:
+        db.update_card(card_id=card_id, archived=archived, deleted=deleted)
+        result_ids = db.search_card_ids(query="needle")
+        assert (card_id in result_ids) == (not archived and not deleted)
+```
+
 ---
 
 ## 16. Implementation Roadmap
@@ -1351,7 +1385,7 @@ KANBAN_EMBEDDING_QUEUE=redis    # redis or sync
 - [ ] All endpoints follow existing tldw_server patterns
 - [ ] Optimistic locking (version field) prevents conflicts
 - [ ] Rate limiting configured for all mutating endpoints
-- [ ] Test coverage >= 80%
+- [ ] Test coverage >= 80% (line + branch coverage via pytest-cov; enforced in CI)
 - [ ] API documentation complete for frontend handoff
 
 ---

@@ -15,6 +15,7 @@ from loguru import logger
 
 # Local imports
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
     get_request_user,
@@ -367,7 +368,11 @@ async def generate_embeddings_for_media(
         }
 
 
-@router.get("/{media_id}/embeddings/status", response_model=EmbeddingsStatusResponse)
+@router.get(
+    "/{media_id}/embeddings/status",
+    response_model=EmbeddingsStatusResponse,
+    dependencies=[Depends(rbac_rate_limit("embeddings.status"))],
+)
 async def get_embeddings_status(
     media_id: int,
     db: MediaDatabase = Depends(get_media_db_for_user),
@@ -430,7 +435,11 @@ async def get_embeddings_status(
         )
 
 
-@router.post("/{media_id}/embeddings", response_model=GenerateEmbeddingsResponse)
+@router.post(
+    "/{media_id}/embeddings",
+    response_model=GenerateEmbeddingsResponse,
+    dependencies=[Depends(rbac_rate_limit("embeddings.create"))],
+)
 async def generate_embeddings(
     media_id: int,
     background_tasks: BackgroundTasks,
@@ -446,7 +455,10 @@ async def generate_embeddings(
 
     try:
         # Generate embeddings in per-user collection
-        user_id = str(current_user.id)
+        user_id = resolve_user_id_for_request(
+            current_user,
+            error_status=http_status.HTTP_400_BAD_REQUEST,
+        )
         collection_name = f"user_{user_id}_media_embeddings"
 
         # Get media content
@@ -511,7 +523,8 @@ async def generate_embeddings(
 @router.post(
     "/embeddings/batch",
     response_model=BatchMediaEmbeddingsResponse,
-    status_code=http_status.HTTP_202_ACCEPTED
+    status_code=http_status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(rbac_rate_limit("embeddings.create"))],
 )
 async def generate_embeddings_batch(
     request: BatchMediaEmbeddingsRequest,
@@ -532,7 +545,10 @@ async def generate_embeddings_batch(
     for media_id in media_ids:
         media_payloads[media_id] = await get_media_content(media_id, db)
 
-    user_id = str(current_user.id)
+    user_id = resolve_user_id_for_request(
+        current_user,
+        error_status=http_status.HTTP_400_BAD_REQUEST,
+    )
     jobs_init_db(user_id)
 
     job_ids: List[str] = []
@@ -583,7 +599,8 @@ async def generate_embeddings_batch(
 @router.post(
     "/embeddings/search",
     response_model=EmbeddingsSearchResponse,
-    status_code=http_status.HTTP_200_OK
+    status_code=http_status.HTTP_200_OK,
+    dependencies=[Depends(rbac_rate_limit("embeddings.search"))],
 )
 async def search_embeddings(
     request: EmbeddingsSearchRequest,
@@ -594,7 +611,10 @@ async def search_embeddings(
     if not request.query or not request.query.strip():
         raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail="query must not be empty")
 
-    user_id = str(current_user.id)
+    user_id = resolve_user_id_for_request(
+        current_user,
+        error_status=http_status.HTTP_400_BAD_REQUEST,
+    )
     embedding_model = request.embedding_model or settings.get("embedding_model", DEFAULT_EMBEDDING_MODEL)
     embedding_provider = request.embedding_provider or settings.get("embedding_provider", DEFAULT_EMBEDDING_PROVIDER)
 
@@ -670,7 +690,10 @@ async def search_embeddings(
     return EmbeddingsSearchResponse(results=results, count=len(results))
 
 
-@router.delete("/{media_id}/embeddings")
+@router.delete(
+    "/{media_id}/embeddings",
+    dependencies=[Depends(rbac_rate_limit("embeddings.delete"))],
+)
 async def delete_embeddings(
     media_id: int,
     db: MediaDatabase = Depends(get_media_db_for_user),
@@ -719,7 +742,10 @@ async def delete_embeddings(
         )
 
 
-@router.get("/embeddings/jobs/{job_id}")
+@router.get(
+    "/embeddings/jobs/{job_id}",
+    dependencies=[Depends(rbac_rate_limit("embeddings.jobs.get"))],
+)
 async def get_media_embedding_job(
     job_id: str,
     current_user: User = Depends(get_request_user)
@@ -732,11 +758,14 @@ async def get_media_embedding_job(
     jobs_init_db(user_id)
     rec = jobs_get(job_id, user_id)
     if not rec:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Job not found")
     return rec
 
 
-@router.get("/embeddings/jobs")
+@router.get(
+    "/embeddings/jobs",
+    dependencies=[Depends(rbac_rate_limit("embeddings.jobs.list"))],
+)
 async def list_media_embedding_jobs(
     status: Optional[str] = None,
     limit: int = 50,

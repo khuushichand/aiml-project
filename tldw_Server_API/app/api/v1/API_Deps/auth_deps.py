@@ -404,7 +404,7 @@ async def get_session_manager_dep() -> SessionManager:
 async def get_rate_limiter_dep(request: Request) -> RateLimiter:
     """Get AuthNZ rate limiter dependency (lockout only)."""
     _ = request
-    return await get_rate_limiter()
+    return get_rate_limiter()
 
 
 async def get_registration_service_dep() -> RegistrationService:
@@ -1266,8 +1266,12 @@ def _rg_enabled_for_request(request: Request) -> bool:
     try:
         if getattr(request.state, "rg_policy_id", None):
             return True
-    except Exception:
-        pass
+    except Exception as exc:
+        # Defensive: don't let bad state break requests, but surface in logs.
+        logger.debug(
+            "RG enablement: failed to inspect request.state.rg_policy_id; treating as disabled: {}",
+            exc,
+        )
     try:
         from tldw_Server_API.app.core.config import rg_enabled as _rg_enabled_flag
     except Exception as exc:
@@ -1301,7 +1305,7 @@ async def check_rate_limit(request: Request) -> None:
         return
 
     try:
-        rate_limiter = await get_rate_limiter()
+        rate_limiter = get_rate_limiter()
     except Exception as exc:
         logger.debug("Legacy rate limiter unavailable; skipping rate limit check: {}", exc)
         return
@@ -1350,7 +1354,7 @@ async def check_auth_rate_limit(request: Request) -> None:
         return
 
     try:
-        rate_limiter = await get_rate_limiter()
+        rate_limiter = get_rate_limiter()
     except Exception as exc:
         logger.debug("Legacy rate limiter unavailable; skipping auth rate limit check: {}", exc)
         return

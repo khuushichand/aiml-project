@@ -69,7 +69,8 @@ Related Schemas
 - Exports
   - CSV or Markdown via `db_export_prompts_formatted` (stream-safe for large outputs; base64 file content for HTTP responses).
 - Configuration
-  - `USER_DB_BASE_DIR` controls user DB locations; Prompt Studio backend can be selected in tests via `TLDW_PS_BACKEND` (see tests README).
+  - `USER_DB_BASE_DIR` (from `tldw_Server_API.app.core.config`): per-user DB root directory; defaults to `Databases/user_databases/` under the project root. Override via environment variable or `Config_Files/config.txt` as needed.
+  - Prompt Studio backend can be selected in tests via `TLDW_PS_BACKEND` (see tests README).
   - Routers are gated by route policy in `main.py` (e.g., `prompt-studio` routes must be enabled).
 - Error handling
   - DB-layer exceptions (`InputError`, `ConflictError`, `DatabaseError`) mapped to HTTP 400/409/500 consistently; 404 on missing resources.

@@ -252,3 +252,13 @@ def _rate_limit_env_toggle(request):
                 os.environ["TESTING"] = original_testing
     else:
         yield
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_open_httpx_clients():
+    yield
+    try:
+        from tldw_Server_API.tests.e2e.fixtures import APIClient
+        APIClient.close_open_clients()
+    except Exception:
+        pass

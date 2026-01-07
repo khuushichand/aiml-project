@@ -62,16 +62,24 @@ Success Metrics:
             proxies, verify, cert, cookies, http2)
   - `files` follows httpx/requests multipart conventions: mapping or sequence of
     (field, (filename, file-like or bytes, content_type)). Adapters do not accept
-    file paths or open files; callers supply file-like objects. File-like objects
-    must be seekable if retries are enabled; otherwise raise a clear validation error.
-    Upload buffering/streaming is delegated to the transport.
+    file paths or open files; callers supply file-like objects. When `files` are
+    provided and RetryPolicy enables retries, seekability is validated once
+    synchronously at call time (before the first send) for each file-like object.
+    Validation error: "file-like object for field '<field>' is not seekable; required
+    when retries are enabled". Adapters/transports do not re-check per retry because
+    callers must supply seekable objects when retries are configured. Non-seekable
+    objects are permitted only when retries are disabled; request helpers like
+    request_json(...), stream_bytes(...), and stream_sse(...) surface the same
+    validation error when retries are enabled. Upload buffering/streaming is
+    delegated to the transport.
   - RequestOptions object for request options (preferred to limit signature growth)
   - RetryPolicy object for retries (defaults sourced from [HTTP] config / HTTP_* env vars)
   - request_json(...) with content-type validation; allow override for mismatched or missing
     content-type (e.g., require_json_ct=False). RequestOptions includes
     require_json_ct (default true) to keep sync/async helpers consistent.
   - stream_bytes(...) and stream_sse(...) helpers
-- `http2` is reserved for future use and ignored until HTTP/2 is in-scope.
+- `http2` remains a forward-compatible parameter in public signatures and is
+  currently a no-op (ignored) until HTTP/2 support is implemented.
 - All functions enforce egress policy, timeouts, and metrics.
 
 ### 6.2 Transport Adapters
@@ -102,6 +110,8 @@ Success Metrics:
     (env: `HTTP_CONNECT_TIMEOUT|HTTP_READ_TIMEOUT|HTTP_WRITE_TIMEOUT|HTTP_POOL_TIMEOUT`).
   - Retries map to `[HTTP]` `retry_attempts|backoff_base_ms|backoff_cap_s`
     (env: `HTTP_RETRY_ATTEMPTS|HTTP_BACKOFF_BASE_MS|HTTP_BACKOFF_CAP_S`).
+  - Pool sizing maps to `[HTTP]` `max_connections|max_keepalive_connections`
+    (env: `HTTP_MAX_CONNECTIONS|HTTP_MAX_KEEPALIVE_CONNECTIONS`).
   - Rationale: connect=5s fails fast on dead endpoints, 30s read/write/pool
     reflects conservative provider latency envelopes; per-provider overrides
     remain available and are documented in the config reference.
@@ -167,7 +177,7 @@ Success Metrics:
 ### 7.1 Migration Checklist
 - Replace direct requests/httpx/aiohttp calls with http_client (or RequestOptions).
 - Confirm timeouts/retry overrides for non-idempotent calls and streaming endpoints.
-- Map per-provider `*_api_timeout|*_api_retry|*_api_retry_delay` settings to RetryPolicy overrides where still needed.
+- Map per-provider `*_api_timeout|*_api_retry|*_api_retry_delay` settings to RetryPolicy overrides where still needed. Post-migration, provider settings live under `[Providers.<ProviderName>]` (env: `PROVIDER_<NAME>_*`). Discovery: search for `*_api_timeout|*_api_retry|*_api_retry_delay` via `rg -n "_api_(timeout|retry|retry_delay)" tldw_Server_API/ Config_Files/` or a small helper script that enumerates matches. Fallback: if a provider-specific backoff algorithm cannot be expressed by RetryPolicy, document the custom strategy in the provider config and add a hook to translate/wrap it where possible. Example: `stripe_api_retry_delay` -> `Providers.Stripe.retry.delay` (env `PROVIDER_STRIPE_RETRY_DELAY`); if Stripe's SDK backoff is custom, document `Providers.Stripe.retry.backoff_strategy="stripe_sdk"` and wrap the delay calculation while still using RetryPolicy for attempts/statuses.
 - Update provider docs and config examples to point at the unified HTTP settings.
 - Ensure streaming callers handle SSE events per defined parsing rules.
 - Verify adapters use shared clients and are closed via app lifecycle hooks.
@@ -226,6 +236,9 @@ Success Metrics:
   - `stream_max_duration_s` (env: `HTTP_STREAM_MAX_DURATION_S`)
   - `expected_heartbeat_s` (env: `HTTP_STREAM_EXPECTED_HEARTBEAT_S`)
   - `heartbeat_event_names` (env: `HTTP_STREAM_HEARTBEAT_EVENT_NAMES`, comma-separated)
+- Pool sizing defaults map to `[HTTP]` keys:
+  - `max_connections` (env: `HTTP_MAX_CONNECTIONS`)
+  - `max_keepalive_connections` (env: `HTTP_MAX_KEEPALIVE_CONNECTIONS`)
 - Proxy defaults map to `[HTTP]` keys:
   - `trust_env` (env: `HTTP_TRUST_ENV`)
   - `proxy_allowlist` (env: `PROXY_ALLOWLIST`)

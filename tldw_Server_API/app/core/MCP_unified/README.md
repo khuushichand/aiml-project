@@ -309,6 +309,8 @@ modules:
     circuit_breaker_max_timeout: 180
 ```
 
+`USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root). Override via environment variable or `Config_Files/config.txt` as needed.
+
 - Environment variable (comma-separated list):
 ```
 export MCP_MODULES="example=tldw_Server_API.app.core.MCP_unified.modules.implementations.template_module:TemplateModule"

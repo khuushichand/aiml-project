@@ -37,6 +37,11 @@ export const isAdminRole = (role?: string | null): boolean => {
   return rank !== undefined && rank >= ROLE_RANK.admin;
 };
 
+export const isMemberRole = (role?: string | null): boolean => {
+  const rank = getRoleRank(role);
+  return rank !== undefined && rank >= ROLE_RANK.member;
+};
+
 export const isSuperAdminRole = (role?: string | null): boolean => {
   const rank = getRoleRank(role);
   return rank !== undefined && rank >= ROLE_RANK.super_admin;

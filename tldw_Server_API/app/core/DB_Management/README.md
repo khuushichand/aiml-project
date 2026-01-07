@@ -50,7 +50,7 @@ Central data stores and database abstractions for content, prompts, notes, evalu
   - Content backend selection: `TLDW_CONTENT_DB_BACKEND=sqlite|postgresql` (defaults to `sqlite`).
   - SQLite path: `TLDW_CONTENT_SQLITE_PATH` or `[Database].sqlite_path`; backups: `TLDW_DB_BACKUP_PATH` or `[Database].backup_path` (defaults to `./tldw_DB_Backups/`).
   - Postgres (content) envs: `TLDW_CONTENT_PG_DSN` (or `POSTGRES_TEST_DSN`), `TLDW_CONTENT_PG_HOST|PORT|DATABASE|USER|PASSWORD|SSLMODE` (fallback to `TLDW_PG_*` or `PG*`).
-  - Per-user base dir: `[settings].USER_DB_BASE_DIR` used by `db_path_utils.DatabasePaths` for media/notes/prompts/evals/workflows trees.
+  - Per-user base dir: `USER_DB_BASE_DIR` (from `tldw_Server_API.app.core.config`) used by `db_path_utils.DatabasePaths` for media/notes/prompts/evals/workflows trees; defaults to `Databases/user_databases/` under the project root. Override via environment variable or `Config_Files/config.txt` as needed.
   - General app config merges env + config files via `load_comprehensive_config`.
 - Concurrency & Performance:
   - SQLite: WAL mode, busy_timeout, thread-local pooled connections; memory DBs keep a persistent connection to retain state.

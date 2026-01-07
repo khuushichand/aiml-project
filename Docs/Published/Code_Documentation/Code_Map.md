@@ -132,4 +132,4 @@ Note: All paths can be overridden by environment or config. `USER_DB_BASE_DIR` c
 
 - CORS configured in `main.py` (adjust for deployment)
 - Auth mode and keys set via env or `Config_Files/`
-- The Next.js UI lives under `tldw-frontend/`; the legacy WebUI is served at `/webui`
+- The Next.js UI lives under `tldw-frontend/` (see `tldw-frontend/README.md`); the legacy WebUI is served at `/webui` (see `tldw_Server_API/WebUI/README.md`)

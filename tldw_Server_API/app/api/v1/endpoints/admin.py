@@ -1793,7 +1793,11 @@ async def admin_add_team_member(
         raise HTTPException(status_code=500, detail="Failed to add team member")
 
 
-@router.get("/teams/{team_id}/members", response_model=List[TeamMemberResponse])
+@router.get(
+    "/teams/{team_id}/members",
+    response_model=List[TeamMemberResponse],
+    dependencies=[Depends(check_rate_limit)],
+)
 async def admin_list_team_members(
     team_id: int,
     principal: AuthPrincipal = Depends(get_auth_principal),
@@ -1809,10 +1813,10 @@ async def admin_list_team_members(
             if org_id is not None:
                 payload.setdefault("org_id", org_id)
             items.append(TeamMemberResponse(**payload))
-        return items
     except Exception as e:
         logger.error(f"Failed to list team members: {e}")
         raise HTTPException(status_code=500, detail="Failed to list team members")
+    return items
 
 
 @router.delete("/teams/{team_id}/members/{user_id}")

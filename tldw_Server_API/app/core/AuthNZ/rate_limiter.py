@@ -148,7 +148,7 @@ class RateLimiter:
 _rate_limiter: Optional[RateLimiter] = None
 
 
-async def get_rate_limiter() -> RateLimiter:
+def get_rate_limiter() -> RateLimiter:
     global _rate_limiter
     if _rate_limiter is None:
         _rate_limiter = RateLimiter()
@@ -161,5 +161,5 @@ async def check_rate_limit(
     limit: Optional[int] = None,
     window_minutes: Optional[int] = None,
 ) -> Tuple[bool, Dict[str, Any]]:
-    limiter = await get_rate_limiter()
+    limiter = get_rate_limiter()
     return await limiter.check_rate_limit(identifier, endpoint, limit=limit, window_minutes=window_minutes)

@@ -16,6 +16,31 @@ and this project adheres to Some kind of Versioning
 ### Fixed
 
 
+## [0.1.14] - 2026-1-6
+
+### Added
+- Added tldw-admin react frontend for admin Mgmt of the server. Very nuch WIP. 
+- Extended feedback system/schema - Added a unified feedback system (explicit/implicit) across chat and search, integrates message IDs into chat history and streaming, 
+- introduced API key KDF/key_id, 
+- added admin effective-config endpoint/UI,
+
+### Changed
+- centralized per-user path utilities, 
+- shifted ingress limiting toward RG (removing SlowAPI decorators), 
+- Implemented explicit feedback endpoint with schemas, idempotent merge rules, and implicit feedback handling in tldw_Server_API/app/api/v1/endpoints/feedback.py, tldw_Server_API/app/api/v1/schemas/   feedback_schemas.py, tldw_Server_API/app/api/v1/endpoints/rag_unified.py, tldw_Server_API/app/core/RAG/rag_service/analytics_system.py.
+- Expanded chat streaming metadata to include system/assistant message IDs in tldw_Server_API/app/core/Chat/streaming_utils.py and update tests in tldw_Server_API/tests/Chat/unit/test_streaming_utils.py.
+- Wired UI feedback (thumbs row + modal, source feedback, implicit events) in tldw-frontend/pages/chat.tsx, tldw-frontend/pages/search.tsx, tldw-frontend/components/ui/ChatMessageList.tsx.
+- Updated feedback documentation + config notes in Docs/Product/Feedback_System_PRD.md, Docs/Design/Feedback_System.md, tldw-frontend/README.md, tldw_Server_API/app/core/config.py, tldw_Server_API/   Config_Files/config.txt, tldw_Server_API/Config_Files/README.md, tldw_Server_API/app/main.py.
+- Added tests in tldw-frontend/__tests__/pages/chat-feedback.test.tsx, tldw-frontend/__tests__/pages/search-feedback.test.tsx, tldw_Server_API/tests/RAG/test_feedback_explicit_endpoint.py, tldw_Server_API/   tests/RAG/test_feedback_schemas.py, tldw_Server_API/tests/Chat/unit/test_chat_system_message_persistence.py.
+
+### Removed
+- slowapi usage
+
+
+### Fixed
+- Lots of Bugs
+
+
 ## [0.1.13] - 2025-12-29
 
 ### Added

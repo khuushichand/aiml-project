@@ -15,6 +15,8 @@ import base64
 import tempfile
 import time
 import hashlib
+import uuid
+import weakref
 from typing import Dict, Any, Optional, List, Callable
 from datetime import datetime, timedelta
 from enum import Enum
@@ -32,6 +34,18 @@ MAX_RETRIES = int(os.getenv("E2E_MAX_RETRIES", "3"))  # Max retries for rate lim
 SERVER_STARTUP_TIMEOUT = int(os.getenv("E2E_SERVER_STARTUP_TIMEOUT", "30"))  # Max time to wait for server
 E2E_INPROCESS = os.getenv("E2E_INPROCESS", "").lower() in {"1", "true", "yes", "on"}
 _INPROCESS_DB_URL: Optional[str] = None
+
+
+def _looks_like_jwt(token: str) -> bool:
+    if not isinstance(token, str):
+        return False
+    token = token.strip()
+    if not token:
+        return False
+    parts = token.split(".")
+    if len(parts) != 3:
+        return False
+    return all(part for part in parts)
 
 
 def _build_inprocess_httpx_client() -> httpx.Client:
@@ -82,7 +96,17 @@ def _build_inprocess_httpx_client() -> httpx.Client:
 class APIClient:
     """Wrapper for API interactions with authentication support."""
 
-    def __init__(self, base_url: str = BASE_URL, client: Optional[httpx.Client] = None):
+    _registry: "weakref.WeakSet[APIClient]" = weakref.WeakSet()
+    _protected_ids: set[int] = set()
+
+    def __init__(
+        self,
+        base_url: str = BASE_URL,
+        client: Optional[httpx.Client] = None,
+        *,
+        keep_open: bool = False,
+        auto_auth: bool = True,
+    ):
         self.base_url = base_url
         # Prefer provided client (e.g., in-process), otherwise decide based on env
         if client is not None:
@@ -94,8 +118,41 @@ class APIClient:
         self.token: Optional[str] = None
         self.refresh_token: Optional[str] = None
         self.user_id: Optional[int] = None
+        self._closed = False
+
+        APIClient._registry.add(self)
+        if keep_open:
+            APIClient._protected_ids.add(id(self))
 
         # Note: TEST_MODE must be set on the server, not passed as header
+        if auto_auth:
+            self._maybe_set_single_user_auth()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    @classmethod
+    def close_open_clients(cls, *, include_protected: bool = False) -> None:
+        for inst in list(cls._registry):
+            if include_protected or id(inst) not in cls._protected_ids:
+                try:
+                    inst.close()
+                except Exception:
+                    pass
+
+    def _maybe_set_single_user_auth(self) -> None:
+        if "X-API-KEY" in self.client.headers or self.token:
+            return
+        mode = os.getenv("AUTH_MODE", "").lower()
+        if mode not in {"single_user", "single-user", "singleuser"}:
+            return
+        api_key = os.getenv("SINGLE_USER_TEST_API_KEY") or os.getenv("SINGLE_USER_API_KEY")
+        if api_key:
+            self.set_auth_token(api_key)
 
     def _handle_rate_limit(self, func: Callable, *args, **kwargs) -> Any:
         """Handle rate limiting with retry logic."""
@@ -117,14 +174,16 @@ class APIClient:
         """Set authentication tokens."""
         self.token = token
         self.refresh_token = refresh_token
-        # In single-user mode, use X-API-KEY header
-        # Also add Token header for some endpoints that expect it (case-sensitive)
-        # Add Bearer authorization for OpenAI-compatible endpoints
-        self.client.headers.update({
-            "X-API-KEY": token,
-            "Token": token,  # Some endpoints expect this (capital T)
-            "Authorization": f"Bearer {token}"  # For OpenAI-compatible endpoints
-        })
+        use_bearer = _looks_like_jwt(token)
+        if use_bearer:
+            self.client.headers["Authorization"] = f"Bearer {token}"
+            self.client.headers.pop("X-API-KEY", None)
+            self.client.headers.pop("Token", None)
+        else:
+            # Use API key headers for single-user and virtual-key flows.
+            self.client.headers["X-API-KEY"] = token
+            self.client.headers["Token"] = token  # Some endpoints expect this (capital T)
+            self.client.headers.pop("Authorization", None)
 
     def clear_auth(self):
         """Clear authentication."""
@@ -134,6 +193,8 @@ class APIClient:
             del self.client.headers["Authorization"]
         if "X-API-KEY" in self.client.headers:
             del self.client.headers["X-API-KEY"]
+        if "Token" in self.client.headers:
+            del self.client.headers["Token"]
 
     # Authentication endpoints
     def register(self, username: str, email: str, password: str) -> Dict[str, Any]:
@@ -668,7 +729,13 @@ class APIClient:
 
     def close(self):
         """Close the client connection."""
-        self.client.close()
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self.client.close()
+        finally:
+            APIClient._protected_ids.discard(id(self))
 
 
 def ensure_server_running(base_url: str = BASE_URL, timeout: int = SERVER_STARTUP_TIMEOUT) -> Dict[str, Any]:
@@ -754,11 +821,12 @@ def api_client():
 
     # Build HTTP client matching the chosen mode
     httpx_client = _build_inprocess_httpx_client() if E2E_INPROCESS else None
-    client = APIClient(client=httpx_client)
+    client = APIClient(client=httpx_client, keep_open=True)
 
     # Check if single-user mode and set token
+    mode = (health_info.get("auth_mode") or os.getenv("AUTH_MODE", "single_user")).lower()
     try:
-        if (health_info.get("auth_mode") or os.getenv("AUTH_MODE", "single_user")) == "single_user":
+        if mode in {"single_user", "single-user", "singleuser"}:
             # In test mode, get API key from health endpoint
             if health_info.get("test_api_key"):
                 api_key = health_info.get("test_api_key")
@@ -772,7 +840,25 @@ def api_client():
                 except:
                     api_key = os.getenv("SINGLE_USER_API_KEY", "test-api-key-12345")
             client.set_auth_token(api_key)
+        elif mode in {"multi_user", "multi-user", "multiuser"}:
+            username = os.getenv("E2E_TEST_USERNAME") or f"e2e_user_{uuid.uuid4().hex[:8]}"
+            email = os.getenv("E2E_TEST_EMAIL") or f"{username}@example.com"
+            password = os.getenv("E2E_TEST_PASSWORD") or "Tlp9!ZxVq8@M"
+            try:
+                client.register(username=username, email=email, password=password)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code not in (400, 409):
+                    raise
+            try:
+                client.login(username, password)
+            except httpx.HTTPStatusError as exc:
+                raise RuntimeError(
+                    f"Multi-user login failed for '{username}'. "
+                    "Set E2E_TEST_USERNAME/E2E_TEST_PASSWORD to a valid account."
+                ) from exc
     except Exception as e:
+        if mode in {"multi_user", "multi-user", "multiuser"}:
+            pytest.fail(f"Failed to authenticate multi-user api_client: {e}")
         print(f"Warning: Failed to set API key: {e}")
     yield client
     client.close()

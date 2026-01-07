@@ -66,11 +66,13 @@ Notes:
 
 ### Initialize (usually via DI)
 
-Note: When using dependency injection (the recommended approach in multi-user scenarios), the service is initialized with a per-user path under `<USER_DB_BASE_DIR>/<user_id>/audit/`. The example below shows direct instantiation for single-user or testing scenarios.
+When using dependency injection (the recommended approach in multi-user production), the service is initialized with a per-user path under `<USER_DB_BASE_DIR>/<user_id>/audit/` (where `USER_DB_BASE_DIR` is defined in settings via `tldw_Server_API.app.core.config`, defaults to `Databases/user_databases/`, and can be overridden via environment variable or `Config_Files/config.txt`).
+
+For single-user setups, development, or testing, you may instantiate the service directly:
 
 ```python
 from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService
-svc = UnifiedAuditService(db_path="./Databases/unified_audit.db")  # Non-DI usage
+svc = UnifiedAuditService(db_path="./Databases/unified_audit.db")  # Direct instantiation (non-DI)
 await svc.initialize()
 ```
 
@@ -119,6 +121,7 @@ rows = [svc.decode_row_fields(r) for r in rows]
 ### REST Endpoint
 
 - Path: `GET /api/v1/audit/export`
+- Permissions: `SYSTEM_LOGS` (admin)
 - Query parameters:
   - `format`: `json` (default), `jsonl` (NDJSON), or `csv`
   - `start_time`, `end_time`: ISO8601 (accepts trailing `Z`)
@@ -126,8 +129,8 @@ rows = [svc.decode_row_fields(r) for r in rows]
   - `min_risk_score`, `user_id`, `request_id`, `correlation_id`
   - `ip_address`, `session_id`, `endpoint`, `method`: additional filters by context fields
   - `filename`: suggested download name (server sanitizes and normalizes extension)
-  - `stream`: `true` for JSON/JSONL streaming responses (CSV streaming returns 400)
-  - `max_rows`: hard cap on number of rows to export
+  - `stream`: `true` for JSON/JSONL/CSV streaming responses
+  - `max_rows`: hard cap on number of rows to export (streaming stops when reached)
 - CSV exports use a fixed header schema for consistent columns.
 - JSONL exports (NDJSON) are useful for very large datasets and simple line-by-line processing.
 
@@ -145,6 +148,10 @@ curl -H "X-API-KEY: $KEY" \
 # CSV (fixed headers)
 curl -H "X-API-KEY: $KEY" \
   "http://127.0.0.1:8000/api/v1/audit/export?format=csv&user_id=42" -OJ
+
+# JSONL (NDJSON)
+curl -H "X-API-KEY: $KEY" \
+  "http://127.0.0.1:8000/api/v1/audit/export?format=jsonl&stream=true&user_id=42" -OJ
 ```
 
 ### Programmatic Export
@@ -164,7 +171,7 @@ agen = await svc.export_events(user_id="42", format="json", stream=True, chunk_s
 async for chunk in agen:
     ...  # write to socket / file
 ```
-Note: HTTP streaming applies to JSON/JSONL only (CSV+stream returns 400). Programmatic CSV export streams when `file_path` is provided.
+Note: HTTP streaming applies to JSON/JSONL/CSV. Programmatic CSV export streams when `file_path` is provided.
 
 ## Configuration
 
@@ -178,7 +185,7 @@ Note: HTTP streaming applies to JSON/JSONL only (CSV+stream returns 400). Progra
 - Database location:
   - When using DI (single or multi-user), the audit DB path is per-user under `<USER_DB_BASE_DIR>/<user_id>/audit/unified_audit.db`.
   - If you construct the service directly without DI, the default `db_path` is `./Databases/unified_audit.db`.
-- `USER_DB_BASE_DIR` (settings): per-user DB root directory; defaults to `Databases/user_databases/` under the project root.
+- `USER_DB_BASE_DIR` (from `tldw_Server_API.app.core.config`): per-user DB root directory; defaults to `Databases/user_databases/` under the project root. Override via environment variable or `Config_Files/config.txt` as needed.
 
 ## Operational Notes
 
@@ -196,10 +203,3 @@ Note: HTTP streaming applies to JSON/JSONL only (CSV+stream returns 400). Progra
 ---
 
 For questions or contributions, see `README.md` and the tests under `tldw_Server_API/tests/Audit/` for example usage.
-
-### JSONL (NDJSON)
-
-```bash
-curl -H "X-API-KEY: $KEY" \
-  "http://127.0.0.1:8000/api/v1/audit/export?format=jsonl&stream=true&user_id=42" -OJ
-```

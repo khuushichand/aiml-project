@@ -296,59 +296,44 @@ export default function UserDetailPage() {
     };
   };
 
-  if (loading) {
-    return (
-      <PermissionGuard variant="route" requireAuth role="admin">
-        <ResponsiveLayout>
-          <div className="p-4 lg:p-8">
-            <div className="text-center text-muted-foreground py-8">Loading user...</div>
-          </div>
-        </ResponsiveLayout>
-      </PermissionGuard>
-    );
-  }
+  let content: JSX.Element;
 
-  if (!user) {
+  if (loading) {
+    content = (
+      <div className="p-4 lg:p-8">
+        <div className="text-center text-muted-foreground py-8">Loading user...</div>
+      </div>
+    );
+  } else if (!user) {
     if (!isAuthorized) {
-      return (
-        <PermissionGuard variant="route" requireAuth role="admin">
-          <ResponsiveLayout>
-            <div className="p-4 lg:p-8">
-              <Alert variant="destructive">
-                <AlertDescription>You are not authorized to view this user.</AlertDescription>
-              </Alert>
-              <Button onClick={() => router.push('/users')} className="mt-4">
-                <ArrowLeft className="mr-2 h-4 w-4" />
-                Back to Users
-              </Button>
-            </div>
-          </ResponsiveLayout>
-        </PermissionGuard>
+      content = (
+        <div className="p-4 lg:p-8">
+          <Alert variant="destructive">
+            <AlertDescription>You are not authorized to view this user.</AlertDescription>
+          </Alert>
+          <Button onClick={() => router.push('/users')} className="mt-4">
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Back to Users
+          </Button>
+        </div>
+      );
+    } else {
+      content = (
+        <div className="p-4 lg:p-8">
+          <Alert variant="destructive">
+            <AlertDescription>User not found</AlertDescription>
+          </Alert>
+          <Button onClick={() => router.push('/users')} className="mt-4">
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Back to Users
+          </Button>
+        </div>
       );
     }
-    return (
-      <PermissionGuard variant="route" requireAuth role="admin">
-        <ResponsiveLayout>
-          <div className="p-4 lg:p-8">
-            <Alert variant="destructive">
-              <AlertDescription>User not found</AlertDescription>
-            </Alert>
-            <Button onClick={() => router.push('/users')} className="mt-4">
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              Back to Users
-            </Button>
-          </div>
-        </ResponsiveLayout>
-      </PermissionGuard>
-    );
-  }
-
-  const storage = formatStorage(user.storage_used_mb || 0, user.storage_quota_mb || 0);
-
-  return (
-    <PermissionGuard variant="route" requireAuth role="admin">
-      <ResponsiveLayout>
-          <div className="p-4 lg:p-8">
+  } else {
+    const storage = formatStorage(user.storage_used_mb || 0, user.storage_quota_mb || 0);
+    content = (
+      <div className="p-4 lg:p-8">
             {/* Header */}
             <div className="mb-8 flex items-center justify-between">
               <div className="flex items-center gap-4">
@@ -685,6 +670,13 @@ export default function UserDetailPage() {
               </Card>
             </div>
           </div>
+    );
+  }
+
+  return (
+    <PermissionGuard variant="route" requireAuth role="admin">
+      <ResponsiveLayout>
+        {content}
       </ResponsiveLayout>
     </PermissionGuard>
   );

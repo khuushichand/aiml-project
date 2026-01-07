@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useState, ReactNode 
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api-client';
 import { User } from '@/types';
-import { getRoleRank, hasRoleAccess, isAdminRole, isSuperAdminRole } from '@/lib/roles';
+import { getRoleRank, hasRoleAccess, isAdminRole, isMemberRole, isSuperAdminRole } from '@/lib/roles';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
 // UI gating only; backend must enforce authorization and never trust client permissions.
@@ -89,7 +89,7 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
 
       if (isSuperAdminRole(userRole)) {
         derivedPermissions.push('*'); // Wildcard for all permissions
-      } else if (userRole === 'admin') {
+      } else if (isAdminRole(userRole)) {
         derivedPermissions.push(
           'read:users', 'write:users',
           'read:orgs', 'write:orgs',
@@ -97,7 +97,7 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
           'read:api_keys', 'write:api_keys',
           'read:audit', 'read:config'
         );
-      } else if (userRole === 'member') {
+      } else if (isMemberRole(userRole)) {
         derivedPermissions.push('read:users', 'read:orgs', 'read:teams');
       }
 

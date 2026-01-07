@@ -66,7 +66,7 @@ Related Schemas
 - Exports
   - JSON or CSV. CSV uses `StreamingResponse` to avoid large in-memory payloads. Optional `include_keywords` column lists comma-separated keywords.
 - Configuration
-- `USER_DB_BASE_DIR` (env or config) controls per-user DB root (`<USER_DB_BASE_DIR>/<user_id>` by default).
+- `USER_DB_BASE_DIR` (from `tldw_Server_API.app.core.config`): per-user DB root directory (`<USER_DB_BASE_DIR>/<user_id>` by default); defaults to `Databases/user_databases/` under the project root. Override via environment variable or `Config_Files/config.txt` as needed.
   - `SERVER_CLIENT_ID` tags DB writes with the service client identity.
 - Error handling
   - `handle_db_errors()` maps `InputError`, `ConflictError`, and `CharactersRAGDBError` to appropriate HTTP status codes and messages.

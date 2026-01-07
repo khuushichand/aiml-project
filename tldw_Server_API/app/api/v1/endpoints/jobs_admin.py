@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from typing import Any, Optional
-import base64
-import gzip
 import os
 from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
@@ -145,47 +143,6 @@ def _set_pg_rls_for_user(user: dict, domain: Optional[str]) -> None:
         _JM.set_rls_context(is_admin=True, domain_allowlist=str(domain) if domain else None, owner_user_id=uid)
     except Exception:
         pass
-
-
-def _parse_json_value(value: Any) -> Any:
-    if value is None:
-        return None
-    if isinstance(value, (dict, list)):
-        return value
-    if isinstance(value, memoryview):
-        value = value.tobytes()
-    if isinstance(value, (bytes, bytearray)):
-        try:
-            return _parse_json_value(bytes(value).decode("utf-8"))
-        except Exception:
-            return value
-    if isinstance(value, str):
-        try:
-            return _json.loads(value)
-        except Exception:
-            return value
-    return value
-
-
-def _decode_archive_blob(value: Any) -> Any:
-    if value is None:
-        return None
-    if isinstance(value, memoryview):
-        value = value.tobytes()
-    if isinstance(value, (bytes, bytearray)):
-        try:
-            decoded = gzip.decompress(bytes(value)).decode("utf-8")
-            return _parse_json_value(decoded)
-        except Exception:
-            return _parse_json_value(value)
-    if isinstance(value, str) and value.startswith("gzip64:"):
-        try:
-            payload = value[len("gzip64:"):]
-            decoded = gzip.decompress(base64.b64decode(payload)).decode("utf-8")
-            return _parse_json_value(decoded)
-        except Exception:
-            return _parse_json_value(value)
-    return _parse_json_value(value)
 
 
 class PruneRequest(BaseModel):
@@ -1454,52 +1411,10 @@ async def get_job_detail(
     if backend == "postgres":
         _set_pg_rls_for_user(admin_user, domain)
     jm = JobManager(backend=backend, db_url=db_url)
-    job = jm.get_job(job_id)
-    if job:
-        if domain and job.get("domain") != domain:
-            raise HTTPException(status_code=404, detail="Job not found")
-        job["archived"] = False
-        return JobDetailResponse(**job)
-
-    conn = jm._connect()
-    try:
-        row = None
-        if jm.backend == "postgres":
-            with jm._pg_cursor(conn) as cur:
-                if domain:
-                    cur.execute("SELECT * FROM jobs_archive WHERE id = %s AND domain = %s", (int(job_id), domain))
-                else:
-                    cur.execute("SELECT * FROM jobs_archive WHERE id = %s", (int(job_id),))
-                row = cur.fetchone()
-        else:
-            if domain:
-                row = conn.execute(
-                    "SELECT * FROM jobs_archive WHERE id = ? AND domain = ?",
-                    (int(job_id), domain),
-                ).fetchone()
-            else:
-                row = conn.execute(
-                    "SELECT * FROM jobs_archive WHERE id = ?",
-                    (int(job_id),),
-                ).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Job not found")
-        job_data = dict(row)
-        payload = _parse_json_value(job_data.get("payload"))
-        result = _parse_json_value(job_data.get("result"))
-        if payload is None:
-            payload = _decode_archive_blob(job_data.get("payload_compressed"))
-        if result is None:
-            result = _decode_archive_blob(job_data.get("result_compressed"))
-        job_data["payload"] = jm._maybe_decrypt_json(payload)
-        job_data["result"] = jm._maybe_decrypt_json(result)
-        job_data["archived"] = True
-        return JobDetailResponse(**job_data)
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            logger.opt(exception=True).debug("Failed to close connection in get_job_detail")
+    job = jm.get_job_or_archived(job_id, domain=domain)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return JobDetailResponse(**job)
 
 
 class BatchCancelRequest(BaseModel):

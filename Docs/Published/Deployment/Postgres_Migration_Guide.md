@@ -8,13 +8,17 @@ workflow jobs.
 
 ## Prerequisites
 
-- Back up all SQLite databases (`<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`, `Databases/workflows.db`, `<USER_DB_BASE_DIR>/*/ChaChaNotes.db`, `Analytics.db`).
+- Back up all SQLite databases (`<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`, `Databases/workflows.db`, `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db` for each user, `Analytics.db`).
 - Install PostgreSQL and ensure the target database is accessible (local host or remote).
 - Install the Python dependency `psycopg` (listed under pyproject extras, e.g., `.[multiplayer]`). For convenience use the binary extra:
   - pip install "psycopg[binary]"
 - Configure the server once against PostgreSQL so the schema exists. The easiest option is to set
   `TLDW_CONTENT_DB_BACKEND=postgresql` temporarily and start the API; it will create all tables and
   FTS artefacts, then shut the server down before migrating data.
+
+Note: `<USER_DB_BASE_DIR>` comes from the `USER_DB_BASE_DIR` setting (environment variable or
+`Config_Files/config.txt`). When unset, it defaults to `Databases/user_databases` under the project
+root.
 
 ## Step 1 - Prepare connection details
 
@@ -39,7 +43,7 @@ same pass.
 ```bash
 python -m tldw_Server_API.app.core.DB_Management.migration_tools \
       --content-sqlite <USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db \
-      --chacha-sqlite <USER_DB_BASE_DIR>/default/ChaChaNotes.db \
+      --chacha-sqlite <USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db \
       --analytics-sqlite Analytics.db \
       --workflows-sqlite Databases/workflows.db \
       --pg-host "$PGHOST" \
@@ -48,6 +52,25 @@ python -m tldw_Server_API.app.core.DB_Management.migration_tools \
       --pg-user "$PGUSER" \
       --pg-password "$PGPASSWORD" \
       --batch-size 500
+```
+
+For multi-user deployments, repeat the command for each user directory. To auto-discover user IDs
+from the filesystem:
+
+```bash
+for USER_ID in $(ls -1 "$USER_DB_BASE_DIR"); do
+  python -m tldw_Server_API.app.core.DB_Management.migration_tools \
+        --content-sqlite <USER_DB_BASE_DIR>/$USER_ID/Media_DB_v2.db \
+        --chacha-sqlite <USER_DB_BASE_DIR>/$USER_ID/ChaChaNotes.db \
+        --analytics-sqlite Analytics.db \
+        --workflows-sqlite Databases/workflows.db \
+        --pg-host "$PGHOST" \
+        --pg-port "$PGPORT" \
+        --pg-database "$PGDATABASE" \
+        --pg-user "$PGUSER" \
+        --pg-password "$PGPASSWORD" \
+        --batch-size 500
+done
 ```
 
 The script performs the following actions for each supplied database:

@@ -116,7 +116,7 @@ class AuthGovernor:
         limiter = rate_limiter
         if limiter is None:
             try:
-                limiter = await get_rate_limiter()
+                limiter = get_rate_limiter()
             except Exception:
                 limiter = None
 
@@ -146,7 +146,7 @@ class AuthGovernor:
         limiter = rate_limiter
         if limiter is None:
             try:
-                limiter = await get_rate_limiter()
+                limiter = get_rate_limiter()
             except Exception:
                 limiter = None
 
