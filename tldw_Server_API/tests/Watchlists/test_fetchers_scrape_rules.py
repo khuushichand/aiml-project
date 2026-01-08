@@ -119,28 +119,14 @@ async def test_fetch_site_items_with_rules_pagination(monkeypatch):
             self.headers = {}
             self.text = responses[url]
 
-    class FakeClient:
-        def __init__(self, *args, **kwargs):
-            self.calls: list[str] = []
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
     async def fake_afetch(*, method: str, url: str, client=None, headers=None, timeout=None, **kwargs):
         # mimic http_client.afetch signature; ignore method and headers
         if url not in responses:
             raise ValueError(f"unexpected URL {url}")
         return FakeResponse(url)
 
-    # fetch_site_items_with_rules relies on http_client.create_async_client and afetch
-    # Patch those in the http_client module so no real network calls occur
-    monkeypatch.setattr(
-        "tldw_Server_API.app.core.http_client.create_async_client",
-        lambda *args, **kwargs: FakeClient(),
-    )
+    # fetch_site_items_with_rules relies on http_client.afetch
+    # Patch it in the http_client module so no real network calls occur
     monkeypatch.setattr(
         "tldw_Server_API.app.core.http_client.afetch",
         fake_afetch,

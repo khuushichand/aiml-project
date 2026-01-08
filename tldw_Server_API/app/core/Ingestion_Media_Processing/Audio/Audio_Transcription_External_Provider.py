@@ -22,13 +22,12 @@ from pathlib import Path
 from dataclasses import dataclass
 import numpy as np
 import soundfile as sf
-import httpx
 import asyncio
-import json
-import base64
 from urllib.parse import urlparse, urljoin
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import open_safe_local_path
+from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
+from tldw_Server_API.app.core.exceptions import RetryExhaustedError, NetworkError
 
 logger = logger
 
@@ -51,6 +50,18 @@ class ExternalProviderConfig:
 
 # Global cache for provider configurations
 _provider_configs: Dict[str, ExternalProviderConfig] = {}
+
+
+async def _close_response(resp: Any) -> None:
+    if resp is None:
+        return
+    close = getattr(resp, "aclose", None)
+    if callable(close):
+        await close()
+        return
+    close = getattr(resp, "close", None)
+    if callable(close):
+        close()
 
 
 def load_external_provider_config(provider_name: str = "default") -> Optional[ExternalProviderConfig]:
@@ -245,66 +256,62 @@ async def transcribe_with_external_provider_async(
                 if key not in data:
                     data[key] = str(value)
 
-            # Make the request with retries using httpx.AsyncClient directly
-            async with httpx.AsyncClient(timeout=config.timeout, verify=config.verify_ssl) as client:
-                for attempt in range(config.max_retries):
-                    try:
-                        # Ensure file pointer is at beginning for each retry
-                        try:
-                            file_handle.seek(0)
-                        except Exception:
-                            pass
+            retry_policy = RetryPolicy(
+                attempts=max(1, int(config.max_retries)),
+                retry_on_status=(429,),
+                retry_on_unsafe=True,
+            )
 
-                        response = await client.post(
-                            endpoint,
-                            headers=headers,
-                            files=files,
-                            data=data,
-                            timeout=config.timeout,
-                        )
+            resp = None
+            try:
+                try:
+                    file_handle.seek(0)
+                except Exception:
+                    pass
 
-                        if response.status_code == 200:
-                            # Parse response based on format
-                            if config.response_format == 'text':
-                                return response.text
-                            elif config.response_format in ['json', 'verbose_json']:
-                                result = response.json()
-                                return result.get('text', '')
-                            elif config.response_format in ['srt', 'vtt']:
-                                return response.text
-                            else:
-                                return response.text
+                resp = await afetch(
+                    method="POST",
+                    url=endpoint,
+                    headers=headers,
+                    files=files,
+                    data=data,
+                    timeout=config.timeout,
+                    allow_redirects=False,
+                    retry=retry_policy,
+                    verify=config.verify_ssl,
+                )
 
-                        elif response.status_code == 429:  # Rate limit
-                            if attempt < config.max_retries - 1:
-                                await asyncio.sleep(2 ** attempt)  # Exponential backoff
-                                continue
-                            else:
-                                return f"[Error: Rate limit exceeded after {config.max_retries} attempts]"
+                status_code = int(resp.status_code)
+                if status_code == 200:
+                    # Parse response based on format
+                    if config.response_format == 'text':
+                        return resp.text
+                    if config.response_format in ['json', 'verbose_json']:
+                        result = resp.json()
+                        return result.get('text', '')
+                    if config.response_format in ['srt', 'vtt']:
+                        return resp.text
+                    return resp.text
 
-                        else:
-                            error_detail = response.text
-                            try:
-                                error_json = response.json()
-                                error_detail = error_json.get('error', {}).get('message', error_detail)
-                            except Exception as parse_err:
-                                logger.debug(f"Failed to parse provider error JSON: error={parse_err}")
-                            return f"[Error: API returned {response.status_code} - {error_detail}]"
+                if status_code == 429:
+                    return f"[Error: Rate limit exceeded after {config.max_retries} attempts]"
 
-                    except httpx.TimeoutException:
-                        if attempt < config.max_retries - 1:
-                            logger.warning(f"Timeout on attempt {attempt + 1}, retrying...")
-                            continue
-                        else:
-                            return f"[Error: Request timeout after {config.max_retries} attempts]"
+                error_detail = resp.text
+                try:
+                    error_json = resp.json()
+                    error_detail = error_json.get('error', {}).get('message', error_detail)
+                except Exception as parse_err:
+                    logger.debug(f"Failed to parse provider error JSON: error={parse_err}")
+                return f"[Error: API returned {status_code} - {error_detail}]"
 
-                    except Exception as e:
-                        if attempt < config.max_retries - 1:
-                            logger.warning(f"Error on attempt {attempt + 1}: {e}, retrying...")
-                            await asyncio.sleep(1)
-                            continue
-                        else:
-                            return f"[Error: {str(e)}]"
+            except RetryExhaustedError as e:
+                return f"[Error: {str(e)}]"
+            except NetworkError as e:
+                return f"[Error: {str(e)}]"
+            except Exception as e:
+                return f"[Error: {str(e)}]"
+            finally:
+                await _close_response(resp)
 
         return "[Error: Failed to transcribe after all retries]"
 

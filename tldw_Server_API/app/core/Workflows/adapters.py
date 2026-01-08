@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 import types
 
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
 from tldw_Server_API.app.core.exceptions import AdapterError
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
@@ -19,6 +21,25 @@ from tldw_Server_API.app.core.Metrics import start_async_span as _start_span
 from tldw_Server_API.app.core.Security.egress import is_url_allowed, is_url_allowed_for_tenant
 from tldw_Server_API.app.core.http_client import create_client as _wf_create_client
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import resolve_user_id_value
+
+
+def _extract_openai_content(response: Any) -> Optional[str]:
+    if isinstance(response, dict):
+        try:
+            choices = response.get("choices") or []
+            if choices:
+                message = choices[0].get("message") or {}
+                content = message.get("content")
+                if isinstance(content, str):
+                    return content
+            text = response.get("content") or response.get("text")
+            if isinstance(text, str):
+                return text
+        except Exception:
+            return None
+    if isinstance(response, str):
+        return response
+    return None
 
 
 def _sanitize_path_component(value: str, default: str, max_len: int = 80) -> str:
@@ -1757,18 +1778,22 @@ async def run_translate_adapter(config: Dict[str, Any], context: Dict[str, Any])
     if _os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
         return {"text": text, "target_lang": target, "simulated": True}
 
-    # Try OpenAI-compatible first; fall back to returning input
+    # Try OpenAI-compatible adapter first; fall back to returning input
     try:
-        from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_openai_async
+        adapter = get_registry().get_adapter("openai")
+        if adapter is None:
+            raise ChatConfigurationError(provider="openai", message="OpenAI adapter unavailable.")
         system = f"You are a professional translator. Translate the user text to {target}. Preserve meaning and tone. Output only the translation."
         messages = [{"role": "user", "content": text}]
-        resp = await chat_with_openai_async(messages, model=None, api_key=None, system_message=system, streaming=False)
-        # Extract text from OpenAI-like response
-        out = None
-        try:
-            out = ((resp or {}).get("choices") or [{}])[0].get("message", {}).get("content")
-        except Exception:
-            out = None
+        resp = await adapter.achat(
+            {
+                "messages": messages,
+                "system_message": system,
+                "model": None,
+                "stream": False,
+            }
+        )
+        out = _extract_openai_content(resp)
         if not out:
             return {"text": text, "target_lang": target, "provider": "openai", "fallback": True}
         return {"text": out, "target_lang": target, "provider": "openai"}

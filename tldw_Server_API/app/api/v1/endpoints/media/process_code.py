@@ -6,7 +6,6 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import httpx
 from fastapi import APIRouter, Depends, File, UploadFile, status
 from loguru import logger
 from starlette.responses import JSONResponse
@@ -144,53 +143,50 @@ async def process_code_endpoint(
 
         # Handle URLs
         if urls:
-            # Use module-local httpx.AsyncClient so tests can monkeypatch it.
-            async with httpx.AsyncClient() as client:
-                download_url_async = getattr(media_mod, "_download_url_async")
+            download_url_async = getattr(media_mod, "_download_url_async")
+            tasks = [
+                download_url_async(
+                    client=None,
+                    url=u,
+                    target_dir=temp_dir,
+                    allowed_extensions=CODE_FILE_EXTENSIONS,
+                    check_extension=True,
+                )
+                for u in urls
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
 
-                tasks = [
-                    download_url_async(
-                        client=client,
-                        url=u,
-                        target_dir=temp_dir,
-                        allowed_extensions=CODE_FILE_EXTENSIONS,
-                        check_extension=True,
+            for url, res in zip(urls, results):
+                if isinstance(res, Exception):
+                    batch["results"].append(
+                        {
+                            "status": "Error",
+                            "input_ref": url,
+                            "processing_source": None,
+                            "media_type": "code",
+                            "error": f"Download/preparation failed: {res}",
+                            "metadata": {},
+                            "content": None,
+                            "chunks": None,
+                            "analysis": None,
+                            "keywords": None,
+                            "warnings": None,
+                            "analysis_details": {},
+                            "db_id": None,
+                            "db_message": "Processing only endpoint.",
+                        }
                     )
-                    for u in urls
-                ]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
+                    continue
 
-                for url, res in zip(urls, results):
-                    if isinstance(res, Exception):
-                        batch["results"].append(
-                            {
-                                "status": "Error",
-                                "input_ref": url,
-                                "processing_source": None,
-                                "media_type": "code",
-                                "error": f"Download/preparation failed: {res}",
-                                "metadata": {},
-                                "content": None,
-                                "chunks": None,
-                                "analysis": None,
-                                "keywords": None,
-                                "warnings": None,
-                                "analysis_details": {},
-                                "db_id": None,
-                                "db_message": "Processing only endpoint.",
-                            }
-                        )
-                        continue
-
-                    local_path = Path(res)
-                    items.append(
-                        ProcessItem(
-                            input_ref=url,
-                            local_path=local_path,
-                            media_type="code",
-                            metadata={"source": "url"},
-                        )
+                local_path = Path(res)
+                items.append(
+                    ProcessItem(
+                        input_ref=url,
+                        local_path=local_path,
+                        media_type="code",
+                        metadata={"source": "url"},
                     )
+                )
 
         if not items and not batch["results"]:
             # No valid inputs at all

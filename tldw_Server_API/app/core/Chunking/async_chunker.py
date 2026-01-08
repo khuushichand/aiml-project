@@ -17,6 +17,19 @@ from .exceptions import InvalidInputError
 from .chunker import Chunker
 from .templates import TemplateManager
 from .utils.metrics import get_metrics, MetricsContext
+from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
+
+
+async def _close_response(resp: Any) -> None:
+    if resp is None:
+        return
+    close = getattr(resp, "aclose", None)
+    if callable(close):
+        await close()
+        return
+    close = getattr(resp, "close", None)
+    if callable(close):
+        close()
 
 
 class AsyncChunker:
@@ -355,13 +368,18 @@ class AsyncChunker:
         Returns:
             List of text chunks
         """
-        import aiohttp
-
-        # Configure timeout for HTTP request to prevent hanging connections
-        client_timeout = aiohttp.ClientTimeout(total=timeout)
-        async with aiohttp.ClientSession(timeout=client_timeout) as session:
-            async with session.get(url) as response:
-                text = await response.text()
+        resp = None
+        retry_policy = RetryPolicy(attempts=1, retry_on_unsafe=False)
+        try:
+            resp = await afetch(
+                method="GET",
+                url=url,
+                timeout=timeout,
+                retry=retry_policy,
+            )
+            text = resp.text
+        finally:
+            await _close_response(resp)
 
         return await self.chunk_text(text, method, max_size, overlap, **options)
 

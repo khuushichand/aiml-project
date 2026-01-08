@@ -12,8 +12,8 @@ from loguru import logger
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
     PromptStudioDatabase, DatabaseError
 )
-# Import chat completion function
-from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_openai
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 import os
 
 ########################################################################################################################
@@ -66,6 +66,14 @@ class PromptTemplate:
             raise ValueError(f"Missing variables in template: {missing}")
 
         return True
+
+
+def _call_openai_adapter(request: Dict[str, Any]) -> Dict[str, Any]:
+    registry = get_registry()
+    adapter = registry.get_adapter("openai")
+    if adapter is None:
+        raise ChatConfigurationError(provider="openai", message="OpenAI adapter unavailable.")
+    return adapter.chat(request)
 
 ########################################################################################################################
 # Generation Templates
@@ -172,11 +180,13 @@ INSTRUCTIONS:
 """
 
             # Generate with LLM (single call)
-            response = chat_with_openai(
-                input_data=[{"role": "user", "content": generation_prompt}],
-                system_message="You are an expert prompt engineer.",
-                model=model_name,
-                temp=0.7,
+            response = _call_openai_adapter(
+                {
+                    "messages": [{"role": "user", "content": generation_prompt}],
+                    "system_message": "You are an expert prompt engineer.",
+                    "model": model_name,
+                    "temperature": 0.7,
+                }
             )
 
             generation_text = self._extract_llm_content(response)

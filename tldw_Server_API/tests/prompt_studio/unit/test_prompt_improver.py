@@ -355,8 +355,8 @@ class TestPromptImprover:
         }
 
         monkeypatch.setattr(
-            "tldw_Server_API.app.core.Prompt_Management.prompt_studio.prompt_improver.chat_with_openai",
-            lambda **kwargs: payload,
+            "tldw_Server_API.app.core.Prompt_Management.prompt_studio.prompt_improver._call_openai_adapter",
+            lambda request: payload,
         )
 
         improved = improver._improve_text(

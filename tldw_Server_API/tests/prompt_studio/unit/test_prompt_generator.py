@@ -152,8 +152,8 @@ class TestPromptGenerator:
         }
 
         monkeypatch.setattr(
-            "tldw_Server_API.app.core.Prompt_Management.prompt_studio.prompt_generator.chat_with_openai",
-            lambda **kwargs: payload,
+            "tldw_Server_API.app.core.Prompt_Management.prompt_studio.prompt_generator._call_openai_adapter",
+            lambda request: payload,
         )
 
         result = generator_with_db.generate_prompt(

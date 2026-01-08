@@ -89,10 +89,16 @@ def test_validate_payload_rejects_invalid_logit_bias():
 
 
 def test_validate_payload_rejects_invalid_response_format():
-    payload = {"messages": [], "model": "test", "response_format": {"type": "bad"}}
+    payload = {"messages": [], "model": "test", "response_format": {"type": "json_schema"}}
     with pytest.raises(ChatBadRequestError) as exc:
         cr.validate_payload("openai", payload)
     assert "response_format" in str(exc.value).lower()
+
+
+def test_validate_payload_allows_unknown_response_format_type():
+    payload = {"messages": [], "model": "test", "response_format": {"type": "custom"}}
+    normalized = cr.validate_payload("openai", payload)
+    assert normalized["response_format"]["type"] == "custom"
 
 
 def test_validate_payload_allows_json_schema_response_format():
@@ -103,3 +109,9 @@ def test_validate_payload_allows_json_schema_response_format():
     }
     normalized = cr.validate_payload("openai", payload)
     assert normalized["response_format"]["type"] == "json_schema"
+
+
+def test_validate_payload_allows_unknown_tool_type():
+    payload = {"messages": [], "model": "test", "tools": [{"type": "custom_tool", "payload": {"ok": True}}]}
+    normalized = cr.validate_payload("openai", payload)
+    assert normalized["tools"][0]["type"] == "custom_tool"

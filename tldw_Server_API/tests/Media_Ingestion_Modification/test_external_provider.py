@@ -4,14 +4,26 @@ Unit and integration tests for external transcription provider support.
 
 import pytest
 import numpy as np
-import asyncio
-import json
-from unittest.mock import Mock, patch, MagicMock, AsyncMock
-import httpx
+from unittest.mock import patch, AsyncMock
 from pathlib import Path
 import tempfile
+from tldw_Server_API.app.core.exceptions import NetworkError
 
 pytestmark = pytest.mark.unit
+
+
+class _DummyResp:
+    def __init__(self, status_code: int, text: str = "", json_data: dict | None = None, headers: dict | None = None):
+        self.status_code = status_code
+        self.text = text
+        self._json_data = json_data or {}
+        self.headers = headers or {}
+
+    def json(self):
+        return self._json_data
+
+    async def aclose(self):
+        return None
 
 
 class TestExternalProvider:
@@ -144,21 +156,19 @@ class TestExternalProvider:
         audio_data, sample_rate = sample_audio
 
         # Mock HTTP response
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            'text': 'Mocked transcription result',
-            'task': 'transcribe',
-            'language': 'en'
-        }
+        mock_response = _DummyResp(
+            200,
+            json_data={
+                'text': 'Mocked transcription result',
+                'task': 'transcribe',
+                'language': 'en'
+            },
+        )
 
-        with patch('httpx.AsyncClient') as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.post.return_value = mock_response
-            mock_client.__aenter__.return_value = mock_client
-            mock_client.__aexit__.return_value = None
-            mock_client_class.return_value = mock_client
-
+        with patch(
+            'tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_External_Provider.afetch',
+            new=AsyncMock(return_value=mock_response),
+        ) as mock_afetch:
             result = await transcribe_with_external_provider_async(
                 audio_data,
                 sample_rate,
@@ -166,13 +176,13 @@ class TestExternalProvider:
             )
 
             assert result == 'Mocked transcription result'
-            mock_client.post.assert_called_once()
+            assert mock_afetch.call_count == 1
 
             # Verify request parameters
-            call_args = mock_client.post.call_args
-            assert provider_config.base_url in call_args[0][0]
-            assert 'headers' in call_args[1]
-            assert 'Authorization' in call_args[1]['headers']
+            call_kwargs = mock_afetch.call_args.kwargs
+            assert provider_config.base_url in call_kwargs.get("url", "")
+            assert 'headers' in call_kwargs
+            assert 'Authorization' in call_kwargs['headers']
 
     @pytest.mark.asyncio
     async def test_retry_on_rate_limit(self, sample_audio, provider_config):
@@ -184,29 +194,26 @@ class TestExternalProvider:
         audio_data, sample_rate = sample_audio
         provider_config.max_retries = 3
 
-        # Mock responses: first two fail with 429, third succeeds
-        mock_responses = [
-            MagicMock(status_code=429, text="Rate limited"),
-            MagicMock(status_code=429, text="Rate limited"),
-            MagicMock(status_code=200, json=lambda: {'text': 'Success after retry'})
-        ]
+        async def _fake_afetch(**kwargs):
+            retry = kwargs.get("retry")
+            assert retry is not None
+            assert retry.attempts == provider_config.max_retries
+            assert 429 in retry.retry_on_status
+            assert retry.retry_on_unsafe is True
+            return _DummyResp(200, json_data={'text': 'Success after retry'})
 
-        with patch('httpx.AsyncClient') as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.post.side_effect = mock_responses
-            mock_client.__aenter__.return_value = mock_client
-            mock_client.__aexit__.return_value = None
-            mock_client_class.return_value = mock_client
+        with patch(
+            'tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_External_Provider.afetch',
+            new=AsyncMock(side_effect=_fake_afetch),
+        ) as mock_afetch:
+            result = await transcribe_with_external_provider_async(
+                audio_data,
+                sample_rate,
+                config=provider_config
+            )
 
-            with patch('asyncio.sleep'):  # Skip actual sleep in tests
-                result = await transcribe_with_external_provider_async(
-                    audio_data,
-                    sample_rate,
-                    config=provider_config
-                )
-
-            assert result == 'Success after retry'
-            assert mock_client.post.call_count == 3
+        assert result == 'Success after retry'
+        assert mock_afetch.call_count == 1
 
     @pytest.mark.asyncio
     async def test_timeout_handling(self, sample_audio, provider_config):
@@ -219,22 +226,19 @@ class TestExternalProvider:
         provider_config.max_retries = 2
         provider_config.timeout = 0.1  # Very short timeout
 
-        with patch('httpx.AsyncClient') as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.post.side_effect = httpx.TimeoutException("Request timeout")
-            mock_client.__aenter__.return_value = mock_client
-            mock_client.__aexit__.return_value = None
-            mock_client_class.return_value = mock_client
-
+        with patch(
+            'tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_External_Provider.afetch',
+            new=AsyncMock(side_effect=NetworkError("Request timeout")),
+        ) as mock_afetch:
             result = await transcribe_with_external_provider_async(
                 audio_data,
                 sample_rate,
                 config=provider_config
             )
 
-            assert "[Error:" in result
-            assert "timeout" in result.lower()
-            assert mock_client.post.call_count == 2  # Should retry once
+        assert "[Error:" in result
+        assert "timeout" in result.lower()
+        assert mock_afetch.call_count == 1
 
     @pytest.mark.asyncio
     async def test_different_response_formats(self, sample_audio, provider_config):
@@ -247,62 +251,51 @@ class TestExternalProvider:
 
         # Test JSON format
         provider_config.response_format = 'json'
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {'text': 'JSON response'}
+        mock_response = _DummyResp(200, json_data={'text': 'JSON response'})
 
-        with patch('httpx.AsyncClient') as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.post.return_value = mock_response
-            mock_client.__aenter__.return_value = mock_client
-            mock_client.__aexit__.return_value = None
-            mock_client_class.return_value = mock_client
-
+        with patch(
+            'tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_External_Provider.afetch',
+            new=AsyncMock(return_value=mock_response),
+        ):
             result = await transcribe_with_external_provider_async(
                 audio_data,
                 sample_rate,
                 config=provider_config
             )
 
-            assert result == 'JSON response'
+        assert result == 'JSON response'
 
         # Test text format
         provider_config.response_format = 'text'
-        mock_response.text = 'Plain text response'
+        mock_response = _DummyResp(200, text='Plain text response')
 
-        with patch('httpx.AsyncClient') as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.post.return_value = mock_response
-            mock_client.__aenter__.return_value = mock_client
-            mock_client.__aexit__.return_value = None
-            mock_client_class.return_value = mock_client
-
+        with patch(
+            'tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_External_Provider.afetch',
+            new=AsyncMock(return_value=mock_response),
+        ):
             result = await transcribe_with_external_provider_async(
                 audio_data,
                 sample_rate,
                 config=provider_config
             )
 
-            assert result == 'Plain text response'
+        assert result == 'Plain text response'
 
         # Test SRT format
         provider_config.response_format = 'srt'
-        mock_response.text = '1\n00:00:00,000 --> 00:00:01,000\nSRT subtitle'
+        mock_response = _DummyResp(200, text='1\n00:00:00,000 --> 00:00:01,000\nSRT subtitle')
 
-        with patch('httpx.AsyncClient') as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.post.return_value = mock_response
-            mock_client.__aenter__.return_value = mock_client
-            mock_client.__aexit__.return_value = None
-            mock_client_class.return_value = mock_client
-
+        with patch(
+            'tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_External_Provider.afetch',
+            new=AsyncMock(return_value=mock_response),
+        ):
             result = await transcribe_with_external_provider_async(
                 audio_data,
                 sample_rate,
                 config=provider_config
             )
 
-            assert 'SRT subtitle' in result
+        assert 'SRT subtitle' in result
 
     def test_synchronous_wrapper(self, sample_audio, provider_config):
         """Test synchronous wrapper function."""
@@ -312,24 +305,19 @@ class TestExternalProvider:
 
         audio_data, sample_rate = sample_audio
 
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {'text': 'Sync wrapper result'}
+        mock_response = _DummyResp(200, json_data={'text': 'Sync wrapper result'})
 
-        with patch('httpx.AsyncClient') as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.post.return_value = mock_response
-            mock_client.__aenter__.return_value = mock_client
-            mock_client.__aexit__.return_value = None
-            mock_client_class.return_value = mock_client
-
+        with patch(
+            'tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_External_Provider.afetch',
+            new=AsyncMock(return_value=mock_response),
+        ):
             result = transcribe_with_external_provider(
                 audio_data,
                 sample_rate,
                 config=provider_config
             )
 
-            assert result == 'Sync wrapper result'
+        assert result == 'Sync wrapper result'
 
     @pytest.mark.asyncio
     async def test_with_file_path(self, provider_config):
@@ -347,23 +335,18 @@ class TestExternalProvider:
             tmp_path = tmp_file.name
 
         try:
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = {'text': 'File path result'}
+            mock_response = _DummyResp(200, json_data={'text': 'File path result'})
 
-            with patch('httpx.AsyncClient') as mock_client_class:
-                mock_client = AsyncMock()
-                mock_client.post.return_value = mock_response
-                mock_client.__aenter__.return_value = mock_client
-                mock_client.__aexit__.return_value = None
-                mock_client_class.return_value = mock_client
-
+            with patch(
+                'tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_External_Provider.afetch',
+                new=AsyncMock(return_value=mock_response),
+            ):
                 result = await transcribe_with_external_provider_async(
                     tmp_path,
                     config=provider_config
                 )
 
-                assert result == 'File path result'
+            assert result == 'File path result'
 
         finally:
             # Clean up
@@ -378,23 +361,18 @@ class TestExternalProvider:
             test_external_provider
         )
 
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {'text': 'Test successful'}
+        mock_response = _DummyResp(200, json_data={'text': 'Test successful'})
 
-        with patch('httpx.AsyncClient') as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.post.return_value = mock_response
-            mock_client.__aenter__.return_value = mock_client
-            mock_client.__aexit__.return_value = None
-            mock_client_class.return_value = mock_client
-
+        with patch(
+            'tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_External_Provider.afetch',
+            new=AsyncMock(return_value=mock_response),
+        ):
             result = await test_external_provider(config=provider_config)
 
-            assert result['success'] == True
-            assert result['result'] == 'Test successful'
-            assert 'elapsed_time' in result
-            assert result['elapsed_time'] >= 0
+        assert result['success'] == True
+        assert result['result'] == 'Test successful'
+        assert 'elapsed_time' in result
+        assert result['elapsed_time'] >= 0
 
 
 @pytest.mark.integration

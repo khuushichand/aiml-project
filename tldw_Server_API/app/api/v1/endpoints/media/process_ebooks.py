@@ -6,7 +6,6 @@ import asyncio
 import functools
 from pathlib import Path
 
-import httpx
 from fastapi import (
     APIRouter,
     BackgroundTasks,
@@ -235,20 +234,20 @@ async def process_ebooks_endpoint(
                 "Attempting to download %d EPUB URL(s) asynchronously...",
                 len(form_data.urls),
             )
-            async with media_mod.httpx.AsyncClient(timeout=120) as client:
-                download_tasks = [
-                    media_mod._download_url_async(
-                        client=client,
-                        url=url,
-                        target_dir=temp_dir_path,
-                        allowed_extensions={".epub"},
-                    )
-                    for url in form_data.urls
-                ]
-                download_results = await asyncio.gather(
-                    *download_tasks,
-                    return_exceptions=True,
+            download_url_async = getattr(media_mod, "_download_url_async")
+            download_tasks = [
+                download_url_async(
+                    client=None,
+                    url=url,
+                    target_dir=temp_dir_path,
+                    allowed_extensions={".epub"},
                 )
+                for url in form_data.urls
+            ]
+            download_results = await asyncio.gather(
+                *download_tasks,
+                return_exceptions=True,
+            )
 
             for url, result in zip(form_data.urls, download_results):
                 if isinstance(result, Path):

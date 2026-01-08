@@ -64,6 +64,12 @@ from tldw_Server_API.app.core.Workflows.daily_ledger import (
     record_workflow_run,
     workflows_ledger_category,
 )
+from tldw_Server_API.app.core.exceptions import (
+    EgressPolicyError,
+    NetworkError,
+    RetryExhaustedError,
+)
+from tldw_Server_API.app.core.http_client import afetch as _http_afetch, RetryPolicy as _RetryPolicy
 
 
 # Best-effort per-process cache for "did we backfill today" keys.
@@ -146,6 +152,10 @@ def _classify_db_error(exc: Exception) -> str:
 def _classify_webhook_exception(exc: Exception) -> str:
     if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
         return "transient_error"
+    if isinstance(exc, (NetworkError, RetryExhaustedError)):
+        return "transient_error"
+    if isinstance(exc, EgressPolicyError):
+        return "permanent_error"
     if isinstance(exc, PermissionError):
         return "permanent_error"
     if isinstance(exc, OSError):
@@ -1858,7 +1868,7 @@ async def replay_webhook_dlq(
 
     # Attempt delivery with the same headers/signing as engine
     try:
-        import httpx, time as _time, hmac, hashlib
+        import time as _time, hmac, hashlib
         secret = _os.getenv("WORKFLOWS_WEBHOOK_SECRET", "")
         ts = str(int(_time.time()))
         headers = {
@@ -1873,97 +1883,72 @@ async def replay_webhook_dlq(
             headers["X-Workflows-Signature"] = sig
             headers["X-Hub-Signature-256"] = f"sha256={sig}"
         timeout = float(_os.getenv("WORKFLOWS_WEBHOOK_TIMEOUT", "10"))
-        def _post_via_urllib() -> Any:
-            import urllib.request as _ur
-            import ssl as _ssl
-            req = _ur.Request(url, data=raw.encode("utf-8"), headers=headers, method="POST")
-            ctx = _ssl.create_default_context()
-            ctx.check_hostname = True
-            opener = _ur.build_opener(
-                _ur.ProxyHandler({}),
-                _ur.HTTPSHandler(context=ctx),
-            )
-            with opener.open(req, timeout=timeout) as r:  # type: ignore[arg-type]
-                code = getattr(r, "status", None) or getattr(r, "code", None) or 200
-            class _Resp:
-                def __init__(self, status_code):
-                    self.status_code = status_code
-            return _Resp(int(code))
-
-        resp = None
+        resp = await _http_afetch(
+            method="POST",
+            url=url,
+            data=raw,
+            headers=headers,
+            timeout=timeout,
+            retry=_RetryPolicy(attempts=1),
+        )
         try:
-            import types as _types
-            _is_module = isinstance(httpx, _types.ModuleType)
-            if not _is_module or not hasattr(httpx, "Client"):
-                raise RuntimeError("httpx appears monkeypatched; falling back to urllib")
-            from tldw_Server_API.app.core.http_client import create_client
-            with create_client(timeout=timeout) as client:
-                resp = client.post(url, data=raw, headers=headers)
-        except httpx.HTTPError as exc:
-            logger.debug(
-                "Workflows DLQ replay: httpx error for dlq_id={}: {} - {}",
-                dlq_id,
-                type(exc).__name__,
-                exc,
-            )
-            resp = _post_via_urllib()
-        except Exception as exc:
-            logger.debug(
-                "Workflows DLQ replay: httpx fallback for dlq_id={}: {} - {}",
-                dlq_id,
-                type(exc).__name__,
-                exc,
-            )
-            resp = _post_via_urllib()
-        status_code = getattr(resp, "status_code", None)
-        logger.debug("DLQ replay POST to {} -> {}", url, status_code)
-        if 200 <= int(resp.status_code) < 400:
-            try:
-                db.delete_webhook_dlq(dlq_id=dlq_id)
-            except sqlite3.Error as exc:
-                logger.debug(
-                    "Workflows DLQ replay: failed to delete dlq_id={}: {} - {}",
-                    dlq_id,
-                    type(exc).__name__,
-                    exc,
-                )
-            except Exception as exc:
-                logger.debug(
-                    "Workflows DLQ replay: failed to delete dlq_id={}: {} - {}",
-                    dlq_id,
-                    type(exc).__name__,
-                    exc,
-                )
-            return {"ok": True, "status_code": int(resp.status_code)}
-        else:
-            # Update attempts/backoff minimally
-            error_category = _classify_webhook_status(int(resp.status_code))
-            try:
-                db.update_webhook_dlq_failure(
-                    dlq_id=dlq_id,
-                    last_error=f"status={resp.status_code}",
-                    next_attempt_at_iso=None,
-                )
-            except sqlite3.Error as exc:
-                logger.debug(
-                    "Workflows DLQ replay: failed to update failure record for dlq_id={}: {} - {}",
-                    dlq_id,
-                    type(exc).__name__,
-                    exc,
-                )
-            except Exception as exc:
-                logger.debug(
-                    "Workflows DLQ replay: failed to update failure record for dlq_id={}: {} - {}",
-                    dlq_id,
-                    type(exc).__name__,
-                    exc,
-                )
-            return {
-                "ok": False,
-                "status_code": int(resp.status_code),
-                "error": "delivery_failed",
-                "error_category": error_category,
-            }
+            status_code = int(getattr(resp, "status_code", 0) or 0)
+            logger.debug("DLQ replay POST to {} -> {}", url, status_code)
+            if 200 <= status_code < 400:
+                try:
+                    db.delete_webhook_dlq(dlq_id=dlq_id)
+                except sqlite3.Error as exc:
+                    logger.debug(
+                        "Workflows DLQ replay: failed to delete dlq_id={}: {} - {}",
+                        dlq_id,
+                        type(exc).__name__,
+                        exc,
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        "Workflows DLQ replay: failed to delete dlq_id={}: {} - {}",
+                        dlq_id,
+                        type(exc).__name__,
+                        exc,
+                    )
+                return {"ok": True, "status_code": status_code}
+            else:
+                # Update attempts/backoff minimally
+                error_category = _classify_webhook_status(status_code)
+                try:
+                    db.update_webhook_dlq_failure(
+                        dlq_id=dlq_id,
+                        last_error=f"status={status_code}",
+                        next_attempt_at_iso=None,
+                    )
+                except sqlite3.Error as exc:
+                    logger.debug(
+                        "Workflows DLQ replay: failed to update failure record for dlq_id={}: {} - {}",
+                        dlq_id,
+                        type(exc).__name__,
+                        exc,
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        "Workflows DLQ replay: failed to update failure record for dlq_id={}: {} - {}",
+                        dlq_id,
+                        type(exc).__name__,
+                        exc,
+                    )
+                return {
+                    "ok": False,
+                    "status_code": status_code,
+                    "error": "delivery_failed",
+                    "error_category": error_category,
+                }
+        finally:
+            close = getattr(resp, "aclose", None)
+            if callable(close):
+                await close()
+            else:
+                close = getattr(resp, "close", None)
+                if callable(close):
+                    close()
     except HTTPException:
         raise
     except Exception as e:

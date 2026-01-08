@@ -18,15 +18,8 @@ from enum import Enum
 from loguru import logger
 
 # Import LLM infrastructure
-from ...LLM_Calls.LLM_API_Calls import (
-    chat_with_openai,
-    chat_with_anthropic,
-    chat_with_groq,
-    chat_with_openrouter,
-    chat_with_deepseek,
-    chat_with_huggingface,
-    chat_with_cohere
-)
+from ...Chat.Chat_Deps import ChatConfigurationError
+from ...LLM_Calls.adapter_registry import get_registry
 
 from .types import Document
 try:
@@ -150,6 +143,69 @@ Let me explain:"""
             "conversational": cls.CONVERSATIONAL
         }
         return templates.get(name, cls.DEFAULT)
+
+
+def _extract_openai_content(response: Any) -> str:
+    if isinstance(response, str):
+        return response
+    if isinstance(response, dict):
+        choices = response.get("choices") or []
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            message = choice.get("message")
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str):
+                    return content
+                if isinstance(content, list):
+                    parts = [part.get("text", "") for part in content if isinstance(part, dict)]
+                    if parts:
+                        return "".join(parts)
+            delta = choice.get("delta")
+            if isinstance(delta, dict):
+                delta_content = delta.get("content")
+                if isinstance(delta_content, str):
+                    return delta_content
+                if isinstance(delta_content, list):
+                    parts = [part.get("text", "") for part in delta_content if isinstance(part, dict)]
+                    if parts:
+                        return "".join(parts)
+            text = choice.get("text")
+            if isinstance(text, str):
+                return text
+        content = response.get("content") or response.get("text")
+        if isinstance(content, str):
+            return content
+    return str(response)
+
+
+def _extract_stream_text(chunk: Any) -> Optional[str]:
+    if isinstance(chunk, dict):
+        return _extract_openai_content(chunk)
+    if isinstance(chunk, (bytes, bytearray)):
+        try:
+            chunk = chunk.decode("utf-8", errors="ignore")
+        except Exception:
+            return None
+    if isinstance(chunk, str):
+        stripped = chunk.strip()
+        if not stripped:
+            return None
+        if stripped.lower().startswith("data:"):
+            data = stripped[5:].strip()
+            if data.lower() == "[done]":
+                return None
+            try:
+                payload = json.loads(data)
+            except Exception:
+                return data or None
+            return _extract_openai_content(payload) or None
+        return stripped
+    try:
+        return str(chunk)
+    except Exception:
+        return None
 
 
 class BaseGenerator(ABC):

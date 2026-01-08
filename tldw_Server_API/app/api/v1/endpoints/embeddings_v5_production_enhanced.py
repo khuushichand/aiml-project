@@ -34,7 +34,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 import tiktoken
 from loguru import logger
 from asyncio import Lock
-import aiohttp
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 # Schemas
@@ -47,6 +46,12 @@ from tldw_Server_API.app.api.v1.schemas.embeddings_models import (
 from tldw_Server_API.app.core.Usage.usage_tracker import (
     backfill_legacy_tokens_to_ledger,
     log_llm_usage,
+)
+from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
+from tldw_Server_API.app.core.http_client import (
+    afetch as _http_afetch,
+    create_async_client as _create_async_client,
+    RetryPolicy as _RetryPolicy,
 )
 from pydantic import BaseModel, Field
 
@@ -876,11 +881,11 @@ class ConnectionPoolManager:
     """Manages connection pools with proper cleanup"""
 
     def __init__(self):
-        self.pools: Dict[str, aiohttp.ClientSession] = {}
+        self.pools: Dict[str, Any] = {}
         self.lock = Lock()
         self._closed = False
 
-    async def get_session(self, provider: str) -> aiohttp.ClientSession:
+    async def get_session(self, provider: str) -> Any:
         """Get or create session for provider"""
         async with self.lock:
             if self._closed:
@@ -888,26 +893,23 @@ class ConnectionPoolManager:
                 self._closed = False
 
             existing = self.pools.get(provider)
-            if existing is not None and existing.closed:
-                # Drop stale session so a fresh one can be created.
+            if existing is not None and getattr(existing, "is_closed", False):
+                # Drop stale client so a fresh one can be created.
                 try:
-                    await existing.close()
+                    close = getattr(existing, "aclose", None)
+                    if callable(close):
+                        await close()
+                    else:
+                        close = getattr(existing, "close", None)
+                        if callable(close):
+                            close()
                 except Exception:
                     pass
                 existing = None
                 self.pools.pop(provider, None)
 
             if provider not in self.pools:
-                connector = aiohttp.TCPConnector(
-                    limit=CONNECTION_POOL_SIZE,
-                    limit_per_host=CONNECTION_POOL_SIZE,
-                    force_close=True  # Force close connections on errors
-                )
-                timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
-                self.pools[provider] = aiohttp.ClientSession(
-                    connector=connector,
-                    timeout=timeout
-                )
+                self.pools[provider] = _create_async_client(timeout=REQUEST_TIMEOUT)
             return self.pools[provider]
 
     async def close_all(self):
@@ -915,14 +917,32 @@ class ConnectionPoolManager:
         async with self.lock:
             self._closed = True
             for session in self.pools.values():
-                await session.close()
+                try:
+                    close = getattr(session, "aclose", None)
+                    if callable(close):
+                        await close()
+                    else:
+                        close = getattr(session, "close", None)
+                        if callable(close):
+                            close()
+                except Exception:
+                    pass
             self.pools.clear()
 
     async def remove_provider(self, provider: str):
         """Remove and close specific provider's session"""
         async with self.lock:
             if provider in self.pools:
-                await self.pools[provider].close()
+                try:
+                    close = getattr(self.pools[provider], "aclose", None)
+                    if callable(close):
+                        await close()
+                    else:
+                        close = getattr(self.pools[provider], "close", None)
+                        if callable(close):
+                            close()
+                except Exception:
+                    pass
                 del self.pools[provider]
 
 # ============================================================================
@@ -939,7 +959,7 @@ def get_or_create_circuit_breaker(provider: str) -> CircuitBreaker:
             name=breaker_name,
             failure_threshold=CIRCUIT_BREAKER_FAILURE_THRESHOLD,
             recovery_timeout=CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
-            expected_exception=(ConnectionError, TimeoutError, aiohttp.ClientError),
+            expected_exception=(ConnectionError, TimeoutError, NetworkError, RetryExhaustedError),
             success_threshold=CIRCUIT_BREAKER_SUCCESS_THRESHOLD
         )
         circuit_breaker_registry.register(breaker)
@@ -1588,26 +1608,47 @@ async def create_embeddings_with_circuit_breaker(
                 if not api_key:
                     raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Cohere API key not configured")
                 mdl = config.get("model_name_or_path", model_id) or "embed-english-v3.0"
-                session = await connection_manager.get_session(provider)
+                client = await connection_manager.get_session(provider)
                 url = "https://api.cohere.com/v1/embed"
                 headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
                 payload = {"model": mdl, "texts": texts, "input_type": "search_document"}
-                async with session.post(url, json=payload, headers=headers) as resp:
-                    if resp.status >= 400:
-                        detail = await resp.text()
-                        raise HTTPException(status_code=resp.status, detail=f"Cohere error: {detail}")
-                    data = await resp.json()
+                resp = await _http_afetch(
+                    method="POST",
+                    url=url,
+                    client=client,
+                    headers=headers,
+                    json=payload,
+                    timeout=REQUEST_TIMEOUT,
+                    retry=_RetryPolicy(attempts=1),
+                )
+                try:
+                    status_code = int(getattr(resp, "status_code", 0))
+                    if status_code >= 400:
+                        try:
+                            detail = resp.text
+                        except Exception:
+                            detail = ""
+                        raise HTTPException(status_code=status_code, detail=f"Cohere error: {detail}")
+                    data = resp.json()
+                finally:
+                    close = getattr(resp, "aclose", None)
+                    if callable(close):
+                        await close()
+                    else:
+                        close = getattr(resp, "close", None)
+                        if callable(close):
+                            close()
+                embs = None
+                try:
+                    if isinstance(data.get("embeddings"), list):
+                        embs = data["embeddings"]
+                    elif isinstance(data.get("embeddings"), dict) and "float" in data["embeddings"]:
+                        embs = data["embeddings"]["float"]
+                except Exception:
                     embs = None
-                    try:
-                        if isinstance(data.get("embeddings"), list):
-                            embs = data["embeddings"]
-                        elif isinstance(data.get("embeddings"), dict) and "float" in data["embeddings"]:
-                            embs = data["embeddings"]["float"]
-                    except Exception:
-                        embs = None
-                    if not embs:
-                        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid Cohere response format")
-                    return embs
+                if not embs:
+                    raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid Cohere response format")
+                return embs
             elif provider == "google":
                 # Direct async call to Google Generative Language API (text-embedding-004)
                 api_key = config.get("api_key") or settings.get("GOOGLE_API_KEY")
@@ -1615,31 +1656,51 @@ async def create_embeddings_with_circuit_breaker(
                     raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Google API key not configured")
                 raw_model = config.get("model_name_or_path", model_id) or "models/text-embedding-004"
                 model_name = raw_model if raw_model.startswith("models/") else f"models/{raw_model}"
-                session = await connection_manager.get_session(provider)
+                client = await connection_manager.get_session(provider)
                 base = "https://generativelanguage.googleapis.com/v1beta"
                 url = f"{base}/{model_name}:batchEmbedContents?key={api_key}"
                 reqs = [{"model": model_name, "content": {"parts": [{"text": t}]}} for t in texts]
                 payload = {"requests": reqs}
-                async with session.post(url, json=payload) as resp:
-                    if resp.status >= 400:
-                        detail = await resp.text()
-                        raise HTTPException(status_code=resp.status, detail=f"Google Embeddings error: {detail}")
-                    data = await resp.json()
+                resp = await _http_afetch(
+                    method="POST",
+                    url=url,
+                    client=client,
+                    json=payload,
+                    timeout=REQUEST_TIMEOUT,
+                    retry=_RetryPolicy(attempts=1),
+                )
+                try:
+                    status_code = int(getattr(resp, "status_code", 0))
+                    if status_code >= 400:
+                        try:
+                            detail = resp.text
+                        except Exception:
+                            detail = ""
+                        raise HTTPException(status_code=status_code, detail=f"Google Embeddings error: {detail}")
+                    data = resp.json()
+                finally:
+                    close = getattr(resp, "aclose", None)
+                    if callable(close):
+                        await close()
+                    else:
+                        close = getattr(resp, "close", None)
+                        if callable(close):
+                            close()
+                embs = []
+                try:
+                    items = data.get("embeddings") or []
+                    for it in items:
+                        vec = it.get("values") or it.get("embedding") or []
+                        if isinstance(vec, dict) and "values" in vec:
+                            vec = vec["values"]
+                        if not isinstance(vec, list):
+                            raise ValueError("invalid embedding vector")
+                        embs.append(vec)
+                except Exception:
                     embs = []
-                    try:
-                        items = data.get("embeddings") or []
-                        for it in items:
-                            vec = it.get("values") or it.get("embedding") or []
-                            if isinstance(vec, dict) and "values" in vec:
-                                vec = vec["values"]
-                            if not isinstance(vec, list):
-                                raise ValueError("invalid embedding vector")
-                            embs.append(vec)
-                    except Exception:
-                        embs = []
-                    if not embs or len(embs) != len(texts):
-                        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid Google embeddings response format")
-                    return embs
+                if not embs or len(embs) != len(texts):
+                    raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid Google embeddings response format")
+                return embs
             elif provider == "mlx":
                 loop = asyncio.get_running_loop()
                 registry = get_embeddings_registry()

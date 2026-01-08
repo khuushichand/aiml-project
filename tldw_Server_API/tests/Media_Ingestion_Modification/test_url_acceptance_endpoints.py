@@ -1,72 +1,55 @@
-import asyncio
 from pathlib import Path
 from typing import Dict, Tuple
+from urllib.parse import urlparse
 
 import pytest
-from fastapi.testclient import TestClient
 
-from tldw_Server_API.app.main import app as fastapi_app_instance, app
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, _single_user_instance
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+_STUB_TABLE: Dict[str, Tuple[str, Dict[str, str], bytes]] = {}
 
 
-class AsyncResponseStub:
+class _URLStub:
+    def __init__(self, url: str):
+        self._url = url
+        try:
+            self.path = urlparse(url).path
+        except Exception:
+            self.path = url
+
+    def __str__(self):
+        return self._url
+
+
+class FakeResponse:
     def __init__(self, final_url: str, headers: Dict[str, str], content: bytes):
-        # Simulate httpx.URL on attribute access
-        class _URL:
-            def __init__(self, url: str):
-                self._url = url
-                self.path = Path(url).name if "/" in url else url
-
-            def __str__(self):
-                return self._url
-
-        self.url = _URL(final_url)
-        self.headers = headers or {}
+        self.url = _URLStub(final_url)
+        self.headers = {k.lower(): v for k, v in (headers or {}).items()}
         self._content = content or b""
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
+        self.status_code = 200
 
     def raise_for_status(self):
-        return None
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
 
     async def aiter_bytes(self, chunk_size: int = 8192):
         yield self._content
 
 
-class AsyncClientFake:
-    TABLE: Dict[str, Tuple[str, Dict[str, str], bytes]] = {}
-
-    def __init__(self, *args, **kwargs):
-        pass
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
-
-    # stream("GET", url, follow_redirects=True, timeout=...)
-    def stream(self, method: str, url: str, **kwargs):
-        if method != "GET":
-            raise AssertionError("AsyncClientFake supports only GET in tests")
-        if url not in self.TABLE:
-            raise AssertionError(f"No stub configured for URL: {url}")
-        final_url, headers, content = self.TABLE[url]
-        return AsyncResponseStub(final_url, headers, content)
-
-
 @pytest.fixture(autouse=True)
-def patch_httpx_asyncclient(monkeypatch):
-    # Patch the AsyncClient used by endpoints module only
-    import tldw_Server_API.app.api.v1.endpoints.media as media_endpoints
-    monkeypatch.setattr(media_endpoints.httpx, "AsyncClient", AsyncClientFake)
+def patch_http_fetch(monkeypatch):
+    import tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils as download_utils
+
+    async def fake_afetch(*args, **kwargs):
+        url = kwargs.get("url")
+        if url is None and len(args) > 1:
+            url = args[1]
+        if url not in _STUB_TABLE:
+            raise AssertionError(f"No stub configured for URL: {url}")
+        final_url, headers, content = _STUB_TABLE[url]
+        return FakeResponse(final_url, headers, content)
+
+    monkeypatch.setattr(download_utils, "_m_afetch", fake_afetch)
     yield
-    AsyncClientFake.TABLE = {}
+    _STUB_TABLE.clear()
 
 
 @pytest.fixture()
@@ -84,7 +67,7 @@ def dummy_headers():
 
 
 def _stub_url(url: str, *, final: str = None, headers: Dict[str, str] = None, body: bytes = None):
-    AsyncClientFake.TABLE[url] = (final or url, headers or {}, body or b"TEST")
+    _STUB_TABLE[url] = (final or url, headers or {}, body or b"TEST")
 
 
 ########################

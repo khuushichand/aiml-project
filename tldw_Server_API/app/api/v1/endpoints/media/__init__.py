@@ -4,7 +4,6 @@ from typing import Any, Dict
 
 from fastapi import APIRouter
 from loguru import logger
-import httpx  # legacy shim for tests that monkeypatch media.httpx
 
 from tldw_Server_API.app.api.v1.API_Deps.validations_deps import (
     file_validator_instance,
@@ -254,7 +253,6 @@ __all__ = [
     "cache",
     "cache_response",
     "invalidate_cache",
-    "httpx",
     "get_request_user",
     "get_media_db_for_user",
     "get_usage_event_logger",

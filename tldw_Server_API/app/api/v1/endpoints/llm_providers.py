@@ -5,10 +5,10 @@ from functools import partial
 from typing import Dict, List, Any, Optional, Tuple
 from urllib.parse import urlparse, urljoin
 import os
-import requests
 from fastapi import APIRouter, HTTPException, Depends
 from loguru import logger
 from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.http_client import fetch as _http_fetch, RetryPolicy as _RetryPolicy
 from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
     apply_llm_provider_overrides_to_listing,
 )
@@ -686,14 +686,25 @@ def discover_models_from_endpoint(
     discovered: List[str] = []
     for url in candidates:
         try:
-            resp = requests.get(url, headers=headers, timeout=LOCAL_MODEL_DISCOVERY_TIMEOUT)
-            if resp.status_code >= 400:
-                logger.debug(f"[Model discovery] {provider}: {url} responded with {resp.status_code}")
-                continue
-            discovered = _extract_models_from_response(resp.json())
-            if discovered:
-                logger.info(f"[Model discovery] {provider}: found {len(discovered)} models via {url}")
-                break
+            resp = _http_fetch(
+                method="GET",
+                url=url,
+                headers=headers,
+                timeout=LOCAL_MODEL_DISCOVERY_TIMEOUT,
+                retry=_RetryPolicy(attempts=1),
+            )
+            try:
+                if resp.status_code >= 400:
+                    logger.debug(f"[Model discovery] {provider}: {url} responded with {resp.status_code}")
+                    continue
+                discovered = _extract_models_from_response(resp.json())
+                if discovered:
+                    logger.info(f"[Model discovery] {provider}: found {len(discovered)} models via {url}")
+                    break
+            finally:
+                close = getattr(resp, "close", None)
+                if callable(close):
+                    close()
         except Exception as exc:
             logger.debug(f"[Model discovery] {provider}: error querying {url}: {exc}")
             continue

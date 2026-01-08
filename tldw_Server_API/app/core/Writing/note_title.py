@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Literal
 from tldw_Server_API.app.core.config import settings as core_settings
+from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 import re
 from datetime import datetime
 
@@ -132,10 +133,10 @@ def _try_generate_title_llm(content: str, options: TitleGenOptions) -> Optional[
 
     Keeps synchronous control path; relies on local/adapter-backed sync helpers.
     """
-    try:
-        from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openai_chat_handler
-    except Exception:
-        openai_chat_handler = None  # type: ignore
+    registry = get_registry()
+    adapter = registry.get_adapter("openai")
+    if adapter is None:
+        return None
 
     try:
         # Short prompt instructing concise title; no JSON; single line
@@ -147,32 +148,27 @@ def _try_generate_title_llm(content: str, options: TitleGenOptions) -> Optional[
             f"Write a descriptive title no longer than {options.max_len} characters for the following note.\n"
             f"Return only the title with no quotes or extra text.\n\n{content_snippet}"
         )
-        messages = [
-            {"role": "system", "content": sys_msg},
-            {"role": "user", "content": user_msg},
-        ]
+        messages = [{"role": "user", "content": user_msg}]
         # Avoid streaming for simplicity; small token budget
-        if openai_chat_handler is not None:
-            result = openai_chat_handler(
-                input_data=messages,
-                model=None,
-                temp=0.2,
-                max_tokens=128,
-                streaming=False,
-            )
-            # Adapter may return dict or provider-specific object.
-            # Normalize common dict-like responses.
-            if isinstance(result, dict):
-                try:
-                    title = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-                except Exception:
-                    title = ""
-            else:
-                # Fallback to string-like result if provider returns simple content
-                title = str(result).strip()
+        result = adapter.chat(
+            {
+                "messages": messages,
+                "system_message": sys_msg,
+                "model": None,
+                "temperature": 0.2,
+                "max_tokens": 128,
+            }
+        )
+        # Adapter may return dict or provider-specific object.
+        # Normalize common dict-like responses.
+        if isinstance(result, dict):
+            try:
+                title = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            except Exception:
+                title = ""
         else:
-            # No adapter available; skip
-            title = ""
+            # Fallback to string-like result if provider returns simple content
+            title = str(result).strip()
         title = (title or "").strip().strip('"')
         # Basic sanitization
         title = re.sub(r"\s+", " ", title)

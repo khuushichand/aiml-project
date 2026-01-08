@@ -2,7 +2,6 @@
 # Async implementation of embeddings creation and management
 
 import asyncio
-import aiohttp
 import hashlib
 import time
 import atexit
@@ -19,6 +18,19 @@ from tldw_Server_API.app.core.Embeddings.multi_tier_cache import get_multi_tier_
 from tldw_Server_API.app.core.Embeddings.request_batching import get_batcher
 from tldw_Server_API.app.core.Embeddings.simplified_config import get_config
 from tldw_Server_API.app.core.Utils.tokenizer import count_tokens as _count_tokens
+from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
+
+
+async def _close_response(resp: Any) -> None:
+    if resp is None:
+        return
+    close = getattr(resp, "aclose", None)
+    if callable(close):
+        await close()
+        return
+    close = getattr(resp, "close", None)
+    if callable(close):
+        close()
 
 
 class AsyncEmbeddingProvider:
@@ -98,7 +110,7 @@ class AsyncOpenAIProvider(AsyncEmbeddingProvider):
 
         # Get connection pool for this provider
         pool = self.pool_manager.get_pool(self.provider_name)
-        async with pool.acquire_connection() as session:
+        async with pool.acquire_connection():
             headers = {"Content-Type": "application/json"}
             if self.api_key:
                 headers["Authorization"] = f"Bearer {self.api_key}"
@@ -108,20 +120,29 @@ class AsyncOpenAIProvider(AsyncEmbeddingProvider):
                 "model": model
             }
 
+            resp = None
             try:
-                async with session.post(
-                    self.base_url,
+                retry_policy = RetryPolicy(attempts=max(1, int(getattr(pool, "retry_attempts", 3))))
+                resp = await afetch(
+                    method="POST",
+                    url=self.base_url,
                     json=payload,
-                    headers=headers
-                ) as response:
-                    response.raise_for_status()
-                    data = await response.json()
-                    return data["data"][0]["embedding"]
+                    headers=headers,
+                    timeout=getattr(pool, "timeout_seconds", 30),
+                    retry=retry_policy,
+                )
+                if resp.status_code >= 400:
+                    status = "failure"
+                    self.metrics.log_error(self.provider_name, f"HTTP {resp.status_code}")
+                    raise Exception(f"HTTP {resp.status_code}")
+                data = resp.json()
+                return data["data"][0]["embedding"]
             except Exception as e:
                 status = "failure"
                 self.metrics.log_error(self.provider_name, str(type(e).__name__))
                 raise
             finally:
+                await _close_response(resp)
                 # Emit metrics with the actual requested model
                 elapsed = _time.perf_counter() - t0
                 self.metrics.log_request(self.provider_name, model, status=status)
@@ -171,7 +192,7 @@ class AsyncHuggingFaceProvider(AsyncEmbeddingProvider):
 
         # Get connection pool for this provider
         pool = self.pool_manager.get_pool(self.provider_name)
-        async with pool.acquire_connection() as session:
+        async with pool.acquire_connection():
             headers = {"Content-Type": "application/json"}
             if self.api_key:
                 headers["Authorization"] = f"Bearer {self.api_key}"
@@ -181,28 +202,36 @@ class AsyncHuggingFaceProvider(AsyncEmbeddingProvider):
                 "options": {"wait_for_model": True}
             }
 
+            resp = None
             try:
-                async with session.post(
-                    url,
+                retry_policy = RetryPolicy(attempts=max(1, int(getattr(pool, "retry_attempts", 3))))
+                resp = await afetch(
+                    method="POST",
+                    url=url,
                     json=payload,
-                    headers=headers
-                ) as response:
-                    response.raise_for_status()
-                    data = await response.json()
+                    headers=headers,
+                    timeout=getattr(pool, "timeout_seconds", 30),
+                    retry=retry_policy,
+                )
+                if resp.status_code >= 400:
+                    self.metrics.log_error(self.provider_name, f"HTTP {resp.status_code}")
+                    raise Exception(f"HTTP {resp.status_code}")
+                data = resp.json()
 
-                    # Usage is already recorded in check_rate_limit_async
+                # Usage is already recorded in check_rate_limit_async
 
-                    # Extract embedding based on response format
-                    if isinstance(data, list):
-                        return data
-                    elif isinstance(data, dict) and 'embeddings' in data:
-                        return data['embeddings']
-                    else:
-                        raise ValueError(f"Unexpected response format: {data}")
+                # Extract embedding based on response format
+                if isinstance(data, list):
+                    return data
+                if isinstance(data, dict) and 'embeddings' in data:
+                    return data['embeddings']
+                raise ValueError(f"Unexpected response format: {data}")
 
             except Exception as e:
                 self.metrics.log_error(self.provider_name, str(type(e).__name__))
                 raise
+            finally:
+                await _close_response(resp)
 
 
 class AsyncLocalProvider(AsyncEmbeddingProvider):

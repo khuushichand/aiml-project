@@ -5,8 +5,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import asyncio
 import functools
 from pathlib import Path
-
-import httpx
 from fastapi import APIRouter, Depends, File, UploadFile, status
 from loguru import logger
 from starlette.responses import JSONResponse
@@ -183,42 +181,40 @@ async def process_documents_endpoint(
             download_tasks: List[asyncio.Task[Path]] = []
             url_task_map: Dict[asyncio.Task[Path], str] = {}
 
-            # Use media_mod.httpx.AsyncClient so tests can monkeypatch via the media shim.
-            async with media_mod.httpx.AsyncClient() as client:
-                allowed_ext_set = set(ALLOWED_DOC_EXTENSIONS)
+            allowed_ext_set = set(ALLOWED_DOC_EXTENSIONS)
 
-                # Preserve test-time monkeypatching of `_download_url_async`
-                # via the media shim.
-                download_url_async = getattr(media_mod, "_download_url_async")
+            # Preserve test-time monkeypatching of `_download_url_async`
+            # via the media shim.
+            download_url_async = getattr(media_mod, "_download_url_async")
 
-                download_tasks = [
-                    download_url_async(
-                        client=client,
-                        url=url,
-                        target_dir=temp_dir,
-                        allowed_extensions=allowed_ext_set,
-                        check_extension=True,
-                        # Disallow only clearly unsupported/generic types. Allow HTML/XHTML/XML
-                        # types here because this endpoint handles .html/.htm/.xml content.
-                        disallow_content_types={
-                            "application/msword",
-                            "application/octet-stream",
-                        },
-                    )
-                    for url in form_data.urls
-                ]
+            download_tasks = [
+                download_url_async(
+                    client=None,
+                    url=url,
+                    target_dir=temp_dir,
+                    allowed_extensions=allowed_ext_set,
+                    check_extension=True,
+                    # Disallow only clearly unsupported/generic types. Allow HTML/XHTML/XML
+                    # types here because this endpoint handles .html/.htm/.xml content.
+                    disallow_content_types={
+                        "application/msword",
+                        "application/octet-stream",
+                    },
+                )
+                for url in form_data.urls
+            ]
 
-                url_task_map = {
-                    task: url for task, url in zip(download_tasks, form_data.urls)
-                }
+            url_task_map = {
+                task: url for task, url in zip(download_tasks, form_data.urls)
+            }
 
-                if download_tasks:
-                    download_results = await asyncio.gather(
-                        *download_tasks,
-                        return_exceptions=True,
-                    )
-                else:
-                    download_results: List[Any] = []
+            if download_tasks:
+                download_results = await asyncio.gather(
+                    *download_tasks,
+                    return_exceptions=True,
+                )
+            else:
+                download_results: List[Any] = []
 
             if download_tasks:
                 for task, result in zip(download_tasks, download_results):

@@ -12,7 +12,8 @@ from loguru import logger
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
     PromptStudioDatabase, DatabaseError
 )
-from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_openai
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 import os
 
 ########################################################################################################################
@@ -79,6 +80,14 @@ class ImprovementResult:
         if self.before_analysis and self.after_analysis:
             return self.after_analysis.overall_score() - self.before_analysis.overall_score()
         return self.score_change
+
+
+def _call_openai_adapter(request: Dict[str, Any]) -> Dict[str, Any]:
+    registry = get_registry()
+    adapter = registry.get_adapter("openai")
+    if adapter is None:
+        raise ChatConfigurationError(provider="openai", message="OpenAI adapter unavailable.")
+    return adapter.chat(request)
 
 ########################################################################################################################
 # Improvement Strategies
@@ -753,11 +762,13 @@ Please identify:
 Format as JSON.
 """
 
-            response = chat_with_openai(
-                input_data=[{"role": "user", "content": analysis_prompt}],
-                system_message="You are an expert prompt analyst.",
-                model=model_name,
-                temp=0.7,
+            response = _call_openai_adapter(
+                {
+                    "messages": [{"role": "user", "content": analysis_prompt}],
+                    "system_message": "You are an expert prompt analyst.",
+                    "model": model_name,
+                    "temperature": 0.7,
+                }
             )
 
             response_text = self._extract_llm_content(response)
@@ -884,11 +895,13 @@ Original text:
 Provide only the improved text, no explanations.
 """
 
-        response = chat_with_openai(
-            input_data=[{"role": "user", "content": improvement_prompt}],
-            system_message="You are an expert prompt engineer focused on improvement.",
-            model=model_name,
-            temp=0.7,
+        response = _call_openai_adapter(
+            {
+                "messages": [{"role": "user", "content": improvement_prompt}],
+                "system_message": "You are an expert prompt engineer focused on improvement.",
+                "model": model_name,
+                "temperature": 0.7,
+            }
         )
 
         improved_text = self._extract_llm_content(response)

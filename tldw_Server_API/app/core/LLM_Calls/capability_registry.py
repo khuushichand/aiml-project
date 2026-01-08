@@ -146,8 +146,10 @@ def _validate_tools(provider_key: str, tools: Any) -> None:
         if not isinstance(tool, dict):
             _raise_nested_error(provider_key, "tools", f"item {idx} must be an object")
         tool_type = tool.get("type")
+        if not isinstance(tool_type, str) or not tool_type.strip():
+            _raise_nested_error(provider_key, "tools", f"item {idx} type must be a non-empty string")
         if tool_type != "function":
-            _raise_nested_error(provider_key, "tools", f"item {idx} type must be 'function'")
+            continue
         func = tool.get("function")
         if not isinstance(func, dict):
             _raise_nested_error(provider_key, "tools", f"item {idx} function must be an object")
@@ -167,14 +169,14 @@ def _validate_response_format(provider_key: str, response_format: Any) -> None:
     resp_type = response_format.get("type")
     if not isinstance(resp_type, str) or not resp_type.strip():
         _raise_nested_error(provider_key, "response_format", "type must be a non-empty string")
-    allowed_types = {"text", "json_object", "json_schema"}
-    if resp_type not in allowed_types:
-        _raise_nested_error(provider_key, "response_format", f"unsupported type '{resp_type}'")
+    schema = response_format.get("json_schema")
     if resp_type == "json_schema":
-        schema = response_format.get("json_schema")
         if not isinstance(schema, Mapping):
             _raise_nested_error(provider_key, "response_format", "json_schema must be an object")
-        inner = schema.get("schema") if isinstance(schema, Mapping) else None
+    if schema is not None and not isinstance(schema, Mapping):
+        _raise_nested_error(provider_key, "response_format", "json_schema must be an object")
+    if isinstance(schema, Mapping):
+        inner = schema.get("schema")
         if inner is not None and not isinstance(inner, Mapping):
             _raise_nested_error(provider_key, "response_format", "json_schema.schema must be an object")
 
