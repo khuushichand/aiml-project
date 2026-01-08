@@ -12,7 +12,6 @@ import hashlib
 from pathlib import Path as FilePath
 
 import aiofiles
-import httpx
 from fastapi import BackgroundTasks, HTTPException, Path, UploadFile, status
 from loguru import logger
 from starlette.responses import JSONResponse
@@ -25,6 +24,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
 )
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.exceptions import DownloadError, NetworkError, RetryExhaustedError
 from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
     prepare_chunking_options_dict,
     prepare_common_options,
@@ -52,6 +52,13 @@ def _ensure_warnings_list(result: Dict[str, Any]) -> List[str]:
         warnings = []
         result["warnings"] = warnings
     return warnings
+
+
+def _is_httpx_request_error(exc: Exception) -> bool:
+    module = getattr(exc.__class__, "__module__", "")
+    if not module.startswith("httpx"):
+        return False
+    return exc.__class__.__name__ in {"HTTPStatusError", "RequestError"}
 
 
 def _compute_source_hash_safe(
@@ -2152,13 +2159,24 @@ async def process_document_like_item(
 
             final_result["processing_source"] = processing_source
 
-    except (
-        httpx.HTTPStatusError,
-        httpx.RequestError,
-        IOError,
-        OSError,
-        FileNotFoundError,
-    ) as prep_err:
+    except Exception as prep_err:
+        if isinstance(prep_err, HTTPException):
+            raise
+        if not (
+            isinstance(
+                prep_err,
+                (
+                    IOError,
+                    OSError,
+                    FileNotFoundError,
+                    NetworkError,
+                    RetryExhaustedError,
+                    DownloadError,
+                ),
+            )
+            or _is_httpx_request_error(prep_err)
+        ):
+            raise
         logging.error(
             "File preparation/download error for %s: %s",
             item_input_ref,

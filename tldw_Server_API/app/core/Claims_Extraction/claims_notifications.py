@@ -159,6 +159,23 @@ def _normalize_notification_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
+def _classify_httpx_exception(exc: Exception, msg: str) -> Optional[str]:
+    module = getattr(exc.__class__, "__module__", "")
+    if not module.startswith("httpx"):
+        return None
+    name = exc.__class__.__name__
+    if "Timeout" in name:
+        return "timeout"
+    if "Connect" in name:
+        if isinstance(getattr(exc, "__cause__", None), ssl.SSLError):
+            return "tls"
+        if isinstance(getattr(exc, "__cause__", None), socket.gaierror):
+            return "dns"
+        if "name or service not known" in msg or "dns" in msg:
+            return "dns"
+    return None
+
+
 def _classify_webhook_exception(exc: Exception) -> str:
     if isinstance(exc, EgressPolicyError):
         return "invalid_url"
@@ -171,20 +188,9 @@ def _classify_webhook_exception(exc: Exception) -> str:
         return "tls"
     if isinstance(exc, socket.gaierror) or "name or service not known" in msg:
         return "dns"
-    try:
-        import httpx
-    except Exception:
-        httpx = None  # type: ignore
-    if httpx is not None:
-        if isinstance(exc, getattr(httpx, "TimeoutException", Exception)):
-            return "timeout"
-        if isinstance(exc, getattr(httpx, "ConnectError", Exception)):
-            if isinstance(getattr(exc, "__cause__", None), ssl.SSLError):
-                return "tls"
-            if isinstance(getattr(exc, "__cause__", None), socket.gaierror):
-                return "dns"
-            if "name or service not known" in msg or "dns" in msg:
-                return "dns"
+    httpx_class = _classify_httpx_exception(exc, msg)
+    if httpx_class:
+        return httpx_class
     return "other"
 
 

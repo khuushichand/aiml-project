@@ -227,64 +227,87 @@ For NeuTTS installation and usage, see `Docs/STT-TTS/NEUTTS_TTS_SETUP.md`.
 ### Basic Text-to-Speech
 
 ```python
-import requests
+import json
+from pathlib import Path
+from urllib import request
 
-response = requests.post(
+payload = {
+    "model": "tts-1",  # or an ElevenLabs model like "eleven_multilingual_v2" / "eleven_turbo_v2"
+    "input": "Hello, world!",
+    "voice": "alloy",
+    "response_format": "mp3",
+}
+
+req = request.Request(
     "http://localhost:8000/api/v1/audio/speech",
-    headers={"Authorization": "Bearer your-token"},
-    json={
-        "model": "tts-1",  # or an ElevenLabs model like "eleven_multilingual_v2" / "eleven_turbo_v2"
-        "input": "Hello, world!",
-        "voice": "alloy",
-        "response_format": "mp3"
-    }
+    data=json.dumps(payload).encode("utf-8"),
+    headers={
+        "Authorization": "Bearer your-token",
+        "Content-Type": "application/json",
+    },
+    method="POST",
 )
 
-with open("output.mp3", "wb") as f:
-    f.write(response.content)
+with request.urlopen(req) as resp:
+    Path("output.mp3").write_bytes(resp.read())
 ```
 
 ### Voice Cloning
 
 ```python
 import base64
+import json
+from urllib import request
 
 # Prepare voice reference
 with open("voice_sample.wav", "rb") as f:
     voice_ref = base64.b64encode(f.read()).decode()
 
-response = requests.post(
+payload = {
+    "model": "higgs",  # or chatterbox, vibevoice
+    "input": "This will sound like the reference voice.",
+    "voice": "default",
+    "voice_reference": voice_ref,  # Base64 encoded audio
+    "response_format": "mp3",
+}
+
+req = request.Request(
     "http://localhost:8000/api/v1/audio/speech",
-    json={
-        "model": "higgs",  # or chatterbox, vibevoice
-        "input": "This will sound like the reference voice.",
-        "voice": "default",
-        "voice_reference": voice_ref,  # Base64 encoded audio
-        "response_format": "mp3"
-    }
+    data=json.dumps(payload).encode("utf-8"),
+    headers={"Content-Type": "application/json"},
+    method="POST",
 )
+
+with request.urlopen(req) as resp:
+    audio = resp.read()
 ```
 
 ### Streaming Audio
 
 ```python
-import httpx
+import json
+from urllib import request
 
-async with httpx.AsyncClient() as client:
-    response = await client.post(
-        "http://localhost:8000/api/v1/audio/speech",
-        json={
-            "model": "kokoro",  # ElevenLabs also supports streaming
-            "input": "Streaming audio test.",
-            "voice": "af_bella",
-            "stream": True
-        },
-        timeout=30.0
-    )
+payload = {
+    "model": "kokoro",  # ElevenLabs also supports streaming
+    "input": "Streaming audio test.",
+    "voice": "af_bella",
+    "stream": True,
+}
 
-    with open("stream.mp3", "wb") as f:
-        async for chunk in response.aiter_bytes():
-            f.write(chunk)
+req = request.Request(
+    "http://localhost:8000/api/v1/audio/speech",
+    data=json.dumps(payload).encode("utf-8"),
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+
+with request.urlopen(req, timeout=30) as resp, open("stream.mp3", "wb") as f:
+    while True:
+        chunk = resp.read(8192)
+        if not chunk:
+            break
+        f.write(chunk)
 ```
 
 ### List Voices
@@ -333,21 +356,13 @@ Update `tts_providers_config.yaml` if you use custom paths. For the PyTorch vari
 
 ### Transcription (Speech-to-Text)
 
-```python
-# Transcribe audio file
-with open("audio.mp3", "rb") as f:
-    response = requests.post(
-        "http://localhost:8000/api/v1/audio/transcriptions",
-        headers={"Authorization": "Bearer your-token"},
-        files={"file": f},
-        data={
-            "model": "whisper-1",
-            "language": "en",
-            "response_format": "json"
-        }
-    )
-
-print(response.json()["text"])
+```bash
+curl -s -X POST "http://localhost:8000/api/v1/audio/transcriptions" \
+  -H "Authorization: Bearer your-token" \
+  -F "file=@audio.mp3" \
+  -F "model=whisper-1" \
+  -F "language=en" \
+  -F "response_format=json" | jq -r '.text'
 ```
 
 ## Configuration

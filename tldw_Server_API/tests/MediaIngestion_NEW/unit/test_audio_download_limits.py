@@ -29,10 +29,12 @@ def test_download_audio_aborts_when_stream_exceeds_limit(monkeypatch, tmp_path):
         headers={"content-type": "audio/mpeg"},
         chunks=[b"a" * 600, b"b" * 600],
     )
-    monkeypatch.setattr(audio_files.requests, "get", lambda *_, **__: faux_response)
-
     with pytest.raises(audio_files.AudioFileSizeError):
-        audio_files.download_audio_file("https://example.com/file.mp3", str(tmp_path))
+        audio_files.download_audio_file(
+            "https://example.com/file.mp3",
+            str(tmp_path),
+            downloader=lambda *_, **__: faux_response,
+        )
 
     expected_path = tmp_path / "file_12345678.mp3"
     assert not expected_path.exists()
@@ -57,9 +59,11 @@ def test_download_audio_rejects_unexpected_content_type(monkeypatch, tmp_path):
     monkeypatch.setattr(audio_files.uuid, "uuid4", lambda: dummy_uuid)
 
     faux_response = _FakeResponse(headers={"content-type": "text/plain"}, chunks=[b"x"])
-    monkeypatch.setattr(audio_files.requests, "get", lambda *_, **__: faux_response)
-
     with pytest.raises(audio_files.AudioDownloadError):
-        audio_files.download_audio_file("https://example.com/music.mp3", str(tmp_path))
+        audio_files.download_audio_file(
+            "https://example.com/music.mp3",
+            str(tmp_path),
+            downloader=lambda *_, **__: faux_response,
+        )
     expected_path = tmp_path / "music_abcdef12.mp3"
     assert not expected_path.exists()

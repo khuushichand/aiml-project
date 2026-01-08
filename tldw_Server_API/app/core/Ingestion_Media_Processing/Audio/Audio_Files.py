@@ -33,7 +33,6 @@ from typing import Optional, List, Dict, Any, Callable
 from urllib.parse import urlparse
 #
 # External Imports
-import requests
 import yt_dlp
 #
 # Local Imports
@@ -220,19 +219,16 @@ def download_audio_file(
         cookies: A JSON string or a dictionary of cookies to use if `use_cookies` is True.
                  Defaults to None.
         downloader: Optional override for streaming download function (test injection).
-                    If provided, it should be a callable compatible with requests.get,
-                    returning an object exposing .headers, .iter_content(), and
-                    .raise_for_status(). When not provided, the function uses the
-                    centralized http_client downloader in production; if a monkeypatch
-                    is detected on requests.get, it uses requests.get streaming to allow
-                    unit tests to simulate network responses.
+                    If provided, it should be a callable that returns an object exposing
+                    .headers, .iter_content(), and .raise_for_status(). When not provided,
+                    the function uses the centralized http_client downloader.
 
     Returns:
         The absolute local path to the downloaded audio file.
 
     Raises:
-        requests.exceptions.RequestException: If the download fails due to network issues,
-                                              bad HTTP status codes, or timeouts.
+        AudioDownloadError: If the download fails due to network issues,
+                            bad HTTP status codes, or timeouts.
         ValueError: If the file size exceeds `MAX_FILE_SIZE`, or if `cookies`
                     are provided in an invalid JSON format when `use_cookies` is True.
         TypeError: If `cookies` is not a string or dictionary when `use_cookies` is True.
@@ -288,7 +284,7 @@ def download_audio_file(
 
         logging.info(f"Downloading {url} to: {save_path}")
 
-        def _requests_stream_download(get_callable: Callable[..., Any]) -> str:
+        def _stream_download(get_callable: Callable[..., Any]) -> str:
             resp = get_callable(url, headers=headers, stream=True, timeout=30)
             resp.raise_for_status()
             content_type = (resp.headers.get("content-type") or "").lower()
@@ -346,61 +342,45 @@ def download_audio_file(
             return str(save_path)
 
         # Choose download strategy:
-        use_requests_stream = False
         if downloader is not None:
-            use_requests_stream = True
-            get_impl = downloader
-        else:
-            # Detect if requests.get is monkeypatched (as in unit tests)
-            try:
-                import requests as _rq_mod  # local import to compare
-                from requests import api as _rq_api
-                if getattr(_rq_mod, 'get', None) is not getattr(_rq_api, 'get', object()):
-                    use_requests_stream = True
-                    get_impl = _rq_mod.get
-            except Exception:
-                # Be safe; fallback to centralized client
-                use_requests_stream = False
+            return _stream_download(downloader)
 
-        if use_requests_stream:
-            return _requests_stream_download(get_impl)  # type: ignore[name-defined]
-        else:
-            # Centralized downloader with size/content-type enforcement
-            try:
-                http_download(
-                    url=url,
-                    dest=save_path,
-                    headers=headers,
-                    retry=RetryPolicy(),
-                    require_content_type="audio/",
-                    max_bytes_total=int(MAX_FILE_SIZE) if MAX_FILE_SIZE else None,
-                )
-            except Exception as e:
-                # Map size-related failures to AudioFileSizeError
-                msg = str(e)
-                if any(k in msg.lower() for k in ["disk quota exceeded", "quota exceeded", "exceed", "exceeds"]):
-                    try:
-                        Path(save_path).unlink(missing_ok=True)
-                    except Exception:
-                        pass
-                    raise AudioFileSizeError(
-                        f"Downloaded content for {url} exceeded the configured limit."
-                    ) from e
-                # Clean up and wrap remaining errors
+        # Centralized downloader with size/content-type enforcement
+        try:
+            http_download(
+                url=url,
+                dest=save_path,
+                headers=headers,
+                retry=RetryPolicy(),
+                require_content_type="audio/",
+                max_bytes_total=int(MAX_FILE_SIZE) if MAX_FILE_SIZE else None,
+            )
+        except Exception as e:
+            # Map size-related failures to AudioFileSizeError
+            msg = str(e)
+            if any(k in msg.lower() for k in ["disk quota exceeded", "quota exceeded", "exceed", "exceeds"]):
                 try:
                     Path(save_path).unlink(missing_ok=True)
                 except Exception:
                     pass
-                raise AudioDownloadError(f"Download failed for {url}: {e}") from e
-            # Success path
+                raise AudioFileSizeError(
+                    f"Downloaded content for {url} exceeded the configured limit."
+                ) from e
+            # Clean up and wrap remaining errors
             try:
-                downloaded_bytes = Path(save_path).stat().st_size
+                Path(save_path).unlink(missing_ok=True)
             except Exception:
-                downloaded_bytes = 0
-            logging.info(
-                f"Audio file downloaded successfully from {url}: {save_path} ({downloaded_bytes / (1024*1024):.2f} MB)"
-            )
-            return str(save_path)
+                pass
+            raise AudioDownloadError(f"Download failed for {url}: {e}") from e
+        # Success path
+        try:
+            downloaded_bytes = Path(save_path).stat().st_size
+        except Exception:
+            downloaded_bytes = 0
+        logging.info(
+            f"Audio file downloaded successfully from {url}: {save_path} ({downloaded_bytes / (1024*1024):.2f} MB)"
+        )
+        return str(save_path)
 
     except AudioFileSizeError:
         logging.error(f"Audio download aborted: file exceeded configured limit for {url}")
@@ -414,13 +394,6 @@ def download_audio_file(
     except AudioDownloadError:
         # Allow previously raised download errors to bubble without double-wrapping
         raise
-    except requests.exceptions.Timeout:
-         logging.error(f"Timeout occurred while downloading audio file: {url}")
-         raise AudioDownloadError(f"Download timed out for {url}") from None
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error downloading audio file from {url}: {type(e).__name__} - {e}")
-        err_msg = str(e)
-        raise AudioDownloadError(f"Download failed for {url}. Reason: {err_msg}") from e
     except ValueError as e: # Handles cookie format issues and other value errors
         logging.error(f"Value error during download from {url}: {e}")
         if "cookies" in str(e).lower():

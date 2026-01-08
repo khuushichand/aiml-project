@@ -11,10 +11,11 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 from loguru import logger
 
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
 from tldw_Server_API.app.core.Evaluations.benchmark_utils import NextTokenCapture
-from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import (
-    chat_with_openai, chat_with_anthropic, chat_with_local_llm
-)
+from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_local_llm
+from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+from tldw_Server_API.app.core.config import load_and_log_configs
 
 logger = logger
 
@@ -22,15 +23,17 @@ logger = logger
 class WordBenchRunner:
     """Runner for WordBench next token prediction analysis."""
 
-    def __init__(self, api_name: str = "openai", api_key: Optional[str] = None):
+    def __init__(self, api_name: str = "openai", api_key: Optional[str] = None, model: Optional[str] = None):
         """Initialize WordBench runner.
 
         Args:
             api_name: Name of the API to use (openai, local-llm, etc.)
             api_key: API key if required
+            model: Optional model override for adapter-backed providers
         """
         self.api_name = api_name
         self.api_key = api_key
+        self.model = model
         self.capture = NextTokenCapture(top_k=10)
 
     async def analyze_prompt(self, prompt: str) -> Dict[str, Any]:
@@ -80,24 +83,32 @@ class WordBenchRunner:
         """Call OpenAI API with logprob request.
 
         Note: OpenAI's newer models may not support logprobs directly.
-        This would need to use the completions API (not chat completions)
-        for models that support it.
+        This uses the adapter-backed chat completions path with logprobs enabled.
         """
-        # Format for OpenAI completions API (not chat)
-        import openai
+        adapter = get_registry().get_adapter("openai")
+        if adapter is None:
+            raise ChatConfigurationError(provider="openai", message="OpenAI adapter unavailable.")
 
-        if self.api_key:
-            openai.api_key = self.api_key
+        cfg = load_and_log_configs() or {}
+        cfg_model = (cfg.get("openai_api") or {}).get("model")
+        model = self.model or cfg_model or "gpt-4o-mini"
 
-        # Use completions endpoint for logprobs support
-        response = await asyncio.to_thread(
-            openai.Completion.create,
-            model="text-davinci-003",  # Or another model that supports logprobs
-            prompt=request["prompt"],
-            max_tokens=request["max_tokens"],
-            temperature=request["temperature"],
-            logprobs=request["logprobs"],
-            echo=request.get("echo", False)
+        logprobs_val = request.get("logprobs")
+        top_logprobs = None
+        if isinstance(logprobs_val, int):
+            top_logprobs = logprobs_val
+
+        response = await adapter.achat(
+            {
+                "messages": [{"role": "user", "content": request["prompt"]}],
+                "model": model,
+                "api_key": self.api_key,
+                "temperature": request.get("temperature"),
+                "max_tokens": request.get("max_tokens"),
+                "logprobs": bool(top_logprobs),
+                "top_logprobs": top_logprobs,
+                "stream": False,
+            }
         )
 
         return response

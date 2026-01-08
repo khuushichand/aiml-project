@@ -294,11 +294,10 @@ class LLMGenerator(BaseGenerator):
             response = await self._call_llm(full_prompt, **kwargs)
 
             # Extract text from response
+            response_text = _extract_openai_content(response)
             if isinstance(response, dict):
-                response_text = response.get("content", response.get("text", str(response)))
                 tokens_used = response.get("usage", {}).get("total_tokens", 0)
             else:
-                response_text = str(response)
                 tokens_used = len(response_text.split()) * 1.3  # Rough estimate
 
             generation_time = time.time() - start_time
@@ -333,94 +332,31 @@ class LLMGenerator(BaseGenerator):
 
     async def _call_llm(self, prompt: str, **kwargs) -> Any:
         """Call the appropriate LLM provider."""
-        provider = self.config.provider.lower()
+        provider = (self.config.provider or "").lower()
+        streaming = bool(kwargs.get("streaming", self.config.streaming))
+        model = kwargs.get("model", self.config.model)
+        api_key = kwargs.get("api_key", self.config.api_key)
+        temperature = kwargs.get("temperature", self.config.temperature)
+        max_tokens = kwargs.get("max_tokens", self.config.max_tokens)
+        timeout = kwargs.get("timeout", self.config.timeout)
 
-        # Prepare common parameters
-        params = {
-            "custom_prompt_arg": prompt,
-            "streaming": self.config.streaming,
-            "system_prompt": self.config.system_prompt
+        request: Dict[str, Any] = {
+            "messages": [{"role": "user", "content": prompt}],
+            "model": model,
+            "api_key": api_key,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
         }
+        if streaming:
+            request["stream"] = True
 
-        # Add API key if provided
-        if self.config.api_key:
-            params["api_key"] = self.config.api_key
+        adapter = get_registry().get_adapter(provider)
+        if adapter is not None:
+            if streaming:
+                return adapter.astream(request, timeout=timeout)
+            return await adapter.achat(request, timeout=timeout)
 
-        # Override with kwargs
-        params.update(kwargs)
-
-        # Call appropriate provider
-        if provider == "openai":
-            return await asyncio.to_thread(
-                chat_with_openai,
-                api_key=params.get("api_key"),
-                file_path="",  # Not used for direct prompt
-                custom_prompt_arg=prompt,
-                streaming=self.config.streaming
-            )
-
-        elif provider == "anthropic":
-            return await asyncio.to_thread(
-                chat_with_anthropic,
-                api_key=params.get("api_key"),
-                file_path="",
-                model=self.config.model,
-                custom_prompt_arg=prompt,
-                streaming=self.config.streaming
-            )
-
-        elif provider == "groq":
-            return await asyncio.to_thread(
-                chat_with_groq,
-                api_key=params.get("api_key"),
-                input_data=prompt,
-                custom_prompt_arg="",
-                system_prompt=self.config.system_prompt,
-                streaming=self.config.streaming
-            )
-
-        elif provider == "openrouter":
-            return await asyncio.to_thread(
-                chat_with_openrouter,
-                api_key=params.get("api_key"),
-                input_data=prompt,
-                custom_prompt_arg="",
-                system_prompt=self.config.system_prompt,
-                streaming=self.config.streaming
-            )
-
-        elif provider == "deepseek":
-            return await asyncio.to_thread(
-                chat_with_deepseek,
-                api_key=params.get("api_key"),
-                input_data=prompt,
-                custom_prompt_arg="",
-                system_prompt=self.config.system_prompt,
-                streaming=self.config.streaming
-            )
-
-        elif provider == "huggingface":
-            return await asyncio.to_thread(
-                chat_with_huggingface,
-                api_key=params.get("api_key"),
-                input_data=prompt,
-                custom_prompt_arg="",
-                system_prompt=self.config.system_prompt,
-                streaming=self.config.streaming
-            )
-
-        elif provider == "cohere":
-            return await asyncio.to_thread(
-                chat_with_cohere,
-                api_key=params.get("api_key"),
-                file_path="",
-                model=self.config.model,
-                custom_prompt_arg=prompt,
-                streaming=self.config.streaming
-            )
-
-        else:
-            raise ValueError(f"Unsupported provider: {provider}")
+        raise ChatConfigurationError(provider=provider, message="No adapter available for provider.")
 
 
 class StreamingGenerator(LLMGenerator):
@@ -460,28 +396,19 @@ class StreamingGenerator(LLMGenerator):
             if hasattr(response, '__aiter__'):
                 # Async iterator
                 async for chunk in response:
-                    if isinstance(chunk, dict):
-                        text = chunk.get("content", chunk.get("text", ""))
-                    else:
-                        text = str(chunk)
+                    text = _extract_stream_text(chunk)
                     if text:
                         yield text
             elif hasattr(response, '__iter__'):
                 # Sync iterator - convert to async
                 for chunk in response:
-                    if isinstance(chunk, dict):
-                        text = chunk.get("content", chunk.get("text", ""))
-                    else:
-                        text = str(chunk)
+                    text = _extract_stream_text(chunk)
                     if text:
                         yield text
                     await asyncio.sleep(0)  # Allow other tasks
             else:
                 # Non-streaming response
-                if isinstance(response, dict):
-                    text = response.get("content", response.get("text", str(response)))
-                else:
-                    text = str(response)
+                text = _extract_openai_content(response)
 
                 # Simulate streaming by yielding in chunks
                 chunk_size = 50  # characters

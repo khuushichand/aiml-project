@@ -10,7 +10,10 @@ from fastapi.testclient import TestClient
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 from tldw_Server_API.app.api.v1.endpoints import workflows as wf_mod
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
+from starlette.requests import Request
 
 
 class _Recorder:
@@ -62,10 +65,36 @@ def admin_client(tmp_path, auth_headers):
     async def override_user():
         return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True)
 
+    async def override_principal(request: Request):  # type: ignore[override]
+        principal = AuthPrincipal(
+            kind="user",
+            user_id=1,
+            api_key_id=None,
+            subject="tester",
+            token_type="access",
+            jti=None,
+            roles=["admin"],
+            permissions=["workflows.runs.control"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+        try:
+            request.state.auth = AuthContext(
+                principal=principal,
+                ip=None,
+                user_agent=None,
+                request_id=None,
+            )
+        except Exception:
+            pass
+        return principal
+
     def override_db():
         return db
 
     app.dependency_overrides[get_request_user] = override_user
+    app.dependency_overrides[get_auth_principal] = override_principal
     app.dependency_overrides[wf_mod._get_db] = override_db
 
     with TestClient(app, headers=auth_headers) as client:
@@ -87,7 +116,9 @@ def test_dlq_replay_real_allowed(monkeypatch, admin_client):
         url = f'http://127.0.0.1:{port}/hook'
         db.enqueue_webhook_dlq(tenant_id='default', run_id='r1', url=url, body={'ok': True}, last_error='seed')
         # Fetch DLQ id then replay
-        items = client.get('/api/v1/workflows/webhooks/dlq?limit=10').json()['items']
+        resp = client.get('/api/v1/workflows/webhooks/dlq?limit=10')
+        assert resp.status_code == 200, resp.text
+        items = resp.json().get('items') or []
         assert items, 'Expected at least one DLQ item'
         dlq_id = items[0]['id']
         r2 = client.post(f'/api/v1/workflows/webhooks/dlq/{dlq_id}/replay')
@@ -118,7 +149,9 @@ def test_dlq_replay_real_denied(monkeypatch, admin_client):
         monkeypatch.setenv('WORKFLOWS_WEBHOOK_DENYLIST', '127.0.0.1')
         url = f'http://127.0.0.1:{port}/hook'
         db.enqueue_webhook_dlq(tenant_id='default', run_id='r2', url=url, body={'ok': True}, last_error='seed')
-        items = client.get('/api/v1/workflows/webhooks/dlq?limit=10').json()['items']
+        resp = client.get('/api/v1/workflows/webhooks/dlq?limit=10')
+        assert resp.status_code == 200, resp.text
+        items = resp.json().get('items') or []
         target = None
         for it in items:
             if it['url'] == url:

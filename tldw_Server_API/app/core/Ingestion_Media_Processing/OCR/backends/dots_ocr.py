@@ -182,7 +182,6 @@ def _extract_text_from_any(obj) -> str:
 
 def _ocr_via_vllm(image_bytes: bytes, prompt: str) -> str:
     import base64
-    import requests
 
     url = os.getenv("DOTS_VLLM_URL").rstrip("/")
     model = os.getenv("DOTS_VLLM_MODEL", "model")

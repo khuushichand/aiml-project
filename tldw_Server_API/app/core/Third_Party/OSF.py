@@ -92,29 +92,26 @@ def search_preprints(
 
 
 def get_preprint_by_id(osf_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    r = None
     try:
-        session = _mk_session()
         url = f"{BASE_URL}{osf_id}"
-        r = session.get(url, timeout=20)
+        r = fetch(method="GET", url=url, headers={"Accept": "application/json"}, timeout=20)
         if r.status_code == 404:
             return None, None
-        r.raise_for_status()
+        if r.status_code >= 400:
+            return None, f"OSF HTTP error: {r.status_code}"
         data = r.json() or {}
         if isinstance(data.get("data"), dict):
             return _normalize_item(data["data"]), None
         return None, None
     except Exception as e:
-        if httpx is not None and isinstance(e, httpx.TimeoutException):
-            return None, "Request to OSF API timed out."
-        if httpx is not None and isinstance(e, httpx.HTTPStatusError):
-            return None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.Timeout):
-            return None, "Request to OSF API timed out."
-        if isinstance(e, requests.exceptions.HTTPError):
-            return None, f"OSF API HTTP Error: {getattr(e.response, 'status_code', '?')}"
-        if isinstance(e, requests.exceptions.RequestException):
-            return None, f"OSF API Request Error: {str(e)}"
         return None, f"OSF error: {str(e)}"
+    finally:
+        try:
+            if r is not None:
+                r.close()
+        except Exception:
+            pass
 
 
 def get_preprint_by_doi(doi: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:

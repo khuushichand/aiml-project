@@ -50,11 +50,7 @@ class PointsReaderBackend(OCRBackend):
         if mode in ("auto", "sglang"):
             # Require a URL to be configured for availability in SGLang path
             url = os.getenv("POINTS_SGLANG_URL")
-            try:
-                has_requests = importlib.util.find_spec("requests") is not None
-            except Exception:
-                has_requests = False
-            if url and has_requests:
+            if url:
                 return True
         if mode in ("auto", "transformers"):
             try:
@@ -122,7 +118,6 @@ class PointsReaderBackend(OCRBackend):
 
 
 def _ocr_via_sglang(image_path: str, prompt: str) -> str:
-    import requests  # lazy import
     import base64
 
     url = os.getenv("POINTS_SGLANG_URL", "http://127.0.0.1:8081/v1/chat/completions")

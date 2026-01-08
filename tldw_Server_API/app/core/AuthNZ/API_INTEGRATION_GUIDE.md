@@ -5,82 +5,149 @@
 ### 1. Basic Authentication Flow
 
 ```python
-import httpx
-import pyotp
+import json
+import urllib.error
+import urllib.parse
+import urllib.request
 
-# Initialize client
-client = httpx.AsyncClient(base_url="http://localhost:8000/api/v1")
+BASE_URL = "http://localhost:8000/api/v1"
+
+def _request_json(method: str, path: str, *, headers=None, json_body=None, form=None):
+    req_headers = {"Accept": "application/json"}
+    if headers:
+        req_headers.update(headers)
+    data = None
+    if json_body is not None:
+        data = json.dumps(json_body).encode("utf-8")
+        req_headers.setdefault("Content-Type", "application/json")
+    elif form is not None:
+        data = urllib.parse.urlencode(form).encode("utf-8")
+        req_headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+
+    req = urllib.request.Request(
+        f"{BASE_URL}{path}",
+        data=data,
+        headers=req_headers,
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as err:
+        body = err.read().decode("utf-8")
+        payload = json.loads(body) if body else {}
+        return err.code, payload
 
 # Register a new user
-async def register_user():
-    response = await client.post("/auth/register", json={
+def register_user():
+    status, data = _request_json("POST", "/auth/register", json_body={
         "username": "john.doe",
         "email": "john@example.com",
         "password": "SecurePass123!"
     })
-    return response.json()
+    return status, data
 
 # Login (form-encoded)
-async def login(username: str, password: str):
-    response = await client.post(
+def login(username: str, password: str):
+    status, data = _request_json(
+        "POST",
         "/auth/login",
-        data={"username": username, "password": password},
-        headers={"Content-Type": "application/x-www-form-urlencoded"}
+        form={"username": username, "password": password},
     )
-    return response.json()
+    return status, data
 
 # Use authenticated endpoints
-async def get_protected_data(access_token: str):
+def get_protected_data(access_token: str):
     headers = {"Authorization": f"Bearer {access_token}"}
-    response = await client.get("/protected", headers=headers)
-    return response.json()
+    status, data = _request_json("GET", "/protected", headers=headers)
+    return status, data
 ```
 
 ### 2. Implementing Token Refresh
 
 ```python
+import json
+import urllib.error
+import urllib.parse
+import urllib.request
+
 class AuthenticatedClient:
     def __init__(self, base_url: str):
-        self.client = httpx.AsyncClient(base_url=base_url)
+        self.base_url = base_url.rstrip("/")
         self.access_token = None
         self.refresh_token = None
 
-    async def login(self, username: str, password: str):
-        response = await self.client.post(
-            "/auth/login",
-            data={"username": username, "password": password},
-            headers={"Content-Type": "application/x-www-form-urlencoded"}
+    def _request(self, method: str, path: str, *, headers=None, json_body=None, form=None):
+        req_headers = {"Accept": "application/json"}
+        if headers:
+            req_headers.update(headers)
+        data = None
+        if json_body is not None:
+            data = json.dumps(json_body).encode("utf-8")
+            req_headers.setdefault("Content-Type", "application/json")
+        elif form is not None:
+            data = urllib.parse.urlencode(form).encode("utf-8")
+            req_headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+        req = urllib.request.Request(
+            f"{self.base_url}{path}",
+            data=data,
+            headers=req_headers,
+            method=method,
         )
-        data = response.json()
-        self.access_token = data["access_token"]
-        self.refresh_token = data["refresh_token"]
-        return data
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as err:
+            body = err.read().decode("utf-8")
+            payload = json.loads(body) if body else {}
+            return err.code, payload
 
-    async def refresh_access_token(self):
-        response = await self.client.post("/auth/refresh", json={
-            "refresh_token": self.refresh_token
-        })
-        data = response.json()
-        self.access_token = data["access_token"]
-        return data
+    def login(self, username: str, password: str):
+        status, data = self._request(
+            "POST",
+            "/auth/login",
+            form={"username": username, "password": password},
+        )
+        if status == 200:
+            self.access_token = data["access_token"]
+            self.refresh_token = data["refresh_token"]
+        return status, data
 
-    async def make_request(self, method: str, path: str, **kwargs):
-        headers = kwargs.pop("headers", {})
+    def refresh_access_token(self):
+        status, data = self._request(
+            "POST",
+            "/auth/refresh",
+            json_body={"refresh_token": self.refresh_token},
+        )
+        if status == 200:
+            self.access_token = data["access_token"]
+        return status, data
+
+    def make_request(self, method: str, path: str, *, headers=None, json_body=None, form=None):
+        headers = headers or {}
         headers["Authorization"] = f"Bearer {self.access_token}"
 
-        response = await self.client.request(
-            method, path, headers=headers, **kwargs
+        status, data = self._request(
+            method,
+            path,
+            headers=headers,
+            json_body=json_body,
+            form=form,
         )
 
         # Auto-refresh on 401
-        if response.status_code == 401:
-            await self.refresh_access_token()
+        if status == 401:
+            self.refresh_access_token()
             headers["Authorization"] = f"Bearer {self.access_token}"
-            response = await self.client.request(
-                method, path, headers=headers, **kwargs
+            status, data = self._request(
+                method,
+                path,
+                headers=headers,
+                json_body=json_body,
+                form=form,
             )
 
-        return response
+        return status, data
 ```
 
 ---
@@ -671,8 +738,24 @@ Auth endpoints return HTTP 429 with a `Retry-After` header indicating seconds to
 
 ```python
 # Python rate limit handler
+import json
 import time
+import urllib.error
+import urllib.request
 from typing import Dict, Optional
+
+def _request(method: str, url: str, *, headers=None, json_body=None):
+    req_headers = headers or {}
+    data = None
+    if json_body is not None:
+        data = json.dumps(json_body).encode("utf-8")
+        req_headers.setdefault("Content-Type", "application/json")
+    req = urllib.request.Request(url, data=data, headers=req_headers, method=method)
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return resp.status, resp.headers, resp.read()
+    except urllib.error.HTTPError as err:
+        return err.code, err.headers, err.read()
 
 class RateLimitHandler:
     def __init__(self):
@@ -700,7 +783,7 @@ class RateLimitHandler:
 
         return None
 
-    async def make_request_with_limits(self, client, method: str, url: str, **kwargs):
+    def make_request_with_limits(self, method: str, url: str, **kwargs):
         """Make request with automatic rate limit handling"""
         endpoint = url.split("/")[-1]  # Simple endpoint extraction
 
@@ -708,22 +791,22 @@ class RateLimitHandler:
         wait_time = self.should_wait(endpoint)
         if wait_time:
             print(f"Rate limited. Waiting {wait_time} seconds...")
-            await asyncio.sleep(wait_time)
+            time.sleep(wait_time)
 
         # Make request
-        response = await client.request(method, url, **kwargs)
+        status, headers, body = _request(method, url, **kwargs)
 
         # Update limits
-        self.update_limits(endpoint, response.headers)
+        self.update_limits(endpoint, headers)
 
         # Handle 429 response
-        if response.status_code == 429:
-            retry_after = int(response.headers.get("Retry-After", 60))
+        if status == 429:
+            retry_after = int(headers.get("Retry-After", 60))
             print(f"Rate limited. Retrying after {retry_after} seconds...")
-            await asyncio.sleep(retry_after)
-            return await self.make_request_with_limits(client, method, url, **kwargs)
+            time.sleep(retry_after)
+            return self.make_request_with_limits(method, url, **kwargs)
 
-        return response
+        return status, headers, body
 ```
 
 ---
@@ -734,21 +817,17 @@ class RateLimitHandler:
 
 ```python
 # test_auth.py
-import pytest
-from httpx import AsyncClient
 import pyotp
+from fastapi.testclient import TestClient
+from tldw_Server_API.app.main import app
 
-@pytest.fixture
-async def auth_client():
-    async with AsyncClient(app=app, base_url="http://test") as client:
-        yield client
+client = TestClient(app)
 
-@pytest.mark.asyncio
-async def test_complete_auth_flow(auth_client):
+def test_complete_auth_flow():
     """Test complete authentication flow including MFA"""
 
     # 1. Register user
-    register_response = await auth_client.post("/auth/register", json={
+    register_response = client.post("/auth/register", json={
         "username": "testuser",
         "email": "test@example.com",
         "password": "TestPass123!"
@@ -756,10 +835,11 @@ async def test_complete_auth_flow(auth_client):
     assert register_response.status_code == 201
 
     # 2. Login
-    login_response = await auth_client.post("/auth/login", json={
-        "username": "testuser",
-        "password": "TestPass123!"
-    })
+    login_response = client.post(
+        "/auth/login",
+        data={"username": "testuser", "password": "TestPass123!"},
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
     assert login_response.status_code == 200
     tokens = login_response.json()
     access_token = tokens["access_token"]

@@ -6,6 +6,7 @@ from tldw_Server_API.app.core.Chat.Chat_Deps import ChatBadRequestError
 from tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter import OpenAIAdapter
 from tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter import OpenRouterAdapter
 from tldw_Server_API.app.core.LLM_Calls.providers.mistral_adapter import MistralAdapter
+from tldw_Server_API.app.core.LLM_Calls.providers.cohere_adapter import CohereAdapter
 
 
 def test_openai_adapter_rejects_provider_unsupported_fields(monkeypatch):
@@ -83,3 +84,18 @@ def test_mistral_adapter_rejects_min_p(monkeypatch):
     with pytest.raises(ChatBadRequestError) as exc:
         adapter.chat({"messages": [], "model": "mistral-small", "min_p": 0.2})
     assert "min_p" in str(exc.value)
+
+
+def test_cohere_adapter_rejects_tool_choice(monkeypatch):
+    def _fail_handler(*_args, **_kwargs):
+        raise AssertionError("chat_with_cohere should not be called on validation errors")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.LLM_Calls.providers.cohere_adapter.chat_with_cohere",
+        _fail_handler,
+    )
+
+    adapter = CohereAdapter()
+    with pytest.raises(ChatBadRequestError) as exc:
+        adapter.chat({"messages": [], "model": "command-r", "tool_choice": "auto"})
+    assert "tool_choice" in str(exc.value)

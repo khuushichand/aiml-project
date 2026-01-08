@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Set
+from typing import Any, Optional, Set
+from urllib.parse import urlparse
 
 import aiofiles
-import httpx
 from loguru import logger
 
 from tldw_Server_API.app.core.testing import is_test_mode
@@ -15,7 +15,7 @@ from tldw_Server_API.app.core.http_client import (
 )
 
 async def download_url_async(
-    client: Optional[httpx.AsyncClient],
+    client: Optional[Any],
     url: str,
     target_dir: Path,
     allowed_extensions: Optional[Set[str]] = None,
@@ -46,7 +46,7 @@ async def download_url_async(
 
     # Derive a seed filename from URL
     try:
-        url_obj = httpx.URL(url)
+        url_obj = urlparse(url)
         seed_segment = url_obj.path.split("/")[-1] or f"downloaded_{hash(url)}.tmp"
     except Exception:
         seed_segment = f"downloaded_{hash(url)}.tmp"
@@ -63,14 +63,14 @@ async def download_url_async(
     # Plain stream-only clients are only honored in test mode; otherwise we fall
     # back to the central HTTP client helpers.
     stream_only_client = None
-    client_for_afetch: Optional[httpx.AsyncClient] = client if client and hasattr(client, "request") else None
+    client_for_afetch: Optional[Any] = client if client and hasattr(client, "request") else None
     if client is not None and not hasattr(client, "request"):
         if test_mode_active and hasattr(client, "stream"):
             stream_only_client = client
         else:
             client_for_afetch = None
 
-    resp: Optional[httpx.Response] = None
+    resp: Optional[Any] = None
     owns_client = False
     try:
         # Some tests supply lightweight clients that only implement `.stream`
@@ -166,8 +166,7 @@ async def download_url_async(
 
         if client_for_afetch is None:
             owns_client = True
-            timeout = httpx.Timeout(60.0)
-            client_for_afetch = _create_async_client(timeout=timeout)
+            client_for_afetch = _create_async_client(timeout=60.0)
 
         resp = await _m_afetch(
             method="GET",

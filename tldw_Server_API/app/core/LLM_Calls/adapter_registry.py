@@ -37,6 +37,7 @@ class ChatProviderRegistry:
         "custom-openai-api": "tldw_Server_API.app.core.LLM_Calls.providers.custom_openai_adapter.CustomOpenAIAdapter",
         "custom-openai-api-2": "tldw_Server_API.app.core.LLM_Calls.providers.custom_openai_adapter.CustomOpenAIAdapter2",
         "mlx": "tldw_Server_API.app.core.LLM_Calls.providers.mlx_provider.MLXChatAdapter",
+        "cohere": "tldw_Server_API.app.core.LLM_Calls.providers.cohere_adapter.CohereAdapter",
     }
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):

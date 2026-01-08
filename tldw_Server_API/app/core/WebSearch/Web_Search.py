@@ -11,7 +11,6 @@ import time
 from typing import Optional, Dict, Any, List, TypedDict
 from urllib.parse import urlparse, urlencode, unquote
 #
-import requests
 # 3rd-Party Imports
 from lxml.etree import _Element
 from lxml.html import document_fromstring

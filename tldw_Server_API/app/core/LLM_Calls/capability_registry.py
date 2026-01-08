@@ -55,6 +55,7 @@ PROVIDER_EXTENSIONS: Dict[str, Set[str]] = {
     "custom-openai-api": {"top_k", "min_p"},
     "custom-openai-api-2": {"top_k", "min_p"},
     "mlx": {"top_k", "prompt_template"},
+    "cohere": {"top_k", "num_generations"},
 }
 
 # Alias mappings from legacy or provider-specific field names to canonical keys.

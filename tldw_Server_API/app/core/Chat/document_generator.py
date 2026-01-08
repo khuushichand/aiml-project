@@ -37,8 +37,8 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDBError,
     InputError
 )
-from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
-from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError, ChatConfigurationError
+from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 
 
 class DocumentType(Enum):
@@ -142,7 +142,7 @@ class DocumentGeneratorService:
         # Request-scoped cache for prompts
         self._prompt_cache: Dict[DocumentType, Dict[str, Any]] = {}
 
-        # No longer need provider mapping - using chat_api_call abstraction
+        # No longer need provider mapping - using adapter registry
     @staticmethod
     def _normalize_conversation_id(conversation_id: Optional[Union[str, int]]) -> Optional[str]:
         """Normalize conversation identifiers provided by API/legacy callers."""
@@ -618,26 +618,29 @@ class DocumentGeneratorService:
         Returns:
             Generated content or stream generator
         """
-        # Prepare messages in OpenAI format
+        # Prepare messages in OpenAI format (system handled separately).
         messages = [
-            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
 
-        # Use the chat_api_call abstraction layer
-        response = chat_api_call(
-            api_endpoint=provider.lower(),
-            messages_payload=messages,
-            api_key=api_key,
-            model=model,
-            temp=temperature,
-            max_tokens=max_tokens,
-            streaming=stream,
-            system_message=system_prompt,
-            app_config=app_config,
-        )
+        adapter = get_registry().get_adapter(provider.lower())
+        if adapter is None:
+            raise ChatConfigurationError(provider=provider, message="LLM adapter unavailable.")
 
-        return response
+        request = {
+            "messages": messages,
+            "system_message": system_prompt,
+            "api_key": api_key,
+            "model": model,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": stream,
+            "app_config": app_config,
+        }
+
+        if stream:
+            return adapter.stream(request)
+        return adapter.chat(request)
 
     def _save_generated_document(
         self,

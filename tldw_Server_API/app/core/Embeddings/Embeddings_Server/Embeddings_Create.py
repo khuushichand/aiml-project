@@ -18,7 +18,6 @@ from typing import Any, Dict, List, Optional
 # Third-party Libraries
 import numpy as np
 import onnxruntime as ort
-import requests
 from huggingface_hub import model_info  # Assuming this is used in _ensure_hf_revision
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -54,6 +53,7 @@ from tldw_Server_API.app.core.Embeddings.audit_adapter import (
     log_model_evicted,
     log_memory_limit_exceeded,
 )
+from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
 from tldw_Server_API.app.core.config import rg_policy_path, resolve_repo_relative_path
 
 #
@@ -77,6 +77,43 @@ COMMIT_HASHES: Dict[str, str] = {
 }
 
 _CACHE_SUBDIR_PATTERN = re.compile(r"[^0-9A-Za-z_.-]+")
+
+
+def _get_http_status_from_exception(exc: Exception) -> Optional[int]:
+    response = getattr(exc, "response", None)
+    if response is None:
+        return None
+    status = getattr(response, "status_code", None)
+    try:
+        return int(status)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_probable_network_error(exc: Exception) -> bool:
+    if isinstance(exc, (NetworkError, TimeoutError, ConnectionError)):
+        return True
+    name = type(exc).__name__
+    if "Timeout" in name or "Connection" in name or "Connect" in name:
+        return True
+    msg = str(exc).lower()
+    if "timed out" in msg or "timeout" in msg or "connection" in msg or "dns" in msg:
+        return True
+    return False
+
+
+def _is_request_exception(exc: Exception) -> bool:
+    name = type(exc).__name__
+    module = getattr(exc, "__module__", "") or ""
+    if module.startswith("requests."):
+        return True
+    if name in {"RequestException", "HTTPError"} or name.endswith("RequestException"):
+        return True
+    if "HTTPError" in name:
+        return True
+    if _get_http_status_from_exception(exc) is not None:
+        return True
+    return False
 
 
 def _model_cache_subdir_name(model_id: str) -> str:
@@ -302,17 +339,6 @@ def _ensure_hf_revision(model_name_or_path: str, expected_sha: Optional[str]) ->
             raise RuntimeError(
                 f"SHA mismatch for model {model_name_or_path}. Expected: {expected_sha}, Got: {actual_sha}")
         logger.info(f"Successfully verified revision SHA {expected_sha} for model {model_name_or_path}.")
-    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as net_err:
-        logger.warning(
-            f"Skipping Hugging Face revision verification for {model_name_or_path} due to connectivity issue: "
-            f"{net_err}. Proceeding with locally cached artifacts."
-        )
-        return
-    except requests.exceptions.RequestException as http_err:
-        logger.exception(
-            f"Failed to verify revision for {model_name_or_path} (SHA: {expected_sha}): {http_err}"
-        )
-        raise RuntimeError(f"Failed to verify model revision for {model_name_or_path}: {http_err}") from http_err
     except OSError as os_err:
         logger.warning(
             f"Skipping Hugging Face revision verification for {model_name_or_path} due to local environment error: "
@@ -320,6 +346,17 @@ def _ensure_hf_revision(model_name_or_path: str, expected_sha: Optional[str]) ->
         )
         return
     except Exception as e:  # Catch network errors or if model/revision not found
+        if _is_probable_network_error(e):
+            logger.warning(
+                f"Skipping Hugging Face revision verification for {model_name_or_path} due to connectivity issue: "
+                f"{e}. Proceeding with locally cached artifacts."
+            )
+            return
+        if _is_request_exception(e):
+            logger.exception(
+                f"Failed to verify revision for {model_name_or_path} (SHA: {expected_sha}): {e}"
+            )
+            raise RuntimeError(f"Failed to verify model revision for {model_name_or_path}: {e}") from e
         logger.exception(
             f"Failed to verify revision for {model_name_or_path} (SHA: {expected_sha}): {e}"
         )
@@ -666,35 +703,31 @@ def exponential_backoff(max_retries: int = 3, base_delay: int = 1):
             for attempt in range(max_retries + 1):  # +1 to include the initial attempt
                 try:
                     return fn(*args, **kwargs)
-                except requests.exceptions.RequestException as e:
-                    status = getattr(e.response, "status_code", None)
+                except Exception as e:
+                    status = _get_http_status_from_exception(e)
                     is_retryable_http = (
-                            status == 429  # Too Many Requests
-                            or (isinstance(status, int) and 500 <= status < 600)  # Server errors
+                        status == 429
+                        or (isinstance(status, int) and 500 <= status < 600)
                     )
-                    is_network_error = isinstance(e, (requests.exceptions.Timeout, requests.exceptions.ConnectionError))
+                    is_network_error = _is_probable_network_error(e) and not isinstance(e, RetryExhaustedError)
 
                     if not (is_retryable_http or is_network_error):
-                        logger.exception(f"Non-retryable RequestException for {fn.__name__}: {e}")
+                        logger.exception(f"Non-retryable error for {fn.__name__}: {e}")
                         raise
 
                     if attempt == max_retries:  # Last attempt failed
                         logger.error(
                             f"Final attempt ({attempt + 1}/{max_retries + 1}) failed for {fn.__name__} "
-                            f"due to RequestException: {e}"
+                            f"due to transient error: {e}"
                         )
                         raise
 
                     delay = base_delay * (2 ** attempt)
                     logger.warning(
-                        f"Attempt {attempt + 1}/{max_retries + 1} for {fn.__name__} failed with RequestException. "
+                        f"Attempt {attempt + 1}/{max_retries + 1} for {fn.__name__} failed with transient error. "
                         f"Retrying in {delay}s. Error: {e}"
                     )
                     time.sleep(delay)
-                except Exception as e:
-                    # Non-network/configuration errors should not be retried to avoid amplifying failures
-                    logger.exception(f"Non-retryable error for {fn.__name__}: {e}")
-                    raise
 
         return wrapper
 
@@ -1628,7 +1661,7 @@ def create_embeddings_batch(
 
             payload = {"texts": texts, "model": model_spec.model_name_or_path}
 
-            # The requests.post call is already wrapped by @exponential_backoff and @limiter
+            # The outbound call is already wrapped by @exponential_backoff and @limiter
             from tldw_Server_API.app.core.http_client import fetch as _fetch
             resp = _fetch(method="POST", url=model_spec.api_url, headers=headers, json=payload, timeout=60)
             if resp.status_code >= 400:
@@ -1663,12 +1696,12 @@ def create_embeddings_batch(
                             "error_type": type(rte).__name__})
         logger.exception(f"Runtime error in create_embeddings_batch: {rte}")
         raise
-    except requests.exceptions.RequestException as req_e:  # Handled by backoff, but re-raised if all retries fail
+    except (NetworkError, RetryExhaustedError) as req_e:
         log_counter("create_embeddings_batch_error",
                     labels={"provider": provider if 'provider' in locals() else 'unknown',
                             "model_id": model_id_to_use if 'model_id_to_use' in locals() else 'unknown',
                             "error_type": type(req_e).__name__})
-        logger.exception(f"RequestException after retries in create_embeddings_batch: {req_e}")
+        logger.exception(f"Network error after retries in create_embeddings_batch: {req_e}")
         raise
     except Exception as e:  # Catch-all for unexpected errors
         log_counter("create_embeddings_batch_error",

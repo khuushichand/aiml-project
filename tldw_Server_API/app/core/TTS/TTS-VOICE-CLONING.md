@@ -369,8 +369,9 @@ def validate_voice_sample(audio_path):
 
 ```python
 import base64
-import requests
+import json
 from pathlib import Path
+from urllib import error, request
 
 def clone_voice(text, voice_file, provider="higgs"):
     """Clone voice from audio file."""
@@ -379,21 +380,24 @@ def clone_voice(text, voice_file, provider="higgs"):
     voice_b64 = base64.b64encode(voice_data).decode()
 
     # Make API request
-    response = requests.post(
+    payload = {
+        "model": provider,
+        "input": text,
+        "voice": "clone",
+        "voice_reference": voice_b64,
+        "response_format": "mp3",
+    }
+    req = request.Request(
         "http://localhost:8000/api/v1/audio/speech",
-        json={
-            "model": provider,
-            "input": text,
-            "voice": "clone",
-            "voice_reference": voice_b64,
-            "response_format": "mp3"
-        }
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
     )
-
-    if response.status_code == 200:
-        return response.content
-    else:
-        raise Exception(f"Error: {response.text}")
+    try:
+        with request.urlopen(req) as resp:
+            return resp.read()
+    except error.HTTPError as err:
+        raise Exception(f"Error: {err.read().decode('utf-8')}")
 
 # Example usage
 audio = clone_voice(
@@ -407,65 +411,74 @@ Path("output.mp3").write_bytes(audio)
 ### Advanced Cloning with Parameters
 
 ```python
+import base64
+import json
+from urllib import request
+
 class VoiceCloner:
     def __init__(self, base_url="http://localhost:8000"):
-        self.base_url = base_url
-        self.session = requests.Session()
+        self.base_url = base_url.rstrip("/")
 
     def clone_with_emotion(self, text, voice_file, emotion="neutral"):
         """Clone voice with emotion control (Chatterbox)."""
         voice_b64 = self._encode_file(voice_file)
 
-        response = self.session.post(
-            f"{self.base_url}/api/v1/audio/speech",
-            json={
-                "model": "chatterbox",
-                "input": text,
-                "voice": "clone",
-                "voice_reference": voice_b64,
-                "extra_params": {
-                    "emotion": emotion,
-                    "emotion_intensity": 1.2,
-                    "enable_watermark": True
-                }
-            }
-        )
-        return response.content
+        payload = {
+            "model": "chatterbox",
+            "input": text,
+            "voice": "clone",
+            "voice_reference": voice_b64,
+            "extra_params": {
+                "emotion": emotion,
+                "emotion_intensity": 1.2,
+                "enable_watermark": True,
+            },
+        }
+        return self._post_json(payload)
 
     def clone_with_music(self, text, voice_file, enable_music=True):
         """Clone voice with background music (VibeVoice)."""
         voice_b64 = self._encode_file(voice_file)
 
-        response = self.session.post(
-            f"{self.base_url}/api/v1/audio/speech",
-            json={
-                "model": "vibevoice",
-                "input": text,
-                "voice": "clone",
-                "voice_reference": voice_b64,
-                "extra_params": {
-                    "enable_music": enable_music,
-                    "vibe": "casual",
-                    "vibe_intensity": 1.0
-                }
-            }
-        )
-        return response.content
+        payload = {
+            "model": "vibevoice",
+            "input": text,
+            "voice": "clone",
+            "voice_reference": voice_b64,
+            "extra_params": {
+                "enable_music": enable_music,
+                "vibe": "casual",
+                "vibe_intensity": 1.0,
+            },
+        }
+        return self._post_json(payload)
 
     def _encode_file(self, file_path):
         """Encode file to base64."""
         with open(file_path, 'rb') as f:
             return base64.b64encode(f.read()).decode()
+
+    def _post_json(self, payload):
+        req = request.Request(
+            f"{self.base_url}/api/v1/audio/speech",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with request.urlopen(req) as resp:
+            return resp.read()
 ```
 
 ### Batch Voice Cloning
 
 ```python
-import asyncio
-import aiohttp
-from typing import List, Tuple
+import base64
+import json
+from concurrent.futures import ThreadPoolExecutor
+from typing import List
+from urllib import request
 
-async def batch_clone_voices(
+def batch_clone_voices(
     texts: List[str],
     voice_file: str,
     provider: str = "higgs"
@@ -476,22 +489,25 @@ async def batch_clone_voices(
     with open(voice_file, 'rb') as f:
         voice_b64 = base64.b64encode(f.read()).decode()
 
-    async def clone_single(session, text):
-        async with session.post(
+    def clone_single(text):
+        payload = {
+            "model": provider,
+            "input": text,
+            "voice": "clone",
+            "voice_reference": voice_b64,
+        }
+        req = request.Request(
             "http://localhost:8000/api/v1/audio/speech",
-            json={
-                "model": provider,
-                "input": text,
-                "voice": "clone",
-                "voice_reference": voice_b64
-            }
-        ) as response:
-            return await response.read()
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with request.urlopen(req) as resp:
+            return resp.read()
 
     # Process concurrently
-    async with aiohttp.ClientSession() as session:
-        tasks = [clone_single(session, text) for text in texts]
-        return await asyncio.gather(*tasks)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        return list(pool.map(clone_single, texts))
 
 # Usage
 texts = [
@@ -500,9 +516,7 @@ texts = [
     "Third paragraph to clone."
 ]
 
-audio_files = asyncio.run(
-    batch_clone_voices(texts, "voice_sample.wav")
-)
+audio_files = batch_clone_voices(texts, "voice_sample.wav")
 ```
 
 ## Performance Considerations

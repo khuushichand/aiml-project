@@ -10,7 +10,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from tldw_Server_API.app.api.v1.API_Deps.backpressure import guard_backpressure_and_quota
 from fastapi.encoders import jsonable_encoder
 from loguru import logger
-import requests
 import tempfile
 import os
 from pathlib import Path
@@ -76,6 +75,32 @@ _PROVIDER_TIMEOUT_DETAIL = "Upstream provider request timed out"
 _PROVIDER_ERROR_DETAIL = "Upstream provider request failed"
 _PROVIDER_UNEXPECTED_DETAIL = "Unexpected provider error"
 _PROVIDER_NOT_CONFIGURED_DETAIL = "Upstream provider not configured"
+
+
+def _raise_http_error_from_exception(
+    exc: Exception,
+    *,
+    not_found_detail: Optional[str] = None,
+    default_status: int = 502,
+    force_status: Optional[int] = None,
+) -> None:
+    """Raise HTTPException when an exception carries a response status code."""
+    response = getattr(exc, "response", None)
+    if response is None:
+        return
+    status = getattr(response, "status_code", None)
+    try:
+        status_code = int(status)
+    except (TypeError, ValueError):
+        if default_status is None:
+            return
+        status_code = default_status
+
+    if status_code == 404 and not_found_detail:
+        raise HTTPException(status_code=404, detail=not_found_detail) from exc
+    if force_status is not None:
+        raise HTTPException(status_code=force_status, detail=_PROVIDER_ERROR_DETAIL) from exc
+    raise HTTPException(status_code=status_code, detail=_PROVIDER_ERROR_DETAIL) from exc
 
 
 async def _download_pdf_bytes(
@@ -1041,13 +1066,12 @@ async def arxiv_ingest(
         return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
     except HTTPException:
         raise
-    except requests.exceptions.HTTPError as e:
-        # Map non-404 HTTP errors to 502 for lenient external test expectations
-        status = getattr(e.response, 'status_code', 502)
-        if status == 404:
-            raise HTTPException(status_code=404, detail="arXiv PDF returned 404") from e
-        raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL) from e
     except Exception as e:
+        _raise_http_error_from_exception(
+            e,
+            not_found_detail="arXiv PDF returned 404",
+            force_status=502,
+        )
         logger.error(f"arXiv ingest error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="arXiv ingest failed") from e
 
@@ -1185,12 +1209,12 @@ async def eartharxiv_ingest(
         return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
     except HTTPException:
         raise
-    except requests.exceptions.HTTPError as e:
-        status = getattr(e.response, 'status_code', 502)
-        if status == 404:
-            raise HTTPException(status_code=404, detail="EarthArXiv PDF returned 404") from e
-        raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL) from e
     except Exception as e:
+        _raise_http_error_from_exception(
+            e,
+            not_found_detail="EarthArXiv PDF returned 404",
+            force_status=502,
+        )
         logger.error(f"EarthArXiv ingest error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="EarthArXiv ingest failed") from e
 
@@ -2817,12 +2841,12 @@ async def ingest_by_doi(
         return {"message": msg, "media_id": media_id, "media_uuid": media_uuid, "source_pdf": pdf_url}
     except HTTPException:
         raise
-    except requests.exceptions.HTTPError as e:
-        status = getattr(e.response, 'status_code', 502)
-        if status == 404:
-            raise HTTPException(status_code=404, detail="Unpaywall PDF returned 404") from e
-        raise HTTPException(status_code=502, detail=_PROVIDER_ERROR_DETAIL) from e
     except Exception as e:
+        _raise_http_error_from_exception(
+            e,
+            not_found_detail="Unpaywall PDF returned 404",
+            force_status=502,
+        )
         logger.error(f"OA ingest by DOI error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="OA ingest by DOI failed") from e
 
@@ -3771,9 +3795,8 @@ async def osf_ingest(
         return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
     except HTTPException:
         raise
-    except requests.exceptions.HTTPError as e:
-        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=_PROVIDER_ERROR_DETAIL) from e
     except Exception as e:
+        _raise_http_error_from_exception(e)
         logger.error(f"OSF ingest error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="OSF ingest failed") from e
 
@@ -4096,9 +4119,8 @@ async def zenodo_ingest(
         return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
     except HTTPException:
         raise
-    except requests.exceptions.HTTPError as e:
-        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=_PROVIDER_ERROR_DETAIL) from e
     except Exception as e:
+        _raise_http_error_from_exception(e)
         logger.error(f"Zenodo ingest error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Zenodo ingest failed") from e
 
@@ -4361,9 +4383,8 @@ async def figshare_ingest(
         return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
     except HTTPException:
         raise
-    except requests.exceptions.HTTPError as e:
-        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=_PROVIDER_ERROR_DETAIL) from e
     except Exception as e:
+        _raise_http_error_from_exception(e)
         logger.error(f"Figshare ingest error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Figshare ingest failed") from e
 
@@ -4513,9 +4534,8 @@ async def figshare_ingest_by_doi(
         return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
     except HTTPException:
         raise
-    except requests.exceptions.HTTPError as e:
-        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=_PROVIDER_ERROR_DETAIL) from e
     except Exception as e:
+        _raise_http_error_from_exception(e)
         logger.error(f"Figshare ingest-by-doi error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Figshare ingest-by-doi failed") from e
 
@@ -4754,9 +4774,8 @@ async def hal_ingest(
         return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
     except HTTPException:
         raise
-    except requests.exceptions.HTTPError as e:
-        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=_PROVIDER_ERROR_DETAIL) from e
     except Exception as e:
+        _raise_http_error_from_exception(e)
         logger.error(f"HAL ingest error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="HAL ingest failed") from e
 
@@ -4908,9 +4927,8 @@ async def vixra_ingest(
         return {"message": msg, "media_id": media_id, "media_uuid": media_uuid}
     except HTTPException:
         raise
-    except requests.exceptions.HTTPError as e:
-        raise HTTPException(status_code=getattr(e.response, 'status_code', 502), detail=_PROVIDER_ERROR_DETAIL) from e
     except Exception as e:
+        _raise_http_error_from_exception(e)
         logger.error(f"viXra ingest error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="viXra ingest failed") from e
 

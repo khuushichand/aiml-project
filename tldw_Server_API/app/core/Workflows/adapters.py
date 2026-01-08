@@ -1622,7 +1622,6 @@ async def run_rss_fetch_adapter(config: Dict[str, Any], context: Dict[str, Any])
     if not urls:
         return {"results": [], "count": 0}
     try:
-        import httpx
         import xml.etree.ElementTree as ET
         from urllib.parse import urlparse
         for u in urls:
@@ -1879,7 +1878,6 @@ async def run_notify_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
             ok = is_url_allowed(url)
         if not ok:
             return {"dispatched": False, "error": "blocked_egress"}
-        import httpx
         headers = {"content-type": "application/json"}
         try:
             headers.update({k: str(v) for k, v in extra_headers.items()})
@@ -2247,7 +2245,7 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
                 pass
             return {"dispatched": False, "error": "blocked_egress"}
         try:
-            import httpx, hmac, hashlib
+            import hmac, hashlib
             # Method, headers, timeout
             method = str(config.get("method") or "POST").upper()
             headers_cfg = config.get("headers") or {}
