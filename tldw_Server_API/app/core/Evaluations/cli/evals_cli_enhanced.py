@@ -23,7 +23,16 @@ from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationMa
 from tldw_Server_API.app.core.Evaluations.benchmark_registry import get_registry
 from tldw_Server_API.app.core.Evaluations.benchmark_loaders import load_benchmark_dataset
 from tldw_Server_API.app.core.config import load_and_log_configs
-from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
+from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
+    ensure_app_config,
+    get_adapter_or_raise,
+    normalize_provider,
+    resolve_provider_api_key_from_config,
+    resolve_provider_model,
+    split_system_message,
+)
 
 
 # Mapping of config keys to friendly API names
@@ -56,6 +65,40 @@ API_CATEGORIES = {
                     'ollama', 'aphrodite'],
     'Custom': ['custom-openai-api', 'custom-openai-api-2']
 }
+
+
+def _call_adapter_text(
+    *,
+    api_endpoint: str,
+    messages_payload: List[Dict[str, Any]],
+    temperature: Optional[float] = None,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+    max_tokens: Optional[int] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+    timeout: Optional[float] = None,
+    **extra_kwargs: Any,
+) -> str:
+    provider = normalize_provider(api_endpoint)
+    if not provider:
+        raise ChatConfigurationError(provider=api_endpoint, message="LLM provider is required.")
+    cfg = ensure_app_config(app_config)
+    resolved_model = model or resolve_provider_model(provider, cfg)
+    if not resolved_model:
+        raise ChatConfigurationError(provider=provider, message="Model is required for provider.")
+    system_message, cleaned_messages = split_system_message(messages_payload or [])
+    request: Dict[str, Any] = {
+        "messages": cleaned_messages,
+        "system_message": system_message,
+        "model": resolved_model,
+        "api_key": api_key or resolve_provider_api_key_from_config(provider, cfg),
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "app_config": cfg,
+    }
+    request.update(extra_kwargs)
+    response = get_adapter_or_raise(provider).chat(request, timeout=timeout)
+    return extract_response_content(response) or str(response)
 
 
 def get_available_apis() -> Dict[str, Dict[str, Any]]:
@@ -215,15 +258,14 @@ def run_evaluation_with_llm(
             ]
 
             # Call the chat API
-            # Note: chat_api_call returns a generator for streaming or a complete response
-            response = chat_api_call(
+            # Adapter calls return a response payload or string; normalize below.
+            response = _call_adapter_text(
                 api_endpoint=api_name,
                 messages_payload=messages_payload,
                 api_key=api_key,
                 model=model,
-                temp=0.7,
-                streaming=False,
-                max_tokens=100  # We only need a short response with the score
+                temperature=0.7,
+                max_tokens=100,  # We only need a short response with the score
             )
 
             # Handle response (could be a generator even with streaming=False for some providers)
@@ -444,7 +486,7 @@ def run(ctx, benchmark, limit, api, model, output, parallel, dry_run):
         click.echo('\r', nl=False)
 
     # Process samples using actual LLM
-    # Note: run_evaluation_with_llm is now synchronous since chat_api_call handles async internally
+    # Note: run_evaluation_with_llm is synchronous; adapter calls are sync.
 
     # Run evaluation
     click.echo("Starting evaluation...")
@@ -536,13 +578,12 @@ def test_api(api_name, test_prompt, model):
         ]
 
         # Send test request via chat API
-        response = chat_api_call(
+        response = _call_adapter_text(
             api_endpoint=api_name,
             messages_payload=messages_payload,
             api_key=api_key,
             model=model_to_use,
-            streaming=False,
-            max_tokens=100
+            max_tokens=100,
         )
 
         # Handle response

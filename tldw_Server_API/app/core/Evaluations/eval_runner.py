@@ -27,7 +27,16 @@ from tldw_Server_API.app.core.Chunking.utils.proposition_eval import evaluate_pr
 from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     create_evaluations_database as _create_evals_db,
 )
-from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
+from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
+    ensure_app_config,
+    get_adapter_or_raise,
+    normalize_provider,
+    resolve_provider_api_key_from_config,
+    resolve_provider_model,
+    split_system_message,
+)
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 from tldw_Server_API.app.core.RAG.rag_custom_metrics import get_custom_metrics
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores import (
@@ -48,6 +57,48 @@ except Exception:
         return {"embedding_config": {"default_model_id": ""}}
     def create_embeddings_batch(*args, **kwargs):  # type: ignore[misc]
         raise RuntimeError("Embeddings backend unavailable; install required dependencies")
+
+
+def _call_adapter_text(
+    *,
+    api_endpoint: str,
+    messages_payload: List[Dict[str, Any]],
+    temperature: Optional[float] = None,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+    system_message: Optional[str] = None,
+    response_format: Optional[Dict[str, Any]] = None,
+    max_tokens: Optional[int] = None,
+    user: Optional[str] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+    timeout: Optional[float] = None,
+    **extra_kwargs: Any,
+) -> str:
+    provider = normalize_provider(api_endpoint)
+    if not provider:
+        raise ChatConfigurationError(provider=api_endpoint, message="LLM provider is required.")
+    cfg = ensure_app_config(app_config)
+    resolved_model = model or resolve_provider_model(provider, cfg)
+    if not resolved_model:
+        raise ChatConfigurationError(provider=provider, message="Model is required for provider.")
+    system_msg = system_message
+    cleaned_messages = messages_payload or []
+    if not system_msg:
+        system_msg, cleaned_messages = split_system_message(cleaned_messages)
+    request: Dict[str, Any] = {
+        "messages": cleaned_messages,
+        "system_message": system_msg,
+        "model": resolved_model,
+        "api_key": api_key or resolve_provider_api_key_from_config(provider, cfg),
+        "temperature": temperature,
+        "response_format": response_format,
+        "max_tokens": max_tokens,
+        "user": user,
+        "app_config": cfg,
+    }
+    request.update(extra_kwargs)
+    response = get_adapter_or_raise(provider).chat(request, timeout=timeout)
+    return extract_response_content(response) or str(response)
 
 
 
@@ -1553,13 +1604,13 @@ class EvaluationRunner:
                 response_format = {"type": "json_object"} if structured else None
 
                 try:
-                    resp = chat_api_call(
+                    resp = _call_adapter_text(
                         api_endpoint=api_name,
                         messages_payload=messages,
-                        temp=temperature,
+                        temperature=temperature,
                         system_message=system_prompt,
                         response_format=response_format,
-                        max_tokens=16
+                        max_tokens=16,
                     )
                 except Exception as ce:
                     logger.error(f"Chat call failed for label_choice {sample_id}: {ce}")
@@ -1747,13 +1798,13 @@ class EvaluationRunner:
                 response_format = {"type": "json_object"} if structured else None
 
                 try:
-                    resp = chat_api_call(
+                    resp = _call_adapter_text(
                         api_endpoint=api_name,
                         messages_payload=messages,
-                        temp=temperature,
+                        temperature=temperature,
                         system_message=system_prompt,
                         response_format=response_format,
-                        max_tokens=16
+                        max_tokens=16,
                     )
                 except Exception as ce:
                     logger.error(f"Chat call failed for nli_factcheck {sample_id}: {ce}")

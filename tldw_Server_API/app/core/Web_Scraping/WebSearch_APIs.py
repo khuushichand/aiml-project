@@ -19,9 +19,19 @@ from lxml.html import document_fromstring
 # Removed: HTTPAdapter/Retry (migrated to http_client)
 #
 # Local Imports
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Utils.Utils import logging
 from functools import lru_cache
 from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
+    ensure_app_config,
+    get_adapter_or_raise,
+    normalize_provider,
+    resolve_provider_api_key_from_config,
+    resolve_provider_model,
+    split_system_message,
+)
 from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import scrape_article
 from tldw_Server_API.app.core.Web_Scraping.ua_profiles import (
     build_browser_headers,
@@ -107,7 +117,6 @@ def _close_response(resp: Any) -> None:
     close = getattr(resp, "close", None)
     if callable(close):
         close()
-from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 #
 #
@@ -149,6 +158,38 @@ def _build_messages(
     if user_prompt:
         messages.append({"role": "user", "content": user_prompt})
     return messages
+
+
+def _call_adapter_text(
+    *,
+    api_endpoint: str,
+    messages_payload: List[Dict[str, Any]],
+    temperature: Optional[float] = None,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+    timeout: Optional[float] = None,
+    **extra_kwargs: Any,
+) -> str:
+    provider = normalize_provider(api_endpoint)
+    if not provider:
+        raise ChatConfigurationError(provider=api_endpoint, message="LLM provider is required.")
+    cfg = ensure_app_config(app_config or get_loaded_config())
+    resolved_model = model or resolve_provider_model(provider, cfg)
+    if not resolved_model:
+        raise ChatConfigurationError(provider=provider, message="Model is required for provider.")
+    system_message, cleaned_messages = split_system_message(messages_payload or [])
+    request: Dict[str, Any] = {
+        "messages": cleaned_messages,
+        "system_message": system_message,
+        "model": resolved_model,
+        "api_key": api_key or resolve_provider_api_key_from_config(provider, cfg),
+        "temperature": temperature,
+        "app_config": cfg,
+    }
+    request.update(extra_kwargs)
+    response = get_adapter_or_raise(provider).chat(request, timeout=timeout)
+    return extract_response_content(response) or str(response)
 #
 #######################################################################################################################
 #
@@ -399,15 +440,11 @@ def analyze_question(question: str, api_endpoint) -> Dict:
                 system_prompt=sub_question_generation_prompt,
                 user_prompt=input_data,
             )
-            response = chat_api_call(
+            response = _call_adapter_text(
                 api_endpoint=api_endpoint,
                 messages_payload=messages_payload,
-                temp=0.7,
-                system_message=None,
-                streaming=False,
-                minp=None,
-                maxp=None,
-                model=None,
+                temperature=0.7,
+                app_config=get_loaded_config(),
             )
             if response:
                 try:
@@ -536,18 +573,12 @@ async def search_result_relevance(
 
             async def _llm_call():
                 return await asyncio.to_thread(
-                    lambda: chat_api_call(
+                    lambda: _call_adapter_text(
                         api_endpoint=api_endpoint,
                         messages_payload=messages_payload,
-                        api_key=None,
-                        temp=0.7,
-                        system_message=None,
-                        streaming=False,
-                        minp=None,
-                        maxp=None,
-                        model=None,
-                        topk=None,
-                        topp=None,
+                        temperature=0.7,
+                        app_config=get_loaded_config(),
+                        timeout=timeouts["llm"],
                     )
                 )
 
@@ -981,18 +1012,11 @@ def aggregate_results(
 
     try:
         logging.info("Generating the report")
-        returned_response = chat_api_call(
+        returned_response = _call_adapter_text(
             api_endpoint=api_endpoint,
             messages_payload=messages_payload,
-            api_key=None,
-            temp=0.7,
-            system_message=None,
-            streaming=False,
-            minp=None,
-            maxp=None,
-            model=None,
-            topk=None,
-            topp=None,
+            temperature=0.7,
+            app_config=get_loaded_config(),
         )
         logging.debug("Returned response from LLM for aggregation: %s", returned_response)
         if returned_response:

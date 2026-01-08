@@ -24,7 +24,16 @@ from tenacity import (
     wait_random_exponential,
 )
 
-from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
+from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
+    ensure_app_config,
+    get_adapter_or_raise,
+    normalize_provider,
+    resolve_provider_api_key_from_config,
+    resolve_provider_model,
+    split_system_message,
+)
 from tldw_Server_API.app.core.config import load_comprehensive_config
 
 #from tldw_Server_API.app.core.Chat.Chat_Functions import (
@@ -39,6 +48,40 @@ logger = logger
 
 # Use the centralized config loading instead of hardcoded path
 config = load_comprehensive_config()
+
+
+def _call_adapter_text(
+    *,
+    api_endpoint: str,
+    messages_payload: List[Dict[str, Any]],
+    temperature: Optional[float] = None,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+    user: Optional[str] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+    timeout: Optional[float] = None,
+    **extra_kwargs: Any,
+) -> str:
+    provider = normalize_provider(api_endpoint)
+    if not provider:
+        raise ChatConfigurationError(provider=api_endpoint, message="LLM provider is required.")
+    cfg = ensure_app_config(app_config)
+    resolved_model = model or resolve_provider_model(provider, cfg)
+    if not resolved_model:
+        raise ChatConfigurationError(provider=provider, message="Model is required for provider.")
+    system_message, cleaned_messages = split_system_message(messages_payload or [])
+    request: Dict[str, Any] = {
+        "messages": cleaned_messages,
+        "system_message": system_message,
+        "model": resolved_model,
+        "api_key": api_key or resolve_provider_api_key_from_config(provider, cfg),
+        "temperature": temperature,
+        "user": user,
+        "app_config": cfg,
+    }
+    request.update(extra_kwargs)
+    response = get_adapter_or_raise(provider).chat(request, timeout=timeout)
+    return extract_response_content(response) or str(response)
 
 
 def aggregate(
@@ -349,15 +392,13 @@ def geval_summarization(
                         {"role": "system", "content": system_message},
                         {"role": "user", "content": prompt_with_src_and_gen},
                     ]
-                    response = chat_api_call(
+                    response = _call_adapter_text(
                         api_endpoint=api_endpoint,
                         messages_payload=messages_payload,
                         api_key=api_key,
-                        temp=temp,
-                        system_message=system_message,
-                        streaming=False,
+                        temperature=temp,
                         model=model,
-                        user_identifier=user_identifier,
+                        user=user_identifier,
                     )
                 except Exception:
                     raise ValueError(f"Unsupported API endpoint: {api_endpoint}")
@@ -374,11 +415,17 @@ def geval_summarization(
     return score
 
 
-def get_model_from_config(api_name: str) -> str:
-    model = config.get('models', api_name)
+def get_model_from_config(api_name: str, app_config: Optional[Dict[str, Any]] = None) -> str:
+    cfg = ensure_app_config(app_config)
+    resolved = resolve_provider_model(api_name, cfg)
+    if resolved:
+        return resolved
+    try:
+        model = config.get('models', api_name)
+    except Exception:
+        model = None
     if isinstance(model, dict):
-        # If the model is a dictionary, return a specific key or a default value
-        return model.get('name', str(model))  # Adjust 'name' to the appropriate key if needed
+        return model.get('name', str(model))
     return str(model) if model is not None else ""
 
 def aggregate_llm_scores(llm_responses: List[str], max_score: float) -> float:
