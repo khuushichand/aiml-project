@@ -5,6 +5,11 @@ import os
 
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import normalize_provider_name
+from tldw_Server_API.app.core.AuthNZ.principal_model import (
+    AuthContext,
+    AuthPrincipal,
+    is_single_user_principal,
+)
 from tldw_Server_API.app.core.config import load_and_log_configs
 
 
@@ -58,6 +63,8 @@ def is_provider_allowlisted(provider: str) -> bool:
 def validate_credential_fields(
     provider: str,
     credential_fields: Optional[Dict[str, Any]],
+    *,
+    allow_base_url: bool = False,
 ) -> Dict[str, Any]:
     if credential_fields is None:
         return {}
@@ -66,7 +73,7 @@ def validate_credential_fields(
 
     provider_norm = normalize_provider_name(provider)
     allowed_keys = set(DEFAULT_ALLOWED_CREDENTIAL_FIELDS)
-    if provider_norm in resolve_byok_base_url_allowlist():
+    if allow_base_url and provider_norm in resolve_byok_base_url_allowlist():
         allowed_keys.add("base_url")
     cleaned: Dict[str, Any] = {}
     for key, value in credential_fields.items():
@@ -75,6 +82,60 @@ def validate_credential_fields(
         if isinstance(value, str) and value.strip() == "":
             raise ValueError(f"Credential field '{key}' cannot be empty")
         cleaned[key] = value
+    return cleaned
+
+
+def is_trusted_base_url_principal(principal: Optional[AuthPrincipal]) -> bool:
+    if not isinstance(principal, AuthPrincipal):
+        return False
+    if principal.is_admin:
+        return True
+    if principal.kind == "service":
+        return True
+    if is_single_user_principal(principal):
+        return True
+    return False
+
+
+def is_trusted_base_url_request(
+    request: Any = None,
+    *,
+    principal: Optional[AuthPrincipal] = None,
+    user: Optional[Dict[str, Any]] = None,
+) -> bool:
+    if principal is None and request is not None:
+        try:
+            ctx = getattr(getattr(request, "state", None), "auth", None)
+        except Exception:
+            ctx = None
+        if isinstance(ctx, AuthContext):
+            principal = ctx.principal
+
+    if is_trusted_base_url_principal(principal):
+        return True
+
+    if isinstance(user, dict):
+        if user.get("is_admin") or user.get("is_superuser"):
+            return True
+        role = str(user.get("role") or "").lower()
+        if role == "admin":
+            return True
+
+    return False
+
+
+def validate_base_url_override(base_url: Any) -> str:
+    if not isinstance(base_url, str):
+        raise ValueError("base_url must be a string")
+    cleaned = base_url.strip()
+    if not cleaned:
+        raise ValueError("base_url cannot be empty")
+
+    from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+
+    result = evaluate_url_policy(cleaned)
+    if not result.allowed:
+        raise ValueError(result.reason or "URL blocked by security policy")
     return cleaned
 
 

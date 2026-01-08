@@ -9,8 +9,6 @@ from typing import Any, Dict
 warnings.filterwarnings("ignore", message="Event loop is closed", category=RuntimeWarning)
 logging.getLogger("asyncio").setLevel(logging.CRITICAL)
 
-import aiohttp
-
 try:
     from curl_cffi.requests import AsyncSession
 except ImportError:  # pragma: no cover - optional dependency guard
@@ -18,6 +16,7 @@ except ImportError:  # pragma: no cover - optional dependency guard
 
 from ..utils.browser_identities import MODERN_BROWSER_IDENTITIES
 from ..utils.impersonate_target import get_impersonate_target
+from tldw_Server_API.app.core.http_client import afetch
 
 
 async def _run_tls_test(url: str) -> Dict[str, Any]:
@@ -30,10 +29,27 @@ async def _run_tls_test(url: str) -> Dict[str, Any]:
     user_agent = chosen_identity.get("User-Agent", "")
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=chosen_identity, timeout=20, allow_redirects=True) as response:
-                results["python_request_blocked"] = response.status >= 400
-    except (aiohttp.ClientError, asyncio.TimeoutError):
+        resp = await afetch(
+            method="GET",
+            url=url,
+            headers=chosen_identity,
+            timeout=20,
+            allow_redirects=True,
+        )
+        try:
+            status = getattr(resp, "status_code", None)
+            if status is None:
+                status = getattr(resp, "status", 0)
+            results["python_request_blocked"] = int(status or 0) >= 400
+        finally:
+            close = getattr(resp, "aclose", None)
+            if callable(close):
+                await close()
+            else:
+                close = getattr(resp, "close", None)
+                if callable(close):
+                    close()
+    except Exception:
         results["python_request_blocked"] = True
 
     impersonate_target = get_impersonate_target(user_agent)

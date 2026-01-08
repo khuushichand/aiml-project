@@ -70,6 +70,48 @@ async def test_protocol_tools_list_catalog_filter(monkeypatch):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_protocol_tools_list_module_filter(monkeypatch):
+    os.environ["TEST_MODE"] = "true"
+
+    from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol, RequestContext
+
+    class _MediaModuleStub:
+        name = "Media"
+
+        async def get_tools(self):
+            return [{"name": "media.search", "inputSchema": {"type": "object"}}]
+
+    class _NotesModuleStub:
+        name = "Notes"
+
+        async def get_tools(self):
+            return [{"name": "notes.search", "inputSchema": {"type": "object"}}]
+
+    class _RegistryStub:
+        async def get_all_modules(self):
+            return {"media": _MediaModuleStub(), "notes": _NotesModuleStub()}
+
+    proto = MCPProtocol()
+    proto.module_registry = _RegistryStub()
+
+    async def _allow_mod(ctx, mid):
+        return True
+
+    async def _allow_tool(ctx, name):
+        return True
+
+    proto._has_module_permission = _allow_mod  # type: ignore
+    proto._has_tool_permission = _allow_tool  # type: ignore
+
+    ctx = RequestContext(request_id="mod-filter", user_id="1", client_id="unit", session_id=None, metadata={})
+    result = await proto._handle_tools_list({"module": "notes"}, ctx)
+    tools = result.get("tools", [])
+    names = {t.get("name") for t in tools}
+    assert names == {"notes.search"}
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_protocol_catalog_resolution_precedence(monkeypatch):
     os.environ["TEST_MODE"] = "true"
 

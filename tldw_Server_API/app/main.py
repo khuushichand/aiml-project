@@ -2838,6 +2838,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"App Shutdown: Error shutting down TTS resource manager: {e}")
 
+    # Shutdown shared HTTP client sessions (aiohttp)
+    try:
+        from tldw_Server_API.app.core.http_client import shutdown_http_client
+
+        await shutdown_http_client()
+        logger.info("App Shutdown: HTTP client sessions shutdown complete")
+    except Exception as e:
+        logger.error(f"App Shutdown: Error shutting down HTTP client sessions: {e}")
+
     # Shutdown ChaChaNotes executor and cached instances
     try:
         from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (

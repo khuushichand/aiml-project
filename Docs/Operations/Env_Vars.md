@@ -230,6 +230,7 @@ Runtime overrides (non-persistent) are available via API:
 ## Embeddings
 - `EMBEDDINGS_DEDUPE_TTL_SECONDS`: Dedupe window for worker replay suppression. Defaults to `3600` seconds. Workers compute a stage-specific dedupe key (or use `dedupe_key`/`idempotency_key` if provided) and suppress processing if the same key was seen within this TTL.
 - `TRUSTED_HF_REMOTE_CODE_MODELS`: Comma-separated allowlist patterns for models that require `trust_remote_code=True` (e.g., `NovaSearch/stella_en_400M_v5,BAAI/*bge*`).
+- `ALLOW_ZERO_EMBEDDINGS_MEDIA_TYPES`: Comma-separated media types that may legitimately yield zero embeddings (e.g., `audio,video`). When set, media-embeddings jobs for these types complete successfully even if no vectors are stored.
 
 ### Backpressure & Quotas
 - `EMB_BACKPRESSURE_MAX_DEPTH`: Maximum depth across core embeddings queues (`embeddings:chunking`, `embeddings:embedding`, `embeddings:storage`) before ingest/embeddings endpoints return HTTP 429 with `Retry-After`. Default: `25000`.

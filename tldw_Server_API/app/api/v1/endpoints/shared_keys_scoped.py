@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_user
@@ -18,6 +18,8 @@ from tldw_Server_API.app.api.v1.schemas.user_keys import (
 from tldw_Server_API.app.core.AuthNZ.byok_helpers import (
     is_byok_enabled,
     is_provider_allowlisted,
+    is_trusted_base_url_request,
+    validate_base_url_override,
     validate_credential_fields,
 )
 from tldw_Server_API.app.core.AuthNZ.byok_testing import test_provider_credentials
@@ -118,6 +120,7 @@ async def _touch_shared_last_used_if_match(
 async def upsert_org_shared_key(
     org_id: int,
     payload: UserProviderKeyUpsertRequest,
+    request: Request,
     user: dict = Depends(get_current_user),
 ) -> SharedProviderKeyResponse:
     _require_byok_enabled()
@@ -131,8 +134,24 @@ async def upsert_org_shared_key(
     if not api_key:
         raise HTTPException(status_code=400, detail="api_key is required")
 
+    allow_base_url = is_trusted_base_url_request(request, user=user)
+    raw_fields = payload.credential_fields or {}
+    if isinstance(raw_fields, dict) and "base_url" in raw_fields and not allow_base_url:
+        raise HTTPException(
+            status_code=400,
+            detail="base_url override requires admin or service principal",
+        )
+
     try:
-        credential_fields = validate_credential_fields(provider_norm, payload.credential_fields)
+        credential_fields = validate_credential_fields(
+            provider_norm,
+            payload.credential_fields,
+            allow_base_url=allow_base_url,
+        )
+        if "base_url" in credential_fields:
+            credential_fields["base_url"] = validate_base_url_override(
+                credential_fields["base_url"]
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -206,6 +225,7 @@ async def list_org_shared_keys(
 async def test_org_shared_key(
     org_id: int,
     payload: ProviderKeyTestRequest,
+    request: Request,
     user: dict = Depends(get_current_user),
 ) -> SharedProviderKeyTestResponse:
     _require_byok_enabled()
@@ -231,11 +251,22 @@ async def test_org_shared_key(
     if not api_key:
         raise HTTPException(status_code=404, detail="Key not found")
 
+    allow_base_url = is_trusted_base_url_request(request, user=user)
+    credential_fields_raw = stored_payload.get("credential_fields") or {}
+    if isinstance(credential_fields_raw, dict) and "base_url" in credential_fields_raw and not allow_base_url:
+        credential_fields_raw = dict(credential_fields_raw)
+        credential_fields_raw.pop("base_url", None)
+
     try:
         credential_fields = validate_credential_fields(
             provider_norm,
-            stored_payload.get("credential_fields") or {},
+            credential_fields_raw,
+            allow_base_url=allow_base_url,
         )
+        if "base_url" in credential_fields:
+            credential_fields["base_url"] = validate_base_url_override(
+                credential_fields["base_url"]
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -294,6 +325,7 @@ async def delete_org_shared_key(
 async def upsert_team_shared_key(
     team_id: int,
     payload: UserProviderKeyUpsertRequest,
+    request: Request,
     user: dict = Depends(get_current_user),
 ) -> SharedProviderKeyResponse:
     _require_byok_enabled()
@@ -307,8 +339,24 @@ async def upsert_team_shared_key(
     if not api_key:
         raise HTTPException(status_code=400, detail="api_key is required")
 
+    allow_base_url = is_trusted_base_url_request(request, user=user)
+    raw_fields = payload.credential_fields or {}
+    if isinstance(raw_fields, dict) and "base_url" in raw_fields and not allow_base_url:
+        raise HTTPException(
+            status_code=400,
+            detail="base_url override requires admin or service principal",
+        )
+
     try:
-        credential_fields = validate_credential_fields(provider_norm, payload.credential_fields)
+        credential_fields = validate_credential_fields(
+            provider_norm,
+            payload.credential_fields,
+            allow_base_url=allow_base_url,
+        )
+        if "base_url" in credential_fields:
+            credential_fields["base_url"] = validate_base_url_override(
+                credential_fields["base_url"]
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -382,6 +430,7 @@ async def list_team_shared_keys(
 async def test_team_shared_key(
     team_id: int,
     payload: ProviderKeyTestRequest,
+    request: Request,
     user: dict = Depends(get_current_user),
 ) -> SharedProviderKeyTestResponse:
     _require_byok_enabled()
@@ -407,11 +456,22 @@ async def test_team_shared_key(
     if not api_key:
         raise HTTPException(status_code=404, detail="Key not found")
 
+    allow_base_url = is_trusted_base_url_request(request, user=user)
+    credential_fields_raw = stored_payload.get("credential_fields") or {}
+    if isinstance(credential_fields_raw, dict) and "base_url" in credential_fields_raw and not allow_base_url:
+        credential_fields_raw = dict(credential_fields_raw)
+        credential_fields_raw.pop("base_url", None)
+
     try:
         credential_fields = validate_credential_fields(
             provider_norm,
-            stored_payload.get("credential_fields") or {},
+            credential_fields_raw,
+            allow_base_url=allow_base_url,
         )
+        if "base_url" in credential_fields:
+            credential_fields["base_url"] = validate_base_url_override(
+                credential_fields["base_url"]
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

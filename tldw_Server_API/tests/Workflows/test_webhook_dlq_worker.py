@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import types
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
@@ -46,30 +45,21 @@ async def test_dlq_worker_backoff_and_delivery(monkeypatch, tmp_path):
     monkeypatch.setattr(dlq_mod, "create_workflows_database", lambda backend=None: db)
     monkeypatch.setattr(dlq_mod, "get_content_backend_instance", lambda: None)
 
-    # Stub httpx AsyncClient behavior: first call fails, second succeeds
+    # Stub afetch behavior: first call fails, second succeeds
     class DummyResp:
         def __init__(self, status_code=200):
             self.status_code = status_code
             self.text = "ok"
+        async def aclose(self):
+            return None
 
-    class DummyClient:
-        async def post(self, url, json=None, timeout=None):
-            DummyClient.calls += 1
-            if DummyClient.calls == 1:
-                # fail first time
-                return DummyResp(500)
-            return DummyResp(200)
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-    DummyClient.calls = 0
-
-    # Patch internal usage
-    monkeypatch.setattr(dlq_mod, "httpx", types.SimpleNamespace(AsyncClient=DummyClient))
+    async def _fake_afetch(*, method, url, json=None, timeout=None, **kwargs):
+        _fake_afetch.calls += 1
+        if _fake_afetch.calls == 1:
+            return DummyResp(500)
+        return DummyResp(200)
+    _fake_afetch.calls = 0
+    monkeypatch.setattr(dlq_mod, "afetch", _fake_afetch)
     # Fix backoff to 1 second to make assertion deterministic
     monkeypatch.setattr(dlq_mod, "_compute_next_backoff", lambda attempts: 1)
 

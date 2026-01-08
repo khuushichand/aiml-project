@@ -201,17 +201,9 @@ export function PermissionGuard({
   fallback = null,
   showLoading = false,
   requireAuth = false,
-  redirectTo = '/login',
   variant = 'inline',
 }: PermissionGuardProps) {
   const { hasPermission, hasAnyPermission, hasAllPermissions, hasRole, loading, user } = usePermissions();
-  const router = useRouter();
-
-  useEffect(() => {
-    if (!loading && requireAuth && !user && redirectTo) {
-      router.push(redirectTo);
-    }
-  }, [loading, requireAuth, user, redirectTo, router]);
 
   const renderRouteLoading = () => (
     <div className="flex h-screen items-center justify-center">

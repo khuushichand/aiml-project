@@ -19,6 +19,8 @@ from tldw_Server_API.app.core.AuthNZ.byok_helpers import (
     is_provider_allowlisted,
     resolve_byok_allowlist,
     resolve_server_default_key,
+    is_trusted_base_url_request,
+    validate_base_url_override,
     validate_credential_fields,
 )
 from tldw_Server_API.app.core.AuthNZ.byok_testing import test_provider_credentials
@@ -96,6 +98,7 @@ async def _touch_user_last_used_if_match(
 )
 async def upsert_user_provider_key(
     payload: UserProviderKeyUpsertRequest,
+    request: Request,
     current_user: Dict[str, Any] = Depends(get_current_active_user),
 ) -> UserProviderKeyResponse:
     _require_byok_enabled()
@@ -113,8 +116,24 @@ async def upsert_user_provider_key(
             detail="api_key is required",
         )
 
+    allow_base_url = is_trusted_base_url_request(request, user=current_user)
+    raw_fields = payload.credential_fields or {}
+    if isinstance(raw_fields, dict) and "base_url" in raw_fields and not allow_base_url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="base_url override requires admin or service principal",
+        )
+
     try:
-        credential_fields = validate_credential_fields(provider_norm, payload.credential_fields)
+        credential_fields = validate_credential_fields(
+            provider_norm,
+            payload.credential_fields,
+            allow_base_url=allow_base_url,
+        )
+        if "base_url" in credential_fields:
+            credential_fields["base_url"] = validate_base_url_override(
+                credential_fields["base_url"]
+            )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -277,6 +296,7 @@ async def list_user_provider_keys(
 @router.post("/keys/test", response_model=ProviderKeyTestResponse)
 async def test_user_provider_key(
     payload: ProviderKeyTestRequest,
+    request: Request,
     current_user: Dict[str, Any] = Depends(get_current_active_user),
 ) -> ProviderKeyTestResponse:
     _require_byok_enabled()
@@ -304,11 +324,22 @@ async def test_user_provider_key(
     if not api_key:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")
 
+    allow_base_url = is_trusted_base_url_request(request, user=current_user)
+    credential_fields_raw = stored_payload.get("credential_fields") or {}
+    if isinstance(credential_fields_raw, dict) and "base_url" in credential_fields_raw and not allow_base_url:
+        credential_fields_raw = dict(credential_fields_raw)
+        credential_fields_raw.pop("base_url", None)
+
     try:
         credential_fields = validate_credential_fields(
             provider_norm,
-            stored_payload.get("credential_fields") or {},
+            credential_fields_raw,
+            allow_base_url=allow_base_url,
         )
+        if "base_url" in credential_fields:
+            credential_fields["base_url"] = validate_base_url_override(
+                credential_fields["base_url"]
+            )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 

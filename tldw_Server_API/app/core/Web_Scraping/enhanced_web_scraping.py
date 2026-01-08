@@ -30,7 +30,6 @@ import random
 import os
 
 from loguru import logger
-import aiohttp
 import aiofiles
 from bs4 import BeautifulSoup
 import trafilatura
@@ -58,6 +57,7 @@ from tldw_Server_API.app.core.Web_Scraping.filters import (
     URLPatternFilter,
     RobotsFilter,
 )
+from tldw_Server_API.app.core.http_client import afetch
 from tldw_Server_API.app.core.Metrics.metrics_logger import (
     log_counter,
     log_histogram,
@@ -305,7 +305,7 @@ async def _maybe_enforce_with_rg_web_scraping() -> Optional[Dict[str, object]]:
 
 
 class CookieManager:
-    """Manages cookies and sessions for scraping"""
+    """Manages cookies for scraping."""
 
     def __init__(self, storage_path: Optional[Path] = None, *, connector_limit: int = 10, per_host_limit: int = 2):
         if storage_path is None:
@@ -314,7 +314,6 @@ class CookieManager:
             storage_path = base / "cookies.json"
         self.storage_path = storage_path
         self._cookies: Dict[str, List[Dict[str, Any]]] = {}
-        self._sessions: Dict[str, aiohttp.ClientSession] = {}
         self._connector_limit = int(connector_limit)
         self._per_host_limit = int(per_host_limit)
         self._load_cookies()
@@ -347,71 +346,9 @@ class CookieManager:
         domain = urlparse(url).netloc
         return self._cookies.get(domain)
 
-    def _build_session_key(
-        self,
-        domain: str,
-        user_agent: str,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> str:
-        """Create a stable key for session reuse based on headers."""
-        if not headers and user_agent == DEFAULT_USER_AGENT:
-            return domain
-
-        payload = {
-            "user_agent": user_agent,
-            "headers": headers or {},
-        }
-        payload_hash = hashlib.sha256(
-            json.dumps(payload, sort_keys=True).encode("utf-8")
-        ).hexdigest()
-        return f"{domain}|{payload_hash}"
-
-    async def get_session(
-        self,
-        url: str,
-        user_agent: Optional[str] = None,
-        custom_headers: Optional[Dict[str, str]] = None,
-    ) -> aiohttp.ClientSession:
-        """Get or create session for URL with optional header overrides."""
-        domain = urlparse(url).netloc
-        header_copy = dict(custom_headers) if custom_headers else {}
-
-        effective_user_agent = user_agent or header_copy.get("User-Agent") or DEFAULT_USER_AGENT
-        # Ensure User-Agent only set via context
-        header_copy.pop("User-Agent", None)
-
-        session_key = self._build_session_key(domain, effective_user_agent, header_copy)
-
-        if session_key not in self._sessions:
-            connector = aiohttp.TCPConnector(limit=self._connector_limit, limit_per_host=self._per_host_limit)
-            timeout = aiohttp.ClientTimeout(total=30)
-            base_headers = {"User-Agent": effective_user_agent}
-            if header_copy:
-                base_headers.update(header_copy)
-
-            self._sessions[session_key] = aiohttp.ClientSession(
-                connector=connector,
-                timeout=timeout,
-                headers=base_headers,
-            )
-
-            # Apply cookies if available
-            cookies = self.get_cookies(url)
-            if cookies:
-                for cookie in cookies:
-                    # Support Playwright-style dicts and plain mappings
-                    if isinstance(cookie, dict) and "name" in cookie and "value" in cookie:
-                        self._sessions[session_key].cookie_jar.update_cookies({cookie["name"]: cookie["value"]})
-                    elif isinstance(cookie, dict):
-                        self._sessions[session_key].cookie_jar.update_cookies(cookie)
-
-        return self._sessions[session_key]
-
     async def close_all(self):
-        """Close all sessions"""
-        for session in self._sessions.values():
-            await session.close()
-        self._sessions.clear()
+        """No-op: http_client manages shared sessions."""
+        return None
 
 
 class ContentDeduplicator:
@@ -747,6 +684,44 @@ class EnhancedWebScraper:
                     )
         return cookies_list
 
+    @staticmethod
+    def _build_request_headers(
+        user_agent: Optional[str],
+        custom_headers: Optional[Dict[str, str]],
+    ) -> Dict[str, str]:
+        header_copy = dict(custom_headers) if custom_headers else {}
+        effective_user_agent = user_agent or header_copy.pop("User-Agent", None) or DEFAULT_USER_AGENT
+        headers = {"User-Agent": effective_user_agent}
+        if header_copy:
+            headers.update(header_copy)
+        return headers
+
+    def _build_cookie_map(
+        self,
+        url: str,
+        custom_cookies: Optional[List[Dict[str, Any]]],
+    ) -> Optional[Dict[str, str]]:
+        cookies: Dict[str, str] = {}
+        stored = self.cookie_manager.get_cookies(url)
+        if stored:
+            cookies.update(self._normalize_cookie_map(stored))
+        custom_map = self._normalize_cookie_map(custom_cookies)
+        if custom_map:
+            cookies.update(custom_map)
+        return cookies or None
+
+    @staticmethod
+    async def _close_response(resp: Any) -> None:
+        if resp is None:
+            return
+        close = getattr(resp, "aclose", None)
+        if callable(close):
+            await close()
+            return
+        close = getattr(resp, "close", None)
+        if callable(close):
+            close()
+
     def _set_progress(self, task_id: Optional[str], **updates: Any) -> None:
         if not task_id:
             return
@@ -865,62 +840,62 @@ class EnhancedWebScraper:
         custom_headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Scrape using trafilatura"""
-        session = await self.cookie_manager.get_session(
-            url,
-            user_agent=user_agent,
-            custom_headers=custom_headers,
+        headers = self._build_request_headers(user_agent, custom_headers)
+        cookies = self._build_cookie_map(url, custom_cookies)
+        resp = await afetch(
+            method="GET",
+            url=url,
+            headers=headers,
+            cookies=cookies,
+        )
+        try:
+            html = resp.text
+        finally:
+            await self._close_response(resp)
+
+        # Extract with trafilatura
+        content = trafilatura.extract(
+            html,
+            include_comments=False,
+            include_tables=True,
+            include_images=False,
+            output_format='json'
         )
 
-        cookie_map = self._normalize_cookie_map(custom_cookies)
-        if cookie_map:
-            session.cookie_jar.update_cookies(cookie_map, response_url=url)
+        if content:
+            content_dict = json.loads(content)
 
-        async with session.get(url) as response:
-            html = await response.text()
-
-            # Extract with trafilatura
-            content = trafilatura.extract(
-                html,
-                include_comments=False,
-                include_tables=True,
-                include_images=False,
-                output_format='json'
-            )
-
-            if content:
-                content_dict = json.loads(content)
-
-                # Check for duplicates
-                if self.deduplicator.is_duplicate(url, content_dict.get('text', '')):
-                    return {
-                        "url": url,
-                        "error": "Duplicate content",
-                        "extraction_successful": False,
-                        "is_duplicate": True
-                    }
-
-                # Add to deduplicator
-                self.deduplicator.add_content(
-                    url,
-                    content_dict.get('text', ''),
-                    content_dict.get('title', '')
-                )
-
+            # Check for duplicates
+            if self.deduplicator.is_duplicate(url, content_dict.get('text', '')):
                 return {
                     "url": url,
-                    "title": content_dict.get('title', 'Untitled'),
-                    "author": content_dict.get('author', 'Unknown'),
-                    "date": content_dict.get('date', ''),
-                    "content": content_dict.get('text', ''),
-                    "extraction_successful": True,
-                    "method": "trafilatura"
+                    "error": "Duplicate content",
+                    "extraction_successful": False,
+                    "is_duplicate": True
                 }
+
+            # Add to deduplicator
+            self.deduplicator.add_content(
+                url,
+                content_dict.get('text', ''),
+                content_dict.get('title', '')
+            )
 
             return {
                 "url": url,
-                "error": "No content extracted",
-                "extraction_successful": False
+                "title": content_dict.get('title', 'Untitled'),
+                "author": content_dict.get('author', 'Unknown'),
+                "date": content_dict.get('date', ''),
+                "content": content_dict.get('text', ''),
+                "extraction_successful": True,
+                "method": "trafilatura"
             }
+
+        return {
+            "url": url,
+            "error": "No content extracted",
+            "extraction_successful": False
+        }
 
     async def _scrape_with_playwright(
         self,
@@ -1021,73 +996,73 @@ class EnhancedWebScraper:
         custom_headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Scrape using BeautifulSoup for simple HTML parsing"""
-        session = await self.cookie_manager.get_session(
-            url,
-            user_agent=user_agent,
-            custom_headers=custom_headers,
+        headers = self._build_request_headers(user_agent, custom_headers)
+        cookies = self._build_cookie_map(url, custom_cookies)
+        resp = await afetch(
+            method="GET",
+            url=url,
+            headers=headers,
+            cookies=cookies,
         )
+        try:
+            html = resp.text
+        finally:
+            await self._close_response(resp)
+        soup = BeautifulSoup(html, 'html.parser')
 
-        cookie_map = self._normalize_cookie_map(custom_cookies)
-        if cookie_map:
-            session.cookie_jar.update_cookies(cookie_map, response_url=url)
+        # Extract title
+        title_tag = soup.find('title')
+        title = title_tag.get_text(strip=True) if title_tag else "Untitled"
+        if not title:
+            title = "Untitled"
 
-        async with session.get(url) as response:
-            html = await response.text()
-            soup = BeautifulSoup(html, 'html.parser')
+        # Extract content
+        # Remove script and style elements
+        for script in soup(["script", "style"]):
+            script.decompose()
 
-            # Extract title
-            title_tag = soup.find('title')
-            title = title_tag.get_text(strip=True) if title_tag else "Untitled"
-            if not title:
-                title = "Untitled"
+        # Try to find main content
+        content = ""
+        for tag in ['main', 'article', 'div']:
+            elements = soup.find_all(tag, class_=lambda x: x and any(
+                keyword in x.lower() for keyword in ['content', 'article', 'post', 'entry']
+            ))
+            if elements:
+                content = '\n\n'.join(elem.get_text(strip=True) for elem in elements)
+                break
 
-            # Extract content
-            # Remove script and style elements
-            for script in soup(["script", "style"]):
-                script.decompose()
+        # Fallback to body
+        if not content:
+            content = soup.get_text(strip=True)
 
-            # Try to find main content
-            content = ""
-            for tag in ['main', 'article', 'div']:
-                elements = soup.find_all(tag, class_=lambda x: x and any(
-                    keyword in x.lower() for keyword in ['content', 'article', 'post', 'entry']
-                ))
-                if elements:
-                    content = '\n\n'.join(elem.get_text(strip=True) for elem in elements)
-                    break
+        # Extract metadata
+        author_meta = soup.find('meta', {'name': 'author'})
+        author = author_meta.get('content', 'Unknown') if author_meta else 'Unknown'
 
-            # Fallback to body
-            if not content:
-                content = soup.get_text(strip=True)
+        date_meta = soup.find('meta', {'property': 'article:published_time'})
+        date = date_meta.get('content', '') if date_meta else ''
 
-            # Extract metadata
-            author_meta = soup.find('meta', {'name': 'author'})
-            author = author_meta.get('content', 'Unknown') if author_meta else 'Unknown'
-
-            date_meta = soup.find('meta', {'property': 'article:published_time'})
-            date = date_meta.get('content', '') if date_meta else ''
-
-            # Check for duplicates
-            if self.deduplicator.is_duplicate(url, content):
-                return {
-                    "url": url,
-                    "error": "Duplicate content",
-                    "extraction_successful": False,
-                    "is_duplicate": True
-                }
-
-            # Add to deduplicator
-            self.deduplicator.add_content(url, content, title)
-
+        # Check for duplicates
+        if self.deduplicator.is_duplicate(url, content):
             return {
                 "url": url,
-                "title": title,
-                "author": author,
-                "date": date,
-                "content": content,
-                "extraction_successful": True,
-                "method": "beautifulsoup"
+                "error": "Duplicate content",
+                "extraction_successful": False,
+                "is_duplicate": True
             }
+
+        # Add to deduplicator
+        self.deduplicator.add_content(url, content, title)
+
+        return {
+            "url": url,
+            "title": title,
+            "author": author,
+            "date": date,
+            "content": content,
+            "extraction_successful": True,
+            "method": "beautifulsoup"
+        }
 
     async def scrape_multiple(self, urls: List[str], method: str = "trafilatura",
                             priority: JobPriority = JobPriority.NORMAL,
@@ -1180,18 +1155,18 @@ class EnhancedWebScraper:
                 "current_url": sitemap_url,
                 "started_at": datetime.now().isoformat(),
             }
-        session = await self.cookie_manager.get_session(
-            sitemap_url,
-            user_agent=user_agent,
-            custom_headers=custom_headers,
+        headers = self._build_request_headers(user_agent, custom_headers)
+        cookies = self._build_cookie_map(sitemap_url, custom_cookies)
+        resp = await afetch(
+            method="GET",
+            url=sitemap_url,
+            headers=headers,
+            cookies=cookies,
         )
-
-        cookie_map = self._normalize_cookie_map(custom_cookies)
-        if cookie_map:
-            session.cookie_jar.update_cookies(cookie_map, response_url=sitemap_url)
-
-        async with session.get(sitemap_url) as response:
-            content = await response.text()
+        try:
+            content = resp.text
+        finally:
+            await self._close_response(resp)
 
         # Parse sitemap
         soup = BeautifulSoup(content, 'xml')
@@ -1728,9 +1703,18 @@ class EnhancedWebScraper:
         # Heuristic: if content lacks HTML tags, fetch the page HTML
         if '<a' not in html_text and '<html' not in html_text:
             try:
-                session = await self.cookie_manager.get_session(base_url)
-                async with session.get(base_url) as resp:
-                    html_text = await resp.text()
+                headers = self._build_request_headers(None, None)
+                cookies = self._build_cookie_map(base_url, None)
+                resp = await afetch(
+                    method="GET",
+                    url=base_url,
+                    headers=headers,
+                    cookies=cookies,
+                )
+                try:
+                    html_text = resp.text
+                finally:
+                    await self._close_response(resp)
             except Exception as e:
                 logger.warning(f"Failed to fetch HTML for link extraction: {e}")
                 return []

@@ -7,6 +7,7 @@ from .base import ChatProvider
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
 )
+from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 
 
 class CustomOpenAIAdapter(ChatProvider):
@@ -123,6 +124,7 @@ class CustomOpenAIAdapter(ChatProvider):
         return data
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+        request = validate_payload(self.name, request or {})
         # If tests monkeypatched legacy callable, honor it and avoid native HTTP
         try:
             from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls_Local as _legacy_local
@@ -172,6 +174,7 @@ class CustomOpenAIAdapter(ChatProvider):
         return _legacy_local.chat_with_custom_openai(**kwargs)
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+        request = validate_payload(self.name, request or {})
         # If tests monkeypatched legacy callable, honor it and avoid native HTTP
         try:
             from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls_Local as _legacy_local
@@ -270,6 +273,7 @@ class CustomOpenAIAdapter2(CustomOpenAIAdapter):
     name = "custom-openai-api-2"
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+        request = validate_payload(self.name, request or {})
         # If tests monkeypatched legacy callable, honor it and avoid native HTTP
         try:
             from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls_Local as _legacy_local
@@ -317,6 +321,7 @@ class CustomOpenAIAdapter2(CustomOpenAIAdapter):
         return _legacy_local.chat_with_custom_openai_2(**kwargs)
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+        request = validate_payload(self.name, request or {})
         # If tests monkeypatched legacy callable, honor it and avoid native HTTP
         try:
             from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls_Local as _legacy_local

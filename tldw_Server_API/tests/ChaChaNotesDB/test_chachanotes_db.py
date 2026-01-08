@@ -113,6 +113,9 @@ class TestDBInitialization:
         conn.execute("SELECT version FROM db_schema_version WHERE schema_name = ?", (db._SCHEMA_NAME,)).fetchone()[
             'version']
         assert version == db._CURRENT_SCHEMA_VERSION
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_metadata'"
+        ).fetchone() is not None
         db.close_connection()
 
     def test_in_memory_db(self, client_id):
@@ -125,6 +128,9 @@ class TestDBInitialization:
         conn.execute("SELECT version FROM db_schema_version WHERE schema_name = ?", (db._SCHEMA_NAME,)).fetchone()[
             'version']
         assert version == db._CURRENT_SCHEMA_VERSION
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_metadata'"
+        ).fetchone() is not None
         db.close_connection()
 
     def test_missing_client_id(self, db_path):
@@ -198,6 +204,45 @@ class TestCharacterCards:
         retrieved = db_instance.get_character_card_by_name(card_data["name"])
         assert retrieved is not None
         assert retrieved["description"] == card_data["description"]
+
+
+class TestMessageMetadata:
+    def test_get_message_metadata_auto_creates_table(self, db_instance: CharactersRAGDB):
+        conn = db_instance.get_connection()
+        conn.execute("DROP TABLE IF EXISTS message_metadata")
+        conn.commit()
+
+        db_instance.get_message_metadata("missing-id")
+
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_metadata'"
+        ).fetchone()
+        assert exists is not None
+
+    def test_migration_v12_to_v13_creates_table(self, db_path, client_id):
+        db = CharactersRAGDB(db_path, client_id)
+        db.close_connection()
+
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.execute(
+                "UPDATE db_schema_version SET version = ? WHERE schema_name = ?",
+                (12, CharactersRAGDB._SCHEMA_NAME),
+            )
+            conn.execute("DROP TABLE IF EXISTS message_metadata")
+            conn.commit()
+
+        db = CharactersRAGDB(db_path, client_id)
+        conn = db.get_connection()
+        version = conn.execute(
+            "SELECT version FROM db_schema_version WHERE schema_name = ?",
+            (CharactersRAGDB._SCHEMA_NAME,),
+        ).fetchone()["version"]
+        assert version == CharactersRAGDB._CURRENT_SCHEMA_VERSION
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_metadata'"
+        ).fetchone()
+        assert exists is not None
+        db.close_connection()
 
     def test_list_character_cards(self, db_instance: CharactersRAGDB):
         # Get initial count (database has a default character card)

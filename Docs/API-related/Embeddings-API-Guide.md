@@ -239,6 +239,9 @@ Note: When the embeddings implementation is unavailable (e.g., optional dependen
 ### Media Embeddings API (Chunk and store document vectors)
 
 Use the media-specific endpoints to generate and persist embeddings for an ingested media item’s text content.
+If a media type can legitimately have no text (e.g., audio/video without transcripts), set
+`allow_zero_embeddings_media_types` in `Config_Files/config.txt` (or `ALLOW_ZERO_EMBEDDINGS_MEDIA_TYPES`) so
+jobs complete successfully with `embedding_count=0` instead of failing.
 
 #### Start Embedding for a Media Item
 ```http

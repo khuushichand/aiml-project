@@ -5,12 +5,12 @@ import asyncio
 import time
 from typing import Dict, Optional, Any
 from contextlib import asynccontextmanager
-import aiohttp
-from aiohttp import ClientTimeout, ClientSession, TCPConnector
 from loguru import logger
 import threading
 
 from tldw_Server_API.app.core.Embeddings.circuit_breaker import CircuitBreaker
+from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
+from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
 
 
 class ConnectionPool:
@@ -46,9 +46,7 @@ class ConnectionPool:
         self.timeout_seconds = timeout_seconds
         self.retry_attempts = retry_attempts
 
-        self.session: Optional[ClientSession] = None
         self._lock = threading.RLock()
-        self._session_lock = asyncio.Lock()
         self._usage_stats = {
             'requests': 0,
             'failures': 0,
@@ -71,57 +69,18 @@ class ConnectionPool:
             f"keepalive_timeout={keepalive_timeout}s"
         )
 
-    async def _create_session(self) -> ClientSession:
-        """Create a new aiohttp session with connection pooling."""
-        connector = TCPConnector(
-            limit=self.max_connections,
-            limit_per_host=self.max_connections,
-            ttl_dns_cache=300,
-            enable_cleanup_closed=True,
-            keepalive_timeout=self.keepalive_timeout,
-            force_close=False
-        )
-
-        timeout = ClientTimeout(
-            total=self.timeout_seconds,
-            connect=5,
-            sock_connect=5,
-            sock_read=self.timeout_seconds
-        )
-
-        return ClientSession(
-            connector=connector,
-            timeout=timeout,
-            trust_env=True  # Use system proxy settings if available
-        )
-
-    async def get_session(self) -> ClientSession:
-        """Get or create the session."""
-        if self.session is None or self.session.closed:
-            async with self._session_lock:
-                if self.session is None or self.session.closed:
-                    new_session = await self._create_session()
-                    old_session = self.session
-                    self.session = new_session
-                    if old_session is not None and not old_session.closed:
-                        await old_session.close()
-        return self.session
-
     @asynccontextmanager
     async def acquire_connection(self):
         """
-        Context manager to acquire a connection from the pool.
+        Context manager to acquire a slot from the pool.
 
-        Yields:
-            ClientSession: An aiohttp session for making requests
+        This class relies on http_client for actual connection reuse.
         """
-        session = await self.get_session()
-
         with self._lock:
             self._usage_stats['active_connections'] += 1
 
         try:
-            yield session
+            yield None
         finally:
             with self._lock:
                 self._usage_stats['active_connections'] -= 1
@@ -170,77 +129,73 @@ class ConnectionPool:
             Response data as dictionary
 
         Raises:
-            aiohttp.ClientError: On network errors
+            NetworkError: On network errors
+            RetryExhaustedError: When retries are exhausted
             ValueError: On invalid responses
         """
         start_time = time.time()
 
-        async with self.acquire_connection() as session:
+        async with self.acquire_connection():
+            resp = None
             try:
-                async with session.request(
+                retry = RetryPolicy(attempts=max(1, int(self.retry_attempts)))
+                resp = await afetch(
                     method=method,
                     url=url,
                     headers=headers,
                     json=json_data,
                     data=data,
-                    params=params
-                ) as response:
-                    # Update statistics
-                    elapsed = time.time() - start_time
+                    params=params,
+                    timeout=self.timeout_seconds,
+                    retry=retry,
+                )
+                elapsed = time.time() - start_time
+                with self._lock:
+                    self._usage_stats['requests'] += 1
+                    self._usage_stats['total_time'] += elapsed
+
+                status = int(getattr(resp, "status_code", 0))
+                if status >= 400:
+                    try:
+                        error_text = (resp.text or "")[:500]
+                    except Exception:
+                        error_text = ""
+                    logger.error(
+                        f"{self.provider} API error: "
+                        f"status={status}, body={error_text}"
+                    )
                     with self._lock:
-                        self._usage_stats['requests'] += 1
-                        self._usage_stats['total_time'] += elapsed
+                        self._usage_stats['failures'] += 1
+                    raise NetworkError(f"HTTP {status}")
 
-                    # Check response status
-                    if response.status >= 400:
-                        error_text = await response.text()
-                        logger.error(
-                            f"{self.provider} API error: "
-                            f"status={response.status}, body={error_text[:500]}"
-                        )
+                ctype = (resp.headers.get("content-type", "") or "").lower()
+                if "application/json" in ctype:
+                    return resp.json()
+                try:
+                    text = resp.text
+                except Exception:
+                    text = ""
+                return {"text": text}
 
-                        with self._lock:
-                            self._usage_stats['failures'] += 1
-
-                        raise aiohttp.ClientResponseError(
-                            request_info=response.request_info,
-                            history=response.history,
-                            status=response.status,
-                            message=error_text,
-                            headers=response.headers
-                        )
-
-                    # Parse response
-                    if 'application/json' in response.headers.get('content-type', ''):
-                        return await response.json()
-                    else:
-                        text = await response.text()
-                        return {'text': text}
-
-            except asyncio.TimeoutError as e:
+            except (NetworkError, RetryExhaustedError) as e:
                 with self._lock:
                     self._usage_stats['failures'] += 1
-                logger.error(f"{self.provider} request timeout after {self.timeout_seconds}s")
-                raise
-            except aiohttp.ClientError as e:
-                with self._lock:
-                    self._usage_stats['failures'] += 1
-                logger.error(f"{self.provider} connection error: {e}")
+                logger.error(f"{self.provider} request error: {e}")
                 raise
             except Exception as e:
                 with self._lock:
                     self._usage_stats['failures'] += 1
                 logger.error(f"{self.provider} unexpected error: {e}")
                 raise
+            finally:
+                if resp is not None:
+                    close = getattr(resp, "aclose", None)
+                    if callable(close):
+                        await close()
 
     async def close(self):
         """Close the connection pool and cleanup resources."""
-        if self.session and not self.session.closed:
-            await self.session.close()
-            # Allow time for graceful shutdown
-            await asyncio.sleep(0.25)
-
-        logger.info(f"ConnectionPool for {self.provider} closed")
+        logger.info(f"ConnectionPool for {self.provider} closed (http_client-managed)")
 
     def get_stats(self) -> Dict[str, Any]:
         """Get connection pool statistics."""

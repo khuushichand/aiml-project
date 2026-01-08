@@ -355,6 +355,7 @@ def _map_tts_exception(exc: Exception) -> HTTPException:
 async def run_speech_chat_turn(
     *,
     request_data: SpeechChatRequest,
+    request: Optional[Any] = None,
     current_user: User,
     chat_db: CharactersRAGDB,
     tts_service: TTSServiceV2,
@@ -511,6 +512,7 @@ async def run_speech_chat_turn(
     byok_resolution = await resolve_byok_credentials(
         llm_provider,
         user_id=user_id_int,
+        request=request,
         fallback_resolver=_fallback_resolver,
     )
     provider_api_key = byok_resolution.api_key

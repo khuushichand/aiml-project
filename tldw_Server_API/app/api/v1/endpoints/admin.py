@@ -142,6 +142,7 @@ from tldw_Server_API.app.core.AuthNZ.byok_helpers import (
     is_byok_enabled,
     is_provider_allowlisted,
     resolve_byok_allowlist,
+    validate_base_url_override,
     validate_credential_fields,
 )
 from tldw_Server_API.app.core.AuthNZ.byok_testing import test_provider_credentials
@@ -1038,7 +1039,15 @@ async def admin_upsert_shared_byok_key(payload: SharedProviderKeyUpsertRequest) 
         raise HTTPException(status_code=400, detail="api_key is required")
 
     try:
-        credential_fields = validate_credential_fields(provider_norm, payload.credential_fields)
+        credential_fields = validate_credential_fields(
+            provider_norm,
+            payload.credential_fields,
+            allow_base_url=True,
+        )
+        if "base_url" in credential_fields:
+            credential_fields["base_url"] = validate_base_url_override(
+                credential_fields["base_url"]
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1123,7 +1132,12 @@ async def admin_test_shared_byok_key(payload: SharedProviderKeyTestRequest) -> S
         credential_fields = validate_credential_fields(
             provider_norm,
             stored_payload.get("credential_fields") or {},
+            allow_base_url=True,
         )
+        if "base_url" in credential_fields:
+            credential_fields["base_url"] = validate_base_url_override(
+                credential_fields["base_url"]
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1330,7 +1344,15 @@ async def admin_upsert_llm_provider_override(
     credential_fields: Optional[Dict[str, Any]] = None
     if payload.credential_fields is not None:
         try:
-            credential_fields = validate_credential_fields(provider_norm, payload.credential_fields)
+            credential_fields = validate_credential_fields(
+                provider_norm,
+                payload.credential_fields,
+                allow_base_url=True,
+            )
+            if "base_url" in credential_fields:
+                credential_fields["base_url"] = validate_base_url_override(
+                    credential_fields["base_url"]
+                )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1446,7 +1468,15 @@ async def admin_test_llm_provider(payload: LLMProviderTestRequest) -> LLMProvide
 
     if credential_fields is not None:
         try:
-            credential_fields = validate_credential_fields(provider_norm, credential_fields)
+            credential_fields = validate_credential_fields(
+                provider_norm,
+                credential_fields,
+                allow_base_url=True,
+            )
+            if "base_url" in credential_fields:
+                credential_fields["base_url"] = validate_base_url_override(
+                    credential_fields["base_url"]
+                )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1806,16 +1836,19 @@ async def admin_list_team_members(
         team = await _get_scoped_team(team_id, principal, require_admin=True)
         rows = await list_team_members(team_id)
         org_id = team.get("org_id") if isinstance(team, dict) else None
-        items = []
+        items: list[TeamMemberResponse] = []
         for row in rows:
             payload = dict(row)
             payload.setdefault("team_id", team_id)
             if org_id is not None:
                 payload.setdefault("org_id", org_id)
             items.append(TeamMemberResponse(**payload))
+    except HTTPException:
+        # Preserve existing HTTP semantics from scoped team/org helpers.
+        raise
     except Exception as e:
         logger.error(f"Failed to list team members: {e}")
-        raise HTTPException(status_code=500, detail="Failed to list team members")
+        raise HTTPException(status_code=500, detail="Failed to list team members") from e
     return items
 
 

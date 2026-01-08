@@ -1757,6 +1757,12 @@ class Chunker:
     @staticmethod
     def _normalize_method_argument(method: Optional[Any]) -> Optional[str]:
         """Normalize chunking method input to a lowercase-friendly string."""
+        def _clean_method(raw: str) -> str:
+            cleaned = raw.strip()
+            if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in {'"', "'"}:
+                cleaned = cleaned[1:-1].strip()
+            return cleaned.lower()
+
         if method is None:
             return None
         if isinstance(method, ChunkingMethod):
@@ -1766,11 +1772,11 @@ class Chunker:
         except Exception:
             value = None
         if isinstance(value, str):
-            return value.lower()
+            return _clean_method(value)
         if isinstance(method, str):
-            return method.lower()
+            return _clean_method(method)
         try:
-            return str(method).lower()
+            return _clean_method(str(method))
         except Exception:
             return None
 

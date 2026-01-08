@@ -115,16 +115,11 @@ LLM calls are fragmented across legacy modules (`LLM_API_Calls.py`, `LLM_API_Cal
 - Supported extension fields are explicitly declared per provider (no implicit passthrough).
 - Field translation is adapter-only and defined in the capability registry; adapters send only provider-supported keys.
 
-### Nested Validation Policy (Decision Required)
-The capability registry only validates top-level keys today. Decide the minimal nested validation that balances determinism with flexibility:
-- **Option A (recommended)**: Shallow shape checks for known nested fields; pass through unknown nested shapes.
-  - Enforce types/required keys for: `tools[]`, `response_format`, `logit_bias`, `json_schema` (if present).
-  - Reject invalid types with deterministic 400s; keep nested contents otherwise unvalidated.
-  - Tests: fixtures that assert valid/invalid shapes per field and provider.
-- **Option B**: Full schema validation for nested objects per provider.
-  - Strongest determinism but highest maintenance and frequent provider drift.
-- **Option C**: No nested validation (top-level only).
-  - Lowest effort but weakest determinism and more provider-side errors.
+### Nested Validation Policy (Selected: Option A)
+The capability registry only validates top-level keys today. Adopt shallow shape checks for known nested fields and pass through unknown nested shapes:
+- Enforce types/required keys for: `tools[]`, `response_format`, `logit_bias`, `json_schema` (if present).
+- Reject invalid types with deterministic 400s; keep nested contents otherwise unvalidated.
+- Tests: fixtures that assert valid/invalid shapes per field and provider.
 
 ### Response Pass-Through
 - Adapters must preserve unknown fields in non-streaming responses (provider-specific extensions are returned unchanged).
@@ -137,12 +132,10 @@ The capability registry only validates top-level keys today. Decide the minimal 
 - BYOK (per-user key resolution) remains supported and overrides config defaults.
 - Caller-provided `api_key`/`base_url`/`extra_headers` override BYOK and config defaults.
 
-### Base URL Override Policy (Decision Required)
-Base URL overrides are useful for self-hosted providers but carry SSRF risk. Decide and document one policy:
-- **Option A (recommended)**: Allow overrides only for trusted callers (internal services/admin) and only when `config.txt` enables it per provider.
-- **Option B**: Allow overrides for all callers but require an allowlist of hostnames/IP ranges in `config.txt`.
-- **Option C**: Disallow overrides on user-facing endpoints; only adapters invoked by internal services may set `base_url`.
-If overrides are allowed, add SSRF protections (scheme allowlist, block link-local/metadata IPs, DNS re-resolution, and explicit port allowlist) and tests.
+### Base URL Override Policy (Selected: Option A)
+Base URL overrides are allowed only for trusted callers (internal services/admin) and only when `config.txt` enables it per provider.
+- SSRF protections required: scheme allowlist, block link-local/metadata IPs, DNS re-resolution, and explicit port allowlist.
+- Tests: allow/deny fixtures for trusted/untrusted callers and blocked network targets.
 
 ### Streaming Semantics
 - Streaming responses must remain SSE formatted with `data:` lines and `[DONE]`.
@@ -194,6 +187,7 @@ Call sites to converge on the registry:
 - Update existing adapters to validate payloads against the capability registry.
 - Add unit tests that verify extension allowlists and validation end-to-end.
 - Stand up the `provider_config.py` replacement or compatibility facade used by remaining call sites.
+- Implement base_url override gating and SSRF checks; add test fixtures for `trusted_caller_context`, `untrusted_caller_context`, `base_url_allowed`, `base_url_invalid_scheme`, `base_url_blocked_link_local`, `base_url_blocked_metadata`, `base_url_blocked_private_ip`, `base_url_dns_rebind`.
 
 ### Phase 2: Summarization/Analysis Collapse
 - Convert `Summarization_General_Lib.analyze` into a prompt-builder that calls adapters.
@@ -252,8 +246,7 @@ Call sites to converge on the registry:
 - `tldw_Server_API/app/core/Writing/note_title.py`: uses `adapter_shims.openai_chat_handler`.
 
 ## Open Questions
-- Nested validation decision (Option A/B/C above) and test scope.
-- Base URL override policy (Option A/B/C above) and SSRF safeguards.
+- None (resolved: nested validation Option A; base URL override Option A).
 
 ## Implementation Plan
 ## Stage 1: Capability Registry Foundation
@@ -265,7 +258,7 @@ Call sites to converge on the registry:
 ## Stage 2: Adapter Validation Integration
 **Goal**: Enforce request validation and deterministic 400s across adapters.
 **Success Criteria**: All registry-backed adapters reject unsupported/blocked keys before provider calls; error mapping remains consistent; response extensions preserved.
-**Tests**: Adapter validation tests; integration tests that assert 400s on unsupported fields; response extension preservation tests.
+**Tests**: Adapter validation tests; integration tests that assert 400s on unsupported fields; response extension preservation tests; base_url override SSRF tests with fixtures `trusted_caller_context`, `untrusted_caller_context`, `base_url_allowed`, `base_url_invalid_scheme`, `base_url_blocked_link_local`, `base_url_blocked_metadata`, `base_url_blocked_private_ip`, `base_url_dns_rebind`.
 **Status**: Not Started
 
 ## Stage 3: Summarization and Call Site Migration

@@ -1201,6 +1201,8 @@ Error response format:
 
 Example property-based tests (Hypothesis; illustrative):
 
+Note: Fixtures and DB methods below are illustrative pseudo-code; see `conftest.py` for actual implementations.
+
 ```python
 # tldw_Server_API/tests/kanban/property/test_kanban_properties.py
 import pytest
@@ -1211,6 +1213,7 @@ from hypothesis import HealthCheck, given, settings, strategies as st
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture], max_examples=50)
 @given(st.lists(st.integers(min_value=1, max_value=10000), min_size=2, max_size=20, unique=True))
 def test_positions_monotonic_after_reorder(db, seeded_kanban_list, card_ids):
+    # seeded_kanban_list is a fixture that creates a list with the given card_ids
     list_id = seeded_kanban_list(db, card_ids)
     new_order = list(reversed(card_ids))
     db.reorder_cards(list_id=list_id, card_ids=new_order)
@@ -1222,6 +1225,7 @@ def test_positions_monotonic_after_reorder(db, seeded_kanban_list, card_ids):
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture], max_examples=50)
 @given(st.lists(st.tuples(st.booleans(), st.booleans()), min_size=1, max_size=6))
 def test_fts_visibility_matches_state(db, seeded_card, transitions):
+    # seeded_card is a fixture that inserts a searchable card in the test DB
     card_id = seeded_card(db, title="needle", description="needle")
     for archived, deleted in transitions:
         db.update_card(card_id=card_id, archived=archived, deleted=deleted)
@@ -1318,9 +1322,12 @@ KANBAN_EMBEDDING_QUEUE=redis    # redis or sync
 
 ## 18. Deployment & Migration
 
-- **First-run initialization**: auto-create `USER_DB_BASE_DIR`, per-user directories, and `<USER_DB_BASE_DIR>/<user_id>/Kanban.db` on first access; fail fast with a clear error if permissions prevent creation.
+- **First-run initialization**:
+  - Timing: On app startup, validate `USER_DB_BASE_DIR` exists and is writable; on first user request, auto-create per-user directory and `Kanban.db`
+  - Error handling: Fail fast with a clear message if `USER_DB_BASE_DIR` is missing/unwritable or per-user directory creation fails (e.g., `KANBAN_DB_INIT_FAILED: insufficient permissions`)
+  - Idempotent: Subsequent accesses re-use existing DB without re-initialization
 - **Legacy path migration**: if an earlier Kanban path or shared DB existed, provide a one-time migration helper to move/merge into per-user databases.
-- **Schema versioning/migrations**: maintain a schema version (e.g., `PRAGMA user_version` or a migrations table) and apply idempotent migrations at startup or first access.
+- **Schema versioning/migrations**: use `PRAGMA user_version` in each per-user `Kanban.db`; apply idempotent migrations at first access via `kanban_db.py` initialization (no external Alembic required for MVP; revisit if complexity grows).
 - **Upgrade/rollback**: take a backup before migrations; on failure, restore the backup and surface a clear operator message. Provide a CLI migration helper for controlled rollouts.
 
 ---
@@ -1386,7 +1393,10 @@ KANBAN_EMBEDDING_QUEUE=redis    # redis or sync
 - [ ] Optimistic locking (version field) prevents conflicts
 - [ ] Rate limiting configured for all mutating endpoints
 - [ ] Test coverage >= 80% (line + branch coverage via pytest-cov; enforced in CI)
+- [ ] Position and FTS visibility invariants verified via property-based tests (Hypothesis; see Section 15)
 - [ ] API documentation complete for frontend handoff
+- [ ] API spec auto-generated via OpenAPI/Swagger; human-reviewed for clarity
+- [ ] Deployment & migration tested (see Section 18): first-run init works; legacy path migration (if applicable) succeeds with no data loss
 
 ---
 

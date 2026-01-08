@@ -106,7 +106,7 @@ async def test_reset_password_integration_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_mfa_setup_verify_disable_integration(isolated_test_environment, monkeypatch):
+async def test_mfa_setup_verify_disable_integration(isolated_test_environment, test_user, monkeypatch):
     """Integration test for MFA endpoints using stubbed MFA + email services.
 
     - Stubs MFA service via sys.modules before reload (avoids optional deps)
@@ -158,7 +158,13 @@ async def test_mfa_setup_verify_disable_integration(isolated_test_environment, m
     from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_active_user
 
     async def _active_user():
-        return User(id=1, username="alice", email="alice@example.com", is_active=True)
+        return User(
+            id=test_user["id"],
+            username=test_user["username"],
+            email=test_user["email"],
+            is_active=True,
+            is_verified=True,
+        )
 
     app = client.app
     previous_override_main = app.dependency_overrides.get(get_current_active_user)
@@ -190,7 +196,7 @@ async def test_mfa_setup_verify_disable_integration(isolated_test_environment, m
         # Disable
         r3 = client.post(
             "/api/v1/auth/mfa/disable",
-            data={"password": "irrelevant"},
+            data={"password": test_user["password"]},
         )
         assert r3.status_code == 200, r3.text
         assert "disabled" in r3.json().get("message", "").lower()

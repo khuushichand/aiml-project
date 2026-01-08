@@ -814,8 +814,18 @@ class MCPProtocol:
         tools = []
         catalog_filter = await self._resolve_catalog_tool_names(params, context)
         modules = await self.module_registry.get_all_modules()
+        module_filter = None
+        if isinstance(params, dict):
+            module_filter = params.get("module")
+        allowed_modules: Optional[set[str]] = None
+        if isinstance(module_filter, str) and module_filter.strip():
+            allowed_modules = {module_filter.strip()}
+        elif isinstance(module_filter, list):
+            allowed_modules = {str(m).strip() for m in module_filter if str(m).strip()}
 
         for module_id, module in modules.items():
+            if allowed_modules is not None and module_id not in allowed_modules:
+                continue
             if catalog_filter is not None:
                 context.logger.info(
                     "Catalog filter applied",

@@ -236,6 +236,7 @@ Most runtime behavior is configured via code defaults or YAML, not environment v
 - Provider keys: `OPENAI_API_KEY`, `COHERE_API_KEY`, `GOOGLE_API_KEY`, `MISTRAL_API_KEY`, `VOYAGE_API_KEY`
 - `USER_DB_BASE_DIR` (optional; default `Databases/user_databases`)
 - `EMBEDDINGS_RATE_LIMIT=on` enables the built-in rate limiter for the embeddings endpoint
+- `ALLOW_ZERO_EMBEDDINGS_MEDIA_TYPES` allows media-embeddings jobs to succeed with zero vectors for types like `audio,video` (also configurable via `Config_Files/config.txt`).
 
 Advanced constants like batch size, cache TTL, and connection pool are code-level defaults in `embeddings_v5_production_enhanced.py`.
 

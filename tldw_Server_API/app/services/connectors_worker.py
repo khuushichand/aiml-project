@@ -9,7 +9,6 @@ import hashlib
 import tempfile
 from pathlib import Path
 from typing import Dict, Any, List
-import aiohttp
 
 try:
     from tldw_Server_API.app.core.Jobs.manager import JobManager
@@ -111,8 +110,18 @@ async def _process_import_job(jm, jid: int, lease_id: Optional[str], worker_id: 
     conn = get_connector_by_name(provider)
     # Helper to detect 401-like unauthorized errors from provider responses
     def _is_unauthorized(err: Exception) -> bool:
+        status = None
         try:
-            if isinstance(err, aiohttp.ClientResponseError) and getattr(err, 'status', None) == 401:
+            resp = getattr(err, "response", None)
+            if resp is not None:
+                status = getattr(resp, "status_code", None)
+                if status is None:
+                    status = getattr(resp, "status", None)
+            if status is None:
+                status = getattr(err, "status_code", None)
+            if status is None:
+                status = getattr(err, "status", None)
+            if status is not None and int(status) == 401:
                 return True
         except Exception:
             pass

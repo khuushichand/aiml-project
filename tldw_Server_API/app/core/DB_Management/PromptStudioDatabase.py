@@ -3748,6 +3748,28 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             cursor.execute(query)
         return cursor
 
+    def _execute(
+        self,
+        query: str,
+        params: Optional[Union[Tuple, List, Dict, Any]] = None,
+        *,
+        connection: Optional[sqlite3.Connection] = None,
+    ):
+        conn = connection or self.get_connection()
+        return self._cursor_exec(conn, query, params)
+
+    def _executemany(
+        self,
+        query: str,
+        params_list: List[Union[Tuple, List, Dict, Any]],
+        *,
+        connection: Optional[sqlite3.Connection] = None,
+    ):
+        conn = connection or self.get_connection()
+        cursor = conn.cursor()
+        cursor.executemany(query, params_list)
+        return cursor
+
     def _apply_prompt_studio_migrations(self, conn: sqlite3.Connection):
         """Apply Prompt Studio migration scripts."""
         migrations_dir = Path(__file__).parent / "migrations"

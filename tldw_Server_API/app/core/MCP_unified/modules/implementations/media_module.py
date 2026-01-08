@@ -19,7 +19,13 @@ from pathlib import Path
 from loguru import logger
 
 from ..base import BaseModule, ModuleConfig, create_tool_definition, create_resource_definition
-from ....DB_Management.Media_DB_v2 import MediaDatabase
+from ....DB_Management.Media_DB_v2 import (
+    MediaDatabase,
+    get_latest_transcription,
+    get_media_transcripts,
+    get_document_version,
+    permanently_delete_item,
+)
 from ....DB_Management.db_path_utils import DatabasePaths
 
 
@@ -440,6 +446,24 @@ class MediaModule(BaseModule):
         except Exception:
             return t[:length]
 
+    def _get_latest_description(self, dbi: MediaDatabase, media_id: int) -> Optional[str]:
+        try:
+            latest = get_document_version(
+                db_instance=dbi,
+                media_id=media_id,
+                version_number=None,
+                include_content=False,
+            )
+            return (latest or {}).get("analysis_content")
+        except Exception:
+            return None
+
+    def _sanitize_media_metadata(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        sanitized = dict(row)
+        for key in ("content", "client_id", "vector_embedding"):
+            sanitized.pop(key, None)
+        return sanitized
+
     async def _media_search_normalized(
         self,
         query: str,
@@ -582,6 +606,7 @@ class MediaModule(BaseModule):
             raise ValueError(f"Media not found: {media_id}")
         # Ownership check
         self._assert_media_access(media_id, context, dbi)
+        description = self._get_latest_description(dbi, media_id)
         content = meta.get("content") or ""
         item = {
             "id": meta.get("id"),
@@ -599,6 +624,7 @@ class MediaModule(BaseModule):
             "url": meta.get("url"),
             "loc": None,
         }
+        item["description"] = description
         if mode == "full":
             body = content
             return {"meta": item, "content": body, "attachments": None}
@@ -1225,37 +1251,32 @@ class MediaModule(BaseModule):
             # Ownership check first
             dbi = self._open_media_db(context)
             self._assert_media_access(media_id, context, dbi)
-            # Get transcript from database
-            transcript_data = dbi.get_transcript(media_id)
-
-            if not transcript_data:
+            # Get transcript from database (latest text)
+            transcript_text = get_latest_transcription(dbi, media_id)
+            if transcript_text is None:
                 raise ValueError(f"No transcript found for media ID: {media_id}")
 
             # Format based on requested type
-            if format == "text":
-                if include_timestamps:
-                    # Include timestamps in text format
-                    formatted = self._format_transcript_with_timestamps(transcript_data)
-                else:
-                    formatted = transcript_data.get("text", "")
-
+            if format == "json":
+                formatted = get_media_transcripts(dbi, media_id)
+            elif format == "text":
+                formatted = (
+                    self._format_transcript_with_timestamps(transcript_text)
+                    if include_timestamps
+                    else transcript_text
+                )
             elif format == "srt":
-                formatted = self._convert_to_srt(transcript_data)
-
+                formatted = self._convert_to_srt(transcript_text)
             elif format == "vtt":
-                formatted = self._convert_to_vtt(transcript_data)
-
-            elif format == "json":
-                formatted = transcript_data
-
+                formatted = self._convert_to_vtt(transcript_text)
             else:
-                formatted = transcript_data.get("text", "")
+                formatted = transcript_text
 
             return {
                 "media_id": media_id,
                 "format": format,
                 "include_timestamps": include_timestamps,
-                "transcript": formatted
+                "transcript": formatted,
             }
 
         except Exception as e:
@@ -1275,10 +1296,14 @@ class MediaModule(BaseModule):
             dbi = self._open_media_db(context)
             self._assert_media_access(media_id, context, dbi)
             # Get basic metadata
-            metadata = dbi.get_media_metadata(media_id)
+            metadata = dbi.get_media_by_id(media_id, include_deleted=False, include_trash=False)
 
             if not metadata:
                 raise ValueError(f"Media not found: {media_id}")
+
+            description = self._get_latest_description(dbi, media_id)
+            metadata = self._sanitize_media_metadata(metadata)
+            metadata["description"] = description
 
             # Add statistics if requested
             if include_stats:
@@ -1348,24 +1373,68 @@ class MediaModule(BaseModule):
             dbi = self._open_media_db(context)
             self._assert_media_access(media_id, context, dbi)
             # Validate media exists
-            existing = dbi.get_media_metadata(media_id)
+            existing = dbi.get_media_by_id(media_id, include_deleted=False, include_trash=False)
             if not existing:
                 raise ValueError(f"Media not found: {media_id}")
 
-            # Apply updates
-            updated_fields = []
+            updated_fields: List[str] = []
+            new_title = updates.get("title")
+            new_description = updates.get("description")
+            new_tags = updates.get("tags")
 
-            if "title" in updates:
-                dbi.update_media_title(media_id, updates["title"])
-                updated_fields.append("title")
+            with dbi.transaction() as conn:
+                row = dbi._fetchone_with_connection(
+                    conn,
+                    "SELECT uuid, version, title, content FROM Media WHERE id = ? AND deleted = 0 AND is_trash = 0",
+                    (media_id,),
+                )
+                if not row:
+                    raise ValueError(f"Media not found: {media_id}")
+                media_uuid = row["uuid"]
+                current_version = row["version"]
+                current_title = row.get("title")
+                current_content = row.get("content")
 
-            if "description" in updates:
-                dbi.update_media_description(media_id, updates["description"])
-                updated_fields.append("description")
+                new_version = current_version + 1
+                now = dbi._get_current_utc_timestamp_str()
+                set_parts = ["last_modified = ?", "version = ?", "client_id = ?"]
+                params: List[Any] = [now, new_version, dbi.client_id]
 
-            if "tags" in updates:
-                dbi.update_media_tags(media_id, updates["tags"])
-                updated_fields.append("tags")
+                if new_title is not None:
+                    set_parts.append("title = ?")
+                    params.append(new_title)
+                    updated_fields.append("title")
+
+                update_sql = f"UPDATE Media SET {', '.join(set_parts)} WHERE id = ? AND version = ?"
+                update_params = (*params, media_id, current_version)
+                update_cursor = dbi._execute_with_connection(conn, update_sql, update_params)
+                if update_cursor.rowcount == 0:
+                    raise ValueError(f"Failed to update media {media_id} (conflict)")
+
+                if new_title is not None and new_title != current_title:
+                    dbi._update_fts_media(conn, media_id, new_title, current_content or "")
+
+                if new_tags is not None:
+                    dbi.update_keywords_for_media(media_id, list(new_tags), conn=conn)
+                    updated_fields.append("tags")
+
+                if new_description is not None:
+                    if current_content is None:
+                        raise ValueError("Cannot update description without media content")
+                    dbi.create_document_version(
+                        media_id=media_id,
+                        content=current_content,
+                        prompt=None,
+                        analysis_content=new_description,
+                    )
+                    updated_fields.append("description")
+
+                updated_media_info = dbi._fetchone_with_connection(
+                    conn,
+                    "SELECT * FROM Media WHERE id = ?",
+                    (media_id,),
+                ) or {}
+                dbi._log_sync_event(conn, "Media", media_uuid, "update", new_version, updated_media_info)
 
             # Clear cache for this media
             self._clear_media_cache(media_id)
@@ -1373,7 +1442,7 @@ class MediaModule(BaseModule):
             return {
                 "media_id": media_id,
                 "updated_fields": updated_fields,
-                "success": True
+                "success": True,
             }
 
         except Exception as e:
@@ -1393,18 +1462,23 @@ class MediaModule(BaseModule):
             dbi = self._open_media_db(context)
             self._assert_media_access(media_id, context, dbi)
             # Validate media exists
-            existing = dbi.get_media_metadata(media_id)
+            existing = dbi.get_media_by_id(media_id, include_deleted=False, include_trash=False)
             if not existing:
                 raise ValueError(f"Media not found: {media_id}")
 
             if permanent:
                 # Hard delete (requires admin)
-                # Check would be done at protocol level
-                dbi.delete_media_permanent(media_id)
+                if not self._is_admin(context):
+                    raise PermissionError("Admin role required for permanent delete")
+                deleted = permanently_delete_item(dbi, media_id)
+                if not deleted:
+                    raise ValueError(f"Media not found: {media_id}")
                 action = "permanently_deleted"
             else:
                 # Soft delete
-                dbi.delete_media_soft(media_id)
+                deleted = dbi.soft_delete_media(media_id, cascade=True)
+                if not deleted:
+                    raise ValueError(f"Media not found: {media_id}")
                 action = "soft_deleted"
 
             # Clear cache
@@ -1413,7 +1487,7 @@ class MediaModule(BaseModule):
             return {
                 "media_id": media_id,
                 "action": action,
-                "success": True
+                "success": True,
             }
 
         except Exception as e:
@@ -1618,7 +1692,7 @@ class MediaModule(BaseModule):
             row = dbi.get_media_by_id(media_id, include_deleted=False, include_trash=False)
             if not row:
                 return
-            owner = row.get("user_id")
+            owner = row.get("owner_user_id")
             if owner is not None and str(owner) != str(context.user_id):
                 raise PermissionError("Access denied for this media item")
         except PermissionError:
@@ -1741,17 +1815,22 @@ class MediaModule(BaseModule):
             "last_accessed": None
         }
 
-    def _format_transcript_with_timestamps(self, transcript_data: Dict) -> str:
-        """Format transcript with timestamps"""
-        # Placeholder implementation
-        return transcript_data.get("text", "")
+    def _format_transcript_with_timestamps(self, transcript_data: Any) -> str:
+        """Format transcript with timestamps (placeholder)."""
+        if isinstance(transcript_data, dict):
+            return str(transcript_data.get("text") or "")
+        if transcript_data is None:
+            return ""
+        return str(transcript_data)
 
-    def _convert_to_srt(self, transcript_data: Dict) -> str:
-        """Convert transcript to SRT format"""
-        # Placeholder implementation
+    def _convert_to_srt(self, transcript_data: Any) -> str:
+        """Convert transcript to SRT format (placeholder)."""
+        if isinstance(transcript_data, dict):
+            _ = transcript_data.get("text") or ""
         return ""
 
-    def _convert_to_vtt(self, transcript_data: Dict) -> str:
-        """Convert transcript to WebVTT format"""
-        # Placeholder implementation
+    def _convert_to_vtt(self, transcript_data: Any) -> str:
+        """Convert transcript to WebVTT format (placeholder)."""
+        if isinstance(transcript_data, dict):
+            _ = transcript_data.get("text") or ""
         return "WEBVTT\n\n"

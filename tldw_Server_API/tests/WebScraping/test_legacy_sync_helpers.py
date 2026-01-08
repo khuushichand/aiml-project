@@ -22,14 +22,14 @@ def test_scrape_from_sitemap_uses_blocking(monkeypatch):
 
     calls = []
 
-    def fake_get(url):
+    def fake_fetch(*args, **kwargs):
         return FakeResp()
 
     def fake_blocking(url):
         calls.append(url)
         return {"url": url, "title": "ok", "author": "", "date": "", "content": "", "extraction_successful": True}
 
-    monkeypatch.setattr(AEL.requests, "get", fake_get)
+    monkeypatch.setattr(AEL, "http_fetch", fake_fetch)
     monkeypatch.setattr(AEL, "scrape_article_blocking", fake_blocking)
 
     results = AEL.scrape_from_sitemap("https://example.com/sitemap.xml")

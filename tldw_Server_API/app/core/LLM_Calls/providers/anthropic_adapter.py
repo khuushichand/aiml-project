@@ -14,6 +14,7 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     is_done_line,
     finalize_stream,
 )
+from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 
 
 def _prefer_httpx_in_tests() -> bool:
@@ -284,6 +285,7 @@ class AnthropicAdapter(ChatProvider):
         return shaped
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+        request = validate_payload(self.name, request or {})
         if _prefer_httpx_in_tests() or os.getenv("PYTEST_CURRENT_TEST") or self._use_native_http():
             api_key = request.get("api_key")
             url = f"{self._resolve_base_url(request).rstrip('/')}/messages"
@@ -319,6 +321,7 @@ class AnthropicAdapter(ChatProvider):
         })
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+        request = validate_payload(self.name, request or {})
         if _prefer_httpx_in_tests() or os.getenv("PYTEST_CURRENT_TEST") or self._use_native_http():
             api_key = request.get("api_key")
             url = f"{self._resolve_base_url(request).rstrip('/')}/messages"

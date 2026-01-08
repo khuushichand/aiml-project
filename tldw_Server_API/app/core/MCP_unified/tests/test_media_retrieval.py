@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 
 import pytest
 
+from tldw_Server_API.app.core.MCP_unified.modules.implementations import media_module as media_module_impl
 from tldw_Server_API.app.core.MCP_unified.modules.implementations.media_module import MediaModule
 from tldw_Server_API.app.core.MCP_unified.modules.base import ModuleConfig
 
@@ -196,3 +197,92 @@ async def test_search_media_semantic_path(monkeypatch):
     assert result["count"] == 1
     assert result["results"][0]["id"] == 42
     assert result["results"][0]["semantic_score"] == pytest.approx(0.9)
+
+
+def test_media_access_enforces_owner_user_id():
+    mod = MediaModule(ModuleConfig(name="media"))
+
+    class StubDB:
+        def get_media_by_id(self, media_id: int, include_deleted: bool = False, include_trash: bool = False) -> Dict[str, Any]:
+            return {"id": media_id, "owner_user_id": 12}
+
+    ctx = SimpleNamespace(user_id="99", metadata={})
+    with pytest.raises(PermissionError):
+        mod._assert_media_access(1, ctx, StubDB())
+
+
+@pytest.mark.asyncio
+async def test_get_media_metadata_sanitizes_and_adds_description(monkeypatch):
+    mod = MediaModule(ModuleConfig(name="media"))
+
+    class StubDB:
+        def get_media_by_id(self, media_id: int, include_deleted: bool = False, include_trash: bool = False) -> Dict[str, Any]:
+            return {
+                "id": media_id,
+                "title": "Title",
+                "content": "secret content",
+                "client_id": "client",
+                "vector_embedding": b"\x00\x01",
+            }
+
+    mod._open_media_db = lambda ctx: StubDB()  # type: ignore[assignment]
+    monkeypatch.setattr(
+        media_module_impl,
+        "get_document_version",
+        lambda db_instance, media_id, version_number=None, include_content=False: {"analysis_content": "desc"},
+    )
+
+    result = await mod._get_media_metadata(media_id=1, include_stats=False, context=None)
+    assert result["description"] == "desc"
+    assert "content" not in result
+    assert "client_id" not in result
+    assert "vector_embedding" not in result
+
+
+@pytest.mark.asyncio
+async def test_media_get_includes_description(monkeypatch):
+    mod = MediaModule(ModuleConfig(name="media"))
+
+    class StubDB:
+        def get_media_by_id(self, media_id: int, include_deleted: bool = False, include_trash: bool = False) -> Dict[str, Any]:
+            return {
+                "id": media_id,
+                "title": "Title",
+                "content": "alpha beta gamma",
+                "type": "text",
+                "url": None,
+                "ingestion_date": None,
+                "last_modified": None,
+                "version": 1,
+            }
+
+    mod._open_media_db = lambda ctx: StubDB()  # type: ignore[assignment]
+    monkeypatch.setattr(
+        media_module_impl,
+        "get_document_version",
+        lambda db_instance, media_id, version_number=None, include_content=False: {"analysis_content": "desc"},
+    )
+
+    result = await mod._media_get_normalized(media_id=1, retrieval=None, context=None)
+    assert result["meta"]["description"] == "desc"
+
+
+@pytest.mark.asyncio
+async def test_delete_media_permanent_requires_admin(monkeypatch):
+    mod = MediaModule(ModuleConfig(name="media"))
+    mod._media_cache = {}
+
+    class StubDB:
+        def get_media_by_id(self, media_id: int, include_deleted: bool = False, include_trash: bool = False) -> Dict[str, Any]:
+            return {"id": media_id}
+
+    mod._open_media_db = lambda ctx: StubDB()  # type: ignore[assignment]
+
+    def _should_not_call(*_args, **_kwargs):
+        raise AssertionError("permanent delete should be gated by admin")
+
+    monkeypatch.setattr(media_module_impl, "permanently_delete_item", _should_not_call)
+    ctx = SimpleNamespace(user_id="1", metadata={"roles": []})
+
+    with pytest.raises(PermissionError):
+        await mod._delete_media(media_id=1, permanent=True, context=ctx)

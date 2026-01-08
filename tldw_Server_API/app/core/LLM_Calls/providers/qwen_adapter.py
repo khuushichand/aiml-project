@@ -13,6 +13,7 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     sse_done,
     finalize_stream,
 )
+from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 
 # Expose a patchable factory for tests; production uses the centralized client
 http_client_factory = _hc_create_client
@@ -152,6 +153,7 @@ class QwenAdapter(ChatProvider):
         return payload
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+        request = validate_payload(self.name, request or {})
         # Native httpx path
         if self._use_native_http():
             api_key = request.get("api_key")
@@ -183,6 +185,7 @@ class QwenAdapter(ChatProvider):
         return _legacy.legacy_chat_with_qwen(**kwargs)
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+        request = validate_payload(self.name, request or {})
         if self._use_native_http():
             api_key = request.get("api_key")
             cfg = request.get("app_config") or {}

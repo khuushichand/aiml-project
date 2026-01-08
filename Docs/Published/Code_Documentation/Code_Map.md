@@ -43,7 +43,7 @@ flowchart LR
 ## API Surface (Selected)
 
 - Auth & Users: `auth.py`, `users.py`
-- Media: `media.py`, `media_embeddings.py`
+- Media: `media/` (add, listing, item, process_*), `media_embeddings.py`
 - Audio: `audio.py` (OpenAI-compatible STT + WebSocket streaming)
 - Chunking: `chunking.py`, `chunking_templates.py`
 - Embeddings: `embeddings_v5_production_enhanced.py`, `vector_stores_openai.py`
@@ -84,7 +84,7 @@ Routers are mounted in `main.py` with prefix `/api/v1`.
   - Root-level path `Databases/Media_DB_v2.db` is deprecated
   - Backends layer wired for PostgreSQL but SQLite is default
 - AuthNZ (Users):
-  - `DATABASE_URL` (env) - default in single-user mode resolves to `sqlite:///<USER_DB_BASE_DIR>/<SINGLE_USER_FIXED_ID>/tldw.db`
+  - `DATABASE_URL` (env) - default `sqlite:///./Databases/users.db` in single-user mode
   - PostgreSQL recommended for multi-user mode
 - Evaluations DB: `Databases/evaluations.db` (unified schema + audit; DI can map per-user audit paths)
 - Per-user notes/chats: `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`
@@ -98,7 +98,7 @@ Note: All paths can be overridden by environment or config. `USER_DB_BASE_DIR` c
 ## Key Flows
 
 1) Media Ingestion → Chunking → Embedding → RAG Index
-   - Endpoint: `POST /api/v1/media/process` → `core/Ingestion_Media_Processing/*`
+   - Endpoint: `POST /api/v1/media/add` (persist) or `POST /api/v1/media/process-*` (no DB) → `core/Ingestion_Media_Processing/*`
    - Chunking via `core/Chunking/chunker.py` (optionally hierarchical/templates)
    - Embeddings via `core/Embeddings/` → ChromaDB and FTS5 entries in Media DB
 

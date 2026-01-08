@@ -112,9 +112,10 @@ def ensure_embeddings(test_workflow_state):
         if test_workflow_state.has_embeddings(media_id):
             return True
         try:
-            response = api_client.post(
-                f"/api/v1/media/{media_id}/embeddings",
+            response = api_client.client.post(
+                f"{api_client.base_url}/api/v1/media/{media_id}/embeddings",
                 json={"force_regenerate": False},
+                headers=api_client.get_auth_headers(),
             )
             if response.status_code == 200:
                 test_workflow_state.mark_embeddings_generated(media_id)

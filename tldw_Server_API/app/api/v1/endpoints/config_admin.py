@@ -10,7 +10,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit, require_roles
 from tldw_Server_API.app.api.v1.schemas.config_schemas import (
     ConfigValue,
     EffectiveConfigResponse,
@@ -32,7 +32,7 @@ from tldw_Server_API.app.core.TTS.tts_config import get_tts_config_manager
 router = APIRouter(
     prefix="/admin/config",
     tags=["admin", "config"],
-    dependencies=[Depends(require_roles("admin"))],
+    dependencies=[Depends(check_rate_limit), Depends(require_roles("admin"))],
 )
 
 _SENSITIVE_KEY_PATTERN = re.compile(
@@ -98,15 +98,15 @@ def _build_config_txt_values() -> Dict[str, ConfigValue]:
 
     try:
         sections = config_parser.sections()
-    except Exception as exc:
-        logger.exception("Error reading config sections: {}", exc)
+    except Exception:
+        logger.exception("Error reading config sections")
         sections = []
 
     for section in sections:
         try:
             items = config_parser.items(section)
-        except Exception as exc:
-            logger.exception("Error reading items for section {}: {}", section, exc)
+        except Exception:
+            logger.exception("Error reading items for section {}", section)
             items = []
         for key, raw_value in items:
             path = f"{section}.{key}"
@@ -175,6 +175,19 @@ async def get_effective_config(
         description="Include default values when true",
     ),
 ) -> EffectiveConfigResponse:
+    """
+    Return the effective configuration with sensitive fields redacted.
+
+    Args:
+        sections: Optional list of namespaces to include (e.g., tts, embeddings).
+        include_defaults: Whether to include default values in the response.
+
+    Returns:
+        EffectiveConfigResponse containing the resolved configuration snapshot.
+
+    Raises:
+        HTTPException: If config resolution fails.
+    """
     try:
         config_root = resolve_config_root()
         config_file = resolve_config_file()

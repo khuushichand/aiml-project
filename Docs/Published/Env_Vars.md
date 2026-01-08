@@ -108,6 +108,7 @@ Queues
 
 ## Chunking / RAG / Embeddings / MCP / TTS
 Module-specific toggles exist; see the repo `Env_Vars.md` or the respective module docs for details.
+Notable: `ALLOW_ZERO_EMBEDDINGS_MEDIA_TYPES` lets media-embeddings jobs succeed with zero vectors for media types like `audio,video`.
 
 Monitoring & Telemetry
 - `METRICS_ENABLED`: Enable text metrics endpoints.

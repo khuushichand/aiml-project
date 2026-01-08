@@ -351,6 +351,10 @@ model_dir = ./App_Function_Libraries/models/embedding_models
 embedding_api_url = http://localhost:8080/v1/embeddings
 chunk_size = 400
 overlap = 200
+# Comma-separated media types that may legitimately produce zero embeddings
+# (e.g., audio/video items without transcripts). When matched, media-embeddings
+# jobs complete successfully even if no vectors are stored.
+allow_zero_embeddings_media_types = audio,video
 enable_contextual_chunking = false
 contextual_llm_model = gpt-3.5-turbo
 context_window_size = None

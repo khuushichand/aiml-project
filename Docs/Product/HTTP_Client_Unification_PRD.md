@@ -82,6 +82,36 @@ Success Metrics:
   currently a no-op (ignored) until HTTP/2 support is implemented.
 - All functions enforce egress policy, timeouts, and metrics.
 
+### 6.1.1 RequestOptions Structure
+RequestOptions is a dataclass or TypedDict with the following fields:
+
+- `timeout: Timeout | float | None` (default: per-request timeout defaults)
+- `retry: RetryPolicy | None` (default: config defaults)
+- `allow_unsafe_methods: bool` (default: false; overrides RetryPolicy for POST/PUT/PATCH/DELETE retries)
+- `max_attempts: int | None` (default: RetryPolicy.attempts or config default)
+- `require_json_ct: bool` (default: true; applies only to request_json helpers)
+- `headers: Dict[str, str] | None` (default: None)
+- `params: Dict[str, Any] | None` (default: None)
+- `json: Any | None` (default: None)
+- `data: Any | None` (default: None)
+- `files: FileSpec | None` (default: None; multipart mapping or sequence)
+- `auth: Tuple[str, str] | None` (default: None)
+- `allow_redirects: bool` (default: true)
+- `proxies: str | Dict[str, str] | None` (default: None)
+- `verify: bool | str | SSLContext | None` (default: None; transport-specific)
+- `cert: str | Tuple[str, str] | None` (default: None; transport-specific)
+- `cookies: Dict[str, str] | None` (default: None)
+- `http2: bool` (default: false; ignored until HTTP/2 is in-scope)
+
+Example usage:
+```python
+opts = RequestOptions(
+    timeout=Timeout(connect=5, read=60),
+    retry=RetryPolicy(attempts=2, retry_on_unsafe=True),
+    require_json_ct=True,
+)
+```
+
 ### 6.2 Transport Adapters
 - Default transport uses aiohttp for async and streaming.
 - httpx adapter is transitional for legacy sync paths only; end state is async-only

@@ -104,6 +104,12 @@ def _get_test_session_lock() -> asyncio.Lock:
             _TEST_SESSION_LOCKS[loop] = lock
         return lock
 
+
+def reset_test_ephemeral_state() -> None:
+    """Clear the test-only in-process ephemeral KV store (pytest/TEST_MODE)."""
+    with _TEST_EPHEMERAL_STATE_GUARD:
+        _TEST_EPHEMERAL_STATE["values"].clear()
+
 #######################################################################################################################
 #
 # Security scheme for JWT bearer tokens
@@ -657,7 +663,7 @@ async def get_current_user(
                 present_headers = ",".join(h for h in ("Authorization", "X-API-KEY") if request.headers.get(h)) or "none"
                 extra_headers["X-TLDW-Auth-Reason"] = "missing-bearer"
                 extra_headers["X-TLDW-Auth-Headers"] = present_headers
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.debug(
                     "get_current_user: failed to set TEST_MODE missing-bearer diagnostic headers: {}",
                     exc,
@@ -687,7 +693,7 @@ async def get_current_user(
             if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
                 try:
                     extra_headers["X-TLDW-Auth-Reason"] = f"auth-error:{exc.detail}"
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     logger.debug(
                         "get_current_user: failed to set TEST_MODE auth-error diagnostic header: {}",
                         exc,
@@ -711,7 +717,7 @@ async def get_current_user(
         if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
             try:
                 extra_headers["X-TLDW-Auth-Reason"] = f"auth-error:{e}"
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.debug(
                     "get_current_user: failed to set TEST_MODE auth-error diagnostic header: {}",
                     exc,
@@ -1291,10 +1297,10 @@ def _rg_enabled_for_request(request: Request) -> bool:
 
 async def check_rate_limit(request: Request) -> None:
     """
-    No-op rate limit dependency.
+    RG-first rate limit dependency with legacy fallback.
 
-    Resource Governor enforces ingress limits; keep this dependency to avoid
-    touching call sites while migrating off legacy AuthNZ limiters.
+    When Resource Governor (RG) is enabled, this is a no-op. Otherwise it uses
+    the legacy AuthNZ rate limiter (user-scoped when available, else IP-scoped).
     """
     # TODO: remove legacy fallback once RG migration is confirmed in production.
     if _rg_enabled_for_request(request):
@@ -1344,7 +1350,7 @@ async def check_rate_limit(request: Request) -> None:
 
 
 async def check_auth_rate_limit(request: Request) -> None:
-    """No-op auth rate limit dependency (RG handles ingress limits)."""
+    """RG-first auth rate limit dependency with legacy fallback (IP-scoped)."""
     # TODO: remove legacy fallback once RG migration is confirmed in production.
     if _rg_enabled_for_request(request):
         return
@@ -1528,7 +1534,7 @@ def require_token_scope(
                 jwt_service = await get_jwt_service_dep()
             if isinstance(db_pool, _Depends) or db_pool is None:
                 db_pool = await get_db_pool()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             # Best effort: if resolution fails, leave as-is; downstream code handles missing services.
             logger.debug(
                 "require_token_scope: dependency resolution failed; continuing with provided services: {}",
@@ -1540,13 +1546,14 @@ def require_token_scope(
             token = credentials.credentials
             try:
                 payload = jwt_service.decode_access_token(token)
-            except Exception:
+            except Exception:  # noqa: BLE001
+                # Defensive: malformed tokens should fall back to upstream auth handling.
                 return None
             # Optional admin bypass based on token role claim
             try:
                 if allow_admin_bypass and str(payload.get("role", "")) == "admin":
                     return None
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.debug(
                     "require_token_scope: admin bypass check failed; continuing: {}",
                     exc,
@@ -1557,7 +1564,7 @@ def require_token_scope(
                     request.state._token_scope_enforced = True
                     request.state._token_scope_claim = tok_scope
                     request.state._token_scope_required = str(scope)
-                except Exception:
+                except Exception:  # noqa: BLE001
                     logger.debug("require_token_scope: failed to attach scope enforcement marker to request.state")
             if tok_scope and require_if_present and tok_scope != str(scope):
                 raise HTTPException(status_code=403, detail="Forbidden: invalid token scope")
@@ -1571,7 +1578,7 @@ def require_token_scope(
                             raise HTTPException(status_code=403, detail="Forbidden: endpoint not permitted for token")
             except HTTPException:
                 raise
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.debug(
                     "require_token_scope: endpoint allowlist enforcement failed; continuing: {}",
                     exc,
@@ -1586,7 +1593,7 @@ def require_token_scope(
                         raise HTTPException(status_code=403, detail="Forbidden: method not permitted for token")
             except HTTPException:
                 raise
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.debug(
                     "require_token_scope: method allowlist enforcement failed; continuing: {}",
                     exc,
@@ -1601,7 +1608,7 @@ def require_token_scope(
                         raise HTTPException(status_code=403, detail="Forbidden: path not permitted for token")
             except HTTPException:
                 raise
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.debug(
                     "require_token_scope: path allowlist enforcement failed; continuing: {}",
                     exc,
@@ -1631,14 +1638,15 @@ def require_token_scope(
                                     raise HTTPException(status_code=403, detail="Forbidden: token quota exceeded")
                             except HTTPException:
                                 raise
-                            except Exception:
+                            except Exception:  # noqa: BLE001
+                                # Defensive: fall back to process-local counters if quota backend fails.
                                 cur = int(_VK_USAGE.get(key, 0))
                                 if cur >= int(max_calls):
                                     raise HTTPException(status_code=403, detail="Forbidden: token quota exceeded")
                                 _VK_USAGE[key] = cur + 1
             except HTTPException:
                 raise
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.debug(
                     "require_token_scope: token constraints evaluation failed; continuing: {}",
                     exc,
@@ -1647,17 +1655,17 @@ def require_token_scope(
             if require_schedule_match:
                 try:
                     tok_sid = payload.get("schedule_id")
-                except Exception:
+                except Exception:  # noqa: BLE001
                     tok_sid = None
                 expected = None
                 try:
                     expected = request.path_params.get(schedule_path_param)
-                except Exception:
+                except Exception:  # noqa: BLE001
                     expected = None
                 if expected is None:
                     try:
                         expected = request.headers.get(schedule_header)
-                    except Exception:
+                    except Exception:  # noqa: BLE001
                         expected = None
                 if tok_sid is not None and expected is not None and str(tok_sid) != str(expected):
                     raise HTTPException(status_code=403, detail="Forbidden: schedule scope mismatch")
@@ -1667,7 +1675,8 @@ def require_token_scope(
         # Fallback: X-API-KEY constraints enforcement (if header present and key is valid)
         try:
             api_key = request.headers.get("X-API-KEY") if getattr(request, "headers", None) else None
-        except Exception:
+        except Exception:  # noqa: BLE001
+            # Defensive: request headers access should never block the fallback path.
             api_key = None
         if api_key:
             try:
@@ -1687,7 +1696,7 @@ def require_token_scope(
                     import json as _json
                     try:
                         allowed_eps = _json.loads(allowed_eps)
-                    except Exception:
+                    except (ValueError, TypeError):
                         allowed_eps = None
                 if endpoint_id and isinstance(allowed_eps, list) and allowed_eps:
                     if endpoint_id not in [str(x) for x in allowed_eps]:
@@ -1698,7 +1707,7 @@ def require_token_scope(
                     import json as _json
                     try:
                         meta = _json.loads(meta)
-                    except Exception:
+                    except (ValueError, TypeError):
                         meta = None
                 if isinstance(meta, dict):
                     am = meta.get("allowed_methods")
@@ -1732,7 +1741,8 @@ def require_token_scope(
                                         raise HTTPException(status_code=403, detail="Forbidden: API key quota exceeded")
                                 except HTTPException:
                                     raise
-                                except Exception:
+                                except Exception:  # noqa: BLE001
+                                    # Defensive: fall back to process-local counters if quota backend fails.
                                     key = (f"apikey:{key_id}", str(count_as))
                                     cur = int(_VK_USAGE.get(key, 0))
                                     if cur >= int(quota):
@@ -1740,7 +1750,7 @@ def require_token_scope(
                                     _VK_USAGE[key] = cur + 1
             except HTTPException:
                 raise
-            except Exception:
+            except Exception:  # noqa: BLE001
                 # Best-effort: do not block if metadata not available
                 return None
         return None
@@ -1750,7 +1760,7 @@ def require_token_scope(
         setattr(_checker, "_tldw_scope_name", scope)
         setattr(_checker, "_tldw_token_scope", True)
         setattr(_checker, "_tldw_token_scope_required", str(scope))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.debug(
             "require_token_scope: unable to attach metadata to dependency: {}",
             exc,

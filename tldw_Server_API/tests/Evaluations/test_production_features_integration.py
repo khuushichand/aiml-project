@@ -16,8 +16,7 @@ import sqlite3
 import tempfile
 import shutil
 from pathlib import Path
-from unittest.mock import patch, MagicMock, AsyncMock
-from aioresponses import aioresponses
+from unittest.mock import patch, AsyncMock
 import sys
 import os
 #
@@ -792,9 +791,17 @@ class TestIntegration:
                     )
 
             # 4. Send webhook notification (mocked)
-            with aioresponses() as m:
-                m.post("https://example.com/webhook", status=200)
+            class _DummyResp:
+                def __init__(self, status_code: int, text: str = "ok"):
+                    self.status_code = status_code
+                    self.text = text
+                async def aclose(self):
+                    return None
 
+            with patch(
+                "tldw_Server_API.app.core.Evaluations.webhook_manager.afetch",
+                new=AsyncMock(return_value=_DummyResp(200)),
+            ):
                 await webhook_manager.send_webhook(
                     user_id,
                     WebhookEvent.EVALUATION_COMPLETED,

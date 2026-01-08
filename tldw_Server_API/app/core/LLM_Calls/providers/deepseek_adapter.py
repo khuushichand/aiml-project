@@ -13,6 +13,7 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     sse_done,
     finalize_stream,
 )
+from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 from loguru import logger
 import re
 
@@ -172,6 +173,7 @@ class DeepSeekAdapter(ChatProvider):
         return meta
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+        request = validate_payload(self.name, request or {})
         if self._use_native_http():
             api_key = request.get("api_key")
             cfg = request.get("app_config") or {}
@@ -226,6 +228,7 @@ class DeepSeekAdapter(ChatProvider):
         return _legacy.legacy_chat_with_deepseek(**kwargs)
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+        request = validate_payload(self.name, request or {})
         if self._use_native_http():
             api_key = request.get("api_key")
             cfg = request.get("app_config") or {}

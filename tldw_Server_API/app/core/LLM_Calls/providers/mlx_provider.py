@@ -37,6 +37,7 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     finalize_stream,
     openai_delta_chunk,
 )
+from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 
 
 def _coerce_int(val: Optional[str], default: Optional[int] = None) -> Optional[int]:
@@ -415,6 +416,7 @@ class MLXChatAdapter(ChatProvider):
         return out
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+        request = validate_payload(self.name, request or {})
         with self.registry.session_scope() as session:
             prompt = _messages_to_prompt(
                 request.get("messages"),
@@ -466,6 +468,7 @@ class MLXChatAdapter(ChatProvider):
             }
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+        request = validate_payload(self.name, request or {})
         with self.registry.session_scope() as session:
             prompt = _messages_to_prompt(
                 request.get("messages"),

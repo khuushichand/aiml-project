@@ -10,6 +10,7 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     sse_done,
     finalize_stream,
 )
+from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
 )
@@ -104,6 +105,7 @@ class BedrockAdapter(ChatProvider):
         return payload
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+        request = validate_payload(self.name, request or {})
         if not self._use_native_http():
             raise RuntimeError("BedrockAdapter native HTTP disabled by configuration")
 
@@ -121,6 +123,7 @@ class BedrockAdapter(ChatProvider):
             raise self.normalize_error(e)
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+        request = validate_payload(self.name, request or {})
         if not self._use_native_http():
             raise RuntimeError("BedrockAdapter native HTTP disabled by configuration")
 

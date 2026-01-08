@@ -55,6 +55,7 @@ from tldw_Server_API.app.core.LLM_Calls.streaming import (
     aiter_sse_lines_httpx,
     aiter_normalized_sse,
 )
+from tldw_Server_API.app.core.LLM_Calls.providers.base import apply_tool_choice as _apply_tool_choice_base
 
 # -----------------------------------------------------------------------------
 # Session shim for non-streaming POST calls
@@ -190,19 +191,8 @@ def create_session_with_retries(
 #
 # Shared helper for consistent tool_choice gating across providers
 def _apply_tool_choice(payload: Dict[str, Any], tools: Optional[List[Dict[str, Any]]], tool_choice: Optional[Union[str, Dict[str, Any]]]) -> None:
-    """Set tool_choice in payload only when supported.
-
-    - Always allow "none" to disable tools explicitly.
-    - Otherwise include tool_choice only when tools are present.
-    """
-    try:
-        if tool_choice == "none":
-            payload["tool_choice"] = "none"
-        elif tool_choice is not None and tools:
-            payload["tool_choice"] = tool_choice
-    except Exception:
-        # Never break the call due to helper failure
-        pass
+    """Back-compat wrapper around the shared helper in providers.base."""
+    _apply_tool_choice_base(payload, tools, tool_choice)
 #
 #######################################################################################################################
 

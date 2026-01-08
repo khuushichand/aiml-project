@@ -14,6 +14,7 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     sse_done,
     finalize_stream,
 )
+from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
     fetch as _hc_fetch,
@@ -148,6 +149,14 @@ class OpenAIAdapter(ChatProvider):
             payload["logprobs"] = request.get("logprobs")
         if request.get("top_logprobs") is not None and request.get("logprobs"):
             payload["top_logprobs"] = request.get("top_logprobs")
+        # gpt-5 models use max_completion_tokens and reject top_p
+        model = payload.get("model")
+        if isinstance(model, str) and model.lower().startswith("gpt-5"):
+            if "max_tokens" in payload and "max_completion_tokens" not in payload:
+                payload["max_completion_tokens"] = payload.pop("max_tokens")
+            else:
+                payload.pop("max_tokens", None)
+            payload.pop("top_p", None)
         return payload
 
     def _openai_base_url(self) -> str:
@@ -196,6 +205,7 @@ class OpenAIAdapter(ChatProvider):
         return headers
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+        request = validate_payload(self.name, request or {})
         if self._use_native_http():
             api_key = request.get("api_key")
             payload = self._build_openai_payload(request)
@@ -215,6 +225,7 @@ class OpenAIAdapter(ChatProvider):
         raise RuntimeError("OpenAIAdapter native HTTP disabled by configuration")
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+        request = validate_payload(self.name, request or {})
         if self._use_native_http():
             api_key = request.get("api_key")
             payload = self._build_openai_payload(request)

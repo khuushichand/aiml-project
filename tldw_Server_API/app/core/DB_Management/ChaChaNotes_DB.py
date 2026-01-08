@@ -365,7 +365,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 12  # Schema v12 adds quizzes + quiz attempts
+    _CURRENT_SCHEMA_VERSION = 13  # Schema v13 adds message metadata table
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: Tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
@@ -1817,6 +1817,26 @@ UPDATE db_schema_version
    AND version < 12;
 """
 
+    # --- Migration: V12 -> V13 (Message metadata) ---
+    _MIGRATION_SQL_V12_TO_V13 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 13 - Message metadata (2026-01-07)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS message_metadata(
+  message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+  tool_calls_json TEXT,
+  extra_json TEXT,
+  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+UPDATE db_schema_version
+   SET version = 13
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 13;
+"""
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -2709,6 +2729,26 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V11->V12: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V12 for '{self._SCHEMA_NAME}': {e}") from e
 
+    def _migrate_from_v12_to_v13(self, conn: sqlite3.Connection):
+        """Migrates schema from V12 to V13 (message metadata)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V12 to V13 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V12_TO_V13)
+            final_version = self._get_db_version(conn)
+            if final_version != 13:
+                raise SchemaError(
+                    f"[{self._SCHEMA_NAME}] Migration V12->V13 failed version check. Expected 13, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V13 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V12->V13 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V12->V13 failed for '{self._SCHEMA_NAME}': {e}") from e
+        except SchemaError:
+            raise
+        except Exception as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V12->V13: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V13 for '{self._SCHEMA_NAME}': {e}") from e
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -2718,6 +2758,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise NotImplementedError(
                 f"Schema initialization not implemented for backend {self.backend_type}"
             )
+        self._ensure_message_metadata_table()
 
     def ensure_character_tables_ready(self) -> None:
         """
@@ -2860,6 +2901,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if target_version >= 12 and current_db_version == 11:
                         self._migrate_from_v11_to_v12(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 13 and current_db_version == 12:
+                        self._migrate_from_v12_to_v13(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
@@ -2966,6 +3010,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     elif current_initial_version == 11 and target_version >= 12:
                         self._migrate_from_v11_to_v12(conn)
                         current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 12 and target_version >= 13:
+                        self._migrate_from_v12_to_v13(conn)
+                        current_db_version = self._get_db_version(conn)
                     else:
                         raise SchemaError(
                             f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -2975,6 +3022,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
                 if target_version >= 12 and current_db_version == 11:
                     self._migrate_from_v11_to_v12(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 13 and current_db_version == 12:
+                    self._migrate_from_v12_to_v13(conn)
                     current_db_version = self._get_db_version(conn)
 
                 final_version_check = self._get_db_version(conn)
@@ -3066,6 +3116,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 12:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V11_TO_V12, conn, expected_version=12)
                 current_version = 12
+            if current_version < 13:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V12_TO_V13, conn, expected_version=13)
+                current_version = 13
 
             if current_version > target_version:
                 raise SchemaError(
@@ -3207,6 +3260,40 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     # ----------------------
     # Message metadata (tool calls)
     # ----------------------
+    def _ensure_message_metadata_table(self) -> None:
+        """Ensure the message_metadata table exists for the active backend."""
+        if self.backend_type == BackendType.SQLITE:
+            self.execute_query(
+                """
+                CREATE TABLE IF NOT EXISTS message_metadata(
+                  message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+                  tool_calls_json TEXT,
+                  extra_json TEXT,
+                  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """,
+                script=False,
+                commit=True,
+            )
+            return
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            self.backend.execute(
+                """
+                CREATE TABLE IF NOT EXISTS message_metadata(
+                  message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+                  tool_calls_json TEXT,
+                  extra_json TEXT,
+                  last_modified TIMESTAMP NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            return
+
+        raise NotImplementedError(
+            f"message_metadata table creation not supported for backend {self.backend_type.value}"
+        )
+
     def add_message_metadata(self, message_id: str, tool_calls: Optional[Any] = None, extra: Optional[Any] = None) -> bool:
         """Upsert per-message metadata such as tool calls.
 
@@ -3214,51 +3301,40 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         The table is created on-demand if missing.
         """
         try:
-            # Ensure table exists (SQLite)
+            self._ensure_message_metadata_table()
             if self.backend_type == BackendType.SQLITE:
-                self.execute_query(
-                    """
-                    CREATE TABLE IF NOT EXISTS message_metadata(
-                      message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
-                      tool_calls_json TEXT,
-                      extra_json TEXT,
-                      last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-                    )
-                    """,
-                    script=False,
-                    commit=True,
-                )
                 query = (
                     "INSERT INTO message_metadata(message_id, tool_calls_json, extra_json, last_modified) "
                     "VALUES (?, ?, ?, CURRENT_TIMESTAMP) "
                     "ON CONFLICT(message_id) DO UPDATE SET tool_calls_json=excluded.tool_calls_json, "
                     "extra_json=excluded.extra_json, last_modified=CURRENT_TIMESTAMP"
                 )
-                self.execute_query(query, (message_id, json.dumps(tool_calls) if tool_calls is not None else None,
-                                            json.dumps(extra) if extra is not None else None), commit=True)
-                return True
-            # PostgreSQL
-            else:
-                # Create table if not exists (versionless auxiliary)
-                self.backend.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS message_metadata(
-                      message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
-                      tool_calls_json TEXT,
-                      extra_json TEXT,
-                      last_modified TIMESTAMP NOT NULL DEFAULT NOW()
-                    )
-                    """
+                self.execute_query(
+                    query,
+                    (
+                        message_id,
+                        json.dumps(tool_calls) if tool_calls is not None else None,
+                        json.dumps(extra) if extra is not None else None,
+                    ),
+                    commit=True,
                 )
-                upsert = (
-                    "INSERT INTO message_metadata(message_id, tool_calls_json, extra_json, last_modified) "
-                    "VALUES (%s, %s, %s, NOW()) "
-                    "ON CONFLICT (message_id) DO UPDATE SET tool_calls_json = EXCLUDED.tool_calls_json, "
-                    "extra_json = EXCLUDED.extra_json, last_modified = NOW()"
-                )
-                self.backend.execute(upsert, (message_id, json.dumps(tool_calls) if tool_calls is not None else None,
-                                              json.dumps(extra) if extra is not None else None))
                 return True
+
+            upsert = (
+                "INSERT INTO message_metadata(message_id, tool_calls_json, extra_json, last_modified) "
+                "VALUES (%s, %s, %s, NOW()) "
+                "ON CONFLICT (message_id) DO UPDATE SET tool_calls_json = EXCLUDED.tool_calls_json, "
+                "extra_json = EXCLUDED.extra_json, last_modified = NOW()"
+            )
+            self.backend.execute(
+                upsert,
+                (
+                    message_id,
+                    json.dumps(tool_calls) if tool_calls is not None else None,
+                    json.dumps(extra) if extra is not None else None,
+                ),
+            )
+            return True
         except Exception as e:
             logger.warning(f"add_message_metadata failed for message {message_id}: {e}")
             return False
@@ -3266,6 +3342,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def get_message_metadata(self, message_id: str) -> Optional[Dict[str, Any]]:
         """Fetch metadata for a message if present."""
         try:
+            self._ensure_message_metadata_table()
             if self.backend_type == BackendType.SQLITE:
                 cursor = self.execute_query(
                     "SELECT tool_calls_json, extra_json, last_modified FROM message_metadata WHERE message_id = ?",

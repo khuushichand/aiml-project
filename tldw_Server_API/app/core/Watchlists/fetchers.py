@@ -21,7 +21,6 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 from urllib.parse import urljoin
 
-import httpx
 import xml.etree.ElementTree as ET
 from loguru import logger
 from lxml import html
@@ -35,6 +34,18 @@ _TEST_MODE_VALUES = {"1", "true", "yes"}
 
 def _in_test_mode() -> bool:
     return os.getenv("TEST_MODE", "").lower() in _TEST_MODE_VALUES
+
+
+async def _close_response(resp: Any) -> None:
+    if resp is None:
+        return
+    close = getattr(resp, "aclose", None)
+    if callable(close):
+        await close()
+        return
+    close = getattr(resp, "close", None)
+    if callable(close):
+        close()
 
 
 def _ensure_sequence(value: Sequence[str] | str | None) -> List[str]:
@@ -446,34 +457,43 @@ async def fetch_site_top_links(base_url: str, *, top_n: int = 10, method: str = 
     try:
         from urllib.parse import urlparse, urljoin
         from bs4 import BeautifulSoup
-        import aiohttp
         from tldw_Server_API.app.core.Web_Scraping.enhanced_web_scraping import EnhancedWebScraper
         from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import is_content_page
+        from tldw_Server_API.app.core.http_client import afetch
 
         parsed = urlparse(base_url)
         origin = f"{parsed.scheme}://{parsed.netloc}"
+
+        headers = {
+            "User-Agent": "tldw-watchlist/0.1 (+https://github.com/your-org/tldw_server2)",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
+
+        async def _fetch_text(url: str, timeout: float) -> tuple[int, str]:
+            resp = None
+            try:
+                resp = await afetch(method="GET", url=url, headers=headers, timeout=timeout)
+                return int(resp.status_code), resp.text or ""
+            finally:
+                await _close_response(resp)
 
         # Auto-detect sitemap via robots.txt or common path when method='auto'
         async def _detect_sitemap(u: str) -> Optional[str]:
             try:
                 import re
-                timeout = aiohttp.ClientTimeout(total=6)
                 robots_url = urljoin(origin, "/robots.txt")
-                async with aiohttp.ClientSession(timeout=timeout) as s:
-                    async with s.get(robots_url) as resp:
-                        if resp.status // 100 == 2:
-                            txt = await resp.text()
-                            # Look for Sitemap lines
-                            for line in txt.splitlines():
-                                if line.lower().startswith("sitemap:"):
-                                    sitemap_url = line.split(":", 1)[1].strip()
-                                    return sitemap_url
+                status, txt = await _fetch_text(robots_url, timeout=6)
+                if status // 100 == 2:
+                    # Look for Sitemap lines
+                    for line in txt.splitlines():
+                        if line.lower().startswith("sitemap:"):
+                            sitemap_url = line.split(":", 1)[1].strip()
+                            return sitemap_url
                 # Try common location
                 common = urljoin(origin, "/sitemap.xml")
-                async with aiohttp.ClientSession(timeout=timeout) as s:
-                    async with s.get(common) as resp:
-                        if resp.status // 100 == 2:
-                            return common
+                status, _ = await _fetch_text(common, timeout=6)
+                if status // 100 == 2:
+                    return common
             except Exception:
                 return None
             return None
@@ -510,12 +530,9 @@ async def fetch_site_top_links(base_url: str, *, top_n: int = 10, method: str = 
             return uniq[:top_n]
 
         # Frontpage method: fetch HTML and pull article-like links
-        timeout = aiohttp.ClientTimeout(total=15)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(base_url) as resp:
-                if resp.status // 100 != 2:
-                    return [base_url]
-                html = await resp.text()
+        status, html = await _fetch_text(base_url, timeout=15)
+        if status // 100 != 2:
+            return [base_url]
         soup = BeautifulSoup(html, "html.parser")
         links: List[str] = []
         for a in soup.find_all("a"):
@@ -596,34 +613,34 @@ async def fetch_site_items_with_rules(
     collected: List[Dict[str, Any]] = []
 
     try:
-        from tldw_Server_API.app.core.http_client import create_async_client, afetch
-        async with create_async_client(timeout=timeout) as client:
-            while queue and len(visited) < max_pages:
-                page_url = queue.pop(0)
-                if page_url in visited:
-                    continue
-                visited.add(page_url)
+        from tldw_Server_API.app.core.http_client import afetch
+        while queue and len(visited) < max_pages:
+            page_url = queue.pop(0)
+            if page_url in visited:
+                continue
+            visited.add(page_url)
 
-                allowed = False
-                try:
-                    allowed = is_url_allowed_for_tenant(page_url, tenant_id)
-                except Exception:
-                    allowed = is_url_allowed(page_url)
-                if not allowed:
-                    logger.debug(f"Scrape rules blocked by URL policy: {page_url}")
-                    continue
+            allowed = False
+            try:
+                allowed = is_url_allowed_for_tenant(page_url, tenant_id)
+            except Exception:
+                allowed = is_url_allowed(page_url)
+            if not allowed:
+                logger.debug(f"Scrape rules blocked by URL policy: {page_url}")
+                continue
 
-                try:
-                    resp = await afetch(method="GET", url=page_url, client=client, headers=headers, timeout=timeout)
-                except Exception as exc:
-                    logger.debug(f"fetch_site_items_with_rules request failed ({page_url}): {exc}")
-                    continue
-
+            resp = None
+            try:
+                resp = await afetch(method="GET", url=page_url, headers=headers, timeout=timeout)
                 if resp.status_code // 100 != 2:
                     logger.debug(f"fetch_site_items_with_rules HTTP {resp.status_code} for {page_url}")
                     continue
-
                 parsed = parse_scraped_items(resp.text or "", page_url, rules)
+            except Exception as exc:
+                logger.debug(f"fetch_site_items_with_rules request failed ({page_url}): {exc}")
+                continue
+            finally:
+                await _close_response(resp)
                 page_items = parsed.get("items") or []
                 for item in page_items:
                     url = item.get("url")
@@ -689,14 +706,27 @@ async def fetch_rss_feed(
         if last_modified:
             headers["If-Modified-Since"] = last_modified
 
-        from tldw_Server_API.app.core.http_client import create_async_client, afetch
-        async with create_async_client(timeout=timeout) as client:
-            resp = await afetch(method="GET", url=url, client=client, headers=headers, timeout=timeout)
+        from tldw_Server_API.app.core.http_client import afetch
+        resp = None
+        status = 0
+        resp_headers: Dict[str, Any] = {}
+        text = ""
+        try:
+            resp = await afetch(method="GET", url=url, headers=headers, timeout=timeout)
+            if resp is not None:
+                status = int(resp.status_code)
+                resp_headers = dict(getattr(resp, "headers", {}) or {})
+                text = resp.text or ""
+        finally:
+            await _close_response(resp)
 
-        status = int(resp.status_code)
+        if resp is None:
+            return {"status": 500, "items": []}
+        if status == 0:
+            return {"status": 500, "items": []}
         # Retry-After handling
         if status == 429:
-            ra = resp.headers.get("Retry-After")
+            ra = resp_headers.get("Retry-After")
             retry_after_secs = None
             if ra:
                 ra = ra.strip()
@@ -717,22 +747,21 @@ async def fetch_rss_feed(
             return {
                 "status": 304,
                 "items": [],
-                "etag": resp.headers.get("ETag"),
-                "last_modified": resp.headers.get("Last-Modified"),
+                "etag": resp_headers.get("ETag"),
+                "last_modified": resp_headers.get("Last-Modified"),
             }
 
         if status // 100 != 2:
             return {"status": status, "items": []}
 
-        text = resp.text
         try:
             root = ET.fromstring(text)
         except Exception:
             return {
                 "status": status,
                 "items": [],
-                "etag": resp.headers.get("ETag"),
-                "last_modified": resp.headers.get("Last-Modified"),
+                "etag": resp_headers.get("ETag"),
+                "last_modified": resp_headers.get("Last-Modified"),
             }
 
         def _find_text(node, names):
@@ -802,8 +831,8 @@ async def fetch_rss_feed(
         return {
             "status": 200,
             "items": items,
-            "etag": resp.headers.get("ETag"),
-            "last_modified": resp.headers.get("Last-Modified"),
+            "etag": resp_headers.get("ETag"),
+            "last_modified": resp_headers.get("Last-Modified"),
             "atom_links": atom_links,
         }
     except Exception as e:

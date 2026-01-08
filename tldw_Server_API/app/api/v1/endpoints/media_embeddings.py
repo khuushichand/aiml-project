@@ -6,7 +6,8 @@
 # - Generate embeddings for uploaded media
 # - Delete embeddings for a media item
 
-from typing import Optional, Dict, Any, List
+import os
+from typing import Annotated, Optional, Dict, Any, List, Tuple
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status as http_status
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
@@ -52,6 +53,88 @@ def _user_embedding_config() -> Dict[str, Any]:
     cfg = settings.get("EMBEDDING_CONFIG", {}).copy()
     cfg["USER_DB_BASE_DIR"] = settings.get("USER_DB_BASE_DIR")
     return cfg
+
+
+def _safe_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _job_update_from_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    raw_status = result.get("status")
+    embedding_count = _safe_int(result.get("embedding_count"))
+    chunks_processed = _safe_int(result.get("chunks_processed"))
+    error = result.get("error") or result.get("message")
+    allow_zero_embeddings = bool(result.get("allow_zero_embeddings"))
+
+    status = "completed"
+    if raw_status != "success" or (not embedding_count and not allow_zero_embeddings):
+        status = "failed"
+        if not error:
+            error = "Embedding generation returned no embeddings."
+
+    payload: Dict[str, Any] = {"status": status}
+    if embedding_count is not None:
+        payload["embedding_count"] = embedding_count
+    if chunks_processed is not None:
+        payload["chunks_processed"] = chunks_processed
+    if error and status == "failed":
+        payload["error"] = error
+    return payload
+
+
+def _parse_media_type_list(raw: Any) -> List[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return [item.strip().lower() for item in raw.split(",") if item.strip()]
+    if isinstance(raw, (list, tuple, set)):
+        return [str(item).strip().lower() for item in raw if str(item).strip()]
+    return []
+
+
+def _allow_zero_embeddings_for_media(media_item: Dict[str, Any]) -> bool:
+    media_type = str(media_item.get("media_type") or media_item.get("type") or "").strip().lower()
+    if not media_type:
+        return False
+
+    cfg = settings.get("EMBEDDING_CONFIG", {}) or {}
+    raw = cfg.get("allow_zero_embeddings_media_types")
+    if raw is None:
+        raw = cfg.get("skip_media_types")
+    if raw is None:
+        raw = cfg.get("no_embeddings_media_types")
+    if raw is None:
+        raw = os.getenv("ALLOW_ZERO_EMBEDDINGS_MEDIA_TYPES") or os.getenv("EMBEDDINGS_SKIP_MEDIA_TYPES")
+
+    if raw is None:
+        allowed = {"audio", "video"}
+    else:
+        allowed = set(_parse_media_type_list(raw))
+
+    return media_type in allowed
+
+
+def _resolve_model_provider(
+    embedding_model: Optional[str],
+    embedding_provider: Optional[str],
+) -> Tuple[str, str]:
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import (
+            _resolve_model_and_provider,
+        )
+
+        return _resolve_model_and_provider(embedding_model, embedding_provider)
+    except Exception:
+        default_model = embedding_model or settings.get("embedding_model", DEFAULT_EMBEDDING_MODEL)
+        resolved_provider = embedding_provider or settings.get("embedding_provider", DEFAULT_EMBEDDING_PROVIDER)
+        if isinstance(default_model, str) and ":" in default_model and not embedding_provider:
+            resolved_provider = default_model.split(":", 1)[0]
+        return default_model, resolved_provider
 
 
 class GenerateEmbeddingsRequest(BaseModel):
@@ -147,6 +230,17 @@ async def get_media_content(media_id: int, db: MediaDatabase) -> Dict[str, Any]:
                 detail=f"Media item {media_id} not found"
             )
 
+        # Fall back to latest document version content when Media.content is empty.
+        try:
+            if isinstance(media_item, dict) and not (media_item.get("content") or "").strip():
+                from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import get_document_version
+                latest = get_document_version(db, media_id=media_id, version_number=None, include_content=True)
+                if latest and latest.get("content"):
+                    media_item = dict(media_item)
+                    media_item["content"] = latest["content"]
+        except Exception as exc:
+            logger.warning(f"Failed to load fallback document content for media {media_id}: {exc}")
+
         # Get content
         content = media_item  # The get_media_by_id returns all data including content
         if not content:
@@ -236,20 +330,87 @@ async def generate_embeddings_for_media(
         )
 
         # Extract text content
-        content_text = media_content["content"].get("content", "")
-        if not content_text:
+        allow_zero_embeddings = _allow_zero_embeddings_for_media(media_content.get("media_item", {}))
+        content_payload = media_content.get("content")
+        if isinstance(content_payload, dict):
+            content_text = content_payload.get("content") or content_payload.get("text") or ""
+        elif isinstance(content_payload, str):
+            content_text = content_payload
+        else:
+            content_text = ""
+        if not content_text or not content_text.strip():
+            msg = "No text content to generate embeddings from"
+            if allow_zero_embeddings:
+                return {
+                    "status": "success",
+                    "message": msg,
+                    "embedding_count": 0,
+                    "chunks_processed": 0,
+                    "allow_zero_embeddings": True,
+                }
             return {
                 "status": "error",
-                "message": "No text content to generate embeddings from",
-                "embedding_count": 0
+                "message": msg,
+                "error": msg,
+                "embedding_count": 0,
+                "chunks_processed": 0,
             }
 
         # Chunk the text using the Chunking module
         chunks = chunk_media_content(content_text, chunk_size, chunk_overlap)
         logger.info(f"Created {len(chunks)} chunks for media {media_id}")
+        if not chunks:
+            msg = "No chunks produced from media content"
+            if allow_zero_embeddings:
+                return {
+                    "status": "success",
+                    "message": msg,
+                    "embedding_count": 0,
+                    "chunks_processed": 0,
+                    "allow_zero_embeddings": True,
+                }
+            return {
+                "status": "error",
+                "message": msg,
+                "error": msg,
+                "embedding_count": 0,
+                "chunks_processed": 0,
+            }
 
         # Extract chunk texts for embedding
         chunk_texts = [chunk["text"] for chunk in chunks]
+        if not chunk_texts:
+            msg = "No chunk text available to embed"
+            if allow_zero_embeddings:
+                return {
+                    "status": "success",
+                    "message": msg,
+                    "embedding_count": 0,
+                    "chunks_processed": 0,
+                    "allow_zero_embeddings": True,
+                }
+            return {
+                "status": "error",
+                "message": msg,
+                "error": msg,
+                "embedding_count": 0,
+                "chunks_processed": 0,
+            }
+
+        def _validate_embeddings_result(embeddings, expected_count: int) -> Optional[str]:
+            if not embeddings:
+                return "Embedding service returned no embeddings"
+            if len(embeddings) != expected_count:
+                return f"Embedding service returned {len(embeddings)} embeddings for {expected_count} chunks"
+            for emb in embeddings:
+                if emb is None:
+                    return "Embedding service returned empty embedding vectors"
+                try:
+                    if len(emb) == 0:
+                        return "Embedding service returned empty embedding vectors"
+                except TypeError:
+                    return "Embedding service returned invalid embedding vectors"
+            return None
 
         # Generate embeddings
         try:
@@ -259,6 +420,15 @@ async def generate_embeddings_for_media(
                 model_id=embedding_model,
                 metadata=request_metadata,
             )
+            validation_error = _validate_embeddings_result(embeddings, len(chunk_texts))
+            if validation_error:
+                return {
+                    "status": "error",
+                    "message": validation_error,
+                    "error": validation_error,
+                    "embedding_count": len(embeddings) if embeddings else 0,
+                    "chunks_processed": len(chunks),
+                }
 
             # Store in ChromaDB using per-user collections
             collection_name = f"user_{user_id}_media_embeddings"
@@ -316,6 +486,15 @@ async def generate_embeddings_for_media(
                     model_id=FALLBACK_EMBEDDING_MODEL,
                     metadata=request_metadata,
                 )
+                validation_error = _validate_embeddings_result(embeddings, len(chunk_texts))
+                if validation_error:
+                    return {
+                        "status": "error",
+                        "message": validation_error,
+                        "error": validation_error,
+                        "embedding_count": len(embeddings) if embeddings else 0,
+                        "chunks_processed": len(chunks),
+                    }
 
                 # Store with fallback model info in per-user collection
                 collection_name = f"user_{user_id}_media_embeddings"
@@ -364,7 +543,9 @@ async def generate_embeddings_for_media(
         return {
             "status": "error",
             "message": f"Failed to generate embeddings: {str(e)}",
-            "embedding_count": 0
+            "error": str(e),
+            "embedding_count": 0,
+            "chunks_processed": 0,
         }
 
 
@@ -375,8 +556,8 @@ async def generate_embeddings_for_media(
 )
 async def get_embeddings_status(
     media_id: int,
-    db: MediaDatabase = Depends(get_media_db_for_user),
-    current_user: User = Depends(get_request_user)
+    db: Annotated[MediaDatabase, Depends(get_media_db_for_user)],
+    current_user: Annotated[User, Depends(get_request_user)],
 ) -> EmbeddingsStatusResponse:
     """Check if embeddings exist for a media item"""
     try:
@@ -443,15 +624,16 @@ async def get_embeddings_status(
 async def generate_embeddings(
     media_id: int,
     background_tasks: BackgroundTasks,
-    request: GenerateEmbeddingsRequest = GenerateEmbeddingsRequest(),
-    db: MediaDatabase = Depends(get_media_db_for_user),
-    current_user = Depends(get_request_user)
+    request: GenerateEmbeddingsRequest,
+    db: Annotated[MediaDatabase, Depends(get_media_db_for_user)],
+    current_user: Annotated[User, Depends(get_request_user)],
 ) -> GenerateEmbeddingsResponse:
     """Generate embeddings for a media item"""
 
-    # Use provided model or defaults
-    embedding_model = request.embedding_model or settings.get("embedding_model", DEFAULT_EMBEDDING_MODEL)
-    embedding_provider = request.embedding_provider or settings.get("embedding_provider", DEFAULT_EMBEDDING_PROVIDER)
+    embedding_model, embedding_provider = _resolve_model_provider(
+        request.embedding_model,
+        request.embedding_provider,
+    )
 
     try:
         # Generate embeddings in per-user collection
@@ -484,9 +666,8 @@ async def generate_embeddings(
                     user_id=user_id
                 )
                 try:
-                    jobs_update(job_id=job_id, user_id=user_id, status='completed',
-                                embedding_count=result.get('embedding_count'),
-                                chunks_processed=result.get('chunks_processed'))
+                    update_payload = _job_update_from_result(result)
+                    jobs_update(job_id=job_id, user_id=user_id, **update_payload)
                 except Exception as e:
                     logger.debug(f"media_embeddings: failed to update job status for {job_id}: {e}")
             except Exception as e:
@@ -528,8 +709,8 @@ async def generate_embeddings(
 )
 async def generate_embeddings_batch(
     request: BatchMediaEmbeddingsRequest,
-    db: MediaDatabase = Depends(get_media_db_for_user),
-    current_user: User = Depends(get_request_user)
+    db: Annotated[MediaDatabase, Depends(get_media_db_for_user)],
+    current_user: Annotated[User, Depends(get_request_user)],
 ) -> BatchMediaEmbeddingsResponse:
     """Launch embedding jobs for multiple media items."""
 
@@ -537,8 +718,10 @@ async def generate_embeddings_batch(
     if not media_ids:
         raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail="media_ids must not be empty")
 
-    embedding_model = request.embedding_model or settings.get("embedding_model", DEFAULT_EMBEDDING_MODEL)
-    embedding_provider = request.embedding_provider or settings.get("embedding_provider", DEFAULT_EMBEDDING_PROVIDER)
+    embedding_model, embedding_provider = _resolve_model_provider(
+        request.embedding_model,
+        request.embedding_provider,
+    )
 
     # Ensure media exists before launching jobs
     media_payloads: Dict[int, Dict[str, Any]] = {}
@@ -575,13 +758,8 @@ async def generate_embeddings_batch(
                     user_id=user_id
                 )
                 try:
-                    jobs_update(
-                        job_id=job_ref,
-                        user_id=user_id,
-                        status='completed',
-                        embedding_count=result.get('embedding_count'),
-                        chunks_processed=result.get('chunks_processed')
-                    )
+                    update_payload = _job_update_from_result(result)
+                    jobs_update(job_id=job_ref, user_id=user_id, **update_payload)
                 except Exception as e:
                     logger.debug(f"media_embeddings: index op failed: {e}")
             except Exception as exc:
@@ -604,7 +782,7 @@ async def generate_embeddings_batch(
 )
 async def search_embeddings(
     request: EmbeddingsSearchRequest,
-    current_user: User = Depends(get_request_user)
+    current_user: Annotated[User, Depends(get_request_user)],
 ) -> EmbeddingsSearchResponse:
     """Search stored embeddings using the provided query text."""
 
@@ -615,8 +793,10 @@ async def search_embeddings(
         current_user,
         error_status=http_status.HTTP_400_BAD_REQUEST,
     )
-    embedding_model = request.embedding_model or settings.get("embedding_model", DEFAULT_EMBEDDING_MODEL)
-    embedding_provider = request.embedding_provider or settings.get("embedding_provider", DEFAULT_EMBEDDING_PROVIDER)
+    embedding_model, embedding_provider = _resolve_model_provider(
+        request.embedding_model,
+        request.embedding_provider,
+    )
 
     try:
         from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import (
@@ -696,8 +876,8 @@ async def search_embeddings(
 )
 async def delete_embeddings(
     media_id: int,
-    db: MediaDatabase = Depends(get_media_db_for_user),
-    current_user: User = Depends(get_request_user)
+    db: Annotated[MediaDatabase, Depends(get_media_db_for_user)],
+    current_user: Annotated[User, Depends(get_request_user)],
 ) -> Dict[str, Any]:
     """Delete embeddings for a media item"""
     try:
@@ -748,7 +928,7 @@ async def delete_embeddings(
 )
 async def get_media_embedding_job(
     job_id: str,
-    current_user: User = Depends(get_request_user)
+    current_user: Annotated[User, Depends(get_request_user)],
 ):
     user_id = resolve_user_id_for_request(
         current_user,
@@ -767,10 +947,10 @@ async def get_media_embedding_job(
     dependencies=[Depends(rbac_rate_limit("embeddings.jobs.list"))],
 )
 async def list_media_embedding_jobs(
+    current_user: Annotated[User, Depends(get_request_user)],
     status: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
-    current_user: User = Depends(get_request_user)
 ):
     user_id = resolve_user_id_for_request(
         current_user,

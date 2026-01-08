@@ -35,11 +35,8 @@ from defusedxml import minidom
 from defusedxml import ElementTree as xET
 from defusedxml.common import DefusedXmlException
 
-import requests
-#
 # External Libraries
 from bs4 import BeautifulSoup
-import aiohttp
 import pandas as pd
 from loguru import logger
 from playwright.async_api import (
@@ -47,7 +44,6 @@ from playwright.async_api import (
     async_playwright
 )
 from playwright.sync_api import sync_playwright
-from tldw_Server_API.app.core.http_client import fetch as http_fetch
 import trafilatura
 from tqdm import tqdm
 
@@ -64,7 +60,7 @@ from tldw_Server_API.app.core.Web_Scraping.ua_profiles import (
     build_browser_headers,
     pick_ua_profile,
 )
-from tldw_Server_API.app.core.http_client import fetch as http_fetch
+from tldw_Server_API.app.core.http_client import afetch, fetch as http_fetch
 from urllib.robotparser import RobotFileParser
 from pathlib import Path
 from tldw_Server_API.app.core.Web_Scraping.filters import (
@@ -583,7 +579,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
 def scrape_article_blocking(url: str, custom_cookies: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Blocking scraper for synchronous code paths.
 
-    Fetches HTML with requests using a desktop-like user agent and optional cookies,
+    Fetches HTML with http_client using a desktop-like user agent and optional cookies,
     then extracts article content via trafilatura and converts to display text.
     """
     try:
@@ -604,11 +600,27 @@ def scrape_article_blocking(url: str, custom_cookies: Optional[List[Dict[str, An
                 cookie_hdr = "; ".join([f"{k}={v}" for k, v in cookie_map.items()])
                 headers["Cookie"] = cookie_hdr
         resp = http_fetch(method="GET", url=url, timeout=30, headers=headers)
-        if resp.get("status", 0) != 200:
-            logging.error(f"Failed to fetch {url}, status: {resp.get('status')}")
+        try:
+            status = _resp_get(resp, "status")
+            if status is None:
+                status = _resp_get(resp, "status_code", 0)
+            text = _resp_get(resp, "text", "")
+            if not text:
+                content = _resp_get(resp, "content", b"")
+                try:
+                    text = content.decode("utf-8") if isinstance(content, (bytes, bytearray)) else str(content)
+                except Exception:
+                    text = ""
+        finally:
+            close = getattr(resp, "close", None)
+            if callable(close):
+                close()
+
+        if int(status or 0) != 200:
+            logging.error(f"Failed to fetch {url}, status: {status}")
             return {"url": url, "title": "N/A", "author": "N/A", "date": "N/A", "content": "", "extraction_successful": False}
 
-        article_data = extract_article_data_from_html(resp.get("text", ""), url)
+        article_data = extract_article_data_from_html(text, url)
         if article_data.get("extraction_successful"):
             article_data["content"] = convert_html_to_markdown(article_data["content"])
         return article_data
@@ -938,44 +950,27 @@ def scrape_from_sitemap(sitemap_url: str) -> list:
                 logging.error(f"Egress policy evaluation failed: {_e}")
                 return []
 
-        # Avoid passing kwargs to allow simple monkeypatch fakes in tests
-        resp = None
-        if _allow_in_tests:
-            try:
+        try:
+            resp = http_fetch(method="GET", url=sitemap_url, timeout=10)
+        except Exception as fetch_err:
+            logging.error(f"Sitemap fetch failed via http_fetch: {fetch_err}")
+            return []
+        try:
+            status = _resp_get(resp, "status")
+            if status is None:
+                status = _resp_get(resp, "status_code", 0)
+            text = _resp_get(resp, "text", "")
+            if not text:
+                # Fallback for response objects that expose `content` only
+                content = _resp_get(resp, "content", b"")
                 try:
-                    resp = requests.get(sitemap_url, timeout=10)
-                except TypeError:
-                    # Some test doubles do not accept keyword args
-                    resp = requests.get(sitemap_url)
-            except Exception as req_err:
-                logging.warning(f"Sitemap fetch failed via requests.get in test mode: {req_err}")
-                resp = None
-        if resp is None:
-            try:
-                resp = http_fetch(method="GET", url=sitemap_url, timeout=10)
-            except Exception as fetch_err:
-                # Legacy/test compatibility: honor monkeypatched requests.get
-                logging.warning(f"http_fetch failed for sitemap; falling back to requests.get: {fetch_err}")
-                try:
-                    try:
-                        resp = requests.get(sitemap_url, timeout=10)
-                    except TypeError:
-                        # Some test doubles do not accept keyword args
-                        resp = requests.get(sitemap_url)
-                except Exception as req_err:
-                    logging.error(f"Sitemap fetch failed via requests.get: {req_err}")
-                    return []
-        status = _resp_get(resp, "status")
-        if status is None:
-            status = _resp_get(resp, "status_code", 0)
-        text = _resp_get(resp, "text", "")
-        if not text:
-            # Fallback for response objects that expose `content` only
-            content = _resp_get(resp, "content", b"")
-            try:
-                text = content.decode("utf-8") if isinstance(content, (bytes, bytearray)) else str(content)
-            except Exception:
-                text = ""
+                    text = content.decode("utf-8") if isinstance(content, (bytes, bytearray)) else str(content)
+                except Exception:
+                    text = ""
+        finally:
+            close = getattr(resp, "close", None)
+            if callable(close):
+                close()
 
         if int(status or 0) >= 400 or not text:
             return []
@@ -991,7 +986,7 @@ def scrape_from_sitemap(sitemap_url: str) -> list:
             if article:
                 results.append(article)
         return results
-    except requests.RequestException as e:
+    except Exception as e:
         logging.error(f"Error fetching sitemap: {e}")
         return []
 
@@ -1048,38 +1043,57 @@ async def async_collect_internal_links(base_url: str,
                                        max_pages: int = 500,
                                        rate_limiter: Optional[RateLimiter] = None,
                                        request_timeout: int = 20) -> set:
-    """Async internal link collector using aiohttp and optional rate limiter."""
+    """Async internal link collector using http_client and optional rate limiter."""
     visited: set = set()
     to_visit: set = {base_url}
 
     headers = {"User-Agent": web_scraping_user_agent}
-    timeout = aiohttp.ClientTimeout(total=request_timeout)
+    timeout = float(request_timeout)
 
-    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-        while to_visit and len(visited) < max_pages:
-            current_url = to_visit.pop()
-            if current_url in visited:
-                continue
-            try:
-                if rate_limiter:
-                    await rate_limiter.acquire()
-                async with session.get(current_url) as resp:
-                    if resp.status != 200:
-                        continue
-                    text = await resp.text()
-            except Exception:
-                continue
+    async def _close_resp(resp: Any) -> None:
+        close = getattr(resp, "aclose", None)
+        if callable(close):
+            await close()
+            return
+        close = getattr(resp, "close", None)
+        if callable(close):
+            close()
 
-            visited.add(current_url)
+    while to_visit and len(visited) < max_pages:
+        current_url = to_visit.pop()
+        if current_url in visited:
+            continue
+        try:
+            if rate_limiter:
+                await rate_limiter.acquire()
+            resp = await afetch(
+                method="GET",
+                url=current_url,
+                headers=headers,
+                timeout=timeout,
+            )
             try:
-                soup = BeautifulSoup(text, 'html.parser')
-                for link in soup.find_all('a', href=True):
-                    full_url = urljoin(base_url, link['href'])
-                    if urlparse(full_url).netloc == urlparse(base_url).netloc:
-                        if full_url not in visited:
-                            to_visit.add(full_url)
-            except Exception:
-                continue
+                status = getattr(resp, "status_code", None)
+                if status is None:
+                    status = getattr(resp, "status", None)
+                if status is not None and int(status) != 200:
+                    continue
+                text = resp.text
+            finally:
+                await _close_resp(resp)
+        except Exception:
+            continue
+
+        visited.add(current_url)
+        try:
+            soup = BeautifulSoup(text, 'html.parser')
+            for link in soup.find_all('a', href=True):
+                full_url = urljoin(base_url, link['href'])
+                if urlparse(full_url).netloc == urlparse(base_url).netloc:
+                    if full_url not in visited:
+                        to_visit.add(full_url)
+        except Exception:
+            continue
 
     return visited
 

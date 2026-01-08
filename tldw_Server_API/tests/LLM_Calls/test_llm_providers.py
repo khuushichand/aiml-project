@@ -1550,6 +1550,57 @@ def test_openai_defaults_with_blank_config(monkeypatch):
     assert captured["timeout"] == 90.0
 
 
+def test_openai_sync_gpt5_payload(monkeypatch):
+    captured = {}
+
+    class FakeResp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": []}
+
+    class FakeClient:
+        def __init__(self, *_, **kwargs):
+            captured["timeout"] = kwargs.get("timeout")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["json"] = json
+            return FakeResp()
+
+    monkeypatch.setenv("LLM_ADAPTERS_NATIVE_HTTP_OPENAI", "1")
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.http_client_factory",
+        lambda *a, **k: FakeClient(**k),
+    )
+
+    result = chat_with_openai(
+        input_data=[{"role": "user", "content": "hello"}],
+        api_key="test-key",
+        model="gpt-5-mini",
+        max_tokens=128,
+        maxp=0.8,
+        temp=1.0,
+    )
+
+    payload = captured["json"]
+    assert "top_p" not in payload
+    assert "max_tokens" not in payload
+    assert payload["max_completion_tokens"] == 128
+    assert payload.get("temperature") == 1.0
+    assert result["choices"] == []
+
+
 @pytest.mark.asyncio
 async def test_openai_async_streaming_normalized(monkeypatch):
     captured: Dict[str, Any] = {}

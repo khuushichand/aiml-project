@@ -570,6 +570,8 @@ async def mcp_request(
         user_id=derived_user_id,
         metadata=metadata or None
     )
+    if resp_obj is None:
+        return Response(status_code=204)
     # Convert authorization errors to HTTP 403 with hint for HTTP clients
     if resp_obj.error and resp_obj.error.code == -32001:
         hint = None

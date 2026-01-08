@@ -68,6 +68,8 @@ const isForbiddenError = (err: unknown): boolean => {
   return false;
 };
 
+const formatDate = (dateStr?: string) => formatDateTime(dateStr, { fallback: 'Never' });
+
 export default function UserDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -284,9 +286,6 @@ export default function UserDetailPage() {
     }
   };
 
-  const formatDate = (dateStr?: string) =>
-    formatDateTime(dateStr, { fallback: 'Never' });
-
   const formatStorage = (usedMb: number, quotaMb: number) => {
     const percentage = quotaMb > 0 ? (usedMb / quotaMb) * 100 : 0;
     return {
@@ -296,7 +295,7 @@ export default function UserDetailPage() {
     };
   };
 
-  let content: JSX.Element;
+  let content: JSX.Element = <></>;
 
   if (loading) {
     content = (

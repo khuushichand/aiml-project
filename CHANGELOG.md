@@ -19,7 +19,7 @@ and this project adheres to Some kind of Versioning
 ## [0.1.14] - 2026-1-6
 
 ### Added
-- Added tldw-admin react frontend for admin Mgmt of the server. Very nuch WIP. 
+- Added tldw-admin react frontend for admin Mgmt of the server. Very much WIP. 
 - Extended feedback system/schema - Added a unified feedback system (explicit/implicit) across chat and search, integrates message IDs into chat history and streaming, 
 - introduced API key KDF/key_id, 
 - added admin effective-config endpoint/UI,

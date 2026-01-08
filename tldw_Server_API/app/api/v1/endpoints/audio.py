@@ -959,6 +959,7 @@ async def create_transcription(
 
     # Save uploaded file to temporary location and proceed with processing
     temp_audio_path = None
+    canonical_path = None
     try:
         # Create temporary file with proper extension
         file_extension = os.path.splitext(file.filename)[1] if file.filename else ".wav"
@@ -1406,6 +1407,11 @@ async def create_transcription(
         logger.error(f"Error during transcription: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Transcription failed: {str(e)}")
     finally:
+        if canonical_path and canonical_path != temp_audio_path and os.path.exists(canonical_path):
+            try:
+                os.remove(canonical_path)
+            except OSError as e:
+                logger.warning(f"Failed to remove canonical audio file: path={canonical_path}, error={e}")
         # Clean up temporary file
         if temp_audio_path and os.path.exists(temp_audio_path):
             try:
@@ -1543,6 +1549,7 @@ async def audio_chat_turn(
         try:
             return await speech_chat_service.run_speech_chat_turn(
                 request_data=request_data,
+                request=request,
                 current_user=current_user,
                 chat_db=chat_db,
                 tts_service=tts_service,
