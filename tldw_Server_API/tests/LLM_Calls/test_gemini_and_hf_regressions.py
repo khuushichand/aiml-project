@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as llm_calls
+from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as llm_calls
 from tldw_Server_API.app.core.LLM_Calls import huggingface_api as hf_module
 from tldw_Server_API.app.core.LLM_Calls.huggingface_api import HuggingFaceAPI
 from tldw_Server_API.app.core.LLM_Calls.sse import sse_done

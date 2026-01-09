@@ -56,6 +56,15 @@ PROVIDER_EXTENSIONS: Dict[str, Set[str]] = {
     "custom-openai-api-2": {"top_k", "min_p"},
     "mlx": {"top_k", "prompt_template"},
     "cohere": {"top_k", "num_generations"},
+    "zai": {"do_sample", "request_id"},
+    "llama.cpp": {"top_k", "min_p"},
+    "kobold": {"top_k"},
+    "ooba": {"top_k", "min_p"},
+    "tabbyapi": {"top_k", "min_p"},
+    "vllm": {"top_k", "min_p"},
+    "local-llm": {"top_k", "min_p"},
+    "ollama": {"top_k"},
+    "aphrodite": {"top_k", "min_p"},
 }
 
 # Alias mappings from legacy or provider-specific field names to canonical keys.

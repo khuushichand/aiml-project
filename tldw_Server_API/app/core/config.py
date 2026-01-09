@@ -1604,12 +1604,17 @@ def load_comprehensive_config():
     project_root = current_file_path.parent.parent.parent
 
     # Load .env/.ENV files if they exist (API keys should be here)
-    # Support both lowercase and uppercase filenames and both project root and Config_Files directory.
+    # Support both lowercase and uppercase filenames in the project root, repo root, and Config_Files directories.
+    repo_root = project_root.parent
     candidate_env_paths = [
         project_root / '.env',
         project_root / '.ENV',
         project_root / 'Config_Files' / '.env',
         project_root / 'Config_Files' / '.ENV',
+        repo_root / '.env',
+        repo_root / '.ENV',
+        repo_root / 'Config_Files' / '.env',
+        repo_root / 'Config_Files' / '.ENV',
     ]
     loaded_any_env = False
     for p in candidate_env_paths:
@@ -1623,7 +1628,9 @@ def load_comprehensive_config():
             pass
     if not loaded_any_env:
         _log_info(
-            f"No .env/.ENV file found in {project_root} or {project_root / 'Config_Files'}; using config.txt and system env"
+            "No .env/.ENV file found in "
+            f"{project_root}, {project_root / 'Config_Files'}, {repo_root}, or {repo_root / 'Config_Files'}; "
+            "using config.txt and system env"
         )
 
     config_path_obj = resolve_config_file()
@@ -2552,6 +2559,7 @@ def load_and_log_configs():
         huggingface_use_router_url_format = config_parser_object.getboolean('API', 'huggingface_use_router_url_format', fallback=False)
         huggingface_router_base_url = config_parser_object.get('API', 'huggingface_router_base_url', fallback='https://router.huggingface.co/hf-inference')
         huggingface_api_base_url = config_parser_object.get('API', 'huggingface_api_base_url', fallback='https://router.huggingface.co/hf-inference/models')
+        huggingface_api_chat_path = config_parser_object.get('API', 'huggingface_api_chat_path', fallback='v1/chat/completions')
         huggingface_model = config_parser_object.get('API', 'huggingface_model', fallback='/Qwen/Qwen3-235B-A22B')
         huggingface_streaming = config_parser_object.get('API', 'huggingface_streaming', fallback='False')
         huggingface_temperature = config_parser_object.get('API', 'huggingface_temperature', fallback='0.7')
@@ -3336,6 +3344,7 @@ def load_and_log_configs():
                 'huggingface_use_router_url_format': huggingface_use_router_url_format,
                 'huggingface_router_base_url': huggingface_router_base_url,
                 'api_base_url': huggingface_api_base_url,
+                'api_chat_path': huggingface_api_chat_path,
                 'api_key': huggingface_api_key,
                 'model': huggingface_model,
                 'streaming': huggingface_streaming,

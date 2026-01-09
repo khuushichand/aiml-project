@@ -72,7 +72,7 @@ try:
             # Replace loader functions to return patched cfg
             import tldw_Server_API.app.core.config as _config_mod
             _config_mod.load_and_log_configs = lambda: cfg
-            import tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls as _llm_calls_mod
+            import tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls as _llm_calls_mod
             _llm_calls_mod.load_and_log_configs = _config_mod.load_and_log_configs
         except Exception:
             pass

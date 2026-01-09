@@ -523,7 +523,7 @@ Stage 3 — Chat SSE Pilot Integration
 - Goal: Migrate one Chat streaming endpoint to `SSEStream` behind `STREAMS_UNIFIED` flag.
 - Code:
   - Replace endpoint-local SSE emission for a pilot endpoint (character chat streaming) with `SSEStream` gated by `STREAMS_UNIFIED`.
-  - Replace local normalization with provider iterator output (`LLM_Calls/LLM_API_Calls.*iter_sse_lines_*`) and `normalize_provider_line` fallback for non-string chunks. Suppress provider `[DONE]`; call `stream.done()` once.
+  - Replace local normalization with provider iterator output (`LLM_Calls/legacy_chat_calls.*iter_sse_lines_*`) and `normalize_provider_line` fallback for non-string chunks. Suppress provider `[DONE]`; call `stream.done()` once.
   - Route provider lines via `send_raw_sse_line` for minimal change.
  - Validate under flag with two providers (e.g., OpenAI + Groq) and with the WebUI client; verify metrics populate and no duplicate `[DONE]`.
   - If validation passes, flip `STREAMS_UNIFIED=1` in non-prod environments and stage a second chat endpoint migration.

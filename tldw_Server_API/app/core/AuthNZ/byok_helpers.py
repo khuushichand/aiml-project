@@ -158,7 +158,7 @@ def resolve_server_default_key(provider: str) -> Optional[str]:
         pass
     env_key = _provider_env_key(provider_norm)
     env_val = os.getenv(env_key)
-    if env_val is not None:
+    if env_val is not None and env_val.strip():
         return env_val
 
     try:

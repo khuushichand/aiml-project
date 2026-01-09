@@ -20,6 +20,8 @@ _PROVIDER_SECTION_MAP: Dict[str, str] = {
     "qwen": "qwen_api",
     "custom-openai-api": "custom_openai_api",
     "custom-openai-api-2": "custom_openai_api_2",
+    "moonshot": "moonshot_api",
+    "zai": "zai_api",
     "llama.cpp": "llama_api",
     "kobold": "kobold_api",
     "ooba": "ooba_api",
@@ -52,13 +54,22 @@ def ensure_app_config(app_config: Optional[Dict[str, Any]] = None) -> Dict[str, 
 
 
 def resolve_provider_model(provider: str, app_config: Dict[str, Any]) -> Optional[str]:
+    normalized = normalize_provider(provider)
     section = resolve_provider_section(provider)
     if section:
         cfg = app_config.get(section) or {}
         model = cfg.get("model") or cfg.get("model_id")
         if model:
             return model
-    env_key = f"DEFAULT_MODEL_{normalize_provider(provider).replace('.', '_').replace('-', '_').upper()}"
+    if normalized == "mlx":
+        env_val = (__import__("os").getenv("MLX_MODEL_PATH") or "").strip()
+        if env_val:
+            return env_val
+        mlx_cfg = app_config.get("mlx") or {}
+        model = mlx_cfg.get("model_path") or mlx_cfg.get("mlx_model_path") or mlx_cfg.get("model")
+        if model:
+            return model
+    env_key = f"DEFAULT_MODEL_{normalized.replace('.', '_').replace('-', '_').upper()}"
     env_val = (env_key and __import__("os").getenv(env_key))  # avoid top-level os import
     if isinstance(env_val, str) and env_val.strip():
         return env_val.strip()

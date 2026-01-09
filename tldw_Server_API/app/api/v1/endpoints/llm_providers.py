@@ -12,7 +12,7 @@ from tldw_Server_API.app.core.http_client import fetch as _http_fetch, RetryPoli
 from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
     apply_llm_provider_overrides_to_listing,
 )
-from tldw_Server_API.app.core.Chat.provider_config import (
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import (
     PROVIDER_REQUIRES_KEY,
     PROVIDER_CAPABILITIES,
 )

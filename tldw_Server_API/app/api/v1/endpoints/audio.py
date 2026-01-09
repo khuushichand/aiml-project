@@ -284,7 +284,15 @@ from tldw_Server_API.app.core.Metrics.metrics_manager import (
     MetricDefinition,
     MetricType,
 )
-from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call_async
+from tldw_Server_API.app.core.Chat.chat_service import (
+    perform_chat_api_call_async as chat_api_call_async,
+)
+from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
+    ensure_app_config,
+    normalize_provider,
+    resolve_provider_api_key_from_config,
+)
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     get_usage_event_logger,
     UsageEventLogger,
@@ -2955,23 +2963,65 @@ async def websocket_audio_chat_stream(
                 request=websocket,
                 fallback_resolver=_fallback_resolver,
             )
-            provider_api_key = byok_resolution.api_key
+            app_config = ensure_app_config(byok_resolution.app_config)
+            provider_api_key = byok_resolution.api_key or resolve_provider_api_key_from_config(
+                llm_provider,
+                app_config,
+            )
             messages_payload = list(chat_history)
             messages_payload.append({"role": "user", "content": transcript_text})
             try:
-                llm_stream = await chat_api_call_async(
-                    api_endpoint=llm_provider,
-                    messages_payload=messages_payload,
-                    api_key=provider_api_key,
-                    temp=llm_temperature,
-                    model=llm_model,
-                    max_tokens=llm_max_tokens,
-                    streaming=True,
-                    system_message=llm_system_prompt,
-                    user_identifier=str(user_id_for_usage),
-                    extra_body=llm_extra_params,
-                    app_config=byok_resolution.app_config,
-                )
+                adapter = get_registry().get_adapter(normalize_provider(llm_provider))
+                if adapter is None:
+                    llm_stream = await chat_api_call_async(
+                        api_endpoint=llm_provider,
+                        messages_payload=messages_payload,
+                        api_key=provider_api_key,
+                        temp=llm_temperature,
+                        model=llm_model,
+                        max_tokens=llm_max_tokens,
+                        streaming=True,
+                        system_message=llm_system_prompt,
+                        user_identifier=str(user_id_for_usage),
+                        extra_body=llm_extra_params,
+                        app_config=app_config,
+                    )
+                else:
+                    request_payload = {
+                        "messages": messages_payload,
+                        "system_message": llm_system_prompt,
+                        "model": llm_model,
+                        "api_key": provider_api_key,
+                        "temperature": llm_temperature,
+                        "max_tokens": llm_max_tokens,
+                        "stream": True,
+                        "user": str(user_id_for_usage),
+                        "app_config": app_config,
+                    }
+                    if llm_extra_params:
+                        for key, value in llm_extra_params.items():
+                            if request_payload.get(key) is None:
+                                request_payload[key] = value
+                    stream_candidate = adapter.astream(request_payload)
+                    if asyncio.iscoroutine(stream_candidate):
+                        try:
+                            llm_stream = await stream_candidate
+                        except NotImplementedError:
+                            llm_stream = await chat_api_call_async(
+                                api_endpoint=llm_provider,
+                                messages_payload=messages_payload,
+                                api_key=provider_api_key,
+                                temp=llm_temperature,
+                                model=llm_model,
+                                max_tokens=llm_max_tokens,
+                                streaming=True,
+                                system_message=llm_system_prompt,
+                                user_identifier=str(user_id_for_usage),
+                                extra_body=llm_extra_params,
+                                app_config=app_config,
+                            )
+                    else:
+                        llm_stream = stream_candidate
             except Exception as exc:
                 if _outer_stream:
                     await _outer_stream.send_json(

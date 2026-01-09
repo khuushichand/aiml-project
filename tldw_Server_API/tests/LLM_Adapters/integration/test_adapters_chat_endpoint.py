@@ -70,7 +70,7 @@ def test_chat_completions_non_streaming_via_adapter(monkeypatch, client, auth_to
     else:
         # Provide a test key and mock legacy call to avoid network
         chat_endpoint.API_KEYS = {**(chat_endpoint.API_KEYS or {}), "openai": "sk-adapter-test-key"}
-        import tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls as llm_calls
+        import tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls as llm_calls
 
         def _fake_openai(**kwargs):
             assert kwargs.get("model") == "gpt-4o-mini"
@@ -115,7 +115,7 @@ def test_chat_completions_streaming_via_adapter(monkeypatch, client, auth_token)
             assert sum(1 for line in lines if line.strip().lower() == "data: [done]") == 1
     else:
         chat_endpoint.API_KEYS = {**(chat_endpoint.API_KEYS or {}), "openai": "sk-adapter-test-key"}
-        import tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls as llm_calls
+        import tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls as llm_calls
 
         def _fake_stream_openai(**kwargs) -> Iterator[str]:
             assert kwargs.get("streaming") is True

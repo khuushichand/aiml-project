@@ -37,10 +37,7 @@ from tldw_Server_API.app.core.Chat.prompt_template_manager import (
     load_template,
     apply_template_to_string,
 )
-from tldw_Server_API.app.core.Chat.chat_orchestrator import (
-    chat_api_call as perform_chat_api_call,
-    chat_api_call_async as perform_chat_api_call_async,
-)
+from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry as get_llm_registry
 from tldw_Server_API.app.core.Chat.streaming_utils import (
     create_streaming_response_with_timeout,
 )
@@ -56,6 +53,7 @@ from tldw_Server_API.app.core.Moderation.moderation_service import get_moderatio
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatAPIError,
+    ChatConfigurationError,
     ChatProviderError,
 )
 from tldw_Server_API.app.core.Usage.usage_tracker import log_llm_usage
@@ -570,6 +568,125 @@ def resolve_provider_api_key(
     debug_info["raw_value_was_empty"] = isinstance(raw_value, str) and raw_value.strip() == ""
     normalized_value = _normalize(raw_value)
     return normalized_value, debug_info
+
+
+def _build_adapter_request_from_chat_args(chat_args: Dict[str, Any]) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
+    """Translate chat_api_call-style args into an adapter request payload."""
+    from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
+        ensure_app_config,
+        normalize_provider,
+        resolve_provider_api_key_from_config,
+        resolve_provider_model,
+    )
+
+    provider = normalize_provider(
+        chat_args.get("api_endpoint")
+        or chat_args.get("api_provider")
+        or chat_args.get("provider")
+    )
+    if provider in {"local", "local_llm"}:
+        provider = "local-llm"
+    if not provider:
+        raise ChatConfigurationError(provider=str(chat_args.get("api_endpoint")), message="LLM provider is required.")
+
+    app_config = ensure_app_config(chat_args.get("app_config"))
+    model = chat_args.get("model") or resolve_provider_model(provider, app_config)
+    if not model:
+        raise ChatConfigurationError(provider=provider, message="Model is required for provider.")
+
+    api_key = chat_args.get("api_key") or resolve_provider_api_key_from_config(provider, app_config)
+    messages_payload = chat_args.get("messages_payload") or chat_args.get("messages") or []
+
+    request: Dict[str, Any] = {
+        "messages": messages_payload,
+        "system_message": chat_args.get("system_message"),
+        "model": model,
+        "api_key": api_key,
+        "app_config": app_config,
+    }
+
+    stream_value = chat_args.get("stream")
+    if stream_value is None:
+        stream_value = chat_args.get("streaming")
+    if stream_value is not None:
+        request["stream"] = bool(stream_value)
+
+    skip_keys = {
+        "api_endpoint",
+        "api_provider",
+        "provider",
+        "messages_payload",
+        "messages",
+        "system_message",
+        "model",
+        "api_key",
+        "app_config",
+        "stream",
+        "streaming",
+    }
+    for key, value in chat_args.items():
+        if key in skip_keys or value is None:
+            continue
+        if key not in request:
+            request[key] = value
+
+    internal: Dict[str, Any] = {}
+    for key in ("http_client_factory", "http_fetcher"):
+        if chat_args.get(key) is not None:
+            internal[key] = chat_args[key]
+
+    return provider, request, internal
+
+
+def _attach_internal_http_hooks(adapter: Any, request: Dict[str, Any], internal: Dict[str, Any]) -> None:
+    """Attach http_client_factory/http_fetcher only for legacy adapters."""
+    if not internal:
+        return
+    try:
+        from tldw_Server_API.app.core.LLM_Calls.providers.legacy_adapters import LegacyChatAdapter
+        if isinstance(adapter, LegacyChatAdapter):
+            request.update(internal)
+    except Exception:
+        # Ignore adapter detection failures; internal hooks are optional.
+        return
+
+
+def perform_chat_api_call(**kwargs: Any) -> Any:
+    """Adapter-backed replacement for chat_orchestrator.chat_api_call."""
+    provider, request, internal = _build_adapter_request_from_chat_args(kwargs)
+    adapter = get_llm_registry().get_adapter(provider)
+    if adapter is None:
+        raise ChatConfigurationError(provider=provider, message="LLM adapter unavailable.")
+    _attach_internal_http_hooks(adapter, request, internal)
+    if request.get("stream"):
+        return adapter.stream(request)
+    return adapter.chat(request)
+
+
+async def perform_chat_api_call_async(**kwargs: Any) -> Any:
+    """Async adapter-backed replacement for chat_orchestrator.chat_api_call_async."""
+    provider, request, internal = _build_adapter_request_from_chat_args(kwargs)
+    adapter = get_llm_registry().get_adapter(provider)
+    if adapter is None:
+        raise ChatConfigurationError(provider=provider, message="LLM adapter unavailable.")
+    _attach_internal_http_hooks(adapter, request, internal)
+
+    if request.get("stream"):
+        try:
+            return adapter.astream(request)
+        except NotImplementedError:
+            stream_iter = adapter.stream(request)
+
+            async def _wrap_sync_stream() -> AsyncIterator[str]:
+                for item in stream_iter:
+                    yield item
+
+            return _wrap_sync_stream()
+
+    try:
+        return await adapter.achat(request)
+    except NotImplementedError:
+        return await asyncio.to_thread(adapter.chat, request)
 
 
 def merge_api_keys_for_provider(

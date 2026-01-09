@@ -43,7 +43,45 @@ flowchart LR
 ## API Surface (Selected)
 
 - Auth & Users: `auth.py`, `users.py`
-- Media: `media/` (add, listing, item, process_*), `media_embeddings.py`
+- Media:
+  - `POST /api/v1/media/add` - ingest URLs/files with processing + persistence.
+  - `GET /api/v1/media/` - list media items (paginated).
+  - `GET /api/v1/media/metadata-search` - search by safe metadata fields.
+  - `GET /api/v1/media/by-identifier` - lookup by DOI/PMID/PMCID/arXiv/S2 identifiers.
+  - `POST /api/v1/media/search` - search media items (FTS/filters).
+  - `GET /api/v1/media/{media_id}` - fetch a media item (content/versions optional).
+  - `PUT /api/v1/media/{media_id}` - update a media item (metadata/content).
+  - `GET /api/v1/media/{media_id}/file` - stream the original stored file.
+  - `GET /api/v1/media/debug/schema` - inspect media DB schema/row counts.
+  - `POST /api/v1/media/ingest-web-content` - ingest web content with persistence.
+  - `POST /api/v1/media/{media_id}/reprocess` - rebuild chunks/embeddings for stored media.
+  - `GET /api/v1/media/transcription-models` - list available transcription models.
+  - `POST /api/v1/media/process-documents` - process documents (no DB persistence).
+  - `POST /api/v1/media/process-pdfs` - process PDFs (no DB persistence).
+  - `POST /api/v1/media/process-ebooks` - process EPUBs (no DB persistence).
+  - `POST /api/v1/media/process-emails` - process email files (no DB persistence).
+  - `POST /api/v1/media/process-videos` - process videos (no DB persistence).
+  - `POST /api/v1/media/process-audios` - process audio (no DB persistence).
+  - `POST /api/v1/media/process-code` - process code files (no DB persistence).
+  - `POST /api/v1/media/process-web-scraping` - scrape/summarize URLs (ephemeral or persisted by mode).
+  - `POST /api/v1/media/mediawiki/ingest-dump` - ingest MediaWiki dump (persisted).
+  - `POST /api/v1/media/mediawiki/process-dump` - process MediaWiki dump (no persistence).
+  - `GET /api/v1/media/{media_id}/versions` - list media versions.
+  - `GET /api/v1/media/{media_id}/versions/{version_number}` - get a specific version.
+  - `POST /api/v1/media/{media_id}/versions` - create a new version.
+  - `DELETE /api/v1/media/{media_id}/versions/{version_number}` - soft-delete a version.
+  - `POST /api/v1/media/{media_id}/versions/rollback` - rollback to a previous version.
+  - `PATCH /api/v1/media/{media_id}/metadata` - update safe metadata on latest version.
+  - `PUT /api/v1/media/{media_id}/versions/{version_number}/metadata` - set safe metadata on a version.
+  - `POST /api/v1/media/{media_id}/versions/advanced` - create/update version with content + metadata.
+  - Embeddings (`media_embeddings.py`):
+    - `GET /api/v1/media/{media_id}/embeddings/status` - check embedding status.
+    - `POST /api/v1/media/{media_id}/embeddings` - generate embeddings.
+    - `DELETE /api/v1/media/{media_id}/embeddings` - delete embeddings.
+    - `POST /api/v1/media/embeddings/batch` - enqueue batch embedding jobs.
+    - `POST /api/v1/media/embeddings/search` - vector search over embeddings.
+    - `GET /api/v1/media/embeddings/jobs` - list embedding jobs.
+    - `GET /api/v1/media/embeddings/jobs/{job_id}` - fetch embedding job status.
 - Audio: `audio.py` (OpenAI-compatible STT + WebSocket streaming)
 - Chunking: `chunking.py`, `chunking_templates.py`
 - Embeddings: `embeddings_v5_production_enhanced.py`, `vector_stores_openai.py`

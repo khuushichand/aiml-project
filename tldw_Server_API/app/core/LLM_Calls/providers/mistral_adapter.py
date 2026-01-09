@@ -5,7 +5,8 @@ from typing import Any, Dict, Iterable, Optional, AsyncIterator, List
 from .base import ChatProvider
 
 import os
-from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
+from loguru import logger
+from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
 )
@@ -22,14 +23,17 @@ http_client_factory = _hc_create_client
 
 
 def _prefer_httpx_in_tests() -> bool:
-    try:
-        import httpx  # type: ignore
-        cls = getattr(httpx, "Client", None)
-        mod = getattr(cls, "__module__", "") or ""
-        name = getattr(cls, "__name__", "") or ""
-        return ("tests" in mod) or name.startswith("_Fake")
-    except Exception:
+    return bool(os.getenv("PYTEST_CURRENT_TEST"))
+
+
+def _stream_debug_enabled(provider: str) -> bool:
+    value = (os.getenv("LLM_ADAPTERS_STREAM_DEBUG") or "").strip().lower()
+    if not value:
         return False
+    if value in {"1", "true", "yes", "on", "all"}:
+        return True
+    providers = {p.strip() for p in value.split(",") if p.strip()}
+    return provider.lower() in providers
 
 
 class MistralAdapter(ChatProvider):
@@ -69,10 +73,17 @@ class MistralAdapter(ChatProvider):
     def _use_native_http(self) -> bool:
         if os.getenv("PYTEST_CURRENT_TEST"):
             return True
-        if (os.getenv("LLM_ADAPTERS_ENABLED") or "").lower() in {"1", "true", "yes", "on"}:
+        enabled = (os.getenv("LLM_ADAPTERS_ENABLED") or "").strip().lower()
+        if enabled in {"0", "false", "no", "off"}:
+            return False
+        if enabled in {"1", "true", "yes", "on"}:
             return True
-        v = os.getenv("LLM_ADAPTERS_NATIVE_HTTP_MISTRAL")
-        return bool(v and v.lower() in {"1", "true", "yes", "on"})
+        v = (os.getenv("LLM_ADAPTERS_NATIVE_HTTP_MISTRAL") or "").strip().lower()
+        if v in {"0", "false", "no", "off"}:
+            return False
+        if v in {"1", "true", "yes", "on"}:
+            return True
+        return True
 
     def _base_url(self) -> str:
         return os.getenv("MISTRAL_API_BASE", "https://api.mistral.ai/v1").rstrip("/")
@@ -149,11 +160,12 @@ class MistralAdapter(ChatProvider):
         return data
 
     def normalize_error(self, exc: Exception):  # type: ignore[override]
-        try:
-            import httpx  # type: ignore
-        except Exception:  # pragma: no cover
-            httpx = None  # type: ignore
-        if httpx is not None and isinstance(exc, getattr(httpx, "HTTPStatusError", ())):
+        from tldw_Server_API.app.core.LLM_Calls.error_utils import (
+            get_http_status_from_exception,
+            get_http_error_text,
+            is_http_status_error,
+        )
+        if is_http_status_error(exc):
             from tldw_Server_API.app.core.Chat.Chat_Deps import (
                 ChatBadRequestError,
                 ChatAuthenticationError,
@@ -162,7 +174,7 @@ class MistralAdapter(ChatProvider):
                 ChatAPIError,
             )
             resp = getattr(exc, "response", None)
-            status = getattr(resp, "status_code", None)
+            status = get_http_status_from_exception(exc)
             body = None
             try:
                 body = resp.json()
@@ -175,10 +187,7 @@ class MistralAdapter(ChatProvider):
                 typ = (eobj.get("type") or "").strip()
                 detail = (f"{typ} {msg}" if typ else msg) or str(exc)
             else:
-                try:
-                    detail = resp.text if resp is not None else str(exc)
-                except Exception:
-                    detail = str(exc)
+                detail = get_http_error_text(exc)
             if status in (400, 404, 422):
                 return ChatBadRequestError(provider=self.name, message=str(detail))
             if status in (401, 403):
@@ -232,10 +241,13 @@ class MistralAdapter(ChatProvider):
                 with http_client_factory(timeout=resolved_timeout) as client:
                     with client.stream("POST", url, headers=headers, json=payload) as resp:
                         resp.raise_for_status()
+                        debug_stream = _stream_debug_enabled(self.name)
                         seen_done = False
                         for raw in resp.iter_lines():
                             if not raw:
                                 continue
+                            if debug_stream:
+                                logger.debug(f"{self.name} stream raw: {raw!r}")
                             try:
                                 line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
                             except Exception:

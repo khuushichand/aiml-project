@@ -7,18 +7,16 @@ forwarding a provider's own [DONE] line; callers should append a single
 final sentinel using sse_done()/finalize_stream to avoid duplicates.
 """
 
-from typing import Iterator, AsyncIterator, Optional, Callable, Tuple
-
-import requests
-import httpx
+from typing import Iterator, AsyncIterator, Optional, Callable, Tuple, Any
 
 import os
 from .sse import normalize_provider_line, is_done_line, sse_data
+from tldw_Server_API.app.core.LLM_Calls.error_utils import is_chunked_encoding_error
 from tldw_Server_API.app.core.http_client import astream_sse, RetryPolicy
 
 
 def iter_sse_lines_requests(
-    response: requests.Response,
+    response: Any,
     *,
     decode_unicode: bool = True,
     provider: str = "provider",
@@ -57,15 +55,17 @@ def iter_sse_lines_requests(
             if normalized is None:
                 continue
             yield normalized
-    except requests.exceptions.ChunkedEncodingError as e_chunk:
-        # Surface as an SSE error frame so the client can handle gracefully
-        yield sse_data({"error": {"message": f"Stream connection error: {str(e_chunk)}", "type": f"{provider}_stream_error"}})
     except Exception as e_stream:
-        yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": f"{provider}_stream_error"}})
+        # Surface as an SSE error frame so the client can handle gracefully
+        if is_chunked_encoding_error(e_stream):
+            message = f"Stream connection error: {str(e_stream)}"
+        else:
+            message = f"Stream iteration error: {str(e_stream)}"
+        yield sse_data({"error": {"message": message, "type": f"{provider}_stream_error"}})
 
 
 async def aiter_sse_lines_httpx(
-    resp: httpx.Response,
+    resp: Any,
     *,
     provider: str = "provider",
     provider_control_passthru: Optional[bool] = None,
@@ -96,8 +96,6 @@ async def aiter_sse_lines_httpx(
             if normalized is None:
                 continue
             yield normalized
-    except httpx.HTTPError as e_stream:
-        yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": f"{provider}_stream_error"}})
     except Exception as e_stream:
         yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": f"{provider}_stream_error"}})
 

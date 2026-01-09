@@ -7,11 +7,12 @@ readiness polling, and command redaction for safer logging.
 from __future__ import annotations
 
 import asyncio
-from typing import Optional, Iterable, Tuple
+from typing import Any, Optional, Iterable, Tuple
+import re
 
-import httpx
 from loguru import logger
 
+from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
 from tldw_Server_API.app.core.http_client import (
     create_async_client as _create_async_client,
     afetch_json,
@@ -24,6 +25,72 @@ from tldw_Server_API.app.core.http_client import (
 DEFAULT_TIMEOUT: float = 120.0
 DEFAULT_RETRIES: int = 2
 DEFAULT_BACKOFF: float = 0.75
+
+
+class LocalHTTPStatusError(Exception):
+    """Lightweight status error for non-httpx clients used in tests."""
+
+    def __init__(self, status_code: int, response_text: str = "", response: Any = None) -> None:
+        self.status_code = status_code
+        self.response_text = response_text
+        self.response = response
+        super().__init__(f"HTTP {status_code}: {response_text}")
+
+
+def _is_httpx_async_client(client: Any) -> bool:
+    module = getattr(client.__class__, "__module__", "")
+    return module.startswith("httpx") and client.__class__.__name__ == "AsyncClient"
+
+
+def get_http_status_from_exception(exc: Exception) -> Optional[int]:
+    resp = getattr(exc, "response", None)
+    if resp is not None:
+        for attr in ("status_code", "status"):
+            status = getattr(resp, attr, None)
+            if status is not None:
+                try:
+                    return int(status)
+                except (TypeError, ValueError):
+                    pass
+    for attr in ("status_code", "status"):
+        status = getattr(exc, attr, None)
+        if status is not None:
+            try:
+                return int(status)
+            except (TypeError, ValueError):
+                pass
+    if isinstance(exc, NetworkError):
+        match = re.search(r"HTTP\\s+(\\d{3})", str(exc))
+        if match:
+            try:
+                return int(match.group(1))
+            except ValueError:
+                return None
+    return None
+
+
+def get_http_error_text(exc: Exception) -> str:
+    resp = getattr(exc, "response", None)
+    if resp is not None:
+        text = getattr(resp, "text", None)
+        if text is not None:
+            return str(text)
+    response_text = getattr(exc, "response_text", None)
+    if response_text:
+        return str(response_text)
+    return str(exc)
+
+
+def is_network_error(exc: Exception) -> bool:
+    if isinstance(exc, (NetworkError, RetryExhaustedError)):
+        return True
+    module = getattr(exc.__class__, "__module__", "")
+    name = exc.__class__.__name__
+    if module.startswith("httpx"):
+        return "RequestError" in name or "Timeout" in name or "Connect" in name
+    if module.startswith("requests"):
+        return "RequestException" in name or "Timeout" in name or "ConnectionError" in name
+    return False
 
 
 def redact_cmd_args(
@@ -75,17 +142,16 @@ def redact_cmd_args(
     return redacted
 
 
-def create_async_client(timeout: Optional[float] = None) -> httpx.AsyncClient:
+def create_async_client(timeout: Optional[float] = None) -> Any:
     """Create a configured AsyncClient via central factory.
 
     Uses centralized defaults (trust_env=False, HTTP/2 if available).
     """
-    to = httpx.Timeout(timeout or DEFAULT_TIMEOUT)
-    return _create_async_client(timeout=to)
+    return _create_async_client(timeout=timeout or DEFAULT_TIMEOUT)
 
 
 async def request_json(
-    client: httpx.AsyncClient,
+    client: Any,
     method: str,
     url: str,
     *,
@@ -101,7 +167,7 @@ async def request_json(
     # Backward-compat shim: if client is not an httpx.AsyncClient (e.g., tests provide a FakeClient),
     # fall back to the legacy minimal retry loop without extra kwargs.
     # DEPRECATED: This shim is for testing only and will be removed in a future version.
-    if not isinstance(client, httpx.AsyncClient):
+    if not _is_httpx_async_client(client):
         import warnings
         warnings.warn(
             "Using non-httpx.AsyncClient in request_json is deprecated. "
@@ -113,21 +179,24 @@ async def request_json(
         while True:
             try:
                 resp = await client.request(method.upper(), url, json=json, headers=headers)
-                if 500 <= resp.status_code < 600 and attempt < retries:
+                status = getattr(resp, "status_code", None)
+                if status is None:
+                    raise LocalHTTPStatusError(0, "Missing status_code on response", response=resp)
+                if 500 <= status < 600 and attempt < retries:
                     attempt += 1
                     await asyncio.sleep(backoff * (attempt or 1))
                     continue
-                if resp.status_code >= 400:
-                    raise httpx.HTTPStatusError("", request=resp.request, response=resp)
+                if status >= 400:
+                    response_text = getattr(resp, "text", "")
+                    raise LocalHTTPStatusError(status, str(response_text), response=resp)
                 return resp.json()
-            except httpx.HTTPStatusError as e:
-                status = getattr(e.response, "status_code", None)
-                if status and status >= 500 and attempt < retries:
+            except LocalHTTPStatusError as e:
+                if e.status_code >= 500 and attempt < retries:
                     attempt += 1
                     await asyncio.sleep(backoff * (attempt or 1))
                     continue
                 raise
-            except httpx.RequestError:
+            except Exception:
                 if attempt < retries:
                     attempt += 1
                     await asyncio.sleep(backoff * (attempt or 1))

@@ -18,7 +18,7 @@ modules. Each path re-implements retry and error handling, and not all paths
 consistently enforce the egress policy or emit metrics.
 
 Examples:
-- tldw_Server_API/app/core/LLM_Calls/LLM_API_Calls.py
+- tldw_Server_API/app/core/LLM_Calls/legacy_chat_calls.py
 - tldw_Server_API/app/core/Embeddings/connection_pool.py
 - tldw_Server_API/app/core/Web_Scraping/enhanced_web_scraping.py
 - tldw_Server_API/app/core/External_Sources/google_drive.py

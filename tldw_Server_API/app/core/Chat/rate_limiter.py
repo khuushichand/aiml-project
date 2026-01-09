@@ -303,8 +303,12 @@ class ConversationRateLimiter:
             Tuple of (allowed, error_message)
         """
         if not _rg_chat_primary_enabled():
-            # RG is disabled - no-op to avoid legacy enforcement.
-            return True, None
+            # RG is disabled - enforce legacy limiter.
+            return await self._check_legacy_rate_limit(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                estimated_tokens=estimated_tokens,
+            )
 
         # RG is enabled - try RG enforcement first
         try:

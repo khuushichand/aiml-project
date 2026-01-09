@@ -13,8 +13,8 @@ from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatProviderError,
 )
 from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
-from tldw_Server_API.app.core.Chat.provider_config import API_CALL_HANDLERS
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import list_registered_providers
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import normalize_provider
 from tldw_Server_API.app.core.config import load_comprehensive_config
 
@@ -91,7 +91,7 @@ async def test_provider_credentials(
     provider_norm = normalize_provider_name(provider)
     provider_registry_name = normalize_provider(provider_norm)
     adapter = get_registry().get_adapter(provider_registry_name)
-    if adapter is None and provider_norm not in API_CALL_HANDLERS:
+    if adapter is None and provider_registry_name not in list_registered_providers():
         raise ValueError(f"Provider '{provider_norm}' does not support key tests yet")
 
     model_to_use = model or resolve_default_model_for_provider(provider_norm)

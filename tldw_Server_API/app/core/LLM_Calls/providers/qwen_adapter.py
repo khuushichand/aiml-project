@@ -72,7 +72,7 @@ class QwenAdapter(ChatProvider):
                 if _default_factory is not None and http_client_factory is not _default_factory:
                     return True
                 # Otherwise, if legacy callable is monkeypatched, allow legacy path
-                from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
+                from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy
                 fn = getattr(_legacy, "chat_with_qwen", None)
                 if callable(fn):
                     mod = getattr(fn, "__module__", "") or ""
@@ -81,10 +81,17 @@ class QwenAdapter(ChatProvider):
                         return False
             except Exception:
                 pass
-        if (os.getenv("LLM_ADAPTERS_ENABLED") or "").lower() in {"1", "true", "yes", "on"}:
+        enabled = (os.getenv("LLM_ADAPTERS_ENABLED") or "").strip().lower()
+        if enabled in {"0", "false", "no", "off"}:
+            return False
+        if enabled in {"1", "true", "yes", "on"}:
             return True
-        v = os.getenv("LLM_ADAPTERS_NATIVE_HTTP_QWEN")
-        return bool(v and v.lower() in {"1", "true", "yes", "on"})
+        v = (os.getenv("LLM_ADAPTERS_NATIVE_HTTP_QWEN") or "").strip().lower()
+        if v in {"0", "false", "no", "off"}:
+            return False
+        if v in {"1", "true", "yes", "on"}:
+            return True
+        return True
 
     def _base_url(self, cfg: Optional[Dict[str, Any]]) -> str:
         # DashScope OpenAI-compatible endpoint
@@ -175,7 +182,7 @@ class QwenAdapter(ChatProvider):
         kwargs = self._to_handler_args(request)
         if "stream" not in request and "streaming" not in request:
             kwargs["streaming"] = None
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
+        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy
         fn = getattr(_legacy, "chat_with_qwen", None)
         if callable(fn):
             mod = getattr(fn, "__module__", "") or ""
@@ -222,7 +229,7 @@ class QwenAdapter(ChatProvider):
 
         kwargs = self._to_handler_args(request)
         kwargs["streaming"] = True
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
+        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy
         fn = getattr(_legacy, "chat_with_qwen", None)
         if callable(fn):
             mod = getattr(fn, "__module__", "") or ""
@@ -232,11 +239,12 @@ class QwenAdapter(ChatProvider):
         return _legacy.legacy_chat_with_qwen(**kwargs)
 
     def normalize_error(self, exc: Exception):  # type: ignore[override]
-        try:
-            import httpx  # type: ignore
-        except Exception:  # pragma: no cover
-            httpx = None  # type: ignore
-        if httpx is not None and isinstance(exc, getattr(httpx, "HTTPStatusError", ( ))):
+        from tldw_Server_API.app.core.LLM_Calls.error_utils import (
+            get_http_status_from_exception,
+            get_http_error_text,
+            is_http_status_error,
+        )
+        if is_http_status_error(exc):
             from tldw_Server_API.app.core.Chat.Chat_Deps import (
                 ChatBadRequestError,
                 ChatAuthenticationError,
@@ -245,7 +253,7 @@ class QwenAdapter(ChatProvider):
                 ChatAPIError,
             )
             resp = getattr(exc, "response", None)
-            status = getattr(resp, "status_code", None)
+            status = get_http_status_from_exception(exc)
             body = None
             try:
                 body = resp.json()
@@ -258,10 +266,7 @@ class QwenAdapter(ChatProvider):
                 typ = (eobj.get("type") or "").strip()
                 detail = (f"{typ} {msg}" if typ else msg) or str(exc)
             else:
-                try:
-                    detail = resp.text if resp is not None else str(exc)
-                except Exception:
-                    detail = str(exc)
+                detail = get_http_error_text(exc)
             if status in (400, 404, 422):
                 return ChatBadRequestError(provider=self.name, message=str(detail))
             if status in (401, 403):

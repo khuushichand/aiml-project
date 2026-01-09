@@ -27,7 +27,7 @@ http_client_factory = _hc_create_client
 # Reuse the existing, stable implementation to ensure behavior parity during migration
 # Do not import legacy handler at module import time to keep tests patchable.
 # Resolve the function from the module at call time so monkeypatching
-# tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.chat_with_openai works.
+# tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.chat_with_openai works.
 
 
 class OpenAIAdapter(ChatProvider):
@@ -161,7 +161,7 @@ class OpenAIAdapter(ChatProvider):
 
     def _openai_base_url(self) -> str:
         import os
-        # Match legacy resolution precedence used by LLM_API_Calls._resolve_openai_api_base
+        # Match legacy resolution precedence used by legacy_chat_calls._resolve_openai_api_base
         env_api_base = (
             os.getenv("OPENAI_API_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
@@ -301,11 +301,12 @@ class OpenAIAdapter(ChatProvider):
             stop_event.set()
 
     def normalize_error(self, exc: Exception):  # type: ignore[override]
-        try:
-            import httpx  # type: ignore
-        except Exception:  # pragma: no cover
-            httpx = None  # type: ignore
-        if httpx is not None and isinstance(exc, getattr(httpx, "HTTPStatusError", ( ))):
+        from tldw_Server_API.app.core.LLM_Calls.error_utils import (
+            get_http_status_from_exception,
+            get_http_error_text,
+            is_http_status_error,
+        )
+        if is_http_status_error(exc):
             from tldw_Server_API.app.core.Chat.Chat_Deps import (
                 ChatBadRequestError,
                 ChatAuthenticationError,
@@ -314,7 +315,7 @@ class OpenAIAdapter(ChatProvider):
                 ChatAPIError,
             )
             resp = getattr(exc, "response", None)
-            status = getattr(resp, "status_code", None)
+            status = get_http_status_from_exception(exc)
             body = None
             try:
                 body = resp.json()
@@ -328,10 +329,7 @@ class OpenAIAdapter(ChatProvider):
                 code = eobj.get("code")
                 detail = (f"{typ} {msg}" if typ else msg) or str(exc)
             else:
-                try:
-                    detail = resp.text if resp is not None else str(exc)
-                except Exception:
-                    detail = str(exc)
+                detail = get_http_error_text(exc)
             if status in (400, 404, 422):
                 return ChatBadRequestError(provider=self.name, message=str(detail))
             if status in (401, 403):

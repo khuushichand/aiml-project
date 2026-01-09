@@ -14,6 +14,7 @@ interface PermissionContextType {
   permissionHints: string[];
   roles: string[];
   loading: boolean;
+  authError: boolean;
   hasPermission: (permission: string | string[]) => boolean;
   hasRole: (role: string | string[]) => boolean;
   hasAnyPermission: (permissions: string[]) => boolean;
@@ -29,6 +30,7 @@ const PermissionContext = createContext<PermissionContextType>({
   permissionHints: [],
   roles: [],
   loading: true,
+  authError: false,
   hasPermission: () => false,
   hasRole: () => false,
   hasAnyPermission: () => false,
@@ -73,10 +75,12 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
   const [permissionHints, setPermissionHints] = useState<string[]>([]);
   const [roles, setRoles] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState(false);
 
   const loadUserPermissions = useCallback(async () => {
     try {
       setLoading(true);
+      setAuthError(false);
       const userData = await api.getCurrentUser();
       setUser(userData);
 
@@ -114,6 +118,7 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
       }
     } catch (error) {
       console.error('Failed to load user permissions:', error);
+      setAuthError(true);
       setUser(null);
       setPermissions([]);
       setPermissionHints([]);
@@ -164,6 +169,7 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
         permissionHints,
         roles,
         loading,
+        authError,
         hasPermission,
         hasRole,
         hasAnyPermission,
@@ -188,7 +194,6 @@ interface PermissionGuardProps {
   fallback?: ReactNode;
   showLoading?: boolean;
   requireAuth?: boolean;
-  redirectTo?: string;
   variant?: 'inline' | 'route';
 }
 
@@ -203,7 +208,27 @@ export function PermissionGuard({
   requireAuth = false,
   variant = 'inline',
 }: PermissionGuardProps) {
-  const { hasPermission, hasAnyPermission, hasAllPermissions, hasRole, loading, user } = usePermissions();
+  const router = useRouter();
+  const {
+    hasPermission,
+    hasAnyPermission,
+    hasAllPermissions,
+    hasRole,
+    loading,
+    user,
+    authError,
+  } = usePermissions();
+  const shouldAuthRedirect = requireAuth && !user && variant === 'route' && authError;
+
+  useEffect(() => {
+    if (!shouldAuthRedirect) {
+      return;
+    }
+    const redirectTo = typeof window !== 'undefined'
+      ? `${window.location.pathname}${window.location.search}`
+      : '/';
+    router.replace(`/login?redirectTo=${encodeURIComponent(redirectTo)}`);
+  }, [router, shouldAuthRedirect]);
 
   const renderRouteLoading = () => (
     <div className="flex h-screen items-center justify-center">
@@ -233,6 +258,13 @@ export function PermissionGuard({
 
   if (requireAuth && !user) {
     if (variant === 'route') {
+      if (authError) {
+        return (
+          <div className="flex h-screen items-center justify-center">
+            <div className="text-muted-foreground">Redirecting to login...</div>
+          </div>
+        );
+      }
       return renderRouteLoading();
     }
     return <>{fallback}</>;

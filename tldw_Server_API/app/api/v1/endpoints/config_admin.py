@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import configparser
 import os
 import re
 from typing import Any, Dict, Iterable, List, Optional
@@ -98,14 +99,14 @@ def _build_config_txt_values() -> Dict[str, ConfigValue]:
 
     try:
         sections = config_parser.sections()
-    except Exception:
+    except configparser.Error:
         logger.exception("Error reading config sections")
         sections = []
 
     for section in sections:
         try:
             items = config_parser.items(section)
-        except Exception:
+        except configparser.Error:
             logger.exception("Error reading items for section {}", section)
             items = []
         for key, raw_value in items:
@@ -219,6 +220,7 @@ async def get_effective_config(
     }
     selected_sections = _normalize_sections(sections)
     values: Dict[str, Dict[str, ConfigValue]] = {}
+    unknown_sections = sorted({section for section in selected_sections if section not in builders})
 
     for section in selected_sections:
         builder = builders.get(section)
@@ -233,4 +235,5 @@ async def get_effective_config(
         prompts_dir=str(prompts_dir) if prompts_dir else None,
         module_yaml=module_yaml,
         values=values,
+        unknown_sections=unknown_sections,
     )

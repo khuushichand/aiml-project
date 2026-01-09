@@ -116,6 +116,31 @@ def _httpx_timeout_from_defaults() -> "httpx.Timeout":
     )
 
 
+def build_limits(
+    *,
+    max_connections: Optional[int] = None,
+    max_keepalive_connections: Optional[int] = None,
+    keepalive_expiry: Optional[float] = None,
+) -> Optional["httpx.Limits"]:
+    """Create an httpx.Limits instance when httpx is available."""
+    _hx = _resolve_httpx()
+    if _hx is None or not hasattr(_hx, "Limits"):
+        return None
+    kwargs: Dict[str, Any] = {}
+    if max_connections is not None:
+        kwargs["max_connections"] = max_connections
+    if max_keepalive_connections is not None:
+        kwargs["max_keepalive_connections"] = max_keepalive_connections
+    if keepalive_expiry is not None:
+        kwargs["keepalive_expiry"] = keepalive_expiry
+    if not kwargs:
+        return None
+    try:
+        return _hx.Limits(**kwargs)
+    except Exception:
+        return None
+
+
 _CACHED_VERSION: Optional[str] = None
 
 
@@ -3286,6 +3311,7 @@ __all__ = [
     "HttpResponse",
     "RetryPolicy",
     "SSEEvent",
+    "build_limits",
     "create_async_client",
     "create_client",
     "afetch",

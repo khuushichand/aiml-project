@@ -1316,12 +1316,26 @@ KANBAN_DELETED_RETENTION_DAYS=30          # How long to keep soft-deleted items
 # Embeddings
 KANBAN_EMBEDDING_MODEL=default  # Uses system default
 KANBAN_EMBEDDING_QUEUE=redis    # redis or sync
+
+# Storage
+USER_DB_BASE_DIR=./data/users
 ```
+
+Storage configuration entry:
+- Name: USER_DB_BASE_DIR
+- Type: string
+- Default: ./data/users (example: /var/lib/myapp/users)
+- Required: No (set explicitly in production deployments)
+- Description: Base filesystem path for per-user databases; all user-specific DBs are stored under `<USER_DB_BASE_DIR>/<user_id>/`
 
 ---
 
 ## 18. Deployment & Migration
 
+- **Base path configuration**: `USER_DB_BASE_DIR` controls the root directory for per-user databases (`<USER_DB_BASE_DIR>/<user_id>/`).
+  - Example override: `export USER_DB_BASE_DIR=/mnt/storage/users`
+  - Example systemd drop-in: `Environment=USER_DB_BASE_DIR=/mnt/storage/users` (or use `EnvironmentFile=/etc/tldw_server.env`)
+  - Validation: use the startup checks described below to confirm the path exists and is writable
 - **First-run initialization**:
   - Timing: On app startup, validate `USER_DB_BASE_DIR` exists and is writable; on first user request, auto-create per-user directory and `Kanban.db`
   - Error handling: Fail fast with a clear message if `USER_DB_BASE_DIR` is missing/unwritable or per-user directory creation fails (e.g., `KANBAN_DB_INIT_FAILED: insufficient permissions`)

@@ -28,7 +28,7 @@ def test_openai_shim_preserves_streaming_none_and_topp_fallback(monkeypatch):
     # Force adapter path
     monkeypatch.setenv("LLM_ADAPTERS_OPENAI", "1")
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.chat_with_openai",
+        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.chat_with_openai",
         _fake_openai,
     ):
         # streaming=None and topp fallback should be forwarded to legacy unchanged
@@ -59,7 +59,7 @@ def test_openai_shim_streaming_true_single_done(monkeypatch):
     # Force adapter path
     monkeypatch.setenv("LLM_ADAPTERS_OPENAI", "1")
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.chat_with_openai",
+        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.chat_with_openai",
         _fake_openai,
     ):
         stream = openai_chat_handler(
@@ -85,7 +85,7 @@ def test_anthropic_shim_stop_sequences_mapping(monkeypatch):
 
     monkeypatch.setenv("LLM_ADAPTERS_ANTHROPIC", "1")
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.chat_with_anthropic",
+        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.chat_with_anthropic",
         _fake_anthropic,
     ):
         resp = anthropic_chat_handler(
@@ -112,7 +112,7 @@ def test_groq_shim_logprobs_toplogprobs_forwarding(monkeypatch):
 
     monkeypatch.setenv("LLM_ADAPTERS_GROQ", "1")
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.chat_with_groq",
+        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.chat_with_groq",
         _fake_groq,
     ):
         resp = groq_chat_handler(
@@ -138,7 +138,7 @@ def test_openrouter_shim_top_k_min_p_forwarding(monkeypatch):
 
     monkeypatch.setenv("LLM_ADAPTERS_OPENROUTER", "1")
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.chat_with_openrouter",
+        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.chat_with_openrouter",
         _fake_openrouter,
     ):
         resp = openrouter_chat_handler(
@@ -166,7 +166,7 @@ def test_google_shim_generation_config_mapping(monkeypatch):
 
     monkeypatch.setenv("LLM_ADAPTERS_GOOGLE", "1")
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.chat_with_google",
+        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.chat_with_google",
         _fake_google,
     ):
         resp = google_chat_handler(
@@ -194,7 +194,7 @@ def test_mistral_shim_random_seed_top_k_safe_prompt(monkeypatch):
 
     monkeypatch.setenv("LLM_ADAPTERS_MISTRAL", "1")
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.chat_with_mistral",
+        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.chat_with_mistral",
         _fake_mistral,
     ):
         resp = mistral_chat_handler(

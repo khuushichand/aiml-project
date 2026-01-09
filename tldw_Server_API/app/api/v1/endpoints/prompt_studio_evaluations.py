@@ -31,8 +31,16 @@ from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     record_byok_missing_credentials,
     resolve_byok_credentials,
 )
+from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
-from tldw_Server_API.app.core.Chat.provider_config import PROVIDER_REQUIRES_KEY
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import PROVIDER_REQUIRES_KEY
+from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
+    ensure_app_config,
+    normalize_provider,
+    resolve_provider_api_key_from_config,
+    resolve_provider_model,
+)
 from ..API_Deps.prompt_studio_deps import get_prompt_studio_db, get_prompt_studio_user
 from ..schemas.prompt_studio_schemas import (
     EvaluationCreate,
@@ -689,17 +697,6 @@ async def run_evaluation_async(
         )
         conn.commit()
 
-        # Try to import chat function lazily; tolerate environments without it
-        # Under pytest (integration tests), skip real LLM calls to avoid network/timeouts
-        try:
-            import os as _os
-            if _os.getenv("PYTEST_CURRENT_TEST") or _os.getenv("TEST_MODE", "").lower() == "true":
-                _chat_call = None
-            else:
-                from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call as _chat_call  # type: ignore
-        except Exception:
-            _chat_call = None  # Fallback: no chat; mark errors per test case
-
         _id, project_id, prompt_id, tc_ids_json, model_cfg_json = row
         try:
             test_case_ids = _json.loads(tc_ids_json) if tc_ids_json else []
@@ -721,6 +718,15 @@ async def run_evaluation_async(
         max_tokens = cfg.get("max_tokens", 1000)
         provider_name = (cfg.get("provider") or cfg.get("api_name") or provider or "openai").strip() or "openai"
         provider_key = provider_name.lower()
+        provider_norm = normalize_provider(provider_key)
+        use_llm = not _is_prompt_studio_test_mode()
+        adapter = get_registry().get_adapter(provider_norm) if use_llm else None
+        _chat_call = None
+        if use_llm and adapter is None:
+            try:
+                from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call as _chat_call  # type: ignore
+            except Exception:
+                _chat_call = None  # Fallback: no chat; mark errors per test case
 
         byok_resolution = None
         provider_api_key = None
@@ -801,22 +807,47 @@ async def run_evaluation_async(
                 actual_output = ""
                 error = None
                 try:
-                    if _chat_call is None:
+                    if not use_llm:
                         raise RuntimeError("LLM chat function not available")
-                    resp = _chat_call(
-                        api_endpoint=provider_name,
-                        model=model_name,
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": formatted_user_prompt},
-                        ],
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        api_key=provider_api_key,
-                        app_config=app_config_override,
-                    )
+                    if adapter is not None:
+                        app_config = ensure_app_config(app_config_override)
+                        resolved_model = model_name or resolve_provider_model(provider_norm, app_config)
+                        if not resolved_model:
+                            raise RuntimeError(f"Model is required for provider '{provider_name}'.")
+                        api_key = provider_api_key or resolve_provider_api_key_from_config(provider_norm, app_config)
+                        request = {
+                            "messages": [{"role": "user", "content": formatted_user_prompt}],
+                            "system_message": system_prompt,
+                            "model": resolved_model,
+                            "api_key": api_key,
+                            "temperature": temperature,
+                            "max_tokens": max_tokens,
+                            "app_config": app_config,
+                            "stream": False,
+                        }
+                        try:
+                            resp = await adapter.achat(request)
+                        except NotImplementedError:
+                            resp = await asyncio.to_thread(adapter.chat, request)
+                    else:
+                        if _chat_call is None:
+                            raise RuntimeError("LLM chat function not available")
+                        resp = _chat_call(
+                            api_endpoint=provider_name,
+                            model=model_name,
+                            messages=[
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": formatted_user_prompt},
+                            ],
+                            temperature=temperature,
+                            max_tokens=max_tokens,
+                            api_key=provider_api_key,
+                            app_config=app_config_override,
+                        )
                     if isinstance(resp, list) and resp:
-                        actual_output = resp[0]
+                        actual_output = str(resp[0])
+                    else:
+                        actual_output = extract_response_content(resp) or str(resp)
                 except Exception as e:
                     error = str(e)
 

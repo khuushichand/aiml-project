@@ -24,7 +24,7 @@ def _enable_stage3_async(monkeypatch):
 @pytest.mark.asyncio
 async def test_qwen_async_non_streaming(monkeypatch):
     from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call_async
-    import tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls as llm_calls
+    import tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls as llm_calls
 
     def _fake_qwen(**kwargs):
         return {"object": "chat.completion", "choices": [{"index": 0, "message": {"content": "ok"}}]}
@@ -43,7 +43,7 @@ async def test_qwen_async_non_streaming(monkeypatch):
 @pytest.mark.asyncio
 async def test_deepseek_async_streaming(monkeypatch):
     from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call_async
-    import tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls as llm_calls
+    import tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls as llm_calls
 
     def _fake_stream(**kwargs) -> Iterator[str]:
         yield "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n"
@@ -67,7 +67,7 @@ async def test_deepseek_async_streaming(monkeypatch):
 @pytest.mark.asyncio
 async def test_huggingface_async_non_streaming(monkeypatch):
     from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call_async
-    import tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls as llm_calls
+    import tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls as llm_calls
 
     def _fake_hf(**kwargs):
         return {"object": "chat.completion", "choices": [{"index": 0, "message": {"content": "ok"}}]}
@@ -86,7 +86,7 @@ async def test_huggingface_async_non_streaming(monkeypatch):
 @pytest.mark.asyncio
 async def test_custom_openai_async_streaming(monkeypatch):
     from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call_async
-    import tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local as llm_local
+    import tldw_Server_API.app.core.LLM_Calls.legacy_local_calls as llm_local
 
     def _fake_stream(**kwargs) -> Iterator[str]:
         yield "data: {\"choices\":[{\"delta\":{\"content\":\"y\"}}]}\n\n"

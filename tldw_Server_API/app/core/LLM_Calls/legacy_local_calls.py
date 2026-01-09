@@ -1,7 +1,6 @@
-# Local_LLM_API_Calls_Lib.py
+# legacy_local_calls.py
 #########################################
-# Local LLM API Calls Library
-# This library is used to perform 'Local' API calls to LLM endpoints.
+# Legacy local LLM API calls retained for compatibility.
 #
 ####
 import json
@@ -25,7 +24,7 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     normalize_provider_line,
     sse_data,
 )
-from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import _sanitize_payload_for_logging, _apply_tool_choice
+from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import _sanitize_payload_for_logging, _apply_tool_choice
 
 
 ####################

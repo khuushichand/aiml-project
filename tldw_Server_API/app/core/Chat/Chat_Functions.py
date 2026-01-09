@@ -28,10 +28,6 @@ from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatRateLimitError,
     ChatAuthenticationError,
 )
-# Note: Provider handler maps are now centralized in provider_config.
-# Authoritative provider mappings (avoid drift):
-from tldw_Server_API.app.core.Chat.provider_config import API_CALL_HANDLERS as _PROVIDER_API_CALL_HANDLERS
-from tldw_Server_API.app.core.Chat.provider_config import PROVIDER_PARAM_MAP as _PROVIDER_PARAM_MAP
 import tldw_Server_API.app.core.Chat.chat_orchestrator as _chat_orchestrator_module
 import tldw_Server_API.app.core.Chat.chat_history as _chat_history_module
 import tldw_Server_API.app.core.Chat.chat_characters as _chat_characters_module
@@ -77,7 +73,7 @@ from tldw_Server_API.app.core.config import load_and_log_configs
 
 approximate_token_count = _orchestrator_approximate_token_count
 
-"""Provider mappings now live in provider_config; this module no longer exports them."""
+"""Provider mappings now live behind the adapter registry; this module no longer exports them."""
 
 def chat_api_call(
     api_endpoint: str,
@@ -111,10 +107,6 @@ def chat_api_call(
     """
     Deprecated shim.
     - Default: forwards to chat_orchestrator.chat_api_call to avoid drift.
-    - Test compatibility: if API_CALL_HANDLERS has been patched on this module
-      (object identity differs from provider_config), perform local dispatch
-      using the patched mapping so existing tests that monkeypatch this symbol
-      continue to work without changes.
     """
     # Forward to orchestrator (single source of truth)
     return _orchestrator_chat_api_call(

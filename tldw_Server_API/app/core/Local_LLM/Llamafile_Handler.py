@@ -12,7 +12,6 @@ from typing import List, Optional, Dict, Any
 #
 # Third-party imports
 import asyncio
-import httpx
 import socket
 import time
 #
@@ -193,12 +192,15 @@ class LlamafileHandler(BaseLLMHandler):
                 self.logger.info(f"Downloaded {output_path.name} successfully.")
                 return output_path
 
-            except httpx.HTTPStatusError as e:
-                self.logger.error(
-                    f"Failed to fetch llamafile release info/download: {e.response.status_code} - {e.response.text}",
-                    exc_info=True)
-                raise ModelDownloadError(f"Failed to fetch/download llamafile: {e.response.status_code}")
             except Exception as e:
+                status = http_utils.get_http_status_from_exception(e)
+                if status is not None:
+                    error_text = http_utils.get_http_error_text(e)
+                    self.logger.error(
+                        f"Failed to fetch llamafile release info/download: {status} - {error_text}",
+                        exc_info=True,
+                    )
+                    raise ModelDownloadError(f"Failed to fetch/download llamafile: {status}")
                 self.logger.error(f"Unexpected error downloading llamafile: {e}", exc_info=True)
                 if output_path.exists():
                     output_path.unlink(missing_ok=True)
@@ -585,20 +587,21 @@ class LlamafileHandler(BaseLLMHandler):
                 result = await request_json(client, "POST", api_url, json=payload, headers=headers)
                 self.logger.debug("Llamafile inference successful.")
                 return result
-            except httpx.HTTPStatusError as e:
-                error_text = e.response.text
-                self.logger.error(
-                    f"Llamafile API error ({e.response.status_code}) from {api_url}: {error_text}",
-                    exc_info=True
-                )
-                raise InferenceError(f"Llamafile API error ({e.response.status_code}): {error_text}")
-            except httpx.RequestError as e:
-                self.logger.error(
-                    f"Could not connect or communicate with Llamafile server at {api_url}: {e}",
-                    exc_info=True
-                )
-                raise ServerError(f"Could not connect/communicate with Llamafile server at {api_url}: {e}")
             except Exception as e:
+                status = http_utils.get_http_status_from_exception(e)
+                if status is not None:
+                    error_text = http_utils.get_http_error_text(e)
+                    self.logger.error(
+                        f"Llamafile API error ({status}) from {api_url}: {error_text}",
+                        exc_info=True
+                    )
+                    raise InferenceError(f"Llamafile API error ({status}): {error_text}")
+                if http_utils.is_network_error(e):
+                    self.logger.error(
+                        f"Could not connect or communicate with Llamafile server at {api_url}: {e}",
+                        exc_info=True
+                    )
+                    raise ServerError(f"Could not connect/communicate with Llamafile server at {api_url}: {e}")
                 self.logger.error(f"Unexpected error during llamafile inference to {api_url}: {e}", exc_info=True)
                 raise InferenceError(f"Unexpected error during llamafile inference: {e}")
 

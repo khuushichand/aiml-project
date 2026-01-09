@@ -56,6 +56,7 @@ from tldw_Server_API.app.core.External_Sources.connectors_service import get_pol
 from tldw_Server_API.app.core.External_Sources.policy import get_default_policy_from_env
 from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed
+from tldw_Server_API.app.core.MCP_unified.monitoring import metrics
 
 # Test stub shared state (persist across dependency calls under TEST_MODE/pytest)
 _TEST_SESSION_STATE: dict = {"sid": 1000, "sessions": {}}
@@ -1269,30 +1270,11 @@ async def get_optional_current_user(
 # Rate Limiting Dependencies
 
 def _rg_enabled_for_request(request: Request) -> bool:
-    try:
-        if getattr(request.state, "rg_policy_id", None):
-            return True
-    except Exception as exc:
-        # Defensive: don't let bad state break requests, but surface in logs.
-        logger.debug(
-            "RG enablement: failed to inspect request.state.rg_policy_id; treating as disabled: {}",
-            exc,
-        )
-    try:
-        from tldw_Server_API.app.core.config import rg_enabled as _rg_enabled_flag
-    except Exception as exc:
-        logger.debug("RG enablement check failed; falling back to legacy limiter: {}", exc)
-        _rg_enabled_flag = None
-    if _rg_enabled_flag is not None:
-        try:
-            return bool(_rg_enabled_flag(False))
-        except Exception as exc:
-            logger.debug("RG enablement check failed; falling back to legacy limiter: {}", exc)
-            return False
-    env_val = os.getenv("RG_ENABLED")
-    if env_val is None:
-        return False
-    return env_val.strip().lower() in {"1", "true", "yes", "on", "y"}
+    state = getattr(request, "state", None)
+    if state is not None and getattr(state, "rg_policy_id", None):
+        return True
+    from tldw_Server_API.app.core.config import rg_enabled
+    return bool(rg_enabled(False))
 
 
 async def check_rate_limit(request: Request) -> None:
@@ -1302,7 +1284,7 @@ async def check_rate_limit(request: Request) -> None:
     When Resource Governor (RG) is enabled, this is a no-op. Otherwise it uses
     the legacy AuthNZ rate limiter (user-scoped when available, else IP-scoped).
     """
-    # TODO: remove legacy fallback once RG migration is confirmed in production.
+    # TODO(Q2-2026): remove legacy fallback after RG enabled in all production environments; track via metrics.record_rate_limit_fallback().
     if _rg_enabled_for_request(request):
         return
 
@@ -1313,7 +1295,11 @@ async def check_rate_limit(request: Request) -> None:
     try:
         rate_limiter = get_rate_limiter()
     except Exception as exc:
-        logger.debug("Legacy rate limiter unavailable; skipping rate limit check: {}", exc)
+        metrics.record_rate_limit_fallback()
+        logger.warning(
+            "Legacy rate limiter unavailable; skipping rate limit check; error={}",
+            exc,
+        )
         return
 
     if not getattr(rate_limiter, "enabled", False):
@@ -1338,7 +1324,11 @@ async def check_rate_limit(request: Request) -> None:
                 window_minutes=1,
             )
     except Exception as exc:
-        logger.debug("Legacy rate limiter check failed; skipping rate limit check: {}", exc)
+        metrics.record_rate_limit_fallback()
+        logger.warning(
+            "Legacy rate limiter check failed; skipping rate limit check; error={}",
+            exc,
+        )
         return
 
     if not allowed:
@@ -1351,7 +1341,7 @@ async def check_rate_limit(request: Request) -> None:
 
 async def check_auth_rate_limit(request: Request) -> None:
     """RG-first auth rate limit dependency with legacy fallback (IP-scoped)."""
-    # TODO: remove legacy fallback once RG migration is confirmed in production.
+    # TODO(Q2-2026): remove legacy fallback after RG enabled in all production environments; track via metrics.record_rate_limit_fallback().
     if _rg_enabled_for_request(request):
         return
 
@@ -1362,7 +1352,11 @@ async def check_auth_rate_limit(request: Request) -> None:
     try:
         rate_limiter = get_rate_limiter()
     except Exception as exc:
-        logger.debug("Legacy rate limiter unavailable; skipping auth rate limit check: {}", exc)
+        metrics.record_rate_limit_fallback()
+        logger.warning(
+            "Legacy rate limiter unavailable; skipping auth rate limit check; error={}",
+            exc,
+        )
         return
 
     if not getattr(rate_limiter, "enabled", False):
@@ -1378,7 +1372,11 @@ async def check_auth_rate_limit(request: Request) -> None:
             window_minutes=1,
         )
     except Exception as exc:
-        logger.debug("Legacy auth rate limiter check failed; skipping auth rate limit check: {}", exc)
+        metrics.record_rate_limit_fallback()
+        logger.warning(
+            "Legacy auth rate limiter check failed; skipping auth rate limit check; error={}",
+            exc,
+        )
         return
 
     if not allowed:
@@ -1546,18 +1544,12 @@ def require_token_scope(
             token = credentials.credentials
             try:
                 payload = jwt_service.decode_access_token(token)
-            except Exception:  # noqa: BLE001
+            except (InvalidTokenError, TokenExpiredError):
                 # Defensive: malformed tokens should fall back to upstream auth handling.
                 return None
             # Optional admin bypass based on token role claim
-            try:
-                if allow_admin_bypass and str(payload.get("role", "")) == "admin":
-                    return None
-            except Exception as exc:  # noqa: BLE001
-                logger.debug(
-                    "require_token_scope: admin bypass check failed; continuing: {}",
-                    exc,
-                )
+            if allow_admin_bypass and str(payload.get("role", "")) == "admin":
+                return None
             tok_scope = str(payload.get("scope") or "").strip()
             if tok_scope:
                 try:
@@ -1638,11 +1630,14 @@ def require_token_scope(
                                     raise HTTPException(status_code=403, detail="Forbidden: token quota exceeded")
                             except HTTPException:
                                 raise
-                            except Exception:  # noqa: BLE001
+                            except Exception as err:  # noqa: BLE001
                                 # Defensive: fall back to process-local counters if quota backend fails.
                                 cur = int(_VK_USAGE.get(key, 0))
                                 if cur >= int(max_calls):
-                                    raise HTTPException(status_code=403, detail="Forbidden: token quota exceeded")
+                                    raise HTTPException(
+                                        status_code=403,
+                                        detail="Forbidden: token quota exceeded",
+                                    ) from err
                                 _VK_USAGE[key] = cur + 1
             except HTTPException:
                 raise
@@ -1741,12 +1736,15 @@ def require_token_scope(
                                         raise HTTPException(status_code=403, detail="Forbidden: API key quota exceeded")
                                 except HTTPException:
                                     raise
-                                except Exception:  # noqa: BLE001
+                                except Exception as err:  # noqa: BLE001
                                     # Defensive: fall back to process-local counters if quota backend fails.
                                     key = (f"apikey:{key_id}", str(count_as))
                                     cur = int(_VK_USAGE.get(key, 0))
                                     if cur >= int(quota):
-                                        raise HTTPException(status_code=403, detail="Forbidden: API key quota exceeded")
+                                        raise HTTPException(
+                                            status_code=403,
+                                            detail="Forbidden: API key quota exceeded",
+                                        ) from err
                                     _VK_USAGE[key] = cur + 1
             except HTTPException:
                 raise

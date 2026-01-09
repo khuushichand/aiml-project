@@ -17,7 +17,7 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.sse import sse_data, sse_done
 # Import legacy implementations under explicit names to avoid recursion when
 # top-level names become adapter-backed wrappers.
-from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import (
+from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import (
     legacy_chat_with_openai as _legacy_chat_with_openai,
     legacy_chat_with_anthropic as _legacy_chat_with_anthropic,
     legacy_chat_with_groq as _legacy_chat_with_groq,
@@ -27,14 +27,24 @@ from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import (
     legacy_chat_with_qwen as _legacy_chat_with_qwen,
     legacy_chat_with_deepseek as _legacy_chat_with_deepseek,
     legacy_chat_with_huggingface as _legacy_chat_with_huggingface,
+    chat_with_moonshot as _legacy_chat_with_moonshot,
+    chat_with_zai as _legacy_chat_with_zai,
 )
-from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local import (
+from tldw_Server_API.app.core.LLM_Calls.legacy_local_calls import (
     legacy_chat_with_custom_openai as _legacy_chat_with_custom_openai,
     legacy_chat_with_custom_openai_2 as _legacy_chat_with_custom_openai_2,
+    chat_with_local_llm as _legacy_chat_with_local_llm,
+    chat_with_llama as _legacy_chat_with_llama,
+    chat_with_kobold as _legacy_chat_with_kobold,
+    chat_with_oobabooga as _legacy_chat_with_oobabooga,
+    chat_with_tabbyapi as _legacy_chat_with_tabbyapi,
+    chat_with_vllm as _legacy_chat_with_vllm,
+    chat_with_ollama as _legacy_chat_with_ollama,
+    chat_with_aphrodite as _legacy_chat_with_aphrodite,
 )
 
 # Legacy async handlers for fallback when adapters are disabled or unavailable
-from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import (
+from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import (
     legacy_chat_with_openai_async as _legacy_chat_with_openai_async,
     legacy_chat_with_groq_async as _legacy_chat_with_groq_async,
     legacy_chat_with_anthropic_async as _legacy_chat_with_anthropic_async,
@@ -43,11 +53,19 @@ from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import (
 
 
 def _flag_enabled(*names: str) -> bool:
+    seen_any = False
     for n in names:
         v = os.getenv(n)
-        if v and v.lower() in {"1", "true", "yes", "on"}:
+        if v is None:
+            continue
+        seen_any = True
+        v_norm = v.strip().lower()
+        if v_norm in {"0", "false", "no", "off"}:
+            return False
+        if v_norm in {"1", "true", "yes", "on"}:
             return True
-    return False
+    # Default to enabled when no flags are set.
+    return not seen_any
 
 
 def _http_factory_patched(provider_module: str) -> bool:
@@ -100,7 +118,7 @@ def openai_chat_handler(
     # clearly marked test double (function name starting with "_fake"). This avoids
     # infinite recursion when the public function simply forwards back to this shim.
     try:
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy_mod
+        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy_mod
         _patched = getattr(_legacy_mod, "chat_with_openai", None)
         if callable(_patched):
             _modname = getattr(_patched, "__module__", "") or ""
@@ -289,7 +307,7 @@ def bedrock_chat_handler(
 
     if adapter is None:
         # Fallback to legacy function if adapter cannot be initialized
-        from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import legacy_chat_with_bedrock as _legacy_bedrock
+        from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import legacy_chat_with_bedrock as _legacy_bedrock
         return _legacy_bedrock(
             input_data=input_data,
             model=model,
@@ -384,7 +402,7 @@ async def bedrock_chat_handler_async(
 
     if adapter is None:
         # Fallback to sync legacy call if adapter path unavailable
-        from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import legacy_chat_with_bedrock as _legacy_bedrock
+        from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import legacy_chat_with_bedrock as _legacy_bedrock
         return _legacy_bedrock(
             input_data=input_data,
             model=model,
@@ -459,7 +477,7 @@ def anthropic_chat_handler(
 ):
     # Honor monkeypatched legacy callable in tests to avoid network or adapter path
     try:
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy_mod
+        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy_mod
         _patched = getattr(_legacy_mod, "chat_with_anthropic", None)
         if callable(_patched):
             _modname = getattr(_patched, "__module__", "") or ""
@@ -548,6 +566,1186 @@ def anthropic_chat_handler(
         "tools": tools,
         "custom_prompt_arg": custom_prompt_arg,
         "app_config": app_config,
+    }
+    if streaming is not None:
+        request["stream"] = bool(streaming)
+    return adapter.stream(request) if streaming else adapter.chat(request)
+
+
+def moonshot_chat_handler(
+    input_data: List[Dict[str, Any]],
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    system_message: Optional[str] = None,
+    temp: Optional[float] = None,
+    maxp: Optional[float] = None,
+    streaming: Optional[bool] = False,
+    frequency_penalty: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    n: Optional[int] = None,
+    presence_penalty: Optional[float] = None,
+    response_format: Optional[Dict[str, str]] = None,
+    seed: Optional[int] = None,
+    stop: Optional[Union[str, List[str]]] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    user: Optional[str] = None,
+    custom_prompt_arg: Optional[str] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+):
+    use_adapter = _flag_enabled("LLM_ADAPTERS_MOONSHOT", "LLM_ADAPTERS_ENABLED")
+    if not use_adapter:
+        return _legacy_chat_with_moonshot(
+            input_data=input_data,
+            model=model,
+            api_key=api_key,
+            system_message=system_message,
+            temp=temp,
+            maxp=maxp,
+            streaming=streaming,
+            frequency_penalty=frequency_penalty,
+            max_tokens=max_tokens,
+            n=n,
+            presence_penalty=presence_penalty,
+            response_format=response_format,
+            seed=seed,
+            stop=stop,
+            tools=tools,
+            tool_choice=tool_choice,
+            user=user,
+            custom_prompt_arg=custom_prompt_arg,
+            app_config=app_config,
+        )
+    registry = get_registry()
+    adapter = registry.get_adapter("moonshot")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.legacy_adapters import MoonshotAdapter
+
+        registry.register_adapter("moonshot", MoonshotAdapter)
+        adapter = registry.get_adapter("moonshot")
+    if adapter is None:
+        return _legacy_chat_with_moonshot(
+            input_data=input_data,
+            model=model,
+            api_key=api_key,
+            system_message=system_message,
+            temp=temp,
+            maxp=maxp,
+            streaming=streaming,
+            frequency_penalty=frequency_penalty,
+            max_tokens=max_tokens,
+            n=n,
+            presence_penalty=presence_penalty,
+            response_format=response_format,
+            seed=seed,
+            stop=stop,
+            tools=tools,
+            tool_choice=tool_choice,
+            user=user,
+            custom_prompt_arg=custom_prompt_arg,
+            app_config=app_config,
+        )
+    request: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "api_key": api_key,
+        "system_message": system_message,
+        "temperature": temp,
+        "top_p": maxp,
+        "frequency_penalty": frequency_penalty,
+        "max_tokens": max_tokens,
+        "n": n,
+        "presence_penalty": presence_penalty,
+        "response_format": response_format,
+        "seed": seed,
+        "stop": stop,
+        "tools": tools,
+        "tool_choice": tool_choice,
+        "user": user,
+        "custom_prompt_arg": custom_prompt_arg,
+        "app_config": app_config,
+    }
+    if streaming is not None:
+        request["stream"] = bool(streaming)
+    return adapter.stream(request) if streaming else adapter.chat(request)
+
+
+def zai_chat_handler(
+    input_data: List[Dict[str, Any]],
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    system_message: Optional[str] = None,
+    temp: Optional[float] = None,
+    maxp: Optional[float] = None,
+    streaming: Optional[bool] = False,
+    max_tokens: Optional[int] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    do_sample: Optional[bool] = None,
+    request_id: Optional[str] = None,
+    stop: Optional[Union[str, List[str]]] = None,
+    response_format: Optional[Dict[str, str]] = None,
+    custom_prompt_arg: Optional[str] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+):
+    use_adapter = _flag_enabled("LLM_ADAPTERS_ZAI", "LLM_ADAPTERS_ENABLED")
+    if not use_adapter:
+        return _legacy_chat_with_zai(
+            input_data=input_data,
+            model=model,
+            api_key=api_key,
+            system_message=system_message,
+            temp=temp,
+            maxp=maxp,
+            streaming=streaming,
+            max_tokens=max_tokens,
+            tools=tools,
+            do_sample=do_sample,
+            request_id=request_id,
+            custom_prompt_arg=custom_prompt_arg,
+            app_config=app_config,
+        )
+    registry = get_registry()
+    adapter = registry.get_adapter("zai")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.legacy_adapters import ZaiAdapter
+
+        registry.register_adapter("zai", ZaiAdapter)
+        adapter = registry.get_adapter("zai")
+    if adapter is None:
+        return _legacy_chat_with_zai(
+            input_data=input_data,
+            model=model,
+            api_key=api_key,
+            system_message=system_message,
+            temp=temp,
+            maxp=maxp,
+            streaming=streaming,
+            max_tokens=max_tokens,
+            tools=tools,
+            do_sample=do_sample,
+            request_id=request_id,
+            custom_prompt_arg=custom_prompt_arg,
+            app_config=app_config,
+        )
+    request: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "api_key": api_key,
+        "system_message": system_message,
+        "temperature": temp,
+        "top_p": maxp,
+        "max_tokens": max_tokens,
+        "tools": tools,
+        "do_sample": do_sample,
+        "request_id": request_id,
+        "stop": stop,
+        "response_format": response_format,
+        "custom_prompt_arg": custom_prompt_arg,
+        "app_config": app_config,
+    }
+    if streaming is not None:
+        request["stream"] = bool(streaming)
+    return adapter.stream(request) if streaming else adapter.chat(request)
+
+
+def llama_cpp_chat_handler(
+    input_data: List[Dict[str, Any]],
+    api_key: Optional[str] = None,
+    custom_prompt: Optional[str] = None,
+    temp: Optional[float] = None,
+    temperature: Optional[float] = None,
+    system_prompt: Optional[str] = None,
+    streaming: Optional[bool] = None,
+    stream: Optional[bool] = None,
+    model: Optional[str] = None,
+    top_k: Optional[int] = None,
+    top_p: Optional[float] = None,
+    min_p: Optional[float] = None,
+    n_predict: Optional[int] = None,
+    seed: Optional[int] = None,
+    stop: Optional[Union[str, List[str]]] = None,
+    response_format: Optional[Dict[str, str]] = None,
+    logit_bias: Optional[Dict[str, float]] = None,
+    n: Optional[int] = None,
+    presence_penalty: Optional[float] = None,
+    frequency_penalty: Optional[float] = None,
+    api_url: Optional[str] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+    http_client_factory: Optional[Any] = None,
+    http_fetcher: Optional[Any] = None,
+):
+    if temperature is not None and temp is None:
+        temp = temperature
+    if stream is not None:
+        streaming = stream
+    use_adapter = _flag_enabled("LLM_ADAPTERS_LLAMA_CPP", "LLM_ADAPTERS_ENABLED")
+    if not use_adapter:
+        return _legacy_chat_with_llama(
+            input_data=input_data,
+            api_key=api_key,
+            custom_prompt=custom_prompt,
+            temp=temp,
+            temperature=temperature,
+            system_prompt=system_prompt,
+            streaming=streaming,
+            stream=stream,
+            model=model,
+            top_k=top_k,
+            top_p=top_p,
+            min_p=min_p,
+            n_predict=n_predict,
+            seed=seed,
+            stop=stop,
+            response_format=response_format,
+            logit_bias=logit_bias,
+            n=n,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            api_url=api_url,
+            app_config=app_config,
+            http_client_factory=http_client_factory,
+            http_fetcher=http_fetcher,
+        )
+    registry = get_registry()
+    adapter = registry.get_adapter("llama.cpp")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.legacy_adapters import LlamaCppAdapter
+
+        registry.register_adapter("llama.cpp", LlamaCppAdapter)
+        adapter = registry.get_adapter("llama.cpp")
+    if adapter is None:
+        return _legacy_chat_with_llama(
+            input_data=input_data,
+            api_key=api_key,
+            custom_prompt=custom_prompt,
+            temp=temp,
+            temperature=temperature,
+            system_prompt=system_prompt,
+            streaming=streaming,
+            stream=stream,
+            model=model,
+            top_k=top_k,
+            top_p=top_p,
+            min_p=min_p,
+            n_predict=n_predict,
+            seed=seed,
+            stop=stop,
+            response_format=response_format,
+            logit_bias=logit_bias,
+            n=n,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            api_url=api_url,
+            app_config=app_config,
+            http_client_factory=http_client_factory,
+            http_fetcher=http_fetcher,
+        )
+    request: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "api_key": api_key,
+        "system_message": system_prompt,
+        "temperature": temp,
+        "top_p": top_p,
+        "top_k": top_k,
+        "min_p": min_p,
+        "max_tokens": n_predict,
+        "seed": seed,
+        "stop": stop,
+        "response_format": response_format,
+        "logit_bias": logit_bias,
+        "n": n,
+        "presence_penalty": presence_penalty,
+        "frequency_penalty": frequency_penalty,
+        "custom_prompt_arg": custom_prompt,
+        "app_config": app_config,
+        "http_client_factory": http_client_factory,
+        "http_fetcher": http_fetcher,
+    }
+    if streaming is not None:
+        request["stream"] = bool(streaming)
+    return adapter.stream(request) if streaming else adapter.chat(request)
+
+
+def kobold_chat_handler(
+    input_data: List[Dict[str, Any]],
+    api_key: Optional[str] = None,
+    custom_prompt_input: Optional[str] = None,
+    temp: Optional[float] = None,
+    system_message: Optional[str] = None,
+    streaming: Optional[bool] = False,
+    model: Optional[str] = None,
+    top_k: Optional[int] = None,
+    top_p: Optional[float] = None,
+    max_length: Optional[int] = None,
+    stop_sequence: Optional[Union[str, List[str]]] = None,
+    num_responses: Optional[int] = None,
+    seed: Optional[int] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+):
+    use_adapter = _flag_enabled("LLM_ADAPTERS_KOBOLD", "LLM_ADAPTERS_ENABLED")
+    if not use_adapter:
+        return _legacy_chat_with_kobold(
+            input_data=input_data,
+            api_key=api_key,
+            custom_prompt_input=custom_prompt_input,
+            temp=temp,
+            system_message=system_message,
+            streaming=streaming,
+            model=model,
+            top_k=top_k,
+            top_p=top_p,
+            max_length=max_length,
+            stop_sequence=stop_sequence,
+            num_responses=num_responses,
+            seed=seed,
+            app_config=app_config,
+        )
+    registry = get_registry()
+    adapter = registry.get_adapter("kobold")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.legacy_adapters import KoboldAdapter
+
+        registry.register_adapter("kobold", KoboldAdapter)
+        adapter = registry.get_adapter("kobold")
+    if adapter is None:
+        return _legacy_chat_with_kobold(
+            input_data=input_data,
+            api_key=api_key,
+            custom_prompt_input=custom_prompt_input,
+            temp=temp,
+            system_message=system_message,
+            streaming=streaming,
+            model=model,
+            top_k=top_k,
+            top_p=top_p,
+            max_length=max_length,
+            stop_sequence=stop_sequence,
+            num_responses=num_responses,
+            seed=seed,
+            app_config=app_config,
+        )
+    request: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "api_key": api_key,
+        "system_message": system_message,
+        "temperature": temp,
+        "top_p": top_p,
+        "top_k": top_k,
+        "max_tokens": max_length,
+        "stop": stop_sequence,
+        "n": num_responses,
+        "seed": seed,
+        "custom_prompt_arg": custom_prompt_input,
+        "app_config": app_config,
+    }
+    if streaming is not None:
+        request["stream"] = bool(streaming)
+    return adapter.stream(request) if streaming else adapter.chat(request)
+
+
+def ooba_chat_handler(
+    input_data: List[Dict[str, Any]],
+    api_key: Optional[str] = None,
+    custom_prompt: Optional[str] = None,
+    temp: Optional[float] = None,
+    temperature: Optional[float] = None,
+    system_prompt: Optional[str] = None,
+    streaming: Optional[bool] = None,
+    stream: Optional[bool] = None,
+    model: Optional[str] = None,
+    top_k: Optional[int] = None,
+    top_p: Optional[float] = None,
+    min_p: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    seed: Optional[int] = None,
+    stop: Optional[Union[str, List[str]]] = None,
+    response_format: Optional[Dict[str, str]] = None,
+    n: Optional[int] = None,
+    user_identifier: Optional[str] = None,
+    logit_bias: Optional[Dict[str, float]] = None,
+    presence_penalty: Optional[float] = None,
+    frequency_penalty: Optional[float] = None,
+    api_url: Optional[str] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+    http_client_factory: Optional[Any] = None,
+    http_fetcher: Optional[Any] = None,
+):
+    if temperature is not None and temp is None:
+        temp = temperature
+    if stream is not None:
+        streaming = stream
+    use_adapter = _flag_enabled("LLM_ADAPTERS_OOBA", "LLM_ADAPTERS_ENABLED")
+    if not use_adapter:
+        return _legacy_chat_with_oobabooga(
+            input_data=input_data,
+            api_key=api_key,
+            custom_prompt=custom_prompt,
+            temp=temp,
+            temperature=temperature,
+            system_prompt=system_prompt,
+            streaming=streaming,
+            stream=stream,
+            model=model,
+            top_k=top_k,
+            top_p=top_p,
+            min_p=min_p,
+            max_tokens=max_tokens,
+            seed=seed,
+            stop=stop,
+            response_format=response_format,
+            n=n,
+            user_identifier=user_identifier,
+            logit_bias=logit_bias,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            api_url=api_url,
+            app_config=app_config,
+            http_client_factory=http_client_factory,
+            http_fetcher=http_fetcher,
+        )
+    registry = get_registry()
+    adapter = registry.get_adapter("ooba")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.legacy_adapters import OobaAdapter
+
+        registry.register_adapter("ooba", OobaAdapter)
+        adapter = registry.get_adapter("ooba")
+    if adapter is None:
+        return _legacy_chat_with_oobabooga(
+            input_data=input_data,
+            api_key=api_key,
+            custom_prompt=custom_prompt,
+            temp=temp,
+            temperature=temperature,
+            system_prompt=system_prompt,
+            streaming=streaming,
+            stream=stream,
+            model=model,
+            top_k=top_k,
+            top_p=top_p,
+            min_p=min_p,
+            max_tokens=max_tokens,
+            seed=seed,
+            stop=stop,
+            response_format=response_format,
+            n=n,
+            user_identifier=user_identifier,
+            logit_bias=logit_bias,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            api_url=api_url,
+            app_config=app_config,
+            http_client_factory=http_client_factory,
+            http_fetcher=http_fetcher,
+        )
+    request: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "api_key": api_key,
+        "system_message": system_prompt,
+        "temperature": temp,
+        "top_p": top_p,
+        "top_k": top_k,
+        "min_p": min_p,
+        "max_tokens": max_tokens,
+        "seed": seed,
+        "stop": stop,
+        "response_format": response_format,
+        "n": n,
+        "user": user_identifier,
+        "logit_bias": logit_bias,
+        "presence_penalty": presence_penalty,
+        "frequency_penalty": frequency_penalty,
+        "custom_prompt_arg": custom_prompt,
+        "app_config": app_config,
+        "http_client_factory": http_client_factory,
+        "http_fetcher": http_fetcher,
+    }
+    if streaming is not None:
+        request["stream"] = bool(streaming)
+    return adapter.stream(request) if streaming else adapter.chat(request)
+
+
+def tabbyapi_chat_handler(
+    input_data: List[Dict[str, Any]],
+    api_key: Optional[str] = None,
+    custom_prompt_input: Optional[str] = None,
+    temp: Optional[float] = None,
+    temperature: Optional[float] = None,
+    system_message: Optional[str] = None,
+    streaming: Optional[bool] = None,
+    stream: Optional[bool] = None,
+    model: Optional[str] = None,
+    top_k: Optional[int] = None,
+    top_p: Optional[float] = None,
+    min_p: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    seed: Optional[int] = None,
+    stop: Optional[Union[str, List[str]]] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+    response_format: Optional[Dict[str, str]] = None,
+    n: Optional[int] = None,
+    user_identifier: Optional[str] = None,
+    logit_bias: Optional[Dict[str, float]] = None,
+    presence_penalty: Optional[float] = None,
+    frequency_penalty: Optional[float] = None,
+    logprobs: Optional[bool] = None,
+    top_logprobs: Optional[int] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    http_client_factory: Optional[Any] = None,
+    http_fetcher: Optional[Any] = None,
+):
+    if temperature is not None and temp is None:
+        temp = temperature
+    if stream is not None:
+        streaming = stream
+    use_adapter = _flag_enabled("LLM_ADAPTERS_TABBYAPI", "LLM_ADAPTERS_ENABLED")
+    if not use_adapter:
+        return _legacy_chat_with_tabbyapi(
+            input_data=input_data,
+            api_key=api_key,
+            custom_prompt_input=custom_prompt_input,
+            temp=temp,
+            temperature=temperature,
+            system_message=system_message,
+            streaming=streaming,
+            stream=stream,
+            model=model,
+            top_k=top_k,
+            top_p=top_p,
+            min_p=min_p,
+            max_tokens=max_tokens,
+            seed=seed,
+            stop=stop,
+            app_config=app_config,
+            response_format=response_format,
+            n=n,
+            user_identifier=user_identifier,
+            logit_bias=logit_bias,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            logprobs=logprobs,
+            top_logprobs=top_logprobs,
+            tools=tools,
+            tool_choice=tool_choice,
+            http_client_factory=http_client_factory,
+            http_fetcher=http_fetcher,
+        )
+    registry = get_registry()
+    adapter = registry.get_adapter("tabbyapi")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.legacy_adapters import TabbyAPIAdapter
+
+        registry.register_adapter("tabbyapi", TabbyAPIAdapter)
+        adapter = registry.get_adapter("tabbyapi")
+    if adapter is None:
+        return _legacy_chat_with_tabbyapi(
+            input_data=input_data,
+            api_key=api_key,
+            custom_prompt_input=custom_prompt_input,
+            temp=temp,
+            temperature=temperature,
+            system_message=system_message,
+            streaming=streaming,
+            stream=stream,
+            model=model,
+            top_k=top_k,
+            top_p=top_p,
+            min_p=min_p,
+            max_tokens=max_tokens,
+            seed=seed,
+            stop=stop,
+            app_config=app_config,
+            response_format=response_format,
+            n=n,
+            user_identifier=user_identifier,
+            logit_bias=logit_bias,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            logprobs=logprobs,
+            top_logprobs=top_logprobs,
+            tools=tools,
+            tool_choice=tool_choice,
+            http_client_factory=http_client_factory,
+            http_fetcher=http_fetcher,
+        )
+    request: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "api_key": api_key,
+        "system_message": system_message,
+        "temperature": temp,
+        "top_p": top_p,
+        "top_k": top_k,
+        "min_p": min_p,
+        "max_tokens": max_tokens,
+        "seed": seed,
+        "stop": stop,
+        "response_format": response_format,
+        "n": n,
+        "user": user_identifier,
+        "logit_bias": logit_bias,
+        "presence_penalty": presence_penalty,
+        "frequency_penalty": frequency_penalty,
+        "logprobs": logprobs,
+        "top_logprobs": top_logprobs,
+        "tools": tools,
+        "tool_choice": tool_choice,
+        "custom_prompt_arg": custom_prompt_input,
+        "app_config": app_config,
+        "http_client_factory": http_client_factory,
+        "http_fetcher": http_fetcher,
+    }
+    if streaming is not None:
+        request["stream"] = bool(streaming)
+    return adapter.stream(request) if streaming else adapter.chat(request)
+
+
+def vllm_chat_handler(
+    input_data: List[Dict[str, Any]],
+    api_key: Optional[str] = None,
+    custom_prompt_input: Optional[str] = None,
+    temp: Optional[float] = None,
+    temperature: Optional[float] = None,
+    system_prompt: Optional[str] = None,
+    streaming: Optional[bool] = None,
+    stream: Optional[bool] = None,
+    model: Optional[str] = None,
+    top_k: Optional[int] = None,
+    top_p: Optional[float] = None,
+    min_p: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    seed: Optional[int] = None,
+    stop: Optional[Union[str, List[str]]] = None,
+    response_format: Optional[Dict[str, str]] = None,
+    n: Optional[int] = None,
+    logit_bias: Optional[Dict[str, float]] = None,
+    presence_penalty: Optional[float] = None,
+    frequency_penalty: Optional[float] = None,
+    logprobs: Optional[bool] = None,
+    user_identifier: Optional[str] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    top_logprobs: Optional[int] = None,
+    vllm_api_url: Optional[str] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+    http_client_factory: Optional[Any] = None,
+    http_fetcher: Optional[Any] = None,
+):
+    if temperature is not None and temp is None:
+        temp = temperature
+    if stream is not None:
+        streaming = stream
+    use_adapter = _flag_enabled("LLM_ADAPTERS_VLLM", "LLM_ADAPTERS_ENABLED")
+    if not use_adapter:
+        return _legacy_chat_with_vllm(
+            input_data=input_data,
+            api_key=api_key,
+            custom_prompt_input=custom_prompt_input,
+            temp=temp,
+            temperature=temperature,
+            system_prompt=system_prompt,
+            streaming=streaming,
+            stream=stream,
+            model=model,
+            top_k=top_k,
+            top_p=top_p,
+            min_p=min_p,
+            max_tokens=max_tokens,
+            seed=seed,
+            stop=stop,
+            response_format=response_format,
+            n=n,
+            logit_bias=logit_bias,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            logprobs=logprobs,
+            user_identifier=user_identifier,
+            tools=tools,
+            tool_choice=tool_choice,
+            top_logprobs=top_logprobs,
+            vllm_api_url=vllm_api_url,
+            app_config=app_config,
+            http_client_factory=http_client_factory,
+            http_fetcher=http_fetcher,
+        )
+    registry = get_registry()
+    adapter = registry.get_adapter("vllm")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.legacy_adapters import VLLMAdapter
+
+        registry.register_adapter("vllm", VLLMAdapter)
+        adapter = registry.get_adapter("vllm")
+    if adapter is None:
+        return _legacy_chat_with_vllm(
+            input_data=input_data,
+            api_key=api_key,
+            custom_prompt_input=custom_prompt_input,
+            temp=temp,
+            temperature=temperature,
+            system_prompt=system_prompt,
+            streaming=streaming,
+            stream=stream,
+            model=model,
+            top_k=top_k,
+            top_p=top_p,
+            min_p=min_p,
+            max_tokens=max_tokens,
+            seed=seed,
+            stop=stop,
+            response_format=response_format,
+            n=n,
+            logit_bias=logit_bias,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            logprobs=logprobs,
+            user_identifier=user_identifier,
+            tools=tools,
+            tool_choice=tool_choice,
+            top_logprobs=top_logprobs,
+            vllm_api_url=vllm_api_url,
+            app_config=app_config,
+            http_client_factory=http_client_factory,
+            http_fetcher=http_fetcher,
+        )
+    request: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "api_key": api_key,
+        "system_message": system_prompt,
+        "temperature": temp,
+        "top_p": top_p,
+        "top_k": top_k,
+        "min_p": min_p,
+        "max_tokens": max_tokens,
+        "seed": seed,
+        "stop": stop,
+        "response_format": response_format,
+        "n": n,
+        "logit_bias": logit_bias,
+        "presence_penalty": presence_penalty,
+        "frequency_penalty": frequency_penalty,
+        "logprobs": logprobs,
+        "top_logprobs": top_logprobs,
+        "user": user_identifier,
+        "tools": tools,
+        "tool_choice": tool_choice,
+        "custom_prompt_arg": custom_prompt_input,
+        "app_config": app_config,
+        "http_client_factory": http_client_factory,
+        "http_fetcher": http_fetcher,
+    }
+    if streaming is not None:
+        request["stream"] = bool(streaming)
+    return adapter.stream(request) if streaming else adapter.chat(request)
+
+
+def local_llm_chat_handler(
+    input_data: List[Dict[str, Any]],
+    temp: Optional[float] = None,
+    temperature: Optional[float] = None,
+    system_message: Optional[str] = None,
+    streaming: Optional[bool] = None,
+    stream: Optional[bool] = None,
+    model: Optional[str] = None,
+    top_k: Optional[int] = None,
+    top_p: Optional[float] = None,
+    min_p: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    seed: Optional[int] = None,
+    stop: Optional[Union[str, List[str]]] = None,
+    custom_prompt_arg: Optional[str] = None,
+    response_format: Optional[Dict[str, str]] = None,
+    n: Optional[int] = None,
+    user_identifier: Optional[str] = None,
+    logit_bias: Optional[Dict[str, float]] = None,
+    presence_penalty: Optional[float] = None,
+    frequency_penalty: Optional[float] = None,
+    logprobs: Optional[bool] = None,
+    top_logprobs: Optional[int] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+    http_client_factory: Optional[Any] = None,
+    http_fetcher: Optional[Any] = None,
+):
+    if temperature is not None and temp is None:
+        temp = temperature
+    if stream is not None:
+        streaming = stream
+    use_adapter = _flag_enabled("LLM_ADAPTERS_LOCAL_LLM", "LLM_ADAPTERS_ENABLED")
+    if not use_adapter:
+        return _legacy_chat_with_local_llm(
+            input_data=input_data,
+            temp=temp,
+            temperature=temperature,
+            system_message=system_message,
+            streaming=streaming,
+            stream=stream,
+            model=model,
+            top_k=top_k,
+            top_p=top_p,
+            min_p=min_p,
+            max_tokens=max_tokens,
+            seed=seed,
+            stop=stop,
+            custom_prompt_arg=custom_prompt_arg,
+            response_format=response_format,
+            n=n,
+            user_identifier=user_identifier,
+            logit_bias=logit_bias,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            logprobs=logprobs,
+            top_logprobs=top_logprobs,
+            tools=tools,
+            tool_choice=tool_choice,
+            app_config=app_config,
+            http_client_factory=http_client_factory,
+            http_fetcher=http_fetcher,
+        )
+    registry = get_registry()
+    adapter = registry.get_adapter("local-llm")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.legacy_adapters import LocalLLMAdapter
+
+        registry.register_adapter("local-llm", LocalLLMAdapter)
+        adapter = registry.get_adapter("local-llm")
+    if adapter is None:
+        return _legacy_chat_with_local_llm(
+            input_data=input_data,
+            temp=temp,
+            temperature=temperature,
+            system_message=system_message,
+            streaming=streaming,
+            stream=stream,
+            model=model,
+            top_k=top_k,
+            top_p=top_p,
+            min_p=min_p,
+            max_tokens=max_tokens,
+            seed=seed,
+            stop=stop,
+            custom_prompt_arg=custom_prompt_arg,
+            response_format=response_format,
+            n=n,
+            user_identifier=user_identifier,
+            logit_bias=logit_bias,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            logprobs=logprobs,
+            top_logprobs=top_logprobs,
+            tools=tools,
+            tool_choice=tool_choice,
+            app_config=app_config,
+            http_client_factory=http_client_factory,
+            http_fetcher=http_fetcher,
+        )
+    request: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "system_message": system_message,
+        "temperature": temp,
+        "top_p": top_p,
+        "top_k": top_k,
+        "min_p": min_p,
+        "max_tokens": max_tokens,
+        "seed": seed,
+        "stop": stop,
+        "response_format": response_format,
+        "n": n,
+        "user": user_identifier,
+        "logit_bias": logit_bias,
+        "presence_penalty": presence_penalty,
+        "frequency_penalty": frequency_penalty,
+        "logprobs": logprobs,
+        "top_logprobs": top_logprobs,
+        "tools": tools,
+        "tool_choice": tool_choice,
+        "custom_prompt_arg": custom_prompt_arg,
+        "app_config": app_config,
+        "http_client_factory": http_client_factory,
+        "http_fetcher": http_fetcher,
+    }
+    if streaming is not None:
+        request["stream"] = bool(streaming)
+    return adapter.stream(request) if streaming else adapter.chat(request)
+
+
+def ollama_chat_handler(
+    input_data: List[Dict[str, Any]],
+    api_key: Optional[str] = None,
+    custom_prompt: Optional[str] = None,
+    temp: Optional[float] = None,
+    temperature: Optional[float] = None,
+    system_message: Optional[str] = None,
+    system: Optional[str] = None,
+    model: Optional[str] = None,
+    streaming: Optional[bool] = None,
+    stream: Optional[bool] = None,
+    top_p: Optional[float] = None,
+    top_k: Optional[int] = None,
+    num_predict: Optional[int] = None,
+    max_tokens: Optional[int] = None,
+    seed: Optional[int] = None,
+    stop: Optional[Union[str, List[str]]] = None,
+    format_str: Optional[Union[str, Dict[str, Any]]] = None,
+    format: Optional[str] = None,
+    presence_penalty: Optional[float] = None,
+    frequency_penalty: Optional[float] = None,
+    api_url: Optional[str] = None,
+    user_identifier: Optional[str] = None,
+    logprobs: Optional[bool] = None,
+    top_logprobs: Optional[int] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+    http_client_factory: Optional[Any] = None,
+    http_fetcher: Optional[Any] = None,
+):
+    if temperature is not None and temp is None:
+        temp = temperature
+    if stream is not None:
+        streaming = stream
+    if system_message is None and system is not None:
+        system_message = system
+    if max_tokens is not None and num_predict is None:
+        num_predict = max_tokens
+    use_adapter = _flag_enabled("LLM_ADAPTERS_OLLAMA", "LLM_ADAPTERS_ENABLED")
+    if not use_adapter:
+        return _legacy_chat_with_ollama(
+            input_data=input_data,
+            api_key=api_key,
+            custom_prompt=custom_prompt,
+            temp=temp,
+            temperature=temperature,
+            system_message=system_message,
+            system=system,
+            model=model,
+            streaming=streaming,
+            stream=stream,
+            top_p=top_p,
+            top_k=top_k,
+            num_predict=num_predict,
+            max_tokens=max_tokens,
+            seed=seed,
+            stop=stop,
+            format_str=format_str,
+            format=format,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            api_url=api_url,
+            user_identifier=user_identifier,
+            logprobs=logprobs,
+            top_logprobs=top_logprobs,
+            tools=tools,
+            tool_choice=tool_choice,
+            app_config=app_config,
+            http_client_factory=http_client_factory,
+            http_fetcher=http_fetcher,
+        )
+    registry = get_registry()
+    adapter = registry.get_adapter("ollama")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.legacy_adapters import OllamaAdapter
+
+        registry.register_adapter("ollama", OllamaAdapter)
+        adapter = registry.get_adapter("ollama")
+    if adapter is None:
+        return _legacy_chat_with_ollama(
+            input_data=input_data,
+            api_key=api_key,
+            custom_prompt=custom_prompt,
+            temp=temp,
+            temperature=temperature,
+            system_message=system_message,
+            system=system,
+            model=model,
+            streaming=streaming,
+            stream=stream,
+            top_p=top_p,
+            top_k=top_k,
+            num_predict=num_predict,
+            max_tokens=max_tokens,
+            seed=seed,
+            stop=stop,
+            format_str=format_str,
+            format=format,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            api_url=api_url,
+            user_identifier=user_identifier,
+            logprobs=logprobs,
+            top_logprobs=top_logprobs,
+            tools=tools,
+            tool_choice=tool_choice,
+            app_config=app_config,
+            http_client_factory=http_client_factory,
+            http_fetcher=http_fetcher,
+        )
+    response_format = format_str if format_str is not None else format
+    request: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "api_key": api_key,
+        "system_message": system_message,
+        "temperature": temp,
+        "top_p": top_p,
+        "top_k": top_k,
+        "max_tokens": num_predict,
+        "seed": seed,
+        "stop": stop,
+        "response_format": response_format,
+        "presence_penalty": presence_penalty,
+        "frequency_penalty": frequency_penalty,
+        "user": user_identifier,
+        "logprobs": logprobs,
+        "top_logprobs": top_logprobs,
+        "tools": tools,
+        "tool_choice": tool_choice,
+        "custom_prompt_arg": custom_prompt,
+        "app_config": app_config,
+        "http_client_factory": http_client_factory,
+        "http_fetcher": http_fetcher,
+    }
+    if streaming is not None:
+        request["stream"] = bool(streaming)
+    return adapter.stream(request) if streaming else adapter.chat(request)
+
+
+def aphrodite_chat_handler(
+    input_data: List[Dict[str, Any]],
+    api_key: Optional[str] = None,
+    custom_prompt: Optional[str] = None,
+    temp: Optional[float] = None,
+    temperature: Optional[float] = None,
+    system_message: Optional[str] = None,
+    streaming: Optional[bool] = None,
+    stream: Optional[bool] = None,
+    model: Optional[str] = None,
+    top_k: Optional[int] = None,
+    top_p: Optional[float] = None,
+    min_p: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    seed: Optional[int] = None,
+    stop: Optional[Union[str, List[str]]] = None,
+    response_format: Optional[Dict[str, str]] = None,
+    n: Optional[int] = None,
+    logit_bias: Optional[Dict[str, float]] = None,
+    presence_penalty: Optional[float] = None,
+    frequency_penalty: Optional[float] = None,
+    logprobs: Optional[bool] = None,
+    user_identifier: Optional[str] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    top_logprobs: Optional[int] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+    http_client_factory: Optional[Any] = None,
+    http_fetcher: Optional[Any] = None,
+):
+    if temperature is not None and temp is None:
+        temp = temperature
+    if stream is not None:
+        streaming = stream
+    use_adapter = _flag_enabled("LLM_ADAPTERS_APHRODITE", "LLM_ADAPTERS_ENABLED")
+    if not use_adapter:
+        return _legacy_chat_with_aphrodite(
+            input_data=input_data,
+            api_key=api_key,
+            custom_prompt=custom_prompt,
+            temp=temp,
+            temperature=temperature,
+            system_message=system_message,
+            streaming=streaming,
+            stream=stream,
+            model=model,
+            top_k=top_k,
+            top_p=top_p,
+            min_p=min_p,
+            max_tokens=max_tokens,
+            seed=seed,
+            stop=stop,
+            response_format=response_format,
+            n=n,
+            logit_bias=logit_bias,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            logprobs=logprobs,
+            user_identifier=user_identifier,
+            tools=tools,
+            tool_choice=tool_choice,
+            top_logprobs=top_logprobs,
+            app_config=app_config,
+            http_client_factory=http_client_factory,
+            http_fetcher=http_fetcher,
+        )
+    registry = get_registry()
+    adapter = registry.get_adapter("aphrodite")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.legacy_adapters import AphroditeAdapter
+
+        registry.register_adapter("aphrodite", AphroditeAdapter)
+        adapter = registry.get_adapter("aphrodite")
+    if adapter is None:
+        return _legacy_chat_with_aphrodite(
+            input_data=input_data,
+            api_key=api_key,
+            custom_prompt=custom_prompt,
+            temp=temp,
+            temperature=temperature,
+            system_message=system_message,
+            streaming=streaming,
+            stream=stream,
+            model=model,
+            top_k=top_k,
+            top_p=top_p,
+            min_p=min_p,
+            max_tokens=max_tokens,
+            seed=seed,
+            stop=stop,
+            response_format=response_format,
+            n=n,
+            logit_bias=logit_bias,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            logprobs=logprobs,
+            user_identifier=user_identifier,
+            tools=tools,
+            tool_choice=tool_choice,
+            top_logprobs=top_logprobs,
+            app_config=app_config,
+            http_client_factory=http_client_factory,
+            http_fetcher=http_fetcher,
+        )
+    request: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "api_key": api_key,
+        "system_message": system_message,
+        "temperature": temp,
+        "top_p": top_p,
+        "top_k": top_k,
+        "min_p": min_p,
+        "max_tokens": max_tokens,
+        "seed": seed,
+        "stop": stop,
+        "response_format": response_format,
+        "n": n,
+        "logit_bias": logit_bias,
+        "presence_penalty": presence_penalty,
+        "frequency_penalty": frequency_penalty,
+        "logprobs": logprobs,
+        "top_logprobs": top_logprobs,
+        "user": user_identifier,
+        "tools": tools,
+        "tool_choice": tool_choice,
+        "custom_prompt_arg": custom_prompt,
+        "app_config": app_config,
+        "http_client_factory": http_client_factory,
+        "http_fetcher": http_fetcher,
     }
     if streaming is not None:
         request["stream"] = bool(streaming)
@@ -706,7 +1904,7 @@ async def openai_chat_handler_async(
     # Honor explicit test monkeypatching of legacy chat_with_openai (only when actually patched to a test helper),
     # otherwise prefer the adapter path. Avoid triggering just because we're under pytest.
     try:
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy_mod
+        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy_mod
         _patched = getattr(_legacy_mod, "chat_with_openai", None)
         if callable(_patched):
             _modname = getattr(_patched, "__module__", "") or ""
@@ -1088,11 +2286,11 @@ async def qwen_chat_handler_async(
     app_config: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ):
-    from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import legacy_chat_with_qwen as _legacy_qwen
+    from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import legacy_chat_with_qwen as _legacy_qwen
     # Honor monkeypatched legacy callable only when the legacy function itself
     # is patched (module/name indicates tests), not merely because tests run.
     try:
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy_mod
+        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy_mod
         _patched = getattr(_legacy_mod, "chat_with_qwen", None)
         if callable(_patched):
             _modname = getattr(_patched, "__module__", "") or ""
@@ -1298,7 +2496,7 @@ async def deepseek_chat_handler_async(
     # Honor monkeypatched legacy callable only when the legacy function itself
     # is patched (module/name indicates tests), not merely because tests run.
     try:
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy_mod
+        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy_mod
         _patched = getattr(_legacy_mod, "chat_with_deepseek", None)
         if callable(_patched):
             _modname = getattr(_patched, "__module__", "") or ""
@@ -1365,7 +2563,7 @@ async def deepseek_chat_handler_async(
                     )
     except Exception:
         pass
-    from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import legacy_chat_with_deepseek as _legacy_deep
+    from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import legacy_chat_with_deepseek as _legacy_deep
     use_adapter = _flag_enabled("LLM_ADAPTERS_DEEPSEEK", "LLM_ADAPTERS_ENABLED")
     if not use_adapter:
         return _legacy_deep(
@@ -1478,10 +2676,10 @@ async def huggingface_chat_handler_async(
     app_config: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ):
-    from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import legacy_chat_with_huggingface as _legacy_hf
+    from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import legacy_chat_with_huggingface as _legacy_hf
     # Honor monkeypatched legacy callable in tests even if adapters are enabled
     try:
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy_mod
+        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy_mod
         _patched = getattr(_legacy_mod, "chat_with_huggingface", None)
         if callable(_patched):
             _modname = getattr(_patched, "__module__", "") or ""
@@ -1636,7 +2834,7 @@ async def custom_openai_chat_handler_async(
 ):
     # Honor monkeypatched legacy callable in tests
     try:
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls_Local as _legacy_local_mod
+        from tldw_Server_API.app.core.LLM_Calls import legacy_local_calls as _legacy_local_mod
         _patched = getattr(_legacy_local_mod, "chat_with_custom_openai", None)
         if callable(_patched):
             _modname = getattr(_patched, "__module__", "") or ""
@@ -1704,7 +2902,7 @@ async def custom_openai_chat_handler_async(
                     )
     except Exception:
         pass
-    from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local import chat_with_custom_openai as _legacy_custom
+    from tldw_Server_API.app.core.LLM_Calls.legacy_local_calls import chat_with_custom_openai as _legacy_custom
     use_adapter = _flag_enabled("LLM_ADAPTERS_CUSTOM_OPENAI", "LLM_ADAPTERS_ENABLED")
     if not use_adapter:
         return _legacy_custom(
@@ -1798,7 +2996,7 @@ async def custom_openai_2_chat_handler_async(
     # Map by tweaking app_config section and adapter name inside a small wrapper
     use_adapter = _flag_enabled("LLM_ADAPTERS_CUSTOM_OPENAI", "LLM_ADAPTERS_ENABLED")
     if not use_adapter:
-        from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local import chat_with_custom_openai_2 as _legacy_custom2
+        from tldw_Server_API.app.core.LLM_Calls.legacy_local_calls import chat_with_custom_openai_2 as _legacy_custom2
         return _legacy_custom2(**kwargs)
     registry = get_registry()
     adapter = registry.get_adapter("custom-openai-api-2")
@@ -1807,7 +3005,7 @@ async def custom_openai_2_chat_handler_async(
         registry.register_adapter("custom-openai-api-2", CustomOpenAIAdapter2)
         adapter = registry.get_adapter("custom-openai-api-2")
     if adapter is None:
-        from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local import chat_with_custom_openai_2 as _legacy_custom2
+        from tldw_Server_API.app.core.LLM_Calls.legacy_local_calls import chat_with_custom_openai_2 as _legacy_custom2
         return _legacy_custom2(**kwargs)
     # Build request from kwargs similar to other shims
     request: Dict[str, Any] = {
@@ -2100,7 +3298,7 @@ def groq_chat_handler(
 ):
     # Honor patched legacy in tests
     try:
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy_mod
+        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy_mod
         _patched = getattr(_legacy_mod, "chat_with_groq", None)
         if callable(_patched):
             _modname = getattr(_patched, "__module__", "") or ""
@@ -2252,7 +3450,7 @@ def openrouter_chat_handler(
 ):
     # Honor patched legacy in tests
     try:
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy_mod
+        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy_mod
         _patched = getattr(_legacy_mod, "chat_with_openrouter", None)
         if callable(_patched):
             _modname = getattr(_patched, "__module__", "") or ""
@@ -2464,7 +3662,7 @@ def google_chat_handler(
 ):
     # Honor patched legacy in tests
     try:
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy_mod
+        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy_mod
         _patched = getattr(_legacy_mod, "chat_with_google", None)
         if callable(_patched):
             _modname = getattr(_patched, "__module__", "") or ""
@@ -2607,7 +3805,7 @@ def mistral_chat_handler(
 ):
     # Honor patched legacy in tests
     try:
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy_mod
+        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy_mod
         _patched = getattr(_legacy_mod, "chat_with_mistral", None)
         if callable(_patched):
             _modname = getattr(_patched, "__module__", "") or ""

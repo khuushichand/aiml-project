@@ -36,7 +36,7 @@ Consolidate all LLM chat and summarization flows onto the adapter registry while
 - As a tester, I can stub a provider adapter without having to patch `requests.Session`.
 
 ## Problem Statement
-LLM calls are fragmented across legacy modules (`LLM_API_Calls.py`, `LLM_API_Calls_Local.py`), summarization helpers, shims, and provider-specific dispatch tables. This duplicates config parsing, error handling, and transport behaviors, while increasing the risk of extension-field regressions. The adapter registry exists but is not the exclusive entry point.
+LLM calls are fragmented across legacy modules (`legacy_chat_calls.py`, `legacy_local_calls.py`), summarization helpers, shims, and provider-specific dispatch tables. This duplicates config parsing, error handling, and transport behaviors, while increasing the risk of extension-field regressions. The adapter registry exists but is not the exclusive entry point.
 
 ## Proposed Architecture
 ### Core Principles
@@ -155,8 +155,8 @@ Base URL overrides are allowed only for trusted callers (internal services/admin
 
 ## In-Scope Migration Targets
 Primary modules to migrate and retire after parity:
-- `tldw_Server_API/app/core/LLM_Calls/LLM_API_Calls.py`
-- `tldw_Server_API/app/core/LLM_Calls/LLM_API_Calls_Local.py`
+- `tldw_Server_API/app/core/LLM_Calls/legacy_chat_calls.py`
+- `tldw_Server_API/app/core/LLM_Calls/legacy_local_calls.py`
 - `tldw_Server_API/app/core/LLM_Calls/adapter_shims.py`
 - `tldw_Server_API/app/core/Chat/provider_config.py`
 - `tldw_Server_API/app/core/LLM_Calls/Summarization_General_Lib.py`
@@ -200,7 +200,7 @@ Call sites to converge on the registry:
 - Migrate remaining call sites to registry directly.
 
 ### Phase 4: Delete Legacy Modules
-- Remove `LLM_API_Calls*` and legacy param maps; keep `adapter_shims` until the deprecation window completes.
+- Remove `legacy_chat_calls*` and legacy param maps; keep `adapter_shims` until the deprecation window completes.
 - Update docs and tests to reference the registry interface.
 
 ## Success Criteria

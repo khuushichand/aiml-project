@@ -935,6 +935,24 @@ def _require_byok_enabled() -> None:
         )
 
 
+def _normalize_credential_fields(
+    provider_norm: str,
+    fields: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    if fields is None:
+        return None
+    credential_fields = validate_credential_fields(
+        provider_norm,
+        fields,
+        allow_base_url=True,
+    )
+    if "base_url" in credential_fields:
+        credential_fields["base_url"] = validate_base_url_override(
+            credential_fields["base_url"]
+        )
+    return credential_fields
+
+
 async def _touch_shared_last_used_if_match(
     repo: AuthnzOrgProviderSecretsRepo,
     *,
@@ -1039,15 +1057,7 @@ async def admin_upsert_shared_byok_key(payload: SharedProviderKeyUpsertRequest) 
         raise HTTPException(status_code=400, detail="api_key is required")
 
     try:
-        credential_fields = validate_credential_fields(
-            provider_norm,
-            payload.credential_fields,
-            allow_base_url=True,
-        )
-        if "base_url" in credential_fields:
-            credential_fields["base_url"] = validate_base_url_override(
-                credential_fields["base_url"]
-            )
+        credential_fields = _normalize_credential_fields(provider_norm, payload.credential_fields)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1129,15 +1139,10 @@ async def admin_test_shared_byok_key(payload: SharedProviderKeyTestRequest) -> S
         raise HTTPException(status_code=404, detail="Key not found")
 
     try:
-        credential_fields = validate_credential_fields(
+        credential_fields = _normalize_credential_fields(
             provider_norm,
             stored_payload.get("credential_fields") or {},
-            allow_base_url=True,
         )
-        if "base_url" in credential_fields:
-            credential_fields["base_url"] = validate_base_url_override(
-                credential_fields["base_url"]
-            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1344,15 +1349,7 @@ async def admin_upsert_llm_provider_override(
     credential_fields: Optional[Dict[str, Any]] = None
     if payload.credential_fields is not None:
         try:
-            credential_fields = validate_credential_fields(
-                provider_norm,
-                payload.credential_fields,
-                allow_base_url=True,
-            )
-            if "base_url" in credential_fields:
-                credential_fields["base_url"] = validate_base_url_override(
-                    credential_fields["base_url"]
-                )
+            credential_fields = _normalize_credential_fields(provider_norm, payload.credential_fields)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1468,15 +1465,7 @@ async def admin_test_llm_provider(payload: LLMProviderTestRequest) -> LLMProvide
 
     if credential_fields is not None:
         try:
-            credential_fields = validate_credential_fields(
-                provider_norm,
-                credential_fields,
-                allow_base_url=True,
-            )
-            if "base_url" in credential_fields:
-                credential_fields["base_url"] = validate_base_url_override(
-                    credential_fields["base_url"]
-                )
+            credential_fields = _normalize_credential_fields(provider_norm, credential_fields)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

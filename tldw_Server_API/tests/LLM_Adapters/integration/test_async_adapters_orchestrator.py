@@ -25,7 +25,7 @@ async def test_chat_api_call_async_non_streaming(monkeypatch):
     from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call_async
 
     # Patch legacy sync path used by adapter to avoid network
-    import tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls as llm_calls
+    import tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls as llm_calls
 
     def _fake_openai(**kwargs):
         assert kwargs.get("streaming") in (False, None)
@@ -53,7 +53,7 @@ async def test_chat_api_call_async_non_streaming(monkeypatch):
 async def test_chat_api_call_async_streaming(monkeypatch):
     from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call_async
 
-    import tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls as llm_calls
+    import tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls as llm_calls
 
     def _fake_stream(**kwargs) -> Iterator[str]:
         assert kwargs.get("streaming") is True

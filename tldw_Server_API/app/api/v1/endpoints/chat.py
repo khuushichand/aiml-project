@@ -81,10 +81,6 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     API_KEYS as SCHEMAS_API_KEYS,
     get_api_keys,
 )
-from tldw_Server_API.app.core.Chat.chat_orchestrator import (
-    chat_api_call as perform_chat_api_call,
-)
-_ORIGINAL_PERFORM_CHAT_API_CALL = perform_chat_api_call
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
@@ -118,6 +114,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_validators import (
 )
 from tldw_Server_API.app.core.Chat.chat_metrics import get_chat_metrics
 from tldw_Server_API.app.core.Chat.chat_service import (
+    perform_chat_api_call,
     resolve_provider_and_model,
     resolve_provider_api_key,
     build_call_params_from_request,
@@ -129,6 +126,7 @@ from tldw_Server_API.app.core.Chat.chat_service import (
     execute_non_stream_call,
     queue_is_active,
 )
+_ORIGINAL_PERFORM_CHAT_API_CALL = perform_chat_api_call
 from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.core.Chat.prompt_template_manager import (
     load_template,
@@ -1836,7 +1834,7 @@ async def create_chat_completion(
 
             # Centralized provider capabilities
             try:
-                from tldw_Server_API.app.core.Chat.provider_config import PROVIDER_REQUIRES_KEY
+                from tldw_Server_API.app.core.LLM_Calls.provider_metadata import PROVIDER_REQUIRES_KEY
             except Exception:
                 PROVIDER_REQUIRES_KEY = {}
             # Allow explicit mock forcing in tests even if provider key is absent

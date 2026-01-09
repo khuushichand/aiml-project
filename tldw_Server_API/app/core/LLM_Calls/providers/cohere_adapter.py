@@ -8,7 +8,7 @@ from loguru import logger
 
 from .base import ChatProvider
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
-from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_cohere
+from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import chat_with_cohere
 
 
 class CohereAdapter(ChatProvider):

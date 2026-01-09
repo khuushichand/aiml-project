@@ -150,7 +150,7 @@ def pytest_configure(config):
 # =====================================================================
 
 @pytest.fixture(autouse=True)
-def _reset_chat_rate_limiter_between_tests(monkeypatch):
+def _reset_chat_rate_limiter_between_tests(monkeypatch, reset_app_overrides):
     """Reset chat rate limiter state before each test to avoid cross-test 429s.
 
     Ensures deterministic behavior for tests that expect 200 responses by
@@ -159,6 +159,7 @@ def _reset_chat_rate_limiter_between_tests(monkeypatch):
     try:
         # Force deterministic TEST_MODE rate limits for this test module.
         monkeypatch.setenv("TEST_MODE", "true")
+        monkeypatch.setenv("RG_ENABLED", "0")
         monkeypatch.setenv("TEST_CHAT_PER_USER_RPM", "2")
         monkeypatch.setenv("TEST_CHAT_PER_CONVERSATION_RPM", "2")
         monkeypatch.setenv("TEST_CHAT_GLOBAL_RPM", "10")

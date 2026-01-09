@@ -534,12 +534,12 @@ def validate_provider_configuration(
     Returns:
         Tuple of (is_valid, error_message)
     """
-    providers_requiring_keys = [
-        "openai", "anthropic", "cohere", "groq", "openrouter",
-        "deepseek", "mistral", "google", "huggingface"
-    ]
+    try:
+        from tldw_Server_API.app.core.LLM_Calls.provider_metadata import PROVIDER_REQUIRES_KEY
+    except Exception:
+        PROVIDER_REQUIRES_KEY = {}
 
-    if provider in providers_requiring_keys:
+    if PROVIDER_REQUIRES_KEY.get(provider, False):
         api_key = api_keys.get(provider)
         if not api_key:
             return False, f"API key for provider '{provider}' is missing or not configured."

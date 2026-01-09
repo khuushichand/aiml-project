@@ -1,6 +1,6 @@
 """
-LLM_API_Calls
-General LLM API calling library for commercial providers.
+legacy_chat_calls
+Legacy commercial-provider LLM calling utilities retained for compatibility.
 
 This module implements provider-specific chat/embeddings calls while returning
 OpenAI-compatible request/response formats whenever feasible. Streaming
@@ -15,7 +15,7 @@ Notes
 - Use environment variables to override base URLs for testing/mocking.
 """
 #########################################
-# Centralized LLM API calling utilities (monolith, in gradual deprecation).
+# Legacy LLM API calling utilities (monolith, in gradual deprecation).
 # Public chat_* entrypoints for key providers now delegate to adapter-backed
 # shims; provider-specific legacy implementations are retained under legacy_*
 # until full parity is proven and branches can be removed safely.

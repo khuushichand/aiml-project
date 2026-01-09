@@ -9,11 +9,11 @@ including dispatch tables for handler functions and parameter mappings.
 from typing import Dict, Any, Callable
 #
 # Local Imports - Import the actual handler functions
-from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import (
+from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import (
     chat_with_cohere,
     chat_with_groq, chat_with_openrouter, chat_with_deepseek,
     chat_with_mistral, chat_with_huggingface, chat_with_google,
-    chat_with_qwen, chat_with_bedrock, chat_with_moonshot, chat_with_zai,
+    chat_with_qwen, chat_with_bedrock,
 )
 from tldw_Server_API.app.core.LLM_Calls.adapter_shims import (
     openai_chat_handler,
@@ -42,12 +42,26 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_shims import (
     google_chat_handler_async,
     mistral_chat_handler_async,
     mlx_chat_handler_async,
+    moonshot_chat_handler,
+    zai_chat_handler,
+    llama_cpp_chat_handler,
+    kobold_chat_handler,
+    ooba_chat_handler,
+    tabbyapi_chat_handler,
+    vllm_chat_handler,
+    local_llm_chat_handler,
+    ollama_chat_handler,
+    aphrodite_chat_handler,
 )
-from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local import (
-    chat_with_aphrodite, chat_with_local_llm, chat_with_ollama,
-    chat_with_kobold, chat_with_llama, chat_with_oobabooga,
-    chat_with_tabbyapi, chat_with_vllm, chat_with_custom_openai,
-    chat_with_custom_openai_2
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import (
+    PROVIDER_CAPABILITIES,
+    PROVIDER_REQUIRES_KEY,
+)
+from tldw_Server_API.app.core.LLM_Calls.deprecation import log_legacy_once
+
+log_legacy_once(
+    "provider_config",
+    "provider_config is deprecated; use adapter registry and provider_metadata instead.",
 )
 #
 ####################################################################################################
@@ -68,16 +82,16 @@ API_CALL_HANDLERS: Dict[str, Callable] = {
     'mistral': mistral_chat_handler,
     'google': google_chat_handler,
     'huggingface': huggingface_chat_handler,
-    'moonshot': chat_with_moonshot,
-    'zai': chat_with_zai,
-    'llama.cpp': chat_with_llama,
-    'kobold': chat_with_kobold,
-    'ooba': chat_with_oobabooga,
-    'tabbyapi': chat_with_tabbyapi,
-    'vllm': chat_with_vllm,
-    'local-llm': chat_with_local_llm,
-    'ollama': chat_with_ollama,
-    'aphrodite': chat_with_aphrodite,
+    'moonshot': moonshot_chat_handler,
+    'zai': zai_chat_handler,
+    'llama.cpp': llama_cpp_chat_handler,
+    'kobold': kobold_chat_handler,
+    'ooba': ooba_chat_handler,
+    'tabbyapi': tabbyapi_chat_handler,
+    'vllm': vllm_chat_handler,
+    'local-llm': local_llm_chat_handler,
+    'ollama': ollama_chat_handler,
+    'aphrodite': aphrodite_chat_handler,
     'custom-openai-api': custom_openai_chat_handler,
     'custom-openai-api-2': custom_openai_2_chat_handler,
     'mlx': mlx_chat_handler,
@@ -673,180 +687,3 @@ def get_provider_params(provider: str) -> Dict[str, str]:
 #
 # End of provider_config.py
 ####################################################################################################
-# 3. Provider capability flags
-# Whether a provider requires an API key (True) or can operate without one (False)
-PROVIDER_REQUIRES_KEY: Dict[str, bool] = {
-    'openai': True,
-    'bedrock': True,
-    'anthropic': True,
-    'cohere': True,
-    'groq': True,
-    'qwen': True,
-    'openrouter': True,
-    'deepseek': True,
-    'mistral': True,
-    'google': True,
-    'huggingface': True,   # HF Inference API typically requires a key
-    'moonshot': True,
-    'zai': True,
-    'llama.cpp': False,
-    'kobold': False,
-    'ooba': False,
-    'tabbyapi': False,
-    'vllm': False,
-    'local-llm': False,
-    'ollama': False,
-    'aphrodite': False,
-    'mlx': False,
-    'custom-openai-api': True,
-    'custom-openai-api-2': True,
-}
-
-# 4. Provider capabilities (surface minimal, extend as needed)
-# Default timeouts are conservative; adjust per provider characteristics
-PROVIDER_CAPABILITIES: Dict[str, Dict[str, Any]] = {
-    'openai': {
-        'supports_streaming': True,
-        'supports_tools': True,
-        'default_timeout_seconds': 60,
-        'max_output_tokens_default': 4096,
-    },
-    'anthropic': {
-        'supports_streaming': True,
-        'supports_tools': True,
-        'default_timeout_seconds': 60,
-        'max_output_tokens_default': 8192,
-    },
-    'google': {
-        'supports_streaming': True,
-        'supports_tools': True,
-        'default_timeout_seconds': 90,
-        'max_output_tokens_default': None,
-    },
-    'mistral': {
-        'supports_streaming': True,
-        'supports_tools': True,
-        'default_timeout_seconds': 60,
-        'max_output_tokens_default': 8192,
-    },
-    'cohere': {
-        'supports_streaming': True,
-        'supports_tools': True,
-        'default_timeout_seconds': 60,
-        'max_output_tokens_default': 4096,
-    },
-    'groq': {
-        'supports_streaming': True,
-        'supports_tools': True,
-        'default_timeout_seconds': 60,
-        'max_output_tokens_default': 4096,
-    },
-    'openrouter': {
-        'supports_streaming': True,
-        'supports_tools': True,
-        'default_timeout_seconds': 90,
-        'max_output_tokens_default': 8192,
-    },
-    'qwen': {
-        'supports_streaming': True,
-        'supports_tools': True,
-        'default_timeout_seconds': 90,
-        'max_output_tokens_default': 8192,
-    },
-    'deepseek': {
-        'supports_streaming': True,
-        'supports_tools': True,
-        'default_timeout_seconds': 90,
-        'max_output_tokens_default': 8192,
-    },
-    'huggingface': {
-        'supports_streaming': True,
-        'supports_tools': False,
-        'default_timeout_seconds': 120,
-        'max_output_tokens_default': 2048,
-    },
-    'moonshot': {
-        'supports_streaming': True,
-        'supports_tools': True,
-        'default_timeout_seconds': 90,
-        'max_output_tokens_default': 8192,
-    },
-    'zai': {
-        'supports_streaming': True,
-        'supports_tools': True,
-        'default_timeout_seconds': 90,
-        'max_output_tokens_default': 8192,
-    },
-    'llama.cpp': {
-        'supports_streaming': True,
-        'supports_tools': True,
-        'default_timeout_seconds': 120,
-        'max_output_tokens_default': 2048,
-    },
-    'kobold': {
-        'supports_streaming': True,
-        'supports_tools': False,
-        'default_timeout_seconds': 120,
-        'max_output_tokens_default': 2048,
-    },
-    'ooba': {
-        'supports_streaming': True,
-        'supports_tools': False,
-        'default_timeout_seconds': 120,
-        'max_output_tokens_default': 2048,
-    },
-    'tabbyapi': {
-        'supports_streaming': True,
-        'supports_tools': False,
-        'default_timeout_seconds': 120,
-        'max_output_tokens_default': 2048,
-    },
-    'vllm': {
-        'supports_streaming': True,
-        'supports_tools': True,
-        'default_timeout_seconds': 120,
-        'max_output_tokens_default': 8192,
-    },
-    'local-llm': {
-        'supports_streaming': True,
-        'supports_tools': False,
-        'default_timeout_seconds': 120,
-        'max_output_tokens_default': 2048,
-    },
-    'ollama': {
-        'supports_streaming': True,
-        'supports_tools': True,
-        'default_timeout_seconds': 120,
-        'max_output_tokens_default': 2048,
-    },
-    'aphrodite': {
-        'supports_streaming': True,
-        'supports_tools': False,
-        'default_timeout_seconds': 120,
-        'max_output_tokens_default': 2048,
-    },
-    'mlx': {
-        'supports_streaming': True,
-        'supports_tools': False,
-        'default_timeout_seconds': 120,
-        'max_output_tokens_default': None,
-    },
-    'bedrock': {
-        'supports_streaming': True,
-        'supports_tools': True,
-        'default_timeout_seconds': 120,
-        'max_output_tokens_default': 8192,
-    },
-    'custom-openai-api': {
-        'supports_streaming': True,
-        'supports_tools': True,
-        'default_timeout_seconds': 60,
-        'max_output_tokens_default': 4096,
-    },
-    'custom-openai-api-2': {
-        'supports_streaming': True,
-        'supports_tools': True,
-        'default_timeout_seconds': 60,
-        'max_output_tokens_default': 4096,
-    },
-}

@@ -51,10 +51,10 @@ def test_local_like_adapters_coerce_numeric_types(provider_name, cfg_section, ur
         return DummyResponse({})
 
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local.load_settings",
+        "tldw_Server_API.app.core.LLM_Calls.legacy_local_calls.load_settings",
         return_value=fake_settings,
     ), patch(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local.httpx.Client"
+        "tldw_Server_API.app.core.LLM_Calls.legacy_local_calls.httpx.Client"
     ) as mock_client_cls:
         mock_client = MagicMock()
         mock_client.post.side_effect = fake_post
@@ -101,10 +101,10 @@ def test_kobold_coerces_numeric_types():
         return Dummy()
 
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local.load_settings",
+        "tldw_Server_API.app.core.LLM_Calls.legacy_local_calls.load_settings",
         return_value=fake_settings,
     ), patch(
-        "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Local._hc_fetch",
+        "tldw_Server_API.app.core.LLM_Calls.legacy_local_calls._hc_fetch",
         side_effect=fake_fetch,
     ):
         chat_api_call(

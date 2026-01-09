@@ -76,6 +76,11 @@ class _StubTTSService:
         yield b"stub-audio"
 
 
+class _NoAdapterRegistry:
+    def get_adapter(self, _name: str):
+        return None
+
+
 class _DummyActionModule(BaseModule):
     def __init__(self, config: ModuleConfig):
         super().__init__(config)
@@ -114,6 +119,9 @@ async def test_run_speech_chat_turn_happy_path(monkeypatch):
     # transcribe_audio is synchronous in the module; patch to simple function
     monkeypatch.setattr(
         speech_chat_service, "transcribe_audio", lambda *a, **k: "hello from audio"
+    )
+    monkeypatch.setattr(
+        speech_chat_service, "get_registry", lambda: _NoAdapterRegistry(), raising=True
     )
 
     # Stub character/conv helpers to avoid touching real DB schema
@@ -272,6 +280,9 @@ async def test_run_speech_chat_turn_invokes_action_when_enabled(monkeypatch):
         "transcribe_audio",
         lambda *_args, **_kwargs: "action transcript",
     )
+    monkeypatch.setattr(
+        speech_chat_service, "get_registry", lambda: _NoAdapterRegistry(), raising=True
+    )
 
     async def _fake_get_or_create_character_context(*_args, **_kwargs):
         return {"id": 1, "name": "Test Character", "system_prompt": "You are helpful."}, 1
@@ -351,6 +362,9 @@ async def test_run_speech_chat_turn_blocks_disallowed_action(monkeypatch):
         speech_chat_service,
         "transcribe_audio",
         lambda *_args, **_kwargs: "blocked transcript",
+    )
+    monkeypatch.setattr(
+        speech_chat_service, "get_registry", lambda: _NoAdapterRegistry(), raising=True
     )
 
     async def _fake_get_or_create_character_context(*_args, **_kwargs):

@@ -5,7 +5,9 @@ from typing import Any, Dict, Iterable, Optional, AsyncIterator, List
 from .base import ChatProvider
 
 import os
-from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
+import json
+from loguru import logger
+from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
 )
@@ -14,6 +16,8 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     is_done_line,
     sse_done,
     finalize_stream,
+    openai_delta_chunk,
+    sse_data,
 )
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 
@@ -22,14 +26,17 @@ http_client_factory = _hc_create_client
 
 
 def _prefer_httpx_in_tests() -> bool:
-    try:
-        import httpx  # type: ignore
-        cls = getattr(httpx, "Client", None)
-        mod = getattr(cls, "__module__", "") or ""
-        name = getattr(cls, "__name__", "") or ""
-        return ("tests" in mod) or name.startswith("_Fake")
-    except Exception:
+    return bool(os.getenv("PYTEST_CURRENT_TEST"))
+
+
+def _stream_debug_enabled(provider: str) -> bool:
+    value = (os.getenv("LLM_ADAPTERS_STREAM_DEBUG") or "").strip().lower()
+    if not value:
         return False
+    if value in {"1", "true", "yes", "on", "all"}:
+        return True
+    providers = {p.strip() for p in value.split(",") if p.strip()}
+    return provider.lower() in providers
 
 
 class GoogleAdapter(ChatProvider):
@@ -70,10 +77,17 @@ class GoogleAdapter(ChatProvider):
         # otherwise require explicit env flag for this provider.
         if os.getenv("PYTEST_CURRENT_TEST"):
             return True
-        if (os.getenv("LLM_ADAPTERS_ENABLED") or "").lower() in {"1", "true", "yes", "on"}:
+        enabled = (os.getenv("LLM_ADAPTERS_ENABLED") or "").strip().lower()
+        if enabled in {"0", "false", "no", "off"}:
+            return False
+        if enabled in {"1", "true", "yes", "on"}:
             return True
-        v = os.getenv("LLM_ADAPTERS_NATIVE_HTTP_GOOGLE")
-        return bool(v and v.lower() in {"1", "true", "yes", "on"})
+        v = (os.getenv("LLM_ADAPTERS_NATIVE_HTTP_GOOGLE") or "").strip().lower()
+        if v in {"0", "false", "no", "off"}:
+            return False
+        if v in {"1", "true", "yes", "on"}:
+            return True
+        return True
 
     def _base_url(self) -> str:
         return os.getenv("GOOGLE_GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
@@ -278,12 +292,56 @@ class GoogleAdapter(ChatProvider):
         except Exception:
             return data
 
+    @staticmethod
+    def _stream_event_deltas(event: Any) -> Iterable[str]:
+        if isinstance(event, list):
+            for item in event:
+                yield from GoogleAdapter._stream_event_deltas(item)
+            return
+        if not isinstance(event, dict):
+            return
+        cands = event.get("candidates") or []
+        tool_index = 0
+        for cand in cands:
+            content = (cand or {}).get("content") or {}
+            parts = content.get("parts") or []
+            for part in parts:
+                if not isinstance(part, dict):
+                    continue
+                if isinstance(part.get("text"), str):
+                    text = part.get("text") or ""
+                    if text:
+                        yield openai_delta_chunk(text)
+                elif isinstance(part.get("functionCall"), dict):
+                    fc = part.get("functionCall") or {}
+                    name = str(fc.get("name") or "")
+                    args = fc.get("args")
+                    try:
+                        arg_str = json.dumps(args if args is not None else {})
+                    except Exception:
+                        arg_str = "{}"
+                    yield sse_data({
+                        "choices": [{
+                            "index": 0,
+                            "delta": {
+                                "tool_calls": [{
+                                    "index": tool_index,
+                                    "id": f"call_{tool_index}",
+                                    "type": "function",
+                                    "function": {"name": name, "arguments": arg_str},
+                                }]
+                            },
+                        }]
+                    })
+                    tool_index += 1
+
     def normalize_error(self, exc: Exception):  # type: ignore[override]
-        try:
-            import httpx  # type: ignore
-        except Exception:  # pragma: no cover
-            httpx = None  # type: ignore
-        if httpx is not None and isinstance(exc, getattr(httpx, "HTTPStatusError", ())):
+        from tldw_Server_API.app.core.LLM_Calls.error_utils import (
+            get_http_status_from_exception,
+            get_http_error_text,
+            is_http_status_error,
+        )
+        if is_http_status_error(exc):
             from tldw_Server_API.app.core.Chat.Chat_Deps import (
                 ChatBadRequestError,
                 ChatAuthenticationError,
@@ -292,7 +350,7 @@ class GoogleAdapter(ChatProvider):
                 ChatAPIError,
             )
             resp = getattr(exc, "response", None)
-            status = getattr(resp, "status_code", None)
+            status = get_http_status_from_exception(exc)
             body = None
             try:
                 body = resp.json()
@@ -306,10 +364,7 @@ class GoogleAdapter(ChatProvider):
                 code = err.get("code")
                 detail = (f"{st} {msg}" if st else msg) or str(exc)
             else:
-                try:
-                    detail = resp.text if resp is not None else str(exc)
-                except Exception:
-                    detail = str(exc)
+                detail = get_http_error_text(exc)
             if status in (400, 404, 422):
                 return ChatBadRequestError(provider=self.name, message=str(detail))
             if status in (401, 403):
@@ -354,17 +409,21 @@ class GoogleAdapter(ChatProvider):
         if _prefer_httpx_in_tests() or os.getenv("PYTEST_CURRENT_TEST") or self._use_native_http():
             api_key = request.get("api_key")
             model = request.get("model")
-            url = f"{self._base_url()}/models/{model}:streamGenerateContent"
+            url = f"{self._base_url()}/models/{model}:streamGenerateContent?alt=sse"
             headers = self._headers(api_key)
             payload = self._build_payload(request)
             try:
                 with http_client_factory(timeout=timeout or 60.0) as client:
                     with client.stream("POST", url, headers=headers, json=payload) as resp:
                         resp.raise_for_status()
+                        debug_stream = _stream_debug_enabled(self.name)
                         seen_done = False
+                        buffer = ""
                         for raw in resp.iter_lines():
                             if not raw:
                                 continue
+                            if debug_stream:
+                                logger.debug(f"{self.name} stream raw: {raw!r}")
                             try:
                                 line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
                             except Exception:
@@ -374,6 +433,37 @@ class GoogleAdapter(ChatProvider):
                                     seen_done = True
                                     yield sse_done()
                                 continue
+                            stripped = line.strip()
+                            if stripped.startswith("data:"):
+                                payload_text = stripped[len("data:"):].strip()
+                                if payload_text.lower() == "[done]":
+                                    if not seen_done:
+                                        seen_done = True
+                                        yield sse_done()
+                                    continue
+                                try:
+                                    event = json.loads(payload_text)
+                                except Exception:
+                                    normalized = normalize_provider_line(line)
+                                    if normalized is not None:
+                                        yield normalized
+                                    continue
+                                for delta in self._stream_event_deltas(event):
+                                    yield delta
+                                continue
+                            if stripped and (stripped.startswith("{") or stripped.startswith("[")):
+                                buffer += stripped
+                                try:
+                                    event = json.loads(buffer)
+                                except Exception:
+                                    continue
+                                buffer = ""
+                                yielded = False
+                                for delta in self._stream_event_deltas(event):
+                                    yielded = True
+                                    yield delta
+                                if yielded:
+                                    continue
                             normalized = normalize_provider_line(line)
                             if normalized is not None:
                                 yield normalized

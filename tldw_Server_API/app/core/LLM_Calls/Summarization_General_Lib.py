@@ -8,10 +8,8 @@
 # Function List
 #
 # 1. extract_text_from_segments(segments: List[Dict]) -> str
-# 2. summarize_with_openai(api_key, file_path, custom_prompt_arg)
-# 3. summarize_with_anthropic(api_key, file_path, model, custom_prompt_arg, max_retries=3, retry_delay=5)
-# 4. summarize_with_cohere(api_key, file_path, model, custom_prompt_arg)
-# 5. summarize_with_groq(api_key, file_path, model, custom_prompt_arg)
+# 2. recursive_summarize_chunks(chunks: List[str], summarize_func: Callable[[str], str]) -> str
+# 3. analyze(...)
 #
 #
 ####################
@@ -19,39 +17,168 @@
 import inspect
 import json
 import os
-import time
 from typing import Optional, Union, Generator, Any, Dict, List, Callable
-#
-# 3rd-Party Imports
-# Removed legacy requests/HTTPAdapter/Retry usage; centralized http client is used elsewhere
-from tldw_Server_API.app.core.http_client import fetch_json, fetch, create_client, RetryPolicy
 #
 # Import Local
 from tldw_Server_API.app.core.Chunking import (
     improved_chunking_process
 )
-from tldw_Server_API.app.core.LLM_Calls.Local_Summarization_Lib import (
-    summarize_with_llama,
-    summarize_with_kobold,
-    summarize_with_oobabooga,
-    summarize_with_tabbyapi,
-    summarize_with_vllm,
-    summarize_with_local_llm,
-    summarize_with_ollama,
-    summarize_with_custom_openai,
-    summarize_with_custom_openai_2
-)
 from tldw_Server_API.app.core.Utils.Utils import (
     logging
 )
 from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
+from tldw_Server_API.app.core.Chat.streaming_utils import _extract_text_from_upstream_sse
+from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
+from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
+    ensure_app_config,
+    normalize_provider,
+    resolve_provider_api_key_from_config,
+    resolve_provider_model,
+    resolve_provider_section,
+)
 #
 #######################################################################################################################
 # Function Definitions
 #
 
 loaded_config_data = load_and_log_configs()
-openai_api_key = loaded_config_data.get('openai_api', {}).get('api_key', None)
+
+_ADAPTER_PROVIDER_ALIASES = {
+    "custom_openai_api": "custom-openai-api",
+    "custom_openai_api_2": "custom-openai-api-2",
+    "custom-openai-api": "custom-openai-api",
+    "custom-openai-api-2": "custom-openai-api-2",
+}
+
+_SUMMARIZATION_PROMPT_KEY = "Summarization System Prompt"
+_DEFAULT_SYSTEM_PROMPT = (
+    "You are a bulleted notes specialist. ```When creating comprehensive bulleted notes, "
+    "you should follow these guidelines: Use multiple headings based on the referenced topics, "
+    "not categories like quotes or terms. Headings should be surrounded by bold formatting and not be "
+    "listed as bullet points themselves. Leave no space between headings and their corresponding list items "
+    "underneath. Important terms within the content should be emphasized by setting them in bold font. "
+    "Any text that ends with a colon should also be bolded. Before submitting your response, review the "
+    "instructions, and make any corrections necessary to adhered to the specified format. Do not reference "
+    "these instructions within the notes.``` \nBased on the content between backticks create comprehensive "
+    "bulleted notes.\n"
+    "**Bulleted Note Creation Guidelines**\n\n"
+    "**Headings**:\n"
+    "- Based on referenced topics, not categories like quotes or terms\n"
+    "- Surrounded by **bold** formatting\n"
+    "- Not listed as bullet points\n"
+    "- No space between headings and list items underneath\n\n"
+    "**Emphasis**:\n"
+    "- **Important terms** set in bold font\n"
+    "- **Text ending in a colon**: also bolded\n\n"
+    "**Review**:\n"
+    "- Ensure adherence to specified format\n"
+    "- Do not reference these instructions in your response."
+)
+
+
+def _resolve_default_system_prompt() -> str:
+    prompt = load_prompt("summarization", _SUMMARIZATION_PROMPT_KEY)
+    if prompt:
+        return prompt
+    return _DEFAULT_SYSTEM_PROMPT
+
+
+def _adapter_provider_name(api_name: str) -> str:
+    normalized = normalize_provider(api_name)
+    return _ADAPTER_PROVIDER_ALIASES.get(normalized, normalized)
+
+
+def _adapter_enabled() -> bool:
+    value = os.getenv("LLM_ADAPTERS_ENABLED")
+    if value is None:
+        return True
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _build_summary_prompt(text: str, custom_prompt_arg: Optional[str]) -> str:
+    suffix = custom_prompt_arg or ""
+    if suffix:
+        return f"{text}\n\n\n\n{suffix}"
+    return text
+
+
+def _resolve_adapter_timeout(provider: str, app_config: Dict[str, Any]) -> Optional[float]:
+    section = resolve_provider_section(provider)
+    if section:
+        raw = (app_config.get(section) or {}).get("api_timeout")
+        if raw is not None:
+            try:
+                return float(raw)
+            except Exception:
+                return None
+    return None
+
+
+def _summarize_via_adapter(
+    *,
+    api_name: str,
+    text_to_summarize: str,
+    custom_prompt_arg: Optional[str],
+    api_key: Optional[str],
+    temp: Optional[float],
+    system_message: Optional[str],
+    streaming: bool,
+    model_override: Optional[str],
+) -> Union[str, Generator[str, None, None], None]:
+    if not _adapter_enabled():
+        return "Error: LLM adapters disabled (LLM_ADAPTERS_ENABLED=false)."
+    provider = _adapter_provider_name(api_name)
+    if not provider:
+        return f"Error: Invalid API Name '{api_name}'"
+    app_config = ensure_app_config(loaded_config_data)
+    adapter = get_registry().get_adapter(provider)
+    if adapter is None:
+        return f"Error: LLM adapter unavailable for provider '{provider}'"
+    model = model_override or resolve_provider_model(provider, app_config)
+    if not model:
+        return f"Error: Model is required for provider '{provider}'"
+    prompt = _build_summary_prompt(text_to_summarize, custom_prompt_arg)
+    request: Dict[str, Any] = {
+        "messages": [{"role": "user", "content": prompt}],
+        "system_message": system_message,
+        "model": model,
+        "api_key": api_key or resolve_provider_api_key_from_config(provider, app_config),
+        "temperature": temp,
+        "stream": streaming,
+        "app_config": app_config,
+    }
+    timeout = _resolve_adapter_timeout(provider, app_config)
+    if streaming:
+        def stream_generator() -> Generator[str, None, None]:
+            gen = None
+            try:
+                gen = adapter.stream(request, timeout=timeout)
+                for raw in gen:
+                    line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                    text_chunk, error_payload, _done = _extract_text_from_upstream_sse(line)
+                    if error_payload is not None:
+                        yield f"Error: {error_payload}"
+                        return
+                    if text_chunk:
+                        yield text_chunk
+            except Exception as exc:
+                logging.error(f"Error during adapter streaming for {provider}: {exc}", exc_info=True)
+                yield f"Error during streaming: {exc}"
+            finally:
+                try:
+                    if gen is not None and hasattr(gen, "close"):
+                        gen.close()
+                except Exception:
+                    pass
+        return stream_generator()
+    try:
+        response = adapter.chat(request, timeout=timeout)
+        return extract_response_content(response) or str(response)
+    except Exception as exc:
+        logging.error(f"Error during adapter summarization for {provider}: {exc}", exc_info=True)
+        return f"Error calling API {api_name}: {exc}"
 
 #######################################################################################################################
 # Helper Function Definitions
@@ -243,64 +370,21 @@ def _dispatch_to_api(
         api_name_lower = api_name.lower()
         logging.debug(f"Dispatching to API: {api_name_lower}")
 
-        # Ensure required args for specific functions are handled if needed
-        # (e.g., model might be loaded from config inside specific funcs)
-
-        # NOTE: The specific functions (summarize_with_openai, etc.) should
-        # handle their own internal logic for loading API keys from config if
-        # the provided api_key is None. They also handle loading models, etc.
-        # We just pass the parameters along.
-
-        if api_name_lower == "openai":
-            return summarize_with_openai(api_key, text_to_summarize, custom_prompt_arg, temp, system_message, streaming, model_override=model_override)
-        elif api_name_lower == "anthropic":
-            # Anthropic might need model passed explicitly or loaded in its func
-            return summarize_with_anthropic(api_key, text_to_summarize, custom_prompt_arg, temp, system_message, streaming)
-        elif api_name_lower == "cohere":
-            return summarize_with_cohere(api_key, text_to_summarize, custom_prompt_arg, temp, system_message, streaming)
-        elif api_name_lower == "google":
-            return summarize_with_google(api_key, text_to_summarize, custom_prompt_arg, temp, system_message, streaming, model_override=model_override)
-        elif api_name_lower == "groq":
-            return summarize_with_groq(api_key, text_to_summarize, custom_prompt_arg, temp, system_message, streaming)
-        elif api_name_lower == "huggingface":
-             # HuggingFace might need specific handling for system_message if not directly supported
-            return summarize_with_huggingface(api_key, text_to_summarize, custom_prompt_arg, temp, streaming) # system_message not directly passed? Check func def.
-        elif api_name_lower == "openrouter":
-            return summarize_with_openrouter(api_key, text_to_summarize, custom_prompt_arg, temp, system_message, streaming)
-        elif api_name_lower == "deepseek":
-            return summarize_with_deepseek(api_key, text_to_summarize, custom_prompt_arg, temp, system_message, streaming)
-        elif api_name_lower == "mistral":
-            return summarize_with_mistral(api_key, text_to_summarize, custom_prompt_arg, temp, system_message, streaming)
-        # --- Local LLM Calls ---
-        elif api_name_lower == "llama.cpp":
-            return summarize_with_llama(text_to_summarize, custom_prompt_arg, api_key, temp, system_message, streaming, model_override=model_override)
-        elif api_name_lower == "kobold":
-            return summarize_with_kobold(text_to_summarize, api_key, custom_prompt_arg, temp, system_message, streaming)
-        elif api_name_lower == "ooba":
-            # Ooba might need api_url from config inside its function
-            return summarize_with_oobabooga(text_to_summarize, api_key, custom_prompt_arg, system_message, temp=temp, streaming=streaming)
-        elif api_name_lower == "tabbyapi":
-            return summarize_with_tabbyapi(text_to_summarize, custom_prompt_arg, temp, system_message, streaming)
-        elif api_name_lower == "vllm":
-            return summarize_with_vllm(api_key, text_to_summarize, custom_prompt_arg, temp, system_message, streaming)
-        elif api_name_lower == "local-llm":
-            return summarize_with_local_llm(text_to_summarize, custom_prompt_arg, temp, system_message, streaming)
-        elif api_name_lower == "custom-openai-api":
-            # Custom OpenAI likely needs base_url from config inside its function
-            return summarize_with_custom_openai(api_key, text_to_summarize, custom_prompt_arg, temp, system_message, streaming)
-        elif api_name_lower == "custom-openai-api-2":
-             # Custom OpenAI likely needs base_url from config inside its function
-            return summarize_with_custom_openai_2(api_key, text_to_summarize, custom_prompt_arg, temp, system_message, streaming) # Assuming this exists
-        elif api_name_lower == "ollama":
-            # Ollama might need model param or load from config
-            return summarize_with_ollama(text_to_summarize, custom_prompt_arg, None, api_key, temp, system_message, streaming) # Passing None for model, assuming func handles it
-        # --- MOCKING TEST LLM Calls ---
-        elif api_name_lower == "mock-llm":
-            return summarize_with_mock_llm(text_to_summarize, custom_prompt_arg, api_key, temp, system_message, streaming)
-        else:
-            error_msg = f"Error: Invalid API Name '{api_name}'"
+        adapter_result = _summarize_via_adapter(
+            api_name=api_name_lower,
+            text_to_summarize=text_to_summarize,
+            custom_prompt_arg=custom_prompt_arg,
+            api_key=api_key,
+            temp=temp,
+            system_message=system_message,
+            streaming=streaming,
+            model_override=model_override,
+        )
+        if adapter_result is None:
+            error_msg = f"Error: LLM adapter unavailable for provider '{api_name}'"
             logging.error(error_msg)
             return error_msg
+        return adapter_result
 
     except Exception as e:
         logging.error(f"Error during dispatch to API '{api_name}': {str(e)}", exc_info=True)
@@ -358,29 +442,7 @@ def analyze(
     # Set default system message if not provided
     if system_message is None:
         logging.debug("Using default system message.")
-        system_message = (
-            "You are a bulleted notes specialist. ```When creating comprehensive bulleted notes, "
-            "you should follow these guidelines: Use multiple headings based on the referenced topics, "
-            "not categories like quotes or terms. Headings should be surrounded by bold formatting and not be "
-            "listed as bullet points themselves. Leave no space between headings and their corresponding list items "
-            "underneath. Important terms within the content should be emphasized by setting them in bold font. "
-            "Any text that ends with a colon should also be bolded. Before submitting your response, review the "
-            "instructions, and make any corrections necessary to adhered to the specified format. Do not reference "
-            "these instructions within the notes.``` \nBased on the content between backticks create comprehensive "
-            "bulleted notes.\n"
-            "**Bulleted Note Creation Guidelines**\n\n"
-            "**Headings**:\n"
-            "- Based on referenced topics, not categories like quotes or terms\n"
-            "- Surrounded by **bold** formatting\n"
-            "- Not listed as bullet points\n"
-            "- No space between headings and list items underneath\n\n"
-            "**Emphasis**:\n"
-            "- **Important terms** set in bold font\n"
-            "- **Text ending in a colon**: also bolded\n\n"
-            "**Review**:\n"
-            "- Ensure adherence to specified format\n"
-            "- Do not reference these instructions in your response."
-        )
+        system_message = _resolve_default_system_prompt()
 
     try:
         # 1. Extract text content from input_data
@@ -542,1402 +604,6 @@ def analyze(
 # End of Analysis Function
 ###################################################################################
 
-
-###################################################################################
-#
-# API Calls
-
-def summarize_with_openai(api_key, input_data, custom_prompt_arg, temp=None, system_message=None, streaming=False, model_override: Optional[str] = None):
-    try:
-        # API key validation
-        if not api_key or api_key.strip() == "":
-            logging.info("OpenAI Summarize: API key not provided as parameter")
-            logging.info("OpenAI Summarize: Attempting to use API key from config file")
-            loaded_config_data = load_and_log_configs()
-            api_key = loaded_config_data.get('openai_api', {}).get('api_key', "")
-            logging.debug("OpenAI Summarize: Using API key from config file")
-
-        if not api_key or api_key.strip() == "":
-            logging.error("OpenAI: #2 API key not found or is empty")
-            return "OpenAI: API Key Not Provided/Found in Config file or is empty"
-
-        # API key handling: prioritize parameter, then config
-        effective_api_key = api_key
-        if not effective_api_key or not effective_api_key.strip():
-            logging.info("OpenAI Summarize: API key not provided or empty, using config.")
-            effective_api_key = loaded_config_data.get('openai_api', {}).get('api_key', "")
-
-        if not effective_api_key or not effective_api_key.strip():
-            logging.error("OpenAI: API key not found or is empty (checked param and config).")
-            return "Error: OpenAI API Key Not Provided/Found or is empty."
-
-        # Model handling: load from config, allow explicit override
-        openai_model = (model_override or loaded_config_data.get('openai_api', {}).get('model') or "gpt-4o")
-        logging.debug(f"OpenAI: Using model: {openai_model}")
-
-        # NOTE: input_data passed to this function should *already be the extracted text*
-        # by the time the main `summarize` function calls `_dispatch_to_api`.
-        # So, the complex input parsing logic previously here is removed.
-        text = str(input_data) # Ensure it's a string
-
-        logging.debug(f"OpenAI: Received text length: {len(text)}")
-        logging.debug(f"OpenAI: Custom prompt: {custom_prompt_arg}")
-        logging.debug(f"OpenAI: Temperature: {temp}, System Message: {system_message}, Streaming: {streaming}")
-
-        headers = {
-            'Authorization': f'Bearer {effective_api_key}',
-            'Content-Type': 'application/json'
-        }
-
-        logging.debug(
-            "OpenAI: Using configured API key")
-        logging.debug("openai: Preparing data + prompt for submittal")
-        openai_prompt = f"{text} \n\n\n\n{custom_prompt_arg}"
-        if temp is None: temp = 0.7
-        if system_message is None: system_message = "You are a helpful AI assistant."
-        try:
-            temp = float(temp)
-        except (ValueError, TypeError):
-            logging.warning(f"Invalid temperature value '{temp}', using default 0.7")
-            temp = 0.7
-
-
-        # Build base payload
-        payload = {
-            "model": openai_model,
-            "messages": [
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": openai_prompt}
-            ],
-            "stream": streaming
-        }
-
-        # Handle model-specific requirements
-        if openai_model.startswith("gpt-5"):
-            # gpt-5 models use max_completion_tokens and only support temperature=1
-            payload["max_completion_tokens"] = 4096
-            # gpt-5-nano only supports default temperature of 1
-            if temp != 1.0:
-                logging.debug(f"OpenAI: gpt-5 model detected, ignoring temperature {temp} and using default 1.0")
-        else:
-            # Other models use max_tokens and support custom temperature
-            payload["max_tokens"] = 4096
-            payload["temperature"] = temp
-
-        # --- Retry Logic --- (Copied from original, seems reasonable)
-        # Centralized client/retry will be used below
-
-        api_url = loaded_config_data.get('openai_api', {}).get('api_base_url', 'https://api.openai.com/v1') + '/chat/completions'
-
-
-        logging.debug(f"OpenAI: Posting request to {api_url}")
-        # Get timeout value and ensure it's numeric
-        timeout_value = loaded_config_data.get('openai_api', {}).get('api_timeout', 120)
-        if isinstance(timeout_value, str):
-            timeout_value = float(timeout_value)
-
-        if streaming:
-            logging.debug("OpenAI: Processing streaming response.")
-            def stream_generator():
-                client = create_client()
-                try:
-                    with client.stream("POST", api_url, headers=headers, json=payload, timeout=timeout_value) as resp:
-                        if resp.status_code >= 400:
-                            yield f"Error during streaming: HTTP {resp.status_code}"
-                            return
-                        for line in resp.iter_lines():
-                            if not line:
-                                continue
-                            s = line.decode("utf-8") if isinstance(line, (bytes, bytearray)) else str(line)
-                            s = s.strip()
-                            if not s:
-                                continue
-                            if s.startswith("data: "):
-                                data_str = s[len("data: "):]
-                                if data_str == "[DONE]":
-                                    break
-                                try:
-                                    data_json = json.loads(data_str)
-                                    chunk = data_json.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                                    if chunk:
-                                        yield chunk
-                                except json.JSONDecodeError:
-                                    logging.error(f"OpenAI Stream: Error decoding JSON: {data_str}")
-                                    continue
-                                except Exception as e:
-                                    logging.error(f"OpenAI Stream: Unexpected structure: {data_str} - Error: {e}")
-                                    continue
-                except Exception as stream_error:
-                    logging.error(f"OpenAI Stream: Error during streaming: {stream_error}", exc_info=True)
-                    yield f"Error during streaming: {stream_error}"
-                finally:
-                    try:
-                        client.close()
-                    except Exception:
-                        pass
-            return stream_generator()
-        else:
-            logging.debug("OpenAI: Processing non-streaming response.")
-            policy = RetryPolicy(attempts=int(loaded_config_data.get('openai_api', {}).get('api_retries', 3)) + 1,
-                                 backoff_base_ms=int(float(loaded_config_data.get('openai_api', {}).get('api_retry_delay', 1)) * 1000))
-            response_data = fetch_json(method="POST", url=api_url, headers=headers, json=payload, timeout=timeout_value, retry=policy)
-            if 'choices' in response_data and len(response_data['choices']) > 0 and 'message' in response_data['choices'][0] and 'content' in response_data['choices'][0]['message']:
-                summary = response_data['choices'][0]['message']['content'].strip()
-                logging.debug("OpenAI: Summarization successful (non-streaming).")
-                return summary
-            else:
-                logging.warning(f"OpenAI: Summary not found in response: {response_data}")
-                return "Error: OpenAI Summary not found in response."
-
-    except Exception as e:
-        logging.error(f"OpenAI: API request failed: {str(e)}", exc_info=True)
-        # Try to get more detailed error from response when available
-        if hasattr(e, 'response') and getattr(e, 'response') is not None:
-            try:
-                error_detail = getattr(e, 'response').json()
-                logging.error(f"OpenAI: API error details: {error_detail}")
-            except Exception as parse_err:
-                logging.debug(f"OpenAI error JSON parse failed: error={parse_err}")
-        return f"Error: OpenAI API request failed: {str(e)}"
-        logging.error(f"OpenAI: Unexpected error: {str(e)}", exc_info=True)
-        return f"Error: OpenAI unexpected error: {str(e)}"
-
-
-def summarize_with_anthropic(api_key, input_data, custom_prompt_arg, temp=None, system_message=None, streaming=False, max_retries=3, retry_delay=5):
-    logging.debug("Anthropic: Summarization process starting...")
-    try:
-        logging.debug("Anthropic: Loading and validating configurations")
-        loaded_config_data = load_and_log_configs()
-        if loaded_config_data is None:
-            logging.error("Failed to load configuration data")
-            anthropic_api_key = None
-        else:
-            # Prioritize the API key passed as a parameter
-            if api_key and api_key.strip():
-                anthropic_api_key = api_key
-                logging.info("Anthropic: Using API key provided as parameter")
-            else:
-                # If no parameter is provided, use the key from the config
-                anthropic_api_key = loaded_config_data['anthropic_api'].get('api_key')
-                if anthropic_api_key:
-                    logging.info("Anthropic: Using API key from config file")
-                else:
-                    logging.warning("Anthropic: No API key found in config file")
-
-        # Final check to ensure we have a valid API key
-        if not anthropic_api_key or not anthropic_api_key.strip():
-            logging.error("Anthropic: No valid API key available")
-            return "Anthropic: API Key Not Provided/Found in Config file or is empty"
-
-        logging.debug("Anthropic: Using configured API key")
-
-        logging.debug("AnthropicAI: Using provided string data for summarization")
-        data = input_data
-
-        # DEBUG - Debug logging to identify sent data
-        logging.debug(f"AnthropicAI: Loaded data: {str(data)[:500]}...(snipped to first 500 chars)")
-        logging.debug(f"AnthropicAI: Type of data: {type(data)}")
-
-        if isinstance(data, dict) and 'summary' in data:
-            # If the loaded data is a dictionary and already contains a summary, return it
-            logging.debug("Anthropic: Summary already exists in the loaded data")
-            return data['summary']
-
-        # If the loaded data is a list of segment dictionaries or a string, proceed with summarization
-        if isinstance(data, list):
-            segments = data
-            text = extract_text_from_segments(segments)
-        elif isinstance(data, str):
-            text = data
-        else:
-            raise ValueError("Anthropic: Invalid input data format")
-
-        if temp is None:
-            temp = 0.1
-        temp = float(temp)
-
-        if system_message is None:
-            system_message = "You are a helpful AI assistant who does whatever the user requests."
-
-        headers = {
-            'x-api-key': anthropic_api_key,
-            'anthropic-version': '2023-06-01',
-            'Content-Type': 'application/json'
-        }
-
-        anthropic_prompt = custom_prompt_arg
-        logging.debug(f"Anthropic: Prompt is {anthropic_prompt}")
-        user_message = {
-            "role": "user",
-            "content": f"{text} \n\n\n\n{anthropic_prompt}"
-        }
-
-        model = loaded_config_data['anthropic_api']['model']
-
-        data = {
-            "model": model,
-            "max_tokens": 4096,  # max possible tokens to return
-            "messages": [user_message],
-            "stop_sequences": ["\n\nHuman:"],
-            "temperature": temp,
-            "top_k": 0,
-            "top_p": 1.0,
-            "metadata": {
-                "user_id": "example_user_id",
-            },
-            "stream": streaming,
-            "system": system_message
-        }
-
-        # Centralized client usage
-        api_url = 'https://api.anthropic.com/v1/messages'
-        # Restore timeout lost during refactor; support both 'timeout' and 'api_timeout' keys
-        try:
-            timeout = float(loaded_config_data['anthropic_api'].get('timeout', loaded_config_data['anthropic_api'].get('api_timeout', 120)) or 120)
-        except Exception:
-            timeout = 120.0
-        if streaming:
-            def stream_generator():
-                client = create_client()
-                try:
-                    with client.stream("POST", api_url, headers=headers, json=data, timeout=timeout) as resp:
-                        if resp.status_code >= 400:
-                            yield f"Error: Anthropic HTTP {resp.status_code}"
-                            return
-                        event_type = None
-                        for line in resp.iter_lines():
-                            if not line:
-                                continue
-                            s = line.decode('utf-8') if isinstance(line, (bytes, bytearray)) else str(line)
-                            s = s.strip()
-                            if not s:
-                                continue
-                            if s.startswith('event:'):
-                                event_type = s[len('event:'):].strip()
-                            elif s.startswith('data:'):
-                                data_str = s[len('data:'):].strip()
-                                if data_str == '[DONE]':
-                                    break
-                                try:
-                                    data_json = json.loads(data_str)
-                                    if event_type == 'content_block_delta' and data_json.get('type') == 'content_block_delta':
-                                        delta = data_json.get('delta', {})
-                                        text_delta = delta.get('text', '')
-                                        if text_delta:
-                                            yield text_delta
-                                except json.JSONDecodeError:
-                                    logging.error(f"Anthropic: Error decoding JSON from line: {s}")
-                                    continue
-                except Exception as e:
-                    logging.error(f"Anthropic stream error: {e}")
-                    yield f"Error: {e}"
-                finally:
-                    try:
-                        client.close()
-                    except Exception:
-                        pass
-            return stream_generator()
-        else:
-            policy = RetryPolicy(
-                attempts=int(loaded_config_data['anthropic_api'].get('api_retries', 3)) + 1,
-                backoff_base_ms=int(float(loaded_config_data['anthropic_api'].get('api_retry_delay', 1)) * 1000),
-            )
-            response_data = fetch_json(method="POST", url=api_url, headers=headers, json=data, timeout=timeout, retry=policy)
-            try:
-                content_blocks = response_data.get('content', [])
-                summary = ''
-                for block in content_blocks:
-                    if block.get('type') == 'text':
-                        summary += block.get('text', '')
-                summary = summary.strip()
-                logging.debug("Anthropic: Summarization successful")
-                logging.debug(f"Anthropic: Summary (first 500 chars): {summary[:500]}...")
-                return summary
-            except Exception:
-                logging.debug("Anthropic: Unexpected data in response")
-                return None
-    except FileNotFoundError as e:
-        logging.error(f"Anthropic: File not found: {input_data}")
-        return f"Anthropic: File not found: {input_data}"
-    except json.JSONDecodeError as e:
-        logging.error(f"Anthropic: Invalid JSON format in file: {input_data}")
-        return f"Anthropic: Invalid JSON format in file: {input_data}"
-    except Exception as e:
-        logging.error(f"Anthropic: Error in processing: {str(e)}")
-        return f"Anthropic: Error occurred while processing summary with Anthropic: {str(e)}"
-
-
-# Summarize with Cohere
-def summarize_with_cohere(api_key, input_data, custom_prompt_arg, temp=None, system_message=None, streaming=False):
-    logging.debug("Cohere: Summarization process starting...")
-    try:
-        logging.debug("Cohere: Loading and validating configurations")
-        loaded_config_data = load_and_log_configs()
-        if loaded_config_data is None:
-            logging.error("Failed to load configuration data")
-            cohere_api_key = None
-        else:
-            # Prioritize the API key passed as a parameter
-            if api_key and api_key.strip():
-                cohere_api_key = api_key
-                logging.info("Cohere: Using API key provided as parameter")
-            else:
-                # If no parameter is provided, use the key from the config
-                cohere_api_key = loaded_config_data['cohere_api'].get('api_key')
-                if cohere_api_key:
-                    logging.info("Cohere: Using API key from config file")
-                else:
-                    logging.warning("Cohere: No API key found in config file")
-
-        # Final check to ensure we have a valid API key
-        if not cohere_api_key or not cohere_api_key.strip():
-            logging.error("Cohere: No valid API key available")
-            return "Cohere: API Key Not Provided/Found in Config file or is empty"
-
-        if custom_prompt_arg is None:
-            custom_prompt_arg = ""
-
-        if system_message is None:
-            system_message = ""
-
-        logging.debug("Cohere: Using configured API key")
-
-        logging.debug("Cohere: Using provided string data for summarization")
-        data = input_data
-
-        # DEBUG - Debug logging to identify sent data
-        logging.debug(f"Cohere: Loaded data: {str(data)[:500]}...(snipped to first 500 chars)")
-        logging.debug(f"Cohere: Type of data: {type(data)}")
-
-        if isinstance(data, dict) and 'summary' in data:
-            # If the loaded data is a dictionary and already contains a summary, return it
-            logging.debug("Cohere: Summary already exists in the loaded data")
-            return data['summary']
-
-        # If the loaded data is a list of segment dictionaries or a string, proceed with summarization
-        if isinstance(data, list):
-            segments = data
-            text = extract_text_from_segments(segments)
-        elif isinstance(data, str):
-            text = data
-        else:
-            raise ValueError("Cohere: Invalid input data format")
-
-        cohere_model = loaded_config_data['cohere_api']['model']
-
-        if temp is None:
-            temp = 0.3
-        temp = float(temp)
-        if system_message is None:
-            system_message = "You are a helpful AI assistant who does whatever the user requests."
-
-        headers = {
-            'accept': 'application/json',
-            'content-type': 'application/json',
-            'Authorization': f'Bearer {cohere_api_key}'
-        }
-
-        cohere_prompt = f"{text} \n\n\n\n{custom_prompt_arg}"
-        logging.debug(f"Cohere: Prompt being sent is {cohere_prompt}")
-
-        data = {
-            "preamble": system_message,
-            "message": cohere_prompt,
-            "model": cohere_model,
-#            "connectors": [{"id": "web-search"}],
-            "temperature": temp,
-            "streaming": streaming
-        }
-
-        if streaming:
-            # Centralized client stream (no auto-retry after first byte)
-            timeout_value = float(loaded_config_data['cohere_api'].get('api_timeout', 120) or 120)
-            def stream_generator():
-                client = create_client()
-                try:
-                    with client.stream('POST', 'https://api.cohere.ai/v1/chat', headers=headers, json=data, timeout=timeout_value) as response:
-                        response.raise_for_status()
-                        for line in response.iter_lines():
-                            if not line:
-                                continue
-                            decoded_line = line.decode('utf-8').strip()
-                            # Cohere may emit plain JSON lines or SSE style with `data:` prefix
-                            if decoded_line.startswith('data:'):
-                                payload = decoded_line[len('data:'):].strip()
-                            else:
-                                payload = decoded_line
-                            try:
-                                data_json = json.loads(payload)
-                                if 'token' in data_json and isinstance(data_json['token'], dict):
-                                    chunk = data_json['token'].get('text', '')
-                                    if chunk:
-                                        yield chunk
-                                elif 'response' in data_json:
-                                    chunk = data_json['response']
-                                    if chunk:
-                                        yield chunk
-                                elif 'text' in data_json:
-                                    chunk = data_json['text']
-                                    if chunk:
-                                        yield chunk
-                                else:
-                                    logging.debug(f"Cohere: Unhandled streaming data: {data_json}")
-                            except json.JSONDecodeError:
-                                logging.error(f"Cohere: Error decoding JSON from line: {decoded_line}")
-                                continue
-                finally:
-                    try:
-                        client.close()
-                    except Exception:
-                        pass
-            return stream_generator()
-        else:
-            logging.debug("Cohere: Submitting request to API endpoint")
-            policy = RetryPolicy(
-                attempts=int(loaded_config_data['cohere_api'].get('api_retries', 3)) + 1,
-                backoff_base_ms=int(float(loaded_config_data['cohere_api'].get('api_retry_delay', 1)) * 1000),
-            )
-            timeout_value = float(loaded_config_data['cohere_api'].get('api_timeout', 120) or 120)
-            response_data = fetch_json(method='POST', url='https://api.cohere.ai/v1/chat', headers=headers, json=data, timeout=timeout_value, retry=policy)
-            logging.debug(f"API Response Data: {response_data}")
-            if 'text' in response_data:
-                summary = str(response_data['text']).strip()
-                logging.debug("Cohere: Summarization successful")
-                return summary
-            elif 'response' in response_data:
-                summary = str(response_data['response']).strip()
-                logging.debug("Cohere: Summarization successful")
-                return summary
-            else:
-                logging.error("Cohere: Expected data not found in API response.")
-                return "Cohere: Expected data not found in API response."
-
-    except Exception as e:
-        logging.error(f"Cohere: Error in processing: {str(e)}", exc_info=True)
-        return f"Cohere: Error occurred while processing summary with Cohere: {str(e)}"
-
-
-
-# https://console.groq.com/docs/quickstart
-def summarize_with_groq(api_key, input_data, custom_prompt_arg, temp=None, system_message=None, streaming=False):
-    logging.debug("Groq: Summarization process starting...")
-    try:
-        logging.debug("Groq: Loading and validating configurations")
-        loaded_config_data = load_and_log_configs()
-        if loaded_config_data is None:
-            logging.error("Failed to load configuration data")
-            groq_api_key = None
-        else:
-            # Prioritize the API key passed as a parameter
-            if api_key and api_key.strip():
-                groq_api_key = api_key
-                logging.info("Groq: Using API key provided as parameter")
-            else:
-                # If no parameter is provided, use the key from the config
-                groq_api_key = loaded_config_data['groq_api'].get('api_key')
-                if groq_api_key:
-                    logging.info("Groq: Using API key from config file")
-                else:
-                    logging.warning("Groq: No API key found in config file")
-
-        # Final check to ensure we have a valid API key
-        if not groq_api_key or not groq_api_key.strip():
-            logging.error("Groq: No valid API key available")
-            return "Groq: API Key Not Provided/Found in Config file or is empty"
-
-        logging.debug("Groq: Using configured API key")
-
-        # Input data handling
-        logging.debug("Groq: Using provided string data for summarization")
-        data = input_data
-
-        # Debug logging to identify sent data
-        logging.debug(f"Groq: Loaded data: {str(data)[:500]}...(snipped to first 500 chars)")
-        logging.debug(f"Groq: Type of data: {type(data)}")
-
-        if isinstance(data, dict) and 'summary' in data:
-            logging.debug("Groq: Summary already exists in the loaded data")
-            return data['summary']
-
-        # Text extraction
-        if isinstance(data, list):
-            segments = data
-            text = extract_text_from_segments(segments)
-        elif isinstance(data, str):
-            text = data
-        else:
-            raise ValueError("Groq: Invalid input data format")
-
-        # Set the model to be used
-        groq_model = loaded_config_data['groq_api']['model']
-
-        if temp is None:
-            temp = 0.2
-        temp = float(temp)
-        if system_message is None:
-            system_message = "You are a helpful AI assistant who does whatever the user requests."
-
-        headers = {
-            'Authorization': f'Bearer {groq_api_key}',
-            'Content-Type': 'application/json'
-        }
-
-        groq_prompt = f"{text} \n\n\n\n{custom_prompt_arg}"
-        logging.debug(f"Groq: Prompt being sent is {groq_prompt}")
-
-        data = {
-            "messages": [
-                {
-                    "role": "system",
-                    "content": system_message,
-                },
-                {
-                    "role": "user",
-                    "content": groq_prompt,
-                }
-            ],
-            "model": groq_model,
-            "temperature": temp,
-            "stream": streaming
-        }
-
-        logging.debug("Groq: Submitting request to API endpoint")
-        if streaming:
-            timeout_value = float(loaded_config_data['groq_api'].get('api_timeout', 120) or 120)
-            def stream_generator():
-                client = create_client()
-                try:
-                    with client.stream(
-                        'POST', 'https://api.groq.com/openai/v1/chat/completions', headers=headers, json=data, timeout=timeout_value
-                    ) as response:
-                        response.raise_for_status()
-                        for line in response.iter_lines():
-                            if not line:
-                                continue
-                            line_str = line.decode('utf-8').strip()
-                            if not line_str.startswith('data: '):
-                                continue
-                            data_str = line_str[len('data: '):]
-                            if data_str == '[DONE]':
-                                break
-                            try:
-                                data_json = json.loads(data_str)
-                                chunk = data_json.get('choices', [{}])[0].get('delta', {}).get('content', '')
-                                if chunk:
-                                    yield chunk
-                            except json.JSONDecodeError:
-                                logging.error(f"Groq: Error decoding JSON from line: {line_str}")
-                                continue
-                finally:
-                    try:
-                        client.close()
-                    except Exception:
-                        pass
-            return stream_generator()
-        else:
-            policy = RetryPolicy(
-                attempts=int(loaded_config_data['groq_api'].get('api_retries', 3)) + 1,
-                backoff_base_ms=int(float(loaded_config_data['groq_api'].get('api_retry_delay', 1)) * 1000),
-            )
-            timeout_value = float(loaded_config_data['groq_api'].get('api_timeout', 120) or 120)
-            response_data = fetch_json(
-                method='POST', url='https://api.groq.com/openai/v1/chat/completions', headers=headers, json=data, timeout=timeout_value, retry=policy
-            )
-            logging.debug(f"API Response Data: {response_data}")
-            if 'choices' in response_data and len(response_data['choices']) > 0:
-                summary = response_data['choices'][0]['message']['content'].strip()
-                logging.debug("Groq: Summarization successful")
-                return summary
-            else:
-                logging.error("Groq: Expected data not found in API response.")
-                return "Groq: Expected data not found in API response."
-
-    except Exception as e:
-        logging.error(f"Groq: Error in processing: {str(e)}", exc_info=True)
-        return f"Groq: Error occurred while processing summary with Groq: {str(e)}"
-
-
-def summarize_with_openrouter(api_key, input_data, custom_prompt_arg, temp=None, system_message=None, streaming=False,):
-    import json
-    global openrouter_model, openrouter_api_key
-    try:
-        logging.debug("OpenRouter: Loading and validating configurations")
-        loaded_config_data = load_and_log_configs()
-        if loaded_config_data is None:
-            logging.error("Failed to load configuration data")
-            openrouter_api_key = None
-        else:
-            # Prioritize the API key passed as a parameter
-            if api_key and api_key.strip():
-                openrouter_api_key = api_key
-                logging.info("OpenRouter: Using API key provided as parameter")
-            else:
-                # If no parameter is provided, use the key from the config
-                openrouter_api_key = loaded_config_data['openrouter_api'].get('api_key')
-                if openrouter_api_key:
-                    logging.info("OpenRouter: Using API key from config file")
-                else:
-                    logging.warning("OpenRouter: No API key found in config file")
-
-        # Model Selection validation
-        logging.debug("OpenRouter: Validating model selection")
-        loaded_config_data = load_and_log_configs()
-        openrouter_model = loaded_config_data['openrouter_api']['model']
-        logging.debug(f"OpenRouter: Using model from config file: {openrouter_model}")
-
-        # Final check to ensure we have a valid API key
-        if not openrouter_api_key or not openrouter_api_key.strip():
-            logging.error("OpenRouter: No valid API key available")
-            raise ValueError("No valid Anthropic API key available")
-    except Exception as e:
-        logging.error(f"OpenRouter: Error in processing: {str(e)}")
-        return f"OpenRouter: Error occurred while processing config file with OpenRouter: {str(e)}"
-
-    logging.debug("OpenRouter: Using configured API key")
-
-    logging.debug(f"OpenRouter: Using Model: {openrouter_model}")
-
-    logging.debug("OpenRouter: Using provided string data for summarization")
-    data = input_data
-
-    # DEBUG - Debug logging to identify sent data
-    logging.debug(f"OpenRouter: Loaded data: {data[:500]}...(snipped to first 500 chars)")
-    logging.debug(f"OpenRouter: Type of data: {type(data)}")
-
-    if isinstance(data, dict) and 'summary' in data:
-        # If the loaded data is a dictionary and already contains a summary, return it
-        logging.debug("OpenRouter: Summary already exists in the loaded data")
-        return data['summary']
-
-    # If the loaded data is a list of segment dictionaries or a string, proceed with summarization
-    if isinstance(data, list):
-        segments = data
-        text = extract_text_from_segments(segments)
-    elif isinstance(data, str):
-        text = data
-    else:
-        raise ValueError("OpenRouter: Invalid input data format")
-
-    openrouter_prompt = f"{input_data} \n\n\n\n{custom_prompt_arg}"
-
-    if temp is None:
-        temp = 0.1
-    temp = float(temp)
-    if system_message is None:
-        system_message = "You are a helpful AI assistant who does whatever the user requests."
-
-    if streaming:
-        logging.debug("OpenRouter: Submitting streaming request to API endpoint")
-        timeout_value = float(loaded_config_data['openrouter_api'].get('api_timeout', 120) or 120)
-        def stream_or_collect():
-            client = create_client()
-            try:
-                with client.stream(
-                    'POST',
-                    'https://openrouter.ai/api/v1/chat/completions',
-                    headers={"Authorization": f"Bearer {openrouter_api_key}", "Accept": "text/event-stream"},
-                    json={
-                        "model": openrouter_model,
-                        "messages": [
-                            {"role": "system", "content": system_message},
-                            {"role": "user", "content": openrouter_prompt}
-                        ],
-                        "stream": True,
-                        "temperature": temp,
-                    },
-                    timeout=timeout_value,
-                ) as response:
-                    response.raise_for_status()
-                    full_response = ""
-                    for line in response.iter_lines():
-                        if not line:
-                            continue
-                        try:
-                            s = line.decode('utf-8').strip()
-                        except Exception:
-                            continue
-                        if not s.startswith('data: '):
-                            continue
-                        payload = s[len('data: '):]
-                        if payload == '[DONE]':
-                            break
-                        try:
-                            j = json.loads(payload)
-                            delta = j.get('choices', [{}])[0].get('delta', {})
-                            content = delta.get('content', '')
-                            if content:
-                                full_response += content
-                        except json.JSONDecodeError:
-                            continue
-                    return full_response.strip()
-            finally:
-                try:
-                    client.close()
-                except Exception:
-                    pass
-        return stream_or_collect()
-    else:
-        try:
-            policy = RetryPolicy(
-                attempts=int(loaded_config_data['openrouter_api'].get('api_retries', 3)) + 1,
-                backoff_base_ms=int(float(loaded_config_data['openrouter_api'].get('api_retry_delay', 1)) * 1000),
-            )
-            timeout_value = float(loaded_config_data['openrouter_api'].get('api_timeout', 120) or 120)
-            response_data = fetch_json(
-                method='POST',
-                url='https://openrouter.ai/api/v1/chat/completions',
-                headers={"Authorization": f"Bearer {openrouter_api_key}"},
-                json={
-                    "model": openrouter_model,
-                    "messages": [
-                        {"role": "system", "content": system_message},
-                        {"role": "user", "content": openrouter_prompt}
-                    ],
-                    "temperature": temp,
-                },
-                timeout=timeout_value,
-                retry=policy,
-            )
-            logging.debug(f"API Response Data: {response_data}")
-            if 'choices' in response_data and len(response_data['choices']) > 0:
-                summary = response_data['choices'][0]['message']['content'].strip()
-                logging.debug("openrouter: Summarization successful")
-                return summary
-            else:
-                logging.error("openrouter: Expected data not found in API response.")
-                return "openrouter: Expected data not found in API response."
-        except Exception as e:
-            logging.error(f"openrouter: Error in processing: {str(e)}")
-            return f"openrouter: Error occurred while processing summary with openrouter: {str(e)}"
-
-
-def summarize_with_huggingface(api_key, input_data, custom_prompt_arg, temp=None, streaming=False,):
-    # https://huggingface.co/docs/api-inference/tasks/chat-completion
-    loaded_config_data = load_and_log_configs()
-    logging.debug("HuggingFace: Summarization process starting...")
-    try:
-        logging.debug("HuggingFace: Loading and validating configurations")
-        if loaded_config_data is None:
-            logging.error("Failed to load configuration data")
-            huggingface_api_key = None
-        else:
-            # Prioritize the API key passed as a parameter
-            if api_key and api_key.strip():
-                huggingface_api_key = api_key
-                logging.info("HuggingFace: Using API key provided as parameter")
-            else:
-                # If no parameter is provided, use the key from the config
-                huggingface_api_key = loaded_config_data['huggingface_api'].get('api_key')
-                logging.debug("HuggingFace: API key from config")
-                if huggingface_api_key:
-                    logging.info("HuggingFace: Using API key from config file")
-                else:
-                    logging.warning("HuggingFace: No API key found in config file")
-
-        # Final check to ensure we have a valid API key
-        if not huggingface_api_key or not huggingface_api_key.strip():
-            logging.error("HuggingFace: No valid API key available")
-            raise ValueError("HuggingFace: API key is required for summarization")
-
-        logging.debug("HuggingFace: Using configured API key")
-
-        logging.debug("HuggingFace: Using provided string data for summarization")
-        data = input_data
-
-        # DEBUG - Debug logging to identify sent data
-        logging.debug(f"HuggingFace: Loaded data: {data[:500]}...(snipped to first 500 chars)")
-        logging.debug(f"HuggingFace: Type of data: {type(data)}")
-
-        if isinstance(data, dict) and 'summary' in data:
-            # If the loaded data is a dictionary and already contains a summary, return it
-            logging.debug("HuggingFace: Summary already exists in the loaded data")
-            return data['summary']
-
-        # If the loaded data is a list of segment dictionaries or a string, proceed with summarization
-        if isinstance(data, list):
-            segments = data
-            text = extract_text_from_segments(segments)
-        elif isinstance(data, str):
-            text = data
-        else:
-            raise ValueError("HuggingFace: Invalid input data format")
-
-        headers = {
-            "Authorization": f"Bearer {huggingface_api_key}"
-        }
-        huggingface_model = loaded_config_data['huggingface_api']['model']
-        API_URL = f"https://api-inference.huggingface.co/models/{huggingface_model}"
-        if temp is None:
-            temp = 0.1
-        temp = float(temp)
-        huggingface_prompt = f"{custom_prompt_arg}\n\n\n{text}"
-        logging.debug(f"HuggingFace: Prompt being sent is {huggingface_prompt}")
-        data_payload = {
-            "inputs": huggingface_prompt,
-            "max_tokens": 4096,
-            "stream": streaming,
-            "temperature": temp
-        }
-
-        logging.debug("HuggingFace: Submitting request...")
-        if streaming:
-            timeout_value = float(loaded_config_data['huggingface_api'].get('api_timeout', 120) or 120)
-            def stream_generator():
-                client = create_client()
-                try:
-                    with client.stream('POST', API_URL, headers=headers, json=data_payload, timeout=timeout_value) as response:
-                        response.raise_for_status()
-                        for line in response.iter_lines():
-                            if not line:
-                                continue
-                            decoded_line = line.decode('utf-8').strip()
-                            if not decoded_line.startswith('data:'):
-                                continue
-                            data_str = decoded_line[len('data:'):].strip()
-                            if data_str == '[DONE]':
-                                break
-                            try:
-                                data_json = json.loads(data_str)
-                                if 'token' in data_json:
-                                    token_text = data_json['token'].get('text', '')
-                                    if token_text:
-                                        yield token_text
-                                elif 'generated_text' in data_json:
-                                    generated_text = data_json['generated_text']
-                                    if generated_text:
-                                        yield generated_text
-                                else:
-                                    logging.debug(f"HuggingFace: Unhandled streaming data: {data_json}")
-                            except json.JSONDecodeError:
-                                logging.error(f"HuggingFace: Error decoding JSON from line: {decoded_line}")
-                                continue
-                finally:
-                    try:
-                        client.close()
-                    except Exception:
-                        pass
-            return stream_generator()
-        else:
-            policy = RetryPolicy(
-                attempts=int(loaded_config_data['huggingface_api'].get('api_retries', 3)) + 1,
-                backoff_base_ms=int(float(loaded_config_data['huggingface_api'].get('api_retry_delay', 1)) * 1000),
-            )
-            timeout_value = float(loaded_config_data['huggingface_api'].get('api_timeout', 120) or 120)
-            response_json = fetch_json(method='POST', url=API_URL, headers=headers, json=data_payload, timeout=timeout_value, retry=policy)
-            logging.debug(f"HuggingFace: Response JSON: {response_json}")
-            if isinstance(response_json, dict) and 'generated_text' in response_json:
-                chat_response = str(response_json['generated_text']).strip()
-            elif isinstance(response_json, list) and len(response_json) > 0 and 'generated_text' in response_json[0]:
-                chat_response = str(response_json[0]['generated_text']).strip()
-            else:
-                logging.error("HuggingFace: Expected 'generated_text' in response")
-                return "HuggingFace: Expected 'generated_text' in API response."
-
-            logging.debug("HuggingFace: Summarization successful")
-            return chat_response
-
-    except Exception as e:
-        logging.error(f"HuggingFace: Error in processing: {str(e)}", exc_info=True)
-        return f"HuggingFace: Error occurred while processing summary with HuggingFace: {str(e)}"
-
-
-def summarize_with_deepseek(api_key, input_data, custom_prompt_arg, temp=None, system_message=None, streaming=False):
-    # https://api-docs.deepseek.com/api/create-chat-completion
-    logging.debug("DeepSeek: Summarization process starting...")
-    try:
-        logging.debug("DeepSeek: Loading and validating configurations")
-        loaded_config_data = load_and_log_configs()
-        if loaded_config_data is None:
-            logging.error("Failed to load configuration data")
-            deepseek_api_key = None
-        else:
-            # Prioritize the API key passed as a parameter
-            if api_key and api_key.strip():
-                deepseek_api_key = api_key
-                logging.info("DeepSeek: Using API key provided as parameter")
-            else:
-                # If no parameter is provided, use the key from the config
-                deepseek_api_key = loaded_config_data['deepseek_api'].get('api_key')
-                if deepseek_api_key:
-                    logging.info("DeepSeek: Using API key from config file")
-                else:
-                    logging.warning("DeepSeek: No API key found in config file")
-
-        # Final check to ensure we have a valid API key
-        if not deepseek_api_key or not deepseek_api_key.strip():
-            logging.error("DeepSeek: No valid API key available")
-            return "DeepSeek: API Key Not Provided/Found in Config file or is empty"
-
-        logging.debug("DeepSeek: Using configured API key")
-
-        # Input data handling
-        logging.debug("DeepSeek: Using provided string data for summarization")
-        data = input_data
-
-        # DEBUG - Debug logging to identify sent data
-        logging.debug(f"DeepSeek: Loaded data: {str(data)[:500]}...(snipped to first 500 chars)")
-        logging.debug(f"DeepSeek: Type of data: {type(data)}")
-
-        if isinstance(data, dict) and 'summary' in data:
-            logging.debug("DeepSeek: Summary already exists in the loaded data")
-            return data['summary']
-
-        # Text extraction
-        if isinstance(data, list):
-            segments = data
-            text = extract_text_from_segments(segments)
-        elif isinstance(data, str):
-            text = data
-        else:
-            raise ValueError("DeepSeek: Invalid input data format")
-
-        deepseek_model = loaded_config_data['deepseek_api']['model'] or "deepseek-chat"
-
-        if temp is None:
-            temp = 0.1
-        temp = float(temp)
-        if system_message is None:
-            system_message = "You are a helpful AI assistant who does whatever the user requests."
-
-        headers = {
-            'Authorization': f'Bearer {deepseek_api_key}',
-            'Content-Type': 'application/json'
-        }
-
-        logging.debug(
-            "DeepSeek: Using configured API key")
-        logging.debug("DeepSeek: Preparing data + prompt for submission")
-        deepseek_prompt = f"{text} \n\n\n\n{custom_prompt_arg}"
-        data = {
-            "model": deepseek_model,
-            "messages": [
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": deepseek_prompt}
-            ],
-            "stream": streaming,
-            "temperature": temp
-        }
-
-        if streaming:
-            logging.debug("DeepSeek: Posting streaming request")
-            response = session.post(
-                'https://api.deepseek.com/chat/completions',
-                headers=headers,
-                json=data,
-                stream=True
-            )
-            response.raise_for_status()
-
-            def stream_generator():
-                client = create_client()
-                try:
-                    with client.stream('POST', 'https://api.deepseek.com/chat/completions', headers=headers, json=data, timeout=float(loaded_config_data['deepseek_api'].get('api_timeout', 120) or 120)) as response2:
-                        response2.raise_for_status()
-                        for line in response2.iter_lines():
-                            if not line:
-                                continue
-                            decoded_line = line.decode('utf-8').strip()
-                            if decoded_line == '':
-                                continue
-                            if not decoded_line.startswith('data: '):
-                                continue
-                            data_str = decoded_line[len('data: '):]
-                            if data_str == '[DONE]':
-                                break
-                            try:
-                                data_json = json.loads(data_str)
-                                delta_content = data_json.get('choices', [{}])[0].get('delta', {}).get('content', '')
-                                if delta_content:
-                                    yield delta_content
-                            except json.JSONDecodeError:
-                                logging.error(f"DeepSeek: Error decoding JSON from line: {decoded_line}")
-                                continue
-                            except KeyError as e:
-                                logging.error(f"DeepSeek: Key error: {str(e)} in line: {decoded_line}")
-                                continue
-                finally:
-                    try:
-                        client.close()
-                    except Exception:
-                        pass
-            return stream_generator()
-        else:
-            from tldw_Server_API.app.core.http_client import fetch_json
-            logging.debug("DeepSeek: Posting request")
-            response_data = fetch_json(method='POST', url='https://api.deepseek.com/chat/completions', headers=headers, json=data, timeout=float(loaded_config_data['deepseek_api'].get('api_timeout', 120) or 120), retry=RetryPolicy(attempts=int(loaded_config_data['deepseek_api'].get('api_retries', 3)) + 1, backoff_base_ms=int(float(loaded_config_data['deepseek_api'].get('api_retry_delay', 1)) * 1000)))
-            if 'choices' in response_data and len(response_data['choices']) > 0:
-                summary = response_data['choices'][0]['message']['content'].strip()
-                logging.debug("DeepSeek: Summarization successful")
-                return summary
-            else:
-                logging.warning("DeepSeek: Summary not found in the response data")
-                return "DeepSeek: Summary not available"
-    except Exception as e:
-        logging.error(f"DeepSeek: Error in processing: {str(e)}", exc_info=True)
-        return f"DeepSeek: Error occurred while processing summary: {str(e)}"
-
-
-def summarize_with_mistral(api_key, input_data, custom_prompt_arg, temp=None, system_message=None, streaming=False):
-    logging.debug("Mistral: Summarization process starting...")
-    try:
-        logging.debug("Mistral: Loading and validating configurations")
-        loaded_config_data = load_and_log_configs()
-        if loaded_config_data is None:
-            logging.error("Failed to load configuration data")
-            mistral_api_key = None
-        else:
-            # Prioritize the API key passed as a parameter
-            if api_key and api_key.strip():
-                mistral_api_key = api_key
-                logging.info("Mistral: Using API key provided as parameter")
-            else:
-                # If no parameter is provided, use the key from the config
-                mistral_api_key = loaded_config_data['mistral_api'].get('api_key')
-                if mistral_api_key:
-                    logging.info("Mistral: Using API key from config file")
-                else:
-                    logging.warning("Mistral: No API key found in config file")
-
-        # Final check to ensure we have a valid API key
-        if not mistral_api_key or not mistral_api_key.strip():
-            logging.error("Mistral: No valid API key available")
-            return "Mistral: API Key Not Provided/Found in Config file or is empty"
-
-        logging.debug("Mistral: Using configured API key")
-
-        # Input data handling
-        logging.debug("Mistral: Using provided string data for summarization")
-        data = input_data
-
-        # DEBUG - Debug logging to identify sent data
-        logging.debug(f"Mistral: Loaded data: {str(data)[:500]}...(snipped to first 500 chars)")
-        logging.debug(f"Mistral: Type of data: {type(data)}")
-
-        if isinstance(data, dict) and 'summary' in data:
-            logging.debug("Mistral: Summary already exists in the loaded data")
-            return data['summary']
-
-        # Text extraction
-        if isinstance(data, list):
-            segments = data
-            text = extract_text_from_segments(segments)
-        elif isinstance(data, str):
-            text = data
-        else:
-            raise ValueError("Mistral: Invalid input data format")
-
-        mistral_model = loaded_config_data['mistral_api']['model'] or "mistral-large-latest"
-
-        if temp is None:
-            temp = 0.2
-        temp = float(temp)
-        if system_message is None:
-            system_message = "You are a helpful AI assistant who does whatever the user requests."
-
-        headers = {
-            'Authorization': f'Bearer {mistral_api_key}',
-            'Content-Type': 'application/json'
-        }
-
-        logging.debug("Mistral: Using configured API key")
-        logging.debug("Mistral: Preparing data + prompt for submission")
-        mistral_prompt = f"{custom_prompt_arg}\n\n\n\n{text} "
-        data = {
-            "model": mistral_model,
-            "messages": [
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": mistral_prompt}
-            ],
-            "temperature": temp,
-            "top_p": 1,
-            "max_tokens": 4096,
-            "stream": streaming,
-            "safe_prompt": False
-        }
-
-        if streaming:
-            logging.debug("Mistral: Posting streaming request")
-            def stream_generator():
-                client = create_client()
-                try:
-                    with client.stream('POST', 'https://api.mistral.ai/v1/chat/completions', headers=headers, json=data, timeout=float(loaded_config_data['mistral_api'].get('api_timeout', 120) or 120)) as response:
-                        response.raise_for_status()
-                        for line in response.iter_lines():
-                            if not line:
-                                continue
-                            decoded_line = line.decode('utf-8').strip()
-                            if decoded_line == '':
-                                continue
-                            if not decoded_line.startswith('data:'):
-                                continue
-                            data_str = decoded_line[len('data:'):].strip()
-                            if data_str == '[DONE]':
-                                break
-                            try:
-                                data_json = json.loads(data_str)
-                                if 'choices' in data_json and len(data_json['choices']) > 0:
-                                    delta_content = data_json['choices'][0]['delta'].get('content', '')
-                                    if delta_content:
-                                        yield delta_content
-                                else:
-                                    logging.error(f"Mistral: Unexpected data format: {data_json}")
-                                    continue
-                            except json.JSONDecodeError:
-                                logging.error(f"Mistral: Error decoding JSON from line: {decoded_line}")
-                                continue
-                            except KeyError as e:
-                                logging.error(f"Mistral: Key error: {str(e)} in line: {decoded_line}")
-                                continue
-                finally:
-                    try:
-                        client.close()
-                    except Exception:
-                        pass
-            return stream_generator()
-        else:
-            policy = RetryPolicy(
-                attempts=int(loaded_config_data['mistral_api'].get('api_retries', 3)) + 1,
-                backoff_base_ms=int(float(loaded_config_data['mistral_api'].get('api_retry_delay', 1)) * 1000),
-            )
-            timeout_value = float(loaded_config_data['mistral_api'].get('api_timeout', 120) or 120)
-            response_data = fetch_json(method='POST', url='https://api.mistral.ai/v1/chat/completions', headers=headers, json=data, timeout=timeout_value, retry=policy)
-            if 'choices' in response_data and len(response_data['choices']) > 0:
-                summary = response_data['choices'][0]['message']['content'].strip()
-                logging.debug("Mistral: Summarization successful")
-                return summary
-            else:
-                logging.warning("Mistral: Summary not found in the response data")
-                return "Mistral: Summary not available"
-    except Exception as e:
-        logging.error(f"Mistral: Error in processing: {str(e)}", exc_info=True)
-        return f"Mistral: Error occurred while processing summary: {str(e)}"
-
-
-def summarize_with_google(api_key, input_data, custom_prompt_arg, temp=None, system_message=None, streaming=False, model_override: Optional[str] = None,):
-    loaded_config_data = load_and_log_configs()
-    try:
-        # API key validation
-        if not api_key or api_key.strip() == "":
-            logging.info("Google: #1 API key not provided as parameter")
-            logging.info("Google: Attempting to use API key from config file")
-            api_key = loaded_config_data['google_api']['api_key']
-
-        if not api_key or api_key.strip() == "":
-            logging.error("Google: #2 API key not found or is empty")
-            return "Google: API Key Not Provided/Found in Config file or is empty"
-
-        google_api_key = api_key
-        logging.debug("Google: Using configured API key")
-
-        # Input data handling
-        logging.debug(f"Google: Raw input data type: {type(input_data)}")
-        logging.debug(f"Google: Raw input data (first 500 chars): {str(input_data)[:500]}...")
-
-        if isinstance(input_data, str):
-            if input_data.strip().startswith('{'):
-                # It's likely a JSON string
-                logging.debug("Google: Parsing provided JSON string data for summarization")
-                try:
-                    data = json.loads(input_data)
-                except json.JSONDecodeError as e:
-                    logging.error(f"Google: Error parsing JSON string: {str(e)}")
-                    return f"Google: Error parsing JSON input: {str(e)}"
-            else:
-                logging.debug("Google: Using provided string data for summarization")
-                data = input_data
-        else:
-            data = input_data
-
-        logging.debug(f"Google: Processed data type: {type(data)}")
-        logging.debug(f"Google: Processed data (first 500 chars): {str(data)[:500]}...")
-
-        # Text extraction
-        if isinstance(data, dict):
-            if 'summary' in data:
-                logging.debug("Google: Summary already exists in the loaded data")
-                return data['summary']
-            elif 'segments' in data:
-                text = extract_text_from_segments(data['segments'])
-            else:
-                text = json.dumps(data)  # Convert dict to string if no specific format
-        elif isinstance(data, list):
-            text = extract_text_from_segments(data)
-        elif isinstance(data, str):
-            text = data
-        else:
-            raise ValueError(f"Google: Invalid input data format: {type(data)}")
-
-        logging.debug(f"Google: Extracted text (first 500 chars): {text[:500]}...")
-        logging.debug(f"Google: Custom prompt: {custom_prompt_arg}")
-
-        google_model = (model_override or loaded_config_data['google_api']['model'] or "gemini-1.5-pro")
-        logging.debug(f"Google: Using model: {google_model}")
-
-        headers = {
-            'Authorization': f'Bearer {google_api_key}',
-            'Content-Type': 'application/json'
-        }
-
-        logging.debug(
-            "Google: Using configured API key")
-        logging.debug("openai: Preparing data + prompt for submittal")
-        google_prompt = f"{text} \n\n\n\n{custom_prompt_arg}"
-        #if temp is None:
-        #    temp = 0.7
-        if system_message is None:
-            system_message = "You are a helpful AI assistant who does whatever the user requests."
-        #temp = float(temp)
-        data = {
-            "model": google_model,
-            "messages": [
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": google_prompt}
-            ],
-            "stream": streaming,
-            #"max_tokens": 4096,
-            #"temperature": temp
-        }
-
-        if streaming:
-            def stream_generator():
-                client = create_client()
-                try:
-                    with client.stream('POST', 'https://generativelanguage.googleapis.com/v1beta/openai/', headers=headers, json=data, timeout=float(loaded_config_data['google_api'].get('api_timeout', 120) or 120)) as response:
-                        response.raise_for_status()
-                        for line in response.iter_lines():
-                            if not line:
-                                continue
-                            decoded_line = line.decode('utf-8').strip()
-                            if decoded_line == '':
-                                continue
-                            if not decoded_line.startswith('data: '):
-                                continue
-                            data_str = decoded_line[len('data: '):]
-                            if data_str == '[DONE]':
-                                break
-                            try:
-                                data_json = json.loads(data_str)
-                                chunk = data_json.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                                if chunk:
-                                    yield chunk
-                            except json.JSONDecodeError:
-                                logging.error(f"Google: Error decoding JSON from line: {decoded_line}")
-                                continue
-                            except KeyError as e:
-                                logging.error(f"Google: Key error: {str(e)} in line: {decoded_line}")
-                                continue
-                finally:
-                    try:
-                        client.close()
-                    except Exception:
-                        pass
-            return stream_generator()
-        else:
-            logging.debug("Google: Posting request")
-            from tldw_Server_API.app.core.http_client import fetch_json
-            response_data = fetch_json(method='POST', url='https://generativelanguage.googleapis.com/v1beta/openai/', headers=headers, json=data, timeout=float(loaded_config_data['google_api'].get('api_timeout', 120) or 120), retry=RetryPolicy(attempts=int(loaded_config_data['google_api'].get('api_retries', 3)) + 1, backoff_base_ms=int(float(loaded_config_data['google_api'].get('api_retry_delay', 1)) * 1000)))
-            if 'choices' in response_data and len(response_data['choices']) > 0:
-                summary = response_data['choices'][0]['message']['content'].strip()
-                logging.debug("Google: Summarization successful")
-                logging.debug(f"Google: Summary (first 500 chars): {summary[:500]}...")
-                return summary
-            else:
-                logging.warning("Google: Summary not found in the response data")
-                return "Google: Summary not available"
-    except json.JSONDecodeError as e:
-        logging.error(f"Google: Error decoding JSON: {str(e)}", exc_info=True)
-        return f"Google: Error decoding JSON input: {str(e)}"
-    except Exception as e:
-        logging.error(f"Google: Error making API request: {str(e)}", exc_info=True)
-        return f"Google: Error making API request: {str(e)}"
-
-def summarize_with_mock_llm(text_to_summarize: str, custom_prompt_arg: Optional[str], api_key: Optional[str] = None, temp: Optional[float] = None, system_message: Optional[str] = None, streaming: bool = False):
-    """
-    Mock implementation of OpenAI summarization function that mimics the behavior
-    without making actual API calls.
-
-    Returns either a string summary or a generator for streaming responses,
-    matching the behavior of the real function.
-    """
-    try:
-        # Log the same debug information as the real function
-        logging.debug(f"MOCK-LLM (MOCK): Received text length: {len(str(text_to_summarize))}")
-        logging.debug(f"MOCK-LLM (MOCK): Custom prompt: {custom_prompt_arg}")
-        logging.debug(f"MOCK-LLM (MOCK): Temperature: {temp}, System Message: {system_message}, Streaming: {streaming}")
-
-        # Extract a sample of text to include in mock response
-        sample_text = str(text_to_summarize)[:50] + "..." if len(str(text_to_summarize)) > 50 else str(text_to_summarize)
-
-        # Create mock summary
-        mock_summary = (
-            f"[MOCK OPENAI RESPONSE]\n"
-            f"This is a mock summary generated for testing purposes.\n\n"
-            f"Sample of input text: '{sample_text}'\n"
-            f"Custom prompt: '{custom_prompt_arg}'\n"
-            f"Temperature: {temp or 0.7}\n"
-            f"System message: '{system_message or 'You are a helpful AI assistant.'}'\n"
-            f"Time generated: {time.strftime('%Y-%m-%d %H:%M:%S')}"
-        )
-
-        # Add some simulated delay to mimic API latency
-        time.sleep(0.5)
-
-        mock_summary_text = f"Mocked summary for: {text_to_summarize[:30]}..."
-        if streaming:
-            def _stream():
-                yield mock_summary_text
-
-            return _stream()
-        else:
-            logging.debug("OpenAI (MOCK): Returning non-streaming mock response")
-            return mock_summary
-
-    except Exception as e:
-        logging.error(f"OpenAI (MOCK): Unexpected error: {str(e)}", exc_info=True)
-        return f"Error: OpenAI mock function unexpected error: {str(e)}"
-#
-#
-
-# FIXME
-def summarize_chunk(api_name, text, custom_prompt_input, api_key, temp=None, system_message=None):
-    logging.debug("Entered 'summarize_chunk' function")
-    if api_name in (None, "None", "none"):
-        logging.warning("summarize_chunk: API name not provided for summarization")
-        return "No summary available"
-
-    try:
-        result = analyze(text, custom_prompt_input, api_name, api_key, temp, system_message)
-
-        # Handle streaming generator responses
-        if inspect.isgenerator(result):
-            logging.debug(f"Handling streaming response from {api_name}")
-            collected_chunks = []
-            for chunk in result:
-                # Check for error chunks first
-                if isinstance(chunk, str) and chunk.startswith("Error:"):
-                    logging.warning(f"Streaming error from {api_name}: {chunk}")
-                    return chunk
-                collected_chunks.append(chunk)
-            final_result = "".join(collected_chunks)
-            logging.info(f"Summarization with {api_name} streaming successful")
-            return final_result
-
-        # Handle regular string responses
-        elif isinstance(result, str):
-            if result.startswith("Error:"):
-                logging.warning(f"Summarization with {api_name} failed: {result}")
-                return None
-            logging.info(f"Summarization with {api_name} successful")
-            return result
-
-        # Handle unexpected response types
-        else:
-            logging.error(f"Unexpected response type from {api_name}: {type(result)}")
-            return None
-
-    except Exception as e:
-        logging.error(f"Error in summarize_chunk with {api_name}: {str(e)}", exc_info=True)
-        return None
 
 
 def extract_metadata_and_content(input_data):

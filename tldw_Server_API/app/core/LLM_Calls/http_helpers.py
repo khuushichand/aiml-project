@@ -1,6 +1,6 @@
 """Helpers to construct a real requests.Session with retry for streaming paths.
 
-This module must NOT import the central shim from LLM_API_Calls to avoid
+This module must NOT import the central shim from legacy_chat_calls to avoid
 recursion. It returns a plain requests.Session configured with urllib3 Retry.
 """
 

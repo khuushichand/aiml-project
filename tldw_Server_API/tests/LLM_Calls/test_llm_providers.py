@@ -19,7 +19,7 @@ from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatRateLimitError,
     ChatProviderError,
 )
-from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import (
+from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import (
     chat_with_moonshot,
     chat_with_zai,
     chat_with_cohere,
@@ -82,7 +82,7 @@ class TestMoonshotProvider:
 
     def test_moonshot_basic_chat(self, mock_response):
         """Test basic chat functionality."""
-        with patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries') as mock_factory:
+        with patch('tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.create_session_with_retries') as mock_factory:
             fake_session = Mock()
             mock_factory.return_value = fake_session
 
@@ -108,7 +108,7 @@ class TestMoonshotProvider:
             assert payload['model'] == "moonshot-v1-8k"
             assert len(payload['messages']) == 1
 
-    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries')
+    @patch('tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.create_session_with_retries')
     def test_moonshot_with_system_message(self, mock_factory, mock_response):
         """Test chat with system message."""
         fake_session = Mock()
@@ -131,7 +131,7 @@ class TestMoonshotProvider:
         assert payload['messages'][0]['role'] == "system"
         assert payload['messages'][0]['content'] == "You are a helpful assistant."
 
-    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries')
+    @patch('tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.create_session_with_retries')
     def test_moonshot_vision_model(self, mock_factory, mock_response):
         """Test vision model with image content."""
         mock_response['model'] = "moonshot-v1-8k-vision-preview"
@@ -194,7 +194,7 @@ class TestMoonshotProvider:
         assert len(chunks) == 4  # 3 content chunks + [DONE]
         assert "[DONE]" in chunks[-1]
 
-    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls._legacy_create_session_with_retries')
+    @patch('tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls._legacy_create_session_with_retries')
     def test_moonshot_streaming_session_lifecycle(self, mock_legacy_factory):
         """Ensure streaming keeps the session open until iteration finishes."""
         session_state = {"closed": False}
@@ -251,7 +251,7 @@ class TestMoonshotProvider:
         assert session_state["closed"] is True
         assert response_state["closed"] is True
 
-    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries')
+    @patch('tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.create_session_with_retries')
     def test_moonshot_error_handling(self, mock_factory):
         """Test error handling."""
         fake_session = Mock()
@@ -295,7 +295,7 @@ class TestZAIProvider:
             }
         }
 
-    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries')
+    @patch('tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.create_session_with_retries')
     def test_zai_basic_chat(self, mock_factory, mock_response):
         """Test basic chat functionality."""
         fake_session = Mock()
@@ -322,7 +322,7 @@ class TestZAIProvider:
         payload = call_args[1]['json']
         assert payload['model'] == "glm-4.5"
 
-    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries')
+    @patch('tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.create_session_with_retries')
     def test_zai_with_request_id(self, mock_factory, mock_response):
         """Test chat with request_id."""
         fake_session = Mock()
@@ -344,7 +344,7 @@ class TestZAIProvider:
         payload = call_args[1]['json']
         assert payload.get('request_id') == "custom_req_123"
 
-    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries')
+    @patch('tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.create_session_with_retries')
     def test_zai_model_variants(self, mock_factory, mock_response):
         """Test different model variants."""
         models = ["glm-4.5", "glm-4.5-air", "glm-4.5-flash", "glm-4-32b-0414-128k"]
@@ -717,7 +717,7 @@ class TestIntegration:
     """Integration tests for provider interactions."""
 
     @pytest.mark.asyncio
-    @patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries')
+    @patch('tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.create_session_with_retries')
     async def test_provider_switching(self, mock_factory):
         """Test switching between different providers."""
         # Mock responses for different providers
@@ -755,7 +755,7 @@ class TestIntegration:
     @pytest.mark.asyncio
     async def test_concurrent_requests(self):
         """Test concurrent requests to multiple providers."""
-        with patch('tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries') as mock_factory:
+        with patch('tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.create_session_with_retries') as mock_factory:
             fake_session = Mock()
             mock_factory.return_value = fake_session
             mock_response_obj = Mock()
@@ -828,11 +828,11 @@ class TestSSENormalization:
         session.close = Mock()
 
         monkeypatch.setattr(
-            "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries",
+            "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.create_session_with_retries",
             lambda **kwargs: session,
         )
         monkeypatch.setattr(
-            "tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs",
+            "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.load_and_log_configs",
             lambda: {"cohere_api": {"api_key": "test", "api_timeout": 30}},
         )
 
@@ -1706,7 +1706,7 @@ async def test_openai_async_non_streaming_preserves_payload(monkeypatch):
         return FakeClient(**kwargs)
 
     monkeypatch.setattr(
-        'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs',
+        'tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.load_and_log_configs',
         fake_config,
     )
     monkeypatch.setattr(
@@ -1769,7 +1769,7 @@ async def test_openai_async_gpt5_payload(monkeypatch):
         return FakeClient()
 
     monkeypatch.setattr(
-        'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs',
+        'tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.load_and_log_configs',
         fake_config,
     )
     monkeypatch.setattr(
@@ -1832,7 +1832,7 @@ async def test_groq_async_non_streaming_preserves_payload(monkeypatch):
         return FakeClient(**kwargs)
 
     monkeypatch.setattr(
-        'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs',
+        'tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.load_and_log_configs',
         fake_config,
     )
     monkeypatch.setattr(
@@ -1893,7 +1893,7 @@ async def test_openrouter_async_streaming_filters_control_lines(monkeypatch):
         return FakeClient(**kwargs)
 
     monkeypatch.setattr(
-        'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs',
+        'tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.load_and_log_configs',
         fake_config,
     )
     monkeypatch.setattr(
@@ -1988,11 +1988,11 @@ def test_cohere_config_fallbacks(monkeypatch):
     session.close = Mock()
 
     monkeypatch.setattr(
-        'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs',
+        'tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.load_and_log_configs',
         fake_config,
     )
     monkeypatch.setattr(
-        'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries',
+        'tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.create_session_with_retries',
         lambda *args, **kwargs: session,
     )
 
@@ -2057,11 +2057,11 @@ def test_google_config_fallbacks(monkeypatch):
     session.close = Mock()
 
     monkeypatch.setattr(
-        'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs',
+        'tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.load_and_log_configs',
         fake_config,
     )
     monkeypatch.setattr(
-        'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries',
+        'tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.create_session_with_retries',
         lambda *args, **kwargs: session,
     )
 
@@ -2098,11 +2098,11 @@ def test_mistral_stream_session_closed(monkeypatch):
     session.close = Mock()
 
     monkeypatch.setattr(
-        'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs',
+        'tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.load_and_log_configs',
         lambda: {'mistral_api': {}},
     )
     monkeypatch.setattr(
-        'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries',
+        'tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.create_session_with_retries',
         lambda *args, **kwargs: session,
     )
 
@@ -2128,11 +2128,11 @@ def test_zai_http_error_normalized(monkeypatch):
     session.close = Mock()
 
     monkeypatch.setattr(
-        'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.load_and_log_configs',
+        'tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.load_and_log_configs',
         lambda: {'zai_api': {}},
     )
     monkeypatch.setattr(
-        'tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls.create_session_with_retries',
+        'tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.create_session_with_retries',
         lambda *args, **kwargs: session,
     )
 

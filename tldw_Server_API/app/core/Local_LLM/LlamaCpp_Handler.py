@@ -10,10 +10,6 @@ import signal
 import subprocess  # For synchronous fallback if needed
 from pathlib import Path
 from typing import List, Optional, Dict, Any
-#
-# Third-party imports
-import httpx
-#
 # Local imports
 from .LLM_Base_Handler import BaseLLMHandler
 from .LLM_Inference_Exceptions import ModelNotFoundError, ServerError, InferenceError
@@ -586,21 +582,30 @@ class LlamaCppHandler(BaseLLMHandler):
                 self.metrics["inference_time_sum"] += max(0.0, t1 - t0)
                 self.logger.debug("Llama.cpp inference successful.")
                 return result
-            except httpx.HTTPStatusError as e:
-                error_text = e.response.text
+            except Exception as e:
+                status = http_utils.get_http_status_from_exception(e)
+                if status is not None:
+                    error_text = http_utils.get_http_error_text(e)
+                    self.logger.error(
+                        f"Llama.cpp API error ({status}) from {target_url}: {error_text}",
+                        exc_info=True
+                    )
+                    self.metrics["inference_error_count"] += 1
+                    raise InferenceError(f"Llama.cpp API error ({status}): {error_text}")
+                if http_utils.is_network_error(e):
+                    self.logger.error(
+                        f"Could not connect or communicate with Llama.cpp server at {target_url}: {e}",
+                        exc_info=True
+                    )
+                    self.metrics["inference_error_count"] += 1
+                    raise ServerError(f"Could not connect/communicate with Llama.cpp server at {target_url}: {e}")
+                error_text = http_utils.get_http_error_text(e)
                 self.logger.error(
-                    f"Llama.cpp API error ({e.response.status_code}) from {target_url}: {error_text}",
-                    exc_info=True
+                    f"Unexpected error during Llama.cpp inference to {target_url}: {error_text}",
+                    exc_info=True,
                 )
                 self.metrics["inference_error_count"] += 1
-                raise InferenceError(f"Llama.cpp API error ({e.response.status_code}): {error_text}")
-            except httpx.RequestError as e:
-                self.logger.error(
-                    f"Could not connect or communicate with Llama.cpp server at {target_url}: {e}",
-                    exc_info=True
-                )
-                self.metrics["inference_error_count"] += 1
-                raise ServerError(f"Could not connect/communicate with Llama.cpp server at {target_url}: {e}")
+                raise InferenceError(f"Unexpected error during Llama.cpp inference: {error_text}")
 
     async def stream_inference(self, prompt: Optional[str] = None, messages: Optional[List[Dict[str, str]]] = None,
                                api_endpoint: str = "/v1/chat/completions", **kwargs):
@@ -637,11 +642,15 @@ class LlamaCppHandler(BaseLLMHandler):
                             yield openai_delta_chunk(l)
                     if not done_sent:
                         yield sse_done()
-            except httpx.HTTPStatusError as e:
-                msg = getattr(e.response, "text", str(e))
-                yield sse_data({"error": {"message": f"HTTP error: {msg}", "type": "llamacpp_stream_error"}})
             except Exception as e:
-                yield sse_data({"error": {"message": f"Stream error: {str(e)}", "type": "llamacpp_stream_error"}})
+                status = http_utils.get_http_status_from_exception(e)
+                if status is not None:
+                    msg = http_utils.get_http_error_text(e)
+                    yield sse_data({"error": {"message": f"HTTP error ({status}): {msg}", "type": "llamacpp_stream_error"}})
+                elif http_utils.is_network_error(e):
+                    yield sse_data({"error": {"message": f"Network error: {e}", "type": "llamacpp_stream_error"}})
+                else:
+                    yield sse_data({"error": {"message": f"Stream error: {str(e)}", "type": "llamacpp_stream_error"}})
 
     # --- Cleanup ---
     def _cleanup_managed_server_sync(self):

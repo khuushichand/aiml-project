@@ -73,7 +73,7 @@ async def generate_document(
 
         # Resolve provider key requirements
         try:
-            from tldw_Server_API.app.core.Chat.provider_config import PROVIDER_REQUIRES_KEY
+            from tldw_Server_API.app.core.LLM_Calls.provider_metadata import PROVIDER_REQUIRES_KEY
         except Exception:
             PROVIDER_REQUIRES_KEY: Dict[str, bool] = {}
 

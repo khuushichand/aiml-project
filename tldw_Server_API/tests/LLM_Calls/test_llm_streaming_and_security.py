@@ -38,7 +38,7 @@ class _DummySession:
 
 def test_google_stream_emits_done_once(monkeypatch):
     # Arrange: stub config and session to simulate two SSE lines: one data chunk and one [DONE]
-    from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as m
+    from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as m
 
     monkeypatch.setattr(
         m, "load_and_log_configs",
@@ -77,7 +77,7 @@ def test_google_stream_emits_done_once(monkeypatch):
 
 def test_huggingface_headers_are_masked(monkeypatch):
     # Arrange: capture debug calls by monkeypatching the logger's debug method
-    from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as m
+    from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as m
 
     secret = "sk-ABCDEF1234567890"
     monkeypatch.setattr(

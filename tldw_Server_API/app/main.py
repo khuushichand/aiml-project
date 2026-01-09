@@ -1567,9 +1567,9 @@ async def lifespan(app: FastAPI):
         nonlocal provider_manager
         try:
             from tldw_Server_API.app.core.Chat.provider_manager import initialize_provider_manager
-            from tldw_Server_API.app.core.Chat.provider_config import API_CALL_HANDLERS as PROVIDER_API_CALL_HANDLERS
+            from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 
-            providers = list(PROVIDER_API_CALL_HANDLERS.keys())
+            providers = get_registry().list_providers()
             provider_manager = initialize_provider_manager(
                 providers, primary_provider=providers[0] if providers else None
             )

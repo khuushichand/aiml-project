@@ -255,8 +255,18 @@ class TestErrorHandling:
     """Test error handling in the API."""
 
     @pytest.mark.integration
-    def test_rate_limit_error_handling(self, test_client, auth_headers):
+    def test_rate_limit_error_handling(self, test_client, auth_headers, monkeypatch):
         """Test rate limit with deterministic TEST_MODE chat limits (per-user RPM=2)."""
+        monkeypatch.setenv("TEST_MODE", "true")
+        monkeypatch.setenv("RG_ENABLED", "0")
+        monkeypatch.setenv("TEST_CHAT_PER_USER_RPM", "2")
+        monkeypatch.setenv("TEST_CHAT_PER_CONVERSATION_RPM", "2")
+        monkeypatch.setenv("TEST_CHAT_GLOBAL_RPM", "10")
+        monkeypatch.setenv("TEST_CHAT_TOKENS_PER_MINUTE", "1000")
+        monkeypatch.delenv("TEST_CHAT_BURST_MULTIPLIER", raising=False)
+        from tldw_Server_API.app.core.Chat.rate_limiter import initialize_rate_limiter
+        initialize_rate_limiter()
+
         statuses = []
         for i in range(4):
             resp = test_client.post(

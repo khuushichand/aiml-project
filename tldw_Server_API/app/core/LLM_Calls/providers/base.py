@@ -74,25 +74,15 @@ class ChatProvider(ABC):
         provides a conservative mapping for common HTTP exceptions if available,
         falling back to ChatProviderError.
         """
-        try:
-            import httpx  # type: ignore
-        except Exception:  # pragma: no cover - optional
-            httpx = None  # type: ignore
-        try:
-            import requests  # type: ignore
-        except Exception:  # pragma: no cover - optional
-            requests = None  # type: ignore
+        from tldw_Server_API.app.core.LLM_Calls.error_utils import (
+            get_http_status_from_exception,
+            get_http_error_text,
+            is_http_status_error,
+        )
 
-        # httpx errors with response
-        if httpx is not None and isinstance(exc, getattr(httpx, "HTTPStatusError", ())):
-            resp = getattr(exc, "response", None)
-            status = getattr(resp, "status_code", None)
-            detail = None
-            try:
-                detail = resp.text if resp is not None else str(exc)
-            except Exception:
-                detail = str(exc)
-
+        if is_http_status_error(exc):
+            status = get_http_status_from_exception(exc)
+            detail = get_http_error_text(exc)
             if status in (400, 404, 422):
                 return ChatBadRequestError(provider=self.name, message=str(detail))
             if status in (401, 403):
@@ -102,24 +92,6 @@ class ChatProvider(ABC):
             if status and 500 <= status < 600:
                 return ChatProviderError(provider=self.name, message=str(detail), status_code=status)
             return ChatAPIError(provider=self.name, message=str(detail), status_code=status or 500)
-
-        # requests HTTPError
-        if requests is not None and isinstance(exc, getattr(requests.exceptions, "HTTPError", ())):
-            response = getattr(exc, "response", None)
-            status = getattr(response, "status_code", None)
-            try:
-                text = response.text if response is not None else str(exc)
-            except Exception:
-                text = str(exc)
-            if status in (400, 404, 422):
-                return ChatBadRequestError(provider=self.name, message=str(text))
-            if status in (401, 403):
-                return ChatAuthenticationError(provider=self.name, message=str(text))
-            if status == 429:
-                return ChatRateLimitError(provider=self.name, message=str(text))
-            if status and 500 <= status < 600:
-                return ChatProviderError(provider=self.name, message=str(text), status_code=status)
-            return ChatAPIError(provider=self.name, message=str(text), status_code=status or 500)
 
         # Fallback
         logger.debug(f"{self.name}: normalizing generic error: {exc}")

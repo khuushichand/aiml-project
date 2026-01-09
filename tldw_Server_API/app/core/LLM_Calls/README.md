@@ -25,15 +25,15 @@
 ## 2. Technical Details of Features
 
 - Architecture & Data Flow:
-  - Commercial providers: `LLM_API_Calls.py` — tldw_Server_API/app/core/LLM_Calls/LLM_API_Calls.py:1
-  - Local/compatible providers: `LLM_API_Calls_Local.py` — tldw_Server_API/app/core/LLM_Calls/LLM_API_Calls_Local.py:1
+  - Commercial providers: `legacy_chat_calls.py` — tldw_Server_API/app/core/LLM_Calls/legacy_chat_calls.py:1
+  - Local/compatible providers: `legacy_local_calls.py` — tldw_Server_API/app/core/LLM_Calls/legacy_local_calls.py:1
   - Routing/dispatch: `core/Chat/provider_config.py` maps provider name → handler — tldw_Server_API/app/core/Chat/provider_config.py:1
   - Streaming: `streaming.py` and `sse.py` normalize lines to SSE — tldw_Server_API/app/core/LLM_Calls/streaming.py:1, tldw_Server_API/app/core/LLM_Calls/sse.py:1
   - Retries: `http_helpers.create_session_with_retries` — tldw_Server_API/app/core/LLM_Calls/http_helpers.py:1
 - Key Functions (entry points):
-  - `chat_with_openai`, `chat_with_anthropic`, `chat_with_cohere`, `chat_with_groq`, `chat_with_openrouter`, `chat_with_deepseek`, `chat_with_mistral`, `chat_with_google`, `chat_with_qwen`, `chat_with_bedrock`, `chat_with_moonshot`, `chat_with_zai` — LLM_API_Calls.py
+  - `chat_with_openai`, `chat_with_anthropic`, `chat_with_cohere`, `chat_with_groq`, `chat_with_openrouter`, `chat_with_deepseek`, `chat_with_mistral`, `chat_with_google`, `chat_with_qwen`, `chat_with_bedrock`, `chat_with_moonshot`, `chat_with_zai` — legacy_chat_calls.py
   - Adapter classes: OpenAI, Groq, Anthropic, Google, Qwen, Mistral, OpenRouter, HuggingFace, Bedrock — under `providers/` and auto-registered via the adapter registry.
-  - `chat_with_local_llm`, `chat_with_llama`, `chat_with_kobold`, `chat_with_oobabooga`, `chat_with_tabbyapi`, `chat_with_vllm`, `chat_with_aphrodite`, `chat_with_ollama`, `chat_with_custom_openai(_2)` — LLM_API_Calls_Local.py
+  - `chat_with_local_llm`, `chat_with_llama`, `chat_with_kobold`, `chat_with_oobabooga`, `chat_with_tabbyapi`, `chat_with_vllm`, `chat_with_aphrodite`, `chat_with_ollama`, `chat_with_custom_openai(_2)` — legacy_local_calls.py
   - Async variants available for select providers (OpenAI, Groq, Anthropic, OpenRouter).
 - Dependencies:
   - Internal: Chat error classes (Chat_Deps), provider_config dispatch, config loader, streaming helpers, summarization libs.
@@ -56,7 +56,7 @@
 ## 3. Developer-Related/Relevant Information for Contributors
 
 - Folder Structure:
-  - `LLM_API_Calls.py` (commercial), `LLM_API_Calls_Local.py` (local/gateways), `streaming.py`, `sse.py`, `http_helpers.py`, `huggingface_api.py`, summarization libs.
+  - `legacy_chat_calls.py` (commercial), `legacy_local_calls.py` (local/gateways), `streaming.py`, `sse.py`, `http_helpers.py`, `huggingface_api.py`, summarization libs.
 - Extension Points:
   - Add a provider function in the appropriate file and register it in `core/Chat/provider_config.py` (both sync and async tables if available).
   - Map generic params → provider params via `PROVIDER_PARAM_MAP` in `provider_config.py`.
@@ -86,7 +86,7 @@
 
 Example (OpenAI)
 ```python
-from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_openai
+from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import chat_with_openai
 
 resp = chat_with_openai(
     input_data=[{"role":"user","content":"Hello"}],

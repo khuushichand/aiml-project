@@ -49,6 +49,33 @@ def _coerce_int(val: Optional[str], default: Optional[int] = None) -> Optional[i
         return default
 
 
+def _extract_unexpected_kwarg(err: TypeError) -> Optional[str]:
+    message = str(err)
+    marker = "unexpected keyword argument"
+    if marker not in message:
+        return None
+    try:
+        return message.split(marker, 1)[1].strip().strip("'\"")
+    except Exception:
+        return None
+
+
+def _retry_load_without_unknown_kwargs(load_fn, model_path: str, load_kwargs: Dict[str, Any], err: TypeError):
+    remaining = dict(load_kwargs)
+    current_err: TypeError = err
+    while remaining:
+        bad_key = _extract_unexpected_kwarg(current_err)
+        if not bad_key or bad_key not in remaining:
+            break
+        remaining.pop(bad_key, None)
+        try:
+            return load_fn(model_path, **remaining)
+        except TypeError as exc:
+            current_err = exc
+            continue
+    raise current_err
+
+
 def _default_settings() -> Dict[str, Any]:
     """Load MLX defaults from env/config shape (env-first)."""
     return {
@@ -196,7 +223,10 @@ class MLXSessionRegistry:
                 load_kwargs["adapter"] = settings["adapter"]
             if settings.get("adapter_weights"):
                 load_kwargs["adapter_weights"] = settings["adapter_weights"]
-            model, tokenizer = load_fn(model_path, **load_kwargs)
+            try:
+                model, tokenizer = load_fn(model_path, **load_kwargs)
+            except TypeError as exc:
+                model, tokenizer = _retry_load_without_unknown_kwargs(load_fn, model_path, load_kwargs, exc)
             session = MLXSession(
                 model_id=model_path,
                 model=model,
@@ -514,8 +544,33 @@ class MLXChatAdapter(ChatProvider):
                 except Exception as exc:
                     logger.error(f"MLX streaming failed, falling back to non-stream: {exc}")
             # Fallback to single-shot if streaming not available
-            result = self.chat(request, timeout=timeout)
-            content = result["choices"][0]["message"]["content"]
+            try:
+                output = session.generate_fn(
+                    session.model,
+                    session.tokenizer,
+                    prompt,
+                    stream=False,
+                    verbose=False,
+                    **generate_kwargs,
+                )
+            except TypeError:
+                output = session.generate_fn(session.model, session.tokenizer, prompt)
+            content = output if isinstance(output, str) else str(output)
+            tokens = len(str(content).split())
+            try:
+                observe_histogram(
+                    "mlx_chat_latency_seconds",
+                    float(time.time() - start_time),
+                    labels={"model": session.model_id, "streaming": "true"},
+                )
+                if tokens:
+                    increment_counter(
+                        "mlx_tokens_generated_total",
+                        value=float(tokens),
+                        labels={"model": session.model_id, "streaming": "true"},
+                    )
+            except Exception:
+                pass
             yield openai_delta_chunk(content)
             yield from finalize_stream(None)
 

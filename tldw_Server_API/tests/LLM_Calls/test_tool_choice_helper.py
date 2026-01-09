@@ -1,6 +1,6 @@
 import pytest
 
-from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import _apply_tool_choice
+from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import _apply_tool_choice
 
 
 def test_apply_tool_choice_none_when_no_tools_and_no_choice():

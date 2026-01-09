@@ -10,10 +10,6 @@ import requests  # For mocking requests.exceptions
 
 # Imports from your application
 from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
-from tldw_Server_API.app.core.Chat.provider_config import (
-    API_CALL_HANDLERS,
-    PROVIDER_PARAM_MAP,
-)
 from tldw_Server_API.app.core.Chat.Chat_Functions import chat  # Multimodal chat coordinator via shim
 from tldw_Server_API.app.core.Chat.chat_characters import (
     load_characters,
@@ -44,7 +40,7 @@ from tldw_Server_API.app.core.Chat.Chat_Deps import (
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB  # For mocking
 
 
-# Mock for load_and_log_configs as it's used in `chat` and `chat_api_call` (indirectly via LLM_API_Calls)
+# Mock for load_and_log_configs as it's used in `chat` and `chat_api_call` (indirectly via legacy_chat_calls)
 # It's better to mock it at the point of use within the functions being tested if it's too global.
 # For now, let's assume it's used by the LLM call functions that are mocked out by mock_llm_api_call_handlers.
 # If `chat` itself calls it directly, that patch needs to be in the `chat` function tests.
@@ -65,22 +61,13 @@ def mock_global_load_and_log_configs():
 
 
 @pytest.fixture
-def mock_llm_api_call_handlers_for_chat_functions_unit():
-    original_handlers = API_CALL_HANDLERS.copy()
-    mocked_handlers_dict = {}
-    for provider_name_key, original_func_ref in original_handlers.items():
-        # Try to get the original function's name for the mock
-        original_func_name = getattr(original_func_ref, '__name__', f"mock_{provider_name_key}_handler")
-
-        # Create a MagicMock and explicitly set its __name__ attribute
-        # and also pass it to the name argument of MagicMock for its repr.
-        mock_handler = MagicMock(name=f"mock_for_{original_func_name}")
-        mock_handler.__name__ = original_func_name  # Explicitly set it
-        mocked_handlers_dict[provider_name_key] = mock_handler
-
-    with patch("tldw_Server_API.app.core.Chat.provider_config.API_CALL_HANDLERS", new=mocked_handlers_dict), \
-         patch("tldw_Server_API.app.core.Chat.chat_orchestrator.API_CALL_HANDLERS", new=mocked_handlers_dict):
-        yield mocked_handlers_dict
+def mock_chat_dispatch():
+    mock_dispatch = MagicMock()
+    with patch(
+        "tldw_Server_API.app.core.Chat.chat_orchestrator.perform_chat_api_call",
+        new=mock_dispatch,
+    ):
+        yield mock_dispatch
 
 
 @pytest.mark.unit
@@ -108,10 +95,9 @@ def test_chat_character_helpers_reexport():
 
 # --- Tests for chat_api_call ---
 @pytest.mark.unit
-def test_chat_api_call_routing_and_param_mapping_openai_unit(mock_llm_api_call_handlers_for_chat_functions_unit):
+def test_chat_api_call_routing_and_param_mapping_openai_unit(mock_chat_dispatch):
     provider = "openai"
-    mock_openai_handler = mock_llm_api_call_handlers_for_chat_functions_unit[provider]
-    mock_openai_handler.return_value = "OpenAI success"
+    mock_chat_dispatch.return_value = "OpenAI success"
 
     args = {
         "api_endpoint": provider,
@@ -125,30 +111,21 @@ def test_chat_api_call_routing_and_param_mapping_openai_unit(mock_llm_api_call_h
     }
     result = chat_api_call(**args)
     assert result == "OpenAI success"
-    mock_openai_handler.assert_called_once()
-    called_kwargs = mock_openai_handler.call_args.kwargs
-
-    # Check that params were mapped correctly according to PROVIDER_PARAM_MAP['openai']
-    param_map_for_provider = PROVIDER_PARAM_MAP[provider]
-    expected_key = param_map_for_provider['messages_payload']
-    print(
-        f"Expected key from map for 'messages_payload': '{expected_key}' (type: {type(expected_key)})")  # Should be 'input_data'
-    print(f"Actual keys in mock's called_kwargs: {list(called_kwargs.keys())}")
-
-    assert expected_key in called_kwargs, f"Key '{expected_key}' not found in mock's called_kwargs"
-    assert called_kwargs[expected_key] == args["messages_payload"]
-    assert called_kwargs[param_map_for_provider['temp']] == args["temp"]
-    assert called_kwargs[param_map_for_provider['system_message']] == args["system_message"]
-    assert called_kwargs[param_map_for_provider['streaming']] == args["streaming"]
-    assert called_kwargs[param_map_for_provider['maxp']] == args["maxp"]
-    assert called_kwargs[param_map_for_provider['model']] == args["model"]
+    mock_chat_dispatch.assert_called_once()
+    called_kwargs = mock_chat_dispatch.call_args.kwargs
+    assert called_kwargs["api_endpoint"] == provider
+    assert called_kwargs["messages_payload"] == args["messages_payload"]
+    assert called_kwargs["temp"] == args["temp"]
+    assert called_kwargs["system_message"] == args["system_message"]
+    assert called_kwargs["streaming"] == args["streaming"]
+    assert called_kwargs["maxp"] == args["maxp"]
+    assert called_kwargs["model"] == args["model"]
 
 
 @pytest.mark.unit
-def test_chat_api_call_llamacpp_multiple_completions(mock_llm_api_call_handlers_for_chat_functions_unit):
+def test_chat_api_call_llamacpp_multiple_completions(mock_chat_dispatch):
     provider = "llama.cpp"
-    mock_llama_handler = mock_llm_api_call_handlers_for_chat_functions_unit[provider]
-    mock_llama_handler.return_value = "llama success"
+    mock_chat_dispatch.return_value = "llama success"
 
     args = {
         "api_endpoint": provider,
@@ -159,28 +136,25 @@ def test_chat_api_call_llamacpp_multiple_completions(mock_llm_api_call_handlers_
 
     result = chat_api_call(**args)
     assert result == "llama success"
-    mock_llama_handler.assert_called_once()
-    called_kwargs = mock_llama_handler.call_args.kwargs
-
-    param_map = PROVIDER_PARAM_MAP[provider]
-    assert called_kwargs[param_map['messages_payload']] == args["messages_payload"]
-    assert called_kwargs[param_map['api_key']] == args["api_key"]
-    assert called_kwargs[param_map['n']] == args["n"]
-    assert "n_probs" not in called_kwargs
+    mock_chat_dispatch.assert_called_once()
+    called_kwargs = mock_chat_dispatch.call_args.kwargs
+    assert called_kwargs["api_endpoint"] == provider
+    assert called_kwargs["messages_payload"] == args["messages_payload"]
+    assert called_kwargs["api_key"] == args["api_key"]
+    assert called_kwargs["n"] == args["n"]
 
 
 @pytest.mark.unit
-def test_chat_api_call_routing_and_param_mapping_anthropic_unit(mock_llm_api_call_handlers_for_chat_functions_unit):
+def test_chat_api_call_routing_and_param_mapping_anthropic_unit(mock_chat_dispatch):
     provider = "anthropic"
-    mock_anthropic_handler = mock_llm_api_call_handlers_for_chat_functions_unit[provider]
-    mock_anthropic_handler.return_value = "Anthropic success"
+    mock_chat_dispatch.return_value = "Anthropic success"
 
     args = {
         "api_endpoint": provider,
         "messages_payload": [{"role": "user", "content": "Hi Anthropic"}],
         "api_key": "test_anthropic_key",
         "temp": 0.6,
-        "system_message": "Be friendly.",  # This maps to 'system_prompt' for anthropic handler
+        "system_message": "Be friendly.",
         "streaming": True,
         "model": "claude-3",
         "topp": 0.92,
@@ -188,51 +162,22 @@ def test_chat_api_call_routing_and_param_mapping_anthropic_unit(mock_llm_api_cal
     }
     result = chat_api_call(**args)
     assert result == "Anthropic success"
-    mock_anthropic_handler.assert_called_once()
-    called_kwargs = mock_anthropic_handler.call_args.kwargs
-
-    param_map_for_provider = PROVIDER_PARAM_MAP[provider]
-
-    # Corrected assertions:
-    # The key for param_map_for_provider is the GENERIC arg name from chat_api_call
-    # The value is the PROVIDER-SPECIFIC arg name, which should be in called_kwargs
-
-    # For 'api_key'
-    provider_specific_api_key_name = param_map_for_provider['api_key']
-    assert called_kwargs[provider_specific_api_key_name] == args["api_key"]
-
-    # For 'messages_payload' -> 'input_data'
-    provider_specific_messages_payload_name = param_map_for_provider['messages_payload']  # This will be 'input_data'
-    assert called_kwargs[provider_specific_messages_payload_name] == args["messages_payload"]
-
-    # For 'temp'
-    provider_specific_temp_name = param_map_for_provider['temp']
-    assert called_kwargs[provider_specific_temp_name] == args["temp"]
-
-    # For 'system_message' -> 'system_prompt'
-    provider_specific_system_message_name = param_map_for_provider['system_message']  # This will be 'system_prompt'
-    assert called_kwargs[provider_specific_system_message_name] == args["system_message"]
-
-    # For 'streaming'
-    provider_specific_streaming_name = param_map_for_provider['streaming']
-    assert called_kwargs[provider_specific_streaming_name] == args["streaming"]
-
-    # For 'model'
-    provider_specific_model_name = param_map_for_provider['model']
-    assert called_kwargs[provider_specific_model_name] == args["model"]
-
-    # For 'topp'
-    provider_specific_topp_name = param_map_for_provider['topp']
-    assert called_kwargs[provider_specific_topp_name] == args["topp"]
-
-    # For 'topk'
-    provider_specific_topk_name = param_map_for_provider['topk']
-    assert called_kwargs[provider_specific_topk_name] == args["topk"]
+    mock_chat_dispatch.assert_called_once()
+    called_kwargs = mock_chat_dispatch.call_args.kwargs
+    assert called_kwargs["api_endpoint"] == provider
+    assert called_kwargs["messages_payload"] == args["messages_payload"]
+    assert called_kwargs["api_key"] == args["api_key"]
+    assert called_kwargs["temp"] == args["temp"]
+    assert called_kwargs["system_message"] == args["system_message"]
+    assert called_kwargs["streaming"] == args["streaming"]
+    assert called_kwargs["model"] == args["model"]
+    assert called_kwargs["topp"] == args["topp"]
+    assert called_kwargs["topk"] == args["topk"]
 
 
 @pytest.mark.unit
 def test_chat_api_call_unsupported_provider_unit():
-    with pytest.raises(ValueError, match="Unsupported API endpoint: non_existent_provider"):
+    with pytest.raises(ChatConfigurationError):
         chat_api_call(api_endpoint="non_existent_provider", messages_payload=[])
 
 
@@ -254,12 +199,11 @@ def test_chat_api_call_unsupported_provider_unit():
     (Exception("Very generic error"), ChatAPIError, 500),
 ])
 def test_chat_api_call_exception_propagation_and_mapping_unit(
-        mock_llm_api_call_handlers_for_chat_functions_unit,
+        mock_chat_dispatch,
         raised_exception, expected_custom_error_type, expected_status_code_in_error
 ):
     provider = "openai"  # Use any mocked provider
-    mock_handler = mock_llm_api_call_handlers_for_chat_functions_unit[provider]
-    mock_handler.side_effect = raised_exception
+    mock_chat_dispatch.side_effect = raised_exception
 
     with pytest.raises(expected_custom_error_type) as exc_info:
         chat_api_call(api_endpoint=provider, messages_payload=[{"role": "user", "content": "test"}])
@@ -580,10 +524,9 @@ def test_save_chat_history_resave_conversation_specific_char():
 
 
 @pytest.mark.unit
-def test_chat_api_call_provider_specific_params_unit(mock_llm_api_call_handlers_for_chat_functions_unit):
+def test_chat_api_call_provider_specific_params_unit(mock_chat_dispatch):
     provider_name = "openrouter"  # Example of a provider with minp, topk, topp
-    mock_handler = mock_llm_api_call_handlers_for_chat_functions_unit[provider_name]
-    mock_handler.return_value = "OpenRouter success"
+    mock_chat_dispatch.return_value = "OpenRouter success"
 
     args = {
         "api_endpoint": provider_name,
@@ -593,23 +536,21 @@ def test_chat_api_call_provider_specific_params_unit(mock_llm_api_call_handlers_
         "model": "some/model",
         "minp": 0.1,
         "topk": 40,
-        "topp": 0.92  # Note: PROVIDER_PARAM_MAP maps 'topp' to 'top_p' for openrouter
+        "topp": 0.92
     }
     chat_api_call(**args)
-    mock_handler.assert_called_once()
-    called_kwargs = mock_handler.call_args.kwargs
-
-    param_map = PROVIDER_PARAM_MAP[provider_name]
-    assert called_kwargs[param_map['minp']] == args['minp']
-    assert called_kwargs[param_map['topk']] == args['topk']
-    assert called_kwargs[param_map['topp']] == args['topp']  # This will be 'top_p'
+    mock_chat_dispatch.assert_called_once()
+    called_kwargs = mock_chat_dispatch.call_args.kwargs
+    assert called_kwargs["api_endpoint"] == provider_name
+    assert called_kwargs["minp"] == args["minp"]
+    assert called_kwargs["topk"] == args["topk"]
+    assert called_kwargs["topp"] == args["topp"]
 
 
 @pytest.mark.unit
-def test_chat_api_call_tools_and_tool_choice_unit(mock_llm_api_call_handlers_for_chat_functions_unit):
+def test_chat_api_call_tools_and_tool_choice_unit(mock_chat_dispatch):
     provider = "openai"  # Assuming OpenAI handler is adapted for tools
-    mock_handler = mock_llm_api_call_handlers_for_chat_functions_unit[provider]
-    mock_handler.return_value = {"id": "tool_response"}
+    mock_chat_dispatch.return_value = {"id": "tool_response"}
 
     tools_payload = [{"type": "function", "function": {"name": "get_weather"}}]
     args = {
@@ -620,23 +561,9 @@ def test_chat_api_call_tools_and_tool_choice_unit(mock_llm_api_call_handlers_for
         "tool_choice": "auto"
     }
     chat_api_call(**args)
-    mock_handler.assert_called_once()
-    called_kwargs = mock_handler.call_args.kwargs
-    # Assuming the openai handler function ('chat_with_openai') directly accepts 'tools' and 'tool_choice'
-    # and PROVIDER_PARAM_MAP for openai would need to include these if names differ.
-    # If they don't differ, these params would be passed through if they are in available_generic_params
-    # and not None.
-    # For this test, let's assume the handler receives them directly.
-    # The current PROVIDER_PARAM_MAP for openai does not list 'tools' or 'tool_choice'.
-    # This means the specific chat_with_openai function needs to accept **kwargs or these specific args.
-    # For a more robust test, ensure the mock_handler is called with these or that your
-    # PROVIDER_PARAM_MAP is updated if the internal handler uses different names.
-
-    # Check if tools and tool_choice are present in the call
-    # According to PROVIDER_PARAM_MAP['openai'], these map directly to 'tools' and 'tool_choice'
-    # So they should be present in called_kwargs if the mock handler accepts **kwargs
-    assert "tools" in called_kwargs
-    assert "tool_choice" in called_kwargs
+    mock_chat_dispatch.assert_called_once()
+    called_kwargs = mock_chat_dispatch.call_args.kwargs
+    assert called_kwargs["api_endpoint"] == provider
     assert called_kwargs["tools"] == tools_payload
     assert called_kwargs["tool_choice"] == "auto"
 
@@ -924,10 +851,9 @@ def test_load_characters_empty_and_with_data_unit():
 # - History with malformed image data URI
 
 @pytest.mark.unit
-def test_chat_api_call_routing_and_param_mapping_bedrock_unit(mock_llm_api_call_handlers_for_chat_functions_unit):
+def test_chat_api_call_routing_and_param_mapping_bedrock_unit(mock_chat_dispatch):
     provider = "bedrock"
-    mock_handler = mock_llm_api_call_handlers_for_chat_functions_unit[provider]
-    mock_handler.return_value = "Bedrock success"
+    mock_chat_dispatch.return_value = "Bedrock success"
 
     args = {
         "api_endpoint": provider,
@@ -955,20 +881,20 @@ def test_chat_api_call_routing_and_param_mapping_bedrock_unit(mock_llm_api_call_
     }
     result = chat_api_call(**args)
     assert result == "Bedrock success"
-    called_kwargs = mock_handler.call_args.kwargs
-    param_map = PROVIDER_PARAM_MAP[provider]
-    assert param_map['messages_payload'] in called_kwargs
-    assert called_kwargs[param_map['messages_payload']] == args['messages_payload']
-    assert called_kwargs[param_map['api_key']] == args['api_key']
-    assert called_kwargs[param_map['temp']] == args['temp']
-    assert called_kwargs[param_map['system_message']] == args['system_message']
-    assert called_kwargs[param_map['streaming']] == args['streaming']
-    assert called_kwargs[param_map['maxp']] == args['maxp']
-    assert called_kwargs[param_map['model']] == args['model']
-    assert called_kwargs[param_map['max_tokens']] == args['max_tokens']
-    assert called_kwargs[param_map['n']] == args['n']
-    assert called_kwargs[param_map['stop']] == args['stop']
-    assert called_kwargs[param_map['presence_penalty']] == args['presence_penalty']
-    assert called_kwargs[param_map['frequency_penalty']] == args['frequency_penalty']
-    assert called_kwargs[param_map['extra_headers']] == args['extra_headers']
-    assert called_kwargs[param_map['extra_body']] == args['extra_body']
+    mock_chat_dispatch.assert_called_once()
+    called_kwargs = mock_chat_dispatch.call_args.kwargs
+    assert called_kwargs["api_endpoint"] == provider
+    assert called_kwargs["messages_payload"] == args["messages_payload"]
+    assert called_kwargs["api_key"] == args["api_key"]
+    assert called_kwargs["temp"] == args["temp"]
+    assert called_kwargs["system_message"] == args["system_message"]
+    assert called_kwargs["streaming"] == args["streaming"]
+    assert called_kwargs["maxp"] == args["maxp"]
+    assert called_kwargs["model"] == args["model"]
+    assert called_kwargs["max_tokens"] == args["max_tokens"]
+    assert called_kwargs["n"] == args["n"]
+    assert called_kwargs["stop"] == args["stop"]
+    assert called_kwargs["presence_penalty"] == args["presence_penalty"]
+    assert called_kwargs["frequency_penalty"] == args["frequency_penalty"]
+    assert called_kwargs["extra_headers"] == args["extra_headers"]
+    assert called_kwargs["extra_body"] == args["extra_body"]

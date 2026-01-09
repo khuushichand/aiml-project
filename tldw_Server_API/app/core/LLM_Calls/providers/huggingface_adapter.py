@@ -66,7 +66,7 @@ class HuggingFaceAdapter(ChatProvider):
                 from tldw_Server_API.app.core.http_client import create_client as _default_factory
                 if http_client_factory is not _default_factory:
                     return True
-                from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
+                from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy
                 fn = getattr(_legacy, "chat_with_huggingface", None)
                 if callable(fn):
                     mod = getattr(fn, "__module__", "") or ""
@@ -75,21 +75,40 @@ class HuggingFaceAdapter(ChatProvider):
                         return False
             except Exception:
                 pass
-        if (os.getenv("LLM_ADAPTERS_ENABLED") or "").lower() in {"1", "true", "yes", "on"}:
+        enabled = (os.getenv("LLM_ADAPTERS_ENABLED") or "").strip().lower()
+        if enabled in {"0", "false", "no", "off"}:
+            return False
+        if enabled in {"1", "true", "yes", "on"}:
             return True
-        v = os.getenv("LLM_ADAPTERS_NATIVE_HTTP_HUGGINGFACE")
-        return bool(v and v.lower() in {"1", "true", "yes", "on"})
+        v = (os.getenv("LLM_ADAPTERS_NATIVE_HTTP_HUGGINGFACE") or "").strip().lower()
+        if v in {"0", "false", "no", "off"}:
+            return False
+        if v in {"1", "true", "yes", "on"}:
+            return True
+        return True
 
     def _resolve_url_and_headers(self, request: Dict[str, Any]) -> Dict[str, Any]:
         cfg = (request.get("app_config") or {}).get("huggingface_api", {})
         api_base = cfg.get("api_base_url")  # may be None
-        use_router = str(cfg.get("use_router_url_format", "false")).lower() == "true"
-        chat_path = (cfg.get("api_chat_path") or ("chat/completions" if (api_base and "api-inference.huggingface.co/v1" in api_base) else "v1/chat/completions"))
+        use_router = str(
+            cfg.get("use_router_url_format", cfg.get("huggingface_use_router_url_format", "false"))
+        ).lower() == "true"
+        chat_path = cfg.get("api_chat_path") or cfg.get("huggingface_api_chat_path")
+        if not chat_path:
+            base = (api_base or "").rstrip("/")
+            if base.endswith("/v1") or "api-inference.huggingface.co/v1" in base:
+                chat_path = "chat/completions"
+            else:
+                chat_path = "v1/chat/completions"
         model = request.get("model") or cfg.get("model_id") or cfg.get("model")
         if not model:
             model = "unspecified"
         if use_router:
-            base = (cfg.get("router_base_url") or "https://router.huggingface.co/hf-inference").rstrip("/")
+            base = (
+                cfg.get("router_base_url")
+                or cfg.get("huggingface_router_base_url")
+                or "https://router.huggingface.co/hf-inference"
+            ).rstrip("/")
             url = f"{base}/models/{model.strip('/')}/{chat_path.lstrip('/')}"
         else:
             base = (api_base or "https://api-inference.huggingface.co/v1").rstrip("/")
@@ -159,7 +178,7 @@ class HuggingFaceAdapter(ChatProvider):
             pass
         else:
             kwargs["streaming"] = None
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
+        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy
         fn = getattr(_legacy, "chat_with_huggingface", None)
         if callable(fn):
             mod = getattr(fn, "__module__", "") or ""
@@ -174,11 +193,12 @@ class HuggingFaceAdapter(ChatProvider):
         return _legacy.legacy_chat_with_huggingface(**kwargs)
 
     def normalize_error(self, exc: Exception):  # type: ignore[override]
-        try:
-            import httpx  # type: ignore
-        except Exception:  # pragma: no cover
-            httpx = None  # type: ignore
-        if httpx is not None and isinstance(exc, getattr(httpx, "HTTPStatusError", ())):
+        from tldw_Server_API.app.core.LLM_Calls.error_utils import (
+            get_http_status_from_exception,
+            get_http_error_text,
+            is_http_status_error,
+        )
+        if is_http_status_error(exc):
             from tldw_Server_API.app.core.Chat.Chat_Deps import (
                 ChatBadRequestError,
                 ChatAuthenticationError,
@@ -187,7 +207,7 @@ class HuggingFaceAdapter(ChatProvider):
                 ChatAPIError,
             )
             resp = getattr(exc, "response", None)
-            status = getattr(resp, "status_code", None)
+            status = get_http_status_from_exception(exc)
             # Try parsing HF error wrapper {"error": {"message": "...", "type": "..."}}
             detail = None
             try:
@@ -201,10 +221,7 @@ class HuggingFaceAdapter(ChatProvider):
                     typ = (err.get("type") or "").strip()
                     detail = (f"{typ} {msg}" if typ else msg) or None
             if not detail:
-                try:
-                    detail = resp.text if resp is not None else str(exc)
-                except Exception:
-                    detail = str(exc)
+                detail = get_http_error_text(exc)
             if status in (400, 404, 422):
                 return ChatBadRequestError(provider=self.name, message=str(detail))
             if status in (401, 403):
@@ -253,7 +270,7 @@ class HuggingFaceAdapter(ChatProvider):
 
         kwargs = self._to_handler_args(request)
         kwargs["streaming"] = True
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
+        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy
         fn = getattr(_legacy, "chat_with_huggingface", None)
         if callable(fn):
             mod = getattr(fn, "__module__", "") or ""
@@ -291,7 +308,7 @@ class HuggingFaceAdapter(ChatProvider):
         kwargs = self._to_handler_args(request)
         if "stream" not in request and "streaming" not in request:
             kwargs["streaming"] = None
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
+        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy
         fn = getattr(_legacy, "chat_with_huggingface", None)
         if callable(fn):
             mod = getattr(fn, "__module__", "") or ""

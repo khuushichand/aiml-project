@@ -78,9 +78,7 @@ from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import (
 )
 
 # For chat completions
-from tldw_Server_API.app.core.Chat.chat_orchestrator import (
-    chat_api_call as perform_chat_api_call
-)
+from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import resolve_byok_credentials
 
 # Completion schemas centralized in schemas/chat_session_schemas.py

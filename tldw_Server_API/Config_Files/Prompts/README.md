@@ -19,6 +19,7 @@ Modules and Files
 - evals.prompts.md: Evaluation tasks and rubric prompts.
 - ingestion.prompts.md: Ingestion-time analysis prompts (e.g., claims).
 - mcp.prompts.md: MCP tools/system prompts.
+- summarization.prompts.yaml: Summarization system prompt defaults.
 
 Example Loader (future)
 - The codebase currently embeds some prompts directly. A future iteration can load these files at startup and pass them into modules.

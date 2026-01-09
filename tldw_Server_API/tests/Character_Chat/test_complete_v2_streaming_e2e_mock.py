@@ -70,7 +70,7 @@ class _FakeSession:
 @pytest.mark.asyncio
 async def test_complete_v2_streaming_e2e_monkeypatched(monkeypatch):
     # Monkeypatch requests.Session used by chat_with_openai to emit SSE chunks
-    import tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls as llm_mod
+    import tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls as llm_mod
     monkeypatch.setattr(llm_mod.requests, "Session", _FakeSession)
 
     streaming_payloads = [

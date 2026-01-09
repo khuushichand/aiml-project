@@ -17,8 +17,6 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Awaitable, Dict, List, Optional, TypeVar, Union, Callable
 #
 # 3rd-party Libraries
-import requests
-import httpx
 from loguru import logger
 #
 # Local Imports
@@ -31,10 +29,9 @@ from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatProviderError,
     ChatRateLimitError
 )
-from tldw_Server_API.app.core.Chat.provider_config import (
-    API_CALL_HANDLERS,
-    PROVIDER_PARAM_MAP,
-    ASYNC_API_CALL_HANDLERS,
+from tldw_Server_API.app.core.Chat.chat_service import (
+    perform_chat_api_call,
+    perform_chat_api_call_async,
 )
 from tldw_Server_API.app.core.Chat.chat_dictionary import (
     ChatDictionary,
@@ -44,6 +41,8 @@ from tldw_Server_API.app.core.Chat.chat_dictionary import (
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.Chat import command_router
 from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
+from tldw_Server_API.app.core.LLM_Calls.deprecation import log_legacy_once
 #
 ####################################################################################################
 #
@@ -152,6 +151,66 @@ def _sanitize_error_for_client(error_text: str, max_length: int = 100) -> str:
     return error_str or "An error occurred"
 
 
+def _get_http_status_from_exception(exc: Exception) -> Optional[int]:
+    response = getattr(exc, "response", None)
+    if response is not None:
+        status = getattr(response, "status_code", None)
+        if status is None:
+            status = getattr(response, "status", None)
+        if status is not None:
+            try:
+                return int(status)
+            except (TypeError, ValueError):
+                pass
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        status = getattr(exc, "status", None)
+    if status is not None:
+        try:
+            return int(status)
+        except (TypeError, ValueError):
+            return None
+    if isinstance(exc, NetworkError):
+        import re
+        match = re.search(r"HTTP\\s+(\\d{3})", str(exc))
+        if match:
+            try:
+                return int(match.group(1))
+            except ValueError:
+                return None
+    return None
+
+
+def _get_http_error_text(exc: Exception) -> str:
+    response = getattr(exc, "response", None)
+    if response is not None:
+        text = getattr(response, "text", None)
+        if text is None:
+            text = getattr(response, "content", None)
+            if isinstance(text, (bytes, bytearray)):
+                try:
+                    text = text.decode("utf-8", errors="replace")
+                except Exception:
+                    text = None
+        if text is not None:
+            return str(text)
+    response_text = getattr(exc, "response_text", None)
+    if response_text:
+        return str(response_text)
+    return str(exc)
+
+
+def _is_network_exception(exc: Exception) -> bool:
+    if isinstance(exc, (NetworkError, RetryExhaustedError)):
+        return True
+    module = getattr(exc.__class__, "__module__", "")
+    name = exc.__class__.__name__
+    if module.startswith("requests"):
+        return "RequestException" in name or "ConnectionError" in name or "Timeout" in name
+    if module.startswith("httpx"):
+        return "RequestError" in name or "Connect" in name or "Timeout" in name
+    return False
+
 #
 ####################################################################################################
 #
@@ -224,10 +283,8 @@ def chat_api_call(
     """
     Acts as a unified dispatcher to call various LLM API providers.
 
-    This function routes chat requests to the appropriate LLM provider based on
-    `api_endpoint`. It uses `API_CALL_HANDLERS` to find the correct handler
-    function and `PROVIDER_PARAM_MAP` to translate generic parameters to
-    provider-specific ones.
+    This function routes chat requests to the adapter registry based on
+    `api_endpoint` while preserving the legacy signature and error mapping.
 
     Args:
         api_endpoint: The identifier for the target LLM provider (e.g., "openai", "anthropic").
@@ -271,67 +328,53 @@ def chat_api_call(
         ChatProviderError: If the provider's server returns an error or there's a network issue.
         ChatConfigurationError: If there's a configuration issue for the specified provider.
         ChatAPIError: For other unexpected API-related errors.
-        requests.exceptions.HTTPError: Propagated from underlying HTTP requests if not caught and re-raised.
-        requests.exceptions.RequestException: For network errors during the request.
+        HTTP client errors from upstream provider handlers (status errors or network failures).
     """
     endpoint_lower = api_endpoint.lower()
     logging.info(f"Chat API Call - Routing to endpoint: {endpoint_lower}")
     log_counter("chat_api_call_attempt", labels={"api_endpoint": endpoint_lower})
     start_time = time.time()
+    log_legacy_once(
+        "chat_orchestrator.chat_api_call",
+        "chat_orchestrator.chat_api_call is deprecated; use chat_service.perform_chat_api_call instead.",
+    )
 
-    handler = API_CALL_HANDLERS.get(endpoint_lower)
-    if not handler:
-        logging.error(f"Unsupported API endpoint requested: {api_endpoint}")
-        raise ValueError(f"Unsupported API endpoint: {api_endpoint}")
-
-    params_map = PROVIDER_PARAM_MAP.get(endpoint_lower, {})
-    call_kwargs = {}
-
-    # Construct kwargs for the handler function based on the map
-    # This requires careful mapping and ensuring the handler functions are adapted.
-
-    # Generic parameters available from chat_api_call signature
-    available_generic_params = {
-        'api_key': api_key,
-        'messages_payload': messages_payload, # This is the core change
-        'temp': temp,
-        'system_message': system_message,
-        'streaming': streaming,
-        'minp': minp,
-        'maxp': maxp, # Will be mapped to top_p by some providers
-        'model': model,
-        'topk': topk,
-        'topp': topp, # Will be mapped to top_p by some providers
-        'logprobs': logprobs,
-        'top_logprobs': top_logprobs,
-        'logit_bias': logit_bias,
-        'presence_penalty': presence_penalty,
-        'frequency_penalty': frequency_penalty,
-        'tools': tools,
-        'tool_choice': tool_choice,
-        'max_tokens': max_tokens,
-        'seed': seed,
-        'stop': stop,
-        'response_format': response_format,
-        'n': n,
-        'user_identifier': user_identifier,
-        'extra_headers': extra_headers,
-        'extra_body': extra_body,
-        'app_config': app_config,
-        'http_client_factory': http_client_factory,
-        'http_fetcher': http_fetcher,
+    call_kwargs = {
+        "api_endpoint": api_endpoint,
+        "messages_payload": messages_payload,
+        "api_key": api_key,
+        "temp": temp,
+        "system_message": system_message,
+        "streaming": streaming,
+        "minp": minp,
+        "maxp": maxp,
+        "model": model,
+        "topk": topk,
+        "topp": topp,
+        "logprobs": logprobs,
+        "top_logprobs": top_logprobs,
+        "logit_bias": logit_bias,
+        "presence_penalty": presence_penalty,
+        "frequency_penalty": frequency_penalty,
+        "tools": tools,
+        "tool_choice": tool_choice,
+        "max_tokens": max_tokens,
+        "seed": seed,
+        "stop": stop,
+        "response_format": response_format,
+        "n": n,
+        "user_identifier": user_identifier,
+        "extra_headers": extra_headers,
+        "extra_body": extra_body,
+        "app_config": app_config,
+        "http_client_factory": http_client_factory,
+        "http_fetcher": http_fetcher,
     }
-
-    for generic_param_name, provider_param_name in params_map.items():
-        if generic_param_name in available_generic_params and available_generic_params[generic_param_name] is not None:
-            call_kwargs[provider_param_name] = available_generic_params[generic_param_name]
-        if generic_param_name == 'prompt' and endpoint_lower == 'cohere':
-             pass # Specific handling for Cohere's prompt is assumed to be within chat_with_cohere
 
     # Never log secrets by default; allow opt-in masked key logging via env
     try:
         import os as _os_keys
-        _key_val = call_kwargs.get(params_map.get('api_key', 'api_key'))
+        _key_val = call_kwargs.get("api_key")
         if (
             _key_val
             and isinstance(_key_val, str)
@@ -347,8 +390,11 @@ def chat_api_call(
         logging.debug(f"Could not log masked API key: {key_log_err}")
 
     try:
-        logging.debug(f"Calling handler {handler.__name__} with kwargs: { {k: (type(v) if k != params_map.get('api_key') else 'key_hidden') for k,v in call_kwargs.items()} }")
-        response = handler(**call_kwargs)
+        logging.debug(
+            "Calling adapter-backed chat dispatcher with kwargs: {}",
+            {k: (type(v) if k != "api_key" else "key_hidden") for k, v in call_kwargs.items()},
+        )
+        response = perform_chat_api_call(**call_kwargs)
 
         call_duration = time.time() - start_time
         log_histogram("chat_api_call_duration", call_duration, labels={"api_endpoint": endpoint_lower})
@@ -363,45 +409,14 @@ def chat_api_call(
         return response
 
     # --- Exception Mapping (copied from your original, ensure it's still relevant) ---
-    except requests.exceptions.HTTPError as e:
-        status_code = getattr(e.response, 'status_code', 500)
-        error_text = getattr(e.response, 'text', str(e))
-        log_message_base = f"{endpoint_lower} API call failed with status {status_code}"
-
-        # Log detailed error for debugging (internal only)
-        try:
-            logging.error("%s. Details: %s", log_message_base, error_text[:500], exc_info=False)
-        except Exception as log_e:
-            logging.error(f"Error during logging HTTPError details: {log_e}")
-
-        # Sanitize error text for client-facing messages to prevent information leakage
-        sanitized_error = _sanitize_error_for_client(error_text)
-
-        if status_code == 401:
-            raise ChatAuthenticationError(provider=endpoint_lower,
-                                          message=f"Authentication failed. Please check your API key.")
-        elif status_code == 429:
-            raise ChatRateLimitError(provider=endpoint_lower,
-                                     message=f"Rate limit exceeded. Please try again later.")
-        elif 400 <= status_code < 500:
-            raise ChatBadRequestError(provider=endpoint_lower,
-                                      message=f"Invalid request (Status {status_code}). {sanitized_error}")
-        elif 500 <= status_code < 600:
-            raise ChatProviderError(provider=endpoint_lower,
-                                    message=f"Provider error (Status {status_code}). Please try again.",
-                                    status_code=status_code)
-        else:
-            raise ChatAPIError(provider=endpoint_lower,
-                               message=f"Unexpected error (Status {status_code}). {sanitized_error}",
-                               status_code=status_code)
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Network error connecting to {endpoint_lower}: {e}", exc_info=False)
-        raise ChatProviderError(provider=endpoint_lower, message="Network error. Please check your connection.", status_code=504)
-    except httpx.RequestError as e:
-        logging.error(f"Network error (httpx) connecting to {endpoint_lower}: {e}", exc_info=False)
-        raise ChatProviderError(provider=endpoint_lower, message="Network error. Please check your connection.", status_code=504)
-    except (ChatAuthenticationError, ChatRateLimitError, ChatBadRequestError, ChatConfigurationError, ChatProviderError,
-            ChatAPIError) as e_chat_direct:
+    except (
+        ChatAuthenticationError,
+        ChatRateLimitError,
+        ChatBadRequestError,
+        ChatConfigurationError,
+        ChatProviderError,
+        ChatAPIError,
+    ) as e_chat_direct:
         # This catches cases where the handler itself has already processed an error
         # (e.g. non-HTTP error, or it decided to raise a specific Chat*Error type)
         # and raises one of our custom exceptions.
@@ -425,6 +440,34 @@ def chat_api_call(
         # Don't catch system-level signals - let them propagate
         raise
     except Exception as e:
+        status_code = _get_http_status_from_exception(e)
+        if status_code is not None:
+            error_text = _get_http_error_text(e)
+            log_message_base = f"{endpoint_lower} API call failed with status {status_code}"
+            try:
+                logging.error("%s. Details: %s", log_message_base, error_text[:500], exc_info=False)
+            except Exception as log_e:
+                logging.error(f"Error during logging HTTP error details: {log_e}")
+            sanitized_error = _sanitize_error_for_client(error_text)
+            if status_code == 401:
+                raise ChatAuthenticationError(provider=endpoint_lower,
+                                              message="Authentication failed. Please check your API key.")
+            if status_code == 429:
+                raise ChatRateLimitError(provider=endpoint_lower,
+                                         message="Rate limit exceeded. Please try again later.")
+            if 400 <= status_code < 500:
+                raise ChatBadRequestError(provider=endpoint_lower,
+                                          message=f"Invalid request (Status {status_code}). {sanitized_error}")
+            if 500 <= status_code < 600:
+                raise ChatProviderError(provider=endpoint_lower,
+                                        message=f"Provider error (Status {status_code}). Please try again.",
+                                        status_code=status_code)
+            raise ChatAPIError(provider=endpoint_lower,
+                               message=f"Unexpected error (Status {status_code}). {sanitized_error}",
+                               status_code=status_code)
+        if _is_network_exception(e):
+            logging.error(f"Network error connecting to {endpoint_lower}: {e}", exc_info=False)
+            raise ChatProviderError(provider=endpoint_lower, message="Network error. Please check your connection.", status_code=504)
         logging.exception(
             f"Unexpected internal error in chat_api_call for {endpoint_lower}: {e}")
         raise ChatAPIError(provider=endpoint_lower,
@@ -463,63 +506,53 @@ async def chat_api_call_async(
     http_client_factory: Optional[Callable[[int], Any]] = None,
     http_fetcher: Optional[Callable[..., Any]] = None,
 ):
-    """Async dispatcher that prefers async handlers when available; otherwise falls back to thread exec.
+    """Async dispatcher that forwards to the adapter registry.
 
     Returns either a regular dict (non-stream) or an async iterator (streaming).
     """
     endpoint_lower = api_endpoint.lower()
-    handler_async = ASYNC_API_CALL_HANDLERS.get(endpoint_lower)
-    params_map = PROVIDER_PARAM_MAP.get(endpoint_lower, {})
+    log_legacy_once(
+        "chat_orchestrator.chat_api_call_async",
+        "chat_orchestrator.chat_api_call_async is deprecated; use chat_service.perform_chat_api_call_async instead.",
+    )
 
-    available_generic_params = {
-        'api_key': api_key,
-        'messages_payload': messages_payload,
-        'temp': temp,
-        'system_message': system_message,
-        'streaming': streaming,
-        'minp': minp,
-        'maxp': maxp,
-        'model': model,
-        'topk': topk,
-        'topp': topp,
-        'logprobs': logprobs,
-        'top_logprobs': top_logprobs,
-        'logit_bias': logit_bias,
-        'presence_penalty': presence_penalty,
-        'frequency_penalty': frequency_penalty,
-        'tools': tools,
-        'tool_choice': tool_choice,
-        'max_tokens': max_tokens,
-        'seed': seed,
-        'stop': stop,
-        'response_format': response_format,
-        'n': n,
-        'user_identifier': user_identifier,
-        'extra_headers': extra_headers,
-        'extra_body': extra_body,
-        'app_config': app_config,
-        'http_client_factory': http_client_factory,
-        'http_fetcher': http_fetcher,
+    call_kwargs = {
+        "api_endpoint": api_endpoint,
+        "messages_payload": messages_payload,
+        "api_key": api_key,
+        "temp": temp,
+        "system_message": system_message,
+        "streaming": streaming,
+        "minp": minp,
+        "maxp": maxp,
+        "model": model,
+        "topk": topk,
+        "topp": topp,
+        "logprobs": logprobs,
+        "top_logprobs": top_logprobs,
+        "logit_bias": logit_bias,
+        "presence_penalty": presence_penalty,
+        "frequency_penalty": frequency_penalty,
+        "tools": tools,
+        "tool_choice": tool_choice,
+        "max_tokens": max_tokens,
+        "seed": seed,
+        "stop": stop,
+        "response_format": response_format,
+        "n": n,
+        "user_identifier": user_identifier,
+        "extra_headers": extra_headers,
+        "extra_body": extra_body,
+        "app_config": app_config,
+        "http_client_factory": http_client_factory,
+        "http_fetcher": http_fetcher,
     }
-    call_kwargs: Dict[str, Any] = {}
-    for generic_param_name, provider_param_name in params_map.items():
-        if generic_param_name in available_generic_params and available_generic_params[generic_param_name] is not None:
-            call_kwargs[provider_param_name] = available_generic_params[generic_param_name]
 
     try:
-        if handler_async is not None:
-            # Invoke provider-native async handler
-            return await handler_async(**call_kwargs)
-        else:
-            # Fallback to sync handler via thread
-            handler_sync = API_CALL_HANDLERS.get(endpoint_lower)
-            if handler_sync is None:
-                raise ChatConfigurationError(provider=endpoint_lower, message=f"Unsupported API endpoint: {api_endpoint}")
-            loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(None, lambda: handler_sync(**call_kwargs))
-    except requests.exceptions.RequestException as e:
-        raise ChatProviderError(provider=endpoint_lower, message=f"Network error: {e}", status_code=504)
+        return await perform_chat_api_call_async(**call_kwargs)
     except Exception as e:
+        if _is_network_exception(e):
+            raise ChatProviderError(provider=endpoint_lower, message=f"Network error: {e}", status_code=504)
         if isinstance(
             e,
             (

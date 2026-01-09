@@ -722,7 +722,7 @@ app.include_router(responses_router, prefix=f"{API_V1_PREFIX}", tags=["responses
 - Use MediaDatabase for searching ingested content
 
 3. **LLM Integration**:
-- Reuse existing LLM_API_Calls infrastructure
+- Reuse existing legacy_chat_calls infrastructure
 - Support all configured providers
 
 ### Phase 6: Testing
@@ -841,7 +841,7 @@ async def file_search(query: str, filters: Dict = None) -> Dict:
 **Problem**: Building new tool orchestration from scratch ignores existing infrastructure
 **Solution**:
 - Leverage existing RAG_Search/simplified/enhanced_rag_service.py for file search
-- Use existing LLM_API_Calls infrastructure for model interactions
+- Use existing legacy_chat_calls infrastructure for model interactions
 - Extend existing tool patterns from chat endpoints
 
 ### CRITICAL ISSUE 4: Background Task Management

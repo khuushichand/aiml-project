@@ -46,7 +46,7 @@ def _import_transformers():
         ) from e
 #
 # Local Imports
-from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import get_openai_embeddings_batch
+from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import get_openai_embeddings_batch
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram  # Keep your existing metrics
 from tldw_Server_API.app.core.Embeddings.audit_adapter import (

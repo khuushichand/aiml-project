@@ -1,7 +1,7 @@
 # config_schemas.py
 """Schemas for effective configuration diagnostics."""
 
-from typing import Any, Dict, Optional, Literal
+from typing import Any, Dict, List, Optional, Literal
 
 from pydantic import BaseModel, Field
 
@@ -29,4 +29,8 @@ class EffectiveConfigResponse(BaseModel):
     values: Dict[str, Dict[str, ConfigValue]] = Field(
         default_factory=dict,
         description="Effective config values by namespace",
+    )
+    unknown_sections: List[str] = Field(
+        default_factory=list,
+        description="Requested config sections that are not recognized",
     )

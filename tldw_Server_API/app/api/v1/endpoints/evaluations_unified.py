@@ -54,7 +54,7 @@ from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     resolve_byok_credentials,
 )
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
-from tldw_Server_API.app.core.Chat.provider_config import PROVIDER_REQUIRES_KEY
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import PROVIDER_REQUIRES_KEY
 
 # Create router
 router = APIRouter(prefix="/evaluations", tags=["evaluations"])

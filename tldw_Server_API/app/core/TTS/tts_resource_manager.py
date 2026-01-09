@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 #
 # Third-party Imports
-import httpx
 from loguru import logger
 #
 # Local Imports
@@ -175,16 +174,16 @@ class HTTPConnectionPool:
         self.timeout = timeout
 
         # Connection pools per provider
-        self._pools: Dict[str, httpx.AsyncClient] = {}
+        self._pools: Dict[str, Any] = {}
         self._pool_metrics: Dict[str, ResourceMetrics] = {}
         self._lock = asyncio.Lock()
 
         # Backward-compatibility: tests reference `_clients`; alias to `_pools`.
     @property
-    def _clients(self) -> Dict[str, httpx.AsyncClient]:
+    def _clients(self) -> Dict[str, Any]:
         return self._pools
 
-    async def get_client(self, provider: str, base_url: Optional[str] = None) -> httpx.AsyncClient:
+    async def get_client(self, provider: str, base_url: Optional[str] = None) -> Any:
         """
         Get or create HTTP client for provider.
 
@@ -199,14 +198,17 @@ class HTTPConnectionPool:
             if provider not in self._pools:
                 # Use centralized factory for consistent trust_env/http2/limits
                 try:
-                    from tldw_Server_API.app.core.http_client import create_async_client
-                    limits = httpx.Limits(
+                    from tldw_Server_API.app.core.http_client import (
+                        build_limits,
+                        create_async_client,
+                    )
+                    limits = build_limits(
                         max_connections=self.max_connections,
                         max_keepalive_connections=self.max_keepalive_connections,
                         keepalive_expiry=self.keepalive_expiry,
                     )
                     client = create_async_client(
-                        timeout=httpx.Timeout(self.timeout),
+                        timeout=self.timeout,
                         base_url=base_url,
                         limits=limits,
                     )
@@ -768,7 +770,7 @@ class TTSResourceManager:
             self._streaming_sessions.pop(session_id, None)
             logger.debug(f"Closed streaming session {session_id}")
 
-    async def get_http_client(self, provider: str, base_url: Optional[str] = None) -> httpx.AsyncClient:
+    async def get_http_client(self, provider: str, base_url: Optional[str] = None) -> Any:
         """Get HTTP client for provider"""
         return await self.connection_pool.get_client(provider, base_url)
 

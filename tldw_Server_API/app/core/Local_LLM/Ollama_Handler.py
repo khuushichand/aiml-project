@@ -11,7 +11,6 @@ from typing import List, Optional, Dict, Any
 #
 # Third-party Imports
 import asyncio
-import httpx
 
 try:
     import psutil
@@ -362,22 +361,22 @@ class OllamaHandler(BaseLLMHandler):
                 result = await request_json(client, "POST", api_url, json=payload)
                 self.logger.debug(f"Ollama inference successful for {model_name}.")
                 return result
-            except httpx.HTTPStatusError as e:
-                status = e.response.status_code
-                text = e.response.text
-                self.logger.error(f"Ollama API error ({status}): {text}")
-                # Attempt model pull on 404 or message indicating not found
-                if status == 404 or (isinstance(text, str) and "model not found" in text.lower()):
-                    self.logger.info(f"Model {model_name} not found on server, attempting to pull.")
-                    try:
-                        await self.pull_model(model_name)
-                        # retry once
-                        return await request_json(client, "POST", api_url, json=payload)
-                    except ModelDownloadError as e_pull:
-                        raise InferenceError(
-                            f"Model {model_name} could not be pulled: {e_pull}. Original API error: {text}")
-                raise InferenceError(f"Ollama API error ({status}): {text}")
             except Exception as e:
+                status = http_utils.get_http_status_from_exception(e)
+                if status is not None:
+                    text = http_utils.get_http_error_text(e)
+                    self.logger.error(f"Ollama API error ({status}): {text}")
+                    # Attempt model pull on 404 or message indicating not found
+                    if status == 404 or (isinstance(text, str) and "model not found" in text.lower()):
+                        self.logger.info(f"Model {model_name} not found on server, attempting to pull.")
+                        try:
+                            await self.pull_model(model_name)
+                            # retry once
+                            return await request_json(client, "POST", api_url, json=payload)
+                        except ModelDownloadError as e_pull:
+                            raise InferenceError(
+                                f"Model {model_name} could not be pulled: {e_pull}. Original API error: {text}")
+                    raise InferenceError(f"Ollama API error ({status}): {text}")
                 # Likely connection error; attempt to start server then retry
                 self.logger.error(f"Could not connect to Ollama server at {api_url}: {e}")
                 self.logger.info("Attempting to start Ollama server...")

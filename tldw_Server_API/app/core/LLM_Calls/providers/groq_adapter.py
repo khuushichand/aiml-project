@@ -15,14 +15,7 @@ http_client_factory = _hc_create_client
 
 
 def _prefer_httpx_in_tests() -> bool:
-    try:
-        import httpx  # type: ignore
-        cls = getattr(httpx, "Client", None)
-        mod = getattr(cls, "__module__", "") or ""
-        name = getattr(cls, "__name__", "") or ""
-        return ("tests" in mod) or name.startswith("_Fake")
-    except Exception:
-        return False
+    return bool(os.getenv("PYTEST_CURRENT_TEST"))
 
 
 class GroqAdapter(ChatProvider):
@@ -174,11 +167,12 @@ class GroqAdapter(ChatProvider):
 
         Groq uses an OpenAI-compatible surface; errors often include {error: {message, type}}.
         """
-        try:
-            import httpx  # type: ignore
-        except Exception:  # pragma: no cover
-            httpx = None  # type: ignore
-        if httpx is not None and isinstance(exc, getattr(httpx, "HTTPStatusError", ())):
+        from tldw_Server_API.app.core.LLM_Calls.error_utils import (
+            get_http_status_from_exception,
+            get_http_error_text,
+            is_http_status_error,
+        )
+        if is_http_status_error(exc):
             from tldw_Server_API.app.core.Chat.Chat_Deps import (
                 ChatBadRequestError,
                 ChatAuthenticationError,
@@ -187,7 +181,7 @@ class GroqAdapter(ChatProvider):
                 ChatAPIError,
             )
             resp = getattr(exc, "response", None)
-            status = getattr(resp, "status_code", None)
+            status = get_http_status_from_exception(exc)
             body = None
             try:
                 body = resp.json()
@@ -200,10 +194,7 @@ class GroqAdapter(ChatProvider):
                 typ = (eobj.get("type") or "").strip()
                 detail = (f"{typ} {msg}" if typ else msg) or str(exc)
             else:
-                try:
-                    detail = resp.text if resp is not None else str(exc)
-                except Exception:
-                    detail = str(exc)
+                detail = get_http_error_text(exc)
             if status in (400, 404, 422):
                 return ChatBadRequestError(provider=self.name, message=str(detail))
             if status in (401, 403):

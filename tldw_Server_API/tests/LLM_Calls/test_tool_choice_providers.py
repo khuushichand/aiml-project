@@ -49,7 +49,7 @@ def _patch_groq(monkeypatch, captured):
 
 
 def test_openai_tool_choice_gating(monkeypatch):
-    from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_openai
+    from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import chat_with_openai
 
     captured = {}
     _patch_openai(monkeypatch, captured)
@@ -75,7 +75,7 @@ def test_openai_tool_choice_gating(monkeypatch):
 
 
 def test_groq_tool_choice_gating(monkeypatch):
-    from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls import chat_with_groq
+    from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import chat_with_groq
 
     captured = {}
     _patch_groq(monkeypatch, captured)

@@ -13,6 +13,11 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     sse_done,
     finalize_stream,
 )
+from tldw_Server_API.app.core.LLM_Calls.error_utils import (
+    get_http_error_text,
+    get_http_status_from_exception,
+    is_http_status_error,
+)
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 from loguru import logger
 import re
@@ -73,7 +78,7 @@ class DeepSeekAdapter(ChatProvider):
                 # If tests monkeypatch the module-level factory (_hc_create_client), prefer native adapter
                 if _hc_create_client is not _default_factory:
                     return True
-                from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
+                from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy
                 fn = getattr(_legacy, "chat_with_deepseek", None)
                 if callable(fn):
                     mod = getattr(fn, "__module__", "") or ""
@@ -82,10 +87,17 @@ class DeepSeekAdapter(ChatProvider):
                         return False
             except Exception:
                 pass
-        if (os.getenv("LLM_ADAPTERS_ENABLED") or "").lower() in {"1", "true", "yes", "on"}:
+        enabled = (os.getenv("LLM_ADAPTERS_ENABLED") or "").strip().lower()
+        if enabled in {"0", "false", "no", "off"}:
+            return False
+        if enabled in {"1", "true", "yes", "on"}:
             return True
-        v = os.getenv("LLM_ADAPTERS_NATIVE_HTTP_DEEPSEEK")
-        return bool(v and v.lower() in {"1", "true", "yes", "on"})
+        v = (os.getenv("LLM_ADAPTERS_NATIVE_HTTP_DEEPSEEK") or "").strip().lower()
+        if v in {"0", "false", "no", "off"}:
+            return False
+        if v in {"1", "true", "yes", "on"}:
+            return True
+        return True
 
     def _base_url(self, cfg: Optional[Dict[str, Any]]) -> str:
         default_base = "https://api.deepseek.com"
@@ -194,29 +206,22 @@ class DeepSeekAdapter(ChatProvider):
                     return resp.json()
             except Exception as e:
                 # Try to log upstream response text if available
-                try:
-                    import httpx  # type: ignore
-                    if isinstance(e, getattr(httpx, "HTTPStatusError", ())):
-                        r = getattr(e, "response", None)
-                        status = getattr(r, "status_code", "?")
-                        text = ""
-                        try:
-                            text = (r.text or "")[:500]
-                        except Exception:
-                            text = "<unreadable>"
-                        logger.error(
-                            "DeepSeekAdapter.chat upstream error {}: {}",
-                            status,
-                            text,
-                        )
-                except Exception:
-                    pass
+                if is_http_status_error(e):
+                    status = get_http_status_from_exception(e) or "?"
+                    text = get_http_error_text(e)
+                    if len(text) > 500:
+                        text = text[:500]
+                    logger.error(
+                        "DeepSeekAdapter.chat upstream error {}: {}",
+                        status,
+                        text,
+                    )
                 raise self.normalize_error(e)
 
         kwargs = self._to_handler_args(request)
         if "stream" not in request and "streaming" not in request:
             kwargs["streaming"] = None
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
+        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy
         fn = getattr(_legacy, "chat_with_deepseek", None)
         if callable(fn):
             mod = getattr(fn, "__module__", "") or ""
@@ -267,28 +272,21 @@ class DeepSeekAdapter(ChatProvider):
                 return
             except Exception as e:
                 # Try to log upstream response text if available
-                try:
-                    import httpx  # type: ignore
-                    if isinstance(e, getattr(httpx, "HTTPStatusError", ())):
-                        r = getattr(e, "response", None)
-                        status = getattr(r, "status_code", "?")
-                        text = ""
-                        try:
-                            text = (r.text or "")[:500]
-                        except Exception:
-                            text = "<unreadable>"
-                        logger.error(
-                            "DeepSeekAdapter.stream upstream error {}: {}",
-                            status,
-                            text,
-                        )
-                except Exception:
-                    pass
+                if is_http_status_error(e):
+                    status = get_http_status_from_exception(e) or "?"
+                    text = get_http_error_text(e)
+                    if len(text) > 500:
+                        text = text[:500]
+                    logger.error(
+                        "DeepSeekAdapter.stream upstream error {}: {}",
+                        status,
+                        text,
+                    )
                 raise self.normalize_error(e)
 
         kwargs = self._to_handler_args(request)
         kwargs["streaming"] = True
-        from tldw_Server_API.app.core.LLM_Calls import LLM_API_Calls as _legacy
+        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy
         fn = getattr(_legacy, "chat_with_deepseek", None)
         if callable(fn):
             mod = getattr(fn, "__module__", "") or ""
@@ -308,11 +306,7 @@ class DeepSeekAdapter(ChatProvider):
             except Exception:
                 pass
             return text
-        try:
-            import httpx  # type: ignore
-        except Exception:  # pragma: no cover
-            httpx = None  # type: ignore
-        if httpx is not None and isinstance(exc, getattr(httpx, "HTTPStatusError", ( ))):
+        if is_http_status_error(exc):
             from tldw_Server_API.app.core.Chat.Chat_Deps import (
                 ChatBadRequestError,
                 ChatAuthenticationError,
@@ -321,12 +315,13 @@ class DeepSeekAdapter(ChatProvider):
                 ChatAPIError,
             )
             resp = getattr(exc, "response", None)
-            status = getattr(resp, "status_code", None)
+            status = get_http_status_from_exception(exc)
             body = None
-            try:
-                body = resp.json()
-            except Exception:
-                body = None
+            if resp is not None:
+                try:
+                    body = resp.json()
+                except Exception:
+                    body = None
             detail = None
             if isinstance(body, dict) and isinstance(body.get("error"), dict):
                 eobj = body["error"]
@@ -335,11 +330,7 @@ class DeepSeekAdapter(ChatProvider):
                 composed = (f"{typ} {msg}" if typ else msg) or str(exc)
                 detail = _redact_secrets(composed)
             else:
-                try:
-                    raw = resp.text if resp is not None else str(exc)
-                    detail = _redact_secrets(raw)
-                except Exception:
-                    detail = _redact_secrets(str(exc))
+                detail = _redact_secrets(get_http_error_text(exc))
             if status in (400, 404, 422):
                 return ChatBadRequestError(provider=self.name, message=str(detail))
             if status in (401, 403):
