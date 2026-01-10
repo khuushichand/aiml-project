@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
-from tldw_Server_API.app.core.LLM_Calls.legacy_local_calls import (
+from tldw_Server_API.app.core.LLM_Calls.local_chat_calls import (
     chat_with_custom_openai,
     chat_with_custom_openai_2,
 )
@@ -36,13 +36,14 @@ def _base_settings() -> dict:
 
 
 @pytest.mark.unit
-def test_custom_openai_handler_accepts_topp():
+def test_custom_openai_handler_accepts_topp(monkeypatch):
+    monkeypatch.setenv("LLM_ADAPTERS_CUSTOM_OPENAI", "0")
     settings = _base_settings()
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_local_calls.load_settings",
+        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls.load_settings",
         return_value=settings,
     ), patch(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_local_calls._chat_with_openai_compatible_local_server"
+        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls._chat_with_openai_compatible_local_server"
     ) as mock_chat:
         mock_chat.return_value = {"choices": []}
 
@@ -59,13 +60,14 @@ def test_custom_openai_handler_accepts_topp():
 
 
 @pytest.mark.unit
-def test_custom_openai_handler_prefers_maxp_when_both_provided():
+def test_custom_openai_handler_prefers_maxp_when_both_provided(monkeypatch):
+    monkeypatch.setenv("LLM_ADAPTERS_CUSTOM_OPENAI", "0")
     settings = _base_settings()
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_local_calls.load_settings",
+        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls.load_settings",
         return_value=settings,
     ), patch(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_local_calls._chat_with_openai_compatible_local_server"
+        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls._chat_with_openai_compatible_local_server"
     ) as mock_chat:
         mock_chat.return_value = {"choices": []}
 
@@ -82,13 +84,14 @@ def test_custom_openai_handler_prefers_maxp_when_both_provided():
 
 
 @pytest.mark.unit
-def test_custom_openai_2_handler_accepts_topp():
+def test_custom_openai_2_handler_accepts_topp(monkeypatch):
+    monkeypatch.setenv("LLM_ADAPTERS_CUSTOM_OPENAI", "0")
     settings = _base_settings()
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_local_calls.load_settings",
+        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls.load_settings",
         return_value=settings,
     ), patch(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_local_calls._chat_with_openai_compatible_local_server"
+        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls._chat_with_openai_compatible_local_server"
     ) as mock_chat:
         mock_chat.return_value = {"choices": []}
 

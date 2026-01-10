@@ -77,7 +77,7 @@ class OpenAIEmbeddingsAdapter(EmbeddingsProvider):
                 raise ChatProviderError(provider=self.name, message=str(e))
 
         # Delegate-first fallback using legacy helper(s)
-        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as legacy
+        from tldw_Server_API.app.core.LLM_Calls import chat_calls as legacy
         if isinstance(inputs, list):
             embeddings: List[List[float]] = []
             for text in inputs:

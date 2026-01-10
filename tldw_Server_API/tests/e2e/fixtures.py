@@ -89,8 +89,13 @@ def _build_inprocess_httpx_client() -> httpx.Client:
     if not hasattr(transport, "handle_request"):
         # Older httpx ASGITransport is async-only; fall back to TestClient.
         from starlette.testclient import TestClient
-        return TestClient(app, base_url="http://testserver")
-    return httpx.Client(transport=transport, base_url="http://testserver", timeout=TEST_TIMEOUT)
+        return TestClient(app, base_url="http://testserver", follow_redirects=True)
+    return httpx.Client(
+        transport=transport,
+        base_url="http://testserver",
+        timeout=TEST_TIMEOUT,
+        follow_redirects=True,
+    )
 
 
 class APIClient:
@@ -114,7 +119,11 @@ class APIClient:
         elif E2E_INPROCESS:
             self.client = _build_inprocess_httpx_client()
         else:
-            self.client = httpx.Client(base_url=base_url, timeout=TEST_TIMEOUT)
+            self.client = httpx.Client(
+                base_url=base_url,
+                timeout=TEST_TIMEOUT,
+                follow_redirects=True,
+            )
         self.token: Optional[str] = None
         self.refresh_token: Optional[str] = None
         self.user_id: Optional[int] = None
@@ -812,6 +821,60 @@ def ensure_server_running(base_url: str = BASE_URL, timeout: int = SERVER_STARTU
     )
     pytest.skip(error_msg)
 
+def _resolve_single_user_api_key(health_info: Optional[Dict[str, Any]] = None) -> str:
+    """Resolve the API key to use for single-user auth in tests."""
+    # Prefer explicit env overrides from the test process.
+    for env_key in ("SINGLE_USER_TEST_API_KEY", "SINGLE_USER_API_KEY"):
+        value = os.getenv(env_key)
+        if value:
+            return value
+    # If the health endpoint exposes a test key, use it.
+    if health_info and health_info.get("test_api_key"):
+        return str(health_info["test_api_key"])
+    # Fallback to settings (may read config files in the test process).
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+        settings = get_settings()
+        if settings.SINGLE_USER_API_KEY:
+            return settings.SINGLE_USER_API_KEY
+    except Exception:
+        pass
+    return "test-api-key-12345"
+
+
+def _env_file_value(key: str) -> Optional[str]:
+    env_candidates = [
+        Path(__file__).resolve().parents[2] / "Config_Files" / ".env",
+        Path(__file__).resolve().parents[2] / "Config_Files" / ".ENV",
+    ]
+    for env_path in env_candidates:
+        try:
+            if not env_path.exists():
+                continue
+            for line in env_path.read_text().splitlines():
+                raw = line.strip()
+                if not raw or raw.startswith("#"):
+                    continue
+                if raw.startswith("export "):
+                    raw = raw[len("export "):].strip()
+                if "=" not in raw:
+                    continue
+                k, v = raw.split("=", 1)
+                if k.strip() != key:
+                    continue
+                val = v.strip().strip("'\"")
+                if val:
+                    return val
+        except Exception:
+            continue
+    return None
+
+
+def has_openai_api_key() -> bool:
+    if os.getenv("OPENAI_API_KEY"):
+        return True
+    return bool(_env_file_value("OPENAI_API_KEY"))
+
 
 @pytest.fixture(scope="session")
 def api_client():
@@ -827,18 +890,7 @@ def api_client():
     mode = (health_info.get("auth_mode") or os.getenv("AUTH_MODE", "single_user")).lower()
     try:
         if mode in {"single_user", "single-user", "singleuser"}:
-            # In test mode, get API key from health endpoint
-            if health_info.get("test_api_key"):
-                api_key = health_info.get("test_api_key")
-                print(f"Using test API key from health endpoint: {api_key[:8]}...")
-            else:
-                # Fallback to environment variable or settings
-                try:
-                    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-                    settings = get_settings()
-                    api_key = settings.SINGLE_USER_API_KEY
-                except:
-                    api_key = os.getenv("SINGLE_USER_API_KEY", "test-api-key-12345")
+            api_key = _resolve_single_user_api_key(health_info)
             client.set_auth_token(api_key)
         elif mode in {"multi_user", "multi-user", "multiuser"}:
             username = os.getenv("E2E_TEST_USERNAME") or f"e2e_user_{uuid.uuid4().hex[:8]}"
@@ -882,18 +934,7 @@ def authenticated_client(api_client, test_user_credentials):
     try:
         health = api_client.health_check()
         if health.get("auth_mode") == "single_user":
-            # In test mode, get API key from health endpoint
-            if health.get("test_api_key"):
-                api_key = health.get("test_api_key")
-                print(f"Authenticated client using test API key: {api_key[:8]}...")
-            else:
-                # Fallback to environment variable or settings
-                try:
-                    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-                    settings = get_settings()
-                    api_key = settings.SINGLE_USER_API_KEY
-                except:
-                    api_key = os.getenv("SINGLE_USER_API_KEY", "test-api-key-12345")
+            api_key = _resolve_single_user_api_key(health)
             api_client.set_auth_token(api_key)
             return api_client
     except Exception as e:

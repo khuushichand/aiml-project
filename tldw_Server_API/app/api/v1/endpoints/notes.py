@@ -224,6 +224,91 @@ def _attach_keywords_inline(db: CharactersRAGDB, note_dict: Dict[str, Any]) -> D
     return note_dict
 
 
+def _normalize_keyword_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _keyword_text_from_row(row: Any) -> Optional[str]:
+    if isinstance(row, dict):
+        for key in ("keyword", "keyword_text", "text"):
+            if key in row:
+                return _normalize_keyword_text(row.get(key))
+    return _normalize_keyword_text(row)
+
+
+def _sync_note_keywords(db: CharactersRAGDB, note_id: str, keywords: List[str]) -> None:
+    desired: Dict[str, str] = {}
+    for kw in keywords:
+        text = _normalize_keyword_text(kw)
+        if not text:
+            continue
+        key = text.lower()
+        if key in desired:
+            continue
+        desired[key] = text
+
+    try:
+        existing_rows = db.get_keywords_for_note(note_id=note_id)
+    except Exception as err:
+        logger.warning(f"Keyword sync lookup failed for note {note_id}: {err}")
+        existing_rows = []
+
+    existing_by_key: Dict[str, Dict[str, Any]] = {}
+    for row in existing_rows:
+        text = _keyword_text_from_row(row)
+        if not text:
+            continue
+        existing_by_key[text.lower()] = row
+
+    desired_keys = set(desired.keys())
+
+    for key, row in existing_by_key.items():
+        if key in desired_keys:
+            continue
+        kw_id = row.get("id") if isinstance(row, dict) else None
+        if kw_id is None:
+            continue
+        try:
+            db.unlink_note_from_keyword(note_id=note_id, keyword_id=int(kw_id))
+        except Exception as err:
+            logger.warning(f"Keyword unlink failed for note {note_id}, keyword {kw_id}: {err}")
+
+    for key, text in desired.items():
+        if key in existing_by_key:
+            continue
+        try:
+            kw_row = db.get_keyword_by_text(text)
+            if not kw_row:
+                kw_id = db.add_keyword(text)
+                kw_row = db.get_keyword_by_id(kw_id) if kw_id is not None else None
+            if kw_row and kw_row.get("id") is not None:
+                db.link_note_to_keyword(note_id=note_id, keyword_id=int(kw_row["id"]))
+        except Exception as err:
+            logger.warning(f"Keyword attach failed for '{text}' on note {note_id}: {err}")
+
+
+def _normalize_keyword_tokens(tokens: Optional[List[str]]) -> List[str]:
+    if not tokens:
+        return []
+    seen: set[str] = set()
+    out: List[str] = []
+    for token in tokens:
+        if token is None:
+            continue
+        text = str(token).strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    return out
+
+
 # --- Helper for Exception Handling (largely the same) ---
 def handle_db_errors(e: Exception, entity_type: str = "resource"):
     if isinstance(e, HTTPException):  # If it's already an HTTPException, re-raise
@@ -509,7 +594,8 @@ async def list_notes(
     tags=["notes"]
 )
 async def search_notes_endpoint(  # Renamed to avoid conflict with imported search_notes
-        query: str = Query(..., min_length=1, description="Search term for notes"),
+        query: Optional[str] = Query(None, min_length=1, description="Search term for notes"),
+        tokens: Optional[List[str]] = Query(None, description="Keyword tokens to filter notes"),
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
         limit: int = Query(10, ge=1, le=100, description="Number of results to return"),
         offset: int = Query(0, ge=0, description="Result offset for pagination"),
@@ -527,9 +613,22 @@ async def search_notes_endpoint(  # Renamed to avoid conflict with imported sear
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                                 detail="Rate limit exceeded for notes.search",
                                 headers={"Retry-After": str(meta.get("retry_after", 60))})
+        token_list = _normalize_keyword_tokens(tokens)
+        query_term = query.strip() if query else ""
+        if not query_term and not token_list:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="query or tokens is required")
         logger.debug(
-            f"User (DB client_id: {db.client_id}) searching notes: query='{query}', limit={limit}, offset={offset}")
-        notes_data = db.search_notes(search_term=query, limit=limit, offset=offset)
+            f"User (DB client_id: {db.client_id}) searching notes: query='{query_term}', limit={limit}, offset={offset}, tokens={token_list}")
+        if token_list:
+            notes_data = db.search_notes_with_keywords(
+                search_term=query_term or None,
+                keyword_tokens=token_list,
+                limit=limit,
+                offset=offset
+            )
+        else:
+            notes_data = db.search_notes(search_term=query_term, limit=limit, offset=offset)
         # Attach keywords inline (optional)
         if include_keywords:
             try:
@@ -818,18 +917,21 @@ async def update_note(
         current_user: User = Depends(get_request_user),
         _: None = Depends(rbac_rate_limit("notes.update")),
 ):
+    keywords_supplied = _field_supplied(note_in, "keywords")
+    kw_list = note_in.normalized_keywords if keywords_supplied else None
     update_data = {
         key: value
         for key, value in note_in.model_dump(exclude_unset=True).items()
         if value is not None
     }
+    update_data.pop("keywords", None)
     if "title" in update_data and isinstance(update_data["title"], str):
         stripped_title = update_data["title"].strip()
         if not stripped_title:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                                 detail="Title cannot be empty or whitespace.")
         update_data["title"] = stripped_title
-    if not update_data:
+    if not update_data and not keywords_supplied:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No valid fields provided for update.")
     try:
         # Rate limit: notes.update
@@ -841,6 +943,17 @@ async def update_note(
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                                 detail="Rate limit exceeded for notes.update",
                                 headers={"Retry-After": str(meta.get("retry_after", 60))})
+        if not update_data and keywords_supplied:
+            current_note = db.get_note_by_id(note_id=note_id)
+            if not current_note:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
+            current_version = current_note.get("version")
+            if current_version is not None and int(current_version) != int(expected_version):
+                raise ConflictError(
+                    f"Note ID {note_id} update failed: version mismatch (db has {current_version}, client expected {expected_version}).",
+                    entity="notes",
+                    entity_id=note_id,
+                )
         if "conversation_id" in update_data or "message_id" in update_data:
             validated_conversation_id, validated_message_id = _validate_note_links(
                 db,
@@ -857,8 +970,11 @@ async def update_note(
                     update_data.pop("message_id", None)
                 else:
                     update_data["message_id"] = validated_message_id
+        data_keys = list(update_data.keys())
+        if keywords_supplied:
+            data_keys.append("keywords")
         logger.info(
-            f"User (DB client_id: {db.client_id}) updating note: ID='{note_id}', Version={expected_version}, DataKeys={list(update_data.keys())}")
+            f"User (DB client_id: {db.client_id}) updating note: ID='{note_id}', Version={expected_version}, DataKeys={data_keys}")
         # Topic monitoring (non-blocking) for updated fields
         try:
             mon = get_topic_monitoring_service()
@@ -869,13 +985,17 @@ async def update_note(
                 mon.schedule_evaluate_and_alert(user_id=str(uid) if uid else None, text=str(update_data['content']), source="notes.update", scope_type="user", scope_id=str(uid) if uid else None)
         except Exception:
             pass
-        success = db.update_note(
-            note_id=note_id,
-            update_data=update_data,
-            expected_version=expected_version
-        )
-        if not success:
-            raise CharactersRAGDBError("Note update reported non-success without specific exception.")
+        if update_data:
+            success = db.update_note(
+                note_id=note_id,
+                update_data=update_data,
+                expected_version=expected_version
+            )
+            if not success:
+                raise CharactersRAGDBError("Note update reported non-success without specific exception.")
+
+        if keywords_supplied:
+            _sync_note_keywords(db, note_id=note_id, keywords=kw_list or [])
 
         updated_note_data = db.get_note_by_id(note_id=note_id)
         if not updated_note_data:
@@ -910,18 +1030,21 @@ async def patch_note(
 ):
     """PATCH variant that allows updates without an explicit expected-version header.
     If header is not provided, it fetches current version and applies the update."""
+    keywords_supplied = _field_supplied(note_in, "keywords")
+    kw_list = note_in.normalized_keywords if keywords_supplied else None
     update_data = {
         key: value
         for key, value in note_in.model_dump(exclude_unset=True).items()
         if value is not None
     }
+    update_data.pop("keywords", None)
     if "title" in update_data and isinstance(update_data["title"], str):
         stripped_title = update_data["title"].strip()
         if not stripped_title:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                                 detail="Title cannot be empty or whitespace.")
         update_data["title"] = stripped_title
-    if not update_data:
+    if not update_data and not keywords_supplied:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No valid fields provided for update.")
     try:
         if expected_version is None:
@@ -930,6 +1053,17 @@ async def patch_note(
             if not current:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
             expected_version = int(current.get("version", 1))
+        elif not update_data and keywords_supplied:
+            current = db.get_note_by_id(note_id=note_id)
+            if not current:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
+            current_version = current.get("version")
+            if current_version is not None and int(current_version) != int(expected_version):
+                raise ConflictError(
+                    f"Note ID {note_id} update failed: version mismatch (db has {current_version}, client expected {expected_version}).",
+                    entity="notes",
+                    entity_id=note_id,
+                )
 
         # Rate limit: notes.update
         try:
@@ -956,15 +1090,22 @@ async def patch_note(
                     update_data.pop("message_id", None)
                 else:
                     update_data["message_id"] = validated_message_id
+        data_keys = list(update_data.keys())
+        if keywords_supplied:
+            data_keys.append("keywords")
         logger.info(
-            f"User (DB client_id: {db.client_id}) partially updating note: ID='{note_id}', Version={expected_version}, DataKeys={list(update_data.keys())}")
-        success = db.update_note(
-            note_id=note_id,
-            update_data=update_data,
-            expected_version=expected_version
-        )
-        if not success:
-            raise CharactersRAGDBError("Note update reported non-success without specific exception.")
+            f"User (DB client_id: {db.client_id}) partially updating note: ID='{note_id}', Version={expected_version}, DataKeys={data_keys}")
+        if update_data:
+            success = db.update_note(
+                note_id=note_id,
+                update_data=update_data,
+                expected_version=expected_version
+            )
+            if not success:
+                raise CharactersRAGDBError("Note update reported non-success without specific exception.")
+
+        if keywords_supplied:
+            _sync_note_keywords(db, note_id=note_id, keywords=kw_list or [])
 
         updated_note_data = db.get_note_by_id(note_id=note_id)
         if not updated_note_data:

@@ -70,34 +70,71 @@ class DeepSeekAdapter(ChatProvider):
             "app_config": request.get("app_config"),
         }
 
-    def _use_native_http(self) -> bool:
-        # In tests, prefer adapter if the http client factory is monkeypatched
-        if os.getenv("PYTEST_CURRENT_TEST"):
-            try:
-                from tldw_Server_API.app.core.http_client import create_client as _default_factory
-                # If tests monkeypatch the module-level factory (_hc_create_client), prefer native adapter
-                if _hc_create_client is not _default_factory:
-                    return True
-                from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy
-                fn = getattr(_legacy, "chat_with_deepseek", None)
-                if callable(fn):
-                    mod = getattr(fn, "__module__", "") or ""
-                    fname = getattr(fn, "__name__", "") or ""
-                    if (mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod or fname.startswith("_fake")):
-                        return False
-            except Exception:
-                pass
-        enabled = (os.getenv("LLM_ADAPTERS_ENABLED") or "").strip().lower()
-        if enabled in {"0", "false", "no", "off"}:
-            return False
-        if enabled in {"1", "true", "yes", "on"}:
-            return True
-        v = (os.getenv("LLM_ADAPTERS_NATIVE_HTTP_DEEPSEEK") or "").strip().lower()
-        if v in {"0", "false", "no", "off"}:
-            return False
-        if v in {"1", "true", "yes", "on"}:
-            return True
-        return True
+    def _apply_config_defaults(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        merged = dict(request)
+        cfg = (merged.get("app_config") or {}).get("deepseek_api", {})
+
+        def _coerce_float(value: Any) -> Any:
+            if value is None or isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, str):
+                try:
+                    return float(value)
+                except ValueError:
+                    return value
+            return value
+
+        def _coerce_int(value: Any) -> Any:
+            if value is None or isinstance(value, bool):
+                return value
+            if isinstance(value, int):
+                return value
+            if isinstance(value, float):
+                return int(value)
+            if isinstance(value, str):
+                try:
+                    return int(float(value))
+                except ValueError:
+                    return value
+            return value
+
+        if merged.get("api_key") is None and cfg.get("api_key") is not None:
+            merged["api_key"] = cfg.get("api_key")
+        if merged.get("model") is None:
+            merged["model"] = cfg.get("model") or "deepseek-chat"
+        if merged.get("temperature") is None and cfg.get("temperature") is not None:
+            merged["temperature"] = _coerce_float(cfg.get("temperature"))
+        if merged.get("top_p") is None and cfg.get("top_p") is not None:
+            merged["top_p"] = _coerce_float(cfg.get("top_p"))
+        if merged.get("max_tokens") is None and cfg.get("max_tokens") is not None:
+            merged["max_tokens"] = _coerce_int(cfg.get("max_tokens"))
+        if merged.get("seed") is None and cfg.get("seed") is not None:
+            merged["seed"] = _coerce_int(cfg.get("seed"))
+        if merged.get("stop") is None and cfg.get("stop") is not None:
+            merged["stop"] = cfg.get("stop")
+        if merged.get("logprobs") is None and cfg.get("logprobs") is not None:
+            merged["logprobs"] = cfg.get("logprobs")
+        if merged.get("top_logprobs") is None and cfg.get("top_logprobs") is not None:
+            merged["top_logprobs"] = _coerce_int(cfg.get("top_logprobs"))
+        if merged.get("presence_penalty") is None and cfg.get("presence_penalty") is not None:
+            merged["presence_penalty"] = _coerce_float(cfg.get("presence_penalty"))
+        if merged.get("frequency_penalty") is None and cfg.get("frequency_penalty") is not None:
+            merged["frequency_penalty"] = _coerce_float(cfg.get("frequency_penalty"))
+        if merged.get("response_format") is None and cfg.get("response_format") is not None:
+            merged["response_format"] = cfg.get("response_format")
+        if merged.get("n") is None and cfg.get("n") is not None:
+            merged["n"] = _coerce_int(cfg.get("n"))
+        if merged.get("user") is None and cfg.get("user") is not None:
+            merged["user"] = cfg.get("user")
+        if merged.get("tools") is None and cfg.get("tools") is not None:
+            merged["tools"] = cfg.get("tools")
+        if merged.get("tool_choice") is None and cfg.get("tool_choice") is not None:
+            merged["tool_choice"] = cfg.get("tool_choice")
+        if merged.get("logit_bias") is None and cfg.get("logit_bias") is not None:
+            merged["logit_bias"] = cfg.get("logit_bias")
+        return merged
 
     def _base_url(self, cfg: Optional[Dict[str, Any]]) -> str:
         default_base = "https://api.deepseek.com"
@@ -186,114 +223,95 @@ class DeepSeekAdapter(ChatProvider):
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
         request = validate_payload(self.name, request or {})
-        if self._use_native_http():
-            api_key = request.get("api_key")
-            cfg = request.get("app_config") or {}
-            url = f"{self._base_url(cfg)}/chat/completions"
-            headers = self._headers(api_key)
-            payload = self._build_payload(request)
-            payload["stream"] = False
-            try:
-                resolved_timeout = self._resolve_timeout(request, timeout)
-                with http_client_factory(timeout=resolved_timeout) as client:
-                    logger.debug(
-                        "DeepSeekAdapter.chat POST {} with meta {}",
-                        url,
-                        self._payload_meta(payload),
-                    )
-                    resp = client.post(url, headers=headers, json=payload)
-                    resp.raise_for_status()
-                    return resp.json()
-            except Exception as e:
-                # Try to log upstream response text if available
-                if is_http_status_error(e):
-                    status = get_http_status_from_exception(e) or "?"
-                    text = get_http_error_text(e)
-                    if len(text) > 500:
-                        text = text[:500]
-                    logger.error(
-                        "DeepSeekAdapter.chat upstream error {}: {}",
-                        status,
-                        text,
-                    )
-                raise self.normalize_error(e)
-
-        kwargs = self._to_handler_args(request)
-        if "stream" not in request and "streaming" not in request:
-            kwargs["streaming"] = None
-        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy
-        fn = getattr(_legacy, "chat_with_deepseek", None)
-        if callable(fn):
-            mod = getattr(fn, "__module__", "") or ""
-            fname = getattr(fn, "__name__", "") or ""
-            # Only honor an explicitly monkeypatched test helper to avoid recursion.
-            if (mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod or fname.startswith("_fake")):
-                return fn(**kwargs)  # type: ignore[misc]
-        # Fallback to the preserved legacy implementation to avoid adapter recursion under pytest
-        return _legacy.legacy_chat_with_deepseek(**kwargs)
+        request = self._apply_config_defaults(request)
+        api_key = request.get("api_key")
+        if not api_key:
+            from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+            raise ChatConfigurationError(provider=self.name, message="DeepSeek API Key required.")
+        cfg = request.get("app_config") or {}
+        url = f"{self._base_url(cfg)}/chat/completions"
+        headers = self._headers(api_key)
+        payload = self._build_payload(request)
+        payload["stream"] = False
+        try:
+            resolved_timeout = self._resolve_timeout(request, timeout)
+            with http_client_factory(timeout=resolved_timeout) as client:
+                logger.debug(
+                    "DeepSeekAdapter.chat POST {} with meta {}",
+                    url,
+                    self._payload_meta(payload),
+                )
+                resp = client.post(url, headers=headers, json=payload)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:
+            # Try to log upstream response text if available
+            if is_http_status_error(e):
+                status = get_http_status_from_exception(e) or "?"
+                text = get_http_error_text(e)
+                if len(text) > 500:
+                    text = text[:500]
+                logger.error(
+                    "DeepSeekAdapter.chat upstream error {}: {}",
+                    status,
+                    text,
+                )
+            raise self.normalize_error(e)
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
         request = validate_payload(self.name, request or {})
-        if self._use_native_http():
-            api_key = request.get("api_key")
-            cfg = request.get("app_config") or {}
-            url = f"{self._base_url(cfg)}/chat/completions"
-            headers = self._headers(api_key)
-            payload = self._build_payload(request)
-            payload["stream"] = True
-            try:
-                resolved_timeout = self._resolve_timeout(request, timeout)
-                with http_client_factory(timeout=resolved_timeout) as client:
-                    logger.debug(
-                        "DeepSeekAdapter.stream POST {} with meta {}",
-                        url,
-                        self._payload_meta(payload),
-                    )
-                    with client.stream("POST", url, headers=headers, json=payload) as resp:
-                        resp.raise_for_status()
-                        seen_done = False
-                        for raw in resp.iter_lines():
-                            if not raw:
-                                continue
-                            try:
-                                line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
-                            except Exception:
-                                line = str(raw)
-                            if is_done_line(line):
-                                if not seen_done:
-                                    seen_done = True
-                                    yield sse_done()
-                                continue
-                            normalized = normalize_provider_line(line)
-                            if normalized is not None:
-                                yield normalized
-                        for tail in finalize_stream(response=resp, done_already=seen_done):
-                            yield tail
-                return
-            except Exception as e:
-                # Try to log upstream response text if available
-                if is_http_status_error(e):
-                    status = get_http_status_from_exception(e) or "?"
-                    text = get_http_error_text(e)
-                    if len(text) > 500:
-                        text = text[:500]
-                    logger.error(
-                        "DeepSeekAdapter.stream upstream error {}: {}",
-                        status,
-                        text,
-                    )
-                raise self.normalize_error(e)
-
-        kwargs = self._to_handler_args(request)
-        kwargs["streaming"] = True
-        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy
-        fn = getattr(_legacy, "chat_with_deepseek", None)
-        if callable(fn):
-            mod = getattr(fn, "__module__", "") or ""
-            fname = getattr(fn, "__name__", "") or ""
-            if (mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod or fname.startswith("_fake")):
-                return fn(**kwargs)  # type: ignore[misc]
-        return _legacy.legacy_chat_with_deepseek(**kwargs)
+        request = self._apply_config_defaults(request)
+        api_key = request.get("api_key")
+        if not api_key:
+            from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+            raise ChatConfigurationError(provider=self.name, message="DeepSeek API Key required.")
+        cfg = request.get("app_config") or {}
+        url = f"{self._base_url(cfg)}/chat/completions"
+        headers = self._headers(api_key)
+        payload = self._build_payload(request)
+        payload["stream"] = True
+        try:
+            resolved_timeout = self._resolve_timeout(request, timeout)
+            with http_client_factory(timeout=resolved_timeout) as client:
+                logger.debug(
+                    "DeepSeekAdapter.stream POST {} with meta {}",
+                    url,
+                    self._payload_meta(payload),
+                )
+                with client.stream("POST", url, headers=headers, json=payload) as resp:
+                    resp.raise_for_status()
+                    seen_done = False
+                    for raw in resp.iter_lines():
+                        if not raw:
+                            continue
+                        try:
+                            line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                        except Exception:
+                            line = str(raw)
+                        if is_done_line(line):
+                            if not seen_done:
+                                seen_done = True
+                                yield sse_done()
+                            continue
+                        normalized = normalize_provider_line(line)
+                        if normalized is not None:
+                            yield normalized
+                    for tail in finalize_stream(response=resp, done_already=seen_done):
+                        yield tail
+            return
+        except Exception as e:
+            # Try to log upstream response text if available
+            if is_http_status_error(e):
+                status = get_http_status_from_exception(e) or "?"
+                text = get_http_error_text(e)
+                if len(text) > 500:
+                    text = text[:500]
+                logger.error(
+                    "DeepSeekAdapter.stream upstream error {}: {}",
+                    status,
+                    text,
+                )
+            raise self.normalize_error(e)
 
     def normalize_error(self, exc: Exception):  # type: ignore[override]
         def _redact_secrets(text: str) -> str:

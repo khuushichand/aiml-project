@@ -97,6 +97,16 @@ def get_transcription_models_payload() -> Dict[str, Any]:
         ],
         "Optimized Models": [
             {
+                "value": "deepdml/faster-distil-whisper-large-v3.5",
+                "label": "Faster Distil-Whisper Large v3.5",
+                "description": "Recommended optimized model",
+            },
+            {
+                "value": "deepdml/faster-whisper-large-v3-turbo-ct2",
+                "label": "Faster Whisper Large v3 Turbo CT2",
+                "description": "Turbo large model (CTranslate2)",
+            },
+            {
                 "value": "whisper-tiny-ct2",
                 "label": "Whisper Tiny CT2",
                 "description": "CTranslate2 optimized",
@@ -129,8 +139,8 @@ def get_transcription_models_payload() -> Dict[str, Any]:
         ],
         "Nemo Models": [
             {
-                "value": "nemo-canary",
-                "label": "Nemo Canary",
+                "value": "nemo-canary-1b",
+                "label": "Nemo Canary 1B",
                 "description": "NVIDIA's multilingual model",
             },
             {

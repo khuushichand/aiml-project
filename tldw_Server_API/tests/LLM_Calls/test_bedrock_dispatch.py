@@ -61,9 +61,9 @@ def test_dispatch_to_bedrock_adapter_non_stream(monkeypatch):
     fake = _FakeClient(post_resp=_FakeResp(status_code=200, json_obj={"choices": [{"message": {"content": "ok"}}]}))
     monkeypatch.setattr(mod, "http_client_factory", lambda *a, **k: fake)
 
-    # Use provider dispatch handler
-    from tldw_Server_API.app.core.Chat.provider_config import API_CALL_HANDLERS
-    handler = API_CALL_HANDLERS['bedrock']
+    # Use legacy-compatible handler shim
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import bedrock_chat_handler
+    handler = bedrock_chat_handler
 
     resp = handler(
         input_data=[{"role": "user", "content": "hi"}],
@@ -73,7 +73,7 @@ def test_dispatch_to_bedrock_adapter_non_stream(monkeypatch):
     )
     assert isinstance(fake.last_json, dict)
     assert fake.last_json.get("stream") is False
-    assert fake.last_url.endswith("/openai/v1/chat/completions")
+    assert fake.last_url.endswith("/v1/chat/completions")
 
 
 def test_dispatch_to_bedrock_adapter_stream(monkeypatch):
@@ -86,8 +86,8 @@ def test_dispatch_to_bedrock_adapter_stream(monkeypatch):
     fake = _FakeClient(stream_lines=lines)
     monkeypatch.setattr(mod, "http_client_factory", lambda *a, **k: fake)
 
-    from tldw_Server_API.app.core.Chat.provider_config import API_CALL_HANDLERS
-    handler = API_CALL_HANDLERS['bedrock']
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import bedrock_chat_handler
+    handler = bedrock_chat_handler
 
     gen = handler(
         input_data=[{"role": "user", "content": "hi"}],

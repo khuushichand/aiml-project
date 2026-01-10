@@ -1,6 +1,6 @@
-# legacy_local_calls.py
+# local_chat_calls.py
 #########################################
-# Legacy local LLM API calls retained for compatibility.
+# Local LLM API calls retained for compatibility with gateway-style providers.
 #
 ####
 import json
@@ -24,7 +24,7 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     normalize_provider_line,
     sse_data,
 )
-from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import _sanitize_payload_for_logging, _apply_tool_choice
+from tldw_Server_API.app.core.LLM_Calls.chat_calls import _sanitize_payload_for_logging, _apply_tool_choice
 
 
 ####################
@@ -366,7 +366,7 @@ def _chat_with_openai_compatible_local_server(
                 pass
 
 
-def chat_with_local_llm(
+def legacy_chat_with_local_llm(
         input_data: List[Dict[str, Any]],
         temp: Optional[float] = None,
         temperature: Optional[float] = None,
@@ -380,7 +380,7 @@ def chat_with_local_llm(
         max_tokens: Optional[int] = None,
         seed: Optional[int] = None,
         stop: Optional[Union[str, List[str]]] = None,
-        # Note: custom_prompt_arg is in PROVIDER_PARAM_MAP but OpenAI compatible servers expect prompts in messages.
+        # Note: custom_prompt_arg is legacy-only; OpenAI-compatible servers expect prompts in messages.
         # It's better handled by the `chat` function by prepending to the user message if needed.
         # For now, we assume it's already part of input_data or handled by system_message.
         custom_prompt_arg: Optional[str] = None, # Mapped from 'prompt'
@@ -523,7 +523,7 @@ def chat_with_local_llm(
 
 
 
-def chat_with_llama(
+def legacy_chat_with_llama(
         input_data: List[Dict[str, Any]],
         api_key: Optional[str] = None, # from map
         custom_prompt: Optional[str] = None,  # from map, Mapped from 'prompt'
@@ -547,7 +547,7 @@ def chat_with_llama(
         # api_url is tricky. Your notes say "positional argument".
         # If chat_api_call is the sole entry, this needs to be passed via kwargs if mapped,
         # or loaded from config if not passed. Let's assume it's primarily from config for now.
-        api_url: Optional[str] = None, # This is specific to this function's call from API_CALL_HANDLERS if special handling exists
+        api_url: Optional[str] = None, # Used by legacy dispatch when special handling exists
         app_config: Optional[Dict[str, Any]] = None,
         http_client_factory: Optional[Callable[[int], Any]] = None,
         http_fetcher: Optional[Callable[..., Any]] = None,
@@ -666,7 +666,7 @@ def chat_with_llama(
 
 # System prompts not supported through API requests.
 # https://lite.koboldai.net/koboldcpp_api#/api%2Fv1/post_api_v1_generate
-def chat_with_kobold(
+def legacy_chat_with_kobold(
         input_data: List[Dict[str, Any]],
         api_key: Optional[str] = None,
         custom_prompt_input: Optional[str] = None, # Mapped from 'prompt'
@@ -834,7 +834,7 @@ def chat_with_kobold(
 
 # https://github.com/oobabooga/text-generation-webui/wiki/12-%E2%80%90-OpenAI-API
 # Oobabooga with OpenAI extension
-def chat_with_oobabooga(
+def legacy_chat_with_oobabooga(
     input_data: List[Dict[str, Any]],
     api_key: Optional[str] = None, # from map
     custom_prompt: Optional[str] = None,  # from map, Mapped from 'prompt'
@@ -969,7 +969,7 @@ def chat_with_oobabooga(
 
 
 # TabbyAPI (seems OpenAI compatible)
-def chat_with_tabbyapi(
+def legacy_chat_with_tabbyapi(
     input_data: List[Dict[str, Any]],
     api_key: Optional[str] = None, # from map
     custom_prompt_input: Optional[str] = None, # from map ('prompt')
@@ -1019,16 +1019,7 @@ def chat_with_tabbyapi(
 
     current_api_key = api_key or cfg.get('api_key')
     current_model = model or cfg.get('model')
-    # TabbyAPI's map uses 'temp' for 'temperature', which matches generic.
-    # So, current_temp = temperature (from chat_api_call's temp arg)
-    # Your map has: 'temp': 'temperature'. This seems like an error in the map, it should be:
-    # 'temperature': 'temperature' (if tabby expects 'temperature') or
-    # 'temp': 'temp' (if tabby expects 'temp' and generic is 'temp').
-    # Assuming generic is 'temp' and TabbyAPI also takes 'temp' or 'temperature'.
-    # If PROVIDER_PARAM_MAP has 'temp':'temperature', then chat_api_call passes `temp` as `temperature` kwarg.
-    # Let's assume tabby expects 'temperature' based on common OpenAI compat.
-    # The `temp` param in this function signature comes from `PROVIDER_PARAM_MAP` key `temperature` and its value `temp`
-    # This is confusing. Let's assume `temp` is the actual parameter name for Tabby from your map.
+    # Accept both temp/temperature from legacy callers; prefer temp when both present.
     current_temp_val = temp if temp is not None else float(cfg.get('temperature', cfg.get('temp', 0.7)))
 
 
@@ -1135,7 +1126,7 @@ def chat_with_tabbyapi(
 
 
 # vLLM (OpenAI compatible)
-def chat_with_vllm(
+def legacy_chat_with_vllm(
     input_data: List[Dict[str, Any]],
     api_key: Optional[str] = None, # from map
     custom_prompt_input: Optional[str] = None, # from map ('prompt')
@@ -1181,7 +1172,7 @@ def chat_with_vllm(
     loaded_config_data = app_config or load_settings()
     cfg = loaded_config_data.get('vllm_api', {})
 
-    # vllm_api_url is a specific argument for this function if it's set up in API_CALL_HANDLERS call
+    # vllm_api_url is a specific argument for this function if it's set up in legacy dispatch
     # otherwise, it falls back to config.
     current_api_base_url = vllm_api_url or cfg.get('api_ip')
     if not current_api_base_url:
@@ -1207,9 +1198,7 @@ def chat_with_vllm(
     current_top_logprobs = top_logprobs if top_logprobs is not None else cfg.get('top_logprobs')
     current_tools = tools if tools is not None else cfg.get('tools')
     current_tool_choice = tool_choice if tool_choice is not None else cfg.get('tool_choice')
-    # top_logprobs: vLLM PROVIDER_PARAM_MAP has 'logprobs' but not 'top_logprobs'.
-    # If vLLM supports top_logprobs, it should be added to the map and this func's signature.
-    # Assuming for now it's not explicitly mapped for vLLM.
+    # If vLLM supports top_logprobs, keep it in the signature and pass through.
     current_user_identifier = user_identifier if user_identifier is not None else cfg.get('user_identifier')
 
 
@@ -1299,7 +1288,7 @@ def chat_with_vllm(
 
 
 # Aphrodite (seems to be an OpenAI compatible engine)
-def chat_with_aphrodite(
+def legacy_chat_with_aphrodite(
     input_data: List[Dict[str, Any]],
     api_key: Optional[str] = None, # from map
     custom_prompt: Optional[str] = None,  # from map ('prompt')
@@ -1319,8 +1308,8 @@ def chat_with_aphrodite(
     response_format: Optional[Dict[str, str]] = None, # from map
     n: Optional[int] = None,             # from map
     logit_bias: Optional[Dict[str, float]] = None, # from map
-    presence_penalty: Optional[float] = None, # from map
-    frequency_penalty: Optional[float] = None, # from map
+    presence_penalty: Optional[float] = None, # legacy alias
+    frequency_penalty: Optional[float] = None, # legacy alias
     logprobs: Optional[bool] = None,     # from map
     user_identifier: Optional[str] = None, # from map
     tools: Optional[List[Dict[str, Any]]] = None,
@@ -1449,7 +1438,7 @@ def chat_with_aphrodite(
 
 
 # Ollama (with OpenAI compatible endpoint)
-def chat_with_ollama(
+def legacy_chat_with_ollama(
     input_data: List[Dict[str, Any]],
     api_key: Optional[str] = None, # from map, Ollama doesn't use key but map has it
     custom_prompt: Optional[str] = None,  # from map ('prompt')
@@ -1486,9 +1475,8 @@ def chat_with_ollama(
     app_config: Optional[Dict[str, Any]] = None,
     http_client_factory: Optional[Callable[[int], Any]] = None,
     http_fetcher: Optional[Callable[..., Any]] = None,
-    # Missing from Ollama PROVIDER_PARAM_MAP that _openai_compatible_server handles:
-    # logit_bias, n (num_choices), user_identifier, logprobs, top_logprobs, tools, tool_choice, min_p
-    # Add to signature and pass if Ollama supports them.
+    # _chat_with_openai_compatible_local_server supports extra OpenAI fields (logit_bias, n, tools, etc.).
+    # Add to this signature if Ollama supports them.
 ):
     if temp is not None:
         if temperature is not None and temperature != temp:
@@ -1534,9 +1522,7 @@ def chat_with_ollama(
     current_tool_choice = tool_choice if tool_choice is not None else cfg.get('tool_choice')
 
     # Handle response_format for Ollama:
-    # PROVIDER_PARAM_MAP has 'response_format': 'format' (e.g., "json")
-    # _chat_with_openai_compatible_local_server expects {'type': 'json_object'}
-    # We need to translate `format_str` (which is "json" from mapping) to the dict format.
+    # Ollama's format string ("json") maps to OpenAI's response_format {"type": "json_object"}.
     ollama_response_format_dict: Optional[Dict[str, str]] = None
     # Prefer explicit format_str argument, then alias 'format', then config key
     actual_format_value: Optional[Union[str, Dict[str, Any]]] = (
@@ -1560,8 +1546,7 @@ def chat_with_ollama(
     current_frequency_penalty = frequency_penalty if frequency_penalty is not None else cfg.get('frequency_penalty') # Ollama uses 'frequency_penalty'
 
     # Ollama also supports other native parameters like 'num_ctx', 'tfs_z', 'mirostat', etc.
-    # These would need to be added to PROVIDER_PARAM_MAP and then to this function if full coverage is desired.
-    # For now, focusing on OpenAI compatible ones.
+    # Add them to the signature if full coverage is desired; for now, focus on OpenAI-compatible ones.
 
     timeout = int(cfg.get('api_timeout', 300)) # Ollama can be slow
     api_retries = int(cfg.get('api_retries', 1))
@@ -1636,68 +1621,12 @@ def chat_with_ollama(
 def legacy_chat_with_custom_openai(
     input_data: List[Dict[str, Any]],
     api_key: Optional[str] = None,
-    custom_prompt_arg: Optional[str] = None,
-    temp: Optional[float] = None,
-    system_message: Optional[str] = None,
-    streaming: Optional[bool] = False,
-    model: Optional[str] = None,
-    maxp: Optional[float] = None,
-    topp: Optional[float] = None,
-    minp: Optional[float] = None,
-    topk: Optional[int] = None,
-    max_tokens: Optional[int] = None,
-    seed: Optional[int] = None,
-    stop: Optional[Union[str, List[str]]] = None,
-    response_format: Optional[Dict[str, str]] = None,
-    n: Optional[int] = None,
-    user_identifier: Optional[str] = None,
-    tools: Optional[List[Dict[str, Any]]] = None,
-    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
-    logit_bias: Optional[Dict[str, float]] = None,
-    presence_penalty: Optional[float] = None,
-    frequency_penalty: Optional[float] = None,
-    logprobs: Optional[bool] = None,
-    top_logprobs: Optional[int] = None,
-    app_config: Optional[Dict[str, Any]] = None,
-):
-    # Delegate to existing implementation to preserve legacy behavior
-    return chat_with_custom_openai(
-        input_data=input_data,
-        api_key=api_key,
-        custom_prompt_arg=custom_prompt_arg,
-        temp=temp,
-        system_message=system_message,
-        streaming=streaming,
-        model=model,
-        maxp=maxp,
-        topp=topp,
-        minp=minp,
-        topk=topk,
-        max_tokens=max_tokens,
-        seed=seed,
-        stop=stop,
-        response_format=response_format,
-        n=n,
-        user_identifier=user_identifier,
-        tools=tools,
-        tool_choice=tool_choice,
-        logit_bias=logit_bias,
-        presence_penalty=presence_penalty,
-        frequency_penalty=frequency_penalty,
-        logprobs=logprobs,
-        top_logprobs=top_logprobs,
-        app_config=app_config,
-    )
-
-def chat_with_custom_openai(
-    input_data: List[Dict[str, Any]],
-    api_key: Optional[str] = None,
     custom_prompt_arg: Optional[str] = None, # Mapped from 'prompt'
     temp: Optional[float] = None, # Mapped from generic 'temp'
     system_message: Optional[str] = None,
     streaming: Optional[bool] = False,
     model: Optional[str] = None,
-    # PROVIDER_PARAM_MAP for custom-openai-api specific names:
+    # Legacy custom-openai-api parameter aliases:
     maxp: Optional[float] = None,             # Mapped from 'maxp' (likely top_p)
     topp: Optional[float] = None,             # Mapped from 'topp'
     minp: Optional[float] = None,             # Mapped from 'minp'
@@ -1806,55 +1735,6 @@ def chat_with_custom_openai(
 
 # Custom OpenAI API 2
 def legacy_chat_with_custom_openai_2(
-    input_data: List[Dict[str, Any]],
-    api_key: Optional[str] = None,
-    custom_prompt_arg: Optional[str] = None,
-    temp: Optional[float] = None,
-    system_message: Optional[str] = None,
-    streaming: Optional[bool] = False,
-    model: Optional[str] = None,
-    topp: Optional[float] = None,
-    max_tokens: Optional[int] = None,
-    seed: Optional[int] = None,
-    stop: Optional[Union[str, List[str]]] = None,
-    response_format: Optional[Dict[str, str]] = None,
-    n: Optional[int] = None,
-    user_identifier: Optional[str] = None,
-    tools: Optional[List[Dict[str, Any]]] = None,
-    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
-    logit_bias: Optional[Dict[str, float]] = None,
-    presence_penalty: Optional[float] = None,
-    frequency_penalty: Optional[float] = None,
-    logprobs: Optional[bool] = None,
-    top_logprobs: Optional[int] = None,
-    app_config: Optional[Dict[str, Any]] = None,
-):
-    return chat_with_custom_openai_2(
-        input_data=input_data,
-        api_key=api_key,
-        custom_prompt_arg=custom_prompt_arg,
-        temp=temp,
-        system_message=system_message,
-        streaming=streaming,
-        model=model,
-        topp=topp,
-        max_tokens=max_tokens,
-        seed=seed,
-        stop=stop,
-        response_format=response_format,
-        n=n,
-        user_identifier=user_identifier,
-        tools=tools,
-        tool_choice=tool_choice,
-        logit_bias=logit_bias,
-        presence_penalty=presence_penalty,
-        frequency_penalty=frequency_penalty,
-        logprobs=logprobs,
-        top_logprobs=top_logprobs,
-        app_config=app_config,
-    )
-
-def chat_with_custom_openai_2(
     input_data: List[Dict[str, Any]],
     api_key: Optional[str] = None,
     custom_prompt_arg: Optional[str] = None, # Mapped from 'prompt'
@@ -1968,6 +1848,596 @@ def chat_with_custom_openai_2(
         http_fetcher=http_fetcher
     )
 
+
+
+def chat_with_local_llm(
+        input_data: List[Dict[str, Any]],
+        temp: Optional[float] = None,
+        temperature: Optional[float] = None,
+        system_message: Optional[str] = None,
+        streaming: Optional[bool] = None,
+        stream: Optional[bool] = None,
+        model: Optional[str] = None,
+        top_k: Optional[int] = None,
+        top_p: Optional[float] = None,
+        min_p: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        custom_prompt_arg: Optional[str] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        n: Optional[int] = None,
+        user_identifier: Optional[str] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        logprobs: Optional[bool] = None,
+        top_logprobs: Optional[int] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+        http_client_factory: Optional[Callable[[int], Any]] = None,
+        http_fetcher: Optional[Callable[..., Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import local_llm_chat_handler
+    return local_llm_chat_handler(
+        input_data=input_data,
+        temp=temp,
+        temperature=temperature,
+        system_message=system_message,
+        streaming=streaming,
+        stream=stream,
+        model=model,
+        top_k=top_k,
+        top_p=top_p,
+        min_p=min_p,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        custom_prompt_arg=custom_prompt_arg,
+        response_format=response_format,
+        n=n,
+        user_identifier=user_identifier,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        tools=tools,
+        tool_choice=tool_choice,
+        app_config=app_config,
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher,
+    )
+
+
+def chat_with_llama(
+        input_data: List[Dict[str, Any]],
+        api_key: Optional[str] = None,
+        custom_prompt: Optional[str] = None,
+        temp: Optional[float] = None,
+        temperature: Optional[float] = None,
+        system_prompt: Optional[str] = None,
+        streaming: Optional[bool] = None,
+        stream: Optional[bool] = None,
+        model: Optional[str] = None,
+        top_k: Optional[int] = None,
+        top_p: Optional[float] = None,
+        min_p: Optional[float] = None,
+        n_predict: Optional[int] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        n: Optional[int] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        api_url: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+        http_client_factory: Optional[Callable[[int], Any]] = None,
+        http_fetcher: Optional[Callable[..., Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import llama_cpp_chat_handler
+    return llama_cpp_chat_handler(
+        input_data=input_data,
+        api_key=api_key,
+        custom_prompt=custom_prompt,
+        temp=temp,
+        temperature=temperature,
+        system_prompt=system_prompt,
+        streaming=streaming,
+        stream=stream,
+        model=model,
+        top_k=top_k,
+        top_p=top_p,
+        min_p=min_p,
+        n_predict=n_predict,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        logit_bias=logit_bias,
+        n=n,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        api_url=api_url,
+        app_config=app_config,
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher,
+    )
+
+
+def chat_with_kobold(
+        input_data: List[Dict[str, Any]],
+        api_key: Optional[str] = None,
+        custom_prompt_input: Optional[str] = None,
+        temp: Optional[float] = None,
+        system_message: Optional[str] = None,
+        streaming: Optional[bool] = False,
+        model: Optional[str] = None,
+        top_k: Optional[int] = None,
+        top_p: Optional[float] = None,
+        max_length: Optional[int] = None,
+        stop_sequence: Optional[Union[str, List[str]]] = None,
+        num_responses: Optional[int] = None,
+        seed: Optional[int] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import kobold_chat_handler
+    return kobold_chat_handler(
+        input_data=input_data,
+        api_key=api_key,
+        custom_prompt_input=custom_prompt_input,
+        temp=temp,
+        system_message=system_message,
+        streaming=streaming,
+        model=model,
+        top_k=top_k,
+        top_p=top_p,
+        max_length=max_length,
+        stop_sequence=stop_sequence,
+        num_responses=num_responses,
+        seed=seed,
+        app_config=app_config,
+    )
+
+
+def chat_with_oobabooga(
+        input_data: List[Dict[str, Any]],
+        api_key: Optional[str] = None,
+        custom_prompt_input: Optional[str] = None,
+        temp: Optional[float] = None,
+        temperature: Optional[float] = None,
+        system_message: Optional[str] = None,
+        streaming: Optional[bool] = None,
+        stream: Optional[bool] = None,
+        model: Optional[str] = None,
+        top_k: Optional[int] = None,
+        top_p: Optional[float] = None,
+        min_p: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        n: Optional[int] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        logprobs: Optional[bool] = None,
+        user_identifier: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        top_logprobs: Optional[int] = None,
+        ooba_api_url: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+        http_client_factory: Optional[Callable[[int], Any]] = None,
+        http_fetcher: Optional[Callable[..., Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import ooba_chat_handler
+    return ooba_chat_handler(
+        input_data=input_data,
+        api_key=api_key,
+        custom_prompt_input=custom_prompt_input,
+        temp=temp,
+        temperature=temperature,
+        system_message=system_message,
+        streaming=streaming,
+        stream=stream,
+        model=model,
+        top_k=top_k,
+        top_p=top_p,
+        min_p=min_p,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        user_identifier=user_identifier,
+        tools=tools,
+        tool_choice=tool_choice,
+        top_logprobs=top_logprobs,
+        ooba_api_url=ooba_api_url,
+        app_config=app_config,
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher,
+    )
+
+
+def chat_with_tabbyapi(
+        input_data: List[Dict[str, Any]],
+        api_key: Optional[str] = None,
+        custom_prompt_input: Optional[str] = None,
+        temp: Optional[float] = None,
+        temperature: Optional[float] = None,
+        system_message: Optional[str] = None,
+        streaming: Optional[bool] = None,
+        stream: Optional[bool] = None,
+        model: Optional[str] = None,
+        top_k: Optional[int] = None,
+        top_p: Optional[float] = None,
+        min_p: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        n: Optional[int] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        logprobs: Optional[bool] = None,
+        user_identifier: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        top_logprobs: Optional[int] = None,
+        tabby_api_url: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+        http_client_factory: Optional[Callable[[int], Any]] = None,
+        http_fetcher: Optional[Callable[..., Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import tabbyapi_chat_handler
+    return tabbyapi_chat_handler(
+        input_data=input_data,
+        api_key=api_key,
+        custom_prompt_input=custom_prompt_input,
+        temp=temp,
+        temperature=temperature,
+        system_message=system_message,
+        streaming=streaming,
+        stream=stream,
+        model=model,
+        top_k=top_k,
+        top_p=top_p,
+        min_p=min_p,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        user_identifier=user_identifier,
+        tools=tools,
+        tool_choice=tool_choice,
+        top_logprobs=top_logprobs,
+        tabby_api_url=tabby_api_url,
+        app_config=app_config,
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher,
+    )
+
+
+def chat_with_vllm(
+        input_data: List[Dict[str, Any]],
+        api_key: Optional[str] = None,
+        custom_prompt_input: Optional[str] = None,
+        temp: Optional[float] = None,
+        temperature: Optional[float] = None,
+        system_prompt: Optional[str] = None,
+        streaming: Optional[bool] = None,
+        stream: Optional[bool] = None,
+        model: Optional[str] = None,
+        top_k: Optional[int] = None,
+        top_p: Optional[float] = None,
+        min_p: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        n: Optional[int] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        logprobs: Optional[bool] = None,
+        user_identifier: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        top_logprobs: Optional[int] = None,
+        vllm_api_url: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+        http_client_factory: Optional[Callable[[int], Any]] = None,
+        http_fetcher: Optional[Callable[..., Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import vllm_chat_handler
+    return vllm_chat_handler(
+        input_data=input_data,
+        api_key=api_key,
+        custom_prompt_input=custom_prompt_input,
+        temp=temp,
+        temperature=temperature,
+        system_prompt=system_prompt,
+        streaming=streaming,
+        stream=stream,
+        model=model,
+        top_k=top_k,
+        top_p=top_p,
+        min_p=min_p,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        user_identifier=user_identifier,
+        tools=tools,
+        tool_choice=tool_choice,
+        top_logprobs=top_logprobs,
+        vllm_api_url=vllm_api_url,
+        app_config=app_config,
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher,
+    )
+
+
+def chat_with_aphrodite(
+        input_data: List[Dict[str, Any]],
+        api_key: Optional[str] = None,
+        custom_prompt_input: Optional[str] = None,
+        temp: Optional[float] = None,
+        temperature: Optional[float] = None,
+        system_prompt: Optional[str] = None,
+        streaming: Optional[bool] = None,
+        stream: Optional[bool] = None,
+        model: Optional[str] = None,
+        top_k: Optional[int] = None,
+        top_p: Optional[float] = None,
+        min_p: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        n: Optional[int] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        logprobs: Optional[bool] = None,
+        user_identifier: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        top_logprobs: Optional[int] = None,
+        aphrodite_api_url: Optional[str] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+        http_client_factory: Optional[Callable[[int], Any]] = None,
+        http_fetcher: Optional[Callable[..., Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import aphrodite_chat_handler
+    return aphrodite_chat_handler(
+        input_data=input_data,
+        api_key=api_key,
+        custom_prompt_input=custom_prompt_input,
+        temp=temp,
+        temperature=temperature,
+        system_prompt=system_prompt,
+        streaming=streaming,
+        stream=stream,
+        model=model,
+        top_k=top_k,
+        top_p=top_p,
+        min_p=min_p,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        user_identifier=user_identifier,
+        tools=tools,
+        tool_choice=tool_choice,
+        top_logprobs=top_logprobs,
+        aphrodite_api_url=aphrodite_api_url,
+        app_config=app_config,
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher,
+    )
+
+
+def chat_with_ollama(
+        input_data: List[Dict[str, Any]],
+        api_key: Optional[str] = None,
+        custom_prompt: Optional[str] = None,
+        temp: Optional[float] = None,
+        temperature: Optional[float] = None,
+        system_message: Optional[str] = None,
+        streaming: Optional[bool] = None,
+        stream: Optional[bool] = None,
+        model: Optional[str] = None,
+        top_k: Optional[int] = None,
+        top_p: Optional[float] = None,
+        min_p: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        response_format: Optional[Dict[str, str]] = None,
+        n: Optional[int] = None,
+        logit_bias: Optional[Dict[str, float]] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        logprobs: Optional[bool] = None,
+        user_identifier: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        top_logprobs: Optional[int] = None,
+        app_config: Optional[Dict[str, Any]] = None,
+        http_client_factory: Optional[Callable[[int], Any]] = None,
+        http_fetcher: Optional[Callable[..., Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import ollama_chat_handler
+    return ollama_chat_handler(
+        input_data=input_data,
+        api_key=api_key,
+        custom_prompt=custom_prompt,
+        temp=temp,
+        temperature=temperature,
+        system_message=system_message,
+        streaming=streaming,
+        stream=stream,
+        model=model,
+        top_k=top_k,
+        top_p=top_p,
+        min_p=min_p,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        user_identifier=user_identifier,
+        tools=tools,
+        tool_choice=tool_choice,
+        top_logprobs=top_logprobs,
+        app_config=app_config,
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher,
+    )
+
+
+def chat_with_custom_openai(
+    input_data: List[Dict[str, Any]],
+    api_key: Optional[str] = None,
+    custom_prompt_arg: Optional[str] = None,
+    temp: Optional[float] = None,
+    system_message: Optional[str] = None,
+    streaming: Optional[bool] = False,
+    model: Optional[str] = None,
+    maxp: Optional[float] = None,
+    topp: Optional[float] = None,
+    minp: Optional[float] = None,
+    topk: Optional[int] = None,
+    max_tokens: Optional[int] = None,
+    seed: Optional[int] = None,
+    stop: Optional[Union[str, List[str]]] = None,
+    response_format: Optional[Dict[str, str]] = None,
+    n: Optional[int] = None,
+    user_identifier: Optional[str] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    logit_bias: Optional[Dict[str, float]] = None,
+    presence_penalty: Optional[float] = None,
+    frequency_penalty: Optional[float] = None,
+    logprobs: Optional[bool] = None,
+    top_logprobs: Optional[int] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+    http_client_factory: Optional[Callable[[int], Any]] = None,
+    http_fetcher: Optional[Callable[..., Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import custom_openai_chat_handler
+    return custom_openai_chat_handler(
+        input_data=input_data,
+        api_key=api_key,
+        custom_prompt_arg=custom_prompt_arg,
+        temp=temp,
+        system_message=system_message,
+        streaming=streaming,
+        model=model,
+        maxp=maxp,
+        topp=topp,
+        minp=minp,
+        topk=topk,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        user_identifier=user_identifier,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        app_config=app_config,
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher,
+    )
+
+
+def chat_with_custom_openai_2(
+    input_data: List[Dict[str, Any]],
+    api_key: Optional[str] = None,
+    custom_prompt_arg: Optional[str] = None,
+    temp: Optional[float] = None,
+    system_message: Optional[str] = None,
+    streaming: Optional[bool] = False,
+    model: Optional[str] = None,
+    max_tokens: Optional[int] = None,
+    topp: Optional[float] = None,
+    seed: Optional[int] = None,
+    stop: Optional[Union[str, List[str]]] = None,
+    response_format: Optional[Dict[str, str]] = None,
+    n: Optional[int] = None,
+    user_identifier: Optional[str] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    logit_bias: Optional[Dict[str, float]] = None,
+    presence_penalty: Optional[float] = None,
+    frequency_penalty: Optional[float] = None,
+    logprobs: Optional[bool] = None,
+    top_logprobs: Optional[int] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+    http_client_factory: Optional[Callable[[int], Any]] = None,
+    http_fetcher: Optional[Callable[..., Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import custom_openai_2_chat_handler
+    return custom_openai_2_chat_handler(
+        input_data=input_data,
+        api_key=api_key,
+        custom_prompt_arg=custom_prompt_arg,
+        temp=temp,
+        system_message=system_message,
+        streaming=streaming,
+        model=model,
+        max_tokens=max_tokens,
+        topp=topp,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        user_identifier=user_identifier,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        app_config=app_config,
+        http_client_factory=http_client_factory,
+        http_fetcher=http_fetcher,
+    )
 
 
 def save_summary_to_file(summary: str, file_path: str):  # Type hinting

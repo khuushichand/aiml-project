@@ -88,12 +88,9 @@ def test_mistral_adapter_rejects_min_p(monkeypatch):
 
 def test_cohere_adapter_rejects_tool_choice(monkeypatch):
     def _fail_handler(*_args, **_kwargs):
-        raise AssertionError("chat_with_cohere should not be called on validation errors")
+        raise AssertionError("_to_handler_args should not be called on validation errors")
 
-    monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.providers.cohere_adapter.chat_with_cohere",
-        _fail_handler,
-    )
+    monkeypatch.setattr(CohereAdapter, "_to_handler_args", _fail_handler, raising=True)
 
     adapter = CohereAdapter()
     with pytest.raises(ChatBadRequestError) as exc:

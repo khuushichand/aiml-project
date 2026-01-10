@@ -59,7 +59,7 @@ in `http_client.py`. Adapters must not bypass policy or metrics hooks.
 
 ## Migration Inventory (Direct HTTP Usage)
 Priority targets to migrate:
-- `app/core/LLM_Calls/legacy_chat_calls.py` (requests streaming)
+- `app/core/LLM_Calls/chat_calls.py` (requests streaming)
 - `app/core/Embeddings/connection_pool.py` (aiohttp)
 - `app/core/Web_Scraping/enhanced_web_scraping.py` (aiohttp)
 - `app/core/External_Sources/google_drive.py` (aiohttp)

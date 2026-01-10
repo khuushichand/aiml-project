@@ -21,6 +21,8 @@ try:
 except AttributeError:  # Starlette < 0.27
     HTTP_422_UNPROCESSABLE = status.HTTP_422_UNPROCESSABLE_ENTITY
 
+TRANSCRIPTION_MODEL_ENUM = [model.value for model in TranscriptionModel]
+
 
 async def get_add_media_form(
     # Replicate ALL Form(...) fields from the endpoint signature
@@ -98,6 +100,7 @@ async def get_add_media_form(
     transcription_model: str = Form(
         "whisper-large-v3",
         description="Transcription model",
+        json_schema_extra={"enum": TRANSCRIPTION_MODEL_ENUM},
     ),
     transcription_language: str = Form(
         "en",

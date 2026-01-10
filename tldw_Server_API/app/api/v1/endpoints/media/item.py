@@ -8,9 +8,11 @@ from loguru import logger
 import hashlib
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_permissions
 from tldw_Server_API.app.api.v1.schemas.media_request_models import MediaUpdateRequest
 from tldw_Server_API.app.api.v1.schemas.media_response_models import MediaDetailResponse
 from tldw_Server_API.app.api.v1.utils.cache import generate_etag, is_not_modified
+from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_DELETE
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.DB_Manager import get_full_media_details_rich2
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
@@ -18,6 +20,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     DatabaseError,
     InputError,
     MediaDatabase,
+    permanently_delete_item,
 )
 
 
@@ -137,6 +140,270 @@ async def get_media_item(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred retrieving media details",
+        ) from exc
+
+
+@router.delete(
+    "/{media_id:int}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Move media item to trash",
+    description="Soft-delete a media item by moving it to trash (is_trash=1). Use POST /{media_id}/restore to undo.",
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": "Media not found or already deleted"},
+        status.HTTP_409_CONFLICT: {"description": "Media could not be moved to trash"},
+    },
+    dependencies=[
+        Depends(require_permissions(MEDIA_DELETE)),
+        Depends(rbac_rate_limit("media.delete")),
+    ],
+)
+async def delete_media_item(
+    media_id: int = Path(..., description="The ID of the media item"),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+    current_user: User = Depends(get_request_user),
+) -> Response:
+    """
+    Soft-delete a media item by moving it to trash (is_trash=1).
+    """
+    try:
+        existing = db.get_media_by_id(media_id, include_deleted=False, include_trash=True)
+        if not existing:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Media not found or already deleted",
+            )
+        if existing.get("is_trash"):
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+        success = db.mark_as_trash(media_id)
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Media could not be moved to trash",
+            )
+        logger.info(
+            "User {} moved media {} to trash",
+            getattr(current_user, "id", "?"),
+            media_id,
+        )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except ConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Media was modified concurrently",
+        ) from exc
+    except InputError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid media identifier",
+        ) from exc
+    except DatabaseError as exc:
+        logger.error(
+            "Database error trashing media {}: {}",
+            media_id,
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Database error moving media to trash",
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(
+            "Unexpected error trashing media {}: {}",
+            media_id,
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unexpected error moving media to trash",
+        ) from exc
+
+
+@router.post(
+    "/{media_id:int}/restore",
+    status_code=status.HTTP_200_OK,
+    summary="Restore a media item from trash",
+    response_model=MediaDetailResponse,
+    description="Restore a trashed media item (is_trash=0) and return its details.",
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": "Media not found or already deleted"},
+        status.HTTP_409_CONFLICT: {"description": "Media could not be restored from trash"},
+    },
+    dependencies=[
+        Depends(require_permissions(MEDIA_DELETE)),
+        Depends(rbac_rate_limit("media.delete")),
+    ],
+)
+async def restore_media_item(
+    media_id: int = Path(..., description="The ID of the media item"),
+    include_content: bool = Query(
+        True,
+        description="Include main content text in response",
+    ),
+    include_versions: bool = Query(
+        True,
+        description="Include versions list",
+    ),
+    include_version_content: bool = Query(
+        False,
+        description="Include content for each version in versions list",
+    ),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+    current_user: User = Depends(get_request_user),
+) -> Any:
+    """
+    Restore a trashed media item (is_trash=0) and return its details.
+    """
+    try:
+        existing = db.get_media_by_id(media_id, include_deleted=False, include_trash=True)
+        if not existing:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Media not found or already deleted",
+            )
+        if existing.get("is_trash"):
+            success = db.restore_from_trash(media_id)
+            if not success:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Media could not be restored from trash",
+                )
+            logger.info(
+                "User {} restored media {} from trash",
+                getattr(current_user, "id", "?"),
+                media_id,
+            )
+        details = get_full_media_details_rich2(
+            db_instance=db,
+            media_id=media_id,
+            include_content=include_content,
+            include_versions=include_versions,
+            include_version_content=include_version_content,
+        )
+        if not details:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Media not found or is inactive/trashed",
+            )
+        return MediaDetailResponse(**details)
+    except ConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Media was modified concurrently",
+        ) from exc
+    except InputError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid media identifier",
+        ) from exc
+    except DatabaseError as exc:
+        logger.error(
+            "Database error restoring media {}: {}",
+            media_id,
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Database error restoring media from trash",
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(
+            "Unexpected error restoring media {}: {}",
+            media_id,
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unexpected error restoring media from trash",
+        ) from exc
+
+
+@router.delete(
+    "/{media_id:int}/permanent",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Permanently delete a trashed media item",
+    description="Hard-delete a trashed media item. This cannot be undone.",
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": "Media not found or already deleted"},
+        status.HTTP_409_CONFLICT: {"description": "Media is not in trash"},
+    },
+    dependencies=[
+        Depends(require_permissions(MEDIA_DELETE)),
+        Depends(rbac_rate_limit("media.delete")),
+    ],
+)
+async def permanently_delete_media_item(
+    media_id: int = Path(..., description="The ID of the media item"),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+    current_user: User = Depends(get_request_user),
+) -> Response:
+    """
+    Permanently delete a trashed media item.
+    """
+    try:
+        existing = db.get_media_by_id(media_id, include_deleted=False, include_trash=True)
+        if not existing:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Media not found or already deleted",
+            )
+        if not existing.get("is_trash"):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Media must be in trash before permanent delete",
+            )
+        deleted = permanently_delete_item(db, media_id)
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Media not found or already deleted",
+            )
+        logger.warning(
+            "User {} permanently deleted media {}",
+            getattr(current_user, "id", "?"),
+            media_id,
+        )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except ConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Media was modified concurrently",
+        ) from exc
+    except InputError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid media identifier",
+        ) from exc
+    except DatabaseError as exc:
+        logger.error(
+            "Database error permanently deleting media {}: {}",
+            media_id,
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Database error permanently deleting media",
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(
+            "Unexpected error permanently deleting media {}: {}",
+            media_id,
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unexpected error permanently deleting media",
         ) from exc
 
 

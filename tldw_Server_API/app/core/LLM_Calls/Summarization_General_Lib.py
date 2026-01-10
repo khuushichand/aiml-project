@@ -90,13 +90,6 @@ def _adapter_provider_name(api_name: str) -> str:
     return _ADAPTER_PROVIDER_ALIASES.get(normalized, normalized)
 
 
-def _adapter_enabled() -> bool:
-    value = os.getenv("LLM_ADAPTERS_ENABLED")
-    if value is None:
-        return True
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _build_summary_prompt(text: str, custom_prompt_arg: Optional[str]) -> str:
     suffix = custom_prompt_arg or ""
     if suffix:
@@ -127,8 +120,6 @@ def _summarize_via_adapter(
     streaming: bool,
     model_override: Optional[str],
 ) -> Union[str, Generator[str, None, None], None]:
-    if not _adapter_enabled():
-        return "Error: LLM adapters disabled (LLM_ADAPTERS_ENABLED=false)."
     provider = _adapter_provider_name(api_name)
     if not provider:
         return f"Error: Invalid API Name '{api_name}'"

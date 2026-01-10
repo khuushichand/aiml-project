@@ -58,11 +58,6 @@ class CustomOpenAIAdapter(ChatProvider):
         import os
         if os.getenv("PYTEST_CURRENT_TEST"):
             return True
-        enabled = (os.getenv("LLM_ADAPTERS_ENABLED") or "").strip().lower()
-        if enabled in {"0", "false", "no", "off"}:
-            return False
-        if enabled in {"1", "true", "yes", "on"}:
-            return True
         v = (os.getenv("LLM_ADAPTERS_NATIVE_HTTP_CUSTOM_OPENAI") or "").strip().lower()
         if v in {"0", "false", "no", "off"}:
             return False
@@ -132,26 +127,6 @@ class CustomOpenAIAdapter(ChatProvider):
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
         request = validate_payload(self.name, request or {})
-        # If tests monkeypatched legacy callable, honor it and avoid native HTTP
-        try:
-            from tldw_Server_API.app.core.LLM_Calls import legacy_local_calls as _legacy_local
-            fn = getattr(_legacy_local, "chat_with_custom_openai", None)
-            if callable(fn):
-                mod = getattr(fn, "__module__", "") or ""
-                name = getattr(fn, "__name__", "") or ""
-                if (os.getenv("PYTEST_CURRENT_TEST") or "tests" in mod or name.startswith("_Fake") or name.startswith("_fake")):
-                    kwargs = self._to_handler_args(request)
-                    if "stream" in request or "streaming" in request:
-                        streaming_raw = request.get("stream")
-                        if streaming_raw is None:
-                            streaming_raw = request.get("streaming")
-                        kwargs["streaming"] = streaming_raw
-                    else:
-                        kwargs["streaming"] = None
-                    return fn(**kwargs)  # type: ignore[misc]
-        except Exception:
-            pass
-
         if self._use_native_http():
             api_key = request.get("api_key")
             headers = self._headers(api_key)
@@ -173,29 +148,10 @@ class CustomOpenAIAdapter(ChatProvider):
                     return self._normalize_response(resp.json())
             except Exception as e:
                 raise self.normalize_error(e)
-        # Legacy
-        kwargs = self._to_handler_args(request)
-        if "stream" not in request and "streaming" not in request:
-            kwargs["streaming"] = None
-        from tldw_Server_API.app.core.LLM_Calls import legacy_local_calls as _legacy_local
-        return _legacy_local.chat_with_custom_openai(**kwargs)
+        raise RuntimeError("CustomOpenAIAdapter native HTTP disabled by configuration")
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
         request = validate_payload(self.name, request or {})
-        # If tests monkeypatched legacy callable, honor it and avoid native HTTP
-        try:
-            from tldw_Server_API.app.core.LLM_Calls import legacy_local_calls as _legacy_local
-            fn = getattr(_legacy_local, "chat_with_custom_openai", None)
-            if callable(fn):
-                mod = getattr(fn, "__module__", "") or ""
-                name = getattr(fn, "__name__", "") or ""
-                if (os.getenv("PYTEST_CURRENT_TEST") or "tests" in mod or name.startswith("_Fake") or name.startswith("_fake")):
-                    kwargs = self._to_handler_args(request)
-                    kwargs["streaming"] = True
-                    return fn(**kwargs)  # type: ignore[misc]
-        except Exception:
-            pass
-
         if self._use_native_http():
             api_key = request.get("api_key")
             headers = self._headers(api_key)
@@ -220,10 +176,7 @@ class CustomOpenAIAdapter(ChatProvider):
                 return
             except Exception as e:
                 raise self.normalize_error(e)
-        kwargs = self._to_handler_args(request)
-        kwargs["streaming"] = True
-        from tldw_Server_API.app.core.LLM_Calls import legacy_local_calls as _legacy_local
-        return _legacy_local.chat_with_custom_openai(**kwargs)
+        raise RuntimeError("CustomOpenAIAdapter native HTTP disabled by configuration")
 
     async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
         return self.chat(request, timeout=timeout)
@@ -277,35 +230,8 @@ class CustomOpenAIAdapter(ChatProvider):
 class CustomOpenAIAdapter2(CustomOpenAIAdapter):
     name = "custom-openai-api-2"
 
-    def _legacy_kwargs(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        kwargs = self._to_handler_args(request)
-        # Legacy custom_openai_2 handler does not accept top_k/min_p/max_p aliases.
-        for key in ("maxp", "minp", "topk"):
-            kwargs.pop(key, None)
-        return kwargs
-
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
         request = validate_payload(self.name, request or {})
-        # If tests monkeypatched legacy callable, honor it and avoid native HTTP
-        try:
-            from tldw_Server_API.app.core.LLM_Calls import legacy_local_calls as _legacy_local
-            fn = getattr(_legacy_local, "chat_with_custom_openai_2", None)
-            if callable(fn):
-                mod = getattr(fn, "__module__", "") or ""
-                name = getattr(fn, "__name__", "") or ""
-                if (os.getenv("PYTEST_CURRENT_TEST") or "tests" in mod or name.startswith("_Fake") or name.startswith("_fake")):
-                    kwargs = self._legacy_kwargs(request)
-                    if "stream" in request or "streaming" in request:
-                        streaming_raw = request.get("stream")
-                        if streaming_raw is None:
-                            streaming_raw = request.get("streaming")
-                        kwargs["streaming"] = streaming_raw
-                    else:
-                        kwargs["streaming"] = None
-                    return fn(**kwargs)  # type: ignore[misc]
-        except Exception:
-            pass
-
         if self._use_native_http():
             api_key = request.get("api_key")
             headers = self._headers(api_key)
@@ -326,28 +252,10 @@ class CustomOpenAIAdapter2(CustomOpenAIAdapter):
                     return self._normalize_response(resp.json())
             except Exception as e:
                 raise self.normalize_error(e)
-        kwargs = self._legacy_kwargs(request)
-        if "stream" not in request and "streaming" not in request:
-            kwargs["streaming"] = None
-        from tldw_Server_API.app.core.LLM_Calls import legacy_local_calls as _legacy_local
-        return _legacy_local.chat_with_custom_openai_2(**kwargs)
+        raise RuntimeError("CustomOpenAIAdapter2 native HTTP disabled by configuration")
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
         request = validate_payload(self.name, request or {})
-        # If tests monkeypatched legacy callable, honor it and avoid native HTTP
-        try:
-            from tldw_Server_API.app.core.LLM_Calls import legacy_local_calls as _legacy_local
-            fn = getattr(_legacy_local, "chat_with_custom_openai_2", None)
-            if callable(fn):
-                mod = getattr(fn, "__module__", "") or ""
-                name = getattr(fn, "__name__", "") or ""
-                if (os.getenv("PYTEST_CURRENT_TEST") or "tests" in mod or name.startswith("_Fake") or name.startswith("_fake")):
-                    kwargs = self._legacy_kwargs(request)
-                    kwargs["streaming"] = True
-                    return fn(**kwargs)  # type: ignore[misc]
-        except Exception:
-            pass
-
         if self._use_native_http():
             api_key = request.get("api_key")
             headers = self._headers(api_key)
@@ -372,7 +280,4 @@ class CustomOpenAIAdapter2(CustomOpenAIAdapter):
                 return
             except Exception as e:
                 raise self.normalize_error(e)
-        kwargs = self._legacy_kwargs(request)
-        kwargs["streaming"] = True
-        from tldw_Server_API.app.core.LLM_Calls import legacy_local_calls as _legacy_local
-        return _legacy_local.chat_with_custom_openai_2(**kwargs)
+        raise RuntimeError("CustomOpenAIAdapter2 native HTTP disabled by configuration")

@@ -5,7 +5,7 @@ import requests
 from unittest.mock import Mock
 from typing import Iterable
 
-from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import (
+from tldw_Server_API.app.core.LLM_Calls.chat_calls import (
     get_openai_embeddings,
     get_openai_embeddings_batch,
     chat_with_openai,
@@ -129,11 +129,11 @@ def test_get_openai_embeddings_uses_timeout_and_closes(monkeypatch):
     session = _mock_session_with_response([{"embedding": [0.1, 0.2]}])
 
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.create_session_with_retries",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.create_session_with_retries",
         lambda **kwargs: session,
     )
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.load_and_log_configs",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.load_and_log_configs",
         lambda: {
             "openai_api": {
                 "api_key": "test-key",
@@ -156,11 +156,11 @@ def test_get_openai_embeddings_includes_dimensions(monkeypatch):
     session = _mock_session_with_response([{"embedding": [0.1, 0.2]}])
 
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.create_session_with_retries",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.create_session_with_retries",
         lambda **kwargs: session,
     )
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.load_and_log_configs",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.load_and_log_configs",
         lambda: {
             "openai_api": {
                 "api_key": "test-key",
@@ -183,11 +183,11 @@ def test_get_openai_embeddings_batch_uses_timeout_and_closes(monkeypatch):
     )
 
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.create_session_with_retries",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.create_session_with_retries",
         lambda **kwargs: session,
     )
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.load_and_log_configs",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.load_and_log_configs",
         lambda: {
             "openai_api": {
                 "api_key": "test-key",
@@ -215,11 +215,11 @@ def test_get_openai_embeddings_batch_includes_dimensions(monkeypatch):
     )
 
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.create_session_with_retries",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.create_session_with_retries",
         lambda **kwargs: session,
     )
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.load_and_log_configs",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.load_and_log_configs",
         lambda: {
             "openai_api": {
                 "api_key": "test-key",
@@ -237,11 +237,11 @@ def test_get_openai_embeddings_respects_api_base(monkeypatch):
     session = _mock_session_with_response([{"embedding": [0.5, 0.6]}])
 
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.create_session_with_retries",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.create_session_with_retries",
         lambda **kwargs: session,
     )
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.load_and_log_configs",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.load_and_log_configs",
         lambda: {
             "openai_api": {
                 "api_key": "test-key",
@@ -266,11 +266,11 @@ def test_get_openai_embeddings_batch_respects_api_base(monkeypatch):
     )
 
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.create_session_with_retries",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.create_session_with_retries",
         lambda **kwargs: session,
     )
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.load_and_log_configs",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.load_and_log_configs",
         lambda: {
             "openai_api": {
                 "api_key": "test-key",
@@ -312,7 +312,7 @@ def _patch_async_client(monkeypatch, lines):
     stream = _DummyStream(lines)
 
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.httpx.AsyncClient",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.httpx.AsyncClient",
         lambda *args, **kwargs: _DummyAsyncClient(stream),
     )
 

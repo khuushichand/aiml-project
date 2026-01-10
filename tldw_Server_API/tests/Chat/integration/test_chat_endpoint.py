@@ -904,9 +904,7 @@ def test_create_chat_completion_with_optional_params(
     # max_tokens is not directly mapped by chat_args, but by the schema to chat_api_call's provider logic
     # For a unit test of the endpoint, we check it's passed to chat_api_call if chat_api_call accepts it
     # The current chat_api_call doesn't explicitly list max_tokens in its signature,
-    # so it depends on the underlying provider functions.
-    # For now, we'll assume it's NOT directly passed by chat_api_call's main args
-    # unless PROVIDER_PARAM_MAP is updated.
+    # so it depends on downstream adapter/handler forwarding behavior.
     # Let's focus on params explicitly in chat_api_call signature.
     # assert called_kwargs["n"] == 2 # 'n' is also not directly in chat_api_call signature
     # assert called_kwargs["response_format"] == {"type": "json_object"} # also not direct

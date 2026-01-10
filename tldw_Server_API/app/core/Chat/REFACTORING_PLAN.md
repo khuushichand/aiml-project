@@ -5,7 +5,7 @@
 
 ## Current Status (May 2025)
 ✅ **Completed**
-- `provider_config.py` - canonical provider dispatch tables (`API_CALL_HANDLERS`, `PROVIDER_PARAM_MAP`).
+- Adapter registry - canonical provider dispatch mappings.
 - `chat_orchestrator.py` - primary `chat_api_call` implementation plus async helpers and payload plumbing.
 - `chat_service.py` / `chat_helpers.py` - endpoint-facing helpers moved out of FastAPI routes for readability.
 - `chat_metrics.py`, `streaming_utils.py`, `request_queue.py` - ancillary modules extracted from the original monolith.
@@ -21,7 +21,7 @@
 - `chat_characters.py` - adapter for character CRUD that delegates to the Character_Chat modules (new in Phase 4).
 - `chat_service.py` - endpoint orchestration helpers for `/api/v1/chat/completions`.
 - `chat_helpers.py` - request validation, conversation/character lookup, and async DB helpers.
-- `provider_config.py` - provider dispatch mappings.
+- Adapter registry - provider dispatch mappings.
 - `chat_metrics.py`, `streaming_utils.py`, `request_queue.py` - supporting utilities already decoupled.
 
 ## Problem Summary
@@ -35,7 +35,7 @@
 ### Phase 1 - Compatibility Realignment (High Priority)
 Goal: make `Chat_Functions.py` a thin compatibility layer that re-exports implementations from `chat_orchestrator.py`.
 - [x] Promote `chat_orchestrator.chat` to the single canonical implementation; delete duplicated logic in `Chat_Functions.chat` (lines 151-515) and import the orchestrator function.
-- [x] Ensure `Chat_Functions.chat_api_call` remains a forwarding shim while preserving monkeypatch-friendly attributes (`API_CALL_HANDLERS`, etc.).
+- [x] Ensure `Chat_Functions.chat_api_call` remains a forwarding shim while preserving monkeypatch-friendly attributes needed by tests.
 - [x] Update tests and call sites that monkeypatch or reference `Chat_Functions.chat` (e.g., `tests/Chat/test_chat_functions.py`) so they work with the re-exported orchestrator implementation; keep legacy imports working via re-exports.
 
 ### Phase 2 - History & Persistence Extraction

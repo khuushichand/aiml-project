@@ -743,12 +743,16 @@ async def add_media_orchestrate(
                             )
 
                             media_content = await get_media_content(media_id, db)
+                            embedding_settings = settings.get("EMBEDDING_CONFIG", {}) or {}
                             embedding_model = (
                                 form_data.embedding_model
-                                or "Qwen/Qwen3-Embedding-4B-GGUF"
+                                or embedding_settings.get("embedding_model")
+                                or "sentence-transformers/all-MiniLM-L6-v2"
                             )
                             embedding_provider = (
-                                form_data.embedding_provider or "huggingface"
+                                form_data.embedding_provider
+                                or embedding_settings.get("embedding_provider")
+                                or "huggingface"
                             )
 
                             result_emb = await generate_embeddings_for_media(

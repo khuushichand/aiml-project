@@ -87,7 +87,7 @@ async def test_openai_stream_smoke(monkeypatch):
     ]
     monkeypatch.setattr(openai_mod, "http_client_factory", lambda *a, **k: _FakeClient(lines=lines))
 
-    from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import chat_with_openai_async
+    from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_openai_async
 
     it = await chat_with_openai_async(
         input_data=[{"role": "user", "content": "hi"}],
@@ -117,7 +117,7 @@ async def test_openai_stream_no_retry_after_first_byte(monkeypatch):
         lambda *a, **k: _FakeClient(lines=lines, calls=calls, raise_after_first=SentinelError("boom")),
     )
 
-    from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import chat_with_openai_async
+    from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_openai_async
 
     it = await chat_with_openai_async(
         input_data=[{"role": "user", "content": "x"}],
@@ -147,7 +147,7 @@ async def test_groq_stream_smoke(monkeypatch):
     ]
     monkeypatch.setattr(groq_mod, "http_client_factory", lambda *a, **k: _FakeClient(lines=lines))
 
-    from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import chat_with_groq_async
+    from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_groq_async
 
     it = await chat_with_groq_async(
         input_data=[{"role": "user", "content": "hi"}],
@@ -176,7 +176,7 @@ async def test_groq_stream_no_retry_after_first_byte(monkeypatch):
         lambda *a, **k: _FakeClient(lines=lines, calls=calls, raise_after_first=SentinelError("boom")),
     )
 
-    from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import chat_with_groq_async
+    from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_groq_async
 
     it = await chat_with_groq_async(
         input_data=[{"role": "user", "content": "x"}],
@@ -204,7 +204,7 @@ async def test_openrouter_stream_smoke(monkeypatch):
     ]
     monkeypatch.setattr(or_mod, "http_client_factory", lambda *a, **k: _FakeClient(lines=lines))
 
-    from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import chat_with_openrouter_async
+    from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_openrouter_async
 
     it = await chat_with_openrouter_async(
         input_data=[{"role": "user", "content": "hi"}],
@@ -233,7 +233,7 @@ async def test_openrouter_stream_no_retry_after_first_byte(monkeypatch):
         lambda *a, **k: _FakeClient(lines=lines, calls=calls, raise_after_first=SentinelError("boom")),
     )
 
-    from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import chat_with_openrouter_async
+    from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_openrouter_async
 
     it = await chat_with_openrouter_async(
         input_data=[{"role": "user", "content": "x"}],
@@ -261,7 +261,7 @@ async def test_anthropic_stream_smoke(monkeypatch):
     ]
     monkeypatch.setattr(ant_mod, "http_client_factory", lambda *a, **k: _FakeClient(lines=lines))
 
-    from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import chat_with_anthropic_async
+    from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_anthropic_async
 
     it = await chat_with_anthropic_async(
         input_data=[{"role": "user", "content": "hi"}],
@@ -285,7 +285,7 @@ async def test_anthropic_stream_no_retry_after_first_byte(monkeypatch):
     lines = ['data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"one"}}']
     monkeypatch.setattr(ant_mod, "http_client_factory", lambda *a, **k: _FakeClient(lines=lines, calls={"n": 0}, raise_after_first=SentinelError("boom")))
 
-    from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import chat_with_anthropic_async
+    from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_anthropic_async
 
     it = await chat_with_anthropic_async(
         input_data=[{"role": "user", "content": "x"}],
@@ -318,7 +318,7 @@ async def test_combined_sse_providers_smoke_and_cancel(monkeypatch, provider, fn
     Confirms DONE ordering and no retry after first byte by counting client.stream invocations.
     """
     from importlib import import_module
-    from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as llm_api
+    from tldw_Server_API.app.core.LLM_Calls import chat_calls as llm_api
 
     calls = {"n": 0}
 
@@ -374,7 +374,7 @@ async def test_combined_sse_providers_smoke_and_cancel(monkeypatch, provider, fn
 async def test_combined_anthropic_smoke_and_cancel(monkeypatch):
     """Anthropic combined smoke: DONE ordering and cancellation propagation, no retry after first byte."""
     import tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter as ant_mod
-    from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as llm_api
+    from tldw_Server_API.app.core.LLM_Calls import chat_calls as llm_api
 
     calls = {"n": 0}
     lines = [
@@ -419,7 +419,7 @@ async def test_combined_anthropic_smoke_and_cancel(monkeypatch):
 async def test_multi_chunk_done_ordering_under_load(monkeypatch):
     """Stress: many small chunks; ensure a single final [DONE] and proper ordering (shimless OpenAI)."""
     import tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter as openai_mod
-    from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as llm_api
+    from tldw_Server_API.app.core.LLM_Calls import chat_calls as llm_api
 
     # Build many small chunks
     lines = []

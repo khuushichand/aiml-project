@@ -17,10 +17,10 @@ def test_local_llm_forwards_response_format_n_user_identifier_via_chat_api_call(
     }
 
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_local_calls.load_settings",
+        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls.load_settings",
         return_value=fake_settings,
     ), patch(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_local_calls._chat_with_openai_compatible_local_server"
+        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls._chat_with_openai_compatible_local_server"
     ) as mock_inner:
         mock_inner.return_value = {"choices": []}
 

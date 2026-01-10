@@ -1,8 +1,8 @@
 """
-legacy_chat_calls
-Legacy commercial-provider LLM calling utilities retained for compatibility.
+chat_calls
+Commercial-provider LLM calling utilities (adapter-backed compatibility layer).
 
-This module implements provider-specific chat/embeddings calls while returning
+This module implements provider-specific chat/embeddings helpers while returning
 OpenAI-compatible request/response formats whenever feasible. Streaming
 responses are normalized to Server-Sent Events (SSE) semantics: lines prefixed
 with "data: " and separated by a blank line. Provider errors are mapped to
@@ -15,10 +15,10 @@ Notes
 - Use environment variables to override base URLs for testing/mocking.
 """
 #########################################
-# Legacy LLM API calling utilities (monolith, in gradual deprecation).
-# Public chat_* entrypoints for key providers now delegate to adapter-backed
-# shims; provider-specific legacy implementations are retained under legacy_*
-# until full parity is proven and branches can be removed safely.
+# Commercial LLM API calling utilities.
+# Public chat_* entrypoints delegate to adapter-backed handlers; provider-
+# specific implementations are retained under legacy_* names until further
+# cleanup removes the legacy naming.
 #
 # Import necessary libraries
 import asyncio
@@ -225,7 +225,7 @@ def chat_with_openai(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openai_chat_handler
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import openai_chat_handler
     return openai_chat_handler(
         input_data=input_data,
         model=model,
@@ -267,7 +267,7 @@ def legacy_chat_with_anthropic(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    # Delegate to the original implementation to avoid adapter/shim recursion
+    # Adapter-backed wrapper retained for compatibility.
     return chat_with_anthropic(
         input_data=input_data,
         model=model,
@@ -309,42 +309,31 @@ def chat_with_groq(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    # Direct adapter path (shimless)
-    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
-    registry = get_registry()
-    adapter = registry.get_adapter("groq")
-    if adapter is None:
-        from tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter import GroqAdapter
-        registry.register_adapter("groq", GroqAdapter)
-        adapter = registry.get_adapter("groq")
-    req: Dict[str, Any] = {
-        "messages": input_data,
-        "model": model,
-        "api_key": api_key,
-        "system_message": system_message,
-        "temperature": temp,
-        "top_p": maxp,
-        "max_tokens": max_tokens,
-        "seed": seed,
-        "stop": stop,
-        "response_format": response_format,
-        "n": n,
-        "user": user,
-        "tools": tools,
-        "tool_choice": tool_choice,
-        "logit_bias": logit_bias,
-        "presence_penalty": presence_penalty,
-        "frequency_penalty": frequency_penalty,
-        "logprobs": logprobs,
-        "top_logprobs": top_logprobs,
-        "custom_prompt_arg": custom_prompt_arg,
-        "app_config": app_config,
-    }
-    if streaming is not None:
-        req["stream"] = bool(streaming)
-    if streaming:
-        return adapter.stream(req)
-    return adapter.chat(req)
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import groq_chat_handler
+    return groq_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        maxp=maxp,
+        streaming=streaming,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        user=user,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
 
 
 def chat_with_openrouter(
@@ -373,7 +362,7 @@ def chat_with_openrouter(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openrouter_chat_handler
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import openrouter_chat_handler
     return openrouter_chat_handler(
         input_data=input_data,
         model=model,
@@ -419,7 +408,7 @@ def chat_with_google(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import google_chat_handler
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import google_chat_handler
     return google_chat_handler(
         input_data=input_data,
         model=model,
@@ -454,7 +443,7 @@ def chat_with_mistral(
         top_k: Optional[int] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import mistral_chat_handler
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import mistral_chat_handler
     return mistral_chat_handler(
         input_data=input_data,
         model=model,
@@ -496,7 +485,7 @@ def chat_with_qwen(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import qwen_chat_handler
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import qwen_chat_handler
     return qwen_chat_handler(
         input_data=input_data,
         model=model,
@@ -548,8 +537,8 @@ def legacy_chat_with_deepseek(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    # Call the preserved legacy implementation directly
-    return _legacy_chat_with_deepseek_impl(
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import deepseek_chat_handler
+    return deepseek_chat_handler(
         input_data=input_data,
         model=model,
         api_key=api_key,
@@ -584,7 +573,7 @@ def chat_with_huggingface(
         streaming: Optional[bool] = False,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import huggingface_chat_handler
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import huggingface_chat_handler
     return huggingface_chat_handler(
         input_data=input_data,
         model=model,
@@ -620,7 +609,7 @@ async def legacy_chat_with_openai_async(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openai_chat_handler_async
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import openai_chat_handler_async
     return await openai_chat_handler_async(
         input_data=input_data,
         model=model,
@@ -671,7 +660,7 @@ async def legacy_chat_with_groq_async(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import groq_chat_handler_async
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import groq_chat_handler_async
     return await groq_chat_handler_async(
         input_data=input_data,
         model=model,
@@ -713,7 +702,7 @@ async def legacy_chat_with_anthropic_async(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import anthropic_chat_handler
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import anthropic_chat_handler
     if streaming:
         gen = await asyncio.to_thread(
             anthropic_chat_handler,
@@ -813,7 +802,7 @@ async def legacy_chat_with_openrouter_async(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openrouter_chat_handler_async
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import openrouter_chat_handler_async
     return await openrouter_chat_handler_async(
         input_data=input_data,
         model=model,
@@ -1110,105 +1099,6 @@ def _parse_data_url_for_multimodal(data_url: str) -> Optional[Tuple[str, str]]:
             return None
     logging.debug(f"Data URL did not match expected format: {data_url[:60]}...")
     return None
-
-
-def _anthropic_image_source_from_part(image_url_obj: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """
-    Build an Anthropic-compatible image source from an OpenAI-style image_url part.
-
-    Supports both base64 data URLs and remote HTTP(S) URLs.
-    """
-    url_str = (image_url_obj or {}).get("url", "")
-    if not url_str:
-        return None
-    parsed = _parse_data_url_for_multimodal(url_str)
-    if parsed:
-        mime_type, b64_data = parsed
-        return {"type": "base64", "media_type": mime_type, "data": b64_data}
-    if url_str.startswith(("http://", "https://")):
-        return {"type": "url", "url": url_str}
-    logging.warning(f"Anthropic: Unsupported image URL format; skipping: {url_str[:60]}...")
-    return None
-
-
-def _anthropic_tool_delta_chunk(
-        tool_index: int,
-        tool_id: str,
-        tool_name: Optional[str],
-        arguments: str,
-) -> str:
-    """Return an SSE chunk containing an OpenAI-compatible tool_call delta."""
-    return sse_data({
-        "choices": [{
-            "index": 0,
-            "delta": {
-                "tool_calls": [{
-                    "index": tool_index,
-                    "id": tool_id,
-                    "type": "function",
-                    "function": {
-                        "name": tool_name or "",
-                        "arguments": arguments,
-                    },
-                }]
-            }
-        }]
-    })
-
-
-def _normalize_anthropic_response(response_data: Dict[str, Any], model_name: Optional[str]) -> Dict[str, Any]:
-    """
-    Convert Anthropic's Messages API response into an OpenAI-compatible chat completion response.
-    """
-    assistant_text_parts: List[str] = []
-    tool_calls: List[Dict[str, Any]] = []
-    for part in response_data.get("content", []):
-        if not isinstance(part, dict):
-            continue
-        if part.get("type") == "text":
-            assistant_text_parts.append(part.get("text", ""))
-        elif part.get("type") == "tool_use":
-            tool_id = part.get("id") or f"anthropic_tool_{len(tool_calls)}"
-            tool_calls.append({
-                "id": tool_id,
-                "type": "function",
-                "function": {
-                    "name": part.get("name") or "",
-                    "arguments": json.dumps(part.get("input", {})),
-                }
-            })
-
-    message_content = "\n".join(assistant_text_parts).strip()
-    message_payload: Dict[str, Any] = {"role": "assistant", "content": message_content if message_content else None}
-    if tool_calls:
-        message_payload["tool_calls"] = tool_calls
-        if not message_content:
-            message_payload["content"] = None
-
-    finish_reason_map = {
-        "end_turn": "stop",
-        "max_tokens": "length",
-        "stop_sequence": "stop",
-        "tool_use": "tool_calls",
-    }
-    finish_reason = finish_reason_map.get(response_data.get("stop_reason"), response_data.get("stop_reason"))
-
-    normalized: Dict[str, Any] = {
-        "id": response_data.get("id", f"anthropic-{time.time_ns()}"),
-        "object": "chat.completion",
-        "created": int(time.time()),
-        "model": response_data.get("model", model_name),
-        "choices": [{
-            "index": 0,
-            "message": message_payload,
-            "finish_reason": finish_reason,
-        }],
-    }
-    usage = response_data.get("usage")
-    if usage:
-        normalized["usage"] = usage
-    return normalized
-
 
 def _raise_chat_error_from_http(provider: str, error: requests.exceptions.HTTPError) -> None:
     """Normalize requests HTTPError into project ChatAPIError subclasses."""
@@ -1547,7 +1437,7 @@ def legacy_chat_with_openai(
         **kwargs: Catches any unexpected keyword arguments.
     """
     # Adapter era: delegate to adapter-backed shim; keep legacy body unreachable
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openai_chat_handler
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import openai_chat_handler
     return openai_chat_handler(
         input_data=input_data,
         model=model,
@@ -1573,6 +1463,7 @@ def legacy_chat_with_openai(
         app_config=app_config,
     )
 
+
 async def chat_with_openai_async(
         input_data: List[Dict[str, Any]],
         model: Optional[str] = None,
@@ -1597,86 +1488,32 @@ async def chat_with_openai_async(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    cfg_source = app_config if isinstance(app_config, dict) else load_and_log_configs()
-    if not isinstance(cfg_source, dict):
-        cfg_source = {}
-    oa_cfg = cfg_source.get("openai_api") or {}
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import openai_chat_handler_async
+    return await openai_chat_handler_async(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        maxp=maxp,
+        streaming=streaming,
+        frequency_penalty=frequency_penalty,
+        logit_bias=logit_bias,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        max_tokens=max_tokens,
+        n=n,
+        presence_penalty=presence_penalty,
+        response_format=response_format,
+        seed=seed,
+        stop=stop,
+        tools=tools,
+        tool_choice=tool_choice,
+        user=user,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
 
-    def _cfg_value(user_value, cfg_key):
-        cfg_val = oa_cfg.get(cfg_key)
-        return user_value if user_value is not None else cfg_val
-
-    final_model = model or oa_cfg.get("model")
-    final_api_key = api_key or oa_cfg.get("api_key")
-    final_system_message = system_message if system_message is not None else oa_cfg.get("system_message")
-    final_temp = _cfg_value(temp, "temperature")
-    final_top_p = _cfg_value(maxp, "top_p")
-    final_max_tokens = _cfg_value(max_tokens, "max_tokens")
-    final_n = _cfg_value(n, "n")
-    final_presence_penalty = _cfg_value(presence_penalty, "presence_penalty")
-    final_frequency_penalty = _cfg_value(frequency_penalty, "frequency_penalty")
-    final_response_format = response_format if response_format is not None else oa_cfg.get("response_format")
-    final_seed = _cfg_value(seed, "seed")
-    final_stop = stop if stop is not None else oa_cfg.get("stop")
-    final_tools = tools if tools is not None else oa_cfg.get("tools")
-    final_tool_choice = tool_choice if tool_choice is not None else oa_cfg.get("tool_choice")
-    final_user = user if user is not None else oa_cfg.get("user")
-    final_logit_bias = logit_bias if logit_bias is not None else oa_cfg.get("logit_bias")
-    final_logprobs = logprobs if logprobs is not None else oa_cfg.get("logprobs")
-    final_top_logprobs = top_logprobs if top_logprobs is not None else oa_cfg.get("top_logprobs")
-
-    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
-    registry = get_registry()
-    adapter = registry.get_adapter("openai")
-    if adapter is None:
-        from tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter import OpenAIAdapter
-        registry.register_adapter("openai", OpenAIAdapter)
-        adapter = registry.get_adapter("openai")
-
-    req: Dict[str, Any] = {
-        "messages": input_data,
-        "model": final_model,
-        "api_key": final_api_key,
-        "system_message": final_system_message,
-        "temperature": final_temp,
-        "top_p": final_top_p,
-        "frequency_penalty": final_frequency_penalty,
-        "logit_bias": final_logit_bias,
-        "logprobs": final_logprobs,
-        "top_logprobs": final_top_logprobs,
-        "max_tokens": final_max_tokens,
-        "n": final_n,
-        "presence_penalty": final_presence_penalty,
-        "response_format": final_response_format,
-        "seed": final_seed,
-        "stop": final_stop,
-        "tools": final_tools,
-        "tool_choice": final_tool_choice,
-        "user": final_user,
-        "custom_prompt_arg": custom_prompt_arg,
-        "app_config": cfg_source,
-    }
-
-    model_lower = (final_model or "").lower()
-    if model_lower.startswith("gpt-5"):
-        if req.get("max_tokens") is not None:
-            req["max_completion_tokens"] = req.pop("max_tokens")
-        else:
-            req.pop("max_tokens", None)
-        req.pop("top_p", None)
-
-    if streaming is not None:
-        req["stream"] = bool(streaming)
-
-    timeout_val = oa_cfg.get("api_timeout")
-    try:
-        timeout_val = float(timeout_val)
-    except (TypeError, ValueError):
-        timeout_val = 90.0
-
-    if streaming:
-        return adapter.astream(req, timeout=timeout_val)
-    return await adapter.achat(req, timeout=timeout_val)
 
 async def chat_with_groq_async(
         input_data: List[Dict[str, Any]],
@@ -1701,76 +1538,31 @@ async def chat_with_groq_async(
         top_logprobs: Optional[int] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    cfg_source = app_config if isinstance(app_config, dict) else load_and_log_configs()
-    if not isinstance(cfg_source, dict):
-        cfg_source = {}
-    gr_cfg = cfg_source.get("groq_api") or {}
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import groq_chat_handler_async
+    return await groq_chat_handler_async(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        maxp=maxp,
+        streaming=streaming,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        user=user,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        app_config=app_config,
+    )
 
-    def _cfg_value(user_value, cfg_key):
-        cfg_val = gr_cfg.get(cfg_key)
-        return user_value if user_value is not None else cfg_val
-
-    final_model = model or gr_cfg.get("model")
-    final_api_key = api_key or gr_cfg.get("api_key")
-    final_system_message = system_message if system_message is not None else gr_cfg.get("system_message")
-    final_temp = _cfg_value(temp, "temperature")
-    final_top_p = _cfg_value(maxp, "top_p")
-    final_max_tokens = _cfg_value(max_tokens, "max_tokens")
-    final_seed = _cfg_value(seed, "seed")
-    final_stop = stop if stop is not None else gr_cfg.get("stop")
-    final_response_format = response_format if response_format is not None else gr_cfg.get("response_format")
-    final_n = _cfg_value(n, "n")
-    final_user = user if user is not None else gr_cfg.get("user")
-    final_tools = tools if tools is not None else gr_cfg.get("tools")
-    final_tool_choice = tool_choice if tool_choice is not None else gr_cfg.get("tool_choice")
-    final_logit_bias = logit_bias if logit_bias is not None else gr_cfg.get("logit_bias")
-    final_presence_penalty = _cfg_value(presence_penalty, "presence_penalty")
-    final_frequency_penalty = _cfg_value(frequency_penalty, "frequency_penalty")
-    final_logprobs = logprobs if logprobs is not None else gr_cfg.get("logprobs")
-    final_top_logprobs = top_logprobs if top_logprobs is not None else gr_cfg.get("top_logprobs")
-
-    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
-    registry = get_registry()
-    adapter = registry.get_adapter("groq")
-    if adapter is None:
-        from tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter import GroqAdapter
-        registry.register_adapter("groq", GroqAdapter)
-        adapter = registry.get_adapter("groq")
-
-    req: Dict[str, Any] = {
-        "messages": input_data,
-        "model": final_model,
-        "api_key": final_api_key,
-        "system_message": final_system_message,
-        "temperature": final_temp,
-        "top_p": final_top_p,
-        "max_tokens": final_max_tokens,
-        "seed": final_seed,
-        "stop": final_stop,
-        "response_format": final_response_format,
-        "n": final_n,
-        "user": final_user,
-        "tools": final_tools,
-        "tool_choice": final_tool_choice,
-        "logit_bias": final_logit_bias,
-        "presence_penalty": final_presence_penalty,
-        "frequency_penalty": final_frequency_penalty,
-        "logprobs": final_logprobs,
-        "top_logprobs": final_top_logprobs,
-        "app_config": cfg_source,
-    }
-    if streaming is not None:
-        req["stream"] = bool(streaming)
-
-    timeout_val = gr_cfg.get("api_timeout")
-    try:
-        timeout_val = float(timeout_val)
-    except (TypeError, ValueError):
-        timeout_val = 90.0
-
-    if streaming:
-        return adapter.astream(req, timeout=timeout_val)
-    return await adapter.achat(req, timeout=timeout_val)
 
 async def chat_with_anthropic_async(
         input_data: List[Dict[str, Any]],
@@ -1786,34 +1578,21 @@ async def chat_with_anthropic_async(
         tools: Optional[List[Dict[str, Any]]] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    # Shimless adapter path
-    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
-    registry = get_registry()
-    adapter = registry.get_adapter("anthropic")
-    if adapter is None:
-        from tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter import AnthropicAdapter
-        registry.register_adapter("anthropic", AnthropicAdapter)
-        adapter = registry.get_adapter("anthropic")
-    if adapter is None:
-        raise ChatProviderError(provider="anthropic", message="Anthropic adapter unavailable")
-    req: Dict[str, Any] = {
-        "messages": input_data,
-        "model": model,
-        "api_key": api_key,
-        "system_message": system_prompt,
-        "temperature": temp,
-        "top_p": topp,
-        "top_k": topk,
-        "max_tokens": max_tokens,
-        "stop": stop_sequences,
-        "tools": tools,
-        "app_config": app_config,
-    }
-    if streaming is not None:
-        req["stream"] = bool(streaming)
-    if streaming:
-        return adapter.astream(req)
-    return await adapter.achat(req)
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import anthropic_chat_handler_async
+    return await anthropic_chat_handler_async(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_prompt=system_prompt,
+        temp=temp,
+        topp=topp,
+        topk=topk,
+        streaming=streaming,
+        max_tokens=max_tokens,
+        stop_sequences=stop_sequences,
+        tools=tools,
+        app_config=app_config,
+    )
 
 
 async def chat_with_openrouter_async(
@@ -1841,82 +1620,34 @@ async def chat_with_openrouter_async(
         top_logprobs: Optional[int] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    cfg_source = app_config if isinstance(app_config, dict) else load_and_log_configs()
-    if not isinstance(cfg_source, dict):
-        cfg_source = {}
-    or_cfg = cfg_source.get("openrouter_api") or {}
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import openrouter_chat_handler_async
+    return await openrouter_chat_handler_async(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        top_p=top_p,
+        top_k=top_k,
+        min_p=min_p,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        user=user,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        app_config=app_config,
+    )
 
-    def _cfg_value(user_value, cfg_key):
-        cfg_val = or_cfg.get(cfg_key)
-        return user_value if user_value is not None else cfg_val
 
-    final_model = model or or_cfg.get("model")
-    final_api_key = api_key or or_cfg.get("api_key")
-    final_system_message = system_message if system_message is not None else or_cfg.get("system_message")
-    final_temp = _cfg_value(temp, "temperature")
-    final_top_p = _cfg_value(top_p, "top_p")
-    final_top_k = _cfg_value(top_k, "top_k")
-    final_min_p = _cfg_value(min_p, "min_p")
-    final_max_tokens = _cfg_value(max_tokens, "max_tokens")
-    final_seed = _cfg_value(seed, "seed")
-    final_stop = stop if stop is not None else or_cfg.get("stop")
-    final_response_format = response_format if response_format is not None else or_cfg.get("response_format")
-    final_n = _cfg_value(n, "n")
-    final_user = user if user is not None else or_cfg.get("user")
-    final_tools = tools if tools is not None else or_cfg.get("tools")
-    final_tool_choice = tool_choice if tool_choice is not None else or_cfg.get("tool_choice")
-    final_logit_bias = logit_bias if logit_bias is not None else or_cfg.get("logit_bias")
-    final_presence_penalty = _cfg_value(presence_penalty, "presence_penalty")
-    final_frequency_penalty = _cfg_value(frequency_penalty, "frequency_penalty")
-    final_logprobs = logprobs if logprobs is not None else or_cfg.get("logprobs")
-    final_top_logprobs = top_logprobs if top_logprobs is not None else or_cfg.get("top_logprobs")
-
-    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
-    registry = get_registry()
-    adapter = registry.get_adapter("openrouter")
-    if adapter is None:
-        from tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter import OpenRouterAdapter
-        registry.register_adapter("openrouter", OpenRouterAdapter)
-        adapter = registry.get_adapter("openrouter")
-    if adapter is None:
-        raise ChatProviderError(provider="openrouter", message="OpenRouter adapter unavailable")
-
-    req: Dict[str, Any] = {
-        "messages": input_data,
-        "model": final_model,
-        "api_key": final_api_key,
-        "system_message": final_system_message,
-        "temperature": final_temp,
-        "top_p": final_top_p,
-        "top_k": final_top_k,
-        "min_p": final_min_p,
-        "max_tokens": final_max_tokens,
-        "seed": final_seed,
-        "stop": final_stop,
-        "response_format": final_response_format,
-        "n": final_n,
-        "user": final_user,
-        "tools": final_tools,
-        "tool_choice": final_tool_choice,
-        "logit_bias": final_logit_bias,
-        "presence_penalty": final_presence_penalty,
-        "frequency_penalty": final_frequency_penalty,
-        "logprobs": final_logprobs,
-        "top_logprobs": final_top_logprobs,
-        "app_config": cfg_source,
-    }
-    if streaming is not None:
-        req["stream"] = bool(streaming)
-
-    timeout_val = or_cfg.get("api_timeout")
-    try:
-        timeout_val = float(timeout_val)
-    except (TypeError, ValueError):
-        timeout_val = 90.0
-
-    if streaming:
-        return adapter.astream(req, timeout=timeout_val)
-    return await adapter.achat(req, timeout=timeout_val)
 def legacy_chat_with_bedrock(
         input_data: List[Dict[str, Any]],
         model: Optional[str] = None,
@@ -2140,11 +1871,11 @@ def chat_with_bedrock(
 ):
     """Uniform adapter-backed Bedrock entry point (prod) with test-friendly fallbacks.
 
-    Delegates to adapter_shims.bedrock_chat_handler which uses the Bedrock adapter
+    Delegates to adapter_calls.bedrock_chat_handler which uses the Bedrock adapter
     by default and falls back to the legacy implementation only if the adapter is
     unavailable (e.g., missing dependency).
     """
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import bedrock_chat_handler
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import bedrock_chat_handler
     return bedrock_chat_handler(
         input_data=input_data,
         model=model,
@@ -2197,7 +1928,7 @@ async def chat_with_bedrock_async(
         extra_body: Optional[Dict[str, Any]] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import bedrock_chat_handler_async
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import bedrock_chat_handler_async
     return await bedrock_chat_handler_async(
         input_data=input_data,
         model=model,
@@ -2240,270 +1971,65 @@ def chat_with_anthropic(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
-    registry = get_registry()
-    adapter = registry.get_adapter("anthropic")
-    if adapter is None:
-        from tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter import AnthropicAdapter
-        registry.register_adapter("anthropic", AnthropicAdapter)
-        adapter = registry.get_adapter("anthropic")
-    if adapter is None:
-        raise ChatProviderError(provider="anthropic", message="Anthropic adapter unavailable")
-    req: Dict[str, Any] = {
-        "messages": input_data,
-        "model": model,
-        "api_key": api_key,
-        "system_message": system_prompt,
-        "temperature": temp,
-        "top_p": topp,
-        "top_k": topk,
-        "max_tokens": max_tokens,
-        "stop": stop_sequences,
-        "tools": tools,
-        "custom_prompt_arg": custom_prompt_arg,
-        "app_config": app_config,
-    }
-    if streaming is not None:
-        req["stream"] = bool(streaming)
-    if streaming:
-        return adapter.stream(req)
-    return adapter.chat(req)
-    # Assuming load_and_log_configs is defined elsewhere
-    loaded_config_data = app_config or load_and_log_configs()
-    anthropic_config = loaded_config_data.get('anthropic_api', {})
-    final_api_key = api_key or anthropic_config.get('api_key')
-    if not final_api_key:
-        raise ChatConfigurationError(provider="anthropic", message="Anthropic API Key is required.")
-
-    logging.debug("Anthropic: Using configured API key")
-
-    current_model = model or anthropic_config.get('model', 'claude-haiku-4.5')
-    current_temp = temp if temp is not None else _safe_cast(anthropic_config.get('temperature'), float, 0.7)
-    current_top_p = topp
-    current_top_k = topk
-    current_streaming_cfg = anthropic_config.get('streaming', False)
-    current_streaming = streaming if streaming is not None else \
-        (str(current_streaming_cfg).lower() == 'true' if isinstance(current_streaming_cfg, str) else bool(current_streaming_cfg))
-
-    # Use the passed max_tokens if available, else config, else a default
-    fallback_max_tokens = _safe_cast(anthropic_config.get('max_tokens'), int, 4096)
-    default_max_tokens = _safe_cast(anthropic_config.get('max_tokens_to_sample'), int, fallback_max_tokens)
-    current_max_tokens = max_tokens if max_tokens is not None else default_max_tokens
-
-
-    anthropic_messages = []
-    for msg in input_data:
-        role = msg.get("role")
-        content = msg.get("content")
-        if role not in ["user", "assistant"]:
-            logging.warning(f"Anthropic: Skipping message with unsupported role: {role}")
-            continue
-        # ... (multimodal content processing for Anthropic from your existing function) ...
-        anthropic_content_parts = []
-        if isinstance(content, str):
-            anthropic_content_parts.append({"type": "text", "text": content})
-        elif isinstance(content, list): # OpenAI content part list
-            for part in content:
-                part_type = part.get("type")
-                if part_type == "text":
-                    anthropic_content_parts.append({"type": "text", "text": part.get("text", "")})
-                elif part_type == "image_url":
-                    image_source = _anthropic_image_source_from_part(part.get("image_url", {}))
-                    if image_source:
-                        anthropic_content_parts.append({"type": "image", "source": image_source})
-        if anthropic_content_parts:
-            anthropic_messages.append({"role": role, "content": anthropic_content_parts})
-
-
-    if not any(m['role'] == 'user' for m in anthropic_messages):
-        raise ChatBadRequestError(provider="anthropic", message="No valid user messages found for Anthropic.")
-
-    headers = {
-        'x-api-key': final_api_key,
-        'anthropic-version': anthropic_config.get('api_version', '2023-06-01'),
-        'Content-Type': 'application/json'
-    }
-    data = {
-        "model": current_model,
-        "max_tokens": current_max_tokens, # Changed from max_tokens_to_sample to the parameter
-        "messages": anthropic_messages,
-        "stream": current_streaming,
-    }
-    if system_prompt is not None: data["system"] = system_prompt # Anthropic uses 'system' at the top level
-    if current_temp is not None: data["temperature"] = current_temp
-    if current_top_p is not None: data["top_p"] = current_top_p
-    if current_top_k is not None: data["top_k"] = current_top_k
-    if stop_sequences is not None: data["stop_sequences"] = stop_sequences
-    if tools is not None: data["tools"] = tools # Assuming 'tools' is already in Anthropic's required format
-
-    api_url = anthropic_config.get('api_base_url', 'https://api.anthropic.com/v1').rstrip('/') + '/messages'
-    data_metadata = _sanitize_payload_for_logging(data, text_keys=("system",))
-    logging.debug(f"Anthropic request metadata: {data_metadata}")
-
-    session = create_session_with_retries(
-        total=_safe_cast(anthropic_config.get('api_retries'), int, 3),
-        backoff_factor=_safe_cast(anthropic_config.get('api_retry_delay'), float, 1.0),
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["POST"],
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import anthropic_chat_handler
+    return anthropic_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_prompt=system_prompt,
+        temp=temp,
+        topp=topp,
+        topk=topk,
+        streaming=streaming,
+        max_tokens=max_tokens,
+        stop_sequences=stop_sequences,
+        tools=tools,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
     )
 
-    try:
-        response = session.post(api_url, headers=headers, json=data, stream=current_streaming, timeout=180)
-        response.raise_for_status()
-
-        if current_streaming:
-            logging.debug("Anthropic: Streaming response received. Normalizing to OpenAI SSE.")
-            session_handle = session
-            response_handle = response
-
-            def stream_generator():
-                tool_states: Dict[int, Dict[str, Any]] = {}
-                tool_counter = 0
-                done_sent = False
-
-                try:
-                    for line_bytes in response_handle.iter_lines():  # iter_lines gives bytes
-                        if not line_bytes:
-                            continue
-                        try:
-                            decoded = line_bytes.decode('utf-8')
-                        except Exception:
-                            decoded = str(line_bytes)
-                        if is_done_line(decoded):
-                            if not done_sent:
-                                done_sent = True
-                                yield sse_done()
-                            continue
-                        stripped = decoded.strip()
-                        if not stripped or not stripped.startswith("data:"):
-                            continue
-                        event_data_str = stripped[len("data:"):].strip()
-                        if not event_data_str:
-                            continue
-                        try:
-                            anthropic_event = json.loads(event_data_str)
-                        except json.JSONDecodeError:
-                            logging.warning(f"Anthropic Stream: Could not decode JSON: {event_data_str}")
-                            continue
-
-                        ev_type = anthropic_event.get("type")
-                        if ev_type == "content_block_start":
-                            content_block = anthropic_event.get("content_block", {})
-                            if content_block.get("type") == "tool_use":
-                                block_index = anthropic_event.get("index")
-                                tool_id = content_block.get("id") or f"anthropic_tool_{tool_counter}"
-                                tool_name = content_block.get("name")
-                                initial_input = content_block.get("input")
-                                buffer = ""
-                                if initial_input:
-                                    try:
-                                        buffer = json.dumps(initial_input)
-                                    except Exception:
-                                        buffer = str(initial_input)
-                                tool_states[block_index] = {
-                                    "id": tool_id,
-                                    "name": tool_name,
-                                    "buffer": buffer,
-                                    "position": tool_counter,
-                                }
-                                tool_counter += 1
-                                yield _anthropic_tool_delta_chunk(
-                                    tool_states[block_index]["position"],
-                                    tool_id,
-                                    tool_name,
-                                    buffer,
-                                )
-                        elif ev_type == "content_block_delta":
-                            delta = anthropic_event.get("delta", {})
-                            block_index = anthropic_event.get("index")
-                            delta_type = delta.get("type")
-                            if delta_type == "text_delta" and "text" in delta:
-                                yield openai_delta_chunk(delta.get("text", ""))
-                            elif delta_type == "input_json_delta" and block_index in tool_states:
-                                partial = delta.get("partial_json", "")
-                                if partial:
-                                    state = tool_states[block_index]
-                                    state["buffer"] += partial
-                                    yield _anthropic_tool_delta_chunk(
-                                        state["position"], state["id"], state["name"], state["buffer"]
-                                    )
-                            elif delta_type == "tool_use_delta" and block_index in tool_states:
-                                state = tool_states[block_index]
-                                new_name = delta.get("name")
-                                new_input = delta.get("input")
-                                if new_name:
-                                    state["name"] = new_name
-                                if new_input:
-                                    try:
-                                        state["buffer"] = json.dumps(new_input)
-                                    except Exception:
-                                        state["buffer"] = str(new_input)
-                                yield _anthropic_tool_delta_chunk(
-                                    state["position"], state["id"], state["name"], state["buffer"]
-                                )
-                        elif ev_type == "message_delta":
-                            stop_reason = (anthropic_event.get("delta") or {}).get("stop_reason")
-                            if stop_reason:
-                                finish_reason_map = {
-                                    "end_turn": "stop",
-                                    "max_tokens": "length",
-                                    "stop_sequence": "stop",
-                                    "tool_use": "tool_calls",
-                                }
-                                finish_reason = finish_reason_map.get(stop_reason, stop_reason)
-                                yield sse_data({"choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}]})
-                        # Ignore other event types for now
-                except GeneratorExit:
-                    if response:
-                        response.close()
-                    raise
-                except requests.exceptions.ChunkedEncodingError as e:
-                    logging.error(f"Anthropic: ChunkedEncodingError during stream: {e}", exc_info=True)
-                    yield sse_data({"error": {"message": f"Stream connection error: {str(e)}", "type": "anthropic_stream_error"}})
-                except Exception as e:
-                    logging.error(f"Anthropic: Error during stream iteration: {e}", exc_info=True)
-                    yield sse_data({"error": {"message": f"Stream iteration error: {str(e)}", "type": "anthropic_stream_error"}})
-                finally:
-                    for tail in finalize_stream(response_handle, done_already=done_sent):
-                        yield tail
-                    try:
-                        session_handle.close()
-                    except Exception:
-                        pass
-
-            session = None
-            return stream_generator()
-        else:
-            # ... (non-streaming logic remains the same) ...
-            logging.debug("Anthropic: Non-streaming request successful.")
-            try:
-                response_data = response.json()
-            finally:
-                try:
-                    response.close()
-                except Exception:
-                    pass
-            logging.debug("Anthropic: Non-streaming request successful. Normalizing response.")
-            return _normalize_anthropic_response(response_data, current_model)
-    except requests.exceptions.HTTPError as e:
-        # ... (error handling from your file, ensure provider is "anthropic") ...
-        status_code = e.response.status_code if e.response is not None else 500
-        error_text = e.response.text if e.response is not None else "No response text"
-        if status_code == 401: raise ChatAuthenticationError(provider="anthropic", message=f"Auth failed. Detail: {error_text[:200]}") from e
-        elif status_code == 429: raise ChatRateLimitError(provider="anthropic", message=f"Rate limit. Detail: {error_text[:200]}") from e
-        elif 400 <= status_code < 500: raise ChatBadRequestError(provider="anthropic", message=f"Bad request ({status_code}). Detail: {error_text[:200]}") from e
-        else: raise ChatProviderError(provider="anthropic", message=f"API error ({status_code}). Detail: {error_text[:200]}", status_code=status_code) from e
-    except requests.exceptions.RequestException as e:
-        raise ChatProviderError(provider="anthropic", message=f"Network error: {str(e)}", status_code=504) from e
-    except Exception as e:
-        logging.error(f"Anthropic: Unexpected error: {e}", exc_info=True)
-        raise ChatProviderError(provider="anthropic", message=f"Unexpected error: {e}")
-    finally:
-        if session is not None:
-            session.close()
-
-
 def chat_with_cohere(
+        input_data: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_prompt: Optional[str] = None,
+        temp: Optional[float] = None,
+        streaming: Optional[bool] = False,
+        topp: Optional[float] = None,
+        topk: Optional[int] = None,
+        max_tokens: Optional[int] = None,
+        stop_sequences: Optional[List[str]] = None,
+        seed: Optional[int] = None,
+        num_generations: Optional[int] = None, # Only for non-streaming
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        custom_prompt_arg: Optional[str] = None, # Kept for legacy, but focus on structured input
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import cohere_chat_handler
+    return cohere_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_prompt=system_prompt,
+        temp=temp,
+        streaming=streaming,
+        topp=topp,
+        topk=topk,
+        max_tokens=max_tokens,
+        stop_sequences=stop_sequences,
+        seed=seed,
+        num_generations=num_generations,
+        frequency_penalty=frequency_penalty,
+        presence_penalty=presence_penalty,
+        tools=tools,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
+
+
+def legacy_chat_with_cohere(
         input_data: List[Dict[str, Any]],
         model: Optional[str] = None,
         api_key: Optional[str] = None,
@@ -2838,183 +2364,6 @@ def chat_with_cohere(
             session.close()
 
 
-def _legacy_chat_with_deepseek_impl(
-        input_data: List[Dict[str, Any]],
-        model: Optional[str] = None,
-        api_key: Optional[str] = None,
-        system_message: Optional[str] = None,
-        temp: Optional[float] = None,
-        streaming: Optional[bool] = False,
-        topp: Optional[float] = None,  # top_p
-        # New OpenAI-compatible params for DeepSeek
-        max_tokens: Optional[int] = None,
-        seed: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        logprobs: Optional[bool] = None,
-        top_logprobs: Optional[int] = None,
-        presence_penalty: Optional[float] = None,
-        frequency_penalty: Optional[float] = None,
-        response_format: Optional[Dict[str, str]] = None,  # If supported
-        n: Optional[int] = None,  # If supported
-        user: Optional[str] = None,  # If supported
-        tools: Optional[List[Dict[str, Any]]] = None,  # If supported
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,  # If supported
-        logit_bias: Optional[Dict[str, float]] = None,  # If supported
-        custom_prompt_arg: Optional[str] = None,  # Legacy
-        app_config: Optional[Dict[str, Any]] = None,
-):
-    loaded_config_data = app_config or load_and_log_configs()
-    deepseek_config = loaded_config_data.get('deepseek_api', {})
-    final_api_key = api_key or deepseek_config.get('api_key')
-    if not final_api_key:
-        raise ChatConfigurationError(provider="deepseek", message="DeepSeek API Key required.")
-
-    # ... (logging key, model, temp, streaming, top_p setup) ...
-    logging.debug("DeepSeek: Using configured API key")
-    # Strip provider prefix if present (e.g., "deepseek/deepseek-chat" -> "deepseek-chat")
-    if model and '/' in model:
-        model = model.split('/', 1)[1]
-    current_model = model or deepseek_config.get('model', 'deepseek-chat')  # Or deepseek-coder
-    logging.info(f"DeepSeek: Received model='{model}', config model='{deepseek_config.get('model')}', using='{current_model}'")
-    current_temp = temp if temp is not None else _safe_cast(deepseek_config.get('temperature'), float, 0.1)
-    current_top_p = topp  # Deepseek uses top_p
-    current_streaming_cfg = deepseek_config.get('streaming', False)
-    current_streaming = streaming if streaming is not None else \
-        (str(current_streaming_cfg).lower() == 'true' if isinstance(current_streaming_cfg, str) else bool(
-            current_streaming_cfg))
-
-    current_max_tokens = max_tokens if max_tokens is not None else _safe_cast(deepseek_config.get('max_tokens'), int)
-
-    api_messages = []
-    if system_message:
-        api_messages.append({"role": "system", "content": system_message})
-    api_messages.extend(input_data)
-
-    headers = {'Authorization': f'Bearer {final_api_key}', 'Content-Type': 'application/json'}
-    data = {
-        "model": current_model, "messages": api_messages, "stream": current_streaming,
-    }
-    if current_temp is not None: data["temperature"] = current_temp
-    if current_top_p is not None: data["top_p"] = current_top_p
-    if current_max_tokens is not None: data["max_tokens"] = current_max_tokens
-    if seed is not None: data["seed"] = seed
-    if stop is not None: data["stop"] = stop
-    if logprobs is not None: data["logprobs"] = logprobs  # DeepSeek uses 'logprobs' (boolean)
-    if top_logprobs is not None and data.get("logprobs"): data["top_logprobs"] = top_logprobs
-    if presence_penalty is not None: data["presence_penalty"] = presence_penalty
-    if frequency_penalty is not None: data["frequency_penalty"] = frequency_penalty
-    if response_format is not None: data["response_format"] = response_format
-    if n is not None: data["n"] = n
-    if user is not None: data["user"] = user
-    if tools is not None: data["tools"] = tools
-    _apply_tool_choice(data, tools, tool_choice)
-    if logit_bias is not None: data["logit_bias"] = logit_bias
-
-    api_url = deepseek_config.get('api_base_url', 'https://api.deepseek.com').rstrip('/') + '/chat/completions'
-    # Log the actual model being sent
-    logging.info(f"DeepSeek: Sending model='{current_model}' to API")
-    deepseek_metadata = _sanitize_payload_for_logging(data)
-    logging.debug(f"DeepSeek request metadata: {deepseek_metadata}")
-
-    try:
-        if current_streaming:
-            session = create_session_with_retries(
-                total=_safe_cast(deepseek_config.get('api_retries'), int, 3),
-                backoff_factor=_safe_cast(deepseek_config.get('api_retry_delay'), float, 1.0),
-            )
-            stream_timeout = _safe_cast(deepseek_config.get('api_timeout'), float, 90.0)
-            try:
-                response = session.post(api_url, headers=headers, json=data, stream=True, timeout=stream_timeout)
-                response.raise_for_status()
-            except Exception:
-                session.close()
-                raise
-
-            def stream_generator():
-                    done_sent = False
-                    try:
-                        for raw_line in response.iter_lines(decode_unicode=True):
-                            if not raw_line:
-                                continue
-                            if is_done_line(raw_line):
-                                done_sent = True
-                            normalized = normalize_provider_line(raw_line)
-                            if normalized is None:
-                                continue
-                            yield normalized
-                        if not done_sent:
-                            done_sent = True
-                            yield sse_done()
-                    except requests.exceptions.ChunkedEncodingError as e:
-                        logging.error(f"DeepSeek: ChunkedEncodingError during stream: {e}", exc_info=True)
-                        yield sse_data({'error': {'message': f'Stream connection error: {str(e)}', 'type': 'deepseek_stream_error'}})
-                    except Exception as e:
-                        logging.error(f"DeepSeek: Stream iteration error: {e}", exc_info=True)
-                        yield sse_data({'error': {'message': f'Stream iteration error: {str(e)}', 'type': 'deepseek_stream_error'}})
-                    finally:
-                        try:
-                            for tail in finalize_stream(response, done_already=done_sent):
-                                yield tail
-                        finally:
-                            try:
-                                session.close()
-                            except Exception:
-                                pass
-
-            return stream_generator()
-        else:
-            session = create_session_with_retries(
-                total=_safe_cast(deepseek_config.get('api_retries'), int, 3),
-                backoff_factor=_safe_cast(deepseek_config.get('api_retry_delay'), float, 1.0),
-                status_forcelist=[429, 500, 502, 503, 504],
-                allowed_methods=["POST"],
-            )
-            try:
-                response = session.post(api_url, headers=headers, json=data, timeout=120)
-                try:
-                    response.raise_for_status()
-                except requests.exceptions.HTTPError as e:
-                    # Fallback: retry once with a minimal payload if upstream returns 5xx
-                    status_code = getattr(e.response, 'status_code', 500)
-                    if status_code and status_code >= 500:
-                        minimal_payload = {
-                            "model": current_model,
-                            "messages": (
-                                [{"role": "system", "content": system_message}] if system_message else []
-                            ) + input_data,
-                            "stream": False,
-                        }
-                        try:
-                            resp2 = session.post(api_url, headers=headers, json=minimal_payload, timeout=120)
-                            resp2.raise_for_status()
-                            try:
-                                return resp2.json()
-                            finally:
-                                try:
-                                    resp2.close()
-                                except Exception:
-                                    pass
-                        except Exception:
-                            # Re-raise original error if fallback also fails
-                            raise
-                    # If not a 5xx, re-raise
-                    raise
-                # Success path
-                try:
-                    return response.json()
-                finally:
-                    try:
-                        response.close()
-                    except Exception:
-                        pass
-            finally:
-                session.close()
-    except requests.exceptions.HTTPError as e:
-        _raise_chat_error_from_http("deepseek", e)
-    except Exception as e:  # ... error handling ...
-        raise ChatProviderError(provider="deepseek", message=f"Unexpected error: {e}")
-
-
 def chat_with_deepseek(
         input_data: List[Dict[str, Any]],
         model: Optional[str] = None,
@@ -3039,7 +2388,7 @@ def chat_with_deepseek(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import deepseek_chat_handler
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import deepseek_chat_handler
     return deepseek_chat_handler(
         input_data=input_data,
         model=model,
@@ -3085,251 +2434,24 @@ def legacy_chat_with_google(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    loaded_config_data = app_config or load_and_log_configs()
-    google_config = loaded_config_data.get('google_api', {})
-    # ... (api key, model, temp, streaming, topP, topK setup) ...
-    final_api_key = api_key or google_config.get('api_key')
-    if not final_api_key: raise ChatConfigurationError(provider="google", message="Google API Key required.")
-    current_model = model or google_config.get('model', 'gemini-1.5-flash-latest')
-    # ... other param resolutions ...
-    current_streaming_cfg = google_config.get('streaming', False)
-    current_streaming = streaming if streaming is not None else \
-        (str(current_streaming_cfg).lower() == 'true' if isinstance(current_streaming_cfg, str) else bool(
-            current_streaming_cfg))
-
-    current_temp = temp if temp is not None else _safe_cast(google_config.get('temperature'), float, None)
-    resolved_top_p_cfg = google_config.get('top_p', google_config.get('topP'))
-    current_top_p = topp if topp is not None else _safe_cast(resolved_top_p_cfg, float, None)
-    resolved_top_k_cfg = google_config.get('top_k', google_config.get('topK'))
-    current_top_k = topk if topk is not None else _safe_cast(resolved_top_k_cfg, int, None)
-    resolved_max_tokens_cfg = google_config.get('max_output_tokens', google_config.get('max_tokens'))
-    current_max_output_tokens = max_output_tokens if max_output_tokens is not None else _safe_cast(
-        resolved_max_tokens_cfg, int, None)
-    current_stop_sequences = stop_sequences if stop_sequences is not None else google_config.get('stop_sequences')
-    resolved_candidate_count_cfg = google_config.get('candidate_count', google_config.get('n'))
-    current_candidate_count = candidate_count if candidate_count is not None else _safe_cast(
-        resolved_candidate_count_cfg, int, None)
-    current_tools = tools if tools is not None else google_config.get('tools')
-    effective_response_format = response_format or google_config.get('response_format')
-
-    gemini_contents = []
-    # ... (message transformation from input_data to gemini_contents) ...
-    for msg in input_data:
-        role = msg.get("role")
-        content = msg.get("content")
-        gemini_role = "user" if role == "user" else "model" if role == "assistant" else None
-        if not gemini_role: continue
-        gemini_parts = []
-        if isinstance(content, str):
-            gemini_parts.append({"text": content})
-        elif isinstance(content, list):
-            for part_obj in content:
-                if part_obj.get("type") == "text":
-                    gemini_parts.append({"text": part_obj.get("text", "")})
-                elif part_obj.get("type") == "image_url":
-                    parsed_image = _parse_data_url_for_multimodal(part_obj.get("image_url", {}).get("url", ""))
-                    if parsed_image: gemini_parts.append(
-                        {"inline_data": {"mime_type": parsed_image[0], "data": parsed_image[1]}})
-        if gemini_parts: gemini_contents.append({"role": gemini_role, "parts": gemini_parts})
-
-    generation_config = {}
-    if current_temp is not None: generation_config["temperature"] = current_temp
-    if current_top_p is not None: generation_config["topP"] = current_top_p
-    if current_top_k is not None: generation_config["topK"] = current_top_k
-    if current_max_output_tokens is not None: generation_config["maxOutputTokens"] = current_max_output_tokens
-    if current_stop_sequences is not None: generation_config["stopSequences"] = current_stop_sequences
-    if current_candidate_count is not None: generation_config["candidateCount"] = current_candidate_count
-    if effective_response_format and effective_response_format.get("type") == "json_object":
-        generation_config["responseMimeType"] = "application/json"
-
-    payload = {"contents": gemini_contents}
-    if generation_config: payload["generationConfig"] = generation_config
-    if system_message: payload["system_instruction"] = {"parts": [{"text": system_message}]}
-    if current_tools: payload["tools"] = current_tools  # Assuming 'tools' is in Gemini's specific format
-
-    stream_suffix = ":streamGenerateContent?alt=sse" if current_streaming else ":generateContent"
-    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{current_model}{stream_suffix}"
-    headers = {'x-goog-api-key': final_api_key, 'Content-Type': 'application/json'}
-    gemini_payload_metadata = _sanitize_payload_for_logging(
-        payload,
-        message_keys=("contents",),
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import google_chat_handler
+    return google_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        topp=topp,
+        topk=topk,
+        max_output_tokens=max_output_tokens,
+        stop_sequences=stop_sequences,
+        candidate_count=candidate_count,
+        response_format=response_format,
+        tools=tools,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
     )
-    logging.debug(f"Google Gemini request metadata: {gemini_payload_metadata}")
-
-    try:
-        # ... (retry logic) ...
-        session = None
-        response = None
-        try:
-            session = create_session_with_retries(
-                total=_safe_cast(google_config.get('api_retries'), int, 3),
-                backoff_factor=_safe_cast(google_config.get('api_retry_delay'), float, 1.0),
-                status_forcelist=[429, 500, 503],
-                allowed_methods=["POST"],
-            )
-            response = session.post(api_url, headers=headers, json=payload, stream=current_streaming, timeout=180)
-            response.raise_for_status()
-
-            if current_streaming:
-                logging.debug("Google Gemini: Streaming response received.")
-                session_ref = session
-                response_ref = response
-                tool_call_index = 0
-
-                def stream_generator():
-                    nonlocal tool_call_index
-                    done_sent = False
-                    try:
-                        for raw in response_ref.iter_lines():
-                            if not raw:
-                                continue
-                            try:
-                                line = raw.decode('utf-8') if isinstance(raw, (bytes, bytearray)) else str(raw)
-                            except Exception:
-                                line = str(raw)
-                            if line and line.strip().startswith('data:'):
-                                json_str = line.strip()[len('data:'):]
-                                clean_chunk = json_str.strip()
-                                if clean_chunk.lower() == "[done]":
-                                    if not done_sent:
-                                        done_sent = True
-                                        yield sse_done()
-                                    continue
-                                try:
-                                    data_chunk_outer = json.loads(json_str)
-                                    data_chunks_to_process = data_chunk_outer if isinstance(data_chunk_outer, list) else [
-                                        data_chunk_outer]
-
-                                    for data_chunk in data_chunks_to_process:
-                                        chunk_text = ""
-                                        finish_reason = None
-                                        tool_calls_delta: List[Dict[str, Any]] = []
-
-                                        candidates = data_chunk.get('candidates', [])
-                                        if candidates:
-                                            candidate = candidates[0]
-                                            if candidate.get('content', {}).get('parts', []):
-                                                for part in candidate['content']['parts']:
-                                                    if 'text' in part:
-                                                        chunk_text += part.get('text', '')
-                                                    if 'functionCall' in part:
-                                                        logging.debug(
-                                                            f"Gemini Stream: Received functionCall part: {part['functionCall']}")
-                                                        function_call = part['functionCall']
-                                                        tool_call_entry = {
-                                                            "index": tool_call_index,
-                                                            "id": function_call.get("id") or f"call_gemini_{tool_call_index}_{time.time_ns()}",
-                                                            "type": "function",
-                                                            "function": {
-                                                                "name": function_call.get("name"),
-                                                                "arguments": json.dumps(function_call.get("args", {}))
-                                                            }
-                                                        }
-                                                        tool_call_index += 1
-                                                        tool_calls_delta.append(tool_call_entry)
-                                            raw_finish_reason = candidate.get("finishReason")
-                                            if raw_finish_reason:
-                                                finish_reason_map = {"MAX_TOKENS": "length", "STOP": "stop",
-                                                                     "SAFETY": "content_filter",
-                                                                     "RECITATION": "content_filter", "OTHER": "error",
-                                                                     "TOOL_CODE_NOT_FOUND": "error"}
-                                                finish_reason = finish_reason_map.get(
-                                                    raw_finish_reason, raw_finish_reason.lower())
-
-                                        if chunk_text or tool_calls_delta:
-                                            delta_payload: Dict[str, Any] = {}
-                                            if chunk_text:
-                                                delta_payload["content"] = chunk_text
-                                            if tool_calls_delta:
-                                                delta_payload["tool_calls"] = tool_calls_delta
-                                            sse_chunk = {'choices': [{'delta': delta_payload,
-                                                                      "finish_reason": finish_reason if finish_reason else None,
-                                                                      "index": 0}]}
-                                            yield sse_data(sse_chunk)
-                                        elif finish_reason:
-                                            sse_chunk = {'choices': [{'delta': {}, "finish_reason": finish_reason, "index": 0}]}
-                                            yield sse_data(sse_chunk)
-                                except json.JSONDecodeError:
-                                    logging.warning(f"Google Gemini: Could not decode JSON line: {json_str}")
-                        # Ensure we emit [DONE] exactly once
-                        if not done_sent:
-                            done_sent = True
-                            yield sse_done()
-                    except requests.exceptions.ChunkedEncodingError as e_chunk:
-                        logging.error(f"Google Gemini stream: ChunkedEncodingError: {e_chunk}")
-                        yield sse_data({"error": {"message": f"Stream connection error: {str(e_chunk)}", "type": "gemini_stream_error"}})
-                    except Exception as e_stream:
-                        logging.error(f"Google Gemini stream: iteration error: {e_stream}", exc_info=True)
-                        yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "gemini_stream_error"}})
-                    finally:
-                        for tail in finalize_stream(response_ref, done_already=done_sent):
-                            yield tail
-                        try:
-                            session_ref.close()
-                        except Exception:
-                            pass
-
-                session = None
-                return stream_generator()
-            else:
-                response_data = response.json()
-                logging.debug("Google Gemini: Non-streaming request successful.")
-                assistant_content = ""
-                finish_reason = "unknown"
-                tool_calls = None
-
-                if response_data.get("candidates"):
-                    candidate = response_data["candidates"][0]
-                    if candidate.get("content", {}).get("parts"):
-                        parts = candidate["content"]["parts"]
-                        for part in parts:
-                            if "text" in part:
-                                assistant_content += part.get("text", "")
-                            if "functionCall" in part:
-                                if tool_calls is None:
-                                    tool_calls = []
-                                tool_calls.append({
-                                    "id": f"call_gemini_{time.time_ns()}_{len(tool_calls)}",
-                                    "type": "function",
-                                    "function": {
-                                        "name": part["functionCall"].get("name"),
-                                        "arguments": json.dumps(part["functionCall"].get("args", {}))
-                                    }
-                                })
-
-                    raw_finish_reason = candidate.get("finishReason")
-                    if raw_finish_reason:
-                        finish_reason_map = {"MAX_TOKENS": "length", "STOP": "stop", "SAFETY": "content_filter",
-                                             "RECITATION": "content_filter", "OTHER": "error",
-                                             "TOOL_CODE_NOT_FOUND": "error", "FUNCTION_CALL": "tool_calls"}
-                        finish_reason = finish_reason_map.get(raw_finish_reason, raw_finish_reason.lower())
-
-                message_content = {"role": "assistant", "content": assistant_content.strip()}
-                if tool_calls:
-                    message_content["tool_calls"] = tool_calls
-                    if not assistant_content.strip():
-                        message_content["content"] = None
-
-                normalized_response = {
-                    "id": f"gemini-{time.time_ns()}", "object": "chat.completion", "created": int(time.time()),
-                    "model": current_model,
-                    "choices": [{"index": 0, "message": message_content, "finish_reason": finish_reason}],
-                    "usage": {
-                        "prompt_tokens": response_data.get("usageMetadata", {}).get("promptTokenCount"),
-                        "completion_tokens": response_data.get("usageMetadata", {}).get("candidatesTokenCount"),
-                        "total_tokens": response_data.get("usageMetadata", {}).get("totalTokenCount")}
-                }
-                return normalized_response
-        finally:
-            if session is not None:
-                try:
-                    session.close()
-                except Exception:
-                    pass
-    except requests.exceptions.HTTPError as e:
-        _raise_chat_error_from_http("google", e)
-    except Exception as e:  # ... error handling ...
-        raise ChatProviderError(provider="google", message=f"Unexpected error: {e}")
 
 
 
@@ -3360,172 +2482,32 @@ def legacy_chat_with_qwen(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    """OpenAI-compatible chat completions against the commercial Qwen API (DashScope)."""
-    loaded_config_data = app_config or load_and_log_configs()
-    qwen_config = loaded_config_data.get('qwen_api', {}) if loaded_config_data else {}
-    final_api_key = api_key or qwen_config.get('api_key')
-    if not final_api_key:
-        raise ChatConfigurationError(provider="qwen", message="Qwen API Key required.")
-    base_url = (qwen_config.get('api_base_url') or 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1').rstrip('/')
-    current_model = model or qwen_config.get('model', 'qwen-plus')
-    current_temp = temp if temp is not None else _safe_cast(qwen_config.get('temperature'), float, 0.7)
-    current_top_p = maxp if maxp is not None else _safe_cast(qwen_config.get('top_p'), float, 0.8)
-    streaming_cfg = qwen_config.get('streaming', False)
-    current_streaming = streaming if streaming is not None else (
-        str(streaming_cfg).lower() == 'true' if isinstance(streaming_cfg, str) else bool(streaming_cfg)
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import qwen_chat_handler
+    return qwen_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        maxp=maxp,
+        streaming=streaming,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        user=user,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
     )
-    current_max_tokens = max_tokens if max_tokens is not None else _safe_cast(qwen_config.get('max_tokens'), int)
-    api_timeout = _safe_cast(qwen_config.get('api_timeout'), float, 90.0)
-    api_retries = _safe_cast(qwen_config.get('api_retries'), int, 3)
-    retry_delay = _safe_cast(qwen_config.get('api_retry_delay'), float, 1.0)
 
-    api_messages: List[Dict[str, Any]] = []
-    if system_message and not any(msg.get("role") == "system" for msg in input_data):
-        api_messages.append({"role": "system", "content": system_message})
-    api_messages.extend(input_data)
-
-    headers = {
-        'Authorization': f'Bearer {final_api_key}',
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-    }
-    payload: Dict[str, Any] = {"model": current_model, "messages": api_messages, "stream": current_streaming}
-    if current_temp is not None:
-        payload["temperature"] = current_temp
-    if current_top_p is not None:
-        payload["top_p"] = current_top_p
-    if current_max_tokens is not None:
-        payload["max_tokens"] = current_max_tokens
-    if seed is not None:
-        payload["seed"] = seed
-    if stop is not None:
-        payload["stop"] = stop
-    if response_format is not None:
-        payload["response_format"] = response_format
-    if n is not None:
-        payload["n"] = n
-    if user is not None:
-        payload["user"] = user
-    if tools is not None:
-        payload["tools"] = tools
-    if tool_choice == "none":
-        payload["tool_choice"] = "none"
-    elif tool_choice is not None and tools is not None:
-        payload["tool_choice"] = tool_choice
-    if logit_bias is not None:
-        payload["logit_bias"] = logit_bias
-    if presence_penalty is not None:
-        payload["presence_penalty"] = presence_penalty
-    if frequency_penalty is not None:
-        payload["frequency_penalty"] = frequency_penalty
-    if logprobs is not None:
-        payload["logprobs"] = logprobs
-    if top_logprobs is not None and payload.get("logprobs"):
-        payload["top_logprobs"] = top_logprobs
-    if custom_prompt_arg:
-        logging.warning("Qwen: 'custom_prompt_arg' was provided but is unused when message payload is supplied.")
-
-    api_url = f"{base_url}/chat/completions"
-    payload_metadata = {k: v for k, v in payload.items() if k != "messages"}
-    logging.debug(f"Qwen API request target: {api_url}")
-    logging.debug(f"Qwen request payload metadata: {payload_metadata}")
-
-    try:
-        if current_streaming:
-            session = create_session_with_retries(
-                total=api_retries if api_retries is not None else 3,
-                backoff_factor=retry_delay if retry_delay is not None else 1.0,
-            )
-            try:
-                response = session.post(api_url, headers=headers, json=payload, stream=True, timeout=api_timeout or 120)
-                response.raise_for_status()
-            except Exception:
-                session.close()
-                raise
-
-            def stream_generator():
-                    done_sent = False
-                    try:
-                        for raw_line in response.iter_lines(decode_unicode=True):
-                            if not raw_line:
-                                continue
-                            if is_done_line(raw_line):
-                                done_sent = True
-                            normalized = normalize_provider_line(raw_line)
-                            if normalized is None:
-                                continue
-                            yield normalized
-                        # Ensure final DONE sentinel only if not seen
-                        if not done_sent:
-                            done_sent = True
-                            yield sse_done()
-                    except requests.exceptions.ChunkedEncodingError as stream_err:
-                        logging.error(f"Qwen: ChunkedEncodingError during stream: {stream_err}", exc_info=True)
-                        yield sse_data({"error": {"message": f"Stream connection error: {stream_err}", "type": "qwen_stream_error"}})
-                    except Exception as stream_err:
-                        logging.error(f"Qwen: Error during stream iteration: {stream_err}", exc_info=True)
-                        yield sse_data({"error": {"message": f"Stream iteration error: {stream_err}", "type": "qwen_stream_error"}})
-                    finally:
-                        try:
-                            for tail in finalize_stream(response, done_already=done_sent):
-                                yield tail
-                        finally:
-                            try:
-                                session.close()
-                            except Exception:
-                                pass
-
-            return stream_generator()
-        else:
-            session = create_session_with_retries(
-                total=api_retries if api_retries is not None else 3,
-                backoff_factor=retry_delay if retry_delay is not None else 1.0,
-                status_forcelist=[429, 500, 502, 503, 504],
-                allowed_methods=["POST"],
-            )
-            try:
-                response = session.post(api_url, headers=headers, json=payload, timeout=api_timeout or 90)
-                response.raise_for_status()
-                try:
-                    return response.json()
-                finally:
-                    try:
-                        response.close()
-                    except Exception:
-                        pass
-            finally:
-                session.close()
-    except requests.exceptions.HTTPError as e:
-        status_code = None
-        message = ""
-        if e.response is not None:
-            status_code = e.response.status_code
-            logging.error(f"Qwen error response (status {status_code}): {repr(e.response.text)}")
-            try:
-                err_json = e.response.json()
-                message = err_json.get("error", {}).get("message") or err_json.get("message") or ""
-            except Exception:
-                message = e.response.text or str(e)
-        else:
-            logging.error(f"Qwen HTTPError without response: {e}")
-            message = str(e)
-        if not message:
-            message = "Qwen API error"
-        if status_code in (400, 404, 422):
-            raise ChatBadRequestError(provider="qwen", message=message)
-        if status_code in (401, 403):
-            raise ChatAuthenticationError(provider="qwen", message=message)
-        if status_code == 429:
-            raise ChatRateLimitError(provider="qwen", message=message)
-        if status_code in (500, 502, 503, 504):
-            raise ChatProviderError(provider="qwen", message=message, status_code=status_code)
-        raise ChatAPIError(provider="qwen", message=message, status_code=status_code or 500)
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Qwen request exception: {e}", exc_info=True)
-        raise ChatProviderError(provider="qwen", message=f"Network error: {e}", status_code=504)
-    except Exception as e:
-        logging.error(f"Qwen unexpected error: {e}", exc_info=True)
-        raise ChatProviderError(provider="qwen", message=f"Unexpected error: {e}")
 
 def legacy_chat_with_groq(
         input_data: List[Dict[str, Any]],
@@ -3551,129 +2533,31 @@ def legacy_chat_with_groq(
         custom_prompt_arg: Optional[str] = None,  # Legacy
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    loaded_config_data = app_config or load_and_log_configs()
-    groq_config = loaded_config_data.get('groq_api', {})
-    final_api_key = api_key or groq_config.get('api_key')
-    if not final_api_key:
-        raise ChatConfigurationError(provider="groq", message="Groq API Key required.")
-
-    # ... (logging key, model, temp, streaming setup as before) ...
-    logging.debug("Groq: Using configured API key")
-
-    current_model = model or groq_config.get('model', 'llama-3.1-8b-instant')
-    current_temp = temp if temp is not None else _safe_cast(groq_config.get('temperature'), float, 0.2)
-    current_top_p = maxp  # Groq uses top_p
-    current_streaming_cfg = groq_config.get('streaming', False)
-    current_streaming = streaming if streaming is not None else \
-        (str(current_streaming_cfg).lower() == 'true' if isinstance(current_streaming_cfg, str) else bool(
-            current_streaming_cfg))
-
-    current_max_tokens = max_tokens if max_tokens is not None else _safe_cast(groq_config.get('max_tokens'), int)
-
-    api_messages = []
-    if system_message:
-        api_messages.append({"role": "system", "content": system_message})
-    api_messages.extend(input_data)
-
-    headers = {'Authorization': f'Bearer {final_api_key}', 'Content-Type': 'application/json'}
-    data = {
-        "model": current_model, "messages": api_messages, "stream": current_streaming,
-    }
-    if current_temp is not None: data["temperature"] = current_temp
-    if current_top_p is not None: data["top_p"] = current_top_p
-    if current_max_tokens is not None: data["max_tokens"] = current_max_tokens
-    if seed is not None: data["seed"] = seed
-    if stop is not None: data["stop"] = stop
-    if response_format is not None: data["response_format"] = response_format
-    if n is not None: data["n"] = n
-    if user is not None: data["user"] = user
-    if tools is not None: data["tools"] = tools
-    _apply_tool_choice(data, tools, tool_choice)
-    if logit_bias is not None: data["logit_bias"] = logit_bias
-    if presence_penalty is not None: data["presence_penalty"] = presence_penalty
-    if frequency_penalty is not None: data["frequency_penalty"] = frequency_penalty
-    if logprobs is not None: data["logprobs"] = logprobs
-    if top_logprobs is not None and data.get("logprobs") is True: data["top_logprobs"] = top_logprobs
-
-    api_url = groq_config.get('api_base_url', 'https://api.groq.com/openai/v1').rstrip('/') + '/chat/completions'
-    data_metadata = _sanitize_payload_for_logging(data)
-    logging.debug(f"Groq request metadata: {data_metadata}")
-    try:
-        if current_streaming:
-            session = create_session_with_retries(
-                total=_safe_cast(groq_config.get('api_retries'), int, 3),
-                backoff_factor=_safe_cast(groq_config.get('api_retry_delay'), float, 1.0),
-                status_forcelist=[429, 500, 502, 503, 504],
-                allowed_methods=["POST"],
-            )
-            stream_timeout = _safe_cast(groq_config.get('api_timeout'), float, 90.0)
-            try:
-                response = session.post(api_url, headers=headers, json=data, stream=True, timeout=stream_timeout)
-                response.raise_for_status()
-            except Exception:
-                session.close()
-                raise
-
-            session_handle = session
-            response_handle = response
-
-            def stream_generator():
-                done_sent = False
-                try:
-                    for raw_line in response_handle.iter_lines(decode_unicode=True):
-                        if not raw_line:
-                            continue
-                        if is_done_line(raw_line):
-                            done_sent = True
-                        normalized = normalize_provider_line(raw_line)
-                        if normalized is None:
-                            continue
-                        yield normalized
-                    if not done_sent:
-                        done_sent = True
-                        yield sse_done()
-                except GeneratorExit:
-                    if response_handle:
-                        response_handle.close()
-                    raise
-                except requests.exceptions.ChunkedEncodingError as e:
-                    logging.error(f"Groq: ChunkedEncodingError: {e}", exc_info=True)
-                    yield sse_data({'error': {'message': f'Stream error: {str(e)}', 'type': 'groq_stream_error'}})
-                except Exception as e:
-                    logging.error(f"Groq: Stream iteration error: {e}", exc_info=True)
-                    yield sse_data({'error': {'message': f'Stream iteration error: {str(e)}', 'type': 'groq_stream_error'}})
-                finally:
-                    for tail in finalize_stream(response_handle, done_already=done_sent):
-                        yield tail
-                    try:
-                        session_handle.close()
-                    except Exception:
-                        pass
-
-            return stream_generator()
-        else:
-            session = create_session_with_retries(
-                total=_safe_cast(groq_config.get('api_retries'), int, 3),
-                backoff_factor=_safe_cast(groq_config.get('api_retry_delay'), float, 1.0),
-                status_forcelist=[429, 500, 502, 503, 504],
-                allowed_methods=["POST"],
-            )
-            try:
-                response = session.post(api_url, headers=headers, json=data, timeout=120)
-                response.raise_for_status()
-                try:
-                    return response.json()
-                finally:
-                    try:
-                        response.close()
-                    except Exception:
-                        pass
-            finally:
-                session.close()
-    except requests.exceptions.HTTPError as e:
-        _raise_chat_error_from_http("groq", e)
-    except Exception as e:  # ... error handling ...
-        raise ChatProviderError(provider="groq", message=f"Unexpected error: {e}")
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import groq_chat_handler
+    return groq_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        maxp=maxp,
+        streaming=streaming,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        user=user,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
 
 
 def legacy_chat_with_huggingface(
@@ -3701,209 +2585,32 @@ def legacy_chat_with_huggingface(
         custom_prompt_arg: Optional[str] = None,  # Legacy
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    logging.debug(f"HuggingFace Chat: Request process starting for model '{model}' (Streaming: {streaming})")
-    loaded_config_data = app_config or load_and_log_configs()
-    hf_config = loaded_config_data.get('huggingface_api', loaded_config_data.get('API', {}).get('huggingface', {}))
-
-    final_api_key = api_key or hf_config.get('api_key')
-    if final_api_key:
-        logging.debug("HuggingFace: Using configured API key")
-    else:
-        logging.warning("HuggingFace: API key is missing. Public Inference API or unsecured TGI assumed.")
-
-    headers = {"Content-Type": "application/json"}
-    if final_api_key:
-        headers["Authorization"] = f"Bearer {final_api_key}"
-
-    final_model_for_payload = model or hf_config.get('model_id') or hf_config.get('model')
-    if not final_model_for_payload:
-        raise ChatConfigurationError(provider="huggingface",
-                                     message="HuggingFace model ID is required (must be passed as 'model' or configured).")
-    logging.info(f"HuggingFace: Using model_id for payload: {final_model_for_payload}")
-
-    # --- URL Construction ---
-    api_url: str
-    use_router_url_format_str = str(hf_config.get('use_router_url_format', "False")).lower()
-
-    if use_router_url_format_str == "true":
-        # This format explicitly puts the model in the URL path.
-        # User must ensure router_base_url and model_id result in a valid endpoint.
-        router_base = hf_config.get('router_base_url', 'https://router.huggingface.co/hf-inference').rstrip('/')
-        model_path_part = final_model_for_payload.strip('/')
-        chat_path = hf_config.get('api_chat_path', 'v1/chat/completions').lstrip('/')
-        # Constructs URL like: {router_base}/models/{model_path_part}/{chat_path}
-        api_url = f"{router_base}/models/{model_path_part}/{chat_path}"
-        logging.info(f"HuggingFace: Using explicit 'use_router_url_format=true'. Target URL: {api_url}")
-    else: # use_router_url_format is false, standard URL construction
-        configured_api_base_url = hf_config.get('api_base_url')
-        # Default chat path can be just "chat/completions" if base_url includes /v1, or "v1/chat/completions" if not.
-        # Let's make the default api_chat_path more flexible.
-        # If using the public HF API, base is /v1 and path is chat/completions.
-        default_chat_path = 'chat/completions' if (configured_api_base_url and 'api-inference.huggingface.co/v1' in configured_api_base_url) else 'v1/chat/completions'
-        chat_completions_path = hf_config.get('api_chat_path', default_chat_path).lstrip('/')
-
-        if configured_api_base_url:
-            # If api_base_url is configured, use it directly and append the chat_completions_path.
-            # The model is expected to be in the payload.
-            # If the endpoint needs the model_id in the path, configured_api_base_url should include it fully.
-            api_url = f"{configured_api_base_url.rstrip('/')}/{chat_completions_path}"
-            logging.info(f"HuggingFace: Using configured 'api_base_url' ('{configured_api_base_url}') and 'api_chat_path' ('{chat_completions_path}'). Target URL: {api_url}. Model is in payload.")
-        else:
-            # Fallback if no api_base_url is configured.
-            # Use the public Hugging Face Inference API endpoint for OpenAI-like chat completions.
-            default_hf_api_base = 'https://api-inference.huggingface.co/v1' # Base includes /v1
-            default_chat_path_for_api_inference = 'chat/completions' # Path relative to /v1 base
-            api_url = f"{default_hf_api_base.rstrip('/')}/{default_chat_path_for_api_inference}"
-            logging.warning(
-                f"HuggingFace: 'api_base_url' not configured. Defaulting to public Inference API endpoint: {api_url}. Model is in payload."
-            )
-    # --- End URL Construction ---
-
-    final_temp = temp if temp is not None else _safe_cast(hf_config.get('temperature'), float, 0.7)
-    # Ensure final_streaming is a boolean for the payload
-    hf_config_streaming = hf_config.get('streaming', False)
-    final_streaming_payload_val = streaming if streaming is not None else \
-        (str(hf_config_streaming).lower() == 'true' if isinstance(hf_config_streaming, str) else bool(hf_config_streaming))
-
-
-    # TGI uses max_new_tokens. OpenAI compatible layers might expect max_tokens.
-    # If max_tokens is provided, prefer it. Otherwise, check hf_config for max_new_tokens or max_tokens
-    final_max_val = max_tokens
-    if final_max_val is None:
-        final_max_val = _safe_cast(hf_config.get('max_tokens', hf_config.get('max_new_tokens')), int)
-
-
-    api_messages = []
-    # Handle system message: TGI usually wants it as the first message if no dedicated 'system' field in payload root
-    # For OpenAI compatible /v1/chat/completions, system message is standard.
-    if system_message:
-        api_messages.append({"role": "system", "content": system_message})
-    api_messages.extend(input_data) # input_data should be correctly formatted by caller
-
-    payload: Dict[str, Any] = {
-        "model": final_model_for_payload, # Model ID is crucial for endpoints that multiplex
-        "messages": api_messages,
-        "stream": final_streaming_payload_val, # Use the boolean value
-    }
-
-    if final_temp is not None: payload["temperature"] = final_temp
-    if top_p is not None: payload["top_p"] = top_p
-    if top_k is not None: payload["top_k"] = top_k
-    if final_max_val is not None:
-        # Use "max_tokens" for OpenAI compatibility, TGI might map this or use "max_new_tokens"
-        # Sticking to "max_tokens" if the endpoint is /v1/chat/completions
-        payload["max_tokens"] = final_max_val
-    if seed is not None: payload["seed"] = seed
-    if stop is not None: payload["stop_sequences"] = stop if isinstance(stop, list) else [stop] # TGI often uses stop_sequences
-    if response_format is not None: payload["response_format"] = response_format # For OpenAI compatible JSON mode
-
-    if num_return_sequences is not None and not final_streaming_payload_val : payload["n"] = num_return_sequences
-    if user is not None: payload["user"] = user
-    if tools is not None: payload["tools"] = tools
-    if tool_choice == "none":
-        payload["tool_choice"] = "none"
-    elif tool_choice is not None and tools is not None:
-        payload["tool_choice"] = tool_choice
-    if logit_bias is not None: payload["logit_bias"] = logit_bias
-    if presence_penalty is not None: payload["presence_penalty"] = presence_penalty
-    if frequency_penalty is not None: payload["frequency_penalty"] = frequency_penalty
-    if logprobs is not None: payload["logprobs"] = logprobs
-    if top_logprobs is not None and payload.get("logprobs"): payload["top_logprobs"] = top_logprobs
-
-
-    # Remove None values from payload before sending, common practice
-    payload = {k: v for k, v in payload.items() if v is not None}
-
-    logging.debug(f"HuggingFace Final Payload (excluding messages, tools): {{ {', '.join(f'{k}: {v}' for k, v in payload.items() if k not in ['messages', 'tools'])} }}")
-    if 'tools' in payload: logging.debug(f"HuggingFace Tools: {payload['tools']}")
-    # Avoid logging sensitive header values (mask Authorization)
-    try:
-        masked_headers = {k: ("***" if k.lower() == "authorization" else v) for k, v in headers.items()}
-        logging.debug(f"HuggingFace Headers: {masked_headers}")
-    except Exception:
-        logging.debug(f"HuggingFace Headers present: {list(headers.keys())}")
-
-    timeout_seconds = _safe_cast(hf_config.get('api_timeout'), float, 120.0)
-    # For streaming, timeout applies to initial connection and pauses between data.
-    # Consider a tuple timeout (connect_timeout, read_timeout) for more control if needed.
-
-    try:
-        if final_streaming_payload_val:  # Check the boolean intended for payload
-            logging.debug(f"HuggingFace: Posting streaming request to {api_url}")
-            session = create_session_with_retries(
-                total=_safe_cast(hf_config.get('api_retries'), int, 3),
-                backoff_factor=_safe_cast(hf_config.get('api_retry_delay'), float, 1.0),
-                status_forcelist=[429, 500, 502, 503, 504],
-                allowed_methods=["POST"],
-            )
-            try:
-                response = session.post(api_url, headers=headers, json=payload, stream=True, timeout=timeout_seconds)
-                response.raise_for_status()
-            except Exception:
-                session.close()
-                raise
-
-            session_handle = session
-            response_handle = response
-
-            def stream_generator_huggingface():
-                try:
-                    for chunk in iter_sse_lines_requests(response_handle, decode_unicode=True, provider="huggingface"):
-                        yield chunk
-                    for tail in finalize_stream(response_handle, done_already=False):
-                        yield tail
-                finally:
-                    try:
-                        session_handle.close()
-                    except Exception:
-                        pass
-
-            return stream_generator_huggingface()
-        else: # Non-streaming
-            logging.debug(f"HuggingFace: Posting non-streaming request to {api_url}")
-            session = create_session_with_retries(
-                total=_safe_cast(hf_config.get('api_retries'), int, 3),
-                backoff_factor=_safe_cast(hf_config.get('api_retry_delay'), float, 1.0),
-                status_forcelist=[429, 500, 502, 503, 504],
-                allowed_methods=["POST"],
-            )
-            try:
-                response = session.post(api_url, headers=headers, json=payload, timeout=timeout_seconds)
-                response.raise_for_status()
-                try:
-                    return response.json()  # This should be an OpenAI compatible JSON response
-                finally:
-                    try:
-                        response.close()
-                    except Exception:
-                        pass
-            finally:
-                session.close()
-
-    except requests.exceptions.HTTPError as e:
-        status_code = getattr(e.response, 'status_code', 500)
-        error_text = getattr(e.response, 'text', str(e))
-        logging.error(f"HuggingFace API call failed to {api_url} with status {status_code}. Details: {repr(error_text[:500])}", exc_info=False)
-        if status_code == 401:
-            raise ChatAuthenticationError(provider="huggingface", message=f"Authentication failed. Detail: {error_text[:200]}")
-        elif status_code == 404: # Specifically handle 404 for URL/model issues
-            raise ChatBadRequestError(provider="huggingface", message=f"Endpoint or Model not found (404) at {api_url}. Detail: {error_text[:200]}")
-        elif status_code == 429:
-            raise ChatRateLimitError(provider="huggingface", message=f"Rate limit exceeded. Detail: {error_text[:200]}")
-        elif 400 <= status_code < 500: # Other 4xx
-            raise ChatBadRequestError(provider="huggingface", message=f"Bad request (Status {status_code}) to {api_url}. Detail: {error_text[:200]}")
-        else: # 5xx
-            raise ChatProviderError(provider="huggingface", message=f"Server error (Status {status_code}) from {api_url}. Detail: {error_text[:200]}", status_code=status_code)
-    except requests.exceptions.RequestException as e: # Covers DNS, Connection, Timeout errors
-        logging.error(f"HuggingFace API request failed to {api_url} (network error): {e}", exc_info=True)
-        raise ChatProviderError(provider="huggingface", message=f"Network error connecting to {api_url}: {e}", status_code=504) # 504 for timeout/gateway like
-    except Exception as e:
-        logging.error(f"HuggingFace API call to {api_url}: Unexpected error: {e}", exc_info=True)
-        if not isinstance(e, ChatAPIError): # Avoid re-wrapping known chat errors
-            raise ChatAPIError(provider="huggingface", message=f"Unexpected error in HuggingFace API call: {e}")
-        else:
-            raise # Re-raise if it's already a ChatAPIError subtype
-
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import huggingface_chat_handler
+    return huggingface_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        top_p=top_p,
+        top_k=top_k,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        num_return_sequences=num_return_sequences,
+        user=user,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
 
 def legacy_chat_with_mistral(
         input_data: List[Dict[str, Any]],
@@ -3923,119 +2630,25 @@ def legacy_chat_with_mistral(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    loaded_config_data = app_config or load_and_log_configs()
-    mistral_config = loaded_config_data.get('mistral_api', {})
-    final_api_key = api_key or mistral_config.get('api_key')
-    if not final_api_key:
-        raise ChatConfigurationError(provider="mistral", message="Mistral API Key required.")
-
-    # ... (logging key, model, temp, streaming, top_p setup) ...
-    logging.debug("Mistral: Using configured API key")
-    current_model = model or mistral_config.get('model', 'mistral-large-latest')  # or mistral-small, mistral-medium
-    current_temp = temp if temp is not None else _safe_cast(
-        mistral_config.get('temperature'), float, 0.1)  # Mistral defaults to 0.7
-    current_top_p = topp  # Mistral uses top_p
-    current_streaming_cfg = mistral_config.get('streaming', False)
-    current_streaming = streaming if streaming is not None else \
-        (str(current_streaming_cfg).lower() == 'true' if isinstance(current_streaming_cfg, str) else bool(
-            current_streaming_cfg))
-
-    current_max_tokens = max_tokens if max_tokens is not None else _safe_cast(mistral_config.get('max_tokens'), int)
-    current_safe_prompt = safe_prompt if safe_prompt is not None else bool(mistral_config.get('safe_prompt', False))
-
-    api_messages = []
-    # Mistral expects system message as the first message with role: system if provided
-    # However, their latest guidance often shows it as part of the first user message or specific instructions.
-    # For OpenAI compatibility, if system_message is given, and not already in input_data, prepend it.
-    has_system_in_input = any(msg.get("role") == "system" for msg in input_data)
-    if system_message and not has_system_in_input:
-        api_messages.append({"role": "system", "content": system_message})
-    api_messages.extend(input_data)
-
-    headers = {'Authorization': f'Bearer {final_api_key}', 'Content-Type': 'application/json',
-               'Accept': 'application/json'}
-    data = {"model": current_model, "messages": api_messages, "stream": current_streaming}
-
-    if current_temp is not None: data["temperature"] = current_temp
-    if current_top_p is not None: data["top_p"] = current_top_p
-    if current_max_tokens is not None: data["max_tokens"] = current_max_tokens
-    if random_seed is not None: data["random_seed"] = random_seed  # Mistral uses random_seed
-    if top_k is not None: data["top_k"] = top_k  # Mistral has top_k
-    if current_safe_prompt is not None: data["safe_prompt"] = current_safe_prompt  # Mistral specific
-    if tools is not None: data["tools"] = tools
-    if tool_choice == "none":
-        data["tool_choice"] = "none"
-    elif tool_choice is not None and tools is not None:
-        data["tool_choice"] = tool_choice  # "auto", "any", "none"
-    if response_format is not None: data["response_format"] = response_format  # {"type": "json_object"}
-
-    api_url = mistral_config.get('api_base_url', 'https://api.mistral.ai/v1').rstrip('/') + '/chat/completions'
-    data_metadata = _sanitize_payload_for_logging(data)
-    logging.debug(f"Mistral request metadata: {data_metadata}")
-
-    try:
-        if current_streaming:
-            session = create_session_with_retries(
-                total=_safe_cast(mistral_config.get('api_retries'), int, 3),
-                backoff_factor=_safe_cast(mistral_config.get('api_retry_delay'), float, 1.0),
-                status_forcelist=[429, 500, 502, 503, 504],
-                allowed_methods=["POST"],
-            )
-            try:
-                stream_timeout = _safe_cast(mistral_config.get('api_timeout'), float, 90.0)
-                response = session.post(api_url, headers=headers, json=data, stream=True, timeout=stream_timeout)
-                response.raise_for_status()
-            except Exception:
-                try:
-                    session.close()
-                except Exception:
-                    pass
-                raise
-
-            session_handle = session
-            response_handle = response
-
-            def stream_generator():
-                try:
-                    for chunk in iter_sse_lines_requests(response_handle, decode_unicode=True, provider="mistral"):
-                        yield chunk
-                    # Finalize with single [DONE] and close objects
-                    for tail in finalize_stream(response_handle, done_already=False):
-                        yield tail
-                finally:
-                    try:
-                        session_handle.close()
-                    except Exception:
-                        pass
-
-            return stream_generator()
-        else:
-            session = create_session_with_retries(
-                total=_safe_cast(mistral_config.get('api_retries'), int, 3),
-                backoff_factor=_safe_cast(mistral_config.get('api_retry_delay'), float, 1.0),
-                status_forcelist=[429, 500, 502, 503, 504],
-                allowed_methods=["POST"],
-            )
-            try:
-                response = session.post(api_url, headers=headers, json=data, timeout=120)
-                response.raise_for_status()
-                try:
-                    return response.json()
-                finally:
-                    try:
-                        response.close()
-                    except Exception:
-                        pass
-            finally:
-                try:
-                    session.close()
-                except Exception:
-                    pass
-    except requests.exceptions.HTTPError as e:
-        _raise_chat_error_from_http("mistral", e)
-    except Exception as e:  # ... error handling ...
-        raise ChatProviderError(provider="mistral", message=f"Unexpected error: {e}")
-
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import mistral_chat_handler
+    return mistral_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        topp=topp,
+        max_tokens=max_tokens,
+        random_seed=random_seed,
+        top_k=top_k,
+        safe_prompt=safe_prompt,
+        tools=tools,
+        tool_choice=tool_choice,
+        response_format=response_format,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
 
 def legacy_chat_with_openrouter(
         input_data: List[Dict[str, Any]],
@@ -4064,108 +2677,82 @@ def legacy_chat_with_openrouter(
         custom_prompt_arg: Optional[str] = None,
         app_config: Optional[Dict[str, Any]] = None,
 ):
-    loaded_config_data = app_config or load_and_log_configs()
-    openrouter_config = loaded_config_data.get('openrouter_api', {})
-    # ... (api key, model, temp, streaming setup) ...
-    final_api_key = api_key or openrouter_config.get('api_key')
-    if not final_api_key: raise ChatConfigurationError(provider='openrouter', message="OpenRouter API Key required.")
-    current_model = model or openrouter_config.get('model', 'z-ai/glm-4.6')
-    # ... other param resolutions ...
-    current_streaming_cfg = openrouter_config.get('streaming', False)
-    current_streaming = streaming if streaming is not None else \
-        (str(current_streaming_cfg).lower() == 'true' if isinstance(current_streaming_cfg, str) else bool(
-            current_streaming_cfg))
-
-    api_messages = []
-    if system_message: api_messages.append({"role": "system", "content": system_message})
-    api_messages.extend(input_data)
-
-    headers = {
-        "Authorization": f"Bearer {final_api_key}", "Content-Type": "application/json",
-        "HTTP-Referer": openrouter_config.get("site_url", "http://localhost"),  # OpenRouter specific
-        "X-Title": openrouter_config.get("site_name", "TLDW-API"),  # OpenRouter specific
-    }
-    data = {"model": current_model, "messages": api_messages, "stream": current_streaming}
-    # Add all other accepted parameters to data if they are not None
-    if temp is not None: data["temperature"] = temp
-    if top_p is not None: data["top_p"] = top_p
-    if top_k is not None: data["top_k"] = top_k
-    if min_p is not None: data["min_p"] = min_p  # OpenRouter uses min_p
-    if max_tokens is not None: data["max_tokens"] = max_tokens
-    if seed is not None: data["seed"] = seed
-    if stop is not None: data["stop"] = stop
-    if response_format is not None: data["response_format"] = response_format
-    if n is not None: data["n"] = n
-    if user is not None: data["user"] = user
-    if tools is not None: data["tools"] = tools
-    _apply_tool_choice(data, tools, tool_choice)
-    if logit_bias is not None: data["logit_bias"] = logit_bias
-    if presence_penalty is not None: data["presence_penalty"] = presence_penalty
-    if frequency_penalty is not None: data["frequency_penalty"] = frequency_penalty
-    if logprobs is not None: data["logprobs"] = logprobs
-    if top_logprobs is not None and data.get("logprobs"): data["top_logprobs"] = top_logprobs
-
-    api_url = openrouter_config.get('api_base_url', "https://openrouter.ai/api/v1").rstrip('/') + "/chat/completions"
-    data_metadata = _sanitize_payload_for_logging(data)
-    logging.debug(f"OpenRouter request metadata: {data_metadata}")
-
-    try:
-        if current_streaming:
-            session = create_session_with_retries(
-                total=_safe_cast(openrouter_config.get('api_retries'), int, 3),
-                backoff_factor=_safe_cast(openrouter_config.get('api_retry_delay'), float, 1.0),
-                status_forcelist=[429, 500, 502, 503, 504],
-                allowed_methods=["POST"],
-            )
-            stream_timeout = _safe_cast(openrouter_config.get('api_timeout'), float, 90.0)
-            try:
-                response = session.post(api_url, headers=headers, json=data, stream=True, timeout=stream_timeout)
-                response.raise_for_status()
-            except Exception:
-                session.close()
-                raise
-
-            def stream_generator():
-                try:
-                    for chunk in iter_sse_lines_requests(response, decode_unicode=True, provider="openrouter"):
-                        yield chunk
-                    for tail in finalize_stream(response, done_already=False):
-                        yield tail
-                finally:
-                    try:
-                        session.close()
-                    except Exception:
-                        pass
-            return stream_generator()
-        else:
-            session = create_session_with_retries(
-                total=_safe_cast(openrouter_config.get('api_retries'), int, 3),
-                backoff_factor=_safe_cast(openrouter_config.get('api_retry_delay'), float, 1.0),
-                status_forcelist=[429, 500, 502, 503, 504],
-                allowed_methods=["POST"],
-            )
-            try:
-                response = session.post(api_url, headers=headers, json=data, timeout=120)
-                response.raise_for_status()
-                try:
-                    return response.json()  # OpenRouter usually returns OpenAI compatible JSON
-                finally:
-                    try:
-                        response.close()
-                    except Exception:
-                        pass
-            finally:
-                try:
-                    session.close()
-                except Exception:
-                    pass
-    except requests.exceptions.HTTPError as e:
-        _raise_chat_error_from_http("openrouter", e)
-    except Exception as e:  # ... error handling ...
-        raise ChatProviderError(provider="openrouter", message=f"Unexpected error: {e}")
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import openrouter_chat_handler
+    return openrouter_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        streaming=streaming,
+        top_p=top_p,
+        top_k=top_k,
+        min_p=min_p,
+        max_tokens=max_tokens,
+        seed=seed,
+        stop=stop,
+        response_format=response_format,
+        n=n,
+        user=user,
+        tools=tools,
+        tool_choice=tool_choice,
+        logit_bias=logit_bias,
+        presence_penalty=presence_penalty,
+        frequency_penalty=frequency_penalty,
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
 
 
 def chat_with_moonshot(
+        input_data: List[Dict[str, Any]],  # Mapped from 'messages_payload'
+        model: Optional[str] = None,  # Mapped from 'model'
+        api_key: Optional[str] = None,  # Mapped from 'api_key'
+        system_message: Optional[str] = None,  # Mapped from 'system_message'
+        temp: Optional[float] = None,  # Mapped from 'temp' (temperature)
+        maxp: Optional[float] = None,  # Mapped from 'maxp' (top_p)
+        streaming: Optional[bool] = False,  # Mapped from 'streaming'
+        # Moonshot/OpenAI compatible parameters
+        frequency_penalty: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        n: Optional[int] = None,  # Number of completions
+        presence_penalty: Optional[float] = None,
+        response_format: Optional[Dict[str, str]] = None,  # e.g., {"type": "json_object"}
+        seed: Optional[int] = None,
+        stop: Optional[Union[str, List[str]]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        user: Optional[str] = None,  # User identifier
+        custom_prompt_arg: Optional[str] = None,  # Legacy
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import moonshot_chat_handler
+    return moonshot_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        maxp=maxp,
+        streaming=streaming,
+        frequency_penalty=frequency_penalty,
+        max_tokens=max_tokens,
+        n=n,
+        presence_penalty=presence_penalty,
+        response_format=response_format,
+        seed=seed,
+        stop=stop,
+        tools=tools,
+        tool_choice=tool_choice,
+        user=user,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
+
+
+def legacy_chat_with_moonshot(
         input_data: List[Dict[str, Any]],  # Mapped from 'messages_payload'
         model: Optional[str] = None,  # Mapped from 'model'
         api_key: Optional[str] = None,  # Mapped from 'api_key'
@@ -4430,6 +3017,40 @@ def chat_with_moonshot(
 
 
 def chat_with_zai(
+        input_data: List[Dict[str, Any]],  # Mapped from 'messages_payload'
+        model: Optional[str] = None,  # Mapped from 'model'
+        api_key: Optional[str] = None,  # Mapped from 'api_key'
+        system_message: Optional[str] = None,  # Mapped from 'system_message'
+        temp: Optional[float] = None,  # Mapped from 'temp' (temperature)
+        maxp: Optional[float] = None,  # Mapped from 'maxp' (top_p)
+        streaming: Optional[bool] = False,  # Mapped from 'streaming'
+        # Z.AI specific parameters
+        max_tokens: Optional[int] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        do_sample: Optional[bool] = None,
+        request_id: Optional[str] = None,
+        custom_prompt_arg: Optional[str] = None,  # Legacy
+        app_config: Optional[Dict[str, Any]] = None,
+):
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import zai_chat_handler
+    return zai_chat_handler(
+        input_data=input_data,
+        model=model,
+        api_key=api_key,
+        system_message=system_message,
+        temp=temp,
+        maxp=maxp,
+        streaming=streaming,
+        max_tokens=max_tokens,
+        tools=tools,
+        do_sample=do_sample,
+        request_id=request_id,
+        custom_prompt_arg=custom_prompt_arg,
+        app_config=app_config,
+    )
+
+
+def legacy_chat_with_zai(
         input_data: List[Dict[str, Any]],  # Mapped from 'messages_payload'
         model: Optional[str] = None,  # Mapped from 'model'
         api_key: Optional[str] = None,  # Mapped from 'api_key'

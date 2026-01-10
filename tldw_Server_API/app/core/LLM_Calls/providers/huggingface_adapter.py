@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Iterable, Optional, AsyncIterator, List
-import os
 
 from .base import ChatProvider
+from loguru import logger
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
 )
@@ -60,32 +60,12 @@ class HuggingFaceAdapter(ChatProvider):
             "app_config": request.get("app_config"),
         }
 
-    def _use_native_http(self) -> bool:
-        if os.getenv("PYTEST_CURRENT_TEST"):
-            try:
-                from tldw_Server_API.app.core.http_client import create_client as _default_factory
-                if http_client_factory is not _default_factory:
-                    return True
-                from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy
-                fn = getattr(_legacy, "chat_with_huggingface", None)
-                if callable(fn):
-                    mod = getattr(fn, "__module__", "") or ""
-                    fname = getattr(fn, "__name__", "") or ""
-                    if (mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod or fname.startswith("_fake")):
-                        return False
-            except Exception:
-                pass
-        enabled = (os.getenv("LLM_ADAPTERS_ENABLED") or "").strip().lower()
-        if enabled in {"0", "false", "no", "off"}:
-            return False
-        if enabled in {"1", "true", "yes", "on"}:
-            return True
-        v = (os.getenv("LLM_ADAPTERS_NATIVE_HTTP_HUGGINGFACE") or "").strip().lower()
-        if v in {"0", "false", "no", "off"}:
-            return False
-        if v in {"1", "true", "yes", "on"}:
-            return True
-        return True
+    @staticmethod
+    def _mask_headers(headers: Dict[str, str]) -> Dict[str, str]:
+        masked = {}
+        for k, v in headers.items():
+            masked[k] = "***" if k.lower() == "authorization" else v
+        return masked
 
     def _resolve_url_and_headers(self, request: Dict[str, Any]) -> Dict[str, Any]:
         cfg = (request.get("app_config") or {}).get("huggingface_api", {})
@@ -172,26 +152,6 @@ class HuggingFaceAdapter(ChatProvider):
             payload["user"] = request.get("user")
         return payload
 
-    def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
-        kwargs = self._to_handler_args(request)
-        if "stream" in request or "streaming" in request:
-            pass
-        else:
-            kwargs["streaming"] = None
-        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy
-        fn = getattr(_legacy, "chat_with_huggingface", None)
-        if callable(fn):
-            mod = getattr(fn, "__module__", "") or ""
-            fname = getattr(fn, "__name__", "") or ""
-            if (
-                mod.startswith("tldw_Server_API.tests")
-                or mod.startswith("tests")
-                or ".tests." in mod
-                or fname.startswith("_fake")
-            ):
-                return fn(**kwargs)  # type: ignore[misc]
-        return _legacy.legacy_chat_with_huggingface(**kwargs)
-
     def normalize_error(self, exc: Exception):  # type: ignore[override]
         from tldw_Server_API.app.core.LLM_Calls.error_utils import (
             get_http_status_from_exception,
@@ -235,49 +195,38 @@ class HuggingFaceAdapter(ChatProvider):
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
         request = validate_payload(self.name, request or {})
-        if self._use_native_http():
-            info = self._resolve_url_and_headers(request)
-            url = info["url"]
-            headers = info["headers"]
-            payload = self._build_payload(request)
-            payload["stream"] = True
-            try:
-                resolved_timeout = self._resolve_timeout(request, timeout)
-                with http_client_factory(timeout=resolved_timeout) as client:
-                    with client.stream("POST", url, headers=headers, json=payload) as resp:
-                        resp.raise_for_status()
-                        seen_done = False
-                        for raw in resp.iter_lines():
-                            if not raw:
-                                continue
-                            try:
-                                line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
-                            except Exception:
-                                line = str(raw)
-                            if is_done_line(line):
-                                if not seen_done:
-                                    seen_done = True
-                                    yield sse_done()
-                                continue
-                            normalized = normalize_provider_line(line)
-                            if normalized is not None:
-                                yield normalized
-                        for tail in finalize_stream(response=resp, done_already=seen_done):
-                            yield tail
-                return
-            except Exception as e:
-                raise self.normalize_error(e)
-
-        kwargs = self._to_handler_args(request)
-        kwargs["streaming"] = True
-        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy
-        fn = getattr(_legacy, "chat_with_huggingface", None)
-        if callable(fn):
-            mod = getattr(fn, "__module__", "") or ""
-            fname = getattr(fn, "__name__", "") or ""
-            if (os.getenv("PYTEST_CURRENT_TEST") or mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod or fname.startswith("_fake")):
-                return fn(**kwargs)  # type: ignore[misc]
-        return _legacy.legacy_chat_with_huggingface(**kwargs)
+        info = self._resolve_url_and_headers(request)
+        url = info["url"]
+        headers = info["headers"]
+        payload = self._build_payload(request)
+        payload["stream"] = True
+        try:
+            resolved_timeout = self._resolve_timeout(request, timeout)
+            logger.debug("HuggingFace headers: {}", self._mask_headers(headers))
+            with http_client_factory(timeout=resolved_timeout) as client:
+                with client.stream("POST", url, headers=headers, json=payload) as resp:
+                    resp.raise_for_status()
+                    seen_done = False
+                    for raw in resp.iter_lines():
+                        if not raw:
+                            continue
+                        try:
+                            line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                        except Exception:
+                            line = str(raw)
+                        if is_done_line(line):
+                            if not seen_done:
+                                seen_done = True
+                                yield sse_done()
+                            continue
+                        normalized = normalize_provider_line(line)
+                        if normalized is not None:
+                            yield normalized
+                    for tail in finalize_stream(response=resp, done_already=seen_done):
+                        yield tail
+            return
+        except Exception as e:
+            raise self.normalize_error(e)
 
     async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
         return self.chat(request, timeout=timeout)
@@ -289,30 +238,17 @@ class HuggingFaceAdapter(ChatProvider):
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
         request = validate_payload(self.name, request or {})
-        if self._use_native_http():
-            info = self._resolve_url_and_headers(request)
-            url = info["url"]
-            headers = info["headers"]
-            payload = self._build_payload(request)
-            payload["stream"] = False
-            try:
-                resolved_timeout = self._resolve_timeout(request, timeout)
-                with http_client_factory(timeout=resolved_timeout) as client:
-                    resp = client.post(url, headers=headers, json=payload)
-                    resp.raise_for_status()
-                    return resp.json()
-            except Exception as e:
-                raise self.normalize_error(e)
-
-        # Legacy delegate
-        kwargs = self._to_handler_args(request)
-        if "stream" not in request and "streaming" not in request:
-            kwargs["streaming"] = None
-        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy
-        fn = getattr(_legacy, "chat_with_huggingface", None)
-        if callable(fn):
-            mod = getattr(fn, "__module__", "") or ""
-            fname = getattr(fn, "__name__", "") or ""
-            if (os.getenv("PYTEST_CURRENT_TEST") or mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod or fname.startswith("_fake")):
-                return fn(**kwargs)  # type: ignore[misc]
-        return _legacy.legacy_chat_with_huggingface(**kwargs)
+        info = self._resolve_url_and_headers(request)
+        url = info["url"]
+        headers = info["headers"]
+        payload = self._build_payload(request)
+        payload["stream"] = False
+        try:
+            resolved_timeout = self._resolve_timeout(request, timeout)
+            logger.debug("HuggingFace headers: {}", self._mask_headers(headers))
+            with http_client_factory(timeout=resolved_timeout) as client:
+                resp = client.post(url, headers=headers, json=payload)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:
+            raise self.normalize_error(e)

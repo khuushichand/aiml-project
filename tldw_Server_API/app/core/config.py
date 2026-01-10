@@ -30,6 +30,28 @@ def _safe_json_dict(raw: Optional[str]) -> dict:
         return {}
     return parsed if isinstance(parsed, dict) else {}
 
+
+def _int_env_or_cfg(
+    env_value: Optional[object],
+    cfg_value: Optional[object],
+    default: int,
+) -> int:
+    def _clean(raw: Optional[object]) -> Optional[str]:
+        if raw is None:
+            return None
+        text = str(raw).strip()
+        if not text or text.lower() == "none":
+            return None
+        return text
+
+    env_text = _clean(env_value)
+    if env_text is not None:
+        return int(env_text)
+    cfg_text = _clean(cfg_value)
+    if cfg_text is not None:
+        return int(cfg_text)
+    return default
+
 # Config.txt adapter cache + metadata
 _CONFIG_PARSER_CACHE: Optional[configparser.ConfigParser] = None
 _CONFIG_SOURCE_METADATA: dict[str, Any] = {
@@ -1265,7 +1287,11 @@ def load_settings():
                     )
                 ),
                 "parent_max_tokens": (
-                    int(_envs.get("RAG_PARENT_MAX_TOKENS")) if _envs.get("RAG_PARENT_MAX_TOKENS") is not None else int(str(_cfg.get('parent_max_tokens', '1200')) or 1200)
+                    _int_env_or_cfg(
+                        _envs.get("RAG_PARENT_MAX_TOKENS"),
+                        _cfg.get("parent_max_tokens", "1200"),
+                        1200,
+                    )
                 ),
                 "include_sibling_chunks": (
                     (_envs.get("RAG_INCLUDE_SIBLING_CHUNKS").lower() == "true") if _envs.get("RAG_INCLUDE_SIBLING_CHUNKS") is not None else (
@@ -1273,7 +1299,11 @@ def load_settings():
                     )
                 ),
                 "sibling_window": (
-                    int(_envs.get("RAG_SIBLING_WINDOW")) if _envs.get("RAG_SIBLING_WINDOW") is not None else int(str(_cfg.get('sibling_window', '1')) or 1)
+                    _int_env_or_cfg(
+                        _envs.get("RAG_SIBLING_WINDOW"),
+                        _cfg.get("sibling_window", "1"),
+                        1,
+                    )
                 ),
             })(
                 {

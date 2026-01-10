@@ -18,7 +18,44 @@ import time
 import pytest
 import httpx
 
-from .fixtures import api_client, create_test_audio, cleanup_test_file, AssertionHelpers
+from .fixtures import api_client, create_test_audio, cleanup_test_file, AssertionHelpers, has_openai_api_key
+
+
+def _should_try_openai_fallback(response: httpx.Response) -> bool:
+    if response.status_code in (401, 403):
+        return False
+    return response.status_code >= 400
+
+
+def _post_tts_with_fallback(api_client, payload: dict) -> httpx.Response:
+    response = api_client.client.post("/api/v1/audio/speech", json=payload)
+    if not _should_try_openai_fallback(response):
+        return response
+    if payload.get("model") != "kokoro":
+        return response
+    if not has_openai_api_key():
+        return response
+    fallback = dict(payload)
+    fallback["model"] = "tts-1"
+    fallback["voice"] = "alloy"
+    return api_client.client.post("/api/v1/audio/speech", json=fallback)
+
+
+def _post_stt_with_fallback(api_client, wav_path: str, data: dict) -> httpx.Response:
+    with open(wav_path, "rb") as f:
+        files = {"file": ("sample.wav", f, "audio/wav")}
+        response = api_client.client.post("/api/v1/audio/transcriptions", files=files, data=data)
+        if response.status_code != 503:
+            return response
+        if data.get("model") not in {"whisper-1", "whisper"}:
+            return response
+        fallback = dict(data)
+        fallback["model"] = "parakeet-mlx"
+        try:
+            f.seek(0)
+        except Exception:
+            return response
+        return api_client.client.post("/api/v1/audio/transcriptions", files=files, data=fallback)
 
 
 @pytest.mark.critical
@@ -26,18 +63,9 @@ def test_stt_file_flow_transcription_and_optional_search(api_client):
     # Generate short WAV file
     wav_path = create_test_audio()
     try:
-        files = {"file": ("sample.wav", open(wav_path, "rb"), "audio/wav")}
         data = {"model": "whisper-1", "language": "en", "response_format": "json"}
-
-        try:
-            r = api_client.client.post("/api/v1/audio/transcriptions", files=files, data=data)
-        finally:
-            try:
-                files["file"][1].close()
-            except Exception:
-                pass
-
-        if r.status_code in (400, 401, 403, 404, 413, 429, 500, 501):
+        r = _post_stt_with_fallback(api_client, wav_path, data)
+        if r.status_code in (400, 401, 403, 404, 413, 429, 500, 501, 503):
             pytest.skip(f"STT not available/configured: {r.status_code}")
         r.raise_for_status()
         body = r.json()
@@ -91,13 +119,13 @@ def test_tts_voices_catalog_and_nonstream_synthesis(api_client):
 
     # Non-stream TTS synthesis
     payload = {
-        "model": "tts-1",
+        "model": "kokoro",
         "input": "This is a short synthesis test.",
-        "voice": "alloy",
+        "voice": "af_bella",
         "response_format": "mp3",
-        # stream omitted => non-stream
+        "stream": False,
     }
-    r = api_client.client.post("/api/v1/audio/speech", json=payload)
+    r = _post_tts_with_fallback(api_client, payload)
     if r.status_code in (400, 401, 403, 404, 422, 429, 500, 501):
         pytest.skip(f"TTS synthesis not available/configured: {r.status_code}")
     # Content-Type should be audio/* or octet-stream fallback

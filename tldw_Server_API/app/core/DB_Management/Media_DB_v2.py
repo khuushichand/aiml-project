@@ -10723,6 +10723,61 @@ class MediaDatabase:
             logging.error(f"Unexpected error during DB pagination: {e}", exc_info=True)
             raise DatabaseError(f"Unexpected error during DB pagination: {e}") from e
 
+    def get_paginated_trash_list(self, page: int = 1, results_per_page: int = 10) -> Tuple[
+        List[Dict[str, Any]], int, int, int]:
+        """
+        Fetches a paginated list of trashed media items (id, title, type, uuid).
+
+        Filters for items where deleted = 0 and is_trash = 1.
+        Returns data suitable for constructing MediaListItem objects.
+        """
+        if page < 1:
+            raise ValueError("Page number must be 1 or greater.")
+        if results_per_page < 1:
+            raise ValueError("Results per page must be 1 or greater.")
+
+        logging.debug(
+            f"DB: Fetching paginated trash list: page={page}, rpp={results_per_page} from {self.db_path_str}"
+        )
+        offset = (page - 1) * results_per_page
+
+        try:
+            count_cursor = self.execute_query(
+                "SELECT COUNT(*) AS total_items FROM Media WHERE deleted = 0 AND is_trash = 1"
+            )
+            count_row = count_cursor.fetchone()
+            total_items = count_row["total_items"] if count_row else 0
+
+            results_data: List[Dict[str, Any]] = []
+            if total_items > 0:
+                items_cursor = self.execute_query(
+                    """
+                    SELECT id, title, type, uuid
+                    FROM Media
+                    WHERE deleted = 0
+                      AND is_trash = 1
+                    ORDER BY trash_date DESC, last_modified DESC, id DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (results_per_page, offset),
+                )
+                results_data = [dict(row) for row in items_cursor.fetchall()]
+
+            total_pages = ceil(total_items / results_per_page) if total_items > 0 else 0
+            if page > total_pages and total_pages == 0:
+                results_data = []
+
+            return results_data, total_pages, page, total_items
+
+        except DatabaseError:
+            raise
+        except sqlite3.Error as e:
+            logging.error(f"SQLite error during trash pagination: {e}", exc_info=True)
+            raise DatabaseError(f"Failed trash pagination query: {e}") from e
+        except Exception as e:
+            logging.error(f"Unexpected error during trash pagination: {e}", exc_info=True)
+            raise DatabaseError(f"Unexpected error during trash pagination: {e}") from e
+
     def get_media_by_id(self, media_id: int, include_deleted=False, include_trash=False) -> Optional[Dict]:
         """
         Retrieves a single media item by its primary key (ID).

@@ -678,29 +678,126 @@ class PromptsDatabase:
             logging.error(f"Failed FTS update PromptKeyword ID {keyword_id}: {e}", exc_info=True)
             raise DatabaseError(f"Failed FTS update PromptKeyword ID {keyword_id}: {e}") from e
 
-    # --- Version History (basic) ---
-    def get_prompt_versions(self, prompt_id: int) -> List[Dict[str, Any]]:
-        """Return a basic version history for a prompt based on its current version.
-
-        This reconstructs a simple list of versions [1..current_version]. It does not include diffs.
-        """
+    # --- Version History ---
+    def _fetch_prompt_versions_from_sync_log(self, prompt_uuid: str) -> List[Dict[str, Any]]:
+        """Build version entries for a prompt using sync_log snapshots."""
+        if not prompt_uuid:
+            return []
         try:
-            cursor = self.execute_query("SELECT version FROM Prompts WHERE id = ? AND deleted = 0", (prompt_id,))
-            row = cursor.fetchone()
-            if not row:
+            cursor = self.execute_query(
+                """SELECT change_id, version, timestamp, payload
+                   FROM sync_log
+                   WHERE entity = 'Prompts'
+                     AND entity_uuid = ?
+                     AND operation IN ('create', 'update')
+                   ORDER BY version ASC, change_id ASC""",
+                (prompt_uuid,)
+            )
+            versions_by_number: Dict[int, Dict[str, Any]] = {}
+            for row in cursor.fetchall():
+                row_dict = dict(row)
+                ver = int(row_dict['version']) if isinstance(row_dict.get('version'), (int,)) else None
+                if ver is None or ver in versions_by_number:
+                    continue
+                payload_raw = row_dict.get('payload')
+                payload: Optional[Dict[str, Any]] = None
+                if payload_raw:
+                    try:
+                        payload = json.loads(payload_raw) if isinstance(payload_raw, str) else payload_raw
+                    except json.JSONDecodeError:
+                        payload = None
+                entry: Dict[str, Any] = {
+                    "version": ver,
+                    "created_at": row_dict.get("timestamp"),
+                    "comment": None,
+                }
+                if isinstance(payload, dict):
+                    entry.update({
+                        "name": payload.get("name"),
+                        "author": payload.get("author"),
+                        "details": payload.get("details"),
+                        "system_prompt": payload.get("system_prompt"),
+                        "user_prompt": payload.get("user_prompt"),
+                    })
+                versions_by_number[ver] = entry
+            return [versions_by_number[v] for v in sorted(versions_by_number)]
+        except (DatabaseError, sqlite3.Error) as e:
+            logging.error(f"Error fetching version history for prompt UUID {prompt_uuid}: {e}")
+            return []
+
+    def get_prompt_versions(self, prompt_id: int) -> List[Dict[str, Any]]:
+        """Return version history for a prompt, enriched by sync_log when available."""
+        try:
+            prompt = self.fetch_prompt_details(prompt_id, include_deleted=True)
+            if not prompt:
                 return []
-            current_version = int(row['version']) if isinstance(row['version'], (int,)) else 1
-            versions = []
-            for v in range(1, max(1, current_version) + 1):
-                versions.append({
-                    'version': v,
-                    'created_at': None,
-                    'comment': None,
-                })
-            return versions
+            versions = self._fetch_prompt_versions_from_sync_log(prompt.get("uuid"))
+            if versions:
+                return versions
+            current_version = int(prompt.get("version", 1)) if isinstance(prompt.get("version"), (int,)) else 1
+            return [
+                {"version": v, "created_at": None, "comment": None}
+                for v in range(1, max(1, current_version) + 1)
+            ]
         except (DatabaseError, sqlite3.Error) as e:
             logging.error(f"Error building version history for prompt {prompt_id}: {e}")
             return []
+
+    def _fetch_prompt_version_payload(self, prompt_uuid: str, version: int) -> Optional[Dict[str, Any]]:
+        """Fetch a specific prompt version payload from sync_log."""
+        if not prompt_uuid:
+            return None
+        try:
+            cursor = self.execute_query(
+                """SELECT payload
+                   FROM sync_log
+                   WHERE entity = 'Prompts'
+                     AND entity_uuid = ?
+                     AND operation IN ('create', 'update')
+                     AND version = ?
+                   ORDER BY change_id ASC
+                   LIMIT 1""",
+                (prompt_uuid, version)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            row_dict = dict(row)
+            payload_raw = row_dict.get('payload')
+            if not payload_raw:
+                return None
+            if isinstance(payload_raw, dict):
+                return payload_raw
+            try:
+                return json.loads(payload_raw)
+            except json.JSONDecodeError:
+                return None
+        except (DatabaseError, sqlite3.Error) as e:
+            logging.error(f"Error fetching prompt version payload for {prompt_uuid} v{version}: {e}")
+            return None
+
+    def restore_prompt_version(self, prompt_id: int, version: int) -> Tuple[Optional[str], str]:
+        """Restore a prompt to a previous version using sync_log snapshots."""
+        if not isinstance(version, int) or version < 1:
+            raise InputError("Version must be a positive integer.")
+        prompt = self.fetch_prompt_details(prompt_id, include_deleted=True)
+        if not prompt:
+            raise InputError(f"Prompt with ID {prompt_id} not found.")
+        payload = self._fetch_prompt_version_payload(prompt.get("uuid"), version)
+        if not payload:
+            raise InputError(f"Version {version} not found for prompt {prompt_id}.")
+
+        update_data: Dict[str, Any] = {}
+        for field in ("name", "author", "details", "system_prompt", "user_prompt"):
+            if field in payload:
+                update_data[field] = payload.get(field)
+        if "keywords" in payload and isinstance(payload.get("keywords"), list):
+            update_data["keywords"] = payload.get("keywords")
+
+        if not update_data:
+            return None, f"No snapshot data available for version {version}."
+
+        return self.update_prompt_by_id(int(prompt.get("id")), update_data)
 
     def _delete_fts_prompt_keyword(self, conn: sqlite3.Connection, keyword_id: int):
         try:
@@ -1281,12 +1378,40 @@ class PromptsDatabase:
             logger.error(f"Error fetching prompt by name '{name}': {e}")
             raise DatabaseError(f"Failed fetch prompt by name: {e}") from e
 
-    def list_prompts(self, page: int = 1, per_page: int = 10, include_deleted: bool = False) -> Tuple[List[Dict], int, int, int]:
-        if page < 1: raise ValueError("Page number must be >= 1")
-        if per_page < 1: raise ValueError("Per page must be >= 1")
+    def list_prompts(
+        self,
+        page: int = 1,
+        per_page: int = 10,
+        include_deleted: bool = False,
+        sort_by: str = "last_modified",
+        sort_order: str = "desc"
+    ) -> Tuple[List[Dict], int, int, int]:
+        if page < 1:
+            raise ValueError("Page number must be >= 1")
+        if per_page < 1:
+            raise ValueError("Per page must be >= 1")
+        sort_key = (sort_by or "last_modified").strip().lower()
+        sort_dir = (sort_order or "desc").strip().lower()
+        allowed_sort = {
+            "last_modified": "last_modified",
+            "name": "name",
+            "author": "author",
+            "id": "id",
+        }
+        if sort_key not in allowed_sort:
+            raise ValueError(f"Unsupported sort_by value: {sort_by}")
+        if sort_dir not in {"asc", "desc"}:
+            raise ValueError(f"Unsupported sort_order value: {sort_order}")
         offset = (page - 1) * per_page
 
         where_clause = "WHERE deleted = 0" if not include_deleted else ""
+        order_col = allowed_sort[sort_key]
+        order_dir = "ASC" if sort_dir == "asc" else "DESC"
+        tie_breaker = f"id {order_dir}"
+        if sort_key in {"name", "author"}:
+            order_clause = f"{order_col} COLLATE NOCASE {order_dir}, {tie_breaker}"
+        else:
+            order_clause = f"{order_col} {order_dir}, {tie_breaker}"
 
         try:
             with self.transaction() as conn:
@@ -1298,7 +1423,7 @@ class PromptsDatabase:
                 if total_items > 0:
                     # Select desired fields, e.g., id, name, uuid, author
                     query = f"""SELECT id, name, uuid, author, details, last_modified FROM Prompts
-                                {where_clause} ORDER BY last_modified DESC, id DESC
+                                {where_clause} ORDER BY {order_clause}
                                 LIMIT ? OFFSET ?"""
                     cursor.execute(query, (per_page, offset))
                     results_data = [dict(row) for row in cursor.fetchall()]

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 """
-Adapter-backed handler shims for provider_config dispatch tables.
+Adapter-backed handler utilities for provider call sites.
 
-These preserve legacy handler signatures while optionally routing calls
-through the adapter registry when enabled by feature flags.
+These preserve legacy handler signatures while routing calls through the
+adapter registry. They exist for compatibility with older call sites and tests
+that still use the handler-style signatures.
 """
 
 import os
@@ -15,72 +16,8 @@ from loguru import logger
 
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.sse import sse_data, sse_done
-# Import legacy implementations under explicit names to avoid recursion when
+# Import compatibility call sites under explicit names to avoid recursion when
 # top-level names become adapter-backed wrappers.
-from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import (
-    legacy_chat_with_openai as _legacy_chat_with_openai,
-    legacy_chat_with_anthropic as _legacy_chat_with_anthropic,
-    legacy_chat_with_groq as _legacy_chat_with_groq,
-    legacy_chat_with_openrouter as _legacy_chat_with_openrouter,
-    legacy_chat_with_google as _legacy_chat_with_google,
-    legacy_chat_with_mistral as _legacy_chat_with_mistral,
-    legacy_chat_with_qwen as _legacy_chat_with_qwen,
-    legacy_chat_with_deepseek as _legacy_chat_with_deepseek,
-    legacy_chat_with_huggingface as _legacy_chat_with_huggingface,
-    chat_with_moonshot as _legacy_chat_with_moonshot,
-    chat_with_zai as _legacy_chat_with_zai,
-)
-from tldw_Server_API.app.core.LLM_Calls.legacy_local_calls import (
-    legacy_chat_with_custom_openai as _legacy_chat_with_custom_openai,
-    legacy_chat_with_custom_openai_2 as _legacy_chat_with_custom_openai_2,
-    chat_with_local_llm as _legacy_chat_with_local_llm,
-    chat_with_llama as _legacy_chat_with_llama,
-    chat_with_kobold as _legacy_chat_with_kobold,
-    chat_with_oobabooga as _legacy_chat_with_oobabooga,
-    chat_with_tabbyapi as _legacy_chat_with_tabbyapi,
-    chat_with_vllm as _legacy_chat_with_vllm,
-    chat_with_ollama as _legacy_chat_with_ollama,
-    chat_with_aphrodite as _legacy_chat_with_aphrodite,
-)
-
-# Legacy async handlers for fallback when adapters are disabled or unavailable
-from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import (
-    legacy_chat_with_openai_async as _legacy_chat_with_openai_async,
-    legacy_chat_with_groq_async as _legacy_chat_with_groq_async,
-    legacy_chat_with_anthropic_async as _legacy_chat_with_anthropic_async,
-    legacy_chat_with_openrouter_async as _legacy_chat_with_openrouter_async,
-)
-
-
-def _flag_enabled(*names: str) -> bool:
-    seen_any = False
-    for n in names:
-        v = os.getenv(n)
-        if v is None:
-            continue
-        seen_any = True
-        v_norm = v.strip().lower()
-        if v_norm in {"0", "false", "no", "off"}:
-            return False
-        if v_norm in {"1", "true", "yes", "on"}:
-            return True
-    # Default to enabled when no flags are set.
-    return not seen_any
-
-
-def _http_factory_patched(provider_module: str) -> bool:
-    """Return True if the provider's http_client_factory has been monkeypatched.
-
-    This allows tests to steer shims to the adapter path without setting env flags.
-    """
-    try:
-        from importlib import import_module
-        from tldw_Server_API.app.core.http_client import create_client as _default_factory
-        mod = import_module(provider_module)
-        factory = getattr(mod, "http_client_factory", None)
-        return callable(factory) and factory is not _default_factory
-    except Exception:
-        return False
 
 
 def openai_chat_handler(
@@ -109,16 +46,16 @@ def openai_chat_handler(
     **kwargs: Any,
 ):
     """
-    Legacy-compatible OpenAI handler shim that optionally delegates to the adapter.
+    Legacy-compatible OpenAI handler wrapper that delegates to the adapter.
 
-    Accepts extra kwargs (e.g., 'topp') to remain resilient to PROVIDER_PARAM_MAP drift.
+    Accepts extra kwargs (e.g., 'topp') to remain resilient to param alias drift.
     """
     # Honor explicit test monkeypatching of legacy chat_with_openai to avoid network
     # Only delegate when the target appears to come from a tests module or is a
     # clearly marked test double (function name starting with "_fake"). This avoids
     # infinite recursion when the public function simply forwards back to this shim.
     try:
-        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy_mod
+        from tldw_Server_API.app.core.LLM_Calls import chat_calls as _legacy_mod
         _patched = getattr(_legacy_mod, "chat_with_openai", None)
         if callable(_patched):
             _modname = getattr(_patched, "__module__", "") or ""
@@ -130,7 +67,7 @@ def openai_chat_handler(
                 or _fname.startswith("_fake")
             ):
                 logger.debug(
-                    "adapter_shims.openai_chat_handler: using monkeypatched chat_with_openai from {}",
+                    "adapter_calls.openai_chat_handler: using monkeypatched chat_with_openai from {}",
                     _modname,
                 )
                 return _patched(
@@ -160,34 +97,6 @@ def openai_chat_handler(
     except Exception:
         pass
 
-    # Always route via adapter; legacy path pruned
-    use_adapter = True
-    if not use_adapter:
-        return _legacy_chat_with_openai(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            maxp=maxp if maxp is not None else kwargs.get("topp"),
-            streaming=streaming,
-            frequency_penalty=frequency_penalty,
-            logit_bias=logit_bias,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            max_tokens=max_tokens,
-            n=n,
-            presence_penalty=presence_penalty,
-            response_format=response_format,
-            seed=seed,
-            stop=stop,
-            tools=tools,
-            tool_choice=tool_choice,
-            user=user,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
-
     # Route via adapter
     registry = get_registry()
     adapter = registry.get_adapter("openai")
@@ -197,33 +106,9 @@ def openai_chat_handler(
 
         registry.register_adapter("openai", OpenAIAdapter)
         adapter = registry.get_adapter("openai")
-
     if adapter is None:
-        logger.warning("OpenAI adapter unavailable; falling back to legacy handler")
-        return _legacy_chat_with_openai(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            maxp=maxp if maxp is not None else kwargs.get("topp"),
-            streaming=streaming,
-            frequency_penalty=frequency_penalty,
-            logit_bias=logit_bias,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            max_tokens=max_tokens,
-            n=n,
-            presence_penalty=presence_penalty,
-            response_format=response_format,
-            seed=seed,
-            stop=stop,
-            tools=tools,
-            tool_choice=tool_choice,
-            user=user,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="openai", message="OpenAI adapter unavailable")
 
     # Note: Previously, non-streaming calls under pytest attempted to route
     # through a legacy requests.Session to preserve certain logging behavior.
@@ -307,7 +192,7 @@ def bedrock_chat_handler(
 
     if adapter is None:
         # Fallback to legacy function if adapter cannot be initialized
-        from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import legacy_chat_with_bedrock as _legacy_bedrock
+        from tldw_Server_API.app.core.LLM_Calls.chat_calls import legacy_chat_with_bedrock as _legacy_bedrock
         return _legacy_bedrock(
             input_data=input_data,
             model=model,
@@ -402,7 +287,7 @@ async def bedrock_chat_handler_async(
 
     if adapter is None:
         # Fallback to sync legacy call if adapter path unavailable
-        from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import legacy_chat_with_bedrock as _legacy_bedrock
+        from tldw_Server_API.app.core.LLM_Calls.chat_calls import legacy_chat_with_bedrock as _legacy_bedrock
         return _legacy_bedrock(
             input_data=input_data,
             model=model,
@@ -477,7 +362,7 @@ def anthropic_chat_handler(
 ):
     # Honor monkeypatched legacy callable in tests to avoid network or adapter path
     try:
-        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy_mod
+        from tldw_Server_API.app.core.LLM_Calls import chat_calls as _legacy_mod
         _patched = getattr(_legacy_mod, "chat_with_anthropic", None)
         if callable(_patched):
             _modname = getattr(_patched, "__module__", "") or ""
@@ -489,7 +374,7 @@ def anthropic_chat_handler(
                 or _fname.startswith("_fake")
             ):
                 logger.debug(
-                    "adapter_shims.anthropic_chat_handler: using monkeypatched legacy chat_with_anthropic from {}",
+                    "adapter_calls.anthropic_chat_handler: using monkeypatched legacy chat_with_anthropic from {}",
                     _modname,
                 )
                 return _patched(
@@ -510,25 +395,7 @@ def anthropic_chat_handler(
     except Exception:
         pass
 
-    # Always route via adapter; legacy path pruned
-    logger.debug("adapter_shims.anthropic_chat_handler: selected path=adapter (sync)")
-    use_adapter = True
-    if not use_adapter:
-        return _legacy_chat_with_anthropic(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_prompt=system_prompt,
-            temp=temp,
-            topp=topp,
-            topk=topk,
-            streaming=streaming,
-            max_tokens=max_tokens,
-            stop_sequences=stop_sequences,
-            tools=tools,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
+    logger.debug("adapter_calls.anthropic_chat_handler: selected path=adapter (sync)")
 
     registry = get_registry()
     adapter = registry.get_adapter("anthropic")
@@ -537,22 +404,8 @@ def anthropic_chat_handler(
         registry.register_adapter("anthropic", AnthropicAdapter)
         adapter = registry.get_adapter("anthropic")
     if adapter is None:
-        logger.debug("adapter_shims.anthropic_chat_handler: adapter unavailable; using legacy")
-        return _legacy_chat_with_anthropic(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_prompt=system_prompt,
-            temp=temp,
-            topp=topp,
-            topk=topk,
-            streaming=streaming,
-            max_tokens=max_tokens,
-            stop_sequences=stop_sequences,
-            tools=tools,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="anthropic", message="Anthropic adapter unavailable")
     request: Dict[str, Any] = {
         "messages": input_data,
         "model": model,
@@ -563,6 +416,57 @@ def anthropic_chat_handler(
         "top_k": topk,
         "max_tokens": max_tokens,
         "stop": stop_sequences,
+        "tools": tools,
+        "custom_prompt_arg": custom_prompt_arg,
+        "app_config": app_config,
+    }
+    if streaming is not None:
+        request["stream"] = bool(streaming)
+    return adapter.stream(request) if streaming else adapter.chat(request)
+
+
+def cohere_chat_handler(
+    input_data: List[Dict[str, Any]],
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    system_prompt: Optional[str] = None,
+    temp: Optional[float] = None,
+    streaming: Optional[bool] = False,
+    topp: Optional[float] = None,
+    topk: Optional[int] = None,
+    max_tokens: Optional[int] = None,
+    stop_sequences: Optional[List[str]] = None,
+    seed: Optional[int] = None,
+    num_generations: Optional[int] = None,
+    frequency_penalty: Optional[float] = None,
+    presence_penalty: Optional[float] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    custom_prompt_arg: Optional[str] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+):
+    registry = get_registry()
+    adapter = registry.get_adapter("cohere")
+    if adapter is None:
+        from tldw_Server_API.app.core.LLM_Calls.providers.cohere_adapter import CohereAdapter
+        registry.register_adapter("cohere", CohereAdapter)
+        adapter = registry.get_adapter("cohere")
+    if adapter is None:
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="cohere", message="Cohere adapter unavailable")
+    request: Dict[str, Any] = {
+        "messages": input_data,
+        "model": model,
+        "api_key": api_key,
+        "system_message": system_prompt,
+        "temperature": temp,
+        "top_p": topp,
+        "top_k": topk,
+        "max_tokens": max_tokens,
+        "stop": stop_sequences,
+        "seed": seed,
+        "num_generations": num_generations,
+        "frequency_penalty": frequency_penalty,
+        "presence_penalty": presence_penalty,
         "tools": tools,
         "custom_prompt_arg": custom_prompt_arg,
         "app_config": app_config,
@@ -593,58 +497,16 @@ def moonshot_chat_handler(
     custom_prompt_arg: Optional[str] = None,
     app_config: Optional[Dict[str, Any]] = None,
 ):
-    use_adapter = _flag_enabled("LLM_ADAPTERS_MOONSHOT", "LLM_ADAPTERS_ENABLED")
-    if not use_adapter:
-        return _legacy_chat_with_moonshot(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            maxp=maxp,
-            streaming=streaming,
-            frequency_penalty=frequency_penalty,
-            max_tokens=max_tokens,
-            n=n,
-            presence_penalty=presence_penalty,
-            response_format=response_format,
-            seed=seed,
-            stop=stop,
-            tools=tools,
-            tool_choice=tool_choice,
-            user=user,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
     registry = get_registry()
     adapter = registry.get_adapter("moonshot")
     if adapter is None:
-        from tldw_Server_API.app.core.LLM_Calls.providers.legacy_adapters import MoonshotAdapter
+        from tldw_Server_API.app.core.LLM_Calls.providers.compat_adapters import MoonshotAdapter
 
         registry.register_adapter("moonshot", MoonshotAdapter)
         adapter = registry.get_adapter("moonshot")
     if adapter is None:
-        return _legacy_chat_with_moonshot(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            maxp=maxp,
-            streaming=streaming,
-            frequency_penalty=frequency_penalty,
-            max_tokens=max_tokens,
-            n=n,
-            presence_penalty=presence_penalty,
-            response_format=response_format,
-            seed=seed,
-            stop=stop,
-            tools=tools,
-            tool_choice=tool_choice,
-            user=user,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="moonshot", message="Moonshot adapter unavailable")
     request: Dict[str, Any] = {
         "messages": input_data,
         "model": model,
@@ -687,46 +549,16 @@ def zai_chat_handler(
     custom_prompt_arg: Optional[str] = None,
     app_config: Optional[Dict[str, Any]] = None,
 ):
-    use_adapter = _flag_enabled("LLM_ADAPTERS_ZAI", "LLM_ADAPTERS_ENABLED")
-    if not use_adapter:
-        return _legacy_chat_with_zai(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            maxp=maxp,
-            streaming=streaming,
-            max_tokens=max_tokens,
-            tools=tools,
-            do_sample=do_sample,
-            request_id=request_id,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
     registry = get_registry()
     adapter = registry.get_adapter("zai")
     if adapter is None:
-        from tldw_Server_API.app.core.LLM_Calls.providers.legacy_adapters import ZaiAdapter
+        from tldw_Server_API.app.core.LLM_Calls.providers.compat_adapters import ZaiAdapter
 
         registry.register_adapter("zai", ZaiAdapter)
         adapter = registry.get_adapter("zai")
     if adapter is None:
-        return _legacy_chat_with_zai(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            maxp=maxp,
-            streaming=streaming,
-            max_tokens=max_tokens,
-            tools=tools,
-            do_sample=do_sample,
-            request_id=request_id,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="zai", message="ZAI adapter unavailable")
     request: Dict[str, Any] = {
         "messages": input_data,
         "model": model,
@@ -778,68 +610,16 @@ def llama_cpp_chat_handler(
         temp = temperature
     if stream is not None:
         streaming = stream
-    use_adapter = _flag_enabled("LLM_ADAPTERS_LLAMA_CPP", "LLM_ADAPTERS_ENABLED")
-    if not use_adapter:
-        return _legacy_chat_with_llama(
-            input_data=input_data,
-            api_key=api_key,
-            custom_prompt=custom_prompt,
-            temp=temp,
-            temperature=temperature,
-            system_prompt=system_prompt,
-            streaming=streaming,
-            stream=stream,
-            model=model,
-            top_k=top_k,
-            top_p=top_p,
-            min_p=min_p,
-            n_predict=n_predict,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            logit_bias=logit_bias,
-            n=n,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            api_url=api_url,
-            app_config=app_config,
-            http_client_factory=http_client_factory,
-            http_fetcher=http_fetcher,
-        )
     registry = get_registry()
     adapter = registry.get_adapter("llama.cpp")
     if adapter is None:
-        from tldw_Server_API.app.core.LLM_Calls.providers.legacy_adapters import LlamaCppAdapter
+        from tldw_Server_API.app.core.LLM_Calls.providers.compat_adapters import LlamaCppAdapter
 
         registry.register_adapter("llama.cpp", LlamaCppAdapter)
         adapter = registry.get_adapter("llama.cpp")
     if adapter is None:
-        return _legacy_chat_with_llama(
-            input_data=input_data,
-            api_key=api_key,
-            custom_prompt=custom_prompt,
-            temp=temp,
-            temperature=temperature,
-            system_prompt=system_prompt,
-            streaming=streaming,
-            stream=stream,
-            model=model,
-            top_k=top_k,
-            top_p=top_p,
-            min_p=min_p,
-            n_predict=n_predict,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            logit_bias=logit_bias,
-            n=n,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            api_url=api_url,
-            app_config=app_config,
-            http_client_factory=http_client_factory,
-            http_fetcher=http_fetcher,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="llama.cpp", message="Llama.cpp adapter unavailable")
     request: Dict[str, Any] = {
         "messages": input_data,
         "model": model,
@@ -883,48 +663,16 @@ def kobold_chat_handler(
     seed: Optional[int] = None,
     app_config: Optional[Dict[str, Any]] = None,
 ):
-    use_adapter = _flag_enabled("LLM_ADAPTERS_KOBOLD", "LLM_ADAPTERS_ENABLED")
-    if not use_adapter:
-        return _legacy_chat_with_kobold(
-            input_data=input_data,
-            api_key=api_key,
-            custom_prompt_input=custom_prompt_input,
-            temp=temp,
-            system_message=system_message,
-            streaming=streaming,
-            model=model,
-            top_k=top_k,
-            top_p=top_p,
-            max_length=max_length,
-            stop_sequence=stop_sequence,
-            num_responses=num_responses,
-            seed=seed,
-            app_config=app_config,
-        )
     registry = get_registry()
     adapter = registry.get_adapter("kobold")
     if adapter is None:
-        from tldw_Server_API.app.core.LLM_Calls.providers.legacy_adapters import KoboldAdapter
+        from tldw_Server_API.app.core.LLM_Calls.providers.compat_adapters import KoboldAdapter
 
         registry.register_adapter("kobold", KoboldAdapter)
         adapter = registry.get_adapter("kobold")
     if adapter is None:
-        return _legacy_chat_with_kobold(
-            input_data=input_data,
-            api_key=api_key,
-            custom_prompt_input=custom_prompt_input,
-            temp=temp,
-            system_message=system_message,
-            streaming=streaming,
-            model=model,
-            top_k=top_k,
-            top_p=top_p,
-            max_length=max_length,
-            stop_sequence=stop_sequence,
-            num_responses=num_responses,
-            seed=seed,
-            app_config=app_config,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="kobold", message="Kobold adapter unavailable")
     request: Dict[str, Any] = {
         "messages": input_data,
         "model": model,
@@ -976,70 +724,16 @@ def ooba_chat_handler(
         temp = temperature
     if stream is not None:
         streaming = stream
-    use_adapter = _flag_enabled("LLM_ADAPTERS_OOBA", "LLM_ADAPTERS_ENABLED")
-    if not use_adapter:
-        return _legacy_chat_with_oobabooga(
-            input_data=input_data,
-            api_key=api_key,
-            custom_prompt=custom_prompt,
-            temp=temp,
-            temperature=temperature,
-            system_prompt=system_prompt,
-            streaming=streaming,
-            stream=stream,
-            model=model,
-            top_k=top_k,
-            top_p=top_p,
-            min_p=min_p,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            user_identifier=user_identifier,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            api_url=api_url,
-            app_config=app_config,
-            http_client_factory=http_client_factory,
-            http_fetcher=http_fetcher,
-        )
     registry = get_registry()
     adapter = registry.get_adapter("ooba")
     if adapter is None:
-        from tldw_Server_API.app.core.LLM_Calls.providers.legacy_adapters import OobaAdapter
+        from tldw_Server_API.app.core.LLM_Calls.providers.compat_adapters import OobaAdapter
 
         registry.register_adapter("ooba", OobaAdapter)
         adapter = registry.get_adapter("ooba")
     if adapter is None:
-        return _legacy_chat_with_oobabooga(
-            input_data=input_data,
-            api_key=api_key,
-            custom_prompt=custom_prompt,
-            temp=temp,
-            temperature=temperature,
-            system_prompt=system_prompt,
-            streaming=streaming,
-            stream=stream,
-            model=model,
-            top_k=top_k,
-            top_p=top_p,
-            min_p=min_p,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            user_identifier=user_identifier,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            api_url=api_url,
-            app_config=app_config,
-            http_client_factory=http_client_factory,
-            http_fetcher=http_fetcher,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="ooba", message="Oobabooga adapter unavailable")
     request: Dict[str, Any] = {
         "messages": input_data,
         "model": model,
@@ -1102,76 +796,16 @@ def tabbyapi_chat_handler(
         temp = temperature
     if stream is not None:
         streaming = stream
-    use_adapter = _flag_enabled("LLM_ADAPTERS_TABBYAPI", "LLM_ADAPTERS_ENABLED")
-    if not use_adapter:
-        return _legacy_chat_with_tabbyapi(
-            input_data=input_data,
-            api_key=api_key,
-            custom_prompt_input=custom_prompt_input,
-            temp=temp,
-            temperature=temperature,
-            system_message=system_message,
-            streaming=streaming,
-            stream=stream,
-            model=model,
-            top_k=top_k,
-            top_p=top_p,
-            min_p=min_p,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            app_config=app_config,
-            response_format=response_format,
-            n=n,
-            user_identifier=user_identifier,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            tools=tools,
-            tool_choice=tool_choice,
-            http_client_factory=http_client_factory,
-            http_fetcher=http_fetcher,
-        )
     registry = get_registry()
     adapter = registry.get_adapter("tabbyapi")
     if adapter is None:
-        from tldw_Server_API.app.core.LLM_Calls.providers.legacy_adapters import TabbyAPIAdapter
+        from tldw_Server_API.app.core.LLM_Calls.providers.compat_adapters import TabbyAPIAdapter
 
         registry.register_adapter("tabbyapi", TabbyAPIAdapter)
         adapter = registry.get_adapter("tabbyapi")
     if adapter is None:
-        return _legacy_chat_with_tabbyapi(
-            input_data=input_data,
-            api_key=api_key,
-            custom_prompt_input=custom_prompt_input,
-            temp=temp,
-            temperature=temperature,
-            system_message=system_message,
-            streaming=streaming,
-            stream=stream,
-            model=model,
-            top_k=top_k,
-            top_p=top_p,
-            min_p=min_p,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            app_config=app_config,
-            response_format=response_format,
-            n=n,
-            user_identifier=user_identifier,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            tools=tools,
-            tool_choice=tool_choice,
-            http_client_factory=http_client_factory,
-            http_fetcher=http_fetcher,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="tabbyapi", message="TabbyAPI adapter unavailable")
     request: Dict[str, Any] = {
         "messages": input_data,
         "model": model,
@@ -1239,78 +873,16 @@ def vllm_chat_handler(
         temp = temperature
     if stream is not None:
         streaming = stream
-    use_adapter = _flag_enabled("LLM_ADAPTERS_VLLM", "LLM_ADAPTERS_ENABLED")
-    if not use_adapter:
-        return _legacy_chat_with_vllm(
-            input_data=input_data,
-            api_key=api_key,
-            custom_prompt_input=custom_prompt_input,
-            temp=temp,
-            temperature=temperature,
-            system_prompt=system_prompt,
-            streaming=streaming,
-            stream=stream,
-            model=model,
-            top_k=top_k,
-            top_p=top_p,
-            min_p=min_p,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            user_identifier=user_identifier,
-            tools=tools,
-            tool_choice=tool_choice,
-            top_logprobs=top_logprobs,
-            vllm_api_url=vllm_api_url,
-            app_config=app_config,
-            http_client_factory=http_client_factory,
-            http_fetcher=http_fetcher,
-        )
     registry = get_registry()
     adapter = registry.get_adapter("vllm")
     if adapter is None:
-        from tldw_Server_API.app.core.LLM_Calls.providers.legacy_adapters import VLLMAdapter
+        from tldw_Server_API.app.core.LLM_Calls.providers.compat_adapters import VLLMAdapter
 
         registry.register_adapter("vllm", VLLMAdapter)
         adapter = registry.get_adapter("vllm")
     if adapter is None:
-        return _legacy_chat_with_vllm(
-            input_data=input_data,
-            api_key=api_key,
-            custom_prompt_input=custom_prompt_input,
-            temp=temp,
-            temperature=temperature,
-            system_prompt=system_prompt,
-            streaming=streaming,
-            stream=stream,
-            model=model,
-            top_k=top_k,
-            top_p=top_p,
-            min_p=min_p,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            user_identifier=user_identifier,
-            tools=tools,
-            tool_choice=tool_choice,
-            top_logprobs=top_logprobs,
-            vllm_api_url=vllm_api_url,
-            app_config=app_config,
-            http_client_factory=http_client_factory,
-            http_fetcher=http_fetcher,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="vllm", message="vLLM adapter unavailable")
     request: Dict[str, Any] = {
         "messages": input_data,
         "model": model,
@@ -1376,74 +948,16 @@ def local_llm_chat_handler(
         temp = temperature
     if stream is not None:
         streaming = stream
-    use_adapter = _flag_enabled("LLM_ADAPTERS_LOCAL_LLM", "LLM_ADAPTERS_ENABLED")
-    if not use_adapter:
-        return _legacy_chat_with_local_llm(
-            input_data=input_data,
-            temp=temp,
-            temperature=temperature,
-            system_message=system_message,
-            streaming=streaming,
-            stream=stream,
-            model=model,
-            top_k=top_k,
-            top_p=top_p,
-            min_p=min_p,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            custom_prompt_arg=custom_prompt_arg,
-            response_format=response_format,
-            n=n,
-            user_identifier=user_identifier,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            tools=tools,
-            tool_choice=tool_choice,
-            app_config=app_config,
-            http_client_factory=http_client_factory,
-            http_fetcher=http_fetcher,
-        )
     registry = get_registry()
     adapter = registry.get_adapter("local-llm")
     if adapter is None:
-        from tldw_Server_API.app.core.LLM_Calls.providers.legacy_adapters import LocalLLMAdapter
+        from tldw_Server_API.app.core.LLM_Calls.providers.compat_adapters import LocalLLMAdapter
 
         registry.register_adapter("local-llm", LocalLLMAdapter)
         adapter = registry.get_adapter("local-llm")
     if adapter is None:
-        return _legacy_chat_with_local_llm(
-            input_data=input_data,
-            temp=temp,
-            temperature=temperature,
-            system_message=system_message,
-            streaming=streaming,
-            stream=stream,
-            model=model,
-            top_k=top_k,
-            top_p=top_p,
-            min_p=min_p,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            custom_prompt_arg=custom_prompt_arg,
-            response_format=response_format,
-            n=n,
-            user_identifier=user_identifier,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            tools=tools,
-            tool_choice=tool_choice,
-            app_config=app_config,
-            http_client_factory=http_client_factory,
-            http_fetcher=http_fetcher,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="local-llm", message="Local LLM adapter unavailable")
     request: Dict[str, Any] = {
         "messages": input_data,
         "model": model,
@@ -1514,78 +1028,16 @@ def ollama_chat_handler(
         system_message = system
     if max_tokens is not None and num_predict is None:
         num_predict = max_tokens
-    use_adapter = _flag_enabled("LLM_ADAPTERS_OLLAMA", "LLM_ADAPTERS_ENABLED")
-    if not use_adapter:
-        return _legacy_chat_with_ollama(
-            input_data=input_data,
-            api_key=api_key,
-            custom_prompt=custom_prompt,
-            temp=temp,
-            temperature=temperature,
-            system_message=system_message,
-            system=system,
-            model=model,
-            streaming=streaming,
-            stream=stream,
-            top_p=top_p,
-            top_k=top_k,
-            num_predict=num_predict,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            format_str=format_str,
-            format=format,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            api_url=api_url,
-            user_identifier=user_identifier,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            tools=tools,
-            tool_choice=tool_choice,
-            app_config=app_config,
-            http_client_factory=http_client_factory,
-            http_fetcher=http_fetcher,
-        )
     registry = get_registry()
     adapter = registry.get_adapter("ollama")
     if adapter is None:
-        from tldw_Server_API.app.core.LLM_Calls.providers.legacy_adapters import OllamaAdapter
+        from tldw_Server_API.app.core.LLM_Calls.providers.compat_adapters import OllamaAdapter
 
         registry.register_adapter("ollama", OllamaAdapter)
         adapter = registry.get_adapter("ollama")
     if adapter is None:
-        return _legacy_chat_with_ollama(
-            input_data=input_data,
-            api_key=api_key,
-            custom_prompt=custom_prompt,
-            temp=temp,
-            temperature=temperature,
-            system_message=system_message,
-            system=system,
-            model=model,
-            streaming=streaming,
-            stream=stream,
-            top_p=top_p,
-            top_k=top_k,
-            num_predict=num_predict,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            format_str=format_str,
-            format=format,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            api_url=api_url,
-            user_identifier=user_identifier,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            tools=tools,
-            tool_choice=tool_choice,
-            app_config=app_config,
-            http_client_factory=http_client_factory,
-            http_fetcher=http_fetcher,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="ollama", message="Ollama adapter unavailable")
     response_format = format_str if format_str is not None else format
     request: Dict[str, Any] = {
         "messages": input_data,
@@ -1650,76 +1102,16 @@ def aphrodite_chat_handler(
         temp = temperature
     if stream is not None:
         streaming = stream
-    use_adapter = _flag_enabled("LLM_ADAPTERS_APHRODITE", "LLM_ADAPTERS_ENABLED")
-    if not use_adapter:
-        return _legacy_chat_with_aphrodite(
-            input_data=input_data,
-            api_key=api_key,
-            custom_prompt=custom_prompt,
-            temp=temp,
-            temperature=temperature,
-            system_message=system_message,
-            streaming=streaming,
-            stream=stream,
-            model=model,
-            top_k=top_k,
-            top_p=top_p,
-            min_p=min_p,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            user_identifier=user_identifier,
-            tools=tools,
-            tool_choice=tool_choice,
-            top_logprobs=top_logprobs,
-            app_config=app_config,
-            http_client_factory=http_client_factory,
-            http_fetcher=http_fetcher,
-        )
     registry = get_registry()
     adapter = registry.get_adapter("aphrodite")
     if adapter is None:
-        from tldw_Server_API.app.core.LLM_Calls.providers.legacy_adapters import AphroditeAdapter
+        from tldw_Server_API.app.core.LLM_Calls.providers.compat_adapters import AphroditeAdapter
 
         registry.register_adapter("aphrodite", AphroditeAdapter)
         adapter = registry.get_adapter("aphrodite")
     if adapter is None:
-        return _legacy_chat_with_aphrodite(
-            input_data=input_data,
-            api_key=api_key,
-            custom_prompt=custom_prompt,
-            temp=temp,
-            temperature=temperature,
-            system_message=system_message,
-            streaming=streaming,
-            stream=stream,
-            model=model,
-            top_k=top_k,
-            top_p=top_p,
-            min_p=min_p,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            user_identifier=user_identifier,
-            tools=tools,
-            tool_choice=tool_choice,
-            top_logprobs=top_logprobs,
-            app_config=app_config,
-            http_client_factory=http_client_factory,
-            http_fetcher=http_fetcher,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="aphrodite", message="Aphrodite adapter unavailable")
     request: Dict[str, Any] = {
         "messages": input_data,
         "model": model,
@@ -1904,7 +1296,7 @@ async def openai_chat_handler_async(
     # Honor explicit test monkeypatching of legacy chat_with_openai (only when actually patched to a test helper),
     # otherwise prefer the adapter path. Avoid triggering just because we're under pytest.
     try:
-        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy_mod
+        from tldw_Server_API.app.core.LLM_Calls import chat_calls as _legacy_mod
         _patched = getattr(_legacy_mod, "chat_with_openai", None)
         if callable(_patched):
             _modname = getattr(_patched, "__module__", "") or ""
@@ -1953,33 +1345,6 @@ async def openai_chat_handler_async(
     except Exception:
         pass
 
-    use_adapter = _flag_enabled("LLM_ADAPTERS_OPENAI", "LLM_ADAPTERS_ENABLED")
-    if not use_adapter:
-        return await _legacy_chat_with_openai_async(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            maxp=maxp if maxp is not None else kwargs.get("topp"),
-            streaming=streaming,
-            frequency_penalty=frequency_penalty,
-            logit_bias=logit_bias,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            max_tokens=max_tokens,
-            n=n,
-            presence_penalty=presence_penalty,
-            response_format=response_format,
-            seed=seed,
-            stop=stop,
-            tools=tools,
-            tool_choice=tool_choice,
-            user=user,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
-
     registry = get_registry()
     adapter = registry.get_adapter("openai")
     if adapter is None:
@@ -1987,30 +1352,8 @@ async def openai_chat_handler_async(
         registry.register_adapter("openai", OpenAIAdapter)
         adapter = registry.get_adapter("openai")
     if adapter is None:
-        return await _legacy_chat_with_openai_async(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            maxp=maxp if maxp is not None else kwargs.get("topp"),
-            streaming=streaming,
-            frequency_penalty=frequency_penalty,
-            logit_bias=logit_bias,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            max_tokens=max_tokens,
-            n=n,
-            presence_penalty=presence_penalty,
-            response_format=response_format,
-            seed=seed,
-            stop=stop,
-            tools=tools,
-            tool_choice=tool_choice,
-            user=user,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="openai", message="OpenAI adapter unavailable")
 
     request: Dict[str, Any] = {
         "messages": input_data,
@@ -2079,24 +1422,6 @@ async def anthropic_chat_handler_async(
     app_config: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ):
-    use_adapter = _flag_enabled("LLM_ADAPTERS_ANTHROPIC", "LLM_ADAPTERS_ENABLED")
-    if not use_adapter:
-        return await _legacy_chat_with_anthropic_async(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_prompt=system_prompt,
-            temp=temp,
-            topp=topp,
-            topk=topk,
-            streaming=streaming,
-            max_tokens=max_tokens,
-            stop_sequences=stop_sequences,
-            tools=tools,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
-
     registry = get_registry()
     adapter = registry.get_adapter("anthropic")
     if adapter is None:
@@ -2104,21 +1429,8 @@ async def anthropic_chat_handler_async(
         registry.register_adapter("anthropic", AnthropicAdapter)
         adapter = registry.get_adapter("anthropic")
     if adapter is None:
-        return await _legacy_chat_with_anthropic_async(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_prompt=system_prompt,
-            temp=temp,
-            topp=topp,
-            topk=topk,
-            streaming=streaming,
-            max_tokens=max_tokens,
-            stop_sequences=stop_sequences,
-            tools=tools,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="anthropic", message="Anthropic adapter unavailable")
     request: Dict[str, Any] = {
         "messages": input_data,
         "model": model,
@@ -2286,11 +1598,10 @@ async def qwen_chat_handler_async(
     app_config: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ):
-    from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import legacy_chat_with_qwen as _legacy_qwen
     # Honor monkeypatched legacy callable only when the legacy function itself
     # is patched (module/name indicates tests), not merely because tests run.
     try:
-        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy_mod
+        from tldw_Server_API.app.core.LLM_Calls import chat_calls as _legacy_mod
         _patched = getattr(_legacy_mod, "chat_with_qwen", None)
         if callable(_patched):
             _modname = getattr(_patched, "__module__", "") or ""
@@ -2357,33 +1668,6 @@ async def qwen_chat_handler_async(
                     )
     except Exception:
         pass
-    use_adapter = _flag_enabled("LLM_ADAPTERS_QWEN", "LLM_ADAPTERS_ENABLED")
-    if not use_adapter:
-        # No native async legacy; run in thread via adapter-style signature mapped to legacy
-        return _legacy_qwen(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            maxp=maxp,
-            streaming=streaming,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            user=user,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
     registry = get_registry()
     adapter = registry.get_adapter("qwen")
     if adapter is None:
@@ -2391,30 +1675,8 @@ async def qwen_chat_handler_async(
         registry.register_adapter("qwen", QwenAdapter)
         adapter = registry.get_adapter("qwen")
     if adapter is None:
-        return _legacy_qwen(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            maxp=maxp,
-            streaming=streaming,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            user=user,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="qwen", message="Qwen adapter unavailable")
     request: Dict[str, Any] = {
         "messages": input_data,
         "model": model,
@@ -2496,7 +1758,7 @@ async def deepseek_chat_handler_async(
     # Honor monkeypatched legacy callable only when the legacy function itself
     # is patched (module/name indicates tests), not merely because tests run.
     try:
-        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy_mod
+        from tldw_Server_API.app.core.LLM_Calls import chat_calls as _legacy_mod
         _patched = getattr(_legacy_mod, "chat_with_deepseek", None)
         if callable(_patched):
             _modname = getattr(_patched, "__module__", "") or ""
@@ -2563,33 +1825,6 @@ async def deepseek_chat_handler_async(
                     )
     except Exception:
         pass
-    from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import legacy_chat_with_deepseek as _legacy_deep
-    use_adapter = _flag_enabled("LLM_ADAPTERS_DEEPSEEK", "LLM_ADAPTERS_ENABLED")
-    if not use_adapter:
-        return _legacy_deep(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            topp=topp,
-            streaming=streaming,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            user=user,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
     registry = get_registry()
     adapter = registry.get_adapter("deepseek")
     if adapter is None:
@@ -2597,30 +1832,8 @@ async def deepseek_chat_handler_async(
         registry.register_adapter("deepseek", DeepSeekAdapter)
         adapter = registry.get_adapter("deepseek")
     if adapter is None:
-        return _legacy_deep(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            topp=topp,
-            streaming=streaming,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            user=user,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="deepseek", message="DeepSeek adapter unavailable")
     request: Dict[str, Any] = {
         "messages": input_data,
         "model": model,
@@ -2676,10 +1889,9 @@ async def huggingface_chat_handler_async(
     app_config: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ):
-    from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import legacy_chat_with_huggingface as _legacy_hf
     # Honor monkeypatched legacy callable in tests even if adapters are enabled
     try:
-        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy_mod
+        from tldw_Server_API.app.core.LLM_Calls import chat_calls as _legacy_mod
         _patched = getattr(_legacy_mod, "chat_with_huggingface", None)
         if callable(_patched):
             _modname = getattr(_patched, "__module__", "") or ""
@@ -2718,33 +1930,6 @@ async def huggingface_chat_handler_async(
                 )
     except Exception:
         pass
-    use_adapter = _flag_enabled("LLM_ADAPTERS_HUGGINGFACE", "LLM_ADAPTERS_ENABLED")
-    if not use_adapter:
-        return _legacy_hf(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            streaming=streaming,
-            top_p=top_p,
-            top_k=top_k,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            user=user,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
     registry = get_registry()
     adapter = registry.get_adapter("huggingface")
     if adapter is None:
@@ -2752,31 +1937,8 @@ async def huggingface_chat_handler_async(
         registry.register_adapter("huggingface", HuggingFaceAdapter)
         adapter = registry.get_adapter("huggingface")
     if adapter is None:
-        return _legacy_hf(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            streaming=streaming,
-            top_p=top_p,
-            top_k=top_k,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            user=user,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="huggingface", message="HuggingFace adapter unavailable")
     request: Dict[str, Any] = {
         "messages": input_data,
         "model": model,
@@ -2834,8 +1996,8 @@ async def custom_openai_chat_handler_async(
 ):
     # Honor monkeypatched legacy callable in tests
     try:
-        from tldw_Server_API.app.core.LLM_Calls import legacy_local_calls as _legacy_local_mod
-        _patched = getattr(_legacy_local_mod, "chat_with_custom_openai", None)
+        from tldw_Server_API.app.core.LLM_Calls import local_chat_calls as _legacy_local_mod
+        _patched = getattr(_legacy_local_mod, "legacy_chat_with_custom_openai", None)
         if callable(_patched):
             _modname = getattr(_patched, "__module__", "") or ""
             _fname = getattr(_patched, "__name__", "") or ""
@@ -2902,33 +2064,6 @@ async def custom_openai_chat_handler_async(
                     )
     except Exception:
         pass
-    from tldw_Server_API.app.core.LLM_Calls.legacy_local_calls import chat_with_custom_openai as _legacy_custom
-    use_adapter = _flag_enabled("LLM_ADAPTERS_CUSTOM_OPENAI", "LLM_ADAPTERS_ENABLED")
-    if not use_adapter:
-        return _legacy_custom(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            streaming=streaming,
-            maxp=topp,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            user_identifier=user,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
     registry = get_registry()
     adapter = registry.get_adapter("custom-openai-api")
     if adapter is None:
@@ -2936,30 +2071,8 @@ async def custom_openai_chat_handler_async(
         registry.register_adapter("custom-openai-api", CustomOpenAIAdapter)
         adapter = registry.get_adapter("custom-openai-api")
     if adapter is None:
-        return _legacy_custom(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            streaming=streaming,
-            maxp=topp,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            user_identifier=user,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="custom-openai-api", message="Custom OpenAI adapter unavailable")
     request: Dict[str, Any] = {
         "messages": input_data,
         "model": model,
@@ -2994,10 +2107,6 @@ async def custom_openai_2_chat_handler_async(
 ):
     # Reuse same async path as custom-openai-api but target adapter name "custom-openai-api-2"
     # Map by tweaking app_config section and adapter name inside a small wrapper
-    use_adapter = _flag_enabled("LLM_ADAPTERS_CUSTOM_OPENAI", "LLM_ADAPTERS_ENABLED")
-    if not use_adapter:
-        from tldw_Server_API.app.core.LLM_Calls.legacy_local_calls import chat_with_custom_openai_2 as _legacy_custom2
-        return _legacy_custom2(**kwargs)
     registry = get_registry()
     adapter = registry.get_adapter("custom-openai-api-2")
     if adapter is None:
@@ -3005,8 +2114,8 @@ async def custom_openai_2_chat_handler_async(
         registry.register_adapter("custom-openai-api-2", CustomOpenAIAdapter2)
         adapter = registry.get_adapter("custom-openai-api-2")
     if adapter is None:
-        from tldw_Server_API.app.core.LLM_Calls.legacy_local_calls import chat_with_custom_openai_2 as _legacy_custom2
-        return _legacy_custom2(**kwargs)
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="custom-openai-api-2", message="Custom OpenAI 2 adapter unavailable")
     # Build request from kwargs similar to other shims
     request: Dict[str, Any] = {
         "messages": kwargs.get("input_data") or [],
@@ -3062,33 +2171,6 @@ async def groq_chat_handler_async(
     app_config: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ):
-    # Always route via adapter; legacy path pruned
-    use_adapter = True
-    if not use_adapter:
-        return await _legacy_chat_with_groq_async(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            maxp=maxp,
-            streaming=streaming,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            user=user,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
     registry = get_registry()
     adapter = registry.get_adapter("groq")
     if adapter is None:
@@ -3096,30 +2178,8 @@ async def groq_chat_handler_async(
         registry.register_adapter("groq", GroqAdapter)
         adapter = registry.get_adapter("groq")
     if adapter is None:
-        return await _legacy_chat_with_groq_async(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            maxp=maxp,
-            streaming=streaming,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            user=user,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="groq", message="Groq adapter unavailable")
     request: Dict[str, Any] = {
         "messages": input_data,
         "model": model,
@@ -3177,35 +2237,6 @@ async def openrouter_chat_handler_async(
     app_config: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ):
-    # Always route via adapter; legacy path pruned
-    use_adapter = True
-    if not use_adapter:
-        return await _legacy_chat_with_openrouter_async(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            streaming=streaming,
-            top_p=top_p,
-            top_k=top_k,
-            min_p=min_p,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            user=user,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
     registry = get_registry()
     adapter = registry.get_adapter("openrouter")
     if adapter is None:
@@ -3213,32 +2244,8 @@ async def openrouter_chat_handler_async(
         registry.register_adapter("openrouter", OpenRouterAdapter)
         adapter = registry.get_adapter("openrouter")
     if adapter is None:
-        return await _legacy_chat_with_openrouter_async(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            streaming=streaming,
-            top_p=top_p,
-            top_k=top_k,
-            min_p=min_p,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            user=user,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="openrouter", message="OpenRouter adapter unavailable")
     request: Dict[str, Any] = {
         "messages": input_data,
         "model": model,
@@ -3298,7 +2305,7 @@ def groq_chat_handler(
 ):
     # Honor patched legacy in tests
     try:
-        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy_mod
+        from tldw_Server_API.app.core.LLM_Calls import chat_calls as _legacy_mod
         _patched = getattr(_legacy_mod, "chat_with_groq", None)
         if callable(_patched):
             _modname = getattr(_patched, "__module__", "") or ""
@@ -3336,32 +2343,6 @@ def groq_chat_handler(
     except Exception:
         pass
 
-    use_adapter = _flag_enabled("LLM_ADAPTERS_GROQ", "LLM_ADAPTERS_ENABLED")
-    if not use_adapter:
-        return _legacy_chat_with_groq(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            maxp=maxp,
-            streaming=streaming,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            user=user,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
     registry = get_registry()
     adapter = registry.get_adapter("groq")
     if adapter is None:
@@ -3369,30 +2350,8 @@ def groq_chat_handler(
         registry.register_adapter("groq", GroqAdapter)
         adapter = registry.get_adapter("groq")
     if adapter is None:
-        return _legacy_chat_with_groq(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            maxp=maxp,
-            streaming=streaming,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            user=user,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="groq", message="Groq adapter unavailable")
     request: Dict[str, Any] = {
         "messages": input_data,
         "model": model,
@@ -3450,7 +2409,7 @@ def openrouter_chat_handler(
 ):
     # Honor patched legacy in tests
     try:
-        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy_mod
+        from tldw_Server_API.app.core.LLM_Calls import chat_calls as _legacy_mod
         _patched = getattr(_legacy_mod, "chat_with_openrouter", None)
         if callable(_patched):
             _modname = getattr(_patched, "__module__", "") or ""
@@ -3462,7 +2421,7 @@ def openrouter_chat_handler(
                 or _fname.startswith("_fake")
             ):
                 logger.debug(
-                    "adapter_shims.openrouter_chat_handler: using monkeypatched legacy chat_with_openrouter from {}",
+                    "adapter_calls.openrouter_chat_handler: using monkeypatched legacy chat_with_openrouter from {}",
                     _modname,
                 )
                 return _patched(
@@ -3495,7 +2454,7 @@ def openrouter_chat_handler(
             import os as _os
             if _os.getenv("PYTEST_CURRENT_TEST"):
                 logger.debug(
-                    "adapter_shims.openrouter_chat_handler: pytest detected; honoring callable legacy chat_with_openrouter from {}",
+                    "adapter_calls.openrouter_chat_handler: pytest detected; honoring callable legacy chat_with_openrouter from {}",
                     _modname or "<unknown>",
                 )
                 return _patched(
@@ -3527,57 +2486,6 @@ def openrouter_chat_handler(
     except Exception:
         pass
 
-    # In tests, choose path to honor the kind of monkeypatching being used:
-    # - Non-streaming: prefer legacy (requests) so patch('requests.Session.post') works.
-    # - Streaming: use adapter only if its http client factory is monkeypatched;
-    #   otherwise fall back to legacy (requests) so patch('requests.Session.post') works.
-    if os.getenv("PYTEST_CURRENT_TEST"):
-        # In tests, if adapters are explicitly enabled via env flags, honor that
-        # and always route through the adapter (so tests can monkeypatch it).
-        if _flag_enabled("LLM_ADAPTERS_OPENROUTER", "LLM_ADAPTERS_ENABLED"):
-            use_adapter = True
-        else:
-            # Prefer adapter when its http client factory is monkeypatched for both
-            # streaming and non-streaming tests; otherwise prefer legacy for
-            # backward-compatible requests.Session patches.
-            use_adapter = _http_factory_patched(
-                "tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter"
-            )
-    else:
-        use_adapter = _flag_enabled("LLM_ADAPTERS_OPENROUTER", "LLM_ADAPTERS_ENABLED")
-    logger.debug(
-        "adapter_shims.openrouter_chat_handler: selected path={} (use_adapter={}, pytest={})",
-        ("adapter" if use_adapter else "legacy"),
-        bool(use_adapter),
-        bool(os.getenv("PYTEST_CURRENT_TEST")),
-    )
-    if not use_adapter:
-        return _legacy_chat_with_openrouter(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            streaming=streaming,
-            top_p=top_p,
-            top_k=top_k,
-            min_p=min_p,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            user=user,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
     registry = get_registry()
     adapter = registry.get_adapter("openrouter")
     if adapter is None:
@@ -3585,33 +2493,8 @@ def openrouter_chat_handler(
         registry.register_adapter("openrouter", OpenRouterAdapter)
         adapter = registry.get_adapter("openrouter")
     if adapter is None:
-        logger.debug("adapter_shims.openrouter_chat_handler: adapter unavailable; using legacy")
-        return _legacy_chat_with_openrouter(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            streaming=streaming,
-            top_p=top_p,
-            top_k=top_k,
-            min_p=min_p,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            user=user,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="openrouter", message="OpenRouter adapter unavailable")
     request: Dict[str, Any] = {
         "messages": input_data,
         "model": model,
@@ -3662,7 +2545,7 @@ def google_chat_handler(
 ):
     # Honor patched legacy in tests
     try:
-        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy_mod
+        from tldw_Server_API.app.core.LLM_Calls import chat_calls as _legacy_mod
         _patched = getattr(_legacy_mod, "chat_with_google", None)
         if callable(_patched):
             _modname = getattr(_patched, "__module__", "") or ""
@@ -3693,52 +2576,6 @@ def google_chat_handler(
     except Exception:
         pass
 
-    # Test-friendly path: under pytest, prefer legacy implementation to honor
-    # monkeypatched sessions and avoid real network calls when tests inject
-    # dummy responses.
-    try:
-        if os.getenv("PYTEST_CURRENT_TEST"):
-            return _legacy_chat_with_google(
-                input_data=input_data,
-                model=model,
-                api_key=api_key,
-                system_message=system_message,
-                temp=temp,
-                streaming=streaming,
-                topp=topp,
-                topk=topk,
-                max_output_tokens=max_output_tokens,
-                stop_sequences=stop_sequences,
-                candidate_count=candidate_count,
-                response_format=response_format,
-                tools=tools,
-                custom_prompt_arg=custom_prompt_arg,
-                app_config=app_config,
-            )
-    except Exception:
-        # If anything goes wrong here, continue to adapter path below
-        pass
-
-    # Always route via adapter; legacy path pruned
-    use_adapter = True
-    if not use_adapter:
-        return _legacy_chat_with_google(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            streaming=streaming,
-            topp=topp,
-            topk=topk,
-            max_output_tokens=max_output_tokens,
-            stop_sequences=stop_sequences,
-            candidate_count=candidate_count,
-            response_format=response_format,
-            tools=tools,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
     registry = get_registry()
     adapter = registry.get_adapter("google")
     if adapter is None:
@@ -3746,23 +2583,8 @@ def google_chat_handler(
         registry.register_adapter("google", GoogleAdapter)
         adapter = registry.get_adapter("google")
     if adapter is None:
-        return _legacy_chat_with_google(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            streaming=streaming,
-            topp=topp,
-            topk=topk,
-            max_output_tokens=max_output_tokens,
-            stop_sequences=stop_sequences,
-            candidate_count=candidate_count,
-            response_format=response_format,
-            tools=tools,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="google", message="Google adapter unavailable")
     request: Dict[str, Any] = {
         "messages": input_data,
         "model": model,
@@ -3805,7 +2627,7 @@ def mistral_chat_handler(
 ):
     # Honor patched legacy in tests
     try:
-        from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy_mod
+        from tldw_Server_API.app.core.LLM_Calls import chat_calls as _legacy_mod
         _patched = getattr(_legacy_mod, "chat_with_mistral", None)
         if callable(_patched):
             _modname = getattr(_patched, "__module__", "") or ""
@@ -3837,53 +2659,6 @@ def mistral_chat_handler(
     except Exception:
         pass
 
-    # Prefer legacy for streaming under pytest so tests can patch requests.Session
-    try:
-        if os.getenv("PYTEST_CURRENT_TEST") and streaming:
-            # If adapter client seam is patched, honor adapter; otherwise prefer legacy
-            if not _http_factory_patched("tldw_Server_API.app.core.LLM_Calls.providers.mistral_adapter"):
-                return _legacy_chat_with_mistral(
-                    input_data=input_data,
-                    model=model,
-                    api_key=api_key,
-                    system_message=system_message,
-                    temp=temp,
-                    streaming=streaming,
-                    topp=topp,
-                    max_tokens=max_tokens,
-                    random_seed=random_seed,
-                    top_k=top_k,
-                    safe_prompt=safe_prompt,
-                    tools=tools,
-                    tool_choice=tool_choice,
-                    response_format=response_format,
-                    custom_prompt_arg=custom_prompt_arg,
-                    app_config=app_config,
-                )
-    except Exception:
-        pass
-
-    # Always route via adapter otherwise; legacy path pruned
-    use_adapter = True
-    if not use_adapter:
-        return _legacy_chat_with_mistral(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            streaming=streaming,
-            topp=topp,
-            max_tokens=max_tokens,
-            random_seed=random_seed,
-            top_k=top_k,
-            safe_prompt=safe_prompt,
-            tools=tools,
-            tool_choice=tool_choice,
-            response_format=response_format,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
     registry = get_registry()
     adapter = registry.get_adapter("mistral")
     if adapter is None:
@@ -3891,24 +2666,8 @@ def mistral_chat_handler(
         registry.register_adapter("mistral", MistralAdapter)
         adapter = registry.get_adapter("mistral")
     if adapter is None:
-        return _legacy_chat_with_mistral(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            streaming=streaming,
-            topp=topp,
-            max_tokens=max_tokens,
-            random_seed=random_seed,
-            top_k=top_k,
-            safe_prompt=safe_prompt,
-            tools=tools,
-            tool_choice=tool_choice,
-            response_format=response_format,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="mistral", message="Mistral adapter unavailable")
     request: Dict[str, Any] = {
         "messages": input_data,
         "model": model,
@@ -3956,37 +2715,6 @@ def qwen_chat_handler(
     app_config: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ):
-    use_adapter = _flag_enabled("LLM_ADAPTERS_QWEN", "LLM_ADAPTERS_ENABLED")
-    if os.getenv("PYTEST_CURRENT_TEST") and not use_adapter:
-        use_adapter = _http_factory_patched(
-            "tldw_Server_API.app.core.LLM_Calls.providers.qwen_adapter"
-        )
-    if not use_adapter:
-        return _legacy_chat_with_qwen(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            maxp=maxp,
-            streaming=streaming,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            user=user,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
-
     registry = get_registry()
     adapter = registry.get_adapter("qwen")
     if adapter is None:
@@ -3994,30 +2722,8 @@ def qwen_chat_handler(
         registry.register_adapter("qwen", QwenAdapter)
         adapter = registry.get_adapter("qwen")
     if adapter is None:
-        return _legacy_chat_with_qwen(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            maxp=maxp,
-            streaming=streaming,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            user=user,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="qwen", message="Qwen adapter unavailable")
     request: Dict[str, Any] = {
         "messages": input_data,
         "model": model,
@@ -4071,9 +2777,6 @@ def deepseek_chat_handler(
     app_config: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ):
-    # Always prefer adapter path to avoid legacy recursion and ensure test determinism
-    use_adapter = True
-
     registry = get_registry()
     adapter = registry.get_adapter("deepseek")
     if adapter is None:
@@ -4081,31 +2784,8 @@ def deepseek_chat_handler(
         registry.register_adapter("deepseek", DeepSeekAdapter)
         adapter = registry.get_adapter("deepseek")
     if adapter is None:
-        # Fallback to preserved legacy implementation if adapter unavailable
-        return _legacy_chat_with_deepseek(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            streaming=streaming,
-            topp=topp,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            response_format=response_format,
-            n=n,
-            user=user,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="deepseek", message="DeepSeek adapter unavailable")
     request: Dict[str, Any] = {
         "messages": input_data,
         "model": model,
@@ -4160,37 +2840,6 @@ def huggingface_chat_handler(
     app_config: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ):
-    use_adapter = _flag_enabled("LLM_ADAPTERS_HUGGINGFACE", "LLM_ADAPTERS_ENABLED")
-    if os.getenv("PYTEST_CURRENT_TEST") and not use_adapter:
-        use_adapter = _http_factory_patched(
-            "tldw_Server_API.app.core.LLM_Calls.providers.huggingface_adapter"
-        )
-    if not use_adapter:
-        return _legacy_chat_with_huggingface(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            streaming=streaming,
-            top_p=top_p,
-            top_k=top_k,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            num_return_sequences=num_return_sequences,
-            user=user,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
     registry = get_registry()
     adapter = registry.get_adapter("huggingface")
     if adapter is None:
@@ -4198,31 +2847,8 @@ def huggingface_chat_handler(
         registry.register_adapter("huggingface", HuggingFaceAdapter)
         adapter = registry.get_adapter("huggingface")
     if adapter is None:
-        return _legacy_chat_with_huggingface(
-            input_data=input_data,
-            model=model,
-            api_key=api_key,
-            system_message=system_message,
-            temp=temp,
-            streaming=streaming,
-            top_p=top_p,
-            top_k=top_k,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            num_return_sequences=num_return_sequences,
-            user=user,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            custom_prompt_arg=custom_prompt_arg,
-            app_config=app_config,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="huggingface", message="HuggingFace adapter unavailable")
     request: Dict[str, Any] = {
         "messages": input_data,
         "model": model,
@@ -4280,35 +2906,6 @@ def custom_openai_chat_handler(
     app_config: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ):
-    use_adapter = _flag_enabled("LLM_ADAPTERS_CUSTOM_OPENAI", "LLM_ADAPTERS_ENABLED")
-    if not use_adapter:
-        return _legacy_chat_with_custom_openai(
-            input_data=input_data,
-            api_key=api_key,
-            custom_prompt_arg=custom_prompt_arg,
-            temp=temp,
-            system_message=system_message,
-            streaming=streaming,
-            model=model,
-            maxp=maxp,
-            topp=topp,
-            minp=minp,
-            topk=topk,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            user_identifier=user_identifier,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            app_config=app_config,
-        )
     registry = get_registry()
     adapter = registry.get_adapter("custom-openai-api")
     if adapter is None:
@@ -4316,33 +2913,8 @@ def custom_openai_chat_handler(
         registry.register_adapter("custom-openai-api", CustomOpenAIAdapter)
         adapter = registry.get_adapter("custom-openai-api")
     if adapter is None:
-        return _legacy_chat_with_custom_openai(
-            input_data=input_data,
-            api_key=api_key,
-            custom_prompt_arg=custom_prompt_arg,
-            temp=temp,
-            system_message=system_message,
-            streaming=streaming,
-            model=model,
-            maxp=maxp,
-            topp=topp,
-            minp=minp,
-            topk=topk,
-            max_tokens=max_tokens,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            user_identifier=user_identifier,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            app_config=app_config,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="custom-openai-api", message="Custom OpenAI adapter unavailable")
     # Prefer explicit maxp over topp when both provided
     top_p_val = maxp if maxp is not None else topp
     request: Dict[str, Any] = {
@@ -4400,32 +2972,6 @@ def custom_openai_2_chat_handler(
     app_config: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ):
-    use_adapter = _flag_enabled("LLM_ADAPTERS_CUSTOM_OPENAI_2", "LLM_ADAPTERS_ENABLED")
-    if not use_adapter:
-        return _legacy_chat_with_custom_openai_2(
-            input_data=input_data,
-            api_key=api_key,
-            custom_prompt_arg=custom_prompt_arg,
-            temp=temp,
-            system_message=system_message,
-            streaming=streaming,
-            model=model,
-            max_tokens=max_tokens,
-            topp=topp,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            user_identifier=user_identifier,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            app_config=app_config,
-        )
     registry = get_registry()
     adapter = registry.get_adapter("custom-openai-api-2")
     if adapter is None:
@@ -4433,30 +2979,8 @@ def custom_openai_2_chat_handler(
         registry.register_adapter("custom-openai-api-2", CustomOpenAIAdapter2)
         adapter = registry.get_adapter("custom-openai-api-2")
     if adapter is None:
-        return _legacy_chat_with_custom_openai_2(
-            input_data=input_data,
-            api_key=api_key,
-            custom_prompt_arg=custom_prompt_arg,
-            temp=temp,
-            system_message=system_message,
-            streaming=streaming,
-            model=model,
-            max_tokens=max_tokens,
-            topp=topp,
-            seed=seed,
-            stop=stop,
-            response_format=response_format,
-            n=n,
-            user_identifier=user_identifier,
-            tools=tools,
-            tool_choice=tool_choice,
-            logit_bias=logit_bias,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            logprobs=logprobs,
-            top_logprobs=top_logprobs,
-            app_config=app_config,
-        )
+        from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
+        raise ChatProviderError(provider="custom-openai-api-2", message="Custom OpenAI 2 adapter unavailable")
     request: Dict[str, Any] = {
         "messages": input_data,
         "api_key": api_key,

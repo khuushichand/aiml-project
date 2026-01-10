@@ -2161,6 +2161,42 @@ def parse_transcription_model(model_name: str) -> tuple:
     # Default to whisper for all other models
     else:
         # This includes whisper-*, distil-whisper-*, deepdml/*, etc.
+        whisper_prefix = "whisper-"
+        distil_prefix = "distil-whisper-"
+        whisper_sizes = {
+            "tiny",
+            "tiny.en",
+            "base",
+            "base.en",
+            "small",
+            "small.en",
+            "medium",
+            "medium.en",
+            "large-v1",
+            "large-v2",
+            "large-v3",
+            "large-v3-turbo",
+            "large",
+            "turbo",
+        }
+        distil_sizes = {
+            "large-v2",
+            "large-v3",
+            "large-v3.5",
+            "medium.en",
+            "small.en",
+        }
+
+        if model_lower.startswith(distil_prefix):
+            tail = model_lower[len(distil_prefix):]
+            if tail in distil_sizes:
+                return ("whisper", f"distil-{tail}", None)
+
+        if model_lower.startswith(whisper_prefix):
+            tail = model_lower[len(whisper_prefix):]
+            if tail in whisper_sizes:
+                return ("whisper", tail, None)
+
         return ("whisper", model_name, None)
 
 def create_segments_from_text(text: str, audio_duration: float = None, segmentation: str = "sentence") -> list:

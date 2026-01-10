@@ -7,7 +7,7 @@ import pytest
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
 from tldw_Server_API.app.core.LLM_Calls.providers import mlx_provider as mp
-from tldw_Server_API.app.core.LLM_Calls import adapter_shims
+from tldw_Server_API.app.core.LLM_Calls import adapter_calls
 
 
 IS_APPLE = platform.system() == "Darwin"
@@ -89,7 +89,7 @@ async def test_mlx_async_handler_with_real_model():
     except ChatProviderError as exc:
         pytest.skip(f"MLX model unavailable for integration test: {exc}", allow_module_level=False)
 
-    stream = await adapter_shims.mlx_chat_handler_async(
+    stream = await adapter_calls.mlx_chat_handler_async(
         input_data=[{"role": "user", "content": "hi from async test"}],
         model=model_path,
         streaming=True,

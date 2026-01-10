@@ -7,7 +7,6 @@ from .base import ChatProvider
 import os
 import json
 from loguru import logger
-from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
 )
@@ -23,10 +22,6 @@ from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payl
 
 # Expose a patchable factory for tests; production uses the centralized client
 http_client_factory = _hc_create_client
-
-
-def _prefer_httpx_in_tests() -> bool:
-    return bool(os.getenv("PYTEST_CURRENT_TEST"))
 
 
 def _stream_debug_enabled(provider: str) -> bool:
@@ -72,22 +67,30 @@ class GoogleAdapter(ChatProvider):
             "app_config": request.get("app_config"),
         }
 
-    def _use_native_http(self) -> bool:
-        # Prefer native path under pytest or when adapters are globally enabled;
-        # otherwise require explicit env flag for this provider.
-        if os.getenv("PYTEST_CURRENT_TEST"):
-            return True
-        enabled = (os.getenv("LLM_ADAPTERS_ENABLED") or "").strip().lower()
-        if enabled in {"0", "false", "no", "off"}:
-            return False
-        if enabled in {"1", "true", "yes", "on"}:
-            return True
-        v = (os.getenv("LLM_ADAPTERS_NATIVE_HTTP_GOOGLE") or "").strip().lower()
-        if v in {"0", "false", "no", "off"}:
-            return False
-        if v in {"1", "true", "yes", "on"}:
-            return True
-        return True
+    def _apply_config_defaults(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        merged = dict(request)
+        cfg = (merged.get("app_config") or {}).get("google_api", {})
+        if merged.get("api_key") is None and cfg.get("api_key") is not None:
+            merged["api_key"] = cfg.get("api_key")
+        if merged.get("model") is None:
+            merged["model"] = cfg.get("model") or "gemini-1.5-flash-latest"
+        if merged.get("temperature") is None and cfg.get("temperature") is not None:
+            merged["temperature"] = cfg.get("temperature")
+        if merged.get("top_p") is None:
+            merged["top_p"] = cfg.get("top_p", cfg.get("topP"))
+        if merged.get("top_k") is None:
+            merged["top_k"] = cfg.get("top_k", cfg.get("topK"))
+        if merged.get("max_tokens") is None:
+            merged["max_tokens"] = cfg.get("max_output_tokens", cfg.get("max_tokens"))
+        if merged.get("stop") is None and cfg.get("stop_sequences") is not None:
+            merged["stop"] = cfg.get("stop_sequences")
+        if merged.get("n") is None:
+            merged["n"] = cfg.get("candidate_count", cfg.get("n"))
+        if merged.get("response_format") is None and cfg.get("response_format") is not None:
+            merged["response_format"] = cfg.get("response_format")
+        if merged.get("tools") is None and cfg.get("tools") is not None:
+            merged["tools"] = cfg.get("tools")
+        return merged
 
     def _base_url(self) -> str:
         return os.getenv("GOOGLE_GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
@@ -204,6 +207,9 @@ class GoogleAdapter(ChatProvider):
         # Stop sequences belong to generationConfig for the models API
         if request.get("stop") is not None:
             gc["stopSequences"] = request.get("stop")
+        response_format = request.get("response_format")
+        if isinstance(response_format, dict) and response_format.get("type") == "json_object":
+            gc["responseMimeType"] = "application/json"
         # Best-effort system instruction
         if system_message:
             payload["systemInstruction"] = {"parts": [{"text": system_message}]}
@@ -231,6 +237,8 @@ class GoogleAdapter(ChatProvider):
         except Exception:
             # tools mapping is best-effort and optional
             pass
+        if "tools" not in payload and request.get("tools") is not None:
+            payload["tools"] = request.get("tools")
         return payload
 
     @staticmethod
@@ -378,111 +386,95 @@ class GoogleAdapter(ChatProvider):
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
         request = validate_payload(self.name, request or {})
-        if _prefer_httpx_in_tests() or os.getenv("PYTEST_CURRENT_TEST") or self._use_native_http():
-            api_key = request.get("api_key")
-            model = request.get("model")
-            url = f"{self._base_url()}/models/{model}:generateContent"
-            headers = self._headers(api_key)
-            payload = self._build_payload(request)
-            try:
-                with http_client_factory(timeout=timeout or 60.0) as client:
-                    resp = client.post(url, headers=headers, json=payload)
-                    resp.raise_for_status()
-                    data = resp.json()
-                    return self._normalize_to_openai_shape(data)
-            except Exception as e:
-                raise self.normalize_error(e)
-        # Legacy path (parity)
-        kwargs = self._to_handler_args(request)
-        kwargs["streaming"] = False
-        fn = getattr(_legacy, "chat_with_google", None)
-        if callable(fn):
-            mod = getattr(fn, "__module__", "") or ""
-            if os.getenv("PYTEST_CURRENT_TEST") and (
-                mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod
-            ):
-                return fn(**kwargs)  # type: ignore[misc]
-        return _legacy.legacy_chat_with_google(**kwargs)
+        request = self._apply_config_defaults(request)
+        api_key = request.get("api_key")
+        model = request.get("model")
+        if not api_key:
+            from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+            raise ChatConfigurationError(provider=self.name, message="Google API Key required.")
+        url = f"{self._base_url()}/models/{model}:generateContent"
+        headers = self._headers(api_key)
+        payload = self._build_payload(request)
+        try:
+            with http_client_factory(timeout=timeout or 60.0) as client:
+                resp = client.post(url, headers=headers, json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+                return self._normalize_to_openai_shape(data)
+        except Exception as e:
+            raise self.normalize_error(e)
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
         request = validate_payload(self.name, request or {})
-        if _prefer_httpx_in_tests() or os.getenv("PYTEST_CURRENT_TEST") or self._use_native_http():
-            api_key = request.get("api_key")
-            model = request.get("model")
-            url = f"{self._base_url()}/models/{model}:streamGenerateContent?alt=sse"
-            headers = self._headers(api_key)
-            payload = self._build_payload(request)
-            try:
-                with http_client_factory(timeout=timeout or 60.0) as client:
-                    with client.stream("POST", url, headers=headers, json=payload) as resp:
-                        resp.raise_for_status()
-                        debug_stream = _stream_debug_enabled(self.name)
-                        seen_done = False
-                        buffer = ""
-                        for raw in resp.iter_lines():
-                            if not raw:
-                                continue
-                            if debug_stream:
-                                logger.debug(f"{self.name} stream raw: {raw!r}")
-                            try:
-                                line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
-                            except Exception:
-                                line = str(raw)
-                            if is_done_line(line):
+        request = self._apply_config_defaults(request)
+        api_key = request.get("api_key")
+        model = request.get("model")
+        if not api_key:
+            from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+            raise ChatConfigurationError(provider=self.name, message="Google API Key required.")
+        url = f"{self._base_url()}/models/{model}:streamGenerateContent?alt=sse"
+        headers = self._headers(api_key)
+        payload = self._build_payload(request)
+        try:
+            with http_client_factory(timeout=timeout or 60.0) as client:
+                with client.stream("POST", url, headers=headers, json=payload) as resp:
+                    resp.raise_for_status()
+                    debug_stream = _stream_debug_enabled(self.name)
+                    seen_done = False
+                    buffer = ""
+                    for raw in resp.iter_lines():
+                        if not raw:
+                            continue
+                        if debug_stream:
+                            logger.debug(f"{self.name} stream raw: {raw!r}")
+                        try:
+                            line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                        except Exception:
+                            line = str(raw)
+                        if is_done_line(line):
+                            if not seen_done:
+                                seen_done = True
+                                yield sse_done()
+                            continue
+                        stripped = line.strip()
+                        if stripped.startswith("data:"):
+                            payload_text = stripped[len("data:"):].strip()
+                            if payload_text.lower() == "[done]":
                                 if not seen_done:
                                     seen_done = True
                                     yield sse_done()
                                 continue
-                            stripped = line.strip()
-                            if stripped.startswith("data:"):
-                                payload_text = stripped[len("data:"):].strip()
-                                if payload_text.lower() == "[done]":
-                                    if not seen_done:
-                                        seen_done = True
-                                        yield sse_done()
-                                    continue
-                                try:
-                                    event = json.loads(payload_text)
-                                except Exception:
-                                    normalized = normalize_provider_line(line)
-                                    if normalized is not None:
-                                        yield normalized
-                                    continue
-                                for delta in self._stream_event_deltas(event):
-                                    yield delta
+                            try:
+                                event = json.loads(payload_text)
+                            except Exception:
+                                normalized = normalize_provider_line(line)
+                                if normalized is not None:
+                                    yield normalized
                                 continue
-                            if stripped and (stripped.startswith("{") or stripped.startswith("[")):
-                                buffer += stripped
-                                try:
-                                    event = json.loads(buffer)
-                                except Exception:
-                                    continue
-                                buffer = ""
-                                yielded = False
-                                for delta in self._stream_event_deltas(event):
-                                    yielded = True
-                                    yield delta
-                                if yielded:
-                                    continue
-                            normalized = normalize_provider_line(line)
-                            if normalized is not None:
-                                yield normalized
-                        for tail in finalize_stream(response=resp, done_already=seen_done):
-                            yield tail
-                return
-            except Exception as e:
-                raise self.normalize_error(e)
-        # Legacy path (parity)
-        kwargs = self._to_handler_args(request)
-        kwargs["streaming"] = True
-        fn = getattr(_legacy, "chat_with_google", None)
-        if callable(fn):
-            mod = getattr(fn, "__module__", "") or ""
-            if os.getenv("PYTEST_CURRENT_TEST") and (
-                mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod
-            ):
-                return fn(**kwargs)  # type: ignore[misc]
-        return _legacy.legacy_chat_with_google(**kwargs)
+                            for delta in self._stream_event_deltas(event):
+                                yield delta
+                            continue
+                        if stripped and (stripped.startswith("{") or stripped.startswith("[")):
+                            buffer += stripped
+                            try:
+                                event = json.loads(buffer)
+                            except Exception:
+                                continue
+                            buffer = ""
+                            yielded = False
+                            for delta in self._stream_event_deltas(event):
+                                yielded = True
+                                yield delta
+                            if yielded:
+                                continue
+                        normalized = normalize_provider_line(line)
+                        if normalized is not None:
+                            yield normalized
+                    for tail in finalize_stream(response=resp, done_already=seen_done):
+                        yield tail
+            return
+        except Exception as e:
+            raise self.normalize_error(e)
 
     async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
         return self.chat(request, timeout=timeout)

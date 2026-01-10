@@ -41,7 +41,20 @@ try:
     import pytest
 
     @pytest.fixture(scope="session", autouse=True)
-    def _auto_configure_openai_mock(mock_openai_server):  # noqa: F811
+    def _auto_configure_openai_mock(request):  # noqa: F811
+        use_mock = os.getenv("USE_OPENAI_MOCK_SERVER", "").lower() in {"1", "true", "yes", "on"}
+        has_real_key = bool(os.getenv("OPENAI_API_KEY"))
+        if not use_mock and has_real_key:
+            yield
+            return
+
+        try:
+            mock_openai_server = request.getfixturevalue("mock_openai_server")
+        except Exception:
+            # If the mock server cannot start (e.g., sandbox port binding), skip mock setup.
+            yield
+            return
+
         # Point OpenAI to mock server and ensure keys are present
         os.environ.setdefault("OPENAI_API_KEY", "sk-mock-key-12345")
         os.environ["OPENAI_API_BASE"] = f"{mock_openai_server}/v1"
@@ -72,7 +85,7 @@ try:
             # Replace loader functions to return patched cfg
             import tldw_Server_API.app.core.config as _config_mod
             _config_mod.load_and_log_configs = lambda: cfg
-            import tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls as _llm_calls_mod
+            import tldw_Server_API.app.core.LLM_Calls.chat_calls as _llm_calls_mod
             _llm_calls_mod.load_and_log_configs = _config_mod.load_and_log_configs
         except Exception:
             pass

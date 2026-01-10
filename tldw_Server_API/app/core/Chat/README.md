@@ -16,11 +16,10 @@ The Chat module powers the `/api/v1/chat/completions` endpoint, orchestrating re
 ## Module Map
 | File / Folder | Purpose |
 | --- | --- |
-| `chat_orchestrator.py` | Single entry point for provider calls (`chat_api_call`, `chat_api_call_async`). Maps generic parameters to provider-specific handlers defined in `provider_config`. |
+| `chat_orchestrator.py` | Single entry point for provider calls (`chat_api_call`, `chat_api_call_async`). Delegates to adapter-backed helpers. |
 | `chat_service.py` | High-level helpers used by the FastAPI endpoint: request normalization, moderation, persistence, logging, streaming orchestration. |
 | `chat_helpers.py` | Validation, character + conversation loading/creation, history assembly, ensuring default persona, etc. |
 | `prompt_template_manager.py` + `prompt_templates/` | Jinja2-based templating for system/user/assistant messages with sandboxed rendering and bundled defaults. |
-| `provider_config.py` | Declarative provider handler map, async support, and parameter translation tables. |
 | `provider_manager.py` | Circuit breaker + health tracking for providers; used for fallback and observability scenarios. |
 | `rate_limiter.py` | Token-bucket rate limiter covering global, per-user, per-conversation, and token budgets. |
 | `request_queue.py` | Priority queue with backpressure, streaming pipe support, and worker pool management. |
@@ -55,8 +54,8 @@ FastAPI endpoint (app/api/v1/endpoints/chat.py)
       ├─► Provider call
       │       └─ `chat_service.build_call_params_from_request`
       │       └─ `chat_orchestrator.chat_api_call` or async variant
-      │                ◦ parameter translation via `PROVIDER_PARAM_MAP`
-      │                ◦ handler from `API_CALL_HANDLERS`
+      │                ◦ adapter registry validation + aliasing
+      │                ◦ adapter from registry (legacy shims only when forced)
       │
       ├─► Streaming or blocking response handling (`streaming_utils`)
       │
@@ -72,8 +71,8 @@ FastAPI endpoint (app/api/v1/endpoints/chat.py)
 ---
 
 ## Provider & Resiliency Layer
-- Handlers live in `tldw_Server_API.app.core.LLM_Calls.*` and are mapped via `provider_config.API_CALL_HANDLERS` (sync) and `ASYNC_API_CALL_HANDLERS`.
-- `PROVIDER_PARAM_MAP` translates neutral `chat_api_call` kwargs to provider-specific names (e.g., `stop` → `stop_sequences` for Anthropic).
+- Handlers live in `tldw_Server_API.app.core.LLM_Calls.*`; adapter registry is the primary entry point.
+- Parameter translation/validation is enforced by the adapter capability registry.
 - `provider_manager.ProviderManager` tracks success/failure counts, response times, and integrates circuit breakers (`CircuitBreaker`) for degraded providers. Fallback logic is typically applied in the endpoint/service layer.
 - Dynamic API keys are merged with module-level overrides via `chat_service.merge_api_keys_for_provider`, honouring providers that require a key.
 
@@ -121,7 +120,7 @@ FastAPI endpoint (app/api/v1/endpoints/chat.py)
 ---
 
 ## Configuration & Settings
-- Provider defaults and fallbacks read from `Config_Files/config.txt` via `config.load_and_log_configs()` and `provider_config`.
+- Provider defaults and fallbacks read from `Config_Files/config.txt` via `config.load_and_log_configs()` and adapter/provider metadata.
 - Rate limiter defaults are set in `rate_limiter.RateLimitConfig`; override via environment variables or injecting custom configs when instantiating the limiter.
 - Streaming idle/heartbeat intervals are read from the `[Chat-Module]` section in the config file (see `streaming_utils` constants).
 - Prompt template directory is relative to the module but can be extended by writing new JSON files.
@@ -145,7 +144,7 @@ Set `TEST_MODE=1` in the environment when running tests to disable background lo
 ---
 
 ## Extending the Module
-1. **Add a new provider**: implement handler(s) in `LLM_Calls`, register sync/async functions in `provider_config.API_CALL_HANDLERS`, and map parameters in `PROVIDER_PARAM_MAP`. Update tests to cover the new provider.
+1. **Add a new provider**: implement an adapter in `LLM_Calls/providers`, register it in the adapter registry, and update the capability registry. Update tests to cover the new provider.
 2. **Adjust request processing**: modify `chat_service` or `chat_helpers`; keep endpoint logic thin and maintain placeholder, template, and moderation flows.
 3. **Enhance rate limiting**: extend `RateLimitConfig` and the FastAPI dependency that instantiates `ConversationRateLimiter`. Ensure metrics reflect new counters.
 4. **Introduce new templates**: drop JSON files into `prompt_templates/` and reference them in requests via `prompt_template_name`.
@@ -271,7 +270,7 @@ The Chat module powers the `/api/v1/chat/completions` endpoint, orchestrating re
   - Additional: character dictionary unit tests and integration suites targeting `/chat/completions`
 
 - Extension Points
-  - Add providers in `LLM_Calls/` and register in `provider_config` + param map
+  - Add providers in `LLM_Calls/providers` and register in adapter + capability registries
   - Extend rate limiting in `rate_limiter.py` and DI layer; update metrics
   - Add/adjust templates in `prompt_templates/`
 

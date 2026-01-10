@@ -585,6 +585,19 @@ def get_paginated_files(*args, **kwargs):
     else:
         raise ValueError(f"Unsupported database type: {db_type}")
 
+def get_paginated_trash_files(*args, **kwargs):
+    if db_type in SQL_CONTENT_BACKENDS:
+        db_instance: MediaDatabase = _require_db_instance(args, kwargs, 'get_paginated_trash_files')
+        page = kwargs.get('page', 1)
+        results_per_page = kwargs.get('results_per_page', 50)
+        if hasattr(db_instance, "get_paginated_trash_list"):
+            return db_instance.get_paginated_trash_list(page=page, results_per_page=results_per_page)
+        raise AttributeError("MediaDatabase instance does not expose a paginated trash list API")
+    elif db_type == 'elasticsearch':
+        _raise_elasticsearch_not_supported("get_paginated_trash_files")
+    else:
+        raise ValueError(f"Unsupported database type: {db_type}")
+
 #
 # End of DB-Searching functions
 ############################################################################################################

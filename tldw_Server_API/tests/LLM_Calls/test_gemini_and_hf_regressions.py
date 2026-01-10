@@ -2,46 +2,30 @@ import json
 
 import pytest
 
-from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as llm_calls
+from tldw_Server_API.app.core.LLM_Calls import chat_calls as llm_calls
 from tldw_Server_API.app.core.LLM_Calls import huggingface_api as hf_module
 from tldw_Server_API.app.core.LLM_Calls.huggingface_api import HuggingFaceAPI
 from tldw_Server_API.app.core.LLM_Calls.sse import sse_done
 
 
 def test_google_streaming_handles_done_sentinel(monkeypatch):
-    pytest.importorskip("requests")
-
-    def fake_config():
-        return {
-            "google_api": {
-                "api_key": "test-key",
-                "model": "gemini-pro-test",
-            }
-        }
-
-    monkeypatch.setattr(llm_calls, "load_and_log_configs", fake_config)
-
     class DummyResponse:
-        def __init__(self, raw_lines):
-            self._raw_lines = raw_lines
-
-        def raise_for_status(self):
-            return None
-
-        def iter_lines(self):
-            for line in self._raw_lines:
-                yield line
-
-        def close(self):
-            return None
-
-    class DummySession:
         def __init__(self, raw_lines):
             self._raw_lines = raw_lines
             self.closed = False
 
-        def post(self, *args, **kwargs):
-            return DummyResponse(self._raw_lines)
+        def raise_for_status(self):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def iter_lines(self):
+            for line in self._raw_lines:
+                yield line
 
         def close(self):
             self.closed = True
@@ -61,9 +45,25 @@ def test_google_streaming_handles_done_sentinel(monkeypatch):
         b"data: [DONE]",
     ]
 
-    dummy_session = DummySession(raw_lines)
+    closed = {"client": False}
+
+    class DummyClient:
+        def __init__(self, raw_lines):
+            self._raw_lines = raw_lines
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            closed["client"] = True
+            return False
+
+        def stream(self, method, url, **kwargs):
+            return DummyResponse(self._raw_lines)
+
     monkeypatch.setattr(
-        llm_calls, "create_session_with_retries", lambda **_: dummy_session
+        "tldw_Server_API.app.core.LLM_Calls.providers.google_adapter.http_client_factory",
+        lambda *a, **k: DummyClient(raw_lines),
     )
 
     generator = llm_calls.chat_with_google(
@@ -77,13 +77,11 @@ def test_google_streaming_handles_done_sentinel(monkeypatch):
     first_payload = json.loads(chunks[0][len("data: ") :])
     assert first_payload["choices"][0]["delta"]["content"] == "hello"
     assert sse_done() in chunks
-    assert dummy_session.closed is True
+    assert closed["client"] is True
 
 
 @pytest.mark.asyncio
 async def test_huggingface_download_handles_head_failure(tmp_path, monkeypatch):
-    httpx_mod = pytest.importorskip("httpx")
-
     class DummyAsyncClient:
         def __init__(self, *args, **kwargs):
             pass
@@ -95,9 +93,12 @@ async def test_huggingface_download_handles_head_failure(tmp_path, monkeypatch):
             return False
 
         async def head(self, *args, **kwargs):
-            raise httpx_mod.HTTPError("head failed")
+            raise RuntimeError("head failed")
 
-    monkeypatch.setattr(hf_module.httpx, "AsyncClient", DummyAsyncClient, raising=True)
+    def _client_factory(*args, **kwargs):
+        return DummyAsyncClient()
+
+    monkeypatch.setattr(hf_module, "create_async_client", _client_factory, raising=True)
 
     api = HuggingFaceAPI(token="fake-token")
     destination = tmp_path / "downloads" / "model.gguf"

@@ -49,7 +49,7 @@ def test_llamacpp_strict_filter_drops_top_k_from_payload_non_streaming():
             self.closed = True
 
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_local_calls.load_settings",
+        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls.load_settings",
         return_value=fake_settings,
     ):
 

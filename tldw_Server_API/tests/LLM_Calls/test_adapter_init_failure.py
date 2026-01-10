@@ -15,7 +15,7 @@ class _FailingRegistry:
 
 @pytest.mark.asyncio
 async def test_openrouter_async_adapter_unavailable(monkeypatch):
-    from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as llm
+    from tldw_Server_API.app.core.LLM_Calls import chat_calls as llm
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.LLM_Calls.adapter_registry.get_registry",
@@ -33,7 +33,7 @@ async def test_openrouter_async_adapter_unavailable(monkeypatch):
 
 
 def test_anthropic_adapter_unavailable(monkeypatch):
-    from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as llm
+    from tldw_Server_API.app.core.LLM_Calls import chat_calls as llm
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.LLM_Calls.adapter_registry.get_registry",

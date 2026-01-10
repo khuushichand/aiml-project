@@ -40,7 +40,7 @@ from tldw_Server_API.app.core.Chat.Chat_Deps import (
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB  # For mocking
 
 
-# Mock for load_and_log_configs as it's used in `chat` and `chat_api_call` (indirectly via legacy_chat_calls)
+# Mock for load_and_log_configs as it's used in `chat` and `chat_api_call` (indirectly via chat_calls)
 # It's better to mock it at the point of use within the functions being tested if it's too global.
 # For now, let's assume it's used by the LLM call functions that are mocked out by mock_llm_api_call_handlers.
 # If `chat` itself calls it directly, that patch needs to be in the `chat` function tests.

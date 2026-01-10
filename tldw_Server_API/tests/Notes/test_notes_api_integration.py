@@ -130,6 +130,7 @@ def reset_db_mock_calls():
     mock_chacha_db_instance.soft_delete_note.side_effect = None
     mock_chacha_db_instance.list_notes.side_effect = None
     mock_chacha_db_instance.search_notes.side_effect = None
+    mock_chacha_db_instance.search_notes_with_keywords.side_effect = None
     mock_chacha_db_instance.add_keyword.side_effect = None
     mock_chacha_db_instance.get_keyword_by_id.side_effect = None
     mock_chacha_db_instance.link_note_to_keyword.side_effect = None
@@ -193,6 +194,16 @@ def test_create_note(client: TestClient):
         message_id=None,
     )
     mock_chacha_db_instance.get_note_by_id.assert_called_once_with(note_id=note_id_val)
+
+
+def test_create_note_rejects_overlong_keyword(client: TestClient):
+    long_kw = "k" * 101
+    response = client.post(
+        "/api/v1/notes/",
+        json={"title": "New Note", "content": "Note content", "keywords": [long_kw]},
+    )
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    mock_chacha_db_instance.add_note.assert_not_called()
 
 
 def test_create_note_invalid_conversation_id_returns_404(client: TestClient):
@@ -443,6 +454,30 @@ def test_search_notes_without_trailing_slash(client: TestClient):
     assert len(data) == 1
     assert data[0]["id"] == note_id_val
     mock_chacha_db_instance.search_notes.assert_called_once_with(search_term=query_term, limit=5, offset=0)
+
+
+def test_search_notes_with_keyword_tokens(client: TestClient):
+    query_term, note_id_val = "important", str(uuid.uuid4())
+    expected_db_client_id = "test_api_client_for_user_db"
+    mock_chacha_db_instance.search_notes_with_keywords.return_value = [
+        create_timestamped_data(
+            {"id": note_id_val, "title": "Important Note", "content": "Token-filtered content."},
+            expected_db_client_id
+        )
+    ]
+    response = client.get(
+        "/api/v1/notes/search/?query=important&tokens=mindmap&tokens=project&limit=5"
+    )
+    assert response.status_code == status.HTTP_200_OK
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["id"] == note_id_val
+    mock_chacha_db_instance.search_notes_with_keywords.assert_called_once_with(
+        search_term=query_term,
+        keyword_tokens=["mindmap", "project"],
+        limit=5,
+        offset=0
+    )
 
 
 def test_export_notes_route_not_shadowed(client: TestClient):

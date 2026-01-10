@@ -13,12 +13,15 @@ from tldw_Server_API.app.api.v1.schemas.media_request_models import (
     ProcessPDFsForm,
     ProcessEbooksForm,
     ProcessEmailsForm,
+    TranscriptionModel,
 )
 
 try:
     HTTP_422_UNPROCESSABLE = status.HTTP_422_UNPROCESSABLE_CONTENT
 except AttributeError:  # Starlette < 0.27
     HTTP_422_UNPROCESSABLE = status.HTTP_422_UNPROCESSABLE_ENTITY
+
+TRANSCRIPTION_MODEL_ENUM = [model.value for model in TranscriptionModel]
 
 
 def _coerce_urls(urls: Optional[List[str]]) -> Optional[List[str]]:
@@ -153,6 +156,7 @@ async def get_process_videos_form(
     transcription_model: str = Form(
         "deepdml/faster-distil-whisper-large-v3.5",
         description="Transcription model for video audio tracks",
+        json_schema_extra={"enum": TRANSCRIPTION_MODEL_ENUM},
     ),
     transcription_language: str = Form("en"),
     diarize: bool = Form(False),
@@ -223,6 +227,7 @@ async def get_process_audios_form(
     transcription_model: str = Form(
         "deepdml/faster-distil-whisper-large-v3.5",
         description="Transcription model for audio inputs",
+        json_schema_extra={"enum": TRANSCRIPTION_MODEL_ENUM},
     ),
     transcription_language: str = Form("en"),
     diarize: bool = Form(False),

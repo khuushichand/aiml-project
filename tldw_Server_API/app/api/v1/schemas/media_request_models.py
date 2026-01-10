@@ -227,6 +227,12 @@ class TranscriptionModel(str, Enum):
     WHISPER_LARGE_V2 = "whisper-large-v2"
     WHISPER_LARGE_V3 = "whisper-large-v3"
     WHISPER_LARGE_V3_TURBO = "whisper-large-v3-turbo"
+    WHISPER_TINY_CT2 = "whisper-tiny-ct2"
+    WHISPER_BASE_CT2 = "whisper-base-ct2"
+    WHISPER_SMALL_CT2 = "whisper-small-ct2"
+    WHISPER_MEDIUM_CT2 = "whisper-medium-ct2"
+    WHISPER_LARGE_V2_CT2 = "whisper-large-v2-ct2"
+    WHISPER_LARGE_V3_CT2 = "whisper-large-v3-ct2"
 
     # Distil-Whisper Models (faster, optimized)
     DISTIL_WHISPER_LARGE_V2 = "distil-whisper-large-v2"
@@ -234,12 +240,14 @@ class TranscriptionModel(str, Enum):
     DISTIL_WHISPER_MEDIUM_EN = "distil-whisper-medium.en"
     DISTIL_WHISPER_SMALL_EN = "distil-whisper-small.en"
 
-    # Specific HuggingFace models
-    DEEPDML_FASTER_DISTIL_LARGE_V3 = "deepdml/faster-distil-whisper-large-v3.5"
+    # Optimized / hosted models
+    DEEPDML_FASTER_DISTIL_LARGE_V3_5 = "deepdml/faster-distil-whisper-large-v3.5"
     DEEPDML_FASTER_LARGE_V3_TURBO = "deepdml/faster-whisper-large-v3-turbo-ct2"
 
     # Nemo Models
     NEMO_CANARY_1B = "nemo-canary-1b"
+    NEMO_PARAKEET_0_11B = "nemo-parakeet-0.11b"
+    NEMO_PARAKEET_1_1B = "nemo-parakeet-1.1b"
     NEMO_PARAKEET_TDT_1B = "nemo-parakeet-tdt-1.1b"
 
     # Parakeet with backends

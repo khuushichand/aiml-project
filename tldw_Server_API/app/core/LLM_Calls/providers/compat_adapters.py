@@ -9,8 +9,8 @@ from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payl
 from tldw_Server_API.app.core.LLM_Calls.sse import openai_delta_chunk, sse_done
 
 
-class LegacyChatAdapter(ChatProvider):
-    """Adapter wrapper around legacy provider callables."""
+class CompatChatAdapter(ChatProvider):
+    """Adapter wrapper around compatibility provider callables."""
 
     name = "legacy"
     legacy_module: str = ""
@@ -75,10 +75,10 @@ class LegacyChatAdapter(ChatProvider):
             yield item
 
 
-class MoonshotAdapter(LegacyChatAdapter):
+class MoonshotAdapter(CompatChatAdapter):
     name = "moonshot"
-    legacy_module = "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls"
-    legacy_function = "chat_with_moonshot"
+    legacy_module = "tldw_Server_API.app.core.LLM_Calls.chat_calls"
+    legacy_function = "legacy_chat_with_moonshot"
     supports_streaming = True
     supports_tools = True
 
@@ -109,10 +109,10 @@ class MoonshotAdapter(LegacyChatAdapter):
         }
 
 
-class ZaiAdapter(LegacyChatAdapter):
+class ZaiAdapter(CompatChatAdapter):
     name = "zai"
-    legacy_module = "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls"
-    legacy_function = "chat_with_zai"
+    legacy_module = "tldw_Server_API.app.core.LLM_Calls.chat_calls"
+    legacy_function = "legacy_chat_with_zai"
     supports_streaming = True
     supports_tools = True
 
@@ -137,10 +137,10 @@ class ZaiAdapter(LegacyChatAdapter):
         }
 
 
-class LlamaCppAdapter(LegacyChatAdapter):
+class LlamaCppAdapter(CompatChatAdapter):
     name = "llama.cpp"
-    legacy_module = "tldw_Server_API.app.core.LLM_Calls.legacy_local_calls"
-    legacy_function = "chat_with_llama"
+    legacy_module = "tldw_Server_API.app.core.LLM_Calls.local_chat_calls"
+    legacy_function = "legacy_chat_with_llama"
     supports_streaming = True
     supports_tools = False
 
@@ -171,10 +171,10 @@ class LlamaCppAdapter(LegacyChatAdapter):
         }
 
 
-class KoboldAdapter(LegacyChatAdapter):
+class KoboldAdapter(CompatChatAdapter):
     name = "kobold"
-    legacy_module = "tldw_Server_API.app.core.LLM_Calls.legacy_local_calls"
-    legacy_function = "chat_with_kobold"
+    legacy_module = "tldw_Server_API.app.core.LLM_Calls.local_chat_calls"
+    legacy_function = "legacy_chat_with_kobold"
     supports_streaming = False
     supports_tools = False
 
@@ -200,10 +200,10 @@ class KoboldAdapter(LegacyChatAdapter):
         }
 
 
-class OobaAdapter(LegacyChatAdapter):
+class OobaAdapter(CompatChatAdapter):
     name = "ooba"
-    legacy_module = "tldw_Server_API.app.core.LLM_Calls.legacy_local_calls"
-    legacy_function = "chat_with_oobabooga"
+    legacy_module = "tldw_Server_API.app.core.LLM_Calls.local_chat_calls"
+    legacy_function = "legacy_chat_with_oobabooga"
     supports_streaming = True
     supports_tools = False
 
@@ -235,10 +235,10 @@ class OobaAdapter(LegacyChatAdapter):
         }
 
 
-class TabbyAPIAdapter(LegacyChatAdapter):
+class TabbyAPIAdapter(CompatChatAdapter):
     name = "tabbyapi"
-    legacy_module = "tldw_Server_API.app.core.LLM_Calls.legacy_local_calls"
-    legacy_function = "chat_with_tabbyapi"
+    legacy_module = "tldw_Server_API.app.core.LLM_Calls.local_chat_calls"
+    legacy_function = "legacy_chat_with_tabbyapi"
     supports_streaming = True
     supports_tools = True
 
@@ -274,10 +274,10 @@ class TabbyAPIAdapter(LegacyChatAdapter):
         }
 
 
-class VLLMAdapter(LegacyChatAdapter):
+class VLLMAdapter(CompatChatAdapter):
     name = "vllm"
-    legacy_module = "tldw_Server_API.app.core.LLM_Calls.legacy_local_calls"
-    legacy_function = "chat_with_vllm"
+    legacy_module = "tldw_Server_API.app.core.LLM_Calls.local_chat_calls"
+    legacy_function = "legacy_chat_with_vllm"
     supports_streaming = True
     supports_tools = True
 
@@ -313,10 +313,10 @@ class VLLMAdapter(LegacyChatAdapter):
         }
 
 
-class LocalLLMAdapter(LegacyChatAdapter):
+class LocalLLMAdapter(CompatChatAdapter):
     name = "local-llm"
-    legacy_module = "tldw_Server_API.app.core.LLM_Calls.legacy_local_calls"
-    legacy_function = "chat_with_local_llm"
+    legacy_module = "tldw_Server_API.app.core.LLM_Calls.local_chat_calls"
+    legacy_function = "legacy_chat_with_local_llm"
     supports_streaming = True
     supports_tools = True
 
@@ -351,10 +351,10 @@ class LocalLLMAdapter(LegacyChatAdapter):
         }
 
 
-class OllamaAdapter(LegacyChatAdapter):
+class OllamaAdapter(CompatChatAdapter):
     name = "ollama"
-    legacy_module = "tldw_Server_API.app.core.LLM_Calls.legacy_local_calls"
-    legacy_function = "chat_with_ollama"
+    legacy_module = "tldw_Server_API.app.core.LLM_Calls.local_chat_calls"
+    legacy_function = "legacy_chat_with_ollama"
     supports_streaming = True
     supports_tools = True
 
@@ -387,10 +387,10 @@ class OllamaAdapter(LegacyChatAdapter):
         }
 
 
-class AphroditeAdapter(LegacyChatAdapter):
+class AphroditeAdapter(CompatChatAdapter):
     name = "aphrodite"
-    legacy_module = "tldw_Server_API.app.core.LLM_Calls.legacy_local_calls"
-    legacy_function = "chat_with_aphrodite"
+    legacy_module = "tldw_Server_API.app.core.LLM_Calls.local_chat_calls"
+    legacy_function = "legacy_chat_with_aphrodite"
     supports_streaming = True
     supports_tools = True
 

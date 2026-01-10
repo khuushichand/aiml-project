@@ -27,7 +27,7 @@ http_client_factory = _hc_create_client
 # Reuse the existing, stable implementation to ensure behavior parity during migration
 # Do not import legacy handler at module import time to keep tests patchable.
 # Resolve the function from the module at call time so monkeypatching
-# tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.chat_with_openai works.
+# tldw_Server_API.app.core.LLM_Calls.chat_calls.chat_with_openai works.
 
 
 class OpenAIAdapter(ChatProvider):
@@ -161,7 +161,7 @@ class OpenAIAdapter(ChatProvider):
 
     def _openai_base_url(self) -> str:
         import os
-        # Match legacy resolution precedence used by legacy_chat_calls._resolve_openai_api_base
+        # Match legacy resolution precedence used by chat_calls._resolve_openai_api_base
         env_api_base = (
             os.getenv("OPENAI_API_BASE_URL")
             or os.getenv("OPENAI_API_BASE")

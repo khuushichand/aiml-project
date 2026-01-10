@@ -7127,6 +7127,94 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
 
 
+    def search_notes_with_keywords(
+        self,
+        search_term: Optional[str],
+        keyword_tokens: List[str],
+        limit: int = 10,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Search notes with an optional FTS query and keyword-token filter."""
+        tokens = [t.strip().lower() for t in keyword_tokens if isinstance(t, str) and t.strip()]
+        if not tokens:
+            if not search_term or not str(search_term).strip():
+                return []
+            return self.search_notes(search_term=str(search_term), limit=limit, offset=offset)
+
+        keyword_table = self._map_table_for_backend("keywords")
+        like_clause = " OR ".join(["LOWER(k.keyword) LIKE ?"] * len(tokens))
+        like_params = [f"%{t}%" for t in tokens]
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            if search_term and str(search_term).strip():
+                tsquery = FTSQueryTranslator.normalize_query(str(search_term), 'postgresql')
+                if not tsquery:
+                    logger.debug("Notes search term normalized to empty tsquery for input '%s'", search_term)
+                    return []
+                query = f"""
+                    SELECT DISTINCT n.*, ts_rank(n.notes_fts_tsv, to_tsquery('english', ?)) AS rank
+                    FROM notes n
+                    JOIN note_keywords nk ON n.id = nk.note_id
+                    JOIN {keyword_table} k ON k.id = nk.keyword_id
+                    WHERE n.deleted = FALSE
+                      AND k.deleted = FALSE
+                      AND n.notes_fts_tsv @@ to_tsquery('english', ?)
+                      AND ({like_clause})
+                    ORDER BY rank DESC, n.last_modified DESC
+                    LIMIT ? OFFSET ?
+                """
+                params = (tsquery, tsquery, *like_params, limit, offset)
+            else:
+                query = f"""
+                    SELECT DISTINCT n.*
+                    FROM notes n
+                    JOIN note_keywords nk ON n.id = nk.note_id
+                    JOIN {keyword_table} k ON k.id = nk.keyword_id
+                    WHERE n.deleted = FALSE
+                      AND k.deleted = FALSE
+                      AND ({like_clause})
+                    ORDER BY n.last_modified DESC
+                    LIMIT ? OFFSET ?
+                """
+                params = (*like_params, limit, offset)
+            cursor = self.execute_query(query, params)
+            return [dict(row) for row in cursor.fetchall()]
+
+        if search_term and str(search_term).strip():
+            safe_literal = str(search_term).replace('"', '""')
+            safe_search_term = f'"{safe_literal}"'
+            query = f"""
+                    SELECT DISTINCT n.*
+                    FROM notes_fts
+                    JOIN notes AS n ON notes_fts.rowid = n.rowid
+                    JOIN note_keywords nk ON n.id = nk.note_id
+                    JOIN keywords k ON k.id = nk.keyword_id
+                    WHERE notes_fts MATCH ?
+                      AND n.deleted = 0
+                      AND k.deleted = 0
+                      AND ({like_clause})
+                    ORDER BY bm25(notes_fts), n.last_modified DESC
+                    LIMIT ? OFFSET ?
+                    """
+            params = (safe_search_term, *like_params, limit, offset)
+        else:
+            query = f"""
+                    SELECT DISTINCT n.*
+                    FROM notes n
+                    JOIN note_keywords nk ON n.id = nk.note_id
+                    JOIN keywords k ON k.id = nk.keyword_id
+                    WHERE n.deleted = 0
+                      AND k.deleted = 0
+                      AND ({like_clause})
+                    ORDER BY n.last_modified DESC
+                    LIMIT ? OFFSET ?
+                    """
+            params = (*like_params, limit, offset)
+
+        cursor = self.execute_query(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+
+
     def count_notes_matching(self, search_term: str) -> int:
         """Returns the total number of active notes matching the FTS query."""
         if self.backend_type == BackendType.POSTGRESQL:

@@ -9,7 +9,7 @@ Consolidate all LLM chat and summarization flows onto the adapter registry while
 - Deterministic 400s for unsupported request parameters at the provider capability registry level (no silent drops or provider-side surprises for provider-level fields).
 - Preserve response-side extensions in both streaming and non-streaming responses.
 - Keep `config.txt` precedence and semantics unchanged.
-- Remove legacy LLM call modules and dispatch shims once parity is proven.
+- Remove legacy module naming and dispatch shims once parity is proven.
 - Preserve streaming SSE semantics and existing error mapping behavior.
 - Improve maintainability: fewer code paths, fewer test doubles, simpler provider onboarding.
 
@@ -27,7 +27,7 @@ Consolidate all LLM chat and summarization flows onto the adapter registry while
 - Backend maintainers: add/update providers by implementing one adapter.
 - Integrators: send supported OpenAI-compatible fields and receive deterministic errors for unsupported params.
 - Evaluations/RAG/Jobs/Services: call a single LLM interface without provider-specific branching.
-- Test authors: patch adapter calls directly without relying on legacy request shims.
+- Test authors: patch adapter calls directly without relying on compatibility request shims.
 
 ## User Stories
 - As an integrator, I can send supported OpenAI-compatible fields (e.g., `min_p`, `top_k`, `repetition_penalty`) and get a clear error if a field is unsupported.
@@ -36,7 +36,7 @@ Consolidate all LLM chat and summarization flows onto the adapter registry while
 - As a tester, I can stub a provider adapter without having to patch `requests.Session`.
 
 ## Problem Statement
-LLM calls are fragmented across legacy modules (`legacy_chat_calls.py`, `legacy_local_calls.py`), summarization helpers, shims, and provider-specific dispatch tables. This duplicates config parsing, error handling, and transport behaviors, while increasing the risk of extension-field regressions. The adapter registry exists but is not the exclusive entry point.
+LLM calls are fragmented across compatibility modules (`chat_calls.py`, `local_chat_calls.py`), summarization helpers, adapter call handlers, and provider-specific dispatch tables. This duplicates config parsing, error handling, and transport behaviors, while increasing the risk of extension-field regressions. The adapter registry exists but is not the exclusive entry point.
 
 ## Proposed Architecture
 ### Core Principles
@@ -82,7 +82,7 @@ LLM calls are fragmented across legacy modules (`legacy_chat_calls.py`, `legacy_
 - **Runtime**: registry is read-only at runtime; `config.txt` selects providers but does not alter supported fields.
 - **Validation scope**: provider-level only; model-specific capability enforcement is out-of-scope for this migration.
 
-### Capability Registry Launch Checklist (from current provider_config + strict mode tests)
+### Capability Registry Launch Checklist (from legacy handler inventory + strict mode tests)
 **Alias mappings to capture**
 - [ ] bedrock: `topp`/`maxp` -> `maxp`.
 - [ ] openai: `maxp` -> `topp` (legacy alias).
@@ -150,15 +150,15 @@ Base URL overrides are allowed only for trusted callers (internal services/admin
 
 ### Backward Compatibility and Deprecation
 - Legacy entry points remain temporarily as thin wrappers around the adapter registry.
-- Deprecation notices are logged once per process for legacy entry point usage.
-- Complete migration means no production code path depends on legacy modules or shims.
+- Deprecation notices are logged once per process for compatibility entry point usage.
+- Complete migration means no production code path depends on legacy module names or compatibility shims.
 
 ## In-Scope Migration Targets
-Primary modules to migrate and retire after parity:
-- `tldw_Server_API/app/core/LLM_Calls/legacy_chat_calls.py`
-- `tldw_Server_API/app/core/LLM_Calls/legacy_local_calls.py`
-- `tldw_Server_API/app/core/LLM_Calls/adapter_shims.py`
-- `tldw_Server_API/app/core/Chat/provider_config.py`
+Primary modules to consolidate after parity:
+- `tldw_Server_API/app/core/LLM_Calls/chat_calls.py`
+- `tldw_Server_API/app/core/LLM_Calls/local_chat_calls.py`
+- `tldw_Server_API/app/core/LLM_Calls/adapter_calls.py`
+- `tldw_Server_API/app/core/Chat/provider_config.py` (deprecated stub; dispatch tables removed)
 - `tldw_Server_API/app/core/LLM_Calls/Summarization_General_Lib.py`
 - `tldw_Server_API/app/core/LLM_Calls/Local_Summarization_Lib.py`
 
@@ -178,7 +178,7 @@ Call sites to converge on the registry:
 - Confirm provider list and extension-field requirements.
 - Inventory all LLM call sites and current request payload shapes.
 - Document explicit out-of-scope surfaces (e.g., embeddings or other non-chat endpoints) in this PRD.
-- Inventory `provider_config.py` consumers and define a replacement surface (registry + config loader or compatibility facade).
+- Inventory legacy `provider_config.py` consumers and define a replacement surface (registry + config loader or compatibility facade).
 - Define capability registry entries per provider (`base_fields`, extensions, aliases, blocked fields).
 - Define a parity gate (golden tests + fixtures) and a feature flag/rollback plan for registry cutover.
 
@@ -194,14 +194,14 @@ Call sites to converge on the registry:
 - Move default prompts to `Config_Files/Prompts` and load via `prompt_loader`.
 - Remove provider-specific summarization functions after parity.
 
-### Phase 3: Legacy Entry Points as Thin Wrappers
+### Phase 3: Compatibility Entry Points as Thin Wrappers
 - Route legacy chat functions to adapters without filtering or param maps.
-- Deprecate `provider_config` maps and `adapter_shims`.
+- Remove `provider_config` dispatch tables and mark `adapter_calls` as a compatibility interface.
 - Migrate remaining call sites to registry directly.
 
-### Phase 4: Delete Legacy Modules
-- Remove `legacy_chat_calls*` and legacy param maps; keep `adapter_shims` until the deprecation window completes.
-- Update docs and tests to reference the registry interface.
+### Phase 4: Rename Legacy Modules
+- Rename legacy modules to compatibility names (`chat_calls.py`, `local_chat_calls.py`, `adapter_calls.py`) and remove legacy param maps.
+- Update docs and tests to reference the registry interface and compatibility module paths.
 
 ## Success Criteria
 - 100% LLM calls route through adapter registry in production code paths.
@@ -234,8 +234,15 @@ Call sites to converge on the registry:
 ## Compatibility Shims (Launch)
 **Must keep (external consumers/tests depend on these surfaces)**
 - `tldw_Server_API/app/core/Chat/Chat_Functions.py`: legacy chat + chat_api_call shim for downstream integrations/tests.
-- `tldw_Server_API/app/core/LLM_Calls/adapter_shims.py`: adapter-backed handlers that preserve legacy signatures.
+- `tldw_Server_API/app/core/LLM_Calls/adapter_calls.py`: adapter-backed handlers that preserve legacy signatures.
   - Removal gated by a published deprecation window and usage metrics showing no external consumers; must be called out in release notes.
+
+**Deprecation timeline (Phase 4)**
+- Earliest removal: two release trains after registry-default cutover (target: >= v0.1.2 if Stage 4 lands in v0.1.0).
+- Requirements: usage metrics confirm no external consumers, release notes announce removal window, and parity gate tests stay green.
+
+**Rollback plan (Phase 4)**
+- No runtime toggle once the cutover is complete; rollback requires deploying the previous release.
 
 **Can remove early (internal call sites)**
 - `tldw_Server_API/app/core/Prompt_Management/prompt_studio/prompt_generator.py`: direct `chat_with_openai` usage.
@@ -243,7 +250,7 @@ Call sites to converge on the registry:
 - `tldw_Server_API/app/core/RAG/rag_service/generation.py`: direct `chat_with_*` providers.
 - `tldw_Server_API/app/core/Evaluations/wordbench_runner.py`: direct `chat_with_*` usage.
 - `tldw_Server_API/app/core/Workflows/adapters.py`: direct `chat_with_openai_async` usage.
-- `tldw_Server_API/app/core/Writing/note_title.py`: uses `adapter_shims.openai_chat_handler`.
+- `tldw_Server_API/app/core/Writing/note_title.py`: uses `adapter_calls.openai_chat_handler`.
 
 ## Open Questions
 - None (resolved: nested validation Option A; base URL override Option A).
@@ -253,28 +260,28 @@ Call sites to converge on the registry:
 **Goal**: Implement the capability registry module and baseline schema definitions.
 **Success Criteria**: `capability_registry.py` exists with `base_fields`, per-provider extensions, aliases, blocked fields, and schema versioning; docs updated to reference the registry.
 **Tests**: Unit tests for registry structure loading and validation behavior.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Adapter Validation Integration
 **Goal**: Enforce request validation and deterministic 400s across adapters.
 **Success Criteria**: All registry-backed adapters reject unsupported/blocked keys before provider calls; error mapping remains consistent; response extensions preserved.
 **Tests**: Adapter validation tests; integration tests that assert 400s on unsupported fields; response extension preservation tests; base_url override SSRF tests with fixtures `trusted_caller_context`, `untrusted_caller_context`, `base_url_allowed`, `base_url_invalid_scheme`, `base_url_blocked_link_local`, `base_url_blocked_metadata`, `base_url_blocked_private_ip`, `base_url_dns_rebind`.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Summarization and Call Site Migration
 **Goal**: Route summarization/analysis and core call sites through validated adapters.
 **Success Criteria**: Summarization uses the registry path; RAG/evals/services call the registry without legacy shims.
 **Tests**: Regression tests comparing pre/post outputs; streaming contract fixtures still pass.
-**Status**: Not Started
+**Status**: Complete
 
-## Stage 4: Legacy Wrapper Cutover
-**Goal**: Convert legacy entry points to thin wrappers and gate cutover via feature flag.
-**Success Criteria**: Legacy modules call registry only; parity gate tests pass; rollback plan documented and tested; compatibility shims deprecated with a published removal timeline.
-**Tests**: Golden parity fixtures; feature flag toggle tests; legacy entry point integration tests.
-**Status**: Not Started
+## Stage 4: Compatibility Wrapper Cutover
+**Goal**: Convert legacy entry points to thin wrappers and remove feature-flag routing.
+**Success Criteria**: Legacy modules call registry only; parity gate tests pass; rollback plan documented (release rollback); compatibility shims deprecated with a published removal timeline.
+**Tests**: Golden parity fixtures; legacy entry point integration tests.
+**Status**: Complete
 
 ## Stage 5: Legacy Module Removal and Cleanup
-**Goal**: Delete legacy LLM modules and finalize docs/tests.
-**Success Criteria**: Legacy modules removed after deprecation window; docs updated; all tests green; no production path depends on deleted code.
+**Goal**: Remove legacy module naming and finalize docs/tests.
+**Success Criteria**: Legacy module names removed after deprecation window; docs updated; all tests green; no production path depends on deleted code.
 **Tests**: Full test suite with unit/integration coverage for adapter registry and validation.
-**Status**: Not Started
+**Status**: In Progress

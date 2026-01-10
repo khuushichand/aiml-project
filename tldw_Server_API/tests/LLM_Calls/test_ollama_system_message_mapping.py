@@ -38,10 +38,10 @@ def test_ollama_accepts_system_message_kwarg_and_inserts_message():
         return DummyResponse({})
 
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_local_calls.load_settings",
+        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls.load_settings",
         return_value=fake_settings,
     ), patch(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_local_calls.httpx.Client"
+        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls.httpx.Client"
     ) as mock_client_cls:
         mock_client = MagicMock()
         mock_client.post.side_effect = fake_post

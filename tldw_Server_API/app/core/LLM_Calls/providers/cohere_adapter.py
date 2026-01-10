@@ -8,7 +8,7 @@ from loguru import logger
 
 from .base import ChatProvider
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
-from tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls import chat_with_cohere
+from tldw_Server_API.app.core.LLM_Calls.chat_calls import legacy_chat_with_cohere
 
 
 class CohereAdapter(ChatProvider):
@@ -52,13 +52,13 @@ class CohereAdapter(ChatProvider):
         request = validate_payload(self.name, request or {})
         if timeout is not None:
             logger.debug("Cohere adapter ignoring explicit timeout override.")
-        return chat_with_cohere(**self._to_handler_args(request, streaming=False))
+        return legacy_chat_with_cohere(**self._to_handler_args(request, streaming=False))
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
         request = validate_payload(self.name, request or {})
         if timeout is not None:
             logger.debug("Cohere adapter ignoring explicit timeout override.")
-        return chat_with_cohere(**self._to_handler_args(request, streaming=True))
+        return legacy_chat_with_cohere(**self._to_handler_args(request, streaming=True))
 
     async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
         return await asyncio.to_thread(self.chat, request, timeout=timeout)

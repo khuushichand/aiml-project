@@ -14,6 +14,8 @@ import os
 import pytest
 
 
+NETWORK_TESTS_ENABLED = os.getenv("ENABLE_NETWORK_TESTS", "").lower() in {"1", "true", "yes", "on"}
+
 class _FakeResponse:
     def __init__(self, status_code: int = 200, json_obj: Dict[str, Any] | None = None, lines: List[str] | None = None):
         self.status_code = status_code
@@ -89,7 +91,7 @@ def _payload(stream: bool = False):
 
 def test_chat_completions_anthropic_native_non_streaming(monkeypatch, client_user_only):
     import tldw_Server_API.app.api.v1.endpoints.chat as chat_endpoint
-    real = os.getenv("ANTHROPIC_API_KEY")
+    real = os.getenv("ANTHROPIC_API_KEY") if NETWORK_TESTS_ENABLED else None
     if real:
         chat_endpoint.API_KEYS = {**(chat_endpoint.API_KEYS or {}), "anthropic": real}
         client = client_user_only
@@ -101,8 +103,8 @@ def test_chat_completions_anthropic_native_non_streaming(monkeypatch, client_use
     else:
         # Mock httpx client to avoid network when no key
         chat_endpoint.API_KEYS = {**(chat_endpoint.API_KEYS or {}), "anthropic": "sk-ant-test"}
-        import httpx
-        monkeypatch.setattr(httpx, "Client", _FakeClient)
+        import tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter as anthropic_mod
+        monkeypatch.setattr(anthropic_mod, "http_client_factory", lambda *a, **k: _FakeClient())
 
         client = client_user_only
         r = client.post("/api/v1/chat/completions", json=_payload(stream=False))
@@ -113,7 +115,7 @@ def test_chat_completions_anthropic_native_non_streaming(monkeypatch, client_use
 
 def test_chat_completions_anthropic_native_streaming(monkeypatch, client_user_only):
     import tldw_Server_API.app.api.v1.endpoints.chat as chat_endpoint
-    real = os.getenv("ANTHROPIC_API_KEY")
+    real = os.getenv("ANTHROPIC_API_KEY") if NETWORK_TESTS_ENABLED else None
     if real:
         chat_endpoint.API_KEYS = {**(chat_endpoint.API_KEYS or {}), "anthropic": real}
         client = client_user_only
@@ -126,8 +128,8 @@ def test_chat_completions_anthropic_native_streaming(monkeypatch, client_user_on
             assert sum(1 for l in lines if l.strip().lower() == "data: [done]") == 1
     else:
         chat_endpoint.API_KEYS = {**(chat_endpoint.API_KEYS or {}), "anthropic": "sk-ant-test"}
-        import httpx
-        monkeypatch.setattr(httpx, "Client", _FakeClient)
+        import tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter as anthropic_mod
+        monkeypatch.setattr(anthropic_mod, "http_client_factory", lambda *a, **k: _FakeClient())
 
         client = client_user_only
         with client.stream("POST", "/api/v1/chat/completions", json=_payload(stream=True)) as resp:

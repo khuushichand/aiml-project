@@ -1,4 +1,4 @@
-import os
+import json
 from typing import Any, Dict, List, Iterator
 
 import pytest
@@ -16,7 +16,7 @@ def _messages() -> List[Dict[str, Any]]:
 
 
 def test_openai_shim_preserves_streaming_none_and_topp_fallback(monkeypatch):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openai_chat_handler
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import openai_chat_handler
 
     captured: Dict[str, Any] = {}
 
@@ -28,7 +28,7 @@ def test_openai_shim_preserves_streaming_none_and_topp_fallback(monkeypatch):
     # Force adapter path
     monkeypatch.setenv("LLM_ADAPTERS_OPENAI", "1")
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.chat_with_openai",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.chat_with_openai",
         _fake_openai,
     ):
         # streaming=None and topp fallback should be forwarded to legacy unchanged
@@ -48,7 +48,7 @@ def test_openai_shim_preserves_streaming_none_and_topp_fallback(monkeypatch):
 
 
 def test_openai_shim_streaming_true_single_done(monkeypatch):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openai_chat_handler
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import openai_chat_handler
 
     def _fake_openai(**kwargs) -> Iterator[str]:
         # Validate streaming intent
@@ -59,7 +59,7 @@ def test_openai_shim_streaming_true_single_done(monkeypatch):
     # Force adapter path
     monkeypatch.setenv("LLM_ADAPTERS_OPENAI", "1")
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.chat_with_openai",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.chat_with_openai",
         _fake_openai,
     ):
         stream = openai_chat_handler(
@@ -75,7 +75,7 @@ def test_openai_shim_streaming_true_single_done(monkeypatch):
 
 
 def test_anthropic_shim_stop_sequences_mapping(monkeypatch):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import anthropic_chat_handler
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import anthropic_chat_handler
 
     captured: Dict[str, Any] = {}
 
@@ -85,7 +85,7 @@ def test_anthropic_shim_stop_sequences_mapping(monkeypatch):
 
     monkeypatch.setenv("LLM_ADAPTERS_ANTHROPIC", "1")
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.chat_with_anthropic",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.chat_with_anthropic",
         _fake_anthropic,
     ):
         resp = anthropic_chat_handler(
@@ -102,7 +102,7 @@ def test_anthropic_shim_stop_sequences_mapping(monkeypatch):
 
 
 def test_groq_shim_logprobs_toplogprobs_forwarding(monkeypatch):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import groq_chat_handler
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import groq_chat_handler
 
     captured: Dict[str, Any] = {}
 
@@ -112,7 +112,7 @@ def test_groq_shim_logprobs_toplogprobs_forwarding(monkeypatch):
 
     monkeypatch.setenv("LLM_ADAPTERS_GROQ", "1")
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.chat_with_groq",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.chat_with_groq",
         _fake_groq,
     ):
         resp = groq_chat_handler(
@@ -128,7 +128,7 @@ def test_groq_shim_logprobs_toplogprobs_forwarding(monkeypatch):
 
 
 def test_openrouter_shim_top_k_min_p_forwarding(monkeypatch):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import openrouter_chat_handler
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import openrouter_chat_handler
 
     captured: Dict[str, Any] = {}
 
@@ -138,7 +138,7 @@ def test_openrouter_shim_top_k_min_p_forwarding(monkeypatch):
 
     monkeypatch.setenv("LLM_ADAPTERS_OPENROUTER", "1")
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.chat_with_openrouter",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.chat_with_openrouter",
         _fake_openrouter,
     ):
         resp = openrouter_chat_handler(
@@ -156,7 +156,7 @@ def test_openrouter_shim_top_k_min_p_forwarding(monkeypatch):
 
 
 def test_google_shim_generation_config_mapping(monkeypatch):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import google_chat_handler
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import google_chat_handler
 
     captured: Dict[str, Any] = {}
 
@@ -166,7 +166,7 @@ def test_google_shim_generation_config_mapping(monkeypatch):
 
     monkeypatch.setenv("LLM_ADAPTERS_GOOGLE", "1")
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.chat_with_google",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.chat_with_google",
         _fake_google,
     ):
         resp = google_chat_handler(
@@ -184,7 +184,7 @@ def test_google_shim_generation_config_mapping(monkeypatch):
 
 
 def test_mistral_shim_random_seed_top_k_safe_prompt(monkeypatch):
-    from tldw_Server_API.app.core.LLM_Calls.adapter_shims import mistral_chat_handler
+    from tldw_Server_API.app.core.LLM_Calls.adapter_calls import mistral_chat_handler
 
     captured: Dict[str, Any] = {}
 
@@ -194,7 +194,7 @@ def test_mistral_shim_random_seed_top_k_safe_prompt(monkeypatch):
 
     monkeypatch.setenv("LLM_ADAPTERS_MISTRAL", "1")
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls.chat_with_mistral",
+        "tldw_Server_API.app.core.LLM_Calls.chat_calls.chat_with_mistral",
         _fake_mistral,
     ):
         resp = mistral_chat_handler(
@@ -209,3 +209,86 @@ def test_mistral_shim_random_seed_top_k_safe_prompt(monkeypatch):
         assert captured.get("random_seed") == 123
         assert captured.get("top_k") == 42
         assert captured.get("safe_prompt") is True
+
+
+def test_cohere_shim_uses_adapter_when_flags_disabled(monkeypatch):
+    from tldw_Server_API.app.core.LLM_Calls import adapter_calls as shims
+
+    expected = {"ok": True, "message": "parity"}
+
+    class DummyAdapter:
+        def chat(self, request):
+            return expected
+
+    class DummyRegistry:
+        def get_adapter(self, name):
+            return DummyAdapter()
+
+        def register_adapter(self, name, adapter):
+            return None
+
+    monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "0")
+    monkeypatch.setenv("LLM_ADAPTERS_COHERE", "0")
+    monkeypatch.setattr(shims, "get_registry", lambda: DummyRegistry())
+    resp = shims.cohere_chat_handler(
+        input_data=_messages(),
+        model="cohere-test",
+        api_key="dummy",
+        streaming=False,
+    )
+    assert resp == expected
+
+
+@pytest.mark.parametrize(
+    "provider_case",
+    [
+        {
+            "name": "moonshot",
+            "handler": "moonshot_chat_handler",
+            "flag": "LLM_ADAPTERS_MOONSHOT",
+            "kwargs": {"input_data": _messages(), "model": "moonshot-test", "api_key": "dummy"},
+        },
+        {
+            "name": "zai",
+            "handler": "zai_chat_handler",
+            "flag": "LLM_ADAPTERS_ZAI",
+            "kwargs": {"input_data": _messages(), "model": "zai-test", "api_key": "dummy"},
+        },
+        {
+            "name": "local-llm",
+            "handler": "local_llm_chat_handler",
+            "flag": "LLM_ADAPTERS_LOCAL_LLM",
+            "kwargs": {"input_data": _messages(), "model": "local-test"},
+        },
+    ],
+    ids=["moonshot", "zai", "local-llm"],
+)
+@pytest.mark.parametrize("streaming", [False, True], ids=["non-stream", "stream"])
+def test_shim_uses_adapter_moonshot_zai_local(monkeypatch, provider_case, streaming):
+    from tldw_Server_API.app.core.LLM_Calls import adapter_calls as shims
+
+    expected = {"ok": True, "provider": provider_case["name"]}
+    chunk_payload = json.dumps({"choices": [{"delta": {"content": provider_case["name"]}}]})
+    expected_stream = [f"data: {chunk_payload}\n\n", "data: [DONE]\n\n"]
+
+    class DummyAdapter:
+        def chat(self, request):
+            return expected
+
+        def stream(self, request):
+            return iter(expected_stream)
+
+    class DummyRegistry:
+        def get_adapter(self, name):
+            return DummyAdapter()
+
+        def register_adapter(self, name, adapter):
+            return None
+
+    monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "0")
+    monkeypatch.setenv(provider_case["flag"], "0")
+    monkeypatch.setattr(shims, "get_registry", lambda: DummyRegistry())
+    handler = getattr(shims, provider_case["handler"])
+    resp = handler(streaming=streaming, **provider_case["kwargs"])
+    resp = list(resp) if streaming else resp
+    assert resp == (expected_stream if streaming else expected)

@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import List, Any, Dict, Optional, Tuple
 #
 # Third-party Libraries
-from fastapi import HTTPException, Depends, Query, UploadFile, File, APIRouter, Path as FastAPIPath
+from fastapi import HTTPException, Depends, Query, UploadFile, File, Form, APIRouter, Path as FastAPIPath
 from fastapi.responses import JSONResponse
 from loguru import logger
 from starlette import status
@@ -203,6 +203,7 @@ def _build_conflict_import_response(
              status_code=status.HTTP_201_CREATED)
 async def import_character_endpoint(
         character_file: UploadFile = File(..., description="Character card file (PNG, WEBP, JSON, MD)."),
+        allow_image_only: bool = Form(False),
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
         current_user: User = Depends(get_request_user),
 ):
@@ -267,10 +268,26 @@ async def import_character_endpoint(
         file_type_validated = detected_type
 
         success, message, char_id = import_and_save_character_from_file(
-            db, file_content=file_content_bytes, file_type=file_type_validated
+            db,
+            file_content=file_content_bytes,
+            file_type=file_type_validated,
+            file_name=character_file.filename,
+            allow_image_only=allow_image_only
         )
 
         if not success or not char_id:
+            if message == "missing_character_data":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "missing_character_data",
+                        "message": (
+                            "No character data detected in image metadata. "
+                            "Continue to create an image-only character?"
+                        ),
+                        "can_import_image_only": True
+                    }
+                )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=message or "Failed to import character"

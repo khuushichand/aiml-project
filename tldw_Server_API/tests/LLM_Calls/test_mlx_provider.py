@@ -7,7 +7,7 @@ import pytest
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatRateLimitError, ChatBadRequestError
 from tldw_Server_API.app.core.LLM_Calls.providers import mlx_provider as mp
-from tldw_Server_API.app.core.LLM_Calls import adapter_shims
+from tldw_Server_API.app.core.LLM_Calls import adapter_calls
 
 
 IS_APPLE = platform.system() == "Darwin"
@@ -112,7 +112,7 @@ async def test_async_chat_handler(monkeypatch):
     _patch_mlx(monkeypatch)
     reg = mp.get_mlx_registry()
     reg.load(model_path="fake-model", overrides={"max_concurrent": 1})
-    stream = await adapter_shims.mlx_chat_handler_async(
+    stream = await adapter_calls.mlx_chat_handler_async(
         input_data=[{"role": "user", "content": "hi"}],
         streaming=True,
         model="fake-model",

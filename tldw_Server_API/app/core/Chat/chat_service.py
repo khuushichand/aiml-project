@@ -374,16 +374,14 @@ def normalize_request_provider_and_model(
                 # In this case, strip the inline provider prefix from the model
                 setattr(request_data, "model", actual_model)
             else:
-                # api_provider is explicitly set on the request. For OpenRouter, many valid
-                # model IDs include a provider namespace (e.g., "openai/gpt-4o-mini",
-                # "z-ai/glm-4.6"). OpenRouter expects that namespace to be preserved.
-                # Only strip when the inline namespace is literally "openrouter";
-                # otherwise, keep the full "namespace/model" string.
-                if provider == "openrouter":
-                    if inline_provider_lower == "openrouter":
+                # api_provider is explicitly set on the request. For OpenRouter and
+                # Hugging Face, many valid model IDs include a namespace
+                # (e.g., "openai/gpt-4o-mini", "z-ai/glm-4.6"). Preserve the full
+                # namespaced model id unless the inline namespace matches "openrouter".
+                if provider in {"openrouter", "huggingface"}:
+                    if provider == "openrouter" and inline_provider_lower == "openrouter":
                         setattr(request_data, "model", actual_model)
                     else:
-                        # Keep the namespaced model id as-is for OpenRouter
                         setattr(request_data, "model", model_str)
                 else:
                     # Non-OpenRouter providers do not use namespaced model ids; strip prefix
@@ -643,8 +641,8 @@ def _attach_internal_http_hooks(adapter: Any, request: Dict[str, Any], internal:
     if not internal:
         return
     try:
-        from tldw_Server_API.app.core.LLM_Calls.providers.legacy_adapters import LegacyChatAdapter
-        if isinstance(adapter, LegacyChatAdapter):
+        from tldw_Server_API.app.core.LLM_Calls.providers.compat_adapters import CompatChatAdapter
+        if isinstance(adapter, CompatChatAdapter):
             request.update(internal)
     except Exception:
         # Ignore adapter detection failures; internal hooks are optional.

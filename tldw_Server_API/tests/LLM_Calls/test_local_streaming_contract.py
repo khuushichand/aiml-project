@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tldw_Server_API.app.core.LLM_Calls.legacy_local_calls import (
+from tldw_Server_API.app.core.LLM_Calls.local_chat_calls import (
     _chat_with_openai_compatible_local_server,
 )
 
@@ -75,7 +75,7 @@ def test_local_streaming_normalizes_sse_and_closes_client():
     def fake_close():
         client_closed["called"] = True
 
-    with patch("tldw_Server_API.app.core.LLM_Calls.legacy_local_calls.httpx.Client") as mock_client_cls:
+    with patch("tldw_Server_API.app.core.LLM_Calls.local_chat_calls.httpx.Client") as mock_client_cls:
         mock_client = MagicMock()
         mock_client.stream.side_effect = fake_stream
         mock_client.close.side_effect = fake_close

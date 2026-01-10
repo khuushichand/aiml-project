@@ -1,7 +1,7 @@
 import pytest
 
 def test_provider_requires_key_map_basic():
-    from tldw_Server_API.app.core.Chat.provider_config import PROVIDER_REQUIRES_KEY
+    from tldw_Server_API.app.core.LLM_Calls.provider_metadata import PROVIDER_REQUIRES_KEY
 
     # Commercial providers should require keys
     for prov in ["openai", "anthropic", "google", "mistral", "cohere", "groq", "openrouter"]:

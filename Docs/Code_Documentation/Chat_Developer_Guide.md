@@ -25,9 +25,9 @@ This guide explains the Chat module’s architecture, key components, and how to
 
  - `tldw_Server_API/app/core/Chat/`
   - `Chat_Functions.py` - Minimal compatibility shim exporting only `chat`, `chat_api_call`, `DEFAULT_CHARACTER_NAME`, and `approximate_token_count`. Import history/dictionary/character helpers from their dedicated modules.
-  - `chat_orchestrator.py` - Primary dispatcher/utilities (build inputs, assemble context) that use `provider_config.py` mappings
+  - `chat_orchestrator.py` - Primary dispatcher/utilities (build inputs, assemble context) that delegate to the adapter registry
   - `chat_helpers.py` - Request shaping helpers, conversion from API schemas, dictionary/character hooks
-  - `provider_manager.py` & `provider_config.py` - Provider health/fallback management and authoritative handler/parameter mappings
+  - `provider_manager.py` - Provider health/fallback management; adapter registry + capability registry are authoritative for handlers/params
   - `rate_limiter.py` - Module-level rate limiting primitives & startup initialization
   - `request_queue.py` - Optional in-memory queue for back-pressure and concurrency control
   - `streaming_utils.py` - Streaming helpers (yielding tokens/chunks to clients)
@@ -50,18 +50,18 @@ Related:
 2. `chat_helpers.py` and endpoint logic build the internal payload, apply defaults, and optionally enrich messages with:
    - Character info (system prompts, world books) when requested
    - Chat dictionaries (keyword substitutions, token budgeting)
-3. The endpoint uses `chat_service` helpers and delegates to `chat_orchestrator.chat_api_call(...)`. Mappings are sourced from `provider_config.py`. A minimal compatibility shim (`Chat_Functions.chat_api_call`) remains for legacy callers/tests; new code should import from `chat_orchestrator` directly.
+3. The endpoint uses `chat_service` helpers and delegates to `chat_orchestrator.chat_api_call(...)`. Provider routing/validation comes from the adapter + capability registries. A minimal compatibility shim (`Chat_Functions.chat_api_call`) remains for legacy callers/tests; new code should import from `chat_orchestrator` directly.
 4. `LLM_Calls/*` executes the provider-specific request (cloud or local APIs). Streaming responses are normalized to SSE frames via `streaming_utils`.
 5. `chat_exceptions` ensures errors from providers, validation, or networking are translated to module exceptions and proper HTTP responses.
 6. `chat_metrics` records counters, latencies, sizes, and success/failure labels.
 
 ## Provider Dispatch
 
-- Authoritative mappings live in `provider_config.py`:
-  - `API_CALL_HANDLERS` maps provider keys (e.g., `openai`, `anthropic`, `groq`, `mistral`, `vllm`, `ollama`) to call functions in `core/LLM_Calls`.
-  - `PROVIDER_PARAM_MAP` translates generic chat arguments (e.g., `messages_payload`, `system_message`, `top_p`, `max_tokens`) into each provider’s expected keyword names.
-- `Chat_Functions.py` no longer duplicates these mappings. `provider_config.py` is the single source of truth for handler/parameter mappings.
-- At app startup, `main.py` seeds the `provider_manager` from `provider_config.API_CALL_HANDLERS` to avoid drift with the endpoint mappings.
+- Authoritative mappings live in the adapter registry + capability registry:
+  - `adapter_registry` maps provider keys (e.g., `openai`, `anthropic`, `groq`, `mistral`) to adapter classes in `core/LLM_Calls/providers`.
+  - `capability_registry` defines supported request fields, aliases, and blocked fields per provider.
+- `provider_config.py` remains for legacy compatibility only (deprecated, no authoritative mappings).
+- At app startup, `main.py` seeds the `provider_manager` from the adapter registry to avoid drift with endpoint mappings.
 
 Provider selection notes:
 - Requests may specify models with a provider prefix (e.g., `anthropic/claude-opus-4.1`). The endpoint extracts the provider and model automatically.
@@ -69,11 +69,11 @@ Provider selection notes:
 
 ### Adding a Provider (Checklist)
 
-1. Implement provider call(s) in `core/LLM_Calls/` (cloud or local). Prefer a single entrypoint that accepts keyword args from the mapping.
-2. Register the handler in `provider_config.API_CALL_HANDLERS`.
-3. Add a param mapping in `provider_config.PROVIDER_PARAM_MAP` (map generic → provider kwarg names).
-4. Add configuration in `provider_config.py` if needed (API base URL, default model, key names, timeouts).
-5. Add tests under `tldw_Server_API/tests/Chat/` (schema validation, dispatch to new provider, basic error mapping, optional integration smoke).
+1. Implement a provider adapter in `core/LLM_Calls/providers/` (cloud or local).
+2. Register the adapter in `adapter_registry.py`.
+3. Add capabilities/aliases/blocked fields in `capability_registry.py`.
+4. Add configuration defaults in `config.txt`/config loader if needed (API base URL, model, timeouts).
+5. Add tests under `tldw_Server_API/tests/Chat/` (schema validation, dispatch, error mapping, optional integration smoke).
 6. Update docs and verify `GET /api/v1/llm/providers` reflects the provider (if you expose it).
 
 ## Validation & Schemas
@@ -124,7 +124,7 @@ Provider selection notes:
 - Configuration sources:
   - `Config_Files/config.txt` (`[Chat-Module]`, `[Chat-Dictionaries]`, and provider sections)
   - Environment variables (override file settings)
-- `provider_config.py` defines handler/parameter mappings; `provider_manager.py` manages health/circuit-breaker/fallback.
+- Adapter + capability registries define handler/parameter mappings; `provider_manager.py` manages health/circuit-breaker/fallback.
 - Common toggles: default provider/model, streaming timeouts, max tokens, safety filters, rate-limit config, request queue sizes.
 
 ## Images & Multimodal Input
@@ -143,7 +143,7 @@ Provider selection notes:
 - Unit tests:
   - Schema validation: `tldw_Server_API/tests/Chat/test_chat_request_schemas.py` and `tldw_Server_API/tests/Chat_NEW/unit/test_chat_schemas.py`
   - Chat functions: `tldw_Server_API/tests/Chat/test_chat_functions.py` and `tldw_Server_API/tests/Chat_NEW/unit/test_chat_functions.py`
-  - Dispatch shape/mapping: update tests when changing `provider_config`
+  - Dispatch shape/mapping: update tests when changing adapter/capability registries
 - Integration tests:
   - Endpoint flow for `/api/v1/chat/completions`: `tldw_Server_API/tests/Chat/test_chat_endpoint_integration.py`, `tldw_Server_API/tests/Chat/test_chat_completions_integration.py`
   - Streaming normalization: `tldw_Server_API/tests/Chat/test_chat_endpoint_streaming_normalization.py`
@@ -151,7 +151,7 @@ Provider selection notes:
 
 ## Maintenance Notes
 
-- Treat `provider_config.py` as authoritative for handler/parameter mappings going forward; avoid duplicating translation in provider call sites. The legacy duplicate in `Chat_Functions.py` has been removed to prevent drift.
+- Treat adapter/capability registries as authoritative for handler/parameter mappings going forward; avoid duplicating translation in provider call sites. The legacy duplicate in `Chat_Functions.py` has been removed to prevent drift.
 - Log safe: escape curly braces and large payloads before logging (see existing patterns in exception handling).
 - Preserve OpenAI response compatibility in streaming and non-streaming outputs to avoid client regressions.
 - Be careful when altering schema constraints; downstream clients (UI and tools) rely on them.

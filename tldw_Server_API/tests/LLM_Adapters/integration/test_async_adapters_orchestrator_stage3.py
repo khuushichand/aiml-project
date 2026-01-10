@@ -6,7 +6,7 @@ Qwen, DeepSeek, HuggingFace, and Custom OpenAI-compatible.
 from __future__ import annotations
 
 import os
-from typing import Iterator
+from typing import AsyncIterator
 
 import pytest
 
@@ -24,12 +24,12 @@ def _enable_stage3_async(monkeypatch):
 @pytest.mark.asyncio
 async def test_qwen_async_non_streaming(monkeypatch):
     from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call_async
-    import tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls as llm_calls
+    from tldw_Server_API.app.core.LLM_Calls.providers.qwen_adapter import QwenAdapter
 
-    def _fake_qwen(**kwargs):
+    async def _fake_achat(self, *args, **kwargs):
         return {"object": "chat.completion", "choices": [{"index": 0, "message": {"content": "ok"}}]}
 
-    monkeypatch.setattr(llm_calls, "chat_with_qwen", _fake_qwen)
+    monkeypatch.setattr(QwenAdapter, "achat", _fake_achat, raising=True)
 
     resp = await chat_api_call_async(
         api_endpoint="qwen",
@@ -43,13 +43,13 @@ async def test_qwen_async_non_streaming(monkeypatch):
 @pytest.mark.asyncio
 async def test_deepseek_async_streaming(monkeypatch):
     from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call_async
-    import tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls as llm_calls
+    from tldw_Server_API.app.core.LLM_Calls.providers.deepseek_adapter import DeepSeekAdapter
 
-    def _fake_stream(**kwargs) -> Iterator[str]:
+    async def _fake_astream(self, *args, **kwargs) -> AsyncIterator[str]:
         yield "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n"
         yield "data: [DONE]\n\n"
 
-    monkeypatch.setattr(llm_calls, "chat_with_deepseek", _fake_stream)
+    monkeypatch.setattr(DeepSeekAdapter, "astream", _fake_astream, raising=True)
 
     stream = await chat_api_call_async(
         api_endpoint="deepseek",
@@ -67,12 +67,12 @@ async def test_deepseek_async_streaming(monkeypatch):
 @pytest.mark.asyncio
 async def test_huggingface_async_non_streaming(monkeypatch):
     from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call_async
-    import tldw_Server_API.app.core.LLM_Calls.legacy_chat_calls as llm_calls
+    from tldw_Server_API.app.core.LLM_Calls.providers.huggingface_adapter import HuggingFaceAdapter
 
-    def _fake_hf(**kwargs):
+    async def _fake_achat(self, *args, **kwargs):
         return {"object": "chat.completion", "choices": [{"index": 0, "message": {"content": "ok"}}]}
 
-    monkeypatch.setattr(llm_calls, "chat_with_huggingface", _fake_hf)
+    monkeypatch.setattr(HuggingFaceAdapter, "achat", _fake_achat, raising=True)
 
     resp = await chat_api_call_async(
         api_endpoint="huggingface",
@@ -86,13 +86,13 @@ async def test_huggingface_async_non_streaming(monkeypatch):
 @pytest.mark.asyncio
 async def test_custom_openai_async_streaming(monkeypatch):
     from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call_async
-    import tldw_Server_API.app.core.LLM_Calls.legacy_local_calls as llm_local
+    from tldw_Server_API.app.core.LLM_Calls.providers.custom_openai_adapter import CustomOpenAIAdapter
 
-    def _fake_stream(**kwargs) -> Iterator[str]:
+    async def _fake_astream(self, *args, **kwargs) -> AsyncIterator[str]:
         yield "data: {\"choices\":[{\"delta\":{\"content\":\"y\"}}]}\n\n"
         yield "data: [DONE]\n\n"
 
-    monkeypatch.setattr(llm_local, "chat_with_custom_openai", _fake_stream)
+    monkeypatch.setattr(CustomOpenAIAdapter, "astream", _fake_astream, raising=True)
 
     stream = await chat_api_call_async(
         api_endpoint="custom-openai-api",

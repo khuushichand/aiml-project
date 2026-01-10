@@ -97,7 +97,6 @@ ALIASES: Dict[str, Dict[str, str]] = {
 # Explicit denylist for unsafe or unsupported keys.
 BLOCKED_FIELDS: Dict[str, Set[str]] = {
     "cohere": {"tool_choice"},
-    "anthropic": {"tool_choice"},
     "google": {"tool_choice"},
 }
 
@@ -224,6 +223,9 @@ def validate_payload(provider: str, payload: Mapping[str, Any]) -> Dict[str, Any
     """
     provider_key = _normalize_provider(provider)
     normalized = normalize_payload(provider_key, payload)
+    # Treat default tool_choice="auto" as a no-op unless tools are explicitly provided.
+    if normalized.get("tool_choice") == "auto" and not normalized.get("tools"):
+        normalized["tool_choice"] = None
     filtered = {k: v for k, v in normalized.items() if v is not None}
     blocked = set(BLOCKED_FIELDS.get(provider_key, set()))
     blocked_present = sorted(set(filtered.keys()) & blocked)

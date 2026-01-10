@@ -6,7 +6,6 @@ from .base import ChatProvider
 
 import os
 from loguru import logger
-from tldw_Server_API.app.core.LLM_Calls import legacy_chat_calls as _legacy
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
 )
@@ -20,10 +19,6 @@ from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payl
 
 # Expose a patchable factory for tests; production uses centralized client
 http_client_factory = _hc_create_client
-
-
-def _prefer_httpx_in_tests() -> bool:
-    return bool(os.getenv("PYTEST_CURRENT_TEST"))
 
 
 def _stream_debug_enabled(provider: str) -> bool:
@@ -70,20 +65,32 @@ class MistralAdapter(ChatProvider):
             "app_config": request.get("app_config"),
         }
 
-    def _use_native_http(self) -> bool:
-        if os.getenv("PYTEST_CURRENT_TEST"):
-            return True
-        enabled = (os.getenv("LLM_ADAPTERS_ENABLED") or "").strip().lower()
-        if enabled in {"0", "false", "no", "off"}:
-            return False
-        if enabled in {"1", "true", "yes", "on"}:
-            return True
-        v = (os.getenv("LLM_ADAPTERS_NATIVE_HTTP_MISTRAL") or "").strip().lower()
-        if v in {"0", "false", "no", "off"}:
-            return False
-        if v in {"1", "true", "yes", "on"}:
-            return True
-        return True
+    def _apply_config_defaults(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        merged = dict(request)
+        cfg = (merged.get("app_config") or {}).get("mistral_api", {})
+        if merged.get("api_key") is None and cfg.get("api_key") is not None:
+            merged["api_key"] = cfg.get("api_key")
+        if merged.get("model") is None:
+            merged["model"] = cfg.get("model") or "mistral-large-latest"
+        if merged.get("temperature") is None and cfg.get("temperature") is not None:
+            merged["temperature"] = cfg.get("temperature")
+        if merged.get("top_p") is None and cfg.get("top_p") is not None:
+            merged["top_p"] = cfg.get("top_p")
+        if merged.get("max_tokens") is None and cfg.get("max_tokens") is not None:
+            merged["max_tokens"] = cfg.get("max_tokens")
+        if merged.get("seed") is None and cfg.get("random_seed") is not None:
+            merged["seed"] = cfg.get("random_seed")
+        if merged.get("top_k") is None and cfg.get("top_k") is not None:
+            merged["top_k"] = cfg.get("top_k")
+        if merged.get("safe_prompt") is None and cfg.get("safe_prompt") is not None:
+            merged["safe_prompt"] = cfg.get("safe_prompt")
+        if merged.get("tools") is None and cfg.get("tools") is not None:
+            merged["tools"] = cfg.get("tools")
+        if merged.get("tool_choice") is None and cfg.get("tool_choice") is not None:
+            merged["tool_choice"] = cfg.get("tool_choice")
+        if merged.get("response_format") is None and cfg.get("response_format") is not None:
+            merged["response_format"] = cfg.get("response_format")
+        return merged
 
     def _base_url(self) -> str:
         return os.getenv("MISTRAL_API_BASE", "https://api.mistral.ai/v1").rstrip("/")
@@ -201,81 +208,65 @@ class MistralAdapter(ChatProvider):
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
         request = validate_payload(self.name, request or {})
-        if _prefer_httpx_in_tests() or os.getenv("PYTEST_CURRENT_TEST") or self._use_native_http():
-            api_key = request.get("api_key")
-            url = f"{self._resolve_base_url(request)}/chat/completions"
-            headers = self._headers(api_key)
-            payload = self._build_payload(request)
-            payload["stream"] = False
-            try:
-                resolved_timeout = self._resolve_timeout(request, timeout)
-                with http_client_factory(timeout=resolved_timeout) as client:
-                    resp = client.post(url, headers=headers, json=payload)
-                    resp.raise_for_status()
-                    data = resp.json()
-                    return self._normalize_to_openai_shape(data)
-            except Exception as e:
-                raise self.normalize_error(e)
-
-        kwargs = self._to_handler_args(request)
-        kwargs["streaming"] = False
-        fn = getattr(_legacy, "chat_with_mistral", None)
-        if callable(fn):
-            mod = getattr(fn, "__module__", "") or ""
-            if os.getenv("PYTEST_CURRENT_TEST") and (
-                mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod
-            ):
-                return fn(**kwargs)  # type: ignore[misc]
-        return _legacy.legacy_chat_with_mistral(**kwargs)
+        request = self._apply_config_defaults(request)
+        api_key = request.get("api_key")
+        if not api_key:
+            from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+            raise ChatConfigurationError(provider=self.name, message="Mistral API Key required.")
+        url = f"{self._resolve_base_url(request)}/chat/completions"
+        headers = self._headers(api_key)
+        payload = self._build_payload(request)
+        payload["stream"] = False
+        try:
+            resolved_timeout = self._resolve_timeout(request, timeout)
+            with http_client_factory(timeout=resolved_timeout) as client:
+                resp = client.post(url, headers=headers, json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+                return self._normalize_to_openai_shape(data)
+        except Exception as e:
+            raise self.normalize_error(e)
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
         request = validate_payload(self.name, request or {})
-        if _prefer_httpx_in_tests() or os.getenv("PYTEST_CURRENT_TEST") or self._use_native_http():
-            api_key = request.get("api_key")
-            url = f"{self._resolve_base_url(request)}/chat/completions"
-            headers = self._headers(api_key)
-            payload = self._build_payload(request)
-            payload["stream"] = True
-            try:
-                resolved_timeout = self._resolve_timeout(request, timeout)
-                with http_client_factory(timeout=resolved_timeout) as client:
-                    with client.stream("POST", url, headers=headers, json=payload) as resp:
-                        resp.raise_for_status()
-                        debug_stream = _stream_debug_enabled(self.name)
-                        seen_done = False
-                        for raw in resp.iter_lines():
-                            if not raw:
-                                continue
-                            if debug_stream:
-                                logger.debug(f"{self.name} stream raw: {raw!r}")
-                            try:
-                                line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
-                            except Exception:
-                                line = str(raw)
-                            if is_done_line(line):
-                                if not seen_done:
-                                    seen_done = True
-                                    yield sse_done()
-                                continue
-                            normalized = normalize_provider_line(line)
-                            if normalized is not None:
-                                yield normalized
-                        for tail in finalize_stream(response=resp, done_already=seen_done):
-                            yield tail
-                return
-            except Exception as e:
-                raise self.normalize_error(e)
-
-        kwargs = self._to_handler_args(request)
-        kwargs["streaming"] = True
-        fn = getattr(_legacy, "chat_with_mistral", None)
-        if callable(fn):
-            mod = getattr(fn, "__module__", "") or ""
-            if os.getenv("PYTEST_CURRENT_TEST") and (
-                mod.startswith("tldw_Server_API.tests") or mod.startswith("tests") or ".tests." in mod
-            ):
-                return fn(**kwargs)  # type: ignore[misc]
-        return _legacy.legacy_chat_with_mistral(**kwargs)
+        request = self._apply_config_defaults(request)
+        api_key = request.get("api_key")
+        if not api_key:
+            from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+            raise ChatConfigurationError(provider=self.name, message="Mistral API Key required.")
+        url = f"{self._resolve_base_url(request)}/chat/completions"
+        headers = self._headers(api_key)
+        payload = self._build_payload(request)
+        payload["stream"] = True
+        try:
+            resolved_timeout = self._resolve_timeout(request, timeout)
+            with http_client_factory(timeout=resolved_timeout) as client:
+                with client.stream("POST", url, headers=headers, json=payload) as resp:
+                    resp.raise_for_status()
+                    debug_stream = _stream_debug_enabled(self.name)
+                    seen_done = False
+                    for raw in resp.iter_lines():
+                        if not raw:
+                            continue
+                        if debug_stream:
+                            logger.debug(f"{self.name} stream raw: {raw!r}")
+                        try:
+                            line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                        except Exception:
+                            line = str(raw)
+                        if is_done_line(line):
+                            if not seen_done:
+                                seen_done = True
+                                yield sse_done()
+                            continue
+                        normalized = normalize_provider_line(line)
+                        if normalized is not None:
+                            yield normalized
+                    for tail in finalize_stream(response=resp, done_already=seen_done):
+                        yield tail
+            return
+        except Exception as e:
+            raise self.normalize_error(e)
 
     async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
         return self.chat(request, timeout=timeout)

@@ -6,13 +6,23 @@ from __future__ import annotations
 from typing import Optional, List, Any, Dict, Union, Literal
 from datetime import datetime
 # 3rd-party Libraries
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 #
 # Local Imports
 #
 #######################################################################################################################
 #
 # Schemas:
+
+def _split_keywords(value: Any) -> Optional[List[str]]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return [p.strip() for p in value.split(',')]
+    if isinstance(value, list):
+        return [p.strip() for p in value if isinstance(p, str)]
+    raise ValueError("Keywords must be a list of strings or a comma-separated string.")
+
 
 # --- Note Schemas ---
 class NoteBase(BaseModel):
@@ -47,16 +57,23 @@ class NoteCreate(NoteBase):
     language: Optional[str] = Field(None, description="Optional language hint for title generation.")
 
     # Normalize keywords input to a clean list of strings (if provided)
+    @field_validator("keywords", mode="before")
+    @classmethod
+    def validate_keywords(cls, value: Any):
+        parts = _split_keywords(value)
+        if parts is None:
+            return value
+        for part in parts:
+            if not part:
+                continue
+            if len(part) > 100:
+                raise ValueError("Keyword entries must be 100 characters or fewer.")
+        return value
+
     @property
     def normalized_keywords(self) -> Optional[List[str]]:
-        value = getattr(self, 'keywords', None)
-        if value is None:
-            return None
-        if isinstance(value, str):
-            parts = [p.strip() for p in value.split(',')]
-        elif isinstance(value, list):
-            parts = [p.strip() for p in value if isinstance(p, str)]
-        else:
+        parts = _split_keywords(getattr(self, 'keywords', None))
+        if parts is None:
             return None
         # Remove empties and deduplicate while preserving order
         seen = set()
@@ -78,8 +95,42 @@ class NoteUpdate(BaseModel):
     content: Optional[str] = Field(None, min_length=1, max_length=5000000, description="New content for the note (max 5MB)")
     conversation_id: Optional[str] = Field(None, description="Optional conversation ID backlink")
     message_id: Optional[str] = Field(None, description="Optional message ID backlink")
+    keywords: Optional[Union[str, List[str]]] = Field(
+        default=None,
+        description="Optional keywords to attach to the note. Accepts a list of strings or a comma-separated string."
+    )
     # Ensure at least one field is provided for update, or handle in endpoint if empty update is no-op
     # Pydantic v2: model_validator
+
+    @field_validator("keywords", mode="before")
+    @classmethod
+    def validate_keywords(cls, value: Any):
+        parts = _split_keywords(value)
+        if parts is None:
+            return value
+        for part in parts:
+            if not part:
+                continue
+            if len(part) > 100:
+                raise ValueError("Keyword entries must be 100 characters or fewer.")
+        return value
+
+    @property
+    def normalized_keywords(self) -> Optional[List[str]]:
+        parts = _split_keywords(getattr(self, 'keywords', None))
+        if parts is None:
+            return None
+        seen = set()
+        result: List[str] = []
+        for p in parts:
+            if not p:
+                continue
+            key = p.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(p)
+        return result or None
 
 
 class NoteResponse(NoteBase):

@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 try:
-    from tldw_Server_API.app.core.LLM_Calls import legacy_local_calls as _llm_local  # type: ignore
+    from tldw_Server_API.app.core.LLM_Calls import local_chat_calls as _llm_local  # type: ignore
     if not hasattr(_llm_local, "legacy_chat_with_custom_openai_2"):
         def _stub(*args, **kwargs):  # pragma: no cover - simple stub
             return None
