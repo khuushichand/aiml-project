@@ -86,7 +86,7 @@ def _build_app_with_overrides(
 
     class _FakeEngine:
         def __init__(self, _db):
-            self.db = _db
+                     self.db = _db
             self.paused_runs: List[str] = []
 
         def pause(self, run_id: str) -> None:

@@ -77,7 +77,7 @@ from fastapi.testclient import TestClient
 class _StubAuditService:
     """No-op audit service used in TEST_MODE to avoid background tasks."""
     def __init__(self, *args, **kwargs) -> None:
-        pass
+             pass
 
     async def initialize(self) -> None:
         return None
@@ -96,12 +96,14 @@ class _StubPersonalizationDB:
     """No-op personalization DB used to avoid filesystem writes in tests."""
 
     def insert_usage_event(self, *args, **kwargs):
-        return None
+
+             return None
 
     def __getattr__(self, item):
-        # Allow any other method calls without side effects
+
+             # Allow any other method calls without side effects
         def _noop(*_args, **_kwargs):
-            return None
+                     return None
         return _noop
 
 
@@ -176,7 +178,7 @@ async def _ensure_postgres_available(host: str, port: int, user: str, password: 
 
 @pytest.fixture(scope="session")
 def event_loop():
-    """Create an instance of the default event loop for the test session."""
+     """Create an instance of the default event loop for the test session."""
     loop = asyncio.get_event_loop_policy().new_event_loop()
     yield loop
     loop.close()
@@ -238,10 +240,12 @@ async def reset_singletons(request):
                 return _StubAuditService()
 
             def _override_personalization_db(current_user=None):
-                return None
+
+                             return None
 
             def _override_usage_logger(request=None, user=None, db=None):
-                return UsageEventLogger(user_id=str(getattr(user, "id", "test")), db=_StubPersonalizationDB())
+
+                             return UsageEventLogger(user_id=str(getattr(user, "id", "test")), db=_StubPersonalizationDB())
 
             if not request.node.get_closest_marker("real_audit"):
                 _app.dependency_overrides[get_audit_service_for_user] = _override_audit_dep
@@ -1498,13 +1502,13 @@ async def mock_db_pool():
 
 @pytest.fixture
 def password_service():
-    """Create a password service instance for testing."""
+     """Create a password service instance for testing."""
     return PasswordService()
 
 
 @pytest.fixture
 def jwt_settings():
-    """Create JWT settings for testing."""
+     """Create JWT settings for testing."""
     return Settings(
         AUTH_MODE="multi_user",
         JWT_SECRET_KEY="test-secret-key-for-testing-only-needs-32-chars-minimum",
@@ -1534,7 +1538,7 @@ def jwt_settings():
 
 @pytest.fixture
 def jwt_service(jwt_settings):
-    """Create a JWT service instance for testing."""
+     """Create a JWT service instance for testing."""
     return JWTService(settings=jwt_settings)
 
 
@@ -1687,7 +1691,7 @@ async def inactive_user(test_db_pool, password_service):
 
 @pytest.fixture
 def valid_access_token(jwt_service, test_user):
-    """Create a valid access token for testing."""
+     """Create a valid access token for testing."""
     return jwt_service.create_access_token(
         user_id=test_user['id'],
         username=test_user['username'],
@@ -1697,7 +1701,7 @@ def valid_access_token(jwt_service, test_user):
 
 @pytest.fixture
 def valid_refresh_token(jwt_service, test_user):
-    """Create a valid refresh token for testing."""
+     """Create a valid refresh token for testing."""
     return jwt_service.create_refresh_token(
         user_id=test_user['id'],
         username=test_user['username']
@@ -1706,7 +1710,7 @@ def valid_refresh_token(jwt_service, test_user):
 
 @pytest.fixture
 def expired_access_token(jwt_service, test_user):
-    """Create an expired access token for testing."""
+     """Create an expired access token for testing."""
     # Temporarily override expiry
     original_expire = jwt_service.settings.ACCESS_TOKEN_EXPIRE_MINUTES
     jwt_service.settings.ACCESS_TOKEN_EXPIRE_MINUTES = -1  # Expired
@@ -1721,19 +1725,19 @@ def expired_access_token(jwt_service, test_user):
 
 @pytest.fixture
 def auth_headers(valid_access_token):
-    """Create authorization headers with valid token."""
+     """Create authorization headers with valid token."""
     return {"Authorization": f"Bearer {valid_access_token}"}
 
 
 @pytest.fixture
 def api_key_headers():
-    """Create API key headers for single-user mode."""
+     """Create API key headers for single-user mode."""
     return {"X-API-KEY": settings.get("SINGLE_USER_API_KEY", "test-api-key")}
 
 
 @pytest.fixture(autouse=True)
 def clear_app_overrides():
-    """Clear FastAPI app dependency overrides after each test."""
+     """Clear FastAPI app dependency overrides after each test."""
     yield
     from tldw_Server_API.app.main import app
     app.dependency_overrides.clear()

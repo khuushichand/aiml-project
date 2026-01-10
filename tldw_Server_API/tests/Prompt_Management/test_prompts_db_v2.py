@@ -34,14 +34,14 @@ TEST_CLIENT_ID = "test_db_client"
 
 @pytest.fixture
 def memory_db():
-    """Provides an in-memory PromptsDatabase instance for testing."""
+     """Provides an in-memory PromptsDatabase instance for testing."""
     db = PromptsDatabase(db_path=":memory:", client_id=TEST_CLIENT_ID)
     yield db
     db.close_connection()
 
 @pytest.fixture
 def file_db(tmp_path):
-    """Provides a file-based PromptsDatabase instance for testing."""
+     """Provides a file-based PromptsDatabase instance for testing."""
     db_file = tmp_path / "test_prompts.db"
     db = PromptsDatabase(db_path=db_file, client_id=TEST_CLIENT_ID)
     yield db
@@ -52,7 +52,8 @@ def file_db(tmp_path):
 # --- Test PromptsDatabase Class ---
 
 def test_database_initialization_memory(memory_db):
-    assert memory_db is not None
+
+     assert memory_db is not None
     assert memory_db.client_id == TEST_CLIENT_ID
     assert memory_db.is_memory_db is True
     # Check if schema version table exists and has version 1
@@ -61,7 +62,8 @@ def test_database_initialization_memory(memory_db):
     assert cursor.fetchone()['version'] == PromptsDatabase._CURRENT_SCHEMA_VERSION
 
 def test_database_initialization_file(file_db):
-    assert file_db is not None
+
+     assert file_db is not None
     assert file_db.client_id == TEST_CLIENT_ID
     assert file_db.is_memory_db is False
     assert os.path.exists(file_db.db_path)
@@ -70,7 +72,8 @@ def test_database_initialization_file(file_db):
     assert cursor.fetchone()['version'] == PromptsDatabase._CURRENT_SCHEMA_VERSION
 
 def test_initialization_empty_client_id():
-    with pytest.raises(ValueError, match="Client ID cannot be empty or None."):
+
+     with pytest.raises(ValueError, match="Client ID cannot be empty or None."):
         PromptsDatabase(db_path=":memory:", client_id="")
 
 def test_add_keyword(memory_db: PromptsDatabase):

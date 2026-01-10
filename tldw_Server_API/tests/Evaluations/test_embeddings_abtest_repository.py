@@ -10,12 +10,16 @@ from tldw_Server_API.app.core.Evaluations.embeddings_abtest_repository import (
 
 
 def _make_repo() -> EmbeddingABTestRepository:
-    config = RepositoryConfig(db_url="sqlite:///:memory:")
+
+
+     config = RepositoryConfig(db_url="sqlite:///:memory:")
     return EmbeddingABTestRepository.from_config(config)
 
 
 def test_create_and_fetch_abtest():
-    repo = _make_repo()
+
+
+     repo = _make_repo()
     test_id = f"test-{uuid4()}"
     repo.create_test(
         test_id=test_id,
@@ -59,7 +63,9 @@ def test_create_and_fetch_abtest():
 
 
 def test_create_test_defaults_timestamp():
-    repo = _make_repo()
+
+
+     repo = _make_repo()
     test_id = f"test-{uuid4()}"
     entity = repo.create_test(
         test_id=test_id,

@@ -1399,6 +1399,45 @@ class JobManager:
         finally:
             conn.close()
 
+    def get_job_by_uuid(self, job_uuid: str) -> Optional[Dict[str, Any]]:
+        """Fetch a job by UUID string.
+
+        Returns None if not found. JSON payload/result are normalized to dicts
+        for SQLite; Postgres returns native JSON via the driver.
+        """
+        conn = self._connect()
+        try:
+            if self.backend == "postgres":
+                with self._pg_cursor(conn) as cur:
+                    cur.execute("SELECT * FROM jobs WHERE uuid = %s", (str(job_uuid),))
+                    row = cur.fetchone()
+                if not row:
+                    return None
+                d = dict(row)
+                try:
+                    d["payload"] = self._maybe_decrypt_json(d.get("payload"))
+                    d["result"] = self._maybe_decrypt_json(d.get("result"))
+                except Exception:
+                    pass
+                return d
+            else:
+                row = conn.execute("SELECT * FROM jobs WHERE uuid = ?", (str(job_uuid),)).fetchone()
+                if not row:
+                    return None
+                d = dict(row)
+                try:
+                    if isinstance(d.get("payload"), str):
+                        d["payload"] = json.loads(d["payload"]) if d["payload"] else {}
+                    if isinstance(d.get("result"), str):
+                        d["result"] = json.loads(d["result"]) if d["result"] else None
+                    d["payload"] = self._maybe_decrypt_json(d.get("payload"))
+                    d["result"] = self._maybe_decrypt_json(d.get("result"))
+                except Exception:
+                    pass
+                return d
+        finally:
+            conn.close()
+
     def get_job_or_archived(
         self,
         job_id: int,
@@ -3178,6 +3217,7 @@ class JobManager:
                                         pass
                                 return True
                         # terminal failure
+                        failed_from_queued = False
                         if enforce:
                             cur.execute(
                                 (
@@ -3214,8 +3254,41 @@ class JobManager:
                                     completion_token,
                                 ),
                             )
-                            # No fallback to fail queued when enforcement disabled
-                        ok = cur.rowcount > 0
+                            if cur.rowcount == 0:
+                                try:
+                                    allow = {
+                                        d.strip().lower()
+                                        for d in os.getenv(
+                                            "JOBS_ADMIN_COMPLETE_QUEUED_ALLOW_DOMAINS",
+                                            "chatbooks,embeddings",
+                                        ).split(",")
+                                        if d.strip()
+                                    }
+                                    cur.execute("SELECT domain FROM jobs WHERE id = %s", (int(job_id),))
+                                    row_dom = cur.fetchone()
+                                    dom_val = str(row_dom.get("domain") or "").lower() if row_dom else ""
+                                except Exception:
+                                    allow = {"chatbooks", "embeddings"}
+                                    dom_val = ""
+                                if dom_val in allow:
+                                    cur.execute(
+                                        (
+                                            "UPDATE jobs SET status = 'failed', last_error = %s, error_message = %s, error_code = %s, error_class = %s, error_stack = %s::jsonb, completion_token = COALESCE(completion_token, %s), "
+                                            "completed_at = NOW(), leased_until = NULL WHERE id = %s AND status = 'queued' AND (completion_token IS NULL OR completion_token = %s)"
+                                        ),
+                                        (
+                                            (error_code or error),
+                                            error,
+                                            error_code,
+                                            error_class,
+                                            (json.dumps(error_stack) if error_stack is not None else None),
+                                            completion_token,
+                                            int(job_id),
+                                            completion_token,
+                                        ),
+                                    )
+                                    failed_from_queued = cur.rowcount > 0
+                        ok = cur.rowcount > 0 or failed_from_queued
                         try:
                             if ok and elem:
                                 d = dict(elem)
@@ -3229,10 +3302,11 @@ class JobManager:
                                 # Counters: processing -> failed (terminal)
                                 try:
                                     if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
-                                        cur.execute(
-                                            "UPDATE job_counters SET processing_count = GREATEST(processing_count - 1, 0), updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
-                                            (d.get("domain"), d.get("queue"), d.get("job_type")),
-                                        )
+                                        if not failed_from_queued:
+                                            cur.execute(
+                                                "UPDATE job_counters SET processing_count = GREATEST(processing_count - 1, 0), updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
+                                                (d.get("domain"), d.get("queue"), d.get("job_type")),
+                                            )
                                 except Exception:
                                     pass
                                 try:
@@ -3469,6 +3543,7 @@ class JobManager:
                                     pass
                             return True
                     # terminal failure
+                    failed_from_queued = False
                     if enforce:
                         conn.execute(
                             (
@@ -3511,13 +3586,21 @@ class JobManager:
                             # Admin-style finalize: optionally allow failing queued jobs when enforcement is disabled
                             # Scope via allowlist of domains (default: chatbooks) to avoid global behavior in tests
                             try:
-                                allow = {d.strip().lower() for d in (os.getenv("JOBS_ADMIN_COMPLETE_QUEUED_ALLOW_DOMAINS", "chatbooks").split(",")) if d.strip()}
+                                allow = {
+                                    d.strip().lower()
+                                    for d in os.getenv(
+                                        "JOBS_ADMIN_COMPLETE_QUEUED_ALLOW_DOMAINS",
+                                        "chatbooks,embeddings",
+                                    ).split(",")
+                                    if d.strip()
+                                }
                                 row_dom = conn.execute("SELECT domain FROM jobs WHERE id = ?", (job_id,)).fetchone()
                                 dom_val = str(row_dom[0]).lower() if row_dom and row_dom[0] else ""
                             except Exception:
-                                allow = {"chatbooks"}; dom_val = ""
+                                allow = {"chatbooks", "embeddings"}
+                                dom_val = ""
                             if dom_val in allow:
-                                conn.execute(
+                                cur2 = conn.execute(
                                     (
                                         "UPDATE jobs SET status = 'failed', last_error = ?, error_message = ?, error_code = ?, error_class = ?, error_stack = ?, completion_token = COALESCE(completion_token, ?), "
                                         "completed_at = DATETIME('now'), leased_until = NULL WHERE id = ? AND status = 'queued'"
@@ -3532,6 +3615,7 @@ class JobManager:
                                         job_id,
                                     ),
                                 )
+                                failed_from_queued = (cur2.rowcount or 0) > 0
                     ok = conn.total_changes > 0
                     try:
                         if ok and rowl:
@@ -3546,10 +3630,11 @@ class JobManager:
                             # Counters: processing -> failed (terminal)
                             try:
                                 if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}:
-                                    conn.execute(
-                                        "UPDATE job_counters SET processing_count = CASE WHEN processing_count>0 THEN processing_count-1 ELSE 0 END, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?",
-                                        (d.get("domain"), d.get("queue"), d.get("job_type")),
-                                    )
+                                    if not failed_from_queued:
+                                        conn.execute(
+                                            "UPDATE job_counters SET processing_count = CASE WHEN processing_count>0 THEN processing_count-1 ELSE 0 END, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?",
+                                            (d.get("domain"), d.get("queue"), d.get("job_type")),
+                                        )
                             except Exception:
                                 pass
                             # Append terminal failure to timeline (no backoff)

@@ -26,7 +26,7 @@ TERMINAL_STATES = {"succeeded", "failed", "cancelled"}
 
 @pytest.fixture(autouse=True)
 def reset_engine_state(monkeypatch):
-    WorkflowScheduler._inst = None
+     WorkflowScheduler._inst = None
     WorkflowEngine._RUN_SECRETS.clear()
     yield
     WorkflowScheduler._inst = None

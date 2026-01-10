@@ -38,7 +38,8 @@ class TestDbPathValidation:
             KanbanDB(db_path=str(external_path), user_id="1")
 
     def test_memory_db_initializes_schema(self):
-        db = KanbanDB(db_path=":memory:", user_id="mem-user")
+
+             db = KanbanDB(db_path=":memory:", user_id="mem-user")
         board = db.create_board(name="Memory Board", client_id="mem-1")
         fetched = db.get_board(board["id"])
 
@@ -47,7 +48,8 @@ class TestDbPathValidation:
         db.close()
 
     def test_configure_connection_raises_on_pragma_failure(self):
-        class _StubConn:
+
+             class _StubConn:
             def __init__(self, fail_on: str):
                 self.fail_on = fail_on
                 self.row_factory = None

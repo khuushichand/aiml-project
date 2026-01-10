@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.Security.middleware import SecurityHeadersMiddlewa
 
 @pytest.fixture(scope="module")
 def app_with_security_headers():
-    app = FastAPI()
+     app = FastAPI()
     app.add_middleware(SecurityHeadersMiddleware)
 
     @app.get("/ping")
@@ -20,7 +20,9 @@ def app_with_security_headers():
 
 
 def test_security_headers_applied(app_with_security_headers):
-    client = TestClient(app_with_security_headers)
+
+
+     client = TestClient(app_with_security_headers)
     response = client.get("/ping")
 
     assert response.status_code == 200
@@ -36,7 +38,9 @@ def test_security_headers_applied(app_with_security_headers):
 
 
 def test_hsts_applied_when_https_forwarded(monkeypatch):
-    monkeypatch.setenv("SECURITY_ENABLE_HSTS", "true")
+
+
+     monkeypatch.setenv("SECURITY_ENABLE_HSTS", "true")
 
     app = FastAPI()
     app.add_middleware(SecurityHeadersMiddleware)
@@ -51,7 +55,9 @@ def test_hsts_applied_when_https_forwarded(monkeypatch):
 
 
 def test_hsts_disabled_via_env(monkeypatch):
-    monkeypatch.setenv("SECURITY_ENABLE_HSTS", "false")
+
+
+     monkeypatch.setenv("SECURITY_ENABLE_HSTS", "false")
 
     app = FastAPI()
     app.add_middleware(SecurityHeadersMiddleware)

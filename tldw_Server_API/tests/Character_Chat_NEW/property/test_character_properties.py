@@ -80,7 +80,7 @@ class TestCharacterCardProperties:
     def test_create_then_get_preserves_data(
         self, name, description, personality, first_message, tags, character_db
     ):
-        """Creating and getting a character preserves all data."""
+             """Creating and getting a character preserves all data."""
         unique_name = f"{name}_{uuid4()}"
 
         # Create character
@@ -107,7 +107,7 @@ class TestCharacterCardProperties:
     @given(name=character_name_strategy)
     @settings(deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_character_name_uniqueness(self, name, character_db):
-        """Character names should be unique within a creator."""
+             """Character names should be unique within a creator."""
         unique_name = f"{name}_{uuid4()}"
 
         # Create first character
@@ -149,7 +149,7 @@ class TestCharacterCardProperties:
     )
     @settings(deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_multiple_updates_preserve_name(self, updates, character_db):
-        """Multiple updates should preserve character name."""
+             """Multiple updates should preserve character name."""
         # Create character with unique name
         original_name = f"Immutable Name_{uuid4()}"
         char_id = character_db.add_character_card({
@@ -185,7 +185,7 @@ class TestChatSessionProperties:
     @given(messages=st.lists(message_strategy, min_size=1, max_size=20))
     @settings(deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_message_order_preserved(self, messages, character_db):
-        """Message order should be preserved in chat."""
+             """Message order should be preserved in chat."""
         # Create character and chat with unique name
         char_id = character_db.add_character_card({
             'name': f"Test Character_{uuid4()}",
@@ -239,7 +239,7 @@ class TestChatSessionProperties:
     )
     @settings(deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_chat_isolation(self, num_chats, messages_per_chat, character_db):
-        """Messages in one chat should not appear in another."""
+             """Messages in one chat should not appear in another."""
         # Create character with unique name
         char_id = character_db.add_character_card({
             'name': f"Isolation Test_{uuid4()}",
@@ -307,7 +307,7 @@ class TestWorldBookProperties:
     )
     @settings(deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_entry_keyword_matching(self, keywords, content, priority, world_book_service):
-        """Entries should activate when keywords match."""
+             """Entries should activate when keywords match."""
         service = world_book_service
 
         # Create world book with unique name
@@ -342,7 +342,7 @@ class TestWorldBookProperties:
     )
     @settings(deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_priority_ordering_invariant(self, entries, world_book_service):
-        """Activated entries should be ordered by priority."""
+             """Activated entries should be ordered by priority."""
         service = world_book_service
 
         wb_id = service.create_world_book(name=f"Priority Test_{uuid4()}")
@@ -374,7 +374,7 @@ class TestWorldBookProperties:
     )
     @settings(deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_keyword_case_insensitive(self, keyword, world_book_service):
-        """Keywords should match case-insensitively."""
+             """Keywords should match case-insensitively."""
         service = world_book_service
 
         wb_id = service.create_world_book(name=f"Case Test_{uuid4()}")
@@ -412,7 +412,7 @@ class TestDictionaryProperties:
     )
     @settings(deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_literal_replacement_complete(self, pattern, replacement, chat_dictionary_service):
-        """Literal replacements should replace all occurrences."""
+             """Literal replacements should replace all occurrences."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name=f"Literal Test_{uuid4()}")
@@ -451,7 +451,7 @@ class TestDictionaryProperties:
     )
     @settings(deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_multiple_replacements_no_conflicts(self, entries, chat_dictionary_service):
-        """Multiple replacements should not interfere with each other."""
+             """Multiple replacements should not interfere with each other."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name=f"Multi Test_{uuid4()}")
@@ -486,7 +486,7 @@ class TestDictionaryProperties:
     @given(probability=st.floats(min_value=0.0, max_value=1.0))
     @settings(deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_probability_bounds(self, probability, chat_dictionary_service):
-        """Probability replacements should respect bounds."""
+             """Probability replacements should respect bounds."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name=f"Prob Test_{uuid4()}")
@@ -527,7 +527,8 @@ class CharacterChatStateMachine(RuleBasedStateMachine):
     """Stateful testing for character chat operations."""
 
     def __init__(self):
-        super().__init__()
+
+             super().__init__()
         self.manager = None
         self.character_ids = set()
         self.chat_ids = set()
@@ -539,7 +540,7 @@ class CharacterChatStateMachine(RuleBasedStateMachine):
 
     @rule()
     def initialize_manager(self):
-        """Initialize the manager if not already done."""
+             """Initialize the manager if not already done."""
         if self.manager is None:
             import tempfile
             self.db_path = tempfile.mktemp(suffix='.db')
@@ -553,7 +554,7 @@ class CharacterChatStateMachine(RuleBasedStateMachine):
         first_message=message_strategy
     )
     def create_character(self, name, description, personality, first_message):
-        """Create a new character."""
+             """Create a new character."""
         if self.manager is None:
             self.initialize_manager()
 
@@ -583,7 +584,7 @@ class CharacterChatStateMachine(RuleBasedStateMachine):
         character_id=characters
     )
     def create_chat(self, character_id):
-        """Create a chat for a character."""
+             """Create a chat for a character."""
         if character_id in self.character_ids:
             chat_id = self.manager.create_chat_session(
                 character_id=character_id,
@@ -604,14 +605,14 @@ class CharacterChatStateMachine(RuleBasedStateMachine):
         message=message_strategy
     )
     def add_message(self, chat_id, message):
-        """Add a message to a chat."""
+             """Add a message to a chat."""
         if chat_id in self.chat_ids:
             self.manager.add_message(chat_id, "user", message)
             self.chat_data[chat_id]['messages'].append(message)
 
     @rule(character_id=characters)
     def delete_character(self, character_id):
-        """Delete a character."""
+             """Delete a character."""
         if character_id in self.character_ids:
             self.manager.delete_character_card(character_id)
             self.character_ids.remove(character_id)
@@ -624,7 +625,7 @@ class CharacterChatStateMachine(RuleBasedStateMachine):
 
     @invariant()
     def characters_are_retrievable(self):
-        """All created characters should be retrievable."""
+             """All created characters should be retrievable."""
         if self.manager is not None:
             for char_id in self.character_ids:
                 character = self.manager.get_character_card(char_id)
@@ -633,7 +634,7 @@ class CharacterChatStateMachine(RuleBasedStateMachine):
 
     @invariant()
     def chats_belong_to_characters(self):
-        """All chats should belong to existing characters."""
+             """All chats should belong to existing characters."""
         if self.manager is not None:
             for chat_id, data in self.chat_data.items():
                 if chat_id in self.chat_ids:
@@ -643,7 +644,7 @@ class CharacterChatStateMachine(RuleBasedStateMachine):
 
     @invariant()
     def message_count_matches(self):
-        """Message count should match what was added."""
+             """Message count should match what was added."""
         if self.manager is not None:
             for chat_id, data in self.chat_data.items():
                 if chat_id in self.chat_ids:
@@ -653,7 +654,8 @@ class CharacterChatStateMachine(RuleBasedStateMachine):
                     assert len(user_messages) == len(data['messages'])
 
     def teardown(self):
-        """Clean up after test."""
+
+             """Clean up after test."""
         if self.manager:
             self.manager.close()
 
@@ -668,7 +670,7 @@ class CharacterChatStateMachine(RuleBasedStateMachine):
 @pytest.mark.property
 @pytest.mark.slow
 def test_character_chat_state_machine():
-    """Run the stateful property test."""
+     """Run the stateful property test."""
     TestCharacterChatMachine = CharacterChatStateMachine.TestCase
     TestCharacterChatMachine.settings = settings(
         max_examples=50,
@@ -698,7 +700,7 @@ class TestMessageProcessingProperties:
     )
     @settings(deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_context_truncation_preserves_recent(self, messages, max_tokens, mock_chat_manager):
-        """Context truncation should preserve most recent messages."""
+             """Context truncation should preserve most recent messages."""
         manager = mock_chat_manager
 
         # Prepare messages in correct format
@@ -725,7 +727,7 @@ class TestMessageProcessingProperties:
     )
     @settings(deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_message_chunking(self, message_length, chunk_size, mock_chat_manager):
-        """Long messages should be properly chunked."""
+             """Long messages should be properly chunked."""
         manager = mock_chat_manager
 
         # Create a long message
@@ -763,7 +765,7 @@ class TestImportExportProperties:
     )
     @settings(deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_export_import_roundtrip(self, character_data, mock_chat_manager):
-        """Exporting and importing should preserve all data."""
+             """Exporting and importing should preserve all data."""
         manager = mock_chat_manager
 
         # Make name unique
@@ -810,7 +812,7 @@ class TestTagProperties:
     )
     @settings(deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_tag_normalization(self, tags, character_db):
-        """Tags should be normalized consistently."""
+             """Tags should be normalized consistently."""
         # Create character with tags and unique name
         char_id = character_db.add_character_card({
             'name': f"Tag Test_{uuid4()}",

@@ -229,7 +229,8 @@ class TestDatabaseHelper:
             conn.commit()
 
     def clear_all_tables(self) -> None:
-        """Clear all data from tables (for cleanup)."""
+
+             """Clear all data from tables (for cleanup)."""
         tables = [
             "evaluations", "runs", "run_samples", "datasets",
             "internal_evaluations", "evaluation_metrics",
@@ -243,7 +244,8 @@ class TestDatabaseHelper:
             conn.commit()
 
     def get_statistics(self) -> Dict[str, int]:
-        """Get counts of records in each table."""
+
+             """Get counts of records in each table."""
         stats = {}
 
         tables = [

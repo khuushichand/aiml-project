@@ -10,13 +10,17 @@ def _stub_resolver_factory(mapping: dict[str, list[str]]):
 
 
 def test_expand_allowlist_basic_ip_and_cidr():
-    raw = ["192.168.1.10", "10.0.0.0/8"]
+
+
+     raw = ["192.168.1.10", "10.0.0.0/8"]
     out = expand_allowlist_to_targets(raw, resolver=_stub_resolver_factory({}))
     assert "192.168.1.10/32" in out and "10.0.0.0/8" in out
 
 
 def test_expand_allowlist_hostname_and_wildcard():
-    mapping = {
+
+
+     mapping = {
         "example.com": ["93.184.216.34"],
         "www.example.org": ["203.0.113.10"],
         "api.example.org": ["203.0.113.11"],
@@ -31,7 +35,9 @@ def test_expand_allowlist_hostname_and_wildcard():
 
 
 def test_expand_allowlist_suffix_and_scheme_handling():
-    mapping = {
+
+
+     mapping = {
         "example.net": ["198.51.100.10"],
         "www.example.net": ["198.51.100.11"],
         "api.example.net": ["198.51.100.12"],

@@ -13,7 +13,9 @@ from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
 
 
 def _non_character_aliases():
-    # Include prefixed variations used by the pipeline (e.g., "system:notes", "tool:browser")
+
+
+     # Include prefixed variations used by the pipeline (e.g., "system:notes", "tool:browser")
     base = list(SYSTEM_ALIASES | TOOL_ALIASES)
     prefixed = [
         f"system:{p}" for p in ["meta", "note", "debug"]
@@ -29,7 +31,7 @@ def _non_character_aliases():
     greeting=st.text(min_size=3, max_size=120),
 )
 def test_first_message_prefers_character_when_matches_greeting(char_name, user_name, greeting):
-    # Construct DB messages where first message equals char_first_message
+     # Construct DB messages where first message equals char_first_message
     db_messages = [
         {"id": "m1", "sender": char_name, "content": greeting, "timestamp": 1, "version": 1},
         {"id": "m2", "sender": "user", "content": "Hi", "timestamp": 2, "version": 1},
@@ -72,7 +74,7 @@ def test_first_message_prefers_character_when_matches_greeting(char_name, user_n
     )
 )
 def test_system_and_tool_senders_map_to_non_character(msgs):
-    # Ensure messages with system/tool aliases are always classified under non_character
+     # Ensure messages with system/tool aliases are always classified under non_character
     # Use a consistent char/user name that won't collide with system/tool aliases
     char_name = "Assistant"
     user_name = "User"
@@ -107,7 +109,7 @@ def test_system_and_tool_senders_map_to_non_character(msgs):
     char_texts=st.lists(st.text(min_size=1, max_size=40), min_size=8, max_size=16),
 )
 def test_alternating_user_and_character_produce_paired_turns(n, user_texts, char_texts):
-    # Build an alternating sequence: user -> character -> user -> character ...
+     # Build an alternating sequence: user -> character -> user -> character ...
     char_name = "Assistant"
     user_name = "User"
 
@@ -149,7 +151,9 @@ def test_alternating_user_and_character_produce_paired_turns(n, user_texts, char
 
 
 def test_overlapping_alias_resolves_with_additional_char_aliases():
-    # Use 'player' which is part of USER_SENDER_ALIASES; mark it also as a char alias
+
+
+     # Use 'player' which is part of USER_SENDER_ALIASES; mark it also as a char alias
     char_alias = "player"
     char_name = "NarrativeAI"
     user_name = "User"
@@ -178,7 +182,9 @@ def test_overlapping_alias_resolves_with_additional_char_aliases():
 
 
 def test_interrupted_by_system_message_produces_non_character_turn():
-    char_name = "Assistant"
+
+
+     char_name = "Assistant"
     user_name = "User"
 
     db_messages = [

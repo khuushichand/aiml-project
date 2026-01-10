@@ -22,7 +22,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 # Disable rate limiting for all tests
 @pytest.fixture(autouse=True)
 def disable_rate_limiting():
-    """Disable rate limiting for all tests in this module"""
+     """Disable rate limiting for all tests in this module"""
     os.environ["TESTING"] = "true"
     yield
     # Clean up after tests
@@ -32,7 +32,7 @@ def disable_rate_limiting():
 # Mock metrics for tests to avoid registry conflicts
 @pytest.fixture(autouse=True)
 def mock_metrics():
-    """Mock Prometheus metrics to avoid registry conflicts"""
+     """Mock Prometheus metrics to avoid registry conflicts"""
     mock_counter = MagicMock()
     mock_counter_instance = MagicMock()
     mock_counter_instance.inc = MagicMock()
@@ -61,7 +61,7 @@ def mock_metrics():
 # Module-level setup fixture for all test classes
 @pytest.fixture
 def setup():
-    """Setup test environment fixture with proper TestClient lifecycle"""
+     """Setup test environment fixture with proper TestClient lifecycle"""
     class SetupData:
         pass
 
@@ -334,7 +334,8 @@ class TestRetryLogic:
         attempt_count = 0
 
         def mock_embeddings(texts, config, model_id_override, metadata=None, **_):
-            nonlocal attempt_count
+
+                     nonlocal attempt_count
             attempt_count += 1
 
             # First 2 attempts fail, third succeeds
@@ -351,7 +352,7 @@ class TestRetryLogic:
             retry=retry_if_exception_type(ConnectionError),
         )
         def retry_wrapper_sync(*, texts, config, model_id_override, metadata=None):
-            return mock_embeddings(
+                     return mock_embeddings(
                 texts=texts,
                 config=config,
                 model_id_override=model_id_override,
@@ -397,7 +398,8 @@ class TestRetryLogic:
         attempt_count = 0
 
         def mock_embeddings(texts, config, model_id_override, metadata=None, **_):
-            nonlocal attempt_count
+
+                     nonlocal attempt_count
             attempt_count += 1
             raise ValueError("Invalid input")
 

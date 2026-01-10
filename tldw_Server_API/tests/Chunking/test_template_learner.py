@@ -2,7 +2,9 @@ from tldw_Server_API.app.core.Chunking.templates import TemplateLearner
 
 
 def test_template_learner_produces_boundaries():
-    example = """Chapter 1
+
+
+     example = """Chapter 1
 
     Introduction
 

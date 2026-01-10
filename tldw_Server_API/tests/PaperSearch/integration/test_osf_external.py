@@ -11,12 +11,16 @@ pytestmark = [pytest.mark.integration, pytest.mark.external_api]
 
 
 def _require_external():
-    if os.getenv("RUN_EXTERNAL_API_TESTS", "0") != "1":
+
+
+     if os.getenv("RUN_EXTERNAL_API_TESTS", "0") != "1":
         pytest.skip("External API tests disabled. Set RUN_EXTERNAL_API_TESTS=1 to enable.")
 
 
 def test_osf_search_basic(client_with_auth):
-    _require_external()
+
+
+     _require_external()
     resp = client_with_auth.get(
         "/api/v1/paper-search/osf",
         params={"term": "quantum", "results_per_page": 3},
@@ -28,14 +32,18 @@ def test_osf_search_basic(client_with_auth):
 
 
 def test_osf_by_id_lenient(client_with_auth):
-    _require_external()
+
+
+     _require_external()
     # Use an obviously fake id; allow 404 or errors
     resp = client_with_auth.get("/api/v1/paper-search/osf/by-id", params={"osf_id": "zzznotreal"})
     assert resp.status_code in (404, 500, 502, 504)
 
 
 def test_osf_ingest_lenient(client_with_auth):
-    _require_external()
+
+
+     _require_external()
     # Without a stable known OSF id hosting a PDF, just check endpoint wiring
     resp = client_with_auth.post(
         "/api/v1/paper-search/osf/ingest",

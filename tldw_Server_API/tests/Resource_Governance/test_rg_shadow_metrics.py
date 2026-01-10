@@ -11,7 +11,9 @@ pytestmark = pytest.mark.rate_limit
 
 
 def test_record_shadow_mismatch_increments_counter():
-    ensure_rg_metrics_registered()
+
+
+     ensure_rg_metrics_registered()
     reg = get_metrics_registry()
 
     labels = {

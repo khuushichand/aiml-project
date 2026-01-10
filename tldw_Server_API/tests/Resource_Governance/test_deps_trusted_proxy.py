@@ -8,7 +8,9 @@ from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
 
 
 def _build_request(headers=None, client_host="127.0.0.1", client_port=12345):
-    scope = {
+
+
+     scope = {
         "type": "http",
         "method": "GET",
         "path": "/",

@@ -10,7 +10,9 @@ from tldw_Server_API.app.core.AuthNZ.api_key_crypto import format_api_key
 
 
 def test_single_user_production_rejects_weak_key(monkeypatch):
-    monkeypatch.setenv("tldw_production", "true")
+
+
+     monkeypatch.setenv("tldw_production", "true")
     with pytest.raises(ValueError):
         Settings(
             AUTH_MODE="single_user",
@@ -33,7 +35,9 @@ def test_single_user_production_rejects_weak_key(monkeypatch):
 
 
 def test_single_user_production_accepts_new_format(monkeypatch):
-    monkeypatch.setenv("tldw_production", "true")
+
+
+     monkeypatch.setenv("tldw_production", "true")
     Settings(
         AUTH_MODE="single_user",
         SINGLE_USER_API_KEY=format_api_key("deadbeefcafe", "secret-part"),

@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.Chat.chat_service import (
 
 @pytest.mark.unit
 def test_resolve_provider_and_model_inline_alias(monkeypatch):
-    """Inline provider/model with alias should resolve to concrete model."""
+     """Inline provider/model with alias should resolve to concrete model."""
     invalidate_model_alias_caches()
 
     request = ChatCompletionRequest(

@@ -8,10 +8,13 @@ from tldw_Server_API.app.core.Web_Scraping.enhanced_web_scraping import Enhanced
 
 
 def test_config_cached(monkeypatch):
-    calls = {"n": 0}
+
+
+     calls = {"n": 0}
 
     def fake_loader():
-        calls["n"] += 1
+
+             calls["n"] += 1
         return {"search_engines": {}, "Web-Scraping": {}}
 
     # Ensure a cold cache
@@ -25,7 +28,9 @@ def test_config_cached(monkeypatch):
 
 
 def test_enhanced_scraper_concurrency_config_parsing():
-    cfg = {
+
+
+     cfg = {
         "max_rps": "3.5",
         "max_rpm": "7",
         "max_rph": "9",
@@ -46,7 +51,7 @@ def test_enhanced_scraper_concurrency_config_parsing():
 async def test_circuit_breaker_opens_and_skips(monkeypatch):
     # Arrange: force breaker to open after 2 failures
     def fake_cfg():
-        return {
+             return {
             "search_engines": {},
             "Web-Scraping": {
                 "llm_cb_fail_threshold": 2,
@@ -62,7 +67,8 @@ async def test_circuit_breaker_opens_and_skips(monkeypatch):
     calls = {"n": 0}
 
     def fail_call(**kwargs):
-        calls["n"] += 1
+
+             calls["n"] += 1
         raise RuntimeError("rate limited")
 
     monkeypatch.setattr(WSA, "chat_api_call", fail_call)

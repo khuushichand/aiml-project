@@ -5,7 +5,9 @@ from fastapi.testclient import TestClient
 
 
 def _setup_env(monkeypatch, tmp_path):
-    # Isolate DB/filesystem into a temp dir per test
+
+
+     # Isolate DB/filesystem into a temp dir per test
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
@@ -32,7 +34,7 @@ def _setup_env(monkeypatch, tmp_path):
 
 @pytest.mark.integration
 def test_jobs_events_sse_initial_data_within_500ms(monkeypatch, tmp_path):
-    # Guard against sandbox/CI hangs: opt-out via env or auto-skip on CI
+     # Guard against sandbox/CI hangs: opt-out via env or auto-skip on CI
     if os.getenv("CI") or str(os.getenv("TLDW_TEST_NO_SSE", "")).strip().lower() in {"1","true","yes","on"}:
         pytest.skip("Skipping SSE smoke test in CI/sandbox environment")
     _setup_env(monkeypatch, tmp_path)
@@ -64,7 +66,7 @@ def test_jobs_events_sse_initial_data_within_500ms(monkeypatch, tmp_path):
 
 @pytest.mark.integration
 def test_jobs_events_outbox_list_deterministic(monkeypatch, tmp_path):
-    _setup_env(monkeypatch, tmp_path)
+     _setup_env(monkeypatch, tmp_path)
 
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
     reset_settings()

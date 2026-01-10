@@ -11,7 +11,7 @@ from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router
 
 @pytest.fixture
 def client(monkeypatch):
-    monkeypatch.setenv("TEST_MODE", "true")
+     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key-1234567890")
     monkeypatch.setenv("SINGLE_USER_FIXED_ID", "1")

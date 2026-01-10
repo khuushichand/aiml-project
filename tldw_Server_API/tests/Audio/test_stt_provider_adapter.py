@@ -4,7 +4,9 @@ import pytest
 
 
 def _import_module():
-    # Local import so tests don't break when heavy STT deps are absent.
+
+
+     # Local import so tests don't break when heavy STT deps are absent.
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter as spa
 
     return spa
@@ -12,11 +14,11 @@ def _import_module():
 
 @pytest.mark.unit
 def test_default_provider_name_uses_stt_settings(monkeypatch):
-    spa = _import_module()
+     spa = _import_module()
 
     # Simulate STT-Settings with both keys present; default_transcriber should win.
     def fake_get_stt_config():
-        return {
+             return {
             "default_stt_provider": "parakeet",
             "default_transcriber": "faster_whisper",
         }
@@ -29,10 +31,11 @@ def test_default_provider_name_uses_stt_settings(monkeypatch):
 
 @pytest.mark.unit
 def test_default_provider_name_falls_back_to_stt_provider(monkeypatch):
-    spa = _import_module()
+     spa = _import_module()
 
     def fake_get_stt_config():
-        return {
+
+             return {
             "default_stt_provider": "parakeet",
             # No default_transcriber key
         }
@@ -45,10 +48,11 @@ def test_default_provider_name_falls_back_to_stt_provider(monkeypatch):
 
 @pytest.mark.unit
 def test_get_adapter_unknown_provider_falls_back_to_faster_whisper(monkeypatch):
-    spa = _import_module()
+     spa = _import_module()
 
     def fake_get_stt_config():
-        return {
+
+             return {
             "default_stt_provider": "parakeet",
         }
 
@@ -61,7 +65,7 @@ def test_get_adapter_unknown_provider_falls_back_to_faster_whisper(monkeypatch):
 
 @pytest.mark.unit
 def test_resolve_provider_for_model_uses_parser(monkeypatch):
-    spa = _import_module()
+     spa = _import_module()
 
     # Provide a simple, deterministic parser implementation so we don't depend
     # on the exact behavior of Audio_Transcription_Lib here.
@@ -95,7 +99,7 @@ def test_resolve_provider_for_model_uses_parser(monkeypatch):
 
 @pytest.mark.unit
 def test_capabilities_exposed_for_known_providers():
-    spa = _import_module()
+     spa = _import_module()
 
     registry = spa.SttProviderRegistry()
 
@@ -118,7 +122,7 @@ def test_capabilities_exposed_for_known_providers():
 
 @pytest.mark.unit
 def test_transcribe_batch_whisper_normalizes_artifact(monkeypatch, tmp_path):
-    spa = _import_module()
+     spa = _import_module()
 
     audio_file = tmp_path / "sample.wav"
     audio_file.write_bytes(b"\x00" * 2048)
@@ -135,7 +139,8 @@ def test_transcribe_batch_whisper_normalizes_artifact(monkeypatch, tmp_path):
         task="transcribe",
         base_dir=None,
     ):
-        assert str(path) == str(audio_file)
+
+             assert str(path) == str(audio_file)
         assert whisper_model == "tiny"
         assert selected_source_lang is None
         assert task == "transcribe"
@@ -171,7 +176,7 @@ def test_transcribe_batch_whisper_normalizes_artifact(monkeypatch, tmp_path):
 
 @pytest.mark.unit
 def test_transcribe_batch_parakeet_normalizes_artifact(monkeypatch, tmp_path):
-    spa = _import_module()
+     spa = _import_module()
 
     audio_file = tmp_path / "sample_parakeet.wav"
     audio_file.write_bytes(b"\x00" * 1024)
@@ -187,7 +192,8 @@ def test_transcribe_batch_parakeet_normalizes_artifact(monkeypatch, tmp_path):
         return_language,
         base_dir=None,
     ):
-        assert str(path) == str(audio_file)
+
+             assert str(path) == str(audio_file)
         # Parakeet adapter encodes model name into whisper_model
         assert whisper_model == "parakeet-standard"
         segments = [
@@ -215,7 +221,7 @@ def test_transcribe_batch_parakeet_normalizes_artifact(monkeypatch, tmp_path):
 
 @pytest.mark.unit
 def test_transcribe_batch_canary_normalizes_artifact(monkeypatch, tmp_path):
-    spa = _import_module()
+     spa = _import_module()
 
     # Create a minimal valid WAV file for soundfile to read
     import numpy as np
@@ -232,7 +238,8 @@ def test_transcribe_batch_canary_normalizes_artifact(monkeypatch, tmp_path):
     )
 
     def fake_transcribe_with_canary(audio_np, sample_rate, language, task="transcribe", target_language=None):
-        assert sample_rate == 16000
+
+             assert sample_rate == 16000
         return "canary transcript"
 
     fake_nemo_mod.transcribe_with_canary = fake_transcribe_with_canary
@@ -256,7 +263,7 @@ def test_transcribe_batch_canary_normalizes_artifact(monkeypatch, tmp_path):
 
 @pytest.mark.unit
 def test_transcribe_batch_external_normalizes_artifact(monkeypatch, tmp_path):
-    spa = _import_module()
+     spa = _import_module()
 
     audio_file = tmp_path / "sample_external.wav"
     audio_file.write_bytes(b"\x00" * 1024)
@@ -271,7 +278,8 @@ def test_transcribe_batch_external_normalizes_artifact(monkeypatch, tmp_path):
         sample_rate=None,
         base_dir=None,
     ):
-        assert str(path) == str(audio_file)
+
+             assert str(path) == str(audio_file)
         assert base_dir is None
         return "external transcript"
 
@@ -299,7 +307,7 @@ def test_transcribe_batch_external_normalizes_artifact(monkeypatch, tmp_path):
 
 @pytest.mark.unit
 def test_transcribe_batch_external_passes_base_dir(monkeypatch, tmp_path):
-    spa = _import_module()
+     spa = _import_module()
 
     audio_file = tmp_path / "external_base_dir.wav"
     audio_file.write_bytes(b"\x00" * 2048)
@@ -315,7 +323,8 @@ def test_transcribe_batch_external_passes_base_dir(monkeypatch, tmp_path):
         sample_rate=None,
         base_dir=None,
     ):
-        captured["path"] = str(path)
+
+             captured["path"] = str(path)
         captured["base_dir"] = base_dir
         return "external ok"
 

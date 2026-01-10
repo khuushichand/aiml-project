@@ -23,7 +23,8 @@ class _FakeTokenizer:
         return [ord(c) for c in text]
 
     def decode(self, token_ids):
-        return "".join(chr(i) for i in token_ids)
+
+             return "".join(chr(i) for i in token_ids)
 
 
 def _patch_strategy_for_fallback(chunker: Chunker):
@@ -40,7 +41,9 @@ def _patch_strategy_for_fallback(chunker: Chunker):
 
 
 def _assert_monotonic_spans(results, text_len):
-    """Assert spans are monotonic by start and within bounds."""
+
+
+     """Assert spans are monotonic by start and within bounds."""
     prev_start = -1
     for r in results:
         md = r.metadata
@@ -63,7 +66,7 @@ def _assert_monotonic_spans(results, text_len):
     ],
 )
 def test_token_fallback_offsets_repeated_substrings(max_size, overlap):
-    # Repeated substrings can trick naive find() into using the first occurrence
+     # Repeated substrings can trick naive find() into using the first occurrence
     text = "ababa ababa ababa"
     chunker = Chunker()
     _patch_strategy_for_fallback(chunker)
@@ -89,7 +92,7 @@ def test_token_fallback_offsets_repeated_substrings(max_size, overlap):
     overlap=st.integers(min_value=0, max_value=9),
 )
 def test_token_fallback_offsets_repeated_substrings_property(max_size, overlap):
-    assume(overlap < max_size)
+     assume(overlap < max_size)
     text = "ababa ababa ababa ababa"
     chunker = Chunker()
     _patch_strategy_for_fallback(chunker)
@@ -116,7 +119,7 @@ def test_token_fallback_offsets_repeated_substrings_property(max_size, overlap):
     ],
 )
 def test_token_fallback_offsets_unicode_cf_differences(max_size, overlap):
-    # Include Cf characters (word joiner U+2060, variation selector U+FE0F)
+     # Include Cf characters (word joiner U+2060, variation selector U+FE0F)
     text = "alpha\u2060beta alpha\uFE0Fbeta alpha beta"
     chunker = Chunker()
     _patch_strategy_for_fallback(chunker)
@@ -141,7 +144,7 @@ def test_token_fallback_offsets_unicode_cf_differences(max_size, overlap):
     overlap=st.integers(min_value=0, max_value=9),
 )
 def test_token_fallback_offsets_unicode_cf_differences_property(max_size, overlap):
-    assume(overlap < max_size)
+     assume(overlap < max_size)
     text = "alpha\u2060beta alpha\uFE0Fbeta alpha\u2060beta"
     chunker = Chunker()
     _patch_strategy_for_fallback(chunker)
@@ -168,7 +171,7 @@ def test_token_fallback_offsets_unicode_cf_differences_property(max_size, overla
     ],
 )
 def test_token_fallback_offsets_zwj_sequences(max_size, overlap):
-    # ZWJ sequence: woman technologist repeated, with ASCII around
+     # ZWJ sequence: woman technologist repeated, with ASCII around
     text = "👩‍💻👩‍💻👩‍💻 test 👩‍💻👩‍💻"
     chunker = Chunker()
     _patch_strategy_for_fallback(chunker)
@@ -193,7 +196,7 @@ def test_token_fallback_offsets_zwj_sequences(max_size, overlap):
     overlap=st.integers(min_value=0, max_value=9),
 )
 def test_token_fallback_offsets_zwj_sequences_property(max_size, overlap):
-    assume(overlap < max_size)
+     assume(overlap < max_size)
     text = "👩‍💻👩‍💻 test 👩‍💻👩‍💻👩‍💻 end"
     chunker = Chunker()
     _patch_strategy_for_fallback(chunker)

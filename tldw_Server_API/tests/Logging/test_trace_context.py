@@ -9,7 +9,9 @@ from tldw_Server_API.app.core.Logging.log_context import ensure_traceparent
 
 
 def test_ensure_traceparent_sets_state_and_returns_value():
-    class _State:  # minimal stand-in for request.state
+
+
+     class _State:  # minimal stand-in for request.state
         pass
 
     class _Req:
@@ -31,7 +33,9 @@ def test_ensure_traceparent_sets_state_and_returns_value():
 
 
 def test_audio_jobs_submit_propagates_request_id(monkeypatch):
-    # Capture kwargs sent to JobManager.create_job
+
+
+     # Capture kwargs sent to JobManager.create_job
     captured: Dict[str, Any] = {}
 
     from tldw_Server_API.app.core.Jobs import manager as jobs_manager
@@ -66,14 +70,17 @@ def test_audio_jobs_submit_propagates_request_id(monkeypatch):
 
 
 def test_reembed_schedule_propagates_request_id(monkeypatch):
-    captured: Dict[str, Any] = {}
+
+
+     captured: Dict[str, Any] = {}
 
     from tldw_Server_API.app.core.Jobs import manager as jobs_manager
 
     def fake_create_job(self, *, domain, queue, job_type, payload, owner_user_id, project_id=None,
                         priority=5, max_retries=3, available_at=None, idempotency_key=None,
                         request_id=None, trace_id=None):
-        captured.update({
+
+             captured.update({
             "domain": domain,
             "queue": queue,
             "job_type": job_type,

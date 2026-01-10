@@ -8,7 +8,7 @@ from tldw_Server_API.app.core.Embeddings.queue_schemas import EmbeddingMessage, 
 
 class _FakeRedis:
     def __init__(self):
-        self.kv = {}
+             self.kv = {}
         self.hashes = {}
 
     async def get(self, key):
@@ -35,7 +35,7 @@ class _TestEmbeddingWorker(EmbeddingWorker):
 
 @pytest.mark.unit
 def test_embedding_uses_redis_content_hash_cache(monkeypatch):
-    cfg = EmbeddingWorkerConfig(
+     cfg = EmbeddingWorkerConfig(
         worker_id="embedding-0",
         worker_type="embedding",
         redis_url="redis://localhost:6379",

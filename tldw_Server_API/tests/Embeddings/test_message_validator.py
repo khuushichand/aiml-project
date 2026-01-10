@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 @pytest.mark.unit
 def test_normalize_message_adds_version_and_schema():
-    raw = {
+     raw = {
         "job_id": "j1",
         "user_id": "u",
         "media_id": 1,
@@ -27,13 +27,13 @@ def test_normalize_message_adds_version_and_schema():
 
 @pytest.mark.unit
 def test_normalize_message_rejects_bad_stage():
-    with pytest.raises(ValueError):
+     with pytest.raises(ValueError):
         normalize_message("invalid_stage", {"job_id": "x"})
 
 
 @pytest.mark.unit
 def test_normalize_message_invalid_chunking_config():
-    # chunk_size below minimum should raise
+     # chunk_size below minimum should raise
     raw = {
         "job_id": "j2",
         "user_id": "u",
@@ -51,7 +51,7 @@ def test_normalize_message_invalid_chunking_config():
 
 @pytest.mark.unit
 def test_normalize_message_schema_alias_handling():
-    raw = {
+     raw = {
         "schema": "custom.schema.v1",
         "job_id": "j3",
         "user_id": "u",

@@ -14,21 +14,23 @@ pytestmark = pytest.mark.unit
 
 class _FakeRedis:
     def __init__(self):
-        self.calls = []
+             self.calls = []
         self.kv = {}
         self.sets = {}
 
     # Basic KV
     def setex(self, key, ttl, value):
-        self.calls.append(("setex", key, ttl, value))
+             self.calls.append(("setex", key, ttl, value))
         self.kv[key] = value
 
     def get(self, key):
-        self.calls.append(("get", key))
+
+             self.calls.append(("get", key))
         return self.kv.get(key)
 
     def delete(self, *keys):
-        self.calls.append(("delete", keys))
+
+             self.calls.append(("delete", keys))
         deleted = 0
         for k in keys:
             k = k.decode() if isinstance(k, (bytes, bytearray)) else k
@@ -39,25 +41,29 @@ class _FakeRedis:
 
     # Set ops
     def sadd(self, key, member):
-        self.calls.append(("sadd", key, member))
+             self.calls.append(("sadd", key, member))
         self.sets.setdefault(key, set()).add(member)
 
     def smembers(self, key):
-        self.calls.append(("smembers", key))
+
+             self.calls.append(("smembers", key))
         return set(self.sets.get(key, set()))
 
     def expire(self, key, ttl):
-        self.calls.append(("expire", key, ttl))
+
+             self.calls.append(("expire", key, ttl))
         return True
 
     # Scan fallback
     def scan(self, cursor=0, match=None, count=None):
-        self.calls.append(("scan", cursor, match, count))
+             self.calls.append(("scan", cursor, match, count))
         return 0, []
 
 
 def test_build_cache_key_is_stable_and_drops_token():
-    params1 = {"page": "1", "token": "secret"}
+
+
+     params1 = {"page": "1", "token": "secret"}
     params2 = {"token": "secret", "page": "1"}
 
     key1 = cache.build_cache_key("/api/v1/media", params1)
@@ -71,7 +77,9 @@ def test_build_cache_key_is_stable_and_drops_token():
 
 
 def test_cache_response_and_get_cached_response_roundtrip():
-    fake = _FakeRedis()
+
+
+     fake = _FakeRedis()
     payload = {"ok": True, "items": [1, 2, 3]}
     key = "cache:/api/v1/media/123:abc"
 
@@ -91,9 +99,11 @@ def test_cache_response_and_get_cached_response_roundtrip():
 
 
 def test_invalidate_media_cache_uses_index_and_scan():
-    class _ScanRedis(_FakeRedis):
+
+
+     class _ScanRedis(_FakeRedis):
         def scan(self, cursor=0, match=None, count=None):
-            # Expose one extra key on first call when index already seeded
+                     # Expose one extra key on first call when index already seeded
             if cursor == 0 and match:
                 self.kv["cache:/api/v1/media/123:extra"] = "v"
                 return 0, ["cache:/api/v1/media/123:extra"]
@@ -111,7 +121,9 @@ def test_invalidate_media_cache_uses_index_and_scan():
 
 
 def test_etag_and_if_none_match_parsing():
-    payload = {"a": 1, "b": 2}
+
+
+     payload = {"a": 1, "b": 2}
     etag = cache.generate_etag(payload)
 
     header = f'W/"{etag}", "other"'
@@ -122,7 +134,9 @@ def test_etag_and_if_none_match_parsing():
 
 
 def test_request_parsing_to_bool_and_to_int():
-    assert request_parsing.to_bool("yes") is True
+
+
+     assert request_parsing.to_bool("yes") is True
     assert request_parsing.to_bool("No") is False
     assert request_parsing.to_bool(None, default=True) is True
 
@@ -132,7 +146,9 @@ def test_request_parsing_to_bool_and_to_int():
 
 
 def test_request_parsing_normalize_str_list_and_urls():
-    assert request_parsing.normalize_str_list("a, b; c d") == ["a", "b", "c", "d"]
+
+
+     assert request_parsing.normalize_str_list("a, b; c d") == ["a", "b", "c", "d"]
     assert request_parsing.normalize_str_list([" a ", ""]) == ["a"]
 
     urls = request_parsing.normalize_urls([" https://a ", "https://b", "https://a"])
@@ -140,7 +156,9 @@ def test_request_parsing_normalize_str_list_and_urls():
 
 
 def test_http_error_mapping_for_db_exceptions():
-    exc = InputError("bad")
+
+
+     exc = InputError("bad")
     http_exc = http_errors.map_db_error_to_http(exc)
     assert http_exc.status_code == 400
 

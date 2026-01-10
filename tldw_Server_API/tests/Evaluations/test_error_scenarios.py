@@ -89,7 +89,8 @@ class TestErrorScenarios:
         evaluator = RAGEvaluator()
 
         def slow_embed(*args):
-            # Simulate slow network by blocking (create_embedding is synchronous)
+
+                     # Simulate slow network by blocking (create_embedding is synchronous)
             import time
             time.sleep(10)
             return np.random.rand(1536).tolist()
@@ -417,7 +418,8 @@ class TestEdgeCases:
                     assert "relevance" in result["failed_metrics"]
 
     def test_migration_idempotency(self):
-        """Test that migrations can be run multiple times safely."""
+
+             """Test that migrations can be run multiple times safely."""
         from tldw_Server_API.app.core.DB_Management.migrations import migrate_evaluations_database
 
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:

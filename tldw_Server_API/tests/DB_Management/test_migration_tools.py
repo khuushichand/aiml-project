@@ -13,24 +13,27 @@ from tldw_Server_API.app.core.DB_Management import migration_tools
 
 class _StubPool:
     def close_all(self) -> None:
-        pass
+             pass
 
 
 class _StubBackend:
     def __init__(self) -> None:
-        self.executed: List[str] = []
+             self.executed: List[str] = []
         self.executed_many: List[Tuple[str, List[Tuple[Any, ...]]]] = []
 
     def transaction(self):
-        class _Ctx:
+
+             class _Ctx:
             def __init__(self, backend: '_StubBackend') -> None:
                 self.backend = backend
 
             def __enter__(self):
-                return self.backend
+
+                             return self.backend
 
             def __exit__(self, exc_type, exc, tb) -> None:
-                return False
+
+                             return False
 
         return _Ctx(self)
 
@@ -43,7 +46,8 @@ class _StubBackend:
         return None
 
     def get_pool(self) -> _StubPool:
-        return _StubPool()
+
+             return _StubPool()
 
 
 @pytest.fixture

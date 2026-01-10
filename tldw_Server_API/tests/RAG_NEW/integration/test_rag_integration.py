@@ -204,7 +204,7 @@ class TestUnifiedPipelineIntegration:
 
         # Should find the vector database document
         def _content(d):
-            return d.get("content") if isinstance(d, dict) else getattr(d, "content", "")
+                     return d.get("content") if isinstance(d, dict) else getattr(d, "content", "")
         found_vector_doc = any(
             "vector" in str(_content(doc)).lower()
             for doc in result.documents
@@ -225,7 +225,7 @@ class TestUnifiedPipelineIntegration:
         assert isinstance(result, UnifiedRAGResponse)
         # Expanded query should find machine learning documents
         def _content(d):
-            return d.get("content") if isinstance(d, dict) else getattr(d, "content", "")
+                     return d.get("content") if isinstance(d, dict) else getattr(d, "content", "")
         found_ml_doc = any(
             ("rag" in str(_content(doc)).lower()) or ("retrieval" in str(_content(doc)).lower())
             for doc in result.documents
@@ -419,7 +419,7 @@ class TestErrorRecoveryIntegration:
 
         class FailingRetriever:
             def __init__(self, *args, **kwargs):
-                pass
+                             pass
             async def retrieve(self, *args, **kwargs):
                 raise Exception("Simulated DB failure")
 
@@ -480,7 +480,7 @@ class TestErrorRecoveryIntegration:
         class FlakyRetriever:
             attempts = 0
             def __init__(self, *args, **kwargs):
-                pass
+                             pass
             async def retrieve(self, *args, **kwargs):
                 FlakyRetriever.attempts += 1
                 if FlakyRetriever.attempts < 3:

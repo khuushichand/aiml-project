@@ -5,7 +5,9 @@ from tldw_Server_API.app.main import app
 
 
 def test_ps_optimization_simple_includes_request_id_in_payload(monkeypatch):
-    captured = {}
+
+
+     captured = {}
 
     # Monkeypatch the Prompt Studio JobManager.create_job (PS-specific)
     from tldw_Server_API.app.core.Prompt_Management.prompt_studio import job_manager as ps_jm

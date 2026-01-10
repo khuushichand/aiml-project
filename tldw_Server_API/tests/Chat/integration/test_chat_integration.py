@@ -27,7 +27,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
 
 @pytest.fixture
 def test_user():
-    """Create a test user object."""
+     """Create a test user object."""
     return User(
         id=1,
         username="test_user",
@@ -38,7 +38,7 @@ def test_user():
 
 @pytest.fixture
 def auth_token(test_user):
-    """Generate authentication token based on auth mode."""
+     """Generate authentication token based on auth mode."""
     settings = get_settings()
 
     if settings.AUTH_MODE == "multi_user":
@@ -59,7 +59,7 @@ def auth_token(test_user):
 
 @pytest.fixture
 def test_chacha_db(test_user):
-    """Create a real test ChaChaNotes database."""
+     """Create a real test ChaChaNotes database."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name
 
@@ -86,7 +86,7 @@ def test_chacha_db(test_user):
 
 @pytest.fixture
 def test_media_db(test_user):
-    """Create a real test media database."""
+     """Create a real test media database."""
     from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
@@ -105,7 +105,7 @@ def test_media_db(test_user):
 
 @pytest.fixture
 def setup_dependencies(test_user, test_chacha_db, test_media_db):
-    """Override dependencies to use test databases."""
+     """Override dependencies to use test databases."""
     settings = get_settings()
 
     # Override authentication for single-user mode
@@ -125,7 +125,7 @@ def setup_dependencies(test_user, test_chacha_db, test_media_db):
 
 @pytest.fixture
 def client():
-    """Create test client with CSRF handling."""
+     """Create test client with CSRF handling."""
     with TestClient(app) as test_client:
         # Get CSRF token
         response = test_client.get("/api/v1/health")
@@ -137,7 +137,9 @@ def client():
 
 
 def test_chat_completion_integration(client, auth_token, test_chacha_db, setup_dependencies, configure_for_mock_server):
-    """Test chat completion with real database and no mocking."""
+
+
+     """Test chat completion with real database and no mocking."""
 
     settings = get_settings()
 

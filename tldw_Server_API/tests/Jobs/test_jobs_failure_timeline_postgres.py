@@ -8,7 +8,9 @@ pytestmark = pytest.mark.pg_jobs
 
 
 def _pg_env(monkeypatch):
-    dsn = os.getenv("JOBS_DB_URL")
+
+
+     dsn = os.getenv("JOBS_DB_URL")
     if not dsn:
         pytest.skip("JOBS_DB_URL not set")
 
@@ -33,7 +35,9 @@ def _read_timeline_pg(jm: JobManager, job_id: int):
 
 
 def test_failure_timeline_append_and_jsonb_postgres(monkeypatch):
-    _pg_env(monkeypatch)
+
+
+     _pg_env(monkeypatch)
     jm = JobManager(backend="postgres", db_url=os.getenv("JOBS_DB_URL"))
 
     j = jm.create_job(domain="d", queue="default", job_type="t", payload={}, owner_user_id="u", max_retries=50)

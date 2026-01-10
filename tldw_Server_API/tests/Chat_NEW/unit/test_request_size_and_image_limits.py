@@ -16,7 +16,7 @@ from tldw_Server_API.app.core.Utils.image_validation import validate_image_url, 
 
 @pytest.mark.unit
 def test_validator_allows_large_data_image_when_redacted(monkeypatch):
-    """Ensure validate_request_size does not penalize large data:image payloads.
+     """Ensure validate_request_size does not penalize large data:image payloads.
 
     We lower the overall JSON size cap to a small number to keep the test fast,
     then include a relatively large base64 image. The validator should redact
@@ -50,7 +50,7 @@ def test_validator_allows_large_data_image_when_redacted(monkeypatch):
 
 @pytest.mark.unit
 def test_image_limit_rejects_oversized_data_image(monkeypatch):
-    """Ensure validate_image_url rejects too-large base64 images by size.
+     """Ensure validate_image_url rejects too-large base64 images by size.
 
     We set the max image size to 1 MB and craft a data URI whose base64 length
     exceeds the allowed string length threshold. The validator should return False.

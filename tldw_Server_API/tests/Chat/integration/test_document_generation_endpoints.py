@@ -10,7 +10,9 @@ pytestmark = pytest.mark.usefixtures("setup_dependencies")
 
 
 def _make_payload(**overrides):
-    base = {
+
+
+     base = {
         "conversation_id": "chat-42",
         "document_type": "summary",
         "provider": "openai",
@@ -24,17 +26,21 @@ def _make_payload(**overrides):
 
 
 def test_document_generate_streams_as_sse(authenticated_client, auth_token):
-    calls = {}
+
+
+     calls = {}
 
     class StreamingStubService:
         stored_docs: list[dict] = []
         next_id: int = 1
 
         def __init__(self, db):
-            self._db = db
+
+                     self._db = db
 
         def generate_document(self, *, stream, **kwargs):
-            calls["stream"] = stream
+
+                     calls["stream"] = stream
 
             async def _generator():
                 yield "first chunk"
@@ -53,7 +59,8 @@ def test_document_generate_streams_as_sse(authenticated_client, auth_token):
             generation_time_ms,
             token_count=None,
         ):
-            doc_id = StreamingStubService.next_id
+
+                     doc_id = StreamingStubService.next_id
             StreamingStubService.next_id += 1
             StreamingStubService.stored_docs.append(
                 {
@@ -73,7 +80,8 @@ def test_document_generate_streams_as_sse(authenticated_client, auth_token):
             return doc_id
 
         def get_generated_documents(self, conversation_id=None, document_type=None, limit=50):
-            docs = list(StreamingStubService.stored_docs)
+
+                     docs = list(StreamingStubService.stored_docs)
             if conversation_id is not None:
                 docs = [doc for doc in docs if doc["conversation_id"] == conversation_id]
             if document_type is not None:
@@ -115,20 +123,26 @@ def test_document_generate_streams_as_sse(authenticated_client, auth_token):
 
 
 def test_document_generate_bubbles_service_error(authenticated_client):
-    class FailingStubService:
+
+
+     class FailingStubService:
         record_calls = 0
 
         def __init__(self, db):
-            self._db = db
+
+                     self._db = db
 
         def generate_document(self, *args, **kwargs):
-            return {"success": False, "error": "No messages found for conversation chat-42"}
+
+                     return {"success": False, "error": "No messages found for conversation chat-42"}
 
         def get_generated_documents(self, *args, **kwargs):
-            return []
+
+                     return []
 
         def record_streamed_document(self, *args, **kwargs):
-            FailingStubService.record_calls += 1
+
+                     FailingStubService.record_calls += 1
             return None
 
     authenticated_client.app.dependency_overrides[get_document_generator_service] = lambda: FailingStubService
@@ -146,19 +160,23 @@ def test_document_generate_bubbles_service_error(authenticated_client):
 
 
 def test_document_generate_uses_configured_api_key(monkeypatch, authenticated_client):
-    captured = {}
+
+
+     captured = {}
 
     class KeyCaptureService:
         def __init__(self, db):
-            self._db = db
+                     self._db = db
 
         def generate_document(self, *, stream, **kwargs):
-            captured["api_key"] = kwargs.get("api_key")
+
+                     captured["api_key"] = kwargs.get("api_key")
             captured["provider"] = kwargs.get("provider")
             return "Generated content"
 
         def get_generated_documents(self, conversation_id=None, document_type=None, limit=50):
-            return [
+
+                     return [
                 {
                     "id": 101,
                     "conversation_id": conversation_id,
@@ -192,7 +210,9 @@ def test_document_generate_uses_configured_api_key(monkeypatch, authenticated_cl
 
 
 def test_document_generate_missing_provider_credentials_returns_503(monkeypatch, authenticated_client):
-    from tldw_Server_API.app.api.v1.endpoints import chat_documents as chat_docs
+
+
+     from tldw_Server_API.app.api.v1.endpoints import chat_documents as chat_docs
     from tldw_Server_API.app.core.AuthNZ.byok_runtime import ResolvedByokCredentials
 
     async def _missing(provider, *_args, **_kwargs):

@@ -8,7 +8,9 @@ from tldw_Server_API.app.core.Jobs.pg_migrations import ensure_jobs_tables_pg
 
 
 def test_illegal_complete_fail_on_queued_postgres(monkeypatch, jobs_pg_dsn):
-    monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
+
+
+     monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
     ensure_jobs_tables_pg(jobs_pg_dsn)
     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
 

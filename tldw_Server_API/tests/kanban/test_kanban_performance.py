@@ -493,7 +493,7 @@ class TestBenchmarks:
     def test_benchmark_search(self, benchmark, perf_db: KanbanDB, populated_board_medium: dict):
         """Benchmark search operation."""
         def search_op():
-            return perf_db.search_cards("performance", limit=50)
+                     return perf_db.search_cards("performance", limit=50)
 
         result = benchmark(search_op)
         assert result[0] is not None  # results
@@ -515,7 +515,8 @@ class TestBenchmarks:
         counter = [0]  # Use list to allow modification in closure
 
         def create_card():
-            counter[0] += 1
+
+                     counter[0] += 1
             return perf_db.create_card(
                 list_id=list_id,
                 title=f"Benchmark card {counter[0]}",

@@ -34,7 +34,9 @@ def _worker_loop(dsn: str, tag: str, max_iters: int = 20, complete: bool = False
 
 
 def test_pg_concurrency_skip_locked_stress(jobs_pg_dsn):
-    # Seed jobs (a few multiples of workers)
+
+
+     # Seed jobs (a few multiples of workers)
     ensure_jobs_tables_pg(jobs_pg_dsn)
     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     seed_count = 12

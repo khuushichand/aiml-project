@@ -9,7 +9,7 @@ from tldw_Server_API.app.main import app
 
 @pytest.mark.integration
 def test_reranker_toggle_controls_reranking(monkeypatch, auth_headers):
-    # Force admin-only off to avoid admin check failures in CI
+     # Force admin-only off to avoid admin check failures in CI
     monkeypatch.setenv('EVALS_HEAVY_ADMIN_ONLY', 'false')
     # Enable test-mode synthetic embeddings
     monkeypatch.setenv('TESTING', 'true')
@@ -49,7 +49,7 @@ def test_reranker_toggle_controls_reranking(monkeypatch, auth_headers):
 
     # Poll summary
     def _get_status():
-        r = client.get(f"/api/v1/evaluations/embeddings/abtest/{test_id}", headers=auth_headers)
+             r = client.get(f"/api/v1/evaluations/embeddings/abtest/{test_id}", headers=auth_headers)
         assert r.status_code == 200
         return r.json()
 
@@ -95,7 +95,7 @@ def test_reranker_toggle_controls_reranking(monkeypatch, auth_headers):
 
     # Heuristic check: when reranker applied, expect to see some rerank_scores present in later rows
     def _has_rerank(rows):
-        for row in rows.get('results', []):
+             for row in rows.get('results', []):
             try:
                 scores = json.loads(row.get('rerank_scores') or 'null')
                 if scores:

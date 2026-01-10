@@ -9,7 +9,9 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPri
 
 
 def _non_admin_user():
-    async def _f():
+
+
+     async def _f():
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
         return User(id=7, username="user", email="u@x", is_active=True, is_admin=False)
     return _f
@@ -17,7 +19,7 @@ def _non_admin_user():
 
 @pytest.mark.unit
 def test_admin_endpoints_require_admin(disable_heavy_startup, monkeypatch):
-    # Force multi-user mode so admin guard applies
+     # Force multi-user mode so admin guard applies
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     reset_settings()
@@ -81,7 +83,7 @@ def test_admin_endpoints_require_admin(disable_heavy_startup, monkeypatch):
 
 @pytest.mark.unit
 def test_delete_by_filter_rejects_empty_filter(disable_heavy_startup, admin_user):
-    client = TestClient(app)
+     client = TestClient(app)
     r = client.post("/api/v1/vector_stores/store-1/admin/delete_by_filter", json={"filter": {}})
     assert r.status_code == 400
     assert "Filter cannot be empty" in r.text
@@ -89,7 +91,7 @@ def test_delete_by_filter_rejects_empty_filter(disable_heavy_startup, admin_user
 
 @pytest.mark.unit
 def test_delete_by_filter_rejects_empty_boolean_ops(disable_heavy_startup, admin_user):
-    client = TestClient(app)
+     client = TestClient(app)
     # Empty $and list
     r1 = client.post(
         "/api/v1/vector_stores/store-1/admin/delete_by_filter",

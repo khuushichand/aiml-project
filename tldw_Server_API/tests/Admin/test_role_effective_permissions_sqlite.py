@@ -11,7 +11,9 @@ from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
 
 
 def _fresh_client() -> TestClient:
-    """Create a TestClient against a fresh single-user SQLite auth DB."""
+
+
+     """Create a TestClient against a fresh single-user SQLite auth DB."""
     fd, tmp_path = tempfile.mkstemp(prefix="users_test_role_effective_", suffix=".db")
     os.close(fd)
 
@@ -48,7 +50,9 @@ def _fresh_client() -> TestClient:
 
 
 def test_role_effective_permissions_sqlite():
-    with _fresh_client() as client:
+
+
+     with _fresh_client() as client:
         # Locate the 'user' role
         r_roles = client.get("/api/v1/admin/roles")
         if r_roles.status_code != 200:
@@ -87,7 +91,9 @@ def test_role_effective_permissions_sqlite():
 
 
 def test_role_effective_permissions_sqlite_role_not_found():
-    """Nonexistent role id should return 404 from effective-permissions endpoint."""
+
+
+     """Nonexistent role id should return 404 from effective-permissions endpoint."""
     with _fresh_client() as client:
         r_roles = client.get("/api/v1/admin/roles")
         if r_roles.status_code != 200:

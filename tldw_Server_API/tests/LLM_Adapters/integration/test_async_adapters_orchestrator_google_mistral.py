@@ -14,7 +14,6 @@ from typing import AsyncIterator
 
 @pytest.fixture(autouse=True)
 def _enable_adapters(monkeypatch):
-    monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "1")
     # Ensure unified SSE path if relevant parts rely on it
     monkeypatch.setenv("STREAMS_UNIFIED", "1")
     # Avoid TEST_MODE shortcuts that may bypass provider dispatch

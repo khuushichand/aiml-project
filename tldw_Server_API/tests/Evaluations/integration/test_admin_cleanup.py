@@ -10,13 +10,15 @@ pytestmark = [pytest.mark.integration, pytest.mark.evaluations]
 
 @pytest.fixture(autouse=True)
 def _setup_env(monkeypatch):
-    # Bypass admin gating for tests and enable testing auth bypass
+     # Bypass admin gating for tests and enable testing auth bypass
     monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "false")
     monkeypatch.setenv("TESTING", "true")
 
 
 def test_admin_idempotency_cleanup_basic():
-    client = TestClient(app)
+
+
+     client = TestClient(app)
 
     # Trigger cleanup with a short TTL (still safe; DB may be empty)
     r = client.post("/api/v1/evaluations/admin/idempotency/cleanup", params={"ttl_hours": 1})

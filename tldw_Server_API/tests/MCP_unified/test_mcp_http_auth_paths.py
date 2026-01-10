@@ -38,7 +38,7 @@ class _DummyProtocol:
 
 class _DummyServer:
     def __init__(self):
-        self.initialized = True
+             self.initialized = True
         self.protocol = _DummyProtocol()
         self.last_metadata: Optional[Dict[str, Any]] = None
 
@@ -59,7 +59,9 @@ class _DummyServer:
 
 
 def _install_dummy_server(monkeypatch) -> _DummyServer:
-    server = _DummyServer()
+
+
+     server = _DummyServer()
     monkeypatch.setattr(mcp_ep, "get_mcp_server", lambda: server)
     return server
 

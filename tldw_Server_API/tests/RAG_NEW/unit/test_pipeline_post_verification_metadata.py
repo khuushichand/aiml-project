@@ -12,7 +12,7 @@ from tldw_Server_API.app.core.RAG.rag_service import unified_pipeline as up
 
 class _FakeVerifier:
     def __init__(self, *args, **kwargs):
-        pass
+             pass
 
     async def verify_and_maybe_fix(self, **kwargs):  # noqa: D401
         class _Out:
@@ -30,7 +30,7 @@ class _FakeVerifier:
 
 class _FakeAnswerGen:
     def __init__(self, *args, **kwargs):
-        pass
+             pass
 
     async def generate(self, **kwargs):
         return {"answer": "draft answer"}
@@ -38,7 +38,7 @@ class _FakeAnswerGen:
 
 class _FakeRetriever:
     def __init__(self, *args, **kwargs):
-        self.retrievers = {DataSource.MEDIA_DB: self}
+             self.retrievers = {DataSource.MEDIA_DB: self}
 
     async def retrieve(self, **kwargs):
         return [
@@ -56,7 +56,7 @@ async def test_unified_pipeline_post_verification_metadata(monkeypatch):
 
     class _RetrievalConfig:  # minimal placeholder used by pipeline
         def __init__(self, *args, **kwargs):
-            pass
+                     pass
 
     monkeypatch.setattr(up, "RetrievalConfig", _RetrievalConfig, raising=True)
     monkeypatch.setattr(up, "MultiDatabaseRetriever", _FakeRetriever, raising=True)

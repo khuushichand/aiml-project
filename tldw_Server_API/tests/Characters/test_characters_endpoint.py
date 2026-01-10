@@ -38,7 +38,7 @@ CHARACTERS_ENDPOINT_PREFIX = "/api/v1/characters"
 
 @pytest.fixture(scope="function")
 def test_db(tmp_path) -> Generator[CharactersRAGDB, Any, None]:
-    # Using a file-based database to avoid in-memory threading issues
+     # Using a file-based database to avoid in-memory threading issues
     db_path = tmp_path / "test_characters.db"
     db_instance = CharactersRAGDB(str(db_path), client_id=f"db-client-test-{uuid.uuid4().hex[:6]}")
     yield db_instance
@@ -68,7 +68,8 @@ def client(test_db: CharactersRAGDB) -> Generator[TestClient, Any, None]:
         pass
 
     def override_get_db_for_test():
-        logger.info("<<<<< OVERRIDE override_get_db_for_test CALLED >>>>>")
+
+             logger.info("<<<<< OVERRIDE override_get_db_for_test CALLED >>>>>")
         try:
             yield test_db
         finally:
@@ -106,7 +107,8 @@ def client_with_csrf(test_db: CharactersRAGDB) -> Generator[TestClient, Any, Non
     from tldw_Server_API.tests.test_config import TestConfig
 
     def override_get_db_for_test():
-        logger.info("<<<<< OVERRIDE override_get_db_for_test WITH CSRF ENABLED >>>>>")
+
+             logger.info("<<<<< OVERRIDE override_get_db_for_test WITH CSRF ENABLED >>>>>")
         try:
             yield test_db
         finally:
@@ -133,7 +135,9 @@ def client_with_csrf(test_db: CharactersRAGDB) -> Generator[TestClient, Any, Non
 
 
 def create_dummy_image_base64(width=10, height=10, image_format="PNG") -> str:
-    img = PILImage.new('RGB', (width, height), color='red')
+
+
+     img = PILImage.new('RGB', (width, height), color='red')
     buffered = BytesIO()
     img.save(buffered, format=image_format)
     img_bytes = buffered.getvalue()
@@ -171,7 +175,9 @@ st_base64_image_str = st.one_of(st.none(), st.just(create_dummy_image_base64()))
 
 
 def st_character_create_payload_pbt():
-    return st.builds(
+
+
+     return st.builds(
         dict,
         name=st_valid_api_text,  # Name is mandatory for create
         description=st_optional_api_text,
@@ -193,7 +199,7 @@ def st_character_create_payload_pbt():
 
 # Revised strategy for update payload to be less sparse
 def st_character_update_payload_pbt():
-    keys = [  # All fields that can be part of an update payload
+     keys = [  # All fields that can be part of an update payload
         "name", "description", "personality", "scenario", "system_prompt",
         "post_history_instructions", "first_message", "message_example",
         "creator_notes", "alternate_greetings", "tags", "creator",
@@ -222,7 +228,7 @@ def st_character_update_payload_pbt():
 
     @st.composite
     def at_least_one_concrete_field_payload(draw):
-        # Draw a subset of keys to include in the update payload, must include at least one
+             # Draw a subset of keys to include in the update payload, must include at least one
         num_fields_to_update = draw(st.integers(min_value=1, max_value=len(keys)))
         selected_keys = draw(
             st.lists(st.sampled_from(keys), min_size=num_fields_to_update, max_size=num_fields_to_update, unique=True))

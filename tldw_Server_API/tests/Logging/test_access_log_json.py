@@ -11,7 +11,9 @@ from loguru import logger
 
 
 def _make_app() -> FastAPI:
-    app = FastAPI()
+
+
+     app = FastAPI()
 
     # Minimal route for access log emission
     @app.get("/ping")
@@ -27,21 +29,25 @@ def _make_app() -> FastAPI:
 
 
 def _capture_access_log(monkeypatch):
-    from tldw_Server_API.app.core.Logging import access_log_middleware as alm_mod
+
+
+     from tldw_Server_API.app.core.Logging import access_log_middleware as alm_mod
 
     captured = []
 
     class _StubLogger:
         def __init__(self, extra=None):
-            self._extra = extra or {}
+                     self._extra = extra or {}
 
         def bind(self, **kwargs):
-            new_extra = dict(self._extra)
+
+                     new_extra = dict(self._extra)
             new_extra.update(kwargs)
             return _StubLogger(new_extra)
 
         def log(self, level, message):
-            captured.append({"level": level, "message": message, "extra": dict(self._extra)})
+
+                     captured.append({"level": level, "message": message, "extra": dict(self._extra)})
 
     monkeypatch.setattr(alm_mod, "logger", _StubLogger(), raising=True)
     return captured
@@ -92,7 +98,9 @@ async def test_access_log_emits_json_with_core_fields(monkeypatch):
 
 
 def test_access_log_uses_sanitized_request_id(monkeypatch):
-    app = _make_app()
+
+
+     app = _make_app()
     captured = _capture_access_log(monkeypatch)
     client = TestClient(app)
     resp = client.get("/ping", headers={"X-Request-ID": "bad value"})
@@ -110,7 +118,9 @@ def test_access_log_uses_sanitized_request_id(monkeypatch):
 
 
 def test_access_log_generates_request_id_when_missing(monkeypatch):
-    app = _make_app()
+
+
+     app = _make_app()
     captured = _capture_access_log(monkeypatch)
     client = TestClient(app)
     resp = client.get("/ping")

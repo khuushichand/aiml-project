@@ -10,11 +10,15 @@ os.environ.setdefault('TLDW_SETUP_SKIP_DOWNLOADS', '1')
 
 
 def _make_client():
-    return TestClient(app)
+
+
+     return TestClient(app)
 
 
 def test_complete_setup_with_install_plan_triggers_background_task(mocker):
-    install_calls = []
+
+
+     install_calls = []
 
     mocker.patch.object(
         setup_endpoint.setup_manager,
@@ -53,7 +57,9 @@ def test_complete_setup_with_install_plan_triggers_background_task(mocker):
 
 
 def test_install_status_endpoint_returns_idle_when_missing_snapshot(mocker):
-    mocker.patch.object(
+
+
+     mocker.patch.object(
         setup_endpoint.setup_manager,
         'get_status_snapshot',
         return_value={'enabled': True, 'needs_setup': True},
@@ -72,7 +78,9 @@ def test_install_status_endpoint_returns_idle_when_missing_snapshot(mocker):
 
 
 def test_install_status_endpoint_exposes_snapshot(mocker):
-    mocker.patch.object(
+
+
+     mocker.patch.object(
         setup_endpoint.setup_manager,
         'get_status_snapshot',
         return_value={'enabled': True, 'needs_setup': True},

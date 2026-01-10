@@ -26,7 +26,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGD
 
 @pytest.fixture
 def test_db():
-    """Create a test database instance."""
+     """Create a test database instance."""
     # Create in-memory database for testing
     db = CharactersRAGDB(":memory:", "test_user")
     return db
@@ -34,25 +34,25 @@ def test_db():
 
 @pytest.fixture
 def chat_dict_service(test_db):
-    """Create ChatDictionaryService with test database."""
+     """Create ChatDictionaryService with test database."""
     return ChatDictionaryService(test_db)
 
 
 @pytest.fixture
 def world_book_service(test_db):
-    """Create WorldBookService with test database."""
+     """Create WorldBookService with test database."""
     return WorldBookService(test_db)
 
 
 @pytest.fixture
 def doc_gen_service(test_db):
-    """Create DocumentGeneratorService with test database."""
+     """Create DocumentGeneratorService with test database."""
     return DocumentGeneratorService(test_db, user_id="test_user")
 
 
 @pytest.fixture
 def sample_conversation_data():
-    """Create sample conversation for testing."""
+     """Create sample conversation for testing."""
     return {
         "id": "test_conv_1",
         "title": "Fantasy Adventure Discussion",
@@ -71,7 +71,8 @@ class TestDictionaryAndWorldBookIntegration:
     """Test Chat Dictionary and World Book working together."""
 
     def test_combined_text_processing(self, chat_dict_service, world_book_service, test_db):
-        """Test processing text through both dictionary and world book systems."""
+
+             """Test processing text through both dictionary and world book systems."""
         # Setup dictionary
         dict_id = chat_dict_service.create_dictionary(
             name="Fantasy Terms",
@@ -131,7 +132,8 @@ class TestDictionaryAndWorldBookIntegration:
             assert len(injected_content) > 0
 
     def test_character_specific_processing(self, world_book_service, test_db):
-        """Test character-specific world book attachments."""
+
+             """Test character-specific world book attachments."""
         # Create world books
         main_wb = world_book_service.create_world_book(
             name="Main World",
@@ -179,7 +181,8 @@ class TestDocumentGenerationIntegration:
     """Test Document Generator with real conversation data."""
 
     def test_generate_multiple_document_types(self, doc_gen_service, test_db, sample_conversation_data):
-        """Test generating different document types from same conversation."""
+
+             """Test generating different document types from same conversation."""
         # Mock conversation retrieval
         with patch.object(test_db, 'get_conversation_by_id', return_value=sample_conversation_data):
             with patch.object(test_db, 'get_messages_for_conversation', return_value=sample_conversation_data["messages"]):
@@ -225,7 +228,8 @@ class TestDocumentGenerationIntegration:
         assert "Executive Briefing" in briefing
 
     def test_document_generation_with_processed_text(self, doc_gen_service, chat_dict_service, test_db, sample_conversation_data):
-        """Test generating documents after dictionary processing."""
+
+             """Test generating documents after dictionary processing."""
         # Setup dictionary
         dict_id = chat_dict_service.create_dictionary("Terms", "Replacements")
         chat_dict_service.add_entry(dict_id, "dragon", "wyrm", False)
@@ -269,7 +273,8 @@ class TestCompleteWorkflow:
     """Test complete workflow from conversation to processed documents."""
 
     def test_full_pipeline(self, chat_dict_service, world_book_service, doc_gen_service, test_db):
-        """Test full pipeline: Dictionary -> World Book -> Document Generation."""
+
+             """Test full pipeline: Dictionary -> World Book -> Document Generation."""
         # Setup dictionary with fantasy replacements
         dict_id = chat_dict_service.create_dictionary(
             name="Fantasy Replacements",
@@ -341,7 +346,8 @@ class TestCompleteWorkflow:
             assert "elemental" in result.lower()
 
     def test_multi_user_isolation(self, test_db):
-        """Test that different users have isolated data."""
+
+             """Test that different users have isolated data."""
         # Create services for different users
         user1_db = CharactersRAGDB(":memory:", "user1")
         user2_db = CharactersRAGDB(":memory:", "user2")
@@ -371,7 +377,8 @@ class TestErrorHandlingIntegration:
     """Test error handling across integrated components."""
 
     def test_cascade_error_handling(self, chat_dict_service, world_book_service):
-        """Test error handling when one component fails."""
+
+             """Test error handling when one component fails."""
         # Create invalid regex pattern
         dict_id = chat_dict_service.create_dictionary("Test", "Test")
 
@@ -391,7 +398,8 @@ class TestErrorHandlingIntegration:
         assert wb_id is not None
 
     def test_document_generation_with_missing_conversation(self, doc_gen_service, test_db):
-        """Test document generation when conversation doesn't exist."""
+
+             """Test document generation when conversation doesn't exist."""
         with patch.object(test_db, 'get_conversation_by_id', return_value=None):
             result = doc_gen_service.generate_document(
                 conversation_id="nonexistent",
@@ -412,7 +420,8 @@ class TestPerformanceIntegration:
     """Test performance with larger datasets."""
 
     def test_bulk_dictionary_processing(self, chat_dict_service):
-        """Test processing with many dictionary entries."""
+
+             """Test processing with many dictionary entries."""
         dict_id = chat_dict_service.create_dictionary("Large Dict", "Many entries")
 
         # Add 100 entries
@@ -437,7 +446,8 @@ class TestPerformanceIntegration:
         assert "replacement0" in result["processed_text"]
 
     def test_world_book_with_many_entries(self, world_book_service):
-        """Test world book with many entries and keyword matching."""
+
+             """Test world book with many entries and keyword matching."""
         wb_id = world_book_service.create_world_book(
             name="Large World",
             description="Many lore entries",

@@ -6,7 +6,7 @@ from tldw_Server_API.app.core.Embeddings.services.reembed_consumer import proces
 
 class _FakeRedis:
     def __init__(self):
-        self.streams = {REQUEST_STREAM: [], SCHEDULED_STREAM: []}
+             self.streams = {REQUEST_STREAM: [], SCHEDULED_STREAM: []}
 
     async def xrange(self, name, min, max, count=None):
         items = self.streams.get(name, [])
@@ -27,7 +27,7 @@ class _FakeRedis:
 
 @pytest.mark.unit
 def test_reembed_consumer_schedules_and_deletes():
-    fake = _FakeRedis()
+     fake = _FakeRedis()
     # Seed two request entries
     fake.streams[REQUEST_STREAM] = [
         ("1-0", {"user_id": "u", "collection": "c1", "current_embedder_name":"hf","current_embedder_version":"m1","new_embedder_name":"hf","new_embedder_version":"m2"}),

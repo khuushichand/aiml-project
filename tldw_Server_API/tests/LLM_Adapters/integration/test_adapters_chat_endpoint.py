@@ -78,7 +78,6 @@ class _FakeClient:
 
 @pytest.fixture(autouse=True)
 def _enable_adapters(monkeypatch):
-    monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "1")
     # Avoid endpoint-internal mock path that bypasses provider handlers
     monkeypatch.delenv("TEST_MODE", raising=False)
     # Ensure suite-level env overrides from other tests don't hijack base URL.

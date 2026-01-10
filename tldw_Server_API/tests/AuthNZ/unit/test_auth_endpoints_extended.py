@@ -89,7 +89,7 @@ async def test_logout_uses_utc_expiry(monkeypatch):
 
     class StubJWT:
         def __init__(self):
-            pass
+                     pass
 
         def extract_jti(self, token: str) -> str:
             return "jti-123"

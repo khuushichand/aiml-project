@@ -24,7 +24,9 @@ async def test_run_coro_sync_inside_running_loop():
 
 
 def test_chat_wrapper_invokes_achat_in_sync_context(monkeypatch):
-    """chat() should delegate to achat() when called from a plain sync context."""
+
+
+     """chat() should delegate to achat() when called from a plain sync context."""
 
     called: Dict[str, Any] = {"count": 0, "last_args": None}
 

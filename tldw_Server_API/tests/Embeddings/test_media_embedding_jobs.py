@@ -9,7 +9,7 @@ from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 
 class _FakeMediaDB:
     def __init__(self):
-        self._items = {
+             self._items = {
             123: {"id": 123, "title": "Doc", "author": "A", "content": {"content": "short text"}},
         }
 
@@ -22,13 +22,15 @@ from contextlib import contextmanager
 
 @contextmanager
 def _client():
-    with TestClient(app) as c:
+     with TestClient(app) as c:
         c.cookies.set("csrf_token", "test-csrf")
         yield c
 
 
 def test_media_embedding_job_lifecycle():
-    os.environ["TESTING"] = "true"
+
+
+     os.environ["TESTING"] = "true"
     try:
         original_allowed_providers = settings.get("ALLOWED_EMBEDDING_PROVIDERS")
         original_allowed_models = settings.get("ALLOWED_EMBEDDING_MODELS")

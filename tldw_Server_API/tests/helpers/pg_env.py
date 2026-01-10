@@ -44,7 +44,9 @@ def _parse_dsn(dsn: str) -> Optional[tuple[str, int, str, str, str]]:
 
 
 def get_pg_env() -> PGEnv:
-    # Prefer Jobs-specific DSNs first, then an explicit test DSN if set
+
+
+     # Prefer Jobs-specific DSNs first, then an explicit test DSN if set
     raw_dsn = (
         os.getenv("JOBS_DB_URL")
         or os.getenv("POSTGRES_TEST_DSN")
@@ -93,5 +95,7 @@ def get_pg_env() -> PGEnv:
 
 
 def pg_dsn() -> str:
-    """Return the DSN string honoring the standard precedence."""
+
+
+     """Return the DSN string honoring the standard precedence."""
     return get_pg_env().dsn

@@ -31,7 +31,8 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGD
 # =====================================================================
 
 def pytest_configure(config):
-    """Register custom markers for test categorization."""
+
+     """Register custom markers for test categorization."""
     config.addinivalue_line("markers", "unit: Unit tests with minimal mocking")
     config.addinivalue_line("markers", "integration: Integration tests with real components")
     config.addinivalue_line("markers", "property: Property-based tests")
@@ -43,7 +44,8 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "legacy_skip: Skip tests targeting legacy behaviors")
 
 def pytest_collection_modifyitems(config, items):
-    """No automatic skipping; run unit and integration tests."""
+
+     """No automatic skipping; run unit and integration tests."""
     return
 
 # =====================================================================
@@ -52,7 +54,7 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture(scope="session")
 def test_env_vars():
-    """Set up test environment variables."""
+     """Set up test environment variables."""
     original_env = os.environ.copy()
 
     # Set test mode
@@ -73,7 +75,7 @@ def test_env_vars():
 
 @pytest.fixture
 def test_db_path() -> Generator[Path, None, None]:
-    """Create a temporary database file that gets cleaned up."""
+     """Create a temporary database file that gets cleaned up."""
     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp_file:
         db_path = Path(tmp_file.name)
 
@@ -88,7 +90,7 @@ def test_db_path() -> Generator[Path, None, None]:
 
 @pytest.fixture
 def character_db(test_db_path) -> Generator[CharactersRAGDB, None, None]:
-    """Create a real CharactersRAGDB instance for testing."""
+     """Create a real CharactersRAGDB instance for testing."""
     # Use a temporary file database instead of in-memory to avoid threading issues
     # In-memory databases are not shared between connections in different threads
     db = CharactersRAGDB(
@@ -108,7 +110,7 @@ def character_db(test_db_path) -> Generator[CharactersRAGDB, None, None]:
 
 @pytest.fixture
 def populated_character_db(character_db) -> CharactersRAGDB:
-    """Create a CharactersRAGDB with test data."""
+     """Create a CharactersRAGDB with test data."""
     db = character_db
 
     # Create test character cards using the actual database method
@@ -210,7 +212,7 @@ def populated_character_db(character_db) -> CharactersRAGDB:
 
 @pytest.fixture
 def chat_dictionary_service(test_db_path) -> Generator[ChatDictionaryService, None, None]:
-    """Create a ChatDictionaryService instance for testing."""
+     """Create a ChatDictionaryService instance for testing."""
     from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 
     db = CharactersRAGDB(str(test_db_path), client_id="test_client")
@@ -230,7 +232,7 @@ def chat_dictionary_service(test_db_path) -> Generator[ChatDictionaryService, No
 
 @pytest.fixture
 def world_book_service(test_db_path) -> Generator[WorldBookService, None, None]:
-    """Create a WorldBookService instance for testing."""
+     """Create a WorldBookService instance for testing."""
     from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 
     db = CharactersRAGDB(str(test_db_path), client_id="test_client")
@@ -250,7 +252,7 @@ def world_book_service(test_db_path) -> Generator[WorldBookService, None, None]:
 
 @pytest.fixture
 def mock_character_db():
-    """Create a mock CharactersRAGDB for unit tests."""
+     """Create a mock CharactersRAGDB for unit tests."""
     db = MagicMock(spec=CharactersRAGDB)
 
     # Mock initialization
@@ -299,7 +301,7 @@ def mock_character_db():
 
 @pytest.fixture
 def mock_chat_manager(mock_character_db):
-    """Create a CharacterChatManager with mocked database for unit tests."""
+     """Create a CharacterChatManager with mocked database for unit tests."""
     from tldw_Server_API.tests.Character_Chat_NEW.test_utils import CharacterChatManager
 
     with patch('tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB.CharactersRAGDB', return_value=mock_character_db):
@@ -313,7 +315,7 @@ def mock_chat_manager(mock_character_db):
 
 @pytest.fixture
 def sample_character_card():
-    """Sample character card data."""
+     """Sample character card data."""
     return {
         'name': 'Test Character',
         'description': 'A helpful AI assistant for testing',
@@ -330,7 +332,7 @@ def sample_character_card():
 
 @pytest.fixture
 def sample_character_cards():
-    """Multiple sample character cards."""
+     """Multiple sample character cards."""
     return [
         {
             'name': 'Science Teacher',
@@ -360,7 +362,7 @@ def sample_character_cards():
 
 @pytest.fixture
 def character_card_v3_format():
-    """Character card in V3 format for import/export."""
+     """Character card in V3 format for import/export."""
     return {
         'spec': 'chara_card_v3',
         'spec_version': '3.0',
@@ -385,7 +387,7 @@ def character_card_v3_format():
 
 @pytest.fixture
 def sample_chat_session():
-    """Sample chat session data."""
+     """Sample chat session data."""
     return {
         'character_id': 1,
         'user_id': 'test_user',
@@ -400,7 +402,7 @@ def sample_chat_session():
 
 @pytest.fixture
 def long_chat_history():
-    """Long chat history for testing context management."""
+     """Long chat history for testing context management."""
     messages = []
     for i in range(50):
         messages.extend([
@@ -415,7 +417,7 @@ def long_chat_history():
 
 @pytest.fixture
 def sample_world_book():
-    """Sample world book data."""
+     """Sample world book data."""
     return {
         'name': 'Fantasy World',
         'description': 'A comprehensive fantasy world setting',
@@ -443,7 +445,7 @@ def sample_world_book():
 
 @pytest.fixture
 def complex_world_book():
-    """Complex world book with recursive entries."""
+     """Complex world book with recursive entries."""
     return {
         'name': 'Complex World',
         'description': 'World with recursive scanning',
@@ -476,7 +478,7 @@ def complex_world_book():
 
 @pytest.fixture
 def sample_dictionary():
-    """Sample chat dictionary data."""
+     """Sample chat dictionary data."""
     return {
         'name': 'Test Dictionary',
         'description': 'Dictionary for text replacements',
@@ -505,7 +507,7 @@ def sample_dictionary():
 
 @pytest.fixture
 def markdown_dictionary():
-    """Dictionary in markdown format for import/export."""
+     """Dictionary in markdown format for import/export."""
     return """# Test Dictionary
 
 ## Entry: AI
@@ -533,7 +535,7 @@ def markdown_dictionary():
 
 @pytest.fixture
 def rate_limiter():
-    """Create a rate limiter for testing."""
+     """Create a rate limiter for testing."""
     return CharacterRateLimiter(
         max_requests_per_minute=30,
         max_tokens_per_minute=10000,
@@ -542,7 +544,7 @@ def rate_limiter():
 
 @pytest.fixture
 def rate_limit_config():
-    """Rate limiter configuration."""
+     """Rate limiter configuration."""
     return {
         'max_requests_per_minute': 30,
         'max_tokens_per_minute': 10000,
@@ -556,7 +558,7 @@ def rate_limit_config():
 
 @pytest.fixture
 def sample_messages():
-    """Sample messages for testing."""
+     """Sample messages for testing."""
     return [
         {'role': 'user', 'content': 'Hello!'},
         {'role': 'assistant', 'content': 'Hi there!'},
@@ -566,7 +568,7 @@ def sample_messages():
 
 @pytest.fixture
 def context_injection_data():
-    """Data for testing context injection."""
+     """Data for testing context injection."""
     return {
         'world_book_entries': [
             'Dragons are ancient magical creatures.',
@@ -586,7 +588,7 @@ def context_injection_data():
 
 @pytest.fixture
 def search_queries():
-    """Various search query patterns."""
+     """Various search query patterns."""
     return {
         'simple': 'test',
         'tags': 'tag:fantasy',
@@ -597,7 +599,7 @@ def search_queries():
 
 @pytest.fixture
 def filter_criteria():
-    """Filter criteria for characters."""
+     """Filter criteria for characters."""
     return {
         'by_tags': {'tags': ['fantasy', 'roleplay']},
         'by_creator': {'creator': 'test_user'},
@@ -618,7 +620,7 @@ def filter_criteria():
 
 @pytest.fixture
 def export_data():
-    """Sample export data structure."""
+     """Sample export data structure."""
     return {
         'version': '1.0',
         'exported_at': datetime.utcnow().isoformat(),
@@ -650,7 +652,7 @@ def export_data():
 
 @pytest.fixture
 def import_file(export_data, tmp_path):
-    """Create a temporary import file."""
+     """Create a temporary import file."""
     file_path = tmp_path / "character_import.json"
     file_path.write_text(json.dumps(export_data))
     return file_path
@@ -661,7 +663,7 @@ def import_file(export_data, tmp_path):
 
 @pytest.fixture
 def mock_tokenizer():
-    """Mock tokenizer for testing."""
+     """Mock tokenizer for testing."""
     tokenizer = MagicMock()
     tokenizer.encode = Mock(side_effect=lambda text: list(text.split()))
     tokenizer.decode = Mock(side_effect=lambda tokens: ' '.join(tokens))
@@ -674,7 +676,7 @@ def mock_tokenizer():
 
 @pytest.fixture
 def large_character_collection():
-    """Generate a large collection of characters for performance testing."""
+     """Generate a large collection of characters for performance testing."""
     characters = []
     for i in range(100):
         characters.append({
@@ -689,7 +691,7 @@ def large_character_collection():
 
 @pytest.fixture
 def performance_metrics():
-    """Track performance metrics during tests."""
+     """Track performance metrics during tests."""
     return {
         'create_times': [],
         'read_times': [],
@@ -701,7 +703,7 @@ def performance_metrics():
 # Relax Character-Chat rate limits for this package to avoid flakiness.
 @pytest.fixture(autouse=True)
 def _override_character_chat_rate_limits_for_character_chat_new(monkeypatch):
-    monkeypatch.setenv("CHARACTER_RATE_LIMIT_ENABLED", "true")
+     monkeypatch.setenv("CHARACTER_RATE_LIMIT_ENABLED", "true")
     monkeypatch.setenv("CHARACTER_RATE_LIMIT_OPS", "1000000")
     monkeypatch.setenv("CHARACTER_RATE_LIMIT_WINDOW", "60")
     monkeypatch.setenv("MAX_CHARACTERS_PER_USER", "1000000")
@@ -727,7 +729,7 @@ def _override_character_chat_rate_limits_for_character_chat_new(monkeypatch):
 
 @pytest.fixture
 def test_client(test_env_vars, character_db):
-    """Create a test client for the FastAPI app with proper dependency overrides."""
+     """Create a test client for the FastAPI app with proper dependency overrides."""
     from tldw_Server_API.app.main import app
     from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
@@ -746,7 +748,7 @@ def test_client(test_env_vars, character_db):
 
     # Override database dependency
     def override_get_chacha_db_for_user():
-        """Override to return test database."""
+             """Override to return test database."""
         return character_db
 
     # Override user authentication for testing - bypass all auth
@@ -779,7 +781,7 @@ def test_client(test_env_vars, character_db):
 
 @pytest.fixture
 def auth_headers():
-    """Authentication headers for API requests."""
+     """Authentication headers for API requests."""
     return {
         "X-API-KEY": "test-api-key",
         "Content-Type": "application/json"
@@ -791,7 +793,7 @@ def auth_headers():
 
 @pytest.fixture(autouse=True)
 def cleanup_after_test():
-    """Cleanup after each test."""
+     """Cleanup after each test."""
     yield
     # Cleanup any temporary files or resources
     import gc
@@ -802,7 +804,8 @@ def cleanup_after_test():
 # =====================================================================
 
 def create_test_character(db, **kwargs):
-    """Helper to create a test character card."""
+
+     """Helper to create a test character card."""
     character_data = {
         'name': 'Test Character',
         'description': 'Test description',
@@ -814,7 +817,8 @@ def create_test_character(db, **kwargs):
     return db.add_character_card(character_data)
 
 def create_test_chat(db, character_id, user_id='test_user', **kwargs):
-    """Helper to create a test chat session."""
+
+     """Helper to create a test chat session."""
     import uuid
     chat_id = str(uuid.uuid4())
 
@@ -833,7 +837,8 @@ def create_test_chat(db, character_id, user_id='test_user', **kwargs):
     return chat_id
 
 def create_test_world_book(service, **kwargs):
-    """Helper to create a test world book."""
+
+     """Helper to create a test world book."""
     world_book_data = {
         'name': 'Test World Book',
         'description': 'Test world book'

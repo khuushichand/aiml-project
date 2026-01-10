@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.Embeddings.queue_schemas import EmbeddingMessage
 
 class FakeAsyncRedisChaos:
     def __init__(self):
-        self.zsets = {}
+             self.zsets = {}
         self.streams = {}
         self.acks = []
         self.kv = {}
@@ -46,7 +46,7 @@ class FakeAsyncRedisChaos:
 
 class ChaosWorker(BaseWorker):
     def _parse_message(self, data):
-        return EmbeddingMessage(**data)
+             return EmbeddingMessage(**data)
 
     async def process_message(self, message):  # pragma: no cover - not used directly here
         raise NotImplementedError
@@ -56,7 +56,9 @@ class ChaosWorker(BaseWorker):
 
 
 def _mk_config():
-    return WorkerConfig(
+
+
+     return WorkerConfig(
         worker_id="w1",
         worker_type="embedding",
         queue_name="embeddings:embedding",
@@ -66,7 +68,9 @@ def _mk_config():
 
 
 def _mk_msg(retry_count=0):
-    return {
+
+
+     return {
         "job_id": "job-1",
         "user_id": "u",
         "media_id": 1,

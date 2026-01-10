@@ -24,7 +24,9 @@ def _headers_with_idem(key: str) -> Dict[str, str]:
 
 
 def test_project_create_idempotency_dual_backend(prompt_studio_dual_backend_client):
-    backend_label, client, db = prompt_studio_dual_backend_client
+
+
+     backend_label, client, db = prompt_studio_dual_backend_client
 
     project_name = f"IdemProj-{uuid.uuid4().hex[:8]} ({backend_label})"
     idem_key = f"proj-{uuid.uuid4().hex}"
@@ -47,7 +49,9 @@ def test_project_create_idempotency_dual_backend(prompt_studio_dual_backend_clie
 
 
 def test_prompt_create_idempotency_dual_backend(prompt_studio_dual_backend_client):
-    backend_label, client, db = prompt_studio_dual_backend_client
+
+
+     backend_label, client, db = prompt_studio_dual_backend_client
 
     # Create a project first
     pname = f"IdemProjP-{uuid.uuid4().hex[:6]} ({backend_label})"
@@ -80,7 +84,9 @@ def test_prompt_create_idempotency_dual_backend(prompt_studio_dual_backend_clien
 
 
 def test_optimization_create_idempotency_dual_backend(prompt_studio_dual_backend_client):
-    backend_label, client, db = prompt_studio_dual_backend_client
+
+
+     backend_label, client, db = prompt_studio_dual_backend_client
 
     # Create a project + prompt first
     pname = f"IdemProjO-{uuid.uuid4().hex[:6]} ({backend_label})"

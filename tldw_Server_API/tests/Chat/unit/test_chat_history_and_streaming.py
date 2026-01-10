@@ -11,7 +11,7 @@ from tldw_Server_API.app.core.Chat.streaming_utils import StreamingResponseHandl
 
 class DummyRequestData:
     def __init__(self, history_message_limit=None, history_message_order=None, save_to_db=False):
-        self.character_id = None
+             self.character_id = None
         self.history_message_limit = history_message_limit
         self.history_message_order = history_message_order
         self.save_to_db = save_to_db
@@ -31,16 +31,19 @@ class DummyChatDB:
         return ordered[:limit]
 
     def get_character_card_by_name(self, name):
-        return {"id": 1, "name": name, "system_prompt": "Prompt"}
+
+             return {"id": 1, "name": name, "system_prompt": "Prompt"}
 
     def get_character_card_by_id(self, char_id):
-        return {"id": char_id, "name": "Assistant", "system_prompt": "Prompt"}
+
+             return {"id": char_id, "name": "Assistant", "system_prompt": "Prompt"}
 
     def get_message_metadata(self, message_id: str):
         return {}
 
     def get_connection(self):
-        raise RuntimeError("not needed")
+
+             raise RuntimeError("not needed")
 
 
 @pytest.mark.asyncio
@@ -56,10 +59,11 @@ async def test_build_context_uses_history_knobs():
 
     class DummyMetrics:
         def track_character_access(self, *args, **kwargs):
-            pass
+                     pass
 
         def track_conversation(self, *args, **kwargs):
-            pass
+
+                     pass
 
     result = await chat_service.build_context_and_messages(
         chat_db=db,
@@ -80,7 +84,7 @@ async def test_build_context_uses_history_knobs():
 
 class DummySave:
     def __init__(self):
-        self.calls: List[Dict[str, Any]] = []
+             self.calls: List[Dict[str, Any]] = []
 
     async def __call__(self, text: str, tool_calls: Optional[List[Dict[str, Any]]], function_call: Optional[Dict[str, Any]]):
         self.calls.append({
@@ -108,10 +112,11 @@ async def test_build_context_skips_tool_placeholder_replacement():
 
     class DummyMetrics:
         def track_character_access(self, *args, **kwargs):
-            pass
+                     pass
 
         def track_conversation(self, *args, **kwargs):
-            pass
+
+                     pass
 
     result = await chat_service.build_context_and_messages(
         chat_db=db,
@@ -185,14 +190,15 @@ async def test_streaming_topic_monitoring_runs_without_output_moderation(monkeyp
 
     class DummyModeration:
         def get_effective_policy(self, *_args, **_kwargs):
-            return DummyPolicy()
+                     return DummyPolicy()
 
     class DummyMonitor:
         def __init__(self):
-            self.calls: List[Dict[str, Any]] = []
+                     self.calls: List[Dict[str, Any]] = []
 
         def schedule_evaluate_and_alert(self, **kwargs):
-            self.calls.append(kwargs)
+
+                     self.calls.append(kwargs)
 
     dummy_monitor = DummyMonitor()
     monkeypatch.setattr(chat_service, "get_moderation_service", lambda: DummyModeration())
@@ -200,27 +206,31 @@ async def test_streaming_topic_monitoring_runs_without_output_moderation(monkeyp
 
     class DummyStreamTracker:
         def add_heartbeat(self):
-            pass
+                     pass
 
         def add_chunk(self):
-            pass
+
+                     pass
 
     class DummyMetrics:
         def track_llm_call(self, *args, **kwargs):
-            pass
+                     pass
 
         def track_provider_fallback_success(self, *args, **kwargs):
-            pass
+
+                     pass
 
         def track_rate_limit(self, *args, **kwargs):
-            pass
+
+                     pass
 
         @asynccontextmanager
         async def track_streaming(self, *args, **kwargs):
             yield DummyStreamTracker()
 
     def fake_llm_call():
-        def _gen():
+
+             def _gen():
             yield "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n"
             yield "data: [DONE]\n\n"
         return _gen()
@@ -258,7 +268,9 @@ async def test_streaming_topic_monitoring_runs_without_output_moderation(monkeyp
 
 
 def test_document_generator_accepts_string_ids(tmp_path):
-    from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
+
+     from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
     from tldw_Server_API.app.core.Chat.document_generator import DocumentGeneratorService, DocumentType
 
     db_path = tmp_path / "chacha.db"

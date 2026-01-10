@@ -14,7 +14,9 @@ pytestmark = [pytest.mark.integration]
 
 
 def test_speech_requires_auth_401(bypass_api_limits):
-    with bypass_api_limits(app), TestClient(app) as client:
+
+
+     with bypass_api_limits(app), TestClient(app) as client:
         payload = {
             "model": "kokoro",
             "input": "Hello",
@@ -27,7 +29,9 @@ def test_speech_requires_auth_401(bypass_api_limits):
 
 
 def test_speech_ok_with_override(monkeypatch, bypass_api_limits):
-    with bypass_api_limits(app), TestClient(app) as client:
+
+
+     with bypass_api_limits(app), TestClient(app) as client:
         async def _override_user():
             return User(id=1, username="tester", email="t@example.com", is_active=True)
 
@@ -35,7 +39,7 @@ def test_speech_ok_with_override(monkeypatch, bypass_api_limits):
 
         class _StubTTS:
             def generate_speech(self, *args, **kwargs):
-                async def _gen():
+                             async def _gen():
                     yield b"abc"
                 return _gen()
 

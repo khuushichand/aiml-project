@@ -23,7 +23,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGD
 
 @pytest.fixture
 def mock_db():
-    """Create a mock database instance."""
+     """Create a mock database instance."""
     mock = MagicMock()
     mock.execute_query = MagicMock()
     mock.execute_many = MagicMock()
@@ -47,7 +47,7 @@ def mock_db():
 
 @pytest.fixture
 def service(mock_db):
-    """Create a ChatDictionaryService instance with mocked database."""
+     """Create a ChatDictionaryService instance with mocked database."""
     return ChatDictionaryService(mock_db)
 
 
@@ -55,7 +55,8 @@ class TestChatDictionaryService:
     """Test suite for ChatDictionaryService."""
 
     def test_init_creates_tables(self, mock_db):
-        """Test that initialization creates necessary tables."""
+
+             """Test that initialization creates necessary tables."""
         mock_conn = MagicMock()
         mock_db.get_connection.return_value.__enter__ = MagicMock(return_value=mock_conn)
         mock_db.get_connection.return_value.__exit__ = MagicMock(return_value=None)
@@ -72,7 +73,8 @@ class TestChatDictionaryService:
         assert any("CREATE TABLE IF NOT EXISTS dictionary_entries" in sql for sql in sql_statements)
 
     def test_create_dictionary(self, service, mock_db):
-        """Test creating a new dictionary."""
+
+             """Test creating a new dictionary."""
         # Mock the connection and cursor
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
@@ -96,7 +98,8 @@ class TestChatDictionaryService:
         assert "A test dictionary" in call_args[1]
 
     def test_get_dictionary(self, service, mock_db):
-        """Test retrieving a dictionary with its entries."""
+
+             """Test retrieving a dictionary with its entries."""
         # Mock the connection and cursor
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
@@ -121,7 +124,8 @@ class TestChatDictionaryService:
         assert result["name"] == "Test Dict"
 
     def test_add_entry(self, service, mock_db):
-        """Test adding an entry to a dictionary."""
+
+             """Test adding an entry to a dictionary."""
         # Mock the connection and cursor
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
@@ -148,7 +152,8 @@ class TestChatDictionaryService:
         assert "replaced" in call_args[1]
 
     def test_process_text_literal_replacement(self, service, mock_db):
-        """Test processing text with literal string replacement."""
+
+             """Test processing text with literal string replacement."""
         # Setup mock connection to return entries
         mock_conn = mock_db.get_connection().__enter__()
         mock_cursor = mock_conn.execute.return_value
@@ -177,7 +182,8 @@ class TestChatDictionaryService:
         assert result["token_budget_exceeded"] == False
 
     def test_process_text_regex_replacement(self, service, mock_db):
-        """Test processing text with regex pattern replacement."""
+
+             """Test processing text with regex pattern replacement."""
         # Mock active dictionaries with regex entries
         mock_db.execute_query.side_effect = [
             [{"id": 1, "name": "Regex Dict", "is_active": 1}],
@@ -196,7 +202,8 @@ class TestChatDictionaryService:
         assert "replacements" in result
 
     def test_process_text_with_probability(self, service, mock_db):
-        """Test that probability affects replacements."""
+
+             """Test that probability affects replacements."""
         # Mock entry with 0% probability
         mock_db.execute_query.side_effect = [
             [{"id": 1, "name": "Test", "is_active": 1}],
@@ -212,7 +219,8 @@ class TestChatDictionaryService:
         assert result["replacements"] == 0
 
     def test_process_text_token_budget(self, service, mock_db):
-        """Test that processing stops when token budget is exceeded."""
+
+             """Test that processing stops when token budget is exceeded."""
         # Setup mock connection to return entries that will cause replacements
         mock_conn = mock_db.get_connection().__enter__()
         mock_cursor = mock_conn.execute.return_value
@@ -241,7 +249,8 @@ class TestChatDictionaryService:
         assert result["token_budget_exceeded"] == True
 
     def test_delete_dictionary_cascade(self, service, mock_db):
-        """Test that deleting a dictionary cascades to entries."""
+
+             """Test that deleting a dictionary cascades to entries."""
         # Setup mock connection
         mock_conn = mock_db.get_connection().__enter__()
         mock_cursor = mock_conn.execute.return_value
@@ -259,7 +268,8 @@ class TestChatDictionaryService:
         )
 
     def test_import_from_markdown(self, service, mock_db):
-        """Test importing dictionary from markdown format."""
+
+             """Test importing dictionary from markdown format."""
         markdown_content = """# Test Dictionary
 Description: Test import
 
@@ -286,7 +296,8 @@ Description: Test import
         assert result == 1
 
     def test_export_to_markdown(self, service, mock_db):
-        """Test exporting dictionary to markdown format."""
+
+             """Test exporting dictionary to markdown format."""
         # Setup mock connection
         mock_conn = mock_db.get_connection().__enter__()
         mock_cursor = mock_conn.execute.return_value
@@ -316,7 +327,8 @@ Description: Test import
         os.unlink(temp_path)
 
     def test_update_entry(self, service, mock_db):
-        """Test updating a dictionary entry."""
+
+             """Test updating a dictionary entry."""
         # Setup mock connection
         mock_conn = mock_db.get_connection().__enter__()
         mock_cursor = mock_conn.execute.return_value
@@ -341,7 +353,8 @@ Description: Test import
         assert update_call is not None
 
     def test_list_dictionaries(self, service, mock_db):
-        """Test listing all dictionaries."""
+
+             """Test listing all dictionaries."""
         # Setup mock connection
         mock_conn = mock_db.get_connection().__enter__()
         mock_cursor = mock_conn.execute.return_value
@@ -357,7 +370,8 @@ Description: Test import
         assert result[1]["entry_count"] == 3
 
     def test_toggle_dictionary_active(self, service, mock_db):
-        """Test toggling dictionary active status."""
+
+             """Test toggling dictionary active status."""
         # Mock the connection and cursor
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
@@ -377,7 +391,8 @@ Description: Test import
         assert "is_active = ?" in call_args[0]
 
     def test_get_statistics(self, service, mock_db):
-        """Test getting dictionary statistics."""
+
+             """Test getting dictionary statistics."""
         # Mock the connection and multiple cursors for different queries
         mock_conn = MagicMock()
 
@@ -405,7 +420,8 @@ Description: Test import
         assert stats["average_entries_per_dictionary"] == 20.0
 
     def test_bulk_add_entries(self, service, mock_db):
-        """Test adding multiple entries at once."""
+
+             """Test adding multiple entries at once."""
         entries = [
             {"key": "test1", "content": "repl1"},
             {"key": "test2", "content": "repl2"},
@@ -426,7 +442,8 @@ Description: Test import
         assert mock_conn.execute.call_count == 3
 
     def test_search_entries(self, service, mock_db):
-        """Test searching for entries by pattern."""
+
+             """Test searching for entries by pattern."""
         # Setup mock connection
         mock_conn = mock_db.get_connection().__enter__()
         mock_cursor = mock_conn.execute.return_value
@@ -442,7 +459,8 @@ Description: Test import
         assert results[1]["dictionary_name"] == "Dict2"
 
     def test_clone_dictionary(self, service, mock_db):
-        """Test cloning a dictionary with all its entries."""
+
+             """Test cloning a dictionary with all its entries."""
         # Setup mock connection
         mock_conn = mock_db.get_connection().__enter__()
         mock_cursor = mock_conn.execute.return_value
@@ -466,7 +484,8 @@ Description: Test import
         assert new_id == 2
 
     def test_entry_validation(self, service):
-        """Test that invalid entries raise meaningful errors."""
+
+             """Test that invalid entries raise meaningful errors."""
         # Probability outside accepted range (0-100 for ints) should raise InputError
         with pytest.raises(InputError):
             service.add_entry(
@@ -486,7 +505,8 @@ Description: Test import
             )
 
     def test_clear_cache(self, service, mock_db):
-        """Test that cache is cleared when dictionaries are modified."""
+
+             """Test that cache is cleared when dictionaries are modified."""
         # Setup mock connection
         mock_conn = mock_db.get_connection().__enter__()
         mock_cursor = mock_conn.execute.return_value

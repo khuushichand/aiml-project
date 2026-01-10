@@ -79,7 +79,7 @@ async def test_can_start_stream_and_finish_stream_via_rg_integration(monkeypatch
 
     class _FakeGov:
         def __init__(self):
-            self.stream_counts = {}
+                     self.stream_counts = {}
 
         async def reserve(self, req, op_id=None):  # noqa: ARG002
             entity = req.entity

@@ -8,7 +8,7 @@ from tldw_Server_API.app.core.Chunking import Chunker
 
 @pytest.fixture(autouse=True)
 def testing_env():
-    os.environ['TESTING'] = 'true'
+     os.environ['TESTING'] = 'true'
     yield
     os.environ.pop('TESTING', None)
 
@@ -31,7 +31,9 @@ def _join_en_tokens(tokens: list[str]) -> str:
 
 
 def _ja_token_strategy():
-    # limited kana set + punctuation
+
+
+     # limited kana set + punctuation
     kana = "あいうえおかきくけこさしすせそたちつてとなにぬねのまみむめもやゆよらりるれろわをん"
     punct = "。！？"
     tok = st.text(alphabet=list(kana + punct), min_size=1, max_size=6)
@@ -44,7 +46,9 @@ def _join_ja_tokens(tokens: list[str]) -> str:
 
 
 def _th_token_strategy():
-    # small Thai alphabet subset + punctuation
+
+
+     # small Thai alphabet subset + punctuation
     thai = "กขคฆงจฉชซดตถทนบปผฝพฟมยรลวสหออะอิอึอือะเแโใไึ"
     punct = "!?"  # Thai uses these as well
     tok = st.text(alphabet=list(thai + punct), min_size=1, max_size=6)

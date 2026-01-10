@@ -5,7 +5,7 @@ from tldw_Server_API.app.core.Notifications.service import NotificationsService
 
 class _FakeEmailService:
     def __init__(self):
-        self.calls = []
+             self.calls = []
 
     async def send_email(self, *, to_email, subject, html_body, text_body, attachments=None):
         self.calls.append(
@@ -22,7 +22,7 @@ class _FakeEmailService:
 
 class _FakeDocService:
     def __init__(self):
-        self.calls = []
+             self.calls = []
 
     def create_manual_document(
         self,
@@ -35,7 +35,8 @@ class _FakeDocService:
         model,
         conversation_id=None,
     ):
-        self.calls.append(
+
+             self.calls.append(
             {
                 "title": title,
                 "content": content,
@@ -99,7 +100,9 @@ async def test_notifications_email_skips_without_recipient(monkeypatch):
 
 
 def test_notifications_chatbook_delivery(monkeypatch):
-    fake_doc = _FakeDocService()
+
+
+     fake_doc = _FakeDocService()
     svc = NotificationsService(user_id=2, user_email=None)
 
     monkeypatch.setattr(

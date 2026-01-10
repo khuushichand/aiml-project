@@ -280,7 +280,8 @@ async def test_evaluations_admin_cleanup_allowed_with_admin_role(monkeypatch, tm
     db_file.touch()
 
     def _fake_get_single_user_id() -> int:
-        return 1
+
+             return 1
 
     def _fake_get_user_base_directory(_user_id: int) -> Path:
         return tmp_path

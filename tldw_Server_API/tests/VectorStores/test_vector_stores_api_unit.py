@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 
 class FakeCollection:
     def __init__(self, name):
-        self.name = name
+             self.name = name
         self._data = {
             'ids': [],
             'embeddings': [],
@@ -20,11 +20,13 @@ class FakeCollection:
         self.metadata = {}
 
     def modify(self, metadata=None):
-        if metadata:
+
+             if metadata:
             self.metadata.update(metadata)
 
     def get(self, limit=100, offset=0, include=None, where=None):
-        # ignore where for unit tests
+
+             # ignore where for unit tests
         end = min(offset + limit, len(self._data['ids']))
         idxs = list(range(offset, end))
         out = {}
@@ -40,7 +42,8 @@ class FakeCollection:
         return out
 
     def delete(self, ids=None):
-        if not ids:
+
+             if not ids:
             return
         keep = [i for i, vid in enumerate(self._data['ids']) if vid not in ids]
         self._data['ids'] = [self._data['ids'][i] for i in keep]
@@ -49,12 +52,13 @@ class FakeCollection:
         self._data['metadatas'] = [self._data['metadatas'][i] for i in keep]
 
     def count(self):
-        return len(self._data['ids'])
+
+             return len(self._data['ids'])
 
 
 class FakeAdapter:
     def __init__(self):
-        self.config = types.SimpleNamespace(embedding_dim=1536)
+             self.config = types.SimpleNamespace(embedding_dim=1536)
         self._initialized = False
         self._collections = {}
         self.manager = types.SimpleNamespace(get_or_create_collection=self.get_or_create_collection)
@@ -90,14 +94,15 @@ class FakeAdapter:
             del self._collections[name]
 
     def get_or_create_collection(self, name):
-        if name not in self._collections:
+
+             if name not in self._collections:
             self._collections[name] = FakeCollection(name)
         return self._collections[name]
 
 
 @pytest.fixture(autouse=True)
 def testing_env(monkeypatch, tmp_path):
-    os.environ['TESTING'] = 'true'
+     os.environ['TESTING'] = 'true'
     # per-user DB base dir
     from tldw_Server_API.app.core import config as cfg
     monkeypatch.setitem(cfg.settings, 'USER_DB_BASE_DIR', tmp_path)
@@ -108,7 +113,7 @@ def testing_env(monkeypatch, tmp_path):
 
 @pytest.fixture()
 def client(monkeypatch):
-    fake = FakeAdapter()
+     fake = FakeAdapter()
 
     # override adapter factory
     import tldw_Server_API.app.api.v1.endpoints.vector_stores_openai as vs
@@ -127,7 +132,9 @@ def client(monkeypatch):
 
 
 def test_create_store_and_uniqueness(client):
-    # create A
+
+
+     # create A
     r1 = client.post('/api/v1/vector_stores', json={'name': 'Alpha', 'dimensions': 1536})
     assert r1.status_code == 200, r1.text
     # creating same name conflicts
@@ -136,7 +143,9 @@ def test_create_store_and_uniqueness(client):
 
 
 def test_rename_store_uniqueness(client):
-    a = client.post('/api/v1/vector_stores', json={'name': 'A', 'dimensions': 1536}).json()
+
+
+     a = client.post('/api/v1/vector_stores', json={'name': 'A', 'dimensions': 1536}).json()
     b = client.post('/api/v1/vector_stores', json={'name': 'B', 'dimensions': 1536}).json()
     # rename B to A -> 409
     r = client.patch(f"/api/v1/vector_stores/{b['id']}", json={'name': 'A'})
@@ -144,7 +153,9 @@ def test_rename_store_uniqueness(client):
 
 
 def test_list_uses_meta_db(client):
-    client.post('/api/v1/vector_stores', json={'name': 'One', 'dimensions': 1536})
+
+
+     client.post('/api/v1/vector_stores', json={'name': 'One', 'dimensions': 1536})
     client.post('/api/v1/vector_stores', json={'name': 'Two', 'dimensions': 1536})
     r = client.get('/api/v1/vector_stores')
     assert r.status_code == 200
@@ -153,7 +164,9 @@ def test_list_uses_meta_db(client):
 
 
 def test_duplicate_store(client):
-    src = client.post('/api/v1/vector_stores', json={'name': 'Src', 'dimensions': 4}).json()
+
+
+     src = client.post('/api/v1/vector_stores', json={'name': 'Src', 'dimensions': 4}).json()
     # insert a vector via upsert endpoint
     up = client.post(f"/api/v1/vector_stores/{src['id']}/vectors", json={'records':[{'id':'v1','values':[0,0,0,0],'content':'doc','metadata':{}}]})
     assert up.status_code == 200

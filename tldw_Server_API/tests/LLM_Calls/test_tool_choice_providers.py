@@ -2,26 +2,30 @@ import pytest
 
 
 def _dummy_response(payload):
-    class R:
+
+
+     class R:
         status_code = 200
         def json(self):
-            # Echo back the payload to simplify assertions
+                     # Echo back the payload to simplify assertions
             return payload
         def raise_for_status(self):
-            return None
+                     return None
         def close(self):
-            return None
+                     return None
     return R()
 
 
 def _patch_openai(monkeypatch, captured):
-    class _Client:
+
+
+     class _Client:
         def __enter__(self):
-            return self
+                     return self
         def __exit__(self, exc_type, exc, tb):
-            return False
+                     return False
         def post(self, url, headers=None, json=None):
-            captured["url"] = url
+                     captured["url"] = url
             captured["headers"] = headers
             captured["json"] = json
             return _dummy_response(json)
@@ -32,13 +36,15 @@ def _patch_openai(monkeypatch, captured):
 
 
 def _patch_groq(monkeypatch, captured):
-    class _Client:
+
+
+     class _Client:
         def __enter__(self):
-            return self
+                     return self
         def __exit__(self, exc_type, exc, tb):
-            return False
+                     return False
         def post(self, url, headers=None, json=None):
-            captured["url"] = url
+                     captured["url"] = url
             captured["headers"] = headers
             captured["json"] = json
             return _dummy_response(json)
@@ -49,7 +55,9 @@ def _patch_groq(monkeypatch, captured):
 
 
 def test_openai_tool_choice_gating(monkeypatch):
-    from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_openai
+
+
+     from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_openai
 
     captured = {}
     _patch_openai(monkeypatch, captured)
@@ -75,7 +83,9 @@ def test_openai_tool_choice_gating(monkeypatch):
 
 
 def test_groq_tool_choice_gating(monkeypatch):
-    from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_groq
+
+
+     from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_groq
 
     captured = {}
     _patch_groq(monkeypatch, captured)

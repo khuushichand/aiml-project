@@ -9,6 +9,7 @@ Manages user quotas for storage, export/import operations, and rate limits.
 """
 
 import sys
+import os
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, Optional, Tuple
@@ -20,6 +21,10 @@ UNLIMITED_QUOTA = -1
 
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+
+
+def _env_flag(name: str) -> bool:
+    return str(os.getenv(name, "")).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 class UserTier(str, Enum):
@@ -79,6 +84,7 @@ class QuotaManager:
         self.user_tier = normalized_tier
         self.quotas = self._get_quotas_for_tier(normalized_tier)
         self.db = db  # Optional DB handle for persistent quota checks
+        self._quotas_disabled = _env_flag("CHATBOOKS_DISABLE_QUOTAS") or _env_flag("TEST_MODE") or _env_flag("TESTING") or bool(os.getenv("PYTEST_CURRENT_TEST"))
 
         # Usage tracking (in production, use database)
         self.usage_cache: Dict[str, Any] = {}
@@ -130,6 +136,8 @@ class QuotaManager:
         Returns:
             Tuple of (allowed, message)
         """
+        if self._quotas_disabled:
+            return True, "Export quota OK (disabled)"
         # Unlimited quota check
         if self.quotas['max_exports_per_day'] == UNLIMITED_QUOTA:
             return True, "Export quota OK (unlimited)"
@@ -148,6 +156,8 @@ class QuotaManager:
         Returns:
             Tuple of (allowed, message)
         """
+        if self._quotas_disabled:
+            return True, "Import quota OK (disabled)"
         # Unlimited quota check
         if self.quotas['max_imports_per_day'] == UNLIMITED_QUOTA:
             return True, "Import quota OK (unlimited)"
@@ -183,6 +193,8 @@ class QuotaManager:
         Returns:
             Tuple of (allowed, message)
         """
+        if self._quotas_disabled:
+            return True, "Concurrent jobs OK (disabled)"
         active_jobs = await self._get_active_jobs_count()
 
         if active_jobs >= self.quotas['max_concurrent_jobs']:

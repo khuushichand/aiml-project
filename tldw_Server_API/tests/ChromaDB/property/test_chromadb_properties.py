@@ -26,7 +26,9 @@ _state_mgr_base_dir = None
 
 
 def _get_shared_state_manager():
-    global _state_mgr_singleton, _state_mgr_base_dir
+
+
+     global _state_mgr_singleton, _state_mgr_base_dir
     with _state_mgr_lock:
         if _state_mgr_singleton is None:
             base_dir = tempfile.mkdtemp(prefix="chroma_prop_shared_")
@@ -45,7 +47,7 @@ def _get_shared_state_manager():
 # Ensure the shared state manager is properly closed at session end
 @pytest.fixture(scope="session", autouse=True)
 def _state_mgr_cleanup():
-    yield
+     yield
     try:
         mgr = globals().get("_state_mgr_singleton")
         if mgr is not None:
@@ -91,7 +93,7 @@ embedding_dim = st.sampled_from([128, 256, 384, 512, 768, 1536])
 # Strategy for embeddings
 @st.composite
 def embeddings_strategy(draw, dim=None, count=None):
-    """Generate valid embeddings."""
+     """Generate valid embeddings."""
     if dim is None:
         dim = draw(embedding_dim)
     if count is None:
@@ -147,7 +149,7 @@ class TestChromaDBProperties:
     @given(user_id=valid_user_id)
     @settings(max_examples=5)
     def test_valid_user_id_accepted(self, user_id):
-        """Any valid user ID should be accepted."""
+             """Any valid user ID should be accepted."""
         try:
             assert validate_user_id(user_id) == user_id
         except ValueError:
@@ -159,7 +161,7 @@ class TestChromaDBProperties:
     )
     @settings(max_examples=5)
     def test_storage_retrieval_consistency(self, texts, dim):
-        """Stored data should be retrievable exactly as stored."""
+             """Stored data should be retrievable exactly as stored."""
         collection_name = "property_test"
 
         # Generate consistent embeddings
@@ -195,7 +197,7 @@ class TestChromaDBProperties:
     )
     @settings(max_examples=5)
     def test_count_accuracy(self, num_docs, collection):
-        """Count should accurately reflect number of stored items."""
+             """Count should accurately reflect number of stored items."""
         # Reset collection
         manager = _get_shared_state_manager()
         manager.reset_chroma_collection(collection)
@@ -222,7 +224,7 @@ class TestChromaDBProperties:
     )
     @settings(max_examples=5)
     def test_metadata_preservation(self, texts, metadata_list):
-        """Metadata should be preserved exactly as provided."""
+             """Metadata should be preserved exactly as provided."""
         # Ensure same length
         min_len = min(len(texts), len(metadata_list))
         texts = texts[:min_len]
@@ -264,7 +266,7 @@ class TestChromaDBProperties:
     )
     @settings(max_examples=5, suppress_health_check=[HealthCheck.data_too_large])
     def test_embedding_dimension_consistency(self, embedding_list):
-        """All embeddings in a collection must have same dimension."""
+             """All embeddings in a collection must have same dimension."""
         if len(embedding_list) < 2:
             return  # Need at least 2 embeddings to test
 
@@ -297,7 +299,7 @@ class TestChromaDBProperties:
     )
     @settings(max_examples=5)
     def test_id_uniqueness(self, ids):
-        """IDs must be unique within a collection."""
+             """IDs must be unique within a collection."""
         collection_name = "id_test"
         texts = [f"text_{i}" for i in range(len(ids))]
         embeddings = [[0.1, 0.2] for _ in ids]
@@ -332,7 +334,7 @@ class TestVectorSearchProperties:
     )
     @settings(max_examples=5)
     def test_search_result_count(self, k, total_docs):
-        """Search should return at most min(k, total_docs) results."""
+             """Search should return at most min(k, total_docs) results."""
         collection_name = "search_count_test"
 
         # Add documents
@@ -365,7 +367,7 @@ class TestVectorSearchProperties:
     )
     @settings(max_examples=5)
     def test_self_similarity_highest(self, query_embedding):
-        """A document should be most similar to itself."""
+             """A document should be most similar to itself."""
         collection_name = "self_similarity_test"
 
         # Store the query as a document
@@ -401,7 +403,7 @@ class TestVectorSearchProperties:
     @settings(max_examples=5)
     def test_metadata_filter_correctness(self, filter_value, num_matching,
                                         num_non_matching):
-        """Metadata filters should return only matching documents."""
+             """Metadata filters should return only matching documents."""
         collection_name = "filter_test"
 
         # Create documents with and without matching metadata
@@ -464,7 +466,8 @@ class ChromaDBStateMachine(RuleBasedStateMachine):
     """Stateful testing for ChromaDB operations."""
 
     def __init__(self):
-        super().__init__()
+
+             super().__init__()
         # Use a single shared manager across all examples to avoid too many open files
         self.manager = _get_shared_state_manager()
         # Namespace prefix per test run to isolate collections
@@ -485,7 +488,7 @@ class ChromaDBStateMachine(RuleBasedStateMachine):
         target=collections_bundle
     )
     def create_collection(self, collection):
-        """Create a new collection."""
+             """Create a new collection."""
         name = self._full(collection)
         self.manager.get_or_create_collection(name)
         if name not in self.collections:
@@ -498,7 +501,7 @@ class ChromaDBStateMachine(RuleBasedStateMachine):
         target=documents_bundle
     )
     def add_document(self, collection, text):
-        """Add a document to a collection."""
+             """Add a document to a collection."""
         doc_id = f"doc_{len(self.collections[collection])}"
         embedding = [0.1, 0.2, 0.3]
 
@@ -519,7 +522,7 @@ class ChromaDBStateMachine(RuleBasedStateMachine):
         document=documents_bundle
     )
     def delete_document(self, document):
-        """Delete a document from a collection."""
+             """Delete a document from a collection."""
         collection, doc_id = document
 
         self.manager.delete_from_collection([doc_id], collection)
@@ -533,7 +536,7 @@ class ChromaDBStateMachine(RuleBasedStateMachine):
         k=st.integers(min_value=1, max_value=10)
     )
     def search_collection(self, collection, k):
-        """Search in a collection."""
+             """Search in a collection."""
         if not self.collections[collection]:
             return  # Empty collection
 
@@ -549,7 +552,7 @@ class ChromaDBStateMachine(RuleBasedStateMachine):
 
     @invariant()
     def count_matches_state(self):
-        """Collection counts should match internal state."""
+             """Collection counts should match internal state."""
         for collection, ids in self.collections.items():
             actual_count = self.manager.count_items_in_collection(collection)
             expected_count = len(ids)
@@ -558,7 +561,7 @@ class ChromaDBStateMachine(RuleBasedStateMachine):
 
     @invariant()
     def documents_retrievable(self):
-        """All tracked documents should be retrievable."""
+             """All tracked documents should be retrievable."""
         for collection, ids in self.collections.items():
             if ids:  # Non-empty collection
                 collection_obj = self.manager.get_or_create_collection(collection)
@@ -569,7 +572,8 @@ class ChromaDBStateMachine(RuleBasedStateMachine):
                     f"ID mismatch in {collection}: {retrieved_ids} != {ids}"
 
     def teardown(self):
-        """Clean up after test."""
+
+             """Clean up after test."""
         # Delete only collections created in this run to avoid leaking state
         try:
             for collection in list(self.collections.keys()):
@@ -600,7 +604,7 @@ class TestEmbeddingProperties:
     )
     @settings(max_examples=5, suppress_health_check=[HealthCheck.data_too_large])
     def test_embedding_normalization(self, embeddings):
-        """Embeddings should be normalized (unit vectors)."""
+             """Embeddings should be normalized (unit vectors)."""
         for embedding in embeddings:
             norm = np.linalg.norm(embedding)
             # Should be close to 1 (unit vector)
@@ -613,7 +617,7 @@ class TestEmbeddingProperties:
     )
     @settings(max_examples=5, suppress_health_check=[HealthCheck.data_too_large])
     def test_embedding_dimension_consistency(self, dim, count, data):
-        """All embeddings in a batch should have same dimension."""
+             """All embeddings in a batch should have same dimension."""
         embeddings = data.draw(embeddings_strategy(dim=dim, count=count))
 
         # All should have same dimension
@@ -627,14 +631,14 @@ class TestEmbeddingProperties:
     )
     @settings(max_examples=5)
     def test_deterministic_embedding(self, text1, text2):
-        """Same text should produce same embedding."""
+             """Same text should produce same embedding."""
         # This assumes deterministic embedding generation
         # In practice, might need to account for model variations
 
         if text1 == text2:
             # Mock deterministic embeddings based on text hash
             def mock_embedding(text):
-                np.random.seed(hash(text) % 10000)
+                             np.random.seed(hash(text) % 10000)
                 emb = np.random.randn(384)
                 return (emb / np.linalg.norm(emb)).tolist()
 
@@ -650,10 +654,10 @@ class TestEmbeddingProperties:
     )
     @settings(max_examples=5)
     def test_batch_processing_consistency(self, texts, batch_size):
-        """Batch processing should produce same results as individual processing."""
+             """Batch processing should produce same results as individual processing."""
         # Mock embedding function
         def mock_embed(text_list):
-            embeddings = []
+                     embeddings = []
             for text in text_list:
                 np.random.seed(hash(text) % 10000)
                 emb = np.random.randn(384)
@@ -700,7 +704,7 @@ class TestErrorHandlingProperties:
     )
     @settings(max_examples=5)
     def test_invalid_user_id_rejected(self, invalid_user_id):
-        """Invalid user IDs should be rejected."""
+             """Invalid user IDs should be rejected."""
         with pytest.raises(ValueError):
             validate_user_id(invalid_user_id)
 
@@ -710,7 +714,7 @@ class TestErrorHandlingProperties:
     )
     @settings(max_examples=5)
     def test_mismatched_input_lengths(self, texts, embeddings):
-        """Mismatched input lengths should be rejected."""
+             """Mismatched input lengths should be rejected."""
         with pytest.raises(ValueError, match="length"):
             _get_shared_state_manager().store_in_chroma(
                 collection_name="test",
@@ -726,7 +730,7 @@ class TestErrorHandlingProperties:
     )
     @settings(max_examples=5, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_duplicate_ids_handled(self, collection, bad_ids):
-        """Duplicate IDs should be handled appropriately."""
+             """Duplicate IDs should be handled appropriately."""
         # Make some IDs duplicate
         ids_with_duplicates = bad_ids + [bad_ids[0]]
         texts = [f"text_{i}" for i in range(len(ids_with_duplicates))]

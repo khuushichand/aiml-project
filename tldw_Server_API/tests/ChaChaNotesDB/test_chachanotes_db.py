@@ -29,12 +29,12 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 
 @pytest.fixture
 def client_id():
-    return "test_client_001"
+     return "test_client_001"
 
 
 @pytest.fixture
 def db_path(tmp_path):
-    """Provides a temporary path for the database file for each test."""
+     """Provides a temporary path for the database file for each test."""
     return tmp_path / "test_db.sqlite"
 
 
@@ -71,7 +71,7 @@ def db_instance(db_path, client_id):  # Add db_path and tmp_path back
 
 @pytest.fixture
 def mem_db_instance(client_id):
-    """Creates an in-memory DB instance."""
+     """Creates an in-memory DB instance."""
     db = CharactersRAGDB(":memory:", client_id)
     yield db
     db.close_connection()
@@ -79,11 +79,13 @@ def mem_db_instance(client_id):
 
 # --- Helper Functions ---
 def get_current_utc_timestamp_iso():
-    return datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+     return datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
 
 
 def _create_sample_card_data(name_suffix="", client_id_override=None):
-    return {
+
+
+     return {
         "name": f"Test Character {name_suffix}",
         "description": "A test character.",
         "personality": "Testy",
@@ -101,7 +103,7 @@ def _create_sample_card_data(name_suffix="", client_id_override=None):
 
 class TestDBInitialization:
     def test_db_creation(self, db_path, client_id):
-        current_db_path = Path(db_path) # Ensure it's a Path object
+             current_db_path = Path(db_path) # Ensure it's a Path object
         assert not current_db_path.exists()
         db = CharactersRAGDB(current_db_path, client_id)
         assert current_db_path.exists()
@@ -119,7 +121,8 @@ class TestDBInitialization:
         db.close_connection()
 
     def test_in_memory_db(self, client_id):
-        db = CharactersRAGDB(":memory:", client_id)
+
+             db = CharactersRAGDB(":memory:", client_id)
         assert db.is_memory_db
         assert db.client_id == client_id
         # Check schema version for in-memory
@@ -134,13 +137,15 @@ class TestDBInitialization:
         db.close_connection()
 
     def test_missing_client_id(self, db_path):
-        with pytest.raises(ValueError, match="Client ID cannot be empty or None."):
+
+             with pytest.raises(ValueError, match="Client ID cannot be empty or None."):
             CharactersRAGDB(db_path, "")
         with pytest.raises(ValueError, match="Client ID cannot be empty or None."):
             CharactersRAGDB(db_path, None)
 
     def test_reopen_db(self, db_path, client_id):
-        db1 = CharactersRAGDB(db_path, client_id)
+
+             db1 = CharactersRAGDB(db_path, client_id)
         v1 = db1._get_db_version(db1.get_connection()) # Assuming _get_db_version is still available for tests
         db1.close_connection()
 
@@ -151,7 +156,8 @@ class TestDBInitialization:
         db2.close_connection()
 
     def test_schema_newer_than_code(self, db_path, client_id):
-        db = CharactersRAGDB(db_path, client_id)
+
+             db = CharactersRAGDB(db_path, client_id)
         conn = db.get_connection()
         # Manually set a newer version
         conn.execute("UPDATE db_schema_version SET version = ? WHERE schema_name = ?",
@@ -220,7 +226,8 @@ class TestMessageMetadata:
         assert exists is not None
 
     def test_migration_v12_to_v13_creates_table(self, db_path, client_id):
-        db = CharactersRAGDB(db_path, client_id)
+
+             db = CharactersRAGDB(db_path, client_id)
         db.close_connection()
 
         with sqlite3.connect(str(db_path)) as conn:
@@ -399,7 +406,7 @@ class TestMessageMetadata:
 class TestConversationsAndMessages:
     @pytest.fixture
     def char_id(self, db_instance):
-        card_id = db_instance.add_character_card(_create_sample_card_data("ConvChar"))
+             card_id = db_instance.add_character_card(_create_sample_card_data("ConvChar"))
         assert card_id is not None
         return card_id
 

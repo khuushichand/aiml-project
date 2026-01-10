@@ -5,7 +5,9 @@ pytestmark = pytest.mark.unit
 
 
 def _has_httpx():
-    try:
+
+
+     try:
         import httpx  # noqa: F401
         return True
     except Exception:
@@ -17,7 +19,7 @@ requires_httpx = pytest.mark.skipif(not _has_httpx(), reason="httpx not installe
 
 @requires_httpx
 def test_egress_denial_increments_metric(monkeypatch):
-    from tldw_Server_API.app.core.http_client import fetch_json
+     from tldw_Server_API.app.core.http_client import fetch_json
     from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
     from tldw_Server_API.app.core.exceptions import EgressPolicyError
 

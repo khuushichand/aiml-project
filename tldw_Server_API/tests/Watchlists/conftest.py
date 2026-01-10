@@ -15,7 +15,7 @@ import pytest
 
 @pytest.fixture(scope="session", autouse=True)
 def enable_full_app_for_watchlists():
-    orig_minimal = os.getenv("MINIMAL_TEST_APP")
+     orig_minimal = os.getenv("MINIMAL_TEST_APP")
     orig_disable = os.getenv("ROUTES_DISABLE")
     orig_enable = os.getenv("ROUTES_ENABLE")
 

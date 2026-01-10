@@ -17,7 +17,7 @@ from tldw_Server_API.app.core.Chat.prompt_template_manager import (
 # Fixture to clear the template cache before each test
 @pytest.fixture(autouse=True)
 def clear_template_cache():
-    _loaded_templates.clear()
+     _loaded_templates.clear()
     # Re-add the default passthrough because it's normally added at module load
     _loaded_templates["raw_passthrough"] = DEFAULT_RAW_PASSTHROUGH_TEMPLATE
 
@@ -50,7 +50,7 @@ def mock_templates_dir(tmp_path: Path):
 
 @pytest.mark.unit
 def test_load_template_success(mock_templates_dir):
-    with patch("tldw_Server_API.app.core.Chat.prompt_template_manager.PROMPT_TEMPLATES_DIR", mock_templates_dir):
+     with patch("tldw_Server_API.app.core.Chat.prompt_template_manager.PROMPT_TEMPLATES_DIR", mock_templates_dir):
         template = load_template("test_valid")
         assert template is not None
         assert template.name == "test_valid"
@@ -62,21 +62,21 @@ def test_load_template_success(mock_templates_dir):
 
 @pytest.mark.unit
 def test_load_template_not_found(mock_templates_dir):
-    with patch("tldw_Server_API.app.core.Chat.prompt_template_manager.PROMPT_TEMPLATES_DIR", mock_templates_dir):
+     with patch("tldw_Server_API.app.core.Chat.prompt_template_manager.PROMPT_TEMPLATES_DIR", mock_templates_dir):
         template = load_template("non_existent_template")
         assert template is None
 
 
 @pytest.mark.unit
 def test_load_template_invalid_json(mock_templates_dir):
-    with patch("tldw_Server_API.app.core.Chat.prompt_template_manager.PROMPT_TEMPLATES_DIR", mock_templates_dir):
+     with patch("tldw_Server_API.app.core.Chat.prompt_template_manager.PROMPT_TEMPLATES_DIR", mock_templates_dir):
         template = load_template("test_invalid_json")
         assert template is None  # Should fail to parse
 
 
 @pytest.mark.unit
 def test_load_template_empty_json_fails_validation(mock_templates_dir):
-    with patch("tldw_Server_API.app.core.Chat.prompt_template_manager.PROMPT_TEMPLATES_DIR", mock_templates_dir):
+     with patch("tldw_Server_API.app.core.Chat.prompt_template_manager.PROMPT_TEMPLATES_DIR", mock_templates_dir):
         template = load_template("test_empty")
         # Pydantic will raise validation error because 'name' is missing,
         # load_template should catch this and return None.
@@ -86,7 +86,7 @@ def test_load_template_empty_json_fails_validation(mock_templates_dir):
 @pytest.mark.unit
 # Inside test_apply_template_to_string():
 def test_apply_template_to_string():
-    template_str_jinja = "Hello {{name}}, welcome to {{place}}." # Use Jinja
+     template_str_jinja = "Hello {{name}}, welcome to {{place}}." # Use Jinja
     data_full = {"name": "Alice", "place": "Wonderland"}
     assert apply_template_to_string(template_str_jinja, data_full) == "Hello Alice, welcome to Wonderland."
 
@@ -103,7 +103,7 @@ def test_apply_template_to_string():
 
 @pytest.mark.unit
 def test_get_available_templates(mock_templates_dir):
-    with patch("tldw_Server_API.app.core.Chat.prompt_template_manager.PROMPT_TEMPLATES_DIR", mock_templates_dir):
+     with patch("tldw_Server_API.app.core.Chat.prompt_template_manager.PROMPT_TEMPLATES_DIR", mock_templates_dir):
         available = get_available_templates()
         assert isinstance(available, list)
         assert "test_valid" in available
@@ -114,14 +114,14 @@ def test_get_available_templates(mock_templates_dir):
 
 @pytest.mark.unit
 def test_get_available_templates_no_dir():
-    with patch("tldw_Server_API.app.core.Chat.prompt_template_manager.PROMPT_TEMPLATES_DIR", Path("/non/existent/dir")):
+     with patch("tldw_Server_API.app.core.Chat.prompt_template_manager.PROMPT_TEMPLATES_DIR", Path("/non/existent/dir")):
         available = get_available_templates()
         assert available == []
 
 
 @pytest.mark.unit
 def test_default_raw_passthrough_template():
-    assert DEFAULT_RAW_PASSTHROUGH_TEMPLATE is not None
+     assert DEFAULT_RAW_PASSTHROUGH_TEMPLATE is not None
     assert DEFAULT_RAW_PASSTHROUGH_TEMPLATE.name == "raw_passthrough"
     data = {"message_content": "test content", "original_system_message_from_request": "system content"}
 

@@ -5,7 +5,9 @@ pytestmark = pytest.mark.unit
 
 
 def _has_httpx():
-    try:
+
+
+     try:
         import httpx  # noqa: F401
         return True
     except Exception:
@@ -17,24 +19,24 @@ requires_httpx = pytest.mark.skipif(not _has_httpx(), reason="httpx not installe
 
 @requires_httpx
 def test_traceparent_header_injected_with_fake_span(monkeypatch):
-    import httpx
+     import httpx
     import tldw_Server_API.app.core.http_client as hc
 
     # Force OTEL available path and provide a fake current span
     class FakeSpanContext:
         def __init__(self):
-            # Non-zero IDs to trigger header injection
+                     # Non-zero IDs to trigger header injection
             self.trace_id = int("0123456789abcdef0123456789abcdef", 16)
             self.span_id = int("0123456789abcdef", 16)
 
     class FakeSpan:
         def get_span_context(self):
-            return FakeSpanContext()
+                     return FakeSpanContext()
 
     class FakeTracer:
         @staticmethod
         def get_current_span():
-            return FakeSpan()
+                     return FakeSpan()
 
     monkeypatch.setattr(hc, "_OTEL_AVAILABLE", True)
     monkeypatch.setattr(hc, "_otel_trace", FakeTracer)

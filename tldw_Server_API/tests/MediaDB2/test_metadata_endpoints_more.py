@@ -14,25 +14,25 @@ sys.modules.setdefault('dill', dill_stub)
 
 class _FakeConn:
     def execute(self, *args, **kwargs):
-        return None
+             return None
     def commit(self):
-        return None
+             return None
 
 
 class _FakeDB:
     def __init__(self):
-        self.last_filters = None
+             self.last_filters = None
     def transaction(self):
-        class _Tx:
+             class _Tx:
             def __enter__(self_inner):
-                return _FakeConn()
+                             return _FakeConn()
             def __exit__(self_inner, exc_type, exc, tb):
-                return False
+                             return False
         return _Tx()
     def get_connection(self):
-        return _FakeConn()
+             return _FakeConn()
     def search_by_safe_metadata(self, filters=None, match_all=True, page=1, per_page=20, group_by_media=True):
-        self.last_filters = filters
+             self.last_filters = filters
         return [], 0
 
 

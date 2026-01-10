@@ -40,7 +40,7 @@ def _int_env_or_cfg(
         if raw is None:
             return None
         text = str(raw).strip()
-        if not text or text.lower() == "none":
+        if not text or text.lower() in {"none", "null", "nil"}:
             return None
         return text
 
@@ -2744,7 +2744,7 @@ def load_and_log_configs():
         custom_openai_api_streaming = config_parser_object.get('API', 'custom_openai_api_streaming', fallback='False')
         custom_openai_api_temperature = config_parser_object.get('API', 'custom_openai_api_temperature', fallback='0.7')
         custom_openai_api_top_p = config_parser_object.get('API', 'custom_openai_api_top_p', fallback='0.95')
-        custom_openai_api_min_p = config_parser_object.get('API', 'custom_openai_api_top_k', fallback='100')
+        custom_openai_api_min_p = config_parser_object.get('API', 'custom_openai_api_min_p', fallback='0.05')
         custom_openai_api_max_tokens = config_parser_object.get('API', 'custom_openai_api_max_tokens', fallback='4096')
         custom_openai_api_timeout = config_parser_object.get('API', 'custom_openai_api_timeout', fallback='90')
         custom_openai_api_retries = config_parser_object.get('API', 'custom_openai_api_retry', fallback='3')
@@ -2757,7 +2757,7 @@ def load_and_log_configs():
         custom_openai2_api_streaming = config_parser_object.get('API', 'custom_openai2_api_streaming', fallback='False')
         custom_openai2_api_temperature = config_parser_object.get('API', 'custom_openai2_api_temperature', fallback='0.7')
         custom_openai2_api_top_p = config_parser_object.get('API', 'custom_openai_api2_top_p', fallback='0.95')
-        custom_openai2_api_min_p = config_parser_object.get('API', 'custom_openai_api2_top_k', fallback='100')
+        custom_openai2_api_min_p = config_parser_object.get('API', 'custom_openai2_api_min_p', fallback='0.05')
         custom_openai2_api_max_tokens = config_parser_object.get('API', 'custom_openai2_api_max_tokens', fallback='4096')
         custom_openai2_api_timeout = config_parser_object.get('API', 'custom_openai2_api_timeout', fallback='90')
         custom_openai2_api_retries = config_parser_object.get('API', 'custom_openai2_api_retry', fallback='3')

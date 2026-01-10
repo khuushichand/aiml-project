@@ -12,6 +12,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, requi
 from tldw_Server_API.app.api.v1.schemas.media_request_models import MediaUpdateRequest
 from tldw_Server_API.app.api.v1.schemas.media_response_models import MediaDetailResponse
 from tldw_Server_API.app.api.v1.utils.cache import generate_etag, is_not_modified
+from tldw_Server_API.app.api.v1.utils.rag_cache import invalidate_rag_caches
 from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_DELETE
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.DB_Manager import get_full_media_details_rich2
@@ -418,6 +419,7 @@ async def update_media_item(
     payload: MediaUpdateRequest,
     media_id: int = Path(..., description="The ID of the media item"),
     db: MediaDatabase = Depends(get_media_db_for_user),
+    current_user: User = Depends(get_request_user),
 ) -> MediaDetailResponse:
     """
     Update Media Item Details.
@@ -473,6 +475,7 @@ async def update_media_item(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Media not found after update",
             )
+        invalidate_rag_caches(current_user, media_id=media_id)
         return MediaDetailResponse(**details)
 
     new_doc_version_info: Optional[Dict[str, Any]] = None

@@ -8,7 +8,7 @@ from tldw_Server_API.app.core.Embeddings.queue_schemas import StorageMessage, Em
 
 class _FakeRedis:
     def __init__(self):
-        self.kv = {}
+             self.kv = {}
         self.streams = {}
         self.hashes = {}
 
@@ -40,7 +40,8 @@ class _TestStorageWorker(StorageWorker):
             metadata = {"embedder_name": "huggingface", "embedder_version": "model-v1"}
 
             def add(self, **kwargs):
-                return True
+
+                             return True
         return _Dummy()
 
     async def _update_database(self, media_id: int, total_chunks: int):
@@ -49,7 +50,7 @@ class _TestStorageWorker(StorageWorker):
 
 @pytest.mark.unit
 def test_storage_idempotency_short_circuit(monkeypatch):
-    cfg = WorkerConfig(
+     cfg = WorkerConfig(
         worker_id="storage-0",
         worker_type="storage",
         redis_url="redis://localhost:6379",

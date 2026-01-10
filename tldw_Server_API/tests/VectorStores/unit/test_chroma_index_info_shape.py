@@ -6,7 +6,7 @@ import pytest
 
 @pytest.mark.unit
 def test_chroma_index_info_has_no_ef_search(monkeypatch):
-    # Force in-memory Chroma stub and inject minimal module shims
+     # Force in-memory Chroma stub and inject minimal module shims
     monkeypatch.setenv("CHROMADB_FORCE_STUB", "true")
 
     chroma_mod = ModuleType("chromadb")
@@ -14,11 +14,11 @@ def test_chroma_index_info_has_no_ef_search(monkeypatch):
 
     class _Settings:  # minimal config shim
         def __init__(self, **kwargs):
-            self.kw = kwargs
+                     self.kw = kwargs
 
     class _Client:  # not used under FORCE_STUB
         def __init__(self, *a, **k):
-            pass
+                     pass
 
     chroma_cfg.Settings = _Settings
     chroma_mod.config = chroma_cfg

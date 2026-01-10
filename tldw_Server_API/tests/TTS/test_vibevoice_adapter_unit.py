@@ -7,7 +7,7 @@ from tldw_Server_API.app.core.TTS.adapters.vibevoice_adapter import VibeVoiceAda
 
 @pytest.mark.unit
 def test_preprocess_text_converts_bracket_markers_to_speaker_format():
-    adapter = VibeVoiceAdapter({})
+     adapter = VibeVoiceAdapter({})
     raw = "[1]: Hello there\n[2]: And hi back"
     out = adapter.preprocess_text(raw)
     # Expect conversion to Speaker N: form
@@ -17,7 +17,7 @@ def test_preprocess_text_converts_bracket_markers_to_speaker_format():
 
 @pytest.mark.unit
 def test_build_voice_samples_with_mapping_1_based_keys(tmp_path):
-    # Prepare adapter with available voices mapping
+     # Prepare adapter with available voices mapping
     adapter = VibeVoiceAdapter({})
     adapter.available_voices = {
         "en-Alice_woman": "/voices/alice.wav",
@@ -39,7 +39,7 @@ def test_build_voice_samples_with_mapping_1_based_keys(tmp_path):
 
 @pytest.mark.unit
 def test_build_voice_samples_fallbacks_to_reference_then_files(tmp_path):
-    # Create two fake voice files
+     # Create two fake voice files
     voices_dir = tmp_path / "voices"
     voices_dir.mkdir()
     (voices_dir / "a.wav").write_bytes(b"00")
@@ -61,7 +61,7 @@ def test_build_voice_samples_fallbacks_to_reference_then_files(tmp_path):
 
 @pytest.mark.unit
 def test_default_mapping_merged_with_request_overrides():
-    # Adapter with default mapping in config
+     # Adapter with default mapping in config
     adapter = VibeVoiceAdapter({
         "vibevoice_speakers_to_voices": {"1": "en-Alice_woman"}
     })
@@ -89,7 +89,7 @@ def test_default_mapping_merged_with_request_overrides():
 
 @pytest.mark.unit
 def test_request_overrides_default_for_same_speaker():
-    adapter = VibeVoiceAdapter({
+     adapter = VibeVoiceAdapter({
         "vibevoice_speakers_to_voices": {"1": "en-Alice_woman"}
     })
     adapter.available_voices = {

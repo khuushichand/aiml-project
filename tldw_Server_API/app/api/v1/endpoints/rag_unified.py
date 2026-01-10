@@ -867,42 +867,65 @@ async def unified_search_endpoint(
                 enable_metrics=bool(getattr(request, 'agentic_enable_metrics', True)),
             )
 
-            result = await agentic_rag_pipeline(
-                query=request.query,
-                sources=request.sources,
-                media_db=media_db,
-                chacha_db=chacha_db,
-                media_db_path=db_paths.get("media_db_path"),
-                notes_db_path=db_paths.get("notes_db_path"),
-                character_db_path=db_paths.get("character_db_path"),
-                search_mode=request.search_mode,
-                fts_level=request.fts_level,
-                hybrid_alpha=request.hybrid_alpha,
-                top_k=request.top_k,
-                min_score=request.min_score,
-                index_namespace=(request.index_namespace or request.corpus),
-                agentic=agentic_cfg,
-                enable_generation=request.enable_generation,
-                generation_model=request.generation_model,
-                generation_prompt=request.generation_prompt,
-                max_generation_tokens=request.max_generation_tokens,
-                enable_citations=request.enable_citations,
-                include_chunk_citations=request.enable_chunk_citations,
-                debug_mode=request.debug_mode,
-                # expose verification flags on agentic path
-                require_hard_citations=bool(getattr(request, 'require_hard_citations', False)),
-                enable_numeric_fidelity=bool(getattr(request, 'enable_numeric_fidelity', False)),
-                numeric_fidelity_behavior=str(getattr(request, 'numeric_fidelity_behavior', 'continue')),
-                enable_claims=bool(getattr(request, 'enable_claims', False)),
-                claim_verifier=str(getattr(request, 'claim_verifier', 'hybrid')),
-                claims_top_k=int(getattr(request, 'claims_top_k', 5) or 5),
-                claims_conf_threshold=float(getattr(request, 'claims_conf_threshold', 0.7) or 0.7),
-                claims_max=int(getattr(request, 'claims_max', 25) or 25),
-                nli_model=getattr(request, 'nli_model', None),
-                claims_concurrency=int(getattr(request, 'claims_concurrency', 8) or 8),
-                adaptive_unsupported_threshold=float(getattr(request, 'adaptive_unsupported_threshold', 0.15) or 0.15),
-                low_confidence_behavior=str(getattr(request, 'low_confidence_behavior', 'continue')),
-            )
+            try:
+                result = await agentic_rag_pipeline(
+                    query=request.query,
+                    sources=request.sources,
+                    media_db=media_db,
+                    chacha_db=chacha_db,
+                    media_db_path=db_paths.get("media_db_path"),
+                    notes_db_path=db_paths.get("notes_db_path"),
+                    character_db_path=db_paths.get("character_db_path"),
+                    search_mode=request.search_mode,
+                    fts_level=request.fts_level,
+                    hybrid_alpha=request.hybrid_alpha,
+                    top_k=request.top_k,
+                    min_score=request.min_score,
+                    index_namespace=(request.index_namespace or request.corpus),
+                    agentic=agentic_cfg,
+                    enable_generation=request.enable_generation,
+                    generation_model=request.generation_model,
+                    generation_prompt=request.generation_prompt,
+                    max_generation_tokens=request.max_generation_tokens,
+                    enable_citations=request.enable_citations,
+                    include_chunk_citations=request.enable_chunk_citations,
+                    debug_mode=request.debug_mode,
+                    # expose verification flags on agentic path
+                    require_hard_citations=bool(getattr(request, 'require_hard_citations', False)),
+                    enable_numeric_fidelity=bool(getattr(request, 'enable_numeric_fidelity', False)),
+                    numeric_fidelity_behavior=str(getattr(request, 'numeric_fidelity_behavior', 'continue')),
+                    enable_claims=bool(getattr(request, 'enable_claims', False)),
+                    claim_verifier=str(getattr(request, 'claim_verifier', 'hybrid')),
+                    claims_top_k=int(getattr(request, 'claims_top_k', 5) or 5),
+                    claims_conf_threshold=float(getattr(request, 'claims_conf_threshold', 0.7) or 0.7),
+                    claims_max=int(getattr(request, 'claims_max', 25) or 25),
+                    nli_model=getattr(request, 'nli_model', None),
+                    claims_concurrency=int(getattr(request, 'claims_concurrency', 8) or 8),
+                    adaptive_unsupported_threshold=float(getattr(request, 'adaptive_unsupported_threshold', 0.15) or 0.15),
+                    low_confidence_behavior=str(getattr(request, 'low_confidence_behavior', 'continue')),
+                )
+            except Exception as exc:
+                logger.error("Agentic RAG pipeline failed: {}", exc, exc_info=True)
+                fallback_doc = {
+                    "id": f"agentic-error:{uuid4().hex[:8]}",
+                    "content": "Agentic pipeline error fallback content.",
+                    "metadata": {"strategy": "agentic", "error": str(exc)},
+                    "score": 1.0,
+                }
+                result = UnifiedSearchResult(
+                    documents=[fallback_doc],
+                    query=request.query,
+                    expanded_queries=[],
+                    metadata={"strategy": "agentic", "error": str(exc)},
+                    timings={},
+                    citations=[],
+                    feedback_id=None,
+                    generated_answer="Agentic pipeline failed; fallback response returned.",
+                    cache_hit=False,
+                    errors=[str(exc)],
+                    security_report=None,
+                    total_time=0.0,
+                )
         else:
             # Execute unified pipeline with all parameters from request
             result = await unified_rag_pipeline(
@@ -1288,18 +1311,27 @@ async def simple_search_endpoint(
         # Best-effort RAG query logging (counts as a single query).
         await _log_rag_queries_for_org(request, current_user, units=1)
 
+        normalized_docs = []
+        for doc in documents:
+            if isinstance(doc, dict):
+                normalized_docs.append({
+                    "id": doc.get("id"),
+                    "content": doc.get("content"),
+                    "metadata": doc.get("metadata") or {},
+                    "score": doc.get("score", 0.0),
+                })
+            else:
+                normalized_docs.append({
+                    "id": getattr(doc, "id", None),
+                    "content": getattr(doc, "content", None),
+                    "metadata": getattr(doc, "metadata", {}) or {},
+                    "score": getattr(doc, "score", 0.0),
+                })
+
         return {
             "query": query,
-            "documents": [
-                {
-                    "id": doc.id,
-                    "content": doc.content,
-                    "metadata": doc.metadata,
-                    "score": getattr(doc, 'score', 0.0)
-                }
-                for doc in documents
-            ],
-            "count": len(documents)
+            "documents": normalized_docs,
+            "count": len(normalized_docs)
         }
 
     except Exception as e:

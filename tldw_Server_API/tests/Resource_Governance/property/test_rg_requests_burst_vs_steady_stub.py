@@ -12,7 +12,8 @@ class FakeTime:
         self.t = t0
 
     def __call__(self) -> float:
-        return self.t
+
+             return self.t
 
     def advance(self, s: float) -> None:
         self.t += s
@@ -30,7 +31,7 @@ async def test_requests_burst_vs_steady_monotonic_retry_after_under_stub(monkeyp
 
     class _Loader:
         def get_policy(self, pid):
-            return {"requests": {"rpm": int(rpm)}, "scopes": ["global", "user"]}
+                     return {"requests": {"rpm": int(rpm)}, "scopes": ["global", "user"]}
 
     ft = FakeTime(0.0)
     ns = "rg_p_req_stub"

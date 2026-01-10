@@ -29,12 +29,12 @@ class _AcquireCM:
 
 class _FakeDBPool:
     def acquire(self) -> _AcquireCM:
-        return _AcquireCM()
+             return _AcquireCM()
 
 
 class _DummyRequest:
     def __init__(self) -> None:
-        self.state = SimpleNamespace()
+             self.state = SimpleNamespace()
         self.client = SimpleNamespace(host="127.0.0.1")
         self.method = "GET"
         self.url = SimpleNamespace(path="/test")
@@ -180,10 +180,13 @@ async def test_api_key_auth_error_logging_does_not_leak_exception_message_outsid
 
 
 def _profile_helper_should_not_be_called() -> bool:
-    raise AssertionError("Profile helper should not be used for rate-limit bypass")
+
+
+     raise AssertionError("Profile helper should not be used for rate-limit bypass")
 
 def _mode_helper_should_not_be_called() -> bool:
-    raise AssertionError("Mode helper should not be used for rate-limit bypass")
+
+     raise AssertionError("Mode helper should not be used for rate-limit bypass")
 
 
 @pytest.mark.asyncio

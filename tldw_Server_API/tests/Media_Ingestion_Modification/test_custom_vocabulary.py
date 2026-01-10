@@ -9,7 +9,7 @@ import pytest
 
 @pytest.mark.unit
 def test_load_terms_text_and_json(tmp_path, monkeypatch):
-    mod = __import__(
+     mod = __import__(
         'tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Custom_Vocabulary',
         fromlist=['*']
     )
@@ -40,7 +40,7 @@ def test_load_terms_text_and_json(tmp_path, monkeypatch):
 
 @pytest.mark.unit
 def test_load_replacements_json_and_text(tmp_path, monkeypatch):
-    mod = __import__(
+     mod = __import__(
         'tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Custom_Vocabulary',
         fromlist=['*']
     )
@@ -64,7 +64,7 @@ def test_load_replacements_json_and_text(tmp_path, monkeypatch):
 
 @pytest.mark.unit
 def test_build_initial_prompt_and_toggle(tmp_path, monkeypatch):
-    mod = __import__(
+     mod = __import__(
         'tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Custom_Vocabulary',
         fromlist=['*']
     )
@@ -91,7 +91,7 @@ def test_build_initial_prompt_and_toggle(tmp_path, monkeypatch):
 
 @pytest.mark.unit
 def test_apply_replacements_case_and_word_boundaries(monkeypatch):
-    mod = __import__(
+     mod = __import__(
         'tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Custom_Vocabulary',
         fromlist=['*']
     )
@@ -118,7 +118,7 @@ def test_apply_replacements_case_and_word_boundaries(monkeypatch):
 
 @pytest.mark.unit
 def test_whisper_streaming_initial_prompt_injection(monkeypatch):
-    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
+     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
         WhisperStreamingTranscriber, UnifiedStreamingConfig,
     )
 
@@ -151,7 +151,7 @@ def test_whisper_streaming_initial_prompt_injection(monkeypatch):
 
 @pytest.mark.unit
 def test_whisper_streaming_postprocess_applied(monkeypatch):
-    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
+     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
         WhisperStreamingTranscriber, UnifiedStreamingConfig,
     )
 

@@ -9,11 +9,13 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 @pytest.fixture(autouse=True)
 def _setup(jobs_pg_dsn):
-    return
+     return
 
 
 def test_poison_quarantine_on_retries_postgres(monkeypatch, jobs_pg_dsn):
-    monkeypatch.setenv("JOBS_QUARANTINE_THRESHOLD", "2")
+
+
+     monkeypatch.setenv("JOBS_QUARANTINE_THRESHOLD", "2")
     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     j = jm.create_job(domain="test", queue="default", job_type="t", payload={}, owner_user_id="u")
     acq = jm.acquire_next_job(domain="test", queue="default", lease_seconds=5, worker_id="w")

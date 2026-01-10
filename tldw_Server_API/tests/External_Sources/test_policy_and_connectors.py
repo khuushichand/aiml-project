@@ -6,7 +6,7 @@ import pytest
 
 @pytest.mark.unit
 def test_policy_is_file_type_allowed_cases():
-    from tldw_Server_API.app.core.External_Sources.policy import is_file_type_allowed
+     from tldw_Server_API.app.core.External_Sources.policy import is_file_type_allowed
 
     # Empty allowlist allows all
     assert is_file_type_allowed(name="doc.pdf", mime="application/pdf", allowed=None) is True
@@ -24,11 +24,11 @@ def test_policy_is_file_type_allowed_cases():
 
 @pytest.mark.unit
 def test_policy_fail_closed_on_error():
-    from tldw_Server_API.app.core.External_Sources.policy import evaluate_policy_constraints
+     from tldw_Server_API.app.core.External_Sources.policy import evaluate_policy_constraints
 
     class _BadProvider:
         def __str__(self):
-            raise RuntimeError("boom")
+                     raise RuntimeError("boom")
 
     ok, reason = evaluate_policy_constraints({"enabled_providers": [_BadProvider()]}, provider="drive")
     assert ok is False
@@ -43,14 +43,15 @@ async def test_notion_download_renders_nested_blocks(monkeypatch):
     # Fake aiohttp session/response for Notion blocks children
     class _Resp:
         def __init__(self, payload):
-            self._payload = payload
+                     self._payload = payload
             self.status = 200
 
         async def json(self):
             return self._payload
 
         def raise_for_status(self):
-            return None
+
+                     return None
 
         async def __aenter__(self):
             return self
@@ -60,7 +61,7 @@ async def test_notion_download_renders_nested_blocks(monkeypatch):
 
     class _Session:
         def __init__(self, *a, **kw):
-            pass
+                     pass
 
         async def __aenter__(self):
             return self
@@ -69,7 +70,8 @@ async def test_notion_download_renders_nested_blocks(monkeypatch):
             return False
 
         def get(self, url, headers=None, params=None, timeout=None):
-            # Return a single page of blocks containing nested items
+
+                     # Return a single page of blocks containing nested items
             # Construct a minimal realistic Notion blocks payload
             page_blocks = {
                 "results": [
@@ -127,21 +129,23 @@ async def test_worker_drive_recursive_traversal(monkeypatch):
 
     class FakeJM:
         def __init__(self):
-            self.completed = None
+                     self.completed = None
             self.renewed = []
 
         def renew_job_lease(self, *a, **kw):
-            self.renewed.append((a, kw))
+
+                     self.renewed.append((a, kw))
 
         def complete_job(self, jid, result=None, worker_id=None, lease_id=None, completion_token=None):
-            self.completed = {"jid": jid, "result": result}
+
+                     self.completed = {"jid": jid, "result": result}
 
     # Fake connector that returns a folder structure:
     # root -> [folder F, doc A]; F -> [doc B]
     class FakeDriveConn:
         name = "drive"
         def authorize_url(self, *a, **kw):
-            return ""
+                     return ""
         async def exchange_code(self, *a, **kw):
             return {}
         async def list_files(self, account, parent_remote_id, *, page_size=50, cursor=None):
@@ -185,7 +189,7 @@ async def test_worker_drive_recursive_traversal(monkeypatch):
             return False
     class _DummyPool:
         def transaction(self):
-            return _DummyTx()
+                     return _DummyTx()
     async def _fake_get_db_pool():
         return _DummyPool()
     import tldw_Server_API.app.core.AuthNZ.database as dbmod
@@ -200,9 +204,9 @@ async def test_worker_drive_recursive_traversal(monkeypatch):
     # Patch Media DB write
     class _FakeMDB:
         def __init__(self, *a, **kw):
-            self.records = []
+                     self.records = []
         def add_media_with_keywords(self, *, url, title, media_type, content, keywords, overwrite=False):
-            self.records.append((url, title, content))
+                     self.records.append((url, title, content))
             return 1, "uuid", "ok"
     import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as mdb_mod
     monkeypatch.setattr(mdb_mod, "MediaDatabase", _FakeMDB)
@@ -228,18 +232,20 @@ async def test_worker_drive_non_recursive_paginates(monkeypatch):
 
     class FakeJM:
         def __init__(self):
-            self.completed = None
+                     self.completed = None
 
         def renew_job_lease(self, *a, **kw):
-            pass
+
+                     pass
 
         def complete_job(self, jid, result=None, worker_id=None, lease_id=None, completion_token=None):
-            self.completed = {"jid": jid, "result": result}
+
+                     self.completed = {"jid": jid, "result": result}
 
     class FakeDriveConn:
         name = "drive"
         def authorize_url(self, *a, **kw):
-            return ""
+                     return ""
         async def exchange_code(self, *a, **kw):
             return {}
         async def list_files(self, account, parent_remote_id, *, page_size=50, cursor=None):
@@ -279,7 +285,7 @@ async def test_worker_drive_non_recursive_paginates(monkeypatch):
             return False
     class _DummyPool:
         def transaction(self):
-            return _DummyTx()
+                     return _DummyTx()
     async def _fake_get_db_pool():
         return _DummyPool()
     import tldw_Server_API.app.core.AuthNZ.database as dbmod
@@ -292,9 +298,9 @@ async def test_worker_drive_non_recursive_paginates(monkeypatch):
 
     class _FakeMDB:
         def __init__(self, *a, **kw):
-            self.records = []
+                     self.records = []
         def add_media_with_keywords(self, *, url, title, media_type, content, keywords, overwrite=False):
-            self.records.append((url, title, content))
+                     self.records.append((url, title, content))
             return 1, "uuid", "ok"
     import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as mdb_mod
     monkeypatch.setattr(mdb_mod, "MediaDatabase", _FakeMDB)
@@ -315,18 +321,20 @@ async def test_worker_skips_record_on_ingest_failure(monkeypatch):
 
     class FakeJM:
         def __init__(self):
-            self.completed = None
+                     self.completed = None
 
         def renew_job_lease(self, *a, **kw):
-            pass
+
+                     pass
 
         def complete_job(self, jid, result=None, worker_id=None, lease_id=None, completion_token=None):
-            self.completed = {"jid": jid, "result": result}
+
+                     self.completed = {"jid": jid, "result": result}
 
     class FakeDriveConn:
         name = "drive"
         def authorize_url(self, *a, **kw):
-            return ""
+                     return ""
         async def exchange_code(self, *a, **kw):
             return {}
         async def list_files(self, account, parent_remote_id, *, page_size=50, cursor=None):
@@ -363,7 +371,7 @@ async def test_worker_skips_record_on_ingest_failure(monkeypatch):
             return False
     class _DummyPool:
         def transaction(self):
-            return _DummyTx()
+                     return _DummyTx()
     async def _fake_get_db_pool():
         return _DummyPool()
     import tldw_Server_API.app.core.AuthNZ.database as dbmod
@@ -376,9 +384,9 @@ async def test_worker_skips_record_on_ingest_failure(monkeypatch):
 
     class _FailMDB:
         def __init__(self, *a, **kw):
-            pass
+                     pass
         def add_media_with_keywords(self, *, url, title, media_type, content, keywords, overwrite=False):
-            raise RuntimeError("ingest failed")
+                     raise RuntimeError("ingest failed")
     import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as mdb_mod
     monkeypatch.setattr(mdb_mod, "MediaDatabase", _FailMDB)
 

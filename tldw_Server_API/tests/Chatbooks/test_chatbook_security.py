@@ -16,7 +16,8 @@ class TestPathTraversalSecurity:
     """Test suite for path traversal vulnerability prevention."""
 
     def test_validate_filename_with_path_traversal(self):
-        """Test that filenames with path traversal attempts are sanitized."""
+
+             """Test that filenames with path traversal attempts are sanitized."""
         test_cases = [
             "../../../etc/passwd.zip",
             "..\\..\\windows\\system32\\config.zip",
@@ -48,7 +49,8 @@ class TestPathTraversalSecurity:
             assert "Invalid file type" in error or "Allowed" in error
 
     def test_validate_filename_sanitization(self):
-        """Test that dangerous characters are sanitized from filenames."""
+
+             """Test that dangerous characters are sanitized from filenames."""
         test_cases = [
             ("my chatbook.zip", "my_chatbook.zip"),
             ("chatbook@2024.zip", "chatbook_2024.zip"),
@@ -65,7 +67,8 @@ class TestPathTraversalSecurity:
             assert safe_name == expected_output
 
     def test_validate_filename_double_extension(self):
-        """Test that double extensions are handled properly.
+
+             """Test that double extensions are handled properly.
 
         Files must END with a valid extension (.zip or .chatbook).
         Files that contain .zip but end with another extension should be REJECTED.
@@ -97,7 +100,8 @@ class TestPathTraversalSecurity:
             assert "Invalid file type" in error
 
     def test_validate_zip_with_path_traversal(self):
-        """Test ZIP validation catches path traversal in archive."""
+
+             """Test ZIP validation catches path traversal in archive."""
         # Create a malicious ZIP in memory
         zip_buffer = io.BytesIO()
 
@@ -122,7 +126,8 @@ class TestPathTraversalSecurity:
             os.unlink(tmp_path)
 
     def test_validate_zip_with_symlink(self):
-        """Test ZIP validation rejects symbolic links."""
+
+             """Test ZIP validation rejects symbolic links."""
         # Create a ZIP with a symlink (mocked external_attr)
         zip_buffer = io.BytesIO()
 
@@ -152,7 +157,8 @@ class TestPathTraversalSecurity:
             os.unlink(tmp_path)
 
     def test_validate_zip_bomb_detection(self):
-        """Test ZIP bomb detection based on compression ratio."""
+
+             """Test ZIP bomb detection based on compression ratio."""
         # Create a ZIP with suspicious compression ratio
         zip_buffer = io.BytesIO()
 
@@ -184,7 +190,8 @@ class TestPathTraversalSecurity:
             os.unlink(tmp_path)
 
     def test_validate_zip_with_null_bytes(self):
-        """Test ZIP validation rejects filenames with null bytes."""
+
+             """Test ZIP validation rejects filenames with null bytes."""
         zip_buffer = io.BytesIO()
 
         with zipfile.ZipFile(zip_buffer, 'w') as zf:
@@ -206,7 +213,8 @@ class TestPathTraversalSecurity:
             os.unlink(tmp_path)
 
     def test_validate_zip_with_dangerous_file_types(self):
-        """Test ZIP validation rejects dangerous file types."""
+
+             """Test ZIP validation rejects dangerous file types."""
         dangerous_files = [
             'malware.exe',
             'script.sh',
@@ -239,7 +247,8 @@ class TestPathTraversalSecurity:
                 os.unlink(tmp_path)
 
     def test_path_traversal_detection(self):
-        """Test the internal path traversal detection method."""
+
+             """Test the internal path traversal detection method."""
         dangerous_paths = [
             "../../../etc/passwd",
             "..\\..\\windows\\system32",
@@ -255,7 +264,8 @@ class TestPathTraversalSecurity:
             assert ChatbookValidator._is_path_traversal(path) is True
 
     def test_safe_paths(self):
-        """Test that legitimate paths are not flagged as traversal."""
+
+             """Test that legitimate paths are not flagged as traversal."""
         safe_paths = [
             "content/file.json",
             "data/conversations/chat1.json",
@@ -268,7 +278,8 @@ class TestPathTraversalSecurity:
             assert ChatbookValidator._is_path_traversal(path) is False
 
     def test_sanitize_path(self):
-        """Test path sanitization function."""
+
+             """Test path sanitization function."""
         test_cases = [
             ("../../../etc/passwd", "passwd"),
             ("..\\..\\windows\\system32\\config", "config"),
@@ -292,7 +303,8 @@ class TestErrorMessageSecurity:
     """Test that error messages don't expose sensitive information."""
 
     def test_error_messages_dont_expose_paths(self):
-        """Ensure error messages don't reveal internal paths."""
+
+             """Ensure error messages don't reveal internal paths."""
         # Create various invalid ZIPs
         test_cases = [
             ("../../../etc/passwd", "unsafe"),

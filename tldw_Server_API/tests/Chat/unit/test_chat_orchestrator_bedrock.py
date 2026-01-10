@@ -6,12 +6,15 @@ pytestmark = pytest.mark.unit
 
 
 def test_orchestrator_maps_bedrock_extras(monkeypatch):
-    from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
+
+
+     from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
 
     captured = {}
 
     def fake_dispatch(**kwargs):
-        # Capture kwargs for assertions
+
+             # Capture kwargs for assertions
         captured.update(kwargs)
         return {"ok": True}
 

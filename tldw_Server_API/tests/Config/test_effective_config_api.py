@@ -6,17 +6,23 @@ from tldw_Server_API.app.core.TTS.tts_config import reload_tts_config
 
 
 def _reset_tts_manager() -> None:
-    tts_config_module._config_manager = None
+
+
+     tts_config_module._config_manager = None
 
 
 def test_effective_config_requires_auth():
-    with TestClient(app) as client:
+
+
+     with TestClient(app) as client:
         resp = client.get("/api/v1/admin/config/effective")
         assert resp.status_code in (401, 403)
 
 
 def test_effective_config_redacts_tts_api_key(monkeypatch, auth_headers):
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-secret")
+
+
+     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-secret")
     _reset_tts_manager()
     reload_tts_config()
 
@@ -34,7 +40,9 @@ def test_effective_config_redacts_tts_api_key(monkeypatch, auth_headers):
 
 
 def test_effective_config_sections_filter(monkeypatch, auth_headers):
-    monkeypatch.setenv("TTS_DEFAULT_PROVIDER", "openai")
+
+
+     monkeypatch.setenv("TTS_DEFAULT_PROVIDER", "openai")
     _reset_tts_manager()
     reload_tts_config()
 

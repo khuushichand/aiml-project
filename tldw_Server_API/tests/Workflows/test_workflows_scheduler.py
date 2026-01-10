@@ -17,7 +17,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture()
 def client_admin(monkeypatch, auth_headers):
-    async def override_user():
+     async def override_user():
         # Admin user for owner overrides
         u = User(id=1, username="admin", email=None, is_active=True)
         setattr(u, "is_admin", True)
@@ -42,7 +42,9 @@ def client_admin(monkeypatch, auth_headers):
 
 
 def test_cron_validation_422(client_admin):
-    client, _ = client_admin
+
+
+     client, _ = client_admin
     bad = {
         "cron": "not a cron",
         "timezone": "UTC",
@@ -53,7 +55,9 @@ def test_cron_validation_422(client_admin):
 
 
 def test_dry_run_returns_next_run(client_admin):
-    client, _ = client_admin
+
+
+     client, _ = client_admin
     body = {
         "cron": "*/15 * * * *",
         "timezone": "UTC",
@@ -67,7 +71,9 @@ def test_dry_run_returns_next_run(client_admin):
 
 
 def test_concurrency_mode_mapping_and_job_defaults(client_admin):
-    client, svc = client_admin
+
+
+     client, svc = client_admin
     # queue mode should set max_instances > 1 and coalesce False
     body = {
         "workflow_id": None,
@@ -93,7 +99,9 @@ def test_concurrency_mode_mapping_and_job_defaults(client_admin):
 
 
 def test_update_invalid_cron_returns_422(client_admin):
-    client, _ = client_admin
+
+
+     client, _ = client_admin
     # Create a valid schedule
     body = {
         "name": "u1",
@@ -111,7 +119,9 @@ def test_update_invalid_cron_returns_422(client_admin):
 
 
 def test_next_run_persisted_after_create(client_admin):
-    client, _ = client_admin
+
+
+     client, _ = client_admin
     body = {
         "name": "p1",
         "cron": "*/7 * * * *",

@@ -36,27 +36,32 @@ def _make_principal(
 
 class _FakeStore:
     def list_idempotency(self, **_kwargs):
-        return []
+             return []
 
     def count_idempotency(self, **_kwargs) -> int:
-        return 0
+
+             return 0
 
     def list_usage(self, **_kwargs):
-        return []
+
+             return []
 
     def count_usage(self, **_kwargs) -> int:
-        return 0
+
+             return 0
 
 
 class _FakeOrch:
     def __init__(self) -> None:
-        self._store = _FakeStore()
+             self._store = _FakeStore()
 
     def list_runs(self, **_kwargs):
-        return []
+
+             return []
 
     def count_runs(self, **_kwargs) -> int:
-        return 0
+
+             return 0
 
     def get_run_owner(self, run_id: str) -> str | None:
         return "user-1"
@@ -64,7 +69,7 @@ class _FakeOrch:
 
 class _FakeService:
     def __init__(self) -> None:
-        self._orch = _FakeOrch()
+             self._orch = _FakeOrch()
 
     def get_run(self, run_id: str):
         return SimpleNamespace(

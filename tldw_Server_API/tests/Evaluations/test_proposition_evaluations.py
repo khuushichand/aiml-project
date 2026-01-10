@@ -22,18 +22,18 @@ app.include_router(eval_router, prefix="/api/v1")
 
 @pytest.fixture(scope="function")
 def client():
-    with TestClient(app) as c:
+     with TestClient(app) as c:
         yield c
 
 
 @pytest.fixture
 def auth_headers():
-    return test_config.get_auth_headers()
+     return test_config.get_auth_headers()
 
 
 class TestPropositionEvaluationEndpoint:
     def test_proposition_evaluation_basic(self, client, auth_headers):
-        payload = {
+             payload = {
             "extracted": [
                 "Alice founded Acme Corp in 2020",
                 "Bob joined Acme in 2021",
@@ -53,7 +53,8 @@ class TestPropositionEvaluationEndpoint:
         assert data["total_reference"] == 2
 
     def test_proposition_evaluation_headers_present(self, client, auth_headers):
-        payload = {
+
+             payload = {
             "extracted": [
                 "Alice founded Acme Corp in 2020",
                 "Bob joined Acme in 2021",
@@ -82,7 +83,7 @@ class TestPropositionEvaluationEndpoint:
 
 class TestPropositionRunFlow:
     def test_create_and_run_proposition_evaluation(self, client, auth_headers):
-        # Create evaluation with inline dataset
+             # Create evaluation with inline dataset
         create_eval_req = {
             "name": "prop_eval_test",
             "description": "Proposition extraction evaluation",

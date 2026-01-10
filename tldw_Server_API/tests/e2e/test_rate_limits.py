@@ -33,7 +33,8 @@ def test_rate_limit_chat(api_client):
     }
 
     def _call():
-        return api_client.client.post("/api/v1/chat/completions", json=body)
+
+            return api_client.client.post("/api/v1/chat/completions", json=body)
 
     got = _burst_until_429(_call)
     if not got:
@@ -45,7 +46,8 @@ def test_rate_limit_audio_speech(api_client):
     payload = {"model": "tts-1", "input": "ping", "voice": "alloy", "response_format": "mp3"}
 
     def _call():
-        return api_client.client.post("/api/v1/audio/speech", json=payload)
+
+            return api_client.client.post("/api/v1/audio/speech", json=payload)
 
     got = _burst_until_429(_call)
     if not got:
@@ -63,7 +65,8 @@ def test_rate_limit_evaluations(api_client):
     }
 
     def _call():
-        return api_client.client.post("/api/v1/prompt-studio/evaluations", json=payload)
+
+            return api_client.client.post("/api/v1/prompt-studio/evaluations", json=payload)
 
     got = _burst_until_429(_call)
     if not got:

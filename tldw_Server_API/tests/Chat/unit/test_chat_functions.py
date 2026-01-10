@@ -47,7 +47,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGD
 
 @pytest.fixture(autouse=True)  # Applied to all tests in this module
 def mock_global_load_and_log_configs():
-    """Mocks load_and_log_configs where it's used by Chat_Functions.py."""
+     """Mocks load_and_log_configs where it's used by Chat_Functions.py."""
     with patch("tldw_Server_API.app.core.Chat.Chat_Functions.load_and_log_configs", return_value={
         "chat_dictionaries": {},
         # You might need to add more default keys here if Chat_Functions or its callees expect them
@@ -62,7 +62,7 @@ def mock_global_load_and_log_configs():
 
 @pytest.fixture
 def mock_chat_dispatch():
-    mock_dispatch = MagicMock()
+     mock_dispatch = MagicMock()
     with patch(
         "tldw_Server_API.app.core.Chat.chat_orchestrator.perform_chat_api_call",
         new=mock_dispatch,
@@ -72,7 +72,7 @@ def mock_chat_dispatch():
 
 @pytest.mark.unit
 def test_chat_history_helpers_reexport():
-    import tldw_Server_API.app.core.Chat.Chat_Functions as cf
+     import tldw_Server_API.app.core.Chat.Chat_Functions as cf
     import tldw_Server_API.app.core.Chat.chat_history as ch
 
     assert cf.save_chat_history_to_db_wrapper is ch.save_chat_history_to_db_wrapper
@@ -85,7 +85,7 @@ def test_chat_history_helpers_reexport():
 
 @pytest.mark.unit
 def test_chat_character_helpers_reexport():
-    import tldw_Server_API.app.core.Chat.Chat_Functions as cf
+     import tldw_Server_API.app.core.Chat.Chat_Functions as cf
     import tldw_Server_API.app.core.Chat.chat_characters as cc
 
     assert cf.save_character is cc.save_character
@@ -96,7 +96,7 @@ def test_chat_character_helpers_reexport():
 # --- Tests for chat_api_call ---
 @pytest.mark.unit
 def test_chat_api_call_routing_and_param_mapping_openai_unit(mock_chat_dispatch):
-    provider = "openai"
+     provider = "openai"
     mock_chat_dispatch.return_value = "OpenAI success"
 
     args = {
@@ -124,7 +124,7 @@ def test_chat_api_call_routing_and_param_mapping_openai_unit(mock_chat_dispatch)
 
 @pytest.mark.unit
 def test_chat_api_call_llamacpp_multiple_completions(mock_chat_dispatch):
-    provider = "llama.cpp"
+     provider = "llama.cpp"
     mock_chat_dispatch.return_value = "llama success"
 
     args = {
@@ -146,7 +146,7 @@ def test_chat_api_call_llamacpp_multiple_completions(mock_chat_dispatch):
 
 @pytest.mark.unit
 def test_chat_api_call_routing_and_param_mapping_anthropic_unit(mock_chat_dispatch):
-    provider = "anthropic"
+     provider = "anthropic"
     mock_chat_dispatch.return_value = "Anthropic success"
 
     args = {
@@ -177,7 +177,7 @@ def test_chat_api_call_routing_and_param_mapping_anthropic_unit(mock_chat_dispat
 
 @pytest.mark.unit
 def test_chat_api_call_unsupported_provider_unit():
-    with pytest.raises(ChatConfigurationError):
+     with pytest.raises(ChatConfigurationError):
         chat_api_call(api_endpoint="non_existent_provider", messages_payload=[])
 
 
@@ -202,7 +202,7 @@ def test_chat_api_call_exception_propagation_and_mapping_unit(
         mock_chat_dispatch,
         raised_exception, expected_custom_error_type, expected_status_code_in_error
 ):
-    provider = "openai"  # Use any mocked provider
+     provider = "openai"  # Use any mocked provider
     mock_chat_dispatch.side_effect = raised_exception
 
     with pytest.raises(expected_custom_error_type) as exc_info:
@@ -248,7 +248,7 @@ def test_chat_api_call_exception_propagation_and_mapping_unit(
 def test_chat_function_basic_text_call_unit(
         mock_load_configs_chat, mock_process_input, mock_chat_api_call_shim
 ):
-    mock_load_configs_chat.return_value = {"chat_dictionaries": {}}  # Config for chat dictionary part
+     mock_load_configs_chat.return_value = {"chat_dictionaries": {}}  # Config for chat dictionary part
     mock_process_input.side_effect = lambda text, *args, **kwargs: text  # Passthrough
     mock_chat_api_call_shim.return_value = "LLM Response from chat function"
 
@@ -283,7 +283,7 @@ def test_chat_function_basic_text_call_unit(
 @patch("tldw_Server_API.app.core.Chat.chat_orchestrator.process_user_input", side_effect=lambda x, *a, **kw: x)
 @patch("tldw_Server_API.app.core.Chat.Chat_Functions.load_and_log_configs", return_value={"chat_dictionaries": {}})
 def test_chat_function_with_text_history_unit(mock_configs, mock_proc_input, mock_chat_shim):
-    mock_chat_shim.return_value = "LLM Response with history"
+     mock_chat_shim.return_value = "LLM Response with history"
     history_for_chat_func = [
         {"role": "user", "content": "Previous question?"},
         {"role": "assistant", "content": "Previous answer."}
@@ -312,7 +312,7 @@ def test_chat_function_with_text_history_unit(mock_configs, mock_proc_input, moc
 @patch("tldw_Server_API.app.core.Chat.chat_orchestrator.process_user_input", side_effect=lambda x, *a, **kw: x)
 @patch("tldw_Server_API.app.core.Chat.Chat_Functions.load_and_log_configs", return_value={"chat_dictionaries": {}})
 def test_chat_function_with_current_image_unit(mock_configs, mock_proc_input, mock_chat_shim):
-    mock_chat_shim.return_value = "LLM image Response"
+     mock_chat_shim.return_value = "LLM image Response"
     current_image = {"base64_data": "fakeb64imagedata", "mime_type": "image/png"}
 
     response = chat(
@@ -336,7 +336,7 @@ def test_chat_function_with_current_image_unit(mock_configs, mock_proc_input, mo
 @patch("tldw_Server_API.app.core.Chat.chat_orchestrator.process_user_input", side_effect=lambda x, *a, **kw: x)
 @patch("tldw_Server_API.app.core.Chat.Chat_Functions.load_and_log_configs", return_value={"chat_dictionaries": {}})
 def test_chat_function_image_history_tag_past_unit(mock_configs, mock_proc_input, mock_chat_shim):
-    mock_chat_shim.return_value = "Tagged image history response"
+     mock_chat_shim.return_value = "Tagged image history response"
     # History with multimodal content (list of parts)
     history_with_image = [
         {"role": "user", "content": [
@@ -373,12 +373,12 @@ def test_chat_function_image_history_tag_past_unit(mock_configs, mock_proc_input
 @patch("tldw_Server_API.app.core.Chat.chat_orchestrator.process_user_input")
 @patch("tldw_Server_API.app.core.Chat.Chat_Functions.load_and_log_configs")
 def test_chat_function_streaming_passthrough(mock_load_configs, mock_process_input, mock_chat_api_call_shim):
-    mock_load_configs.return_value = {"chat_dictionaries": {}}
+     mock_load_configs.return_value = {"chat_dictionaries": {}}
     mock_process_input.side_effect = lambda text, *args, **kwargs: text
 
     # Simulate chat_api_call returning a generator for streaming
     def dummy_stream_gen():
-        yield "stream chunk 1"
+             yield "stream chunk 1"
         yield "stream chunk 2"
 
     mock_chat_api_call_shim.return_value = dummy_stream_gen()
@@ -400,7 +400,7 @@ def test_chat_function_streaming_passthrough(mock_load_configs, mock_process_inp
 @pytest.mark.unit
 @patch("tldw_Server_API.app.core.Chat.chat_history.DEFAULT_CHARACTER_NAME", "TestDefaultChar")
 def test_save_chat_history_new_conversation_default_char():
-    mock_db = MagicMock(spec=CharactersRAGDB)
+     mock_db = MagicMock(spec=CharactersRAGDB)
     mock_db.client_id = "unit_test_client"
     mock_db.get_character_card_by_name.return_value = {"id": 99, "name": "TestDefaultChar"}  # For default char lookup
     mock_db.add_conversation.return_value = "new_conv_id_123"  # Simulate new conversation ID
@@ -450,7 +450,7 @@ def test_save_chat_history_new_conversation_default_char():
 @pytest.mark.unit
 @patch("tldw_Server_API.app.core.Chat.chat_history.DEFAULT_CHARACTER_NAME", "TestDefaultChar")
 def test_save_chat_history_persists_system_message():
-    mock_db = MagicMock(spec=CharactersRAGDB)
+     mock_db = MagicMock(spec=CharactersRAGDB)
     mock_db.client_id = "unit_test_client_sys"
     mock_db.get_character_card_by_name.return_value = {"id": 99, "name": "TestDefaultChar"}
     mock_db.add_conversation.return_value = "new_conv_id_sys"
@@ -480,7 +480,7 @@ def test_save_chat_history_persists_system_message():
 
 @pytest.mark.unit
 def test_save_chat_history_resave_conversation_specific_char():
-    mock_db = MagicMock(spec=CharactersRAGDB)
+     mock_db = MagicMock(spec=CharactersRAGDB)
     mock_db.client_id = "unit_test_client_resave"
     existing_conv_id = "existing_conv_456"
     char_id_for_resave = 77
@@ -525,7 +525,7 @@ def test_save_chat_history_resave_conversation_specific_char():
 
 @pytest.mark.unit
 def test_chat_api_call_provider_specific_params_unit(mock_chat_dispatch):
-    provider_name = "openrouter"  # Example of a provider with minp, topk, topp
+     provider_name = "openrouter"  # Example of a provider with minp, topk, topp
     mock_chat_dispatch.return_value = "OpenRouter success"
 
     args = {
@@ -549,7 +549,7 @@ def test_chat_api_call_provider_specific_params_unit(mock_chat_dispatch):
 
 @pytest.mark.unit
 def test_chat_api_call_tools_and_tool_choice_unit(mock_chat_dispatch):
-    provider = "openai"  # Assuming OpenAI handler is adapted for tools
+     provider = "openai"  # Assuming OpenAI handler is adapted for tools
     mock_chat_dispatch.return_value = {"id": "tool_response"}
 
     tools_payload = [{"type": "function", "function": {"name": "get_weather"}}]
@@ -575,7 +575,7 @@ def test_chat_api_call_tools_and_tool_choice_unit(mock_chat_dispatch):
 @patch("tldw_Server_API.app.core.Chat.chat_orchestrator.process_user_input", side_effect=lambda x, *a, **kw: x)
 # mock_global_load_and_log_configs is already active via autouse=True
 def test_chat_function_image_history_send_all_unit(mock_process_input, mock_chat_api_call_shim):
-    mock_chat_api_call_shim.return_value = "Response"
+     mock_chat_api_call_shim.return_value = "Response"
     history = [
         {"role": "user", "content": [
             {"type": "text", "text": "First image"},
@@ -604,7 +604,7 @@ def test_chat_function_image_history_send_all_unit(mock_process_input, mock_chat
 @patch("tldw_Server_API.app.core.Chat.Chat_Functions.chat_api_call")
 @patch("tldw_Server_API.app.core.Chat.chat_orchestrator.process_user_input", side_effect=lambda x, *a, **kw: x)
 def test_chat_function_image_history_send_last_user_image_unit(mock_process_input, mock_chat_api_call_shim):
-    mock_chat_api_call_shim.return_value = "Response"
+     mock_chat_api_call_shim.return_value = "Response"
     history = [
         {"role": "user", "content": [  # This image should be ignored
             {"type": "text", "text": "Old image"},
@@ -643,7 +643,7 @@ def test_chat_function_image_history_send_last_user_image_unit(mock_process_inpu
 @patch("tldw_Server_API.app.core.Chat.Chat_Functions.chat_api_call")
 @patch("tldw_Server_API.app.core.Chat.chat_orchestrator.process_user_input", side_effect=lambda x, *a, **kw: x)
 def test_chat_function_with_rag_content_unit(mock_process_input, mock_chat_api_call_shim):
-    mock_chat_api_call_shim.return_value = "RAG Response"
+     mock_chat_api_call_shim.return_value = "RAG Response"
     media_content = {"summary": "This is a summary.", "content": "Full content here."}
     selected_parts = ["summary", "content"]
 
@@ -662,7 +662,7 @@ def test_chat_function_with_rag_content_unit(mock_process_input, mock_chat_api_c
 
 @pytest.mark.unit
 def test_parse_user_dict_markdown_file_various_formats(tmp_path):
-    md_content = textwrap.dedent("""\
+     md_content = textwrap.dedent("""\
         key1: value1
         key2: |
           This is a
@@ -691,7 +691,7 @@ def test_parse_user_dict_markdown_file_various_formats(tmp_path):
 
 @pytest.mark.unit
 def test_chat_dictionary_class_methods():
-    entry_plain = ChatDictionary(key="hello", content="hi there")
+     entry_plain = ChatDictionary(key="hello", content="hi there")
     entry_regex = ChatDictionary(key=r"/\bworld\b/", content="planet")  # Python re.IGNORECASE handles case
 
     assert entry_plain.matches("hello world")
@@ -710,7 +710,7 @@ def test_chat_dictionary_class_methods():
 def test_chat_function_with_chat_dictionary_post_replacement(
         mock_parse_dict, mock_load_configs_chat_func, tmp_path
 ):
-    # Mock config for post-gen replacement
+     # Mock config for post-gen replacement
     mock_config_data = {
         "chat_dictionaries": {
             "post_gen_replacement": "True",  # String "True"
@@ -757,7 +757,7 @@ def test_chat_function_with_chat_dictionary_post_replacement(
 # --- New Tests for save_character and load_characters ---
 @pytest.mark.unit
 def test_save_character_new_and_update_unit():
-    mock_db = MagicMock(spec=CharactersRAGDB)
+     mock_db = MagicMock(spec=CharactersRAGDB)
     mock_db.client_id = "char_test_client"
 
     char_data_v1 = {
@@ -819,7 +819,7 @@ def test_save_character_new_and_update_unit():
 
 @pytest.mark.unit
 def test_load_characters_empty_and_with_data_unit():
-    mock_db = MagicMock(spec=CharactersRAGDB)
+     mock_db = MagicMock(spec=CharactersRAGDB)
 
     # Scenario 1: No characters
     mock_db.list_character_cards.return_value = []
@@ -852,7 +852,7 @@ def test_load_characters_empty_and_with_data_unit():
 
 @pytest.mark.unit
 def test_chat_api_call_routing_and_param_mapping_bedrock_unit(mock_chat_dispatch):
-    provider = "bedrock"
+     provider = "bedrock"
     mock_chat_dispatch.return_value = "Bedrock success"
 
     args = {

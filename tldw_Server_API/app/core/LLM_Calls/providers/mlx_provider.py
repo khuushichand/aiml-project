@@ -417,10 +417,10 @@ class MLXChatAdapter(ChatProvider):
     name = "mlx"
 
     def __init__(self) -> None:
-        self.registry = get_mlx_registry()
+        self.registry = None
 
     def capabilities(self) -> Dict[str, Any]:
-        status = self.registry.status()
+        status = get_mlx_registry().status()
         return {
             "supports_streaming": True,
             "supports_tools": False,
@@ -447,7 +447,7 @@ class MLXChatAdapter(ChatProvider):
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
         request = validate_payload(self.name, request or {})
-        with self.registry.session_scope() as session:
+        with get_mlx_registry().session_scope() as session:
             prompt = _messages_to_prompt(
                 request.get("messages"),
                 session.tokenizer,
@@ -499,7 +499,7 @@ class MLXChatAdapter(ChatProvider):
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
         request = validate_payload(self.name, request or {})
-        with self.registry.session_scope() as session:
+        with get_mlx_registry().session_scope() as session:
             prompt = _messages_to_prompt(
                 request.get("messages"),
                 session.tokenizer,

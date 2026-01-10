@@ -8,20 +8,22 @@ from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create imp
 
 class _DummyResponse:
     def __init__(self, payload, status_code=200):
-        self.status_code = status_code
+             self.status_code = status_code
         self._payload = payload
 
     def raise_for_status(self):
-        if self.status_code >= 400:
+
+             if self.status_code >= 400:
             raise RuntimeError("HTTP error")
 
     def json(self):
-        return self._payload
+
+             return self._payload
 
 
 @pytest.mark.unit
 def test_local_api_embeddings_use_status_code_property(monkeypatch):
-    def fake_fetch(**kwargs):
+     def fake_fetch(**kwargs):
         return _DummyResponse({"embeddings": [[0.1, 0.2, 0.3]]})
 
     monkeypatch.setattr(

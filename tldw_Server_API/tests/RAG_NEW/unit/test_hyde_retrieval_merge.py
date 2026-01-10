@@ -7,7 +7,7 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import VectorSe
 
 class _FakeVectorStore:
     def __init__(self, base_results, hyde_results):
-        self._base = base_results
+             self._base = base_results
         self._hyde = hyde_results
         self._initialized = True
         self.calls = []  # record filters used
@@ -30,7 +30,9 @@ class _FakeVectorStore:
 
 
 def _vr(id, score, media_id, kind, parent_chunk_id=None):
-    md = {"media_id": media_id, "kind": kind}
+
+
+     md = {"media_id": media_id, "kind": kind}
     if parent_chunk_id:
         md["parent_chunk_id"] = parent_chunk_id
     return VectorSearchResult(
@@ -44,7 +46,7 @@ def _vr(id, score, media_id, kind, parent_chunk_id=None):
 
 @pytest.mark.unit
 def test_hyde_merge_media_vs_chunk_level(monkeypatch, tmp_path):
-    # Patch settings flags
+     # Patch settings flags
     import tldw_Server_API.app.core.RAG.rag_service.database_retrievers as retr_mod
     import tldw_Server_API.app.core.config as cfg_mod
 
@@ -88,7 +90,7 @@ def test_hyde_merge_media_vs_chunk_level(monkeypatch, tmp_path):
 
 @pytest.mark.unit
 def test_hyde_early_exit_only_if_needed(monkeypatch, tmp_path):
-    import tldw_Server_API.app.core.config as cfg_mod
+     import tldw_Server_API.app.core.config as cfg_mod
 
     # Configure early-exit ON and high baseline score
     cfg_mod.settings["HYDE_ENABLED"] = True
@@ -116,7 +118,7 @@ def test_hyde_early_exit_only_if_needed(monkeypatch, tmp_path):
 
 @pytest.mark.unit
 def test_hyde_weight_adjusts_order(monkeypatch, tmp_path):
-    import tldw_Server_API.app.core.config as cfg_mod
+     import tldw_Server_API.app.core.config as cfg_mod
 
     cfg_mod.settings["HYDE_ENABLED"] = True
     cfg_mod.settings["HYDE_ONLY_IF_NEEDED"] = False

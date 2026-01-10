@@ -8,21 +8,27 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 
 def _has_sentence_transformers() -> bool:
-    return importlib.util.find_spec("sentence_transformers") is not None
+
+
+     return importlib.util.find_spec("sentence_transformers") is not None
 
 
 def _xformer_model() -> str:
-    return os.getenv("TEST_XFORMERS_RERANKER_MODEL") or os.getenv("RAG_TRANSFORMERS_RERANKER_MODEL") or ""
+
+
+     return os.getenv("TEST_XFORMERS_RERANKER_MODEL") or os.getenv("RAG_TRANSFORMERS_RERANKER_MODEL") or ""
 
 
 def _model_available() -> bool:
-    # HF id can be remote; tests rely on local cache or network if allowed; skip by default unless explicitly set
+
+
+     # HF id can be remote; tests rely on local cache or network if allowed; skip by default unless explicitly set
     return bool(_xformer_model())
 
 
 @pytest.fixture(scope="module")
 def client():
-    settings = get_settings()
+     settings = get_settings()
     headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
     with TestClient(app, headers=headers) as c:
         yield c
@@ -35,7 +41,9 @@ pytestmark = [
 
 
 def _skip_if_unavailable():
-    if not _has_sentence_transformers():
+
+
+     if not _has_sentence_transformers():
         pytest.skip("sentence_transformers not installed; set TEST_XFORMERS_RERANKER_MODEL to run")
     if not _model_available():
         pytest.skip("TEST_XFORMERS_RERANKER_MODEL or RAG_TRANSFORMERS_RERANKER_MODEL not set")

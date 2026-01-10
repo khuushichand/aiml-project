@@ -12,7 +12,7 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthC
 
 class _QStub:
     def get_queue_status(self):
-        return {
+             return {
             "queue_size": 1,
             "processing_count": 0,
             "max_queue_size": 100,
@@ -81,7 +81,7 @@ async def _unauthenticated_principal(_request: Request):  # type: ignore[overrid
 
 @pytest.mark.unit
 def test_queue_status_endpoint_enabled():
-    app.dependency_overrides[get_auth_principal] = _principal_override
+     app.dependency_overrides[get_auth_principal] = _principal_override
     try:
         with TestClient(app) as client:
             with patch("tldw_Server_API.app.api.v1.endpoints.chat.get_request_queue", return_value=_QStub()):
@@ -96,7 +96,7 @@ def test_queue_status_endpoint_enabled():
 
 @pytest.mark.unit
 def test_queue_status_endpoint_disabled():
-    app.dependency_overrides[get_auth_principal] = _principal_override
+     app.dependency_overrides[get_auth_principal] = _principal_override
     try:
         with TestClient(app) as client:
             with patch("tldw_Server_API.app.api.v1.endpoints.chat.get_request_queue", return_value=None):
@@ -110,7 +110,7 @@ def test_queue_status_endpoint_disabled():
 
 @pytest.mark.unit
 def test_queue_status_requires_auth_returns_401():
-    app.dependency_overrides[get_auth_principal] = _unauthenticated_principal
+     app.dependency_overrides[get_auth_principal] = _unauthenticated_principal
     try:
         with TestClient(app) as client:
             resp = client.get("/api/v1/chat/queue/status")
@@ -121,7 +121,7 @@ def test_queue_status_requires_auth_returns_401():
 
 @pytest.mark.unit
 def test_queue_status_requires_system_logs_permission_returns_403():
-    app.dependency_overrides[get_auth_principal] = _limited_principal_override
+     app.dependency_overrides[get_auth_principal] = _limited_principal_override
     try:
         with TestClient(app) as client:
             resp = client.get("/api/v1/chat/queue/status")
@@ -132,7 +132,7 @@ def test_queue_status_requires_system_logs_permission_returns_403():
 
 @pytest.mark.unit
 def test_queue_activity_requires_auth_and_permissions():
-    app.dependency_overrides[get_auth_principal] = _principal_override
+     app.dependency_overrides[get_auth_principal] = _principal_override
     try:
         with TestClient(app) as client:
             with patch("tldw_Server_API.app.api.v1.endpoints.chat.get_request_queue", return_value=_QStub()):

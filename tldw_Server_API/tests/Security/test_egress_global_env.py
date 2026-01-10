@@ -3,7 +3,9 @@ from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
 
 
 def test_global_egress_denylist_blocks(monkeypatch):
-    # Ensure global deny blocks the host regardless of workflows-specific envs
+
+
+     # Ensure global deny blocks the host regardless of workflows-specific envs
     monkeypatch.setenv("EGRESS_DENYLIST", "blocked.example.com")
     monkeypatch.delenv("WORKFLOWS_EGRESS_DENYLIST", raising=False)
     res = evaluate_url_policy("https://blocked.example.com/path")
@@ -12,7 +14,9 @@ def test_global_egress_denylist_blocks(monkeypatch):
 
 
 def test_global_egress_allowlist_allows_when_strict(monkeypatch):
-    # Strict profile requires allowlist entries; ensure global allowlist is honored
+
+
+     # Strict profile requires allowlist entries; ensure global allowlist is honored
     monkeypatch.setenv("ENVIRONMENT", "prod")  # force strict default
     monkeypatch.setenv("EGRESS_ALLOWLIST", "ok.example.com")
     # Disable private IP check to avoid DNS in test

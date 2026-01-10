@@ -11,12 +11,12 @@ pytestmark = [pytest.mark.integration, pytest.mark.bench]
 
 @pytest.fixture(autouse=True)
 def _test_mode(monkeypatch):
-    monkeypatch.setenv("TEST_MODE", "1")
+     monkeypatch.setenv("TEST_MODE", "1")
 
 
 @pytest.fixture()
 def client_with_overrides(monkeypatch, auth_headers):
-    async def override_user():
+     async def override_user():
         return User(id=1, username="tester", email=None, is_active=True)
 
     async def _noop():
@@ -45,7 +45,9 @@ def client_with_overrides(monkeypatch, auth_headers):
 
 
 def test_rag_benchmarks_ablate_latency_and_accuracy(client_with_overrides, monkeypatch):
-    client = client_with_overrides
+
+
+     client = client_with_overrides
 
     # Patch retrievers for both unified and agentic paths
     from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
@@ -57,7 +59,7 @@ def test_rag_benchmarks_ablate_latency_and_accuracy(client_with_overrides, monke
 
     class FakeRetriever:
         def __init__(self, *args, **kwargs):
-            pass
+                     pass
         async def retrieve(self, *args, **kwargs):
             return [Document(id="bm1", content=content, metadata={"title": "Paper"}, source=DataSource.MEDIA_DB, score=0.9)]
 
@@ -69,7 +71,7 @@ def test_rag_benchmarks_ablate_latency_and_accuracy(client_with_overrides, monke
     # Patch generator to return determinstic answer referencing both sentences and the number
     class FakeAnswerGenerator:
         def __init__(self, *args, **kwargs):
-            pass
+                     pass
         async def generate(self, *, query: str, context: str, prompt_template=None, max_tokens=None, temperature=None):  # noqa: ARG002
             return {"answer": "Residual connections help gradient flow. We ran 42 experiments."}
 

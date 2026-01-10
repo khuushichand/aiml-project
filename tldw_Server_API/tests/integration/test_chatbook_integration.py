@@ -37,14 +37,14 @@ from tldw_Server_API.app.core.Character_Chat.world_book_manager import WorldBook
 
 @pytest.fixture
 def test_db():
-    """Create test database for integration tests."""
+     """Create test database for integration tests."""
     db = CharactersRAGDB(":memory:", "test_user")
     return db
 
 
 @pytest.fixture
 def chatbook_service(test_db, dict_service, wb_service):
-    """Create ChatbookService with test database."""
+     """Create ChatbookService with test database."""
     service = ChatbookService(user_id="test_user", db=test_db)
     # Inject the world book and dictionary services
     service.world_books = wb_service
@@ -54,19 +54,19 @@ def chatbook_service(test_db, dict_service, wb_service):
 
 @pytest.fixture
 def dict_service(test_db):
-    """Create ChatDictionaryService for test data."""
+     """Create ChatDictionaryService for test data."""
     return ChatDictionaryService(test_db)
 
 
 @pytest.fixture
 def wb_service(test_db):
-    """Create WorldBookService for test data."""
+     """Create WorldBookService for test data."""
     return WorldBookService(test_db)
 
 
 @pytest.fixture
 def temp_export_dir():
-    """Create temporary directory for exports."""
+     """Create temporary directory for exports."""
     temp_dir = tempfile.mkdtemp()
     yield Path(temp_dir)
     shutil.rmtree(temp_dir, ignore_errors=True)
@@ -74,7 +74,7 @@ def temp_export_dir():
 
 @pytest.fixture
 def sample_test_data(dict_service, wb_service, test_db):
-    """Create sample data for export testing."""
+     """Create sample data for export testing."""
     # Create dictionary with entries
     dict_id = dict_service.create_dictionary(
         name="Test Dictionary",

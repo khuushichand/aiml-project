@@ -7,7 +7,9 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
 def _set_env(monkeypatch):
-    monkeypatch.setenv("TEST_MODE", "true")
+
+
+     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     # Do not set SINGLE_USER_API_KEY so tests use deterministic key from settings
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
@@ -34,7 +36,9 @@ def _backdate_sqlite(job_id: int, days: int = 2):
 
 
 def test_jobs_prune_dry_run_and_filters_sqlite(monkeypatch, tmp_path):
-    # Isolate DB in a temp CWD so Databases/jobs.db is per-test
+
+
+     # Isolate DB in a temp CWD so Databases/jobs.db is per-test
     monkeypatch.chdir(tmp_path)
     _set_env(monkeypatch)
 
@@ -94,7 +98,9 @@ def test_jobs_prune_dry_run_and_filters_sqlite(monkeypatch, tmp_path):
 
 
 def test_jobs_prune_filters_scope_sqlite(monkeypatch, tmp_path):
-    # New temp CWD for isolation
+
+
+     # New temp CWD for isolation
     monkeypatch.chdir(tmp_path)
     _set_env(monkeypatch)
 

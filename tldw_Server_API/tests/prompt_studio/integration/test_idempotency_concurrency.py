@@ -5,28 +5,33 @@ import pytest
 
 class _StubMM:
     def __init__(self):
-        self.increments = []
+             self.increments = []
 
     def increment(self, name, value=1, labels=None):
-        self.increments.append((name, value, labels or {}))
+
+             self.increments.append((name, value, labels or {}))
 
 
 class _StubPSMetrics:
     def __init__(self):
-        self.metrics_manager = _StubMM()
+             self.metrics_manager = _StubMM()
 
 
 pytestmark = pytest.mark.integration
 
 
 def _create_project_and_prompt(db):
-    proj = db.create_project("idem-conc-proj")
+
+
+     proj = db.create_project("idem-conc-proj")
     pr = db.create_prompt(project_id=proj["id"], name="idem-conc-prompt")
     return proj, pr
 
 
 def test_idempotency_concurrency_hits(prompt_studio_dual_backend_client, monkeypatch):
-    label, client, db = prompt_studio_dual_backend_client
+
+
+     label, client, db = prompt_studio_dual_backend_client
 
     proj, pr = _create_project_and_prompt(db)
 
@@ -51,7 +56,8 @@ def test_idempotency_concurrency_hits(prompt_studio_dual_backend_client, monkeyp
     results_lock = threading.Lock()
 
     def worker():
-        r = client.post("/api/v1/prompt-studio/optimizations/create", data=json.dumps(body), headers=headers)
+
+             r = client.post("/api/v1/prompt-studio/optimizations/create", data=json.dumps(body), headers=headers)
         assert r.status_code in (200, 201)
         data = r.json().get("data", {}) if r.headers.get("content-type", "").startswith("application/json") else {}
         opt = data.get("optimization") or data.get("optimization_id") or data

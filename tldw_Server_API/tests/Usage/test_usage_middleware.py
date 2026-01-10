@@ -11,7 +11,9 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPri
 
 
 def _ensure_usage_middleware():
-    """Re-register usage logging middleware when TEST_MODE stripped it."""
+
+
+     """Re-register usage logging middleware when TEST_MODE stripped it."""
     from tldw_Server_API.app.core.AuthNZ.usage_logging_middleware import UsageLoggingMiddleware
 
     if not any(getattr(m, "cls", None) is UsageLoggingMiddleware for m in getattr(app, "user_middleware", [])):
@@ -181,7 +183,7 @@ async def test_usage_logging_prefers_auth_principal_ids(
 
     @app_local.get("/ping")
     def _ping():
-        return {"ok": True}
+             return {"ok": True}
 
     app_local.add_middleware(UsageLoggingMiddleware)
     principal = AuthPrincipal(

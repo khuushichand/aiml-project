@@ -11,7 +11,7 @@ from tldw_Server_API.app.core.Embeddings.worker_config import OrchestrationConfi
 
 class _FakeRedisDrainer:
     def __init__(self):
-        self.z = {}
+             self.z = {}
         self.streams = {}
 
     async def zrangebyscore(self, key, min, max, start=0, num=None):
@@ -40,7 +40,7 @@ def _make_pool_stub(queue_name: str):
 
 @pytest.mark.unit
 def test_token_bucket_throttles_requeue(monkeypatch):
-    # Configure low rate and small burst so only a small number is drained per tick
+     # Configure low rate and small burst so only a small number is drained per tick
     monkeypatch.setenv('EMBEDDINGS_REQUEUE_RATE', '0')
     monkeypatch.setenv('EMBEDDINGS_REQUEUE_BURST', '10')
 

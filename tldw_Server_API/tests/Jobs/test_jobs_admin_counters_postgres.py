@@ -12,19 +12,25 @@ pytestmark = pytest.mark.pg_jobs
 
 
 def _headers(app):
-    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
+
+     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     return {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
 
 
 def _stats(client, domain="chatbooks", queue="default", job_type="export"):
-    r = client.get("/api/v1/jobs/stats", params={"domain": domain, "queue": queue, "job_type": job_type})
+
+
+     r = client.get("/api/v1/jobs/stats", params={"domain": domain, "queue": queue, "job_type": job_type})
     assert r.status_code == 200
     rows = r.json(); assert len(rows) == 1
     return rows[0]
 
 
 def _require_pg(monkeypatch):
-    dsn = os.getenv("JOBS_DB_URL")
+
+
+     dsn = os.getenv("JOBS_DB_URL")
     if not dsn:
         pytest.skip("JOBS_DB_URL not configured")
     monkeypatch.setenv("JOBS_COUNTERS_ENABLED", "true")
@@ -34,7 +40,9 @@ def _require_pg(monkeypatch):
 
 
 def test_pg_batch_cancel_updates_counters(monkeypatch):
-    dsn = _require_pg(monkeypatch)
+
+
+     dsn = _require_pg(monkeypatch)
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     reset_settings()
     from tldw_Server_API.app.main import app
@@ -64,7 +72,9 @@ def test_pg_batch_cancel_updates_counters(monkeypatch):
 
 
 def test_pg_complete_queued_updates_counters(monkeypatch):
-    dsn = _require_pg(monkeypatch)
+
+
+     dsn = _require_pg(monkeypatch)
     jm = JobManager(backend="postgres", db_url=dsn)
     domain = "chatbooks"; queue = "default"; jt = "export"
 
@@ -107,7 +117,9 @@ def test_pg_complete_queued_updates_counters(monkeypatch):
 
 
 def test_pg_batch_reschedule_moves_ready_to_scheduled(monkeypatch):
-    dsn = _require_pg(monkeypatch)
+
+
+     dsn = _require_pg(monkeypatch)
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     reset_settings()
     from tldw_Server_API.app.main import app
@@ -132,7 +144,9 @@ def test_pg_batch_reschedule_moves_ready_to_scheduled(monkeypatch):
 
 
 def test_pg_batch_requeue_quarantined_adjusts_counters(monkeypatch):
-    dsn = _require_pg(monkeypatch)
+
+
+     dsn = _require_pg(monkeypatch)
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     reset_settings()
     from tldw_Server_API.app.main import app

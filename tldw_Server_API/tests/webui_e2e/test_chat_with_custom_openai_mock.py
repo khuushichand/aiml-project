@@ -10,14 +10,16 @@ from playwright.sync_api import sync_playwright
 
 
 def _find_free_port():
-    with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
+
+
+     with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
         s.bind(('', 0))
         return s.getsockname()[1]
 
 
 @pytest.mark.e2e
 def test_chat_with_custom_openai_mock(browser):
-    if not os.environ.get('ENABLE_CUSTOM_OPENAI_API_E2E'):
+     if not os.environ.get('ENABLE_CUSTOM_OPENAI_API_E2E'):
         pytest.skip("Custom OpenAI API E2E disabled; set ENABLE_CUSTOM_OPENAI_API_E2E=1 to enable.")
 
     repo_root = Path(__file__).resolve().parents[3]

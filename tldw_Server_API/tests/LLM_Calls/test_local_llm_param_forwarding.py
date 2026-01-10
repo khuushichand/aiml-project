@@ -6,7 +6,7 @@ from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
 
 @pytest.mark.unit
 def test_local_llm_forwards_response_format_n_user_identifier_via_chat_api_call():
-    messages = [{"role": "user", "content": "ping"}]
+     messages = [{"role": "user", "content": "ping"}]
 
     # Minimal settings; local_llm handler has sensible defaults
     fake_settings = {

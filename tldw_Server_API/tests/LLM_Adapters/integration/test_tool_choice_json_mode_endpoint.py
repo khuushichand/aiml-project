@@ -6,7 +6,6 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _enable_adapters(monkeypatch):
-    monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "1")
     monkeypatch.delenv("TEST_MODE", raising=False)
     monkeypatch.setenv("LOGURU_LEVEL", "ERROR")
     yield

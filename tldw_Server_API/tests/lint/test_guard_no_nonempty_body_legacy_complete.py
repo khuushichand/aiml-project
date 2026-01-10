@@ -3,7 +3,9 @@ from pathlib import Path
 
 
 def test_no_nonempty_body_post_to_legacy_complete():
-    """Guard: prevent tests from posting non-empty JSON bodies to legacy /complete endpoint.
+
+
+     """Guard: prevent tests from posting non-empty JSON bodies to legacy /complete endpoint.
 
     Allowed exceptions:
     - Explicit deprecation test file: test_legacy_complete_deprecation.py

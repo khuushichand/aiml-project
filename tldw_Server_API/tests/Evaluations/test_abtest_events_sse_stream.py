@@ -23,7 +23,7 @@ def _auth_headers(client: TestClient):
 
 @pytest.mark.unit
 def test_embeddings_abtest_events_sse_smoke_heartbeat_and_done(monkeypatch):
-    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
     # Use a per-test DB file for Evaluations to avoid cross-test interference
     with tempfile.NamedTemporaryFile(suffix="_evals.db", delete=False) as f:
@@ -68,7 +68,7 @@ def test_embeddings_abtest_events_sse_smoke_heartbeat_and_done(monkeypatch):
 
             # 2) Flip the test to completed after a short delay to allow heartbeats
             def _complete_later():
-                # Allow a couple of heartbeat intervals to pass
+                             # Allow a couple of heartbeat intervals to pass
                 time.sleep(0.2)
                 try:
                     user_id = DatabasePaths.get_single_user_id()

@@ -44,7 +44,9 @@ def _neutts_streaming_available(client: TestClient) -> bool:
 
 
 def _mp3_supported() -> bool:
-    try:
+
+
+     try:
         from tldw_Server_API.app.core.TTS.streaming_audio_writer import StreamingAudioWriter
         writer = StreamingAudioWriter(format='mp3', sample_rate=24000, channels=1)
         # write a tiny chunk and finalize
@@ -58,7 +60,7 @@ def _mp3_supported() -> bool:
 
 @pytest.fixture
 def client(monkeypatch):
-    monkeypatch.setenv("TEST_MODE", "true")
+     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key-1234567890")
     monkeypatch.setenv("SINGLE_USER_FIXED_ID", "1")

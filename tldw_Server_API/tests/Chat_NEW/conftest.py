@@ -60,7 +60,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
 # touch persona chat endpoints alongside Chat module coverage.
 @pytest.fixture(autouse=True)
 def _override_character_chat_rate_limits_for_chat_new(monkeypatch):
-    monkeypatch.setenv("CHARACTER_RATE_LIMIT_ENABLED", "true")
+     monkeypatch.setenv("CHARACTER_RATE_LIMIT_ENABLED", "true")
     monkeypatch.setenv("CHARACTER_RATE_LIMIT_OPS", "1000000")
     monkeypatch.setenv("CHARACTER_RATE_LIMIT_WINDOW", "60")
     monkeypatch.setenv("MAX_CHARACTERS_PER_USER", "1000000")
@@ -92,7 +92,7 @@ def _override_character_chat_rate_limits_for_chat_new(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _mock_perform_chat_api_call(monkeypatch):
-    """
+     """
     Provide a deterministic fake LLM response so integration tests do not rely on
     external OpenAI connectivity. Tests that need custom behaviour can override
     this by patching `perform_chat_api_call` in the test body.
@@ -100,7 +100,8 @@ def _mock_perform_chat_api_call(monkeypatch):
     from tldw_Server_API.app.api.v1.endpoints import chat as chat_endpoint
 
     def _stream_generator():
-        chunks = [
+
+             chunks = [
             'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n',
             'data: {"choices":[{"delta":{"content":" world"}}]}\n\n',
             'data: {"choices":[{"delta":{"content":"!"}}]}\n\n',
@@ -137,7 +138,8 @@ def _mock_perform_chat_api_call(monkeypatch):
 # =====================================================================
 
 def pytest_configure(config):
-    """Register custom markers for test categorization."""
+
+     """Register custom markers for test categorization."""
     config.addinivalue_line("markers", "unit: Unit tests with minimal mocking")
     config.addinivalue_line("markers", "integration: Integration tests with real components")
     config.addinivalue_line("markers", "property: Property-based tests")
@@ -151,7 +153,7 @@ def pytest_configure(config):
 
 @pytest.fixture(autouse=True)
 def _reset_chat_rate_limiter_between_tests(monkeypatch, reset_app_overrides):
-    """Reset chat rate limiter state before each test to avoid cross-test 429s.
+     """Reset chat rate limiter state before each test to avoid cross-test 429s.
 
     Ensures deterministic behavior for tests that expect 200 responses by
     restoring token buckets to full capacity for the default test user.
@@ -186,7 +188,7 @@ def _reset_chat_rate_limiter_between_tests(monkeypatch, reset_app_overrides):
 
 @pytest.fixture
 def test_env_vars():
-    """Placeholder for test environment variables - already set at module level."""
+     """Placeholder for test environment variables - already set at module level."""
     yield
 
 # =====================================================================
@@ -195,14 +197,14 @@ def test_env_vars():
 
 @pytest.fixture
 def temp_db_path() -> Generator[Path, None, None]:
-    """Create a temporary database path."""
+     """Create a temporary database path."""
     with tempfile.TemporaryDirectory() as temp_dir:
         db_path = Path(temp_dir) / "test_chacha.db"
         yield db_path
 
 @pytest.fixture
 def chacha_db(temp_db_path) -> CharactersRAGDB:
-    """Create a real CharactersRAGDB instance for testing."""
+     """Create a real CharactersRAGDB instance for testing."""
     db = CharactersRAGDB(
         db_path=str(temp_db_path),
         client_id="test_user"
@@ -212,7 +214,7 @@ def chacha_db(temp_db_path) -> CharactersRAGDB:
 
 @pytest.fixture
 def populated_chacha_db(chacha_db) -> CharactersRAGDB:
-    """Create a CharactersRAGDB with test data."""
+     """Create a CharactersRAGDB with test data."""
     # First, add a character card
     # Create the default character that the system expects
     character_data = {
@@ -252,7 +254,7 @@ def populated_chacha_db(chacha_db) -> CharactersRAGDB:
 
 @pytest.fixture
 def mock_chacha_db():
-    """Mock CharactersRAGDB for unit tests."""
+     """Mock CharactersRAGDB for unit tests."""
     mock_db = MagicMock(spec=CharactersRAGDB)
 
     # Setup default return values
@@ -270,7 +272,7 @@ def mock_chacha_db():
 
 @pytest.fixture
 def mock_llm_response():
-    """Mock LLM response for unit tests."""
+     """Mock LLM response for unit tests."""
     return {
         "id": "chatcmpl-test123",
         "object": "chat.completion",
@@ -293,7 +295,7 @@ def mock_llm_response():
 
 @pytest.fixture
 def mock_streaming_response():
-    """Mock streaming LLM response for unit tests."""
+     """Mock streaming LLM response for unit tests."""
     async def stream_generator():
         chunks = [
             'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n',
@@ -312,7 +314,7 @@ def mock_streaming_response():
 
 @pytest.fixture
 def basic_chat_request() -> Dict[str, Any]:
-    """Basic chat completion request."""
+     """Basic chat completion request."""
     return {
         "model": "gpt-3.5-turbo",
         "messages": [
@@ -322,7 +324,7 @@ def basic_chat_request() -> Dict[str, Any]:
 
 @pytest.fixture
 def multi_turn_chat_request() -> Dict[str, Any]:
-    """Multi-turn conversation request."""
+     """Multi-turn conversation request."""
     return {
         "model": "gpt-3.5-turbo",
         "messages": [
@@ -337,7 +339,7 @@ def multi_turn_chat_request() -> Dict[str, Any]:
 
 @pytest.fixture
 def streaming_chat_request() -> Dict[str, Any]:
-    """Streaming chat completion request."""
+     """Streaming chat completion request."""
     return {
         "model": "gpt-3.5-turbo",
         "messages": [
@@ -348,7 +350,7 @@ def streaming_chat_request() -> Dict[str, Any]:
 
 @pytest.fixture
 def provider_specific_request() -> Dict[str, Any]:
-    """Request with specific provider."""
+     """Request with specific provider."""
     return {
         "api_provider": "anthropic",
         "model": "claude-sonnet-4.5",
@@ -364,7 +366,7 @@ def provider_specific_request() -> Dict[str, Any]:
 
 @pytest.fixture
 def valid_messages() -> List[Dict[str, str]]:
-    """Collection of valid message formats."""
+     """Collection of valid message formats."""
     return [
         [{"role": "user", "content": "Simple message"}],
         [{"role": "system", "content": "You are helpful."},
@@ -376,7 +378,7 @@ def valid_messages() -> List[Dict[str, str]]:
 
 @pytest.fixture
 def invalid_messages() -> List[Any]:
-    """Collection of invalid message formats."""
+     """Collection of invalid message formats."""
     return [
         [],  # Empty messages
         [{"role": "invalid", "content": "test"}],  # Invalid role
@@ -392,7 +394,7 @@ def invalid_messages() -> List[Any]:
 
 @pytest.fixture
 def test_client(test_env_vars):
-    """Create a test client for the FastAPI app with cleanup."""
+     """Create a test client for the FastAPI app with cleanup."""
     from tldw_Server_API.app.main import app
     with TestClient(app) as client:
         yield client
@@ -409,7 +411,7 @@ async def async_client(test_env_vars):
 
 @pytest.fixture
 def auth_headers():
-    """Authentication headers for API requests."""
+     """Authentication headers for API requests."""
     api_key = os.getenv("SINGLE_USER_API_KEY", "test-api-key-12345")
     return {
         "Token": f"Bearer {api_key}",
@@ -423,7 +425,7 @@ def auth_headers():
 
 @pytest.fixture
 def provider_configs():
-    """Configuration for different LLM providers."""
+     """Configuration for different LLM providers."""
     return {
         "openai": {
             "api_key": "test-openai-key",
@@ -447,7 +449,7 @@ def provider_configs():
 
 @pytest.fixture
 def rate_limit_error():
-    """Rate limit error response."""
+     """Rate limit error response."""
     return {
         "error": {
             "message": "Rate limit exceeded",
@@ -458,7 +460,7 @@ def rate_limit_error():
 
 @pytest.fixture
 def auth_error():
-    """Authentication error response."""
+     """Authentication error response."""
     return {
         "error": {
             "message": "Invalid API key",
@@ -469,7 +471,7 @@ def auth_error():
 
 @pytest.fixture
 def validation_error():
-    """Validation error response."""
+     """Validation error response."""
     return {
         "error": {
             "message": "Invalid request format",
@@ -484,7 +486,7 @@ def validation_error():
 
 @pytest.fixture
 def message_generator():
-    """Factory for generating test messages."""
+     """Factory for generating test messages."""
     def _generate(count: int = 5) -> List[Dict[str, str]]:
         messages = []
         roles = ["user", "assistant"]
@@ -499,7 +501,7 @@ def message_generator():
 
 @pytest.fixture
 def conversation_generator():
-    """Factory for generating test conversations."""
+     """Factory for generating test conversations."""
     def _generate(num_turns: int = 3) -> Dict[str, Any]:
         messages = []
         for i in range(num_turns):
@@ -526,7 +528,7 @@ def conversation_generator():
 
 @pytest.fixture(autouse=True)
 def cleanup_after_test():
-    """Cleanup after each test."""
+     """Cleanup after each test."""
     yield
     # Any cleanup code here
     import gc

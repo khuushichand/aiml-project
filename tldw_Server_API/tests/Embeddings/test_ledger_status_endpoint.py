@@ -11,7 +11,9 @@ from starlette.requests import Request
 
 
 def _override_user(admin=False):
-    async def _f():
+
+
+     async def _f():
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
         return User(id=1, username="admin" if admin else "u", email="u@x", is_active=True, is_admin=admin)
     return _f
@@ -19,7 +21,7 @@ def _override_user(admin=False):
 
 @pytest.mark.unit
 def test_ledger_status_happy_path(disable_heavy_startup, admin_user, redis_client):
-    client = TestClient(app)
+     client = TestClient(app)
     client.cookies.set("csrf_token", "x")
     client.headers["X-CSRF-Token"] = "x"
     client.headers["Authorization"] = "Bearer key"
@@ -49,7 +51,7 @@ def test_ledger_status_happy_path(disable_heavy_startup, admin_user, redis_clien
 
 @pytest.mark.unit
 def test_ledger_status_requires_key_and_admin(disable_heavy_startup, monkeypatch):
-    client = TestClient(app)
+     client = TestClient(app)
     client.cookies.set("csrf_token", "x")
     client.headers["X-CSRF-Token"] = "x"
     client.headers["Authorization"] = "Bearer key"

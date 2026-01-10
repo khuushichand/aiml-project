@@ -70,8 +70,6 @@ class _FakeClient:
 
 @pytest.fixture(autouse=True)
 def _enable_native(monkeypatch):
-    monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "1")
-    monkeypatch.setenv("LLM_ADAPTERS_ANTHROPIC", "1")
     monkeypatch.setenv("LLM_ADAPTERS_NATIVE_HTTP_ANTHROPIC", "1")
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1")
     # Avoid TEST_MODE mock path so endpoint calls provider

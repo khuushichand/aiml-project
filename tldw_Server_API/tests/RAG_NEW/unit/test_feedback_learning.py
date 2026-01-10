@@ -3,13 +3,15 @@ from tldw_Server_API.app.core.RAG.rag_service.user_personalization_store import 
 
 class Doc:
     def __init__(self, id, score):
-        self.id = id
+             self.id = id
         self.score = score
         self.content = f"content for {id}"
 
 
 def test_personalization_boost(tmp_path, monkeypatch):
-    # Isolate user DB under tmp
+
+
+     # Isolate user DB under tmp
     monkeypatch.chdir(tmp_path)
     store = UserPersonalizationStore("tester")
     # Record implicit click on d2 with impression [d1,d2,d3]
@@ -21,7 +23,9 @@ def test_personalization_boost(tmp_path, monkeypatch):
 
 
 def test_personalization_store_sanitizes_user_id(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
+
+
+     monkeypatch.chdir(tmp_path)
     store = UserPersonalizationStore("../evil")
     base = (tmp_path / "Databases" / "user_databases").resolve()
     path = store.path.resolve()

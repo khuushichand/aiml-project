@@ -2,7 +2,9 @@ from tldw_Server_API.app.core.Web_Scraping.scraper_router import ScraperRouter
 
 
 def test_router_precedence_exact_over_wildcard_and_patterns():
-    rules = {
+
+
+     rules = {
         "domains": {
             "example.com": {
                 "backend": "curl",
@@ -38,7 +40,9 @@ def test_router_precedence_exact_over_wildcard_and_patterns():
 
 
 def test_handler_allowlist_blocks_unknown():
-    rules = {
+
+
+     rules = {
         "domains": {
             "evil.example": {
                 "backend": "curl",
@@ -53,7 +57,9 @@ def test_handler_allowlist_blocks_unknown():
 
 
 def test_router_proxies_parsed():
-    rules = {
+
+
+     rules = {
         "domains": {
             "proxied.example": {
                 "backend": "curl",

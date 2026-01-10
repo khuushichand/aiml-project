@@ -6,7 +6,9 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
 def test_max_queued_quota_sqlite(monkeypatch, tmp_path):
-    db_path = tmp_path / "jobs_quota.db"
+
+
+     db_path = tmp_path / "jobs_quota.db"
     ensure_jobs_tables(db_path)
     jm = JobManager(db_path)
 
@@ -28,7 +30,9 @@ def test_max_queued_quota_sqlite(monkeypatch, tmp_path):
 
 
 def test_submits_per_minute_quota_precedence_sqlite(monkeypatch, tmp_path):
-    db_path = tmp_path / "jobs_quota_spm.db"
+
+
+     db_path = tmp_path / "jobs_quota_spm.db"
     ensure_jobs_tables(db_path)
     jm = JobManager(db_path)
 
@@ -51,7 +55,9 @@ def test_submits_per_minute_quota_precedence_sqlite(monkeypatch, tmp_path):
 
 
 def test_max_inflight_quota_sqlite(monkeypatch, tmp_path):
-    db_path = tmp_path / "jobs_quota_inflight.db"
+
+
+     db_path = tmp_path / "jobs_quota_inflight.db"
     ensure_jobs_tables(db_path)
     jm = JobManager(db_path)
 
@@ -77,7 +83,9 @@ def test_max_inflight_quota_sqlite(monkeypatch, tmp_path):
 
 
 def test_max_inflight_ignores_expired_leases_sqlite(monkeypatch, tmp_path):
-    db_path = tmp_path / "jobs_quota_inflight_expired.db"
+
+
+     db_path = tmp_path / "jobs_quota_inflight_expired.db"
     ensure_jobs_tables(db_path)
     jm = JobManager(db_path)
 

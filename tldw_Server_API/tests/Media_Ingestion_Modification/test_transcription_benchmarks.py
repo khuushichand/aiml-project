@@ -48,7 +48,7 @@ class TranscriptionBenchmark:
 
     @staticmethod
     def measure_performance(func, *args, **kwargs) -> Dict[str, Any]:
-        """Measure performance metrics of a function."""
+             """Measure performance metrics of a function."""
         import psutil
         import os
 
@@ -80,11 +80,12 @@ class TestMLXPerformance(TranscriptionBenchmark):
 
     @pytest.fixture
     def mock_mlx_model(self):
-        """Create mock MLX model with realistic behavior."""
+             """Create mock MLX model with realistic behavior."""
         model = MagicMock()
 
         def mock_transcribe(audio_path, **kwargs):
-            # Simulate processing time based on audio length
+
+                     # Simulate processing time based on audio length
             time.sleep(0.01)  # Base processing time
 
             if 'chunk_duration' in kwargs:
@@ -104,7 +105,7 @@ class TestMLXPerformance(TranscriptionBenchmark):
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.load_parakeet_mlx_model')
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.check_mlx_available')
     def test_mlx_scaling(self, mock_check, mock_load, mock_mlx_model):
-        """Test MLX performance scaling with audio duration."""
+             """Test MLX performance scaling with audio duration."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
             transcribe_with_parakeet_mlx
         )
@@ -145,7 +146,7 @@ class TestMLXPerformance(TranscriptionBenchmark):
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.load_parakeet_mlx_model')
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.check_mlx_available')
     def test_mlx_chunking_performance(self, mock_check, mock_load, mock_mlx_model):
-        """Compare chunked vs non-chunked MLX performance."""
+             """Compare chunked vs non-chunked MLX performance."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
             transcribe_with_parakeet_mlx
         )
@@ -190,11 +191,12 @@ class TestONNXPerformance(TranscriptionBenchmark):
 
     @pytest.fixture
     def mock_onnx_session(self):
-        """Create mock ONNX session with realistic behavior."""
+             """Create mock ONNX session with realistic behavior."""
         session = MagicMock()
 
         def mock_run(output_names, input_dict):
-            # Simulate inference time
+
+                     # Simulate inference time
             time.sleep(0.015)
 
             batch_size = 1
@@ -211,7 +213,7 @@ class TestONNXPerformance(TranscriptionBenchmark):
 
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX.load_parakeet_onnx_model')
     def test_onnx_performance(self, mock_load, mock_onnx_session):
-        """Test ONNX transcription performance."""
+             """Test ONNX transcription performance."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX import (
             transcribe_with_parakeet_onnx
         )
@@ -257,7 +259,8 @@ class TestBufferedTranscriptionPerformance(TranscriptionBenchmark):
     """Performance benchmarks for buffered transcription."""
 
     def test_merge_algorithm_performance(self):
-        """Compare performance of different merge algorithms."""
+
+             """Compare performance of different merge algorithms."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
             BufferedTranscriber,
             LCSMergeTranscriber,
@@ -307,7 +310,7 @@ class TestBufferedTranscriptionPerformance(TranscriptionBenchmark):
 
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.transcribe_with_parakeet_mlx')
     def test_buffered_memory_efficiency(self, mock_transcribe):
-        """Test memory efficiency of buffered transcription."""
+             """Test memory efficiency of buffered transcription."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
             transcribe_long_audio
         )
@@ -347,7 +350,8 @@ class TestComparativePerformance(TranscriptionBenchmark):
     """Comparative benchmarks across all implementations."""
 
     def test_all_implementations_comparison(self):
-        """Compare all transcription implementations."""
+
+             """Compare all transcription implementations."""
 
         results = {
             'implementation': [],
@@ -435,7 +439,8 @@ class TestRealWorldScenarios(TranscriptionBenchmark):
     """Test real-world usage scenarios."""
 
     def test_podcast_transcription(self):
-        """Simulate podcast transcription (long audio)."""
+
+             """Simulate podcast transcription (long audio)."""
         # Simulate 1-hour podcast
         audio = self.generate_test_audio(3600)
 
@@ -460,7 +465,8 @@ class TestRealWorldScenarios(TranscriptionBenchmark):
             print(f"Real-time factor: {3600/metrics['time']:.1f}x")
 
     def test_meeting_transcription(self):
-        """Simulate meeting transcription with multiple speakers."""
+
+             """Simulate meeting transcription with multiple speakers."""
         # Simulate 30-minute meeting
         audio = self.generate_test_audio(1800)
 
@@ -489,7 +495,8 @@ class TestRealWorldScenarios(TranscriptionBenchmark):
             print(f"Real-time factor: {1800/metrics['time']:.1f}x")
 
     def test_batch_processing(self):
-        """Test batch processing of multiple files."""
+
+             """Test batch processing of multiple files."""
         # Create multiple audio files
         audio_files = []
         for i in range(10):

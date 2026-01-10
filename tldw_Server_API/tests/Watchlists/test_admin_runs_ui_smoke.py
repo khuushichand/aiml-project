@@ -2,7 +2,9 @@ from pathlib import Path
 
 
 def test_admin_runs_ui_includes_include_tallies_param_in_server_csv_links():
-    """
+
+
+     """
     Smoke-test the Admin Runs UI page to ensure the server CSV links
     include the include_tallies query parameter bound to the toggle.
 

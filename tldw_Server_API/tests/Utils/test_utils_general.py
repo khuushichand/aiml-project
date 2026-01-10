@@ -11,20 +11,25 @@ from tldw_Server_API.app.core.Utils import Utils
 
 class _TqdmStub:
     def __init__(self, *_, **__):
-        pass
+             pass
 
     def update(self, _amount):
-        pass
+
+             pass
 
     def __enter__(self):
-        return self
+
+             return self
 
     def __exit__(self, exc_type, exc, tb):
-        return False
+
+             return False
 
 
 def test_download_file_resumes_without_truncation(monkeypatch, tmp_path):
-    dest = tmp_path / "file.bin"
+
+
+     dest = tmp_path / "file.bin"
     # http_client.download uses a ".part" suffix for resume writes
     part_path = dest.with_suffix(dest.suffix + ".part")
     part_path.write_bytes(b"12345")
@@ -51,7 +56,9 @@ def test_download_file_resumes_without_truncation(monkeypatch, tmp_path):
 
 
 def test_extract_text_from_segments_collects_all_segments():
-    segments = [
+
+
+     segments = [
         {"Time_Start": 0, "Time_End": 1, "Text": "First"},
         {"Time_Start": 1, "Time_End": 2, "Text": "Second"},
     ]
@@ -63,7 +70,9 @@ def test_extract_text_from_segments_collects_all_segments():
 
 
 def test_extract_text_from_segments_handles_nested_dict():
-    segments = {
+
+
+     segments = {
         "outer": {
             "inner": {
                 "Time_Start": 2,
@@ -77,13 +86,16 @@ def test_extract_text_from_segments_handles_nested_dict():
 
 
 def test_save_temp_file_normalizes_and_preserves_content(monkeypatch):
-    class DummyUpload:
+
+
+     class DummyUpload:
         def __init__(self, name, data):
-            self.name = name
+                     self.name = name
             self._data = data
 
         def read(self):
-            return self._data
+
+                     return self._data
 
     upload = DummyUpload("../evil.txt", b"payload")
     saved_path = Utils.save_temp_file(upload)
@@ -99,19 +111,23 @@ def test_save_temp_file_normalizes_and_preserves_content(monkeypatch):
 
 
 def test_safe_read_file_handles_empty_decodes(monkeypatch):
-    class FakeBytes(bytes):
+
+
+     class FakeBytes(bytes):
         def decode(self, encoding="utf-8", errors="strict"):
-            return ""
+                     return ""
 
     class DummyFile:
         def __enter__(self):
-            return self
+                     return self
 
         def __exit__(self, exc_type, exc, tb):
-            return False
+
+                     return False
 
         def read(self):
-            return FakeBytes(b"data")
+
+                     return FakeBytes(b"data")
 
     monkeypatch.setattr(builtins, "open", lambda *_args, **_kwargs: DummyFile())
     monkeypatch.setattr(Utils.chardet, "detect", lambda _raw: {"encoding": "ascii"})
@@ -123,10 +139,13 @@ def test_safe_read_file_handles_empty_decodes(monkeypatch):
 
 
 def test_download_file_checksum_mismatch_cleans_up(monkeypatch, tmp_path):
-    dest = tmp_path / "file.bin"
+
+
+     dest = tmp_path / "file.bin"
 
     def fake_download(*, url, dest, resume=False, retry=None, **_kwargs):
-        Path(dest).write_bytes(b"bad-content")
+
+             Path(dest).write_bytes(b"bad-content")
         return Path(dest)
 
     monkeypatch.setattr(Utils, "download", fake_download)
@@ -142,7 +161,9 @@ def test_download_file_checksum_mismatch_cleans_up(monkeypatch, tmp_path):
 
 
 def test_zip_validator_rejects_windows_traversal(tmp_path):
-    zip_path = tmp_path / "bad.zip"
+
+
+     zip_path = tmp_path / "bad.zip"
     with zipfile.ZipFile(zip_path, "w") as zf:
         zf.writestr("..\\evil.txt", "bad")
 
@@ -153,13 +174,17 @@ def test_zip_validator_rejects_windows_traversal(tmp_path):
 
 
 def test_sanitize_filename_fallback_for_empty_input():
-    sanitized = Utils.sanitize_filename('<>:"/\\|?*')
+
+
+     sanitized = Utils.sanitize_filename('<>:"/\\|?*')
 
     assert sanitized == "untitled"
 
 
 def test_format_metadata_as_text_accepts_duration_string():
-    metadata = {"duration": "01:02:03"}
+
+
+     metadata = {"duration": "01:02:03"}
 
     text = Utils.format_metadata_as_text(metadata)
 
@@ -167,13 +192,17 @@ def test_format_metadata_as_text_accepts_duration_string():
 
 
 def test_extract_media_id_strips_trailing_punctuation():
-    msg = "Success. Media ID: abc123."
+
+
+     msg = "Success. Media ID: abc123."
 
     assert Utils.extract_media_id_from_result_string(msg) == "abc123"
 
 
 def test_decide_cpugpu_defaults_on_eof(monkeypatch):
-    System_Checks_Lib.processing_choice = "cpu"
+
+
+     System_Checks_Lib.processing_choice = "cpu"
     monkeypatch.setattr(System_Checks_Lib, "input", _raise_eof, raising=False)
 
     selection = System_Checks_Lib.decide_cpugpu()
@@ -182,7 +211,9 @@ def test_decide_cpugpu_defaults_on_eof(monkeypatch):
 
 
 def test_check_ffmpeg_handles_unknown_os(monkeypatch):
-    System_Checks_Lib.userOS = "Unknown"
+
+
+     System_Checks_Lib.userOS = "Unknown"
     monkeypatch.setattr(System_Checks_Lib.shutil, "which", lambda *_: None)
     monkeypatch.setattr(System_Checks_Lib.os.path, "exists", lambda *_: False)
     monkeypatch.setattr(System_Checks_Lib.platform, "system", lambda: "Darwin")
@@ -192,4 +223,4 @@ def test_check_ffmpeg_handles_unknown_os(monkeypatch):
 
     assert result is False
 def _raise_eof(*_args, **_kwargs):
-    raise EOFError()
+     raise EOFError()

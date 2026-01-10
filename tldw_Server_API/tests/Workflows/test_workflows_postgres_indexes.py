@@ -21,7 +21,9 @@ def _postgres_config_from_params(params: dict) -> DatabaseConfig:
 
 
 def _reset_postgres_database(backend) -> None:
-    with backend.transaction() as conn:
+
+
+     with backend.transaction() as conn:
         backend.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;", connection=conn)
 
 

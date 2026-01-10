@@ -61,6 +61,7 @@ def pytest_configure(config):
     # Inject a minimal PromptsInteropService shim if missing
     if PromptsInteropService is None:
         from tldw_Server_API.app.core.DB_Management.Prompts_DB import PromptsDatabase
+
         class _PromptsInteropServiceShim:
             def __init__(self, db_directory: str, client_id: str):
                 self.db_directory = Path(db_directory)
@@ -399,11 +400,13 @@ def prompts_db(test_db_path) -> Generator[PromptsDB, None, None]:
                 if pfx == 'keyword':
                     # Exact keyword match using DB's keyword normalization + case-insensitive compare
                     kw_norm = self._inner._normalize_keyword(rest or '').casefold()
+
                     def _norm_kws(p):
                         try:
                             return [self._inner._normalize_keyword(str(k)).casefold() for k in p.get('keywords', [])]
                         except Exception:
                             return []
+
                     return [p for p in items if any(k == kw_norm for k in _norm_kws(p))]
                 if pfx == 'author':
                     # Exact author match (trim both sides to mirror DB list normalization)

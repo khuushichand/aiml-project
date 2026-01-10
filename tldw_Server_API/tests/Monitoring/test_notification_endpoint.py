@@ -8,7 +8,7 @@ from tldw_Server_API.app.api.v1.schemas.monitoring_schemas import NotificationTe
 async def test_send_test_notification_returns_status_from_notifier(monkeypatch):
     class _StubNotifier:
         def notify(self, alert):
-            return "skipped"
+                     return "skipped"
 
     monkeypatch.setattr(monitoring_ep, "get_notification_service", lambda: _StubNotifier())
 

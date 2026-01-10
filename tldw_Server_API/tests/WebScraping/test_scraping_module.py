@@ -49,7 +49,7 @@ async def test_extract_links_text_vs_html(monkeypatch):
 
     class DummySession:
         def get(self, url):
-            return DummyResp()
+                     return DummyResp()
 
     # Monkeypatch cookie manager to return dummy session (awaitable)
     async def fake_get_session(url, **kw):
@@ -67,11 +67,14 @@ async def test_extract_links_text_vs_html(monkeypatch):
 
 
 def test_provider_missing_keys_google(monkeypatch):
-    # Ensure Google provider raises ValueError when API key/engine id missing
+
+
+     # Ensure Google provider raises ValueError when API key/engine id missing
     from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
 
     def fake_cfg():
-        return {"search_engines": {
+
+             return {"search_engines": {
             "google_search_api_key": "",
             "google_search_engine_id": "",
             "google_search_api_url": "https://customsearch.googleapis.com/customsearch/v1",
@@ -86,10 +89,13 @@ def test_provider_missing_keys_google(monkeypatch):
 
 
 def test_provider_missing_keys_kagi(monkeypatch):
-    from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
+
+
+     from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
 
     def fake_cfg():
-        return {"search_engines": {"kagi_search_api_key": ""}}
+
+             return {"search_engines": {"kagi_search_api_key": ""}}
 
     monkeypatch.setattr(ws, 'get_loaded_config', fake_cfg)
 

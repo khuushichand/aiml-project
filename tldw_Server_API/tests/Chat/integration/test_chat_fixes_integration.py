@@ -39,7 +39,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
 
 @pytest.fixture
 def setup_auth_override():
-    """Override authentication for tests."""
+     """Override authentication for tests."""
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 
     test_user = User(
@@ -224,7 +224,7 @@ class TestConversationRaceCondition:
         # Simulate conflict on first attempt, success on retry
         call_count = 0
         def add_conversation_side_effect(conv_data):
-            nonlocal call_count
+                     nonlocal call_count
             call_count += 1
             if call_count == 1:
                 raise ConflictError("Duplicate conversation")
@@ -260,7 +260,8 @@ class TestConversationRaceCondition:
         creation_attempts = []
 
         def add_conversation_concurrent(conv_data):
-            creation_attempts.append(conv_data['title'])
+
+                     creation_attempts.append(conv_data['title'])
             # Simulate some succeeding, some failing
             if len(creation_attempts) % 2 == 0:
                 raise ConflictError("Duplicate")
@@ -323,7 +324,8 @@ class TestErrorResponseStandardization:
     """Test that error responses are properly standardized for security."""
 
     def test_5xx_errors_masked(self, setup_auth_override):
-        """Test that 5xx errors don't expose internal details."""
+
+             """Test that 5xx errors don't expose internal details."""
         from tldw_Server_API.app.core.Chat.Chat_Deps import (
             ChatProviderError,
             ChatAPIError,
@@ -347,7 +349,8 @@ class TestErrorResponseStandardization:
                 assert len(error.message) > 0
 
     def test_4xx_errors_preserved(self):
-        """Test that 4xx client errors can show details."""
+
+             """Test that 4xx client errors can show details."""
         from tldw_Server_API.app.core.Chat.Chat_Deps import (
             ChatAuthenticationError,
             ChatRateLimitError,
@@ -371,7 +374,8 @@ class TestConfigurationLoading:
     """Test that configuration values are loaded from config file."""
 
     def test_config_values_loaded(self):
-        """Test that chat module loads configuration values."""
+
+             """Test that chat module loads configuration values."""
         from tldw_Server_API.app.api.v1.endpoints.chat import (
             MAX_BASE64_BYTES,
             MAX_TEXT_LENGTH,
@@ -392,7 +396,8 @@ class TestConfigurationLoading:
         assert MAX_IMAGES_PER_REQUEST >= 1  # At least 1 image
 
     def test_streaming_config_loaded(self):
-        """Test that streaming configuration is loaded."""
+
+             """Test that streaming configuration is loaded."""
         from tldw_Server_API.app.core.Chat.streaming_utils import (
             STREAMING_IDLE_TIMEOUT,
             HEARTBEAT_INTERVAL
@@ -454,7 +459,8 @@ class TestValidationImprovements:
         assert "too long" in error.lower()
 
     def test_response_content_extraction(self):
-        """Test extraction of content from various response formats."""
+
+             """Test extraction of content from various response formats."""
         # String response
         assert extract_response_content("Simple response") == "Simple response"
 

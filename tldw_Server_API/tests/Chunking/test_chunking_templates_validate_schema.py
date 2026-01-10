@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 @pytest.mark.integration
 def test_validate_template_schema_classifier_errors():
-    """TemplateConfig pydantic validation errors are returned as 200 with errors listed.
+     """TemplateConfig pydantic validation errors are returned as 200 with errors listed.
 
     Ensures we don't emit 422 for schema errors in /validate; instead, we surface them in the payload.
     """

@@ -120,10 +120,11 @@ def test_search_web_brave_builds_expected_request(monkeypatch: pytest.MonkeyPatc
 
     class DummyResponse:
         def raise_for_status(self) -> None:
-            return None
+                     return None
 
         def json(self) -> Dict[str, Any]:
-            return fake_response_payload
+
+                     return fake_response_payload
 
     def fake_get(url: str, headers: Dict[str, str], params: Dict[str, Any]) -> DummyResponse:
         fake_get.last_request = {"url": url, "headers": headers, "params": params}  # type: ignore[attr-defined]

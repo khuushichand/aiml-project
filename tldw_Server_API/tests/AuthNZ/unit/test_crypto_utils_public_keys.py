@@ -11,7 +11,7 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_setting
 
 @pytest.mark.unit
 def test_public_keys_excluded_when_secret_present(monkeypatch):
-    # Ensure a clean settings instance
+     # Ensure a clean settings instance
     reset_settings()
     monkeypatch.setenv("TEST_MODE", "true")
 
@@ -37,7 +37,7 @@ def test_public_keys_excluded_when_secret_present(monkeypatch):
 
 @pytest.mark.unit
 def test_only_public_key_uses_test_fallback_in_pytest(monkeypatch):
-    # Ensure clean settings
+     # Ensure clean settings
     reset_settings()
     monkeypatch.setenv("TEST_MODE", "true")
 

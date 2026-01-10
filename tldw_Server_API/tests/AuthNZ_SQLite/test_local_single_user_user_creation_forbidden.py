@@ -56,7 +56,7 @@ async def test_http_registration_forbidden_in_local_single_user_profile(monkeypa
     # Stub registration_service so we can assert it is not invoked.
     class _FakeRegistrationService:
         def __init__(self):
-            self.called = False
+                     self.called = False
 
         async def register_user(self, *args, **kwargs):
             self.called = True

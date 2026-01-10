@@ -12,7 +12,7 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 @pytest.fixture(autouse=True)
 def _setup_pg_env(jobs_pg_dsn, monkeypatch):
-    # Standardize env per test and avoid DDL races inside JobManager
+     # Standardize env per test and avoid DDL races inside JobManager
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
@@ -25,11 +25,15 @@ def _setup_pg_env(jobs_pg_dsn, monkeypatch):
 
 
 def _new_pg_manager():
-    return JobManager(None, backend="postgres", db_url=os.getenv("JOBS_DB_URL"))
+
+
+     return JobManager(None, backend="postgres", db_url=os.getenv("JOBS_DB_URL"))
 
 
 def test_pg_create_acquire_complete_idempotent():
-    jm = _new_pg_manager()
+
+
+     jm = _new_pg_manager()
     idem = "pg-idem-1"
     j1 = jm.create_job(
         domain="chatbooks",
@@ -56,7 +60,9 @@ def test_pg_create_acquire_complete_idempotent():
 
 
 def test_pg_concurrent_acquire_skip_locked():
-    jm = _new_pg_manager()
+
+
+     jm = _new_pg_manager()
     # Seed 4 jobs
     ids = []
     for i in range(4):
@@ -70,7 +76,8 @@ def test_pg_concurrent_acquire_skip_locked():
         ids.append(int(j["id"]))
 
     def acq_one(tag):
-        jmx = _new_pg_manager()
+
+             jmx = _new_pg_manager()
         got = jmx.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=30, worker_id=tag)
         return got["id"] if got else None
 
@@ -86,7 +93,9 @@ def test_pg_concurrent_acquire_skip_locked():
 
 
 def test_pg_reschedule_persists_updates():
-    jm = _new_pg_manager()
+
+
+     jm = _new_pg_manager()
     future = datetime.now(timezone.utc) + timedelta(hours=1)
     job = jm.create_job(
         domain="chatbooks",

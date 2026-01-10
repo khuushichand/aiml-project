@@ -6,7 +6,7 @@ from tldw_Server_API.app.main import app
 
 class _StubDB:
     def __init__(self):
-        self.client_id = "test-client"
+             self.client_id = "test-client"
         self._next_opt_id = 100
 
     def get_prompt_with_project(self, prompt_id: int, include_deleted: bool = False):
@@ -14,14 +14,15 @@ class _StubDB:
         return {"id": prompt_id, "project_id": 123}
 
     def create_optimization(self, **kwargs):
-        oid = self._next_opt_id
+
+             oid = self._next_opt_id
         self._next_opt_id += 1
         return {"id": oid, **kwargs}
 
 
 @pytest.fixture
 def override_db_dependency(monkeypatch):
-    from tldw_Server_API.app.api.v1.API_Deps import prompt_studio_deps as deps
+     from tldw_Server_API.app.api.v1.API_Deps import prompt_studio_deps as deps
 
     async def _override_db():
         return _StubDB()
@@ -41,7 +42,9 @@ def override_db_dependency(monkeypatch):
 
 
 def test_compare_strategies_propagates_request_id_for_each_job(monkeypatch, override_db_dependency):
-    captured_payloads = []
+
+
+     captured_payloads = []
 
     # Patch PS JobManager.create_job to capture each payload
     from tldw_Server_API.app.core.Prompt_Management.prompt_studio import job_manager as ps_jm
@@ -73,7 +76,9 @@ def test_compare_strategies_propagates_request_id_for_each_job(monkeypatch, over
 
 
 def test_compare_strategies_mixed_case_request_id_header(monkeypatch, override_db_dependency):
-    captured_payloads = []
+
+
+     captured_payloads = []
 
     from tldw_Server_API.app.core.Prompt_Management.prompt_studio import job_manager as ps_jm
 

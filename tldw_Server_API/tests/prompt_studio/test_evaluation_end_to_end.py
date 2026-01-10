@@ -21,7 +21,7 @@ from loguru import logger
 
 @pytest.fixture
 def test_db():
-    """Create a test database with Prompt Studio schema."""
+     """Create a test database with Prompt Studio schema."""
     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
         db_path = tmp.name
 
@@ -38,7 +38,7 @@ def test_db():
 
 @pytest.fixture
 def mock_llm_responses():
-    """Predefined LLM responses for testing."""
+     """Predefined LLM responses for testing."""
     return {
         "test_case_1": "The capital of France is Paris.",
         "test_case_2": "Python is a high-level programming language.",
@@ -48,9 +48,9 @@ def mock_llm_responses():
 
 @pytest.fixture
 def mock_chat_api_call(mock_llm_responses):
-    """Mock the chat_api_call function."""
+     """Mock the chat_api_call function."""
     def _mock_call(*args, **kwargs):
-        # Extract messages to determine which response to return
+             # Extract messages to determine which response to return
         messages = kwargs.get('messages_payload', kwargs.get('messages', []))
 
         # Simple logic to return different responses based on input
@@ -144,7 +144,8 @@ class TestPromptStudioEvaluationEndToEnd:
     """Comprehensive end-to-end test for Prompt Studio evaluation system."""
 
     def test_complete_evaluation_workflow(self, test_db, mock_chat_api_call):
-        """Test the complete evaluation workflow from start to finish."""
+
+             """Test the complete evaluation workflow from start to finish."""
         # 1. Create project
         project_id = create_test_project(test_db, "Evaluation Test Project")
         assert project_id > 0
@@ -235,7 +236,8 @@ class TestPromptStudioEvaluationEndToEnd:
             logger.info(f"Evaluation completed successfully with metrics: {metrics}")
 
     def test_multiple_test_cases_evaluation(self, test_db, mock_chat_api_call):
-        """Test evaluation with multiple test cases."""
+
+             """Test evaluation with multiple test cases."""
         # Setup
         project_id = create_test_project(test_db, "Multi Test Project")
 
@@ -286,7 +288,8 @@ class TestPromptStudioEvaluationEndToEnd:
             logger.info(f"Multi-test evaluation passed with {result['metrics']['passed']}/{result['metrics']['total_tests']} tests")
 
     def test_evaluation_metrics_calculation(self, test_db):
-        """Test various evaluation metrics calculations."""
+
+             """Test various evaluation metrics calculations."""
         metrics = EvaluationMetrics()
 
         # Test exact match
@@ -323,7 +326,8 @@ class TestPromptStudioEvaluationEndToEnd:
         logger.info("All metrics calculations tested successfully")
 
     def test_evaluation_comparison(self, test_db, mock_chat_api_call):
-        """Test comparing multiple evaluations."""
+
+             """Test comparing multiple evaluations."""
         # Setup
         project_id = create_test_project(test_db, "Comparison Project")
         prompt_id = create_test_prompt(
@@ -372,7 +376,8 @@ class TestPromptStudioEvaluationEndToEnd:
             logger.info(f"Evaluation comparison completed: best performer is evaluation {comparison['metrics_comparison']['best_performer']}")
 
     def test_error_recovery(self, test_db):
-        """Test error handling and recovery."""
+
+             """Test error handling and recovery."""
         # Setup
         project_id = create_test_project(test_db, "Error Test Project")
         prompt_id = create_test_prompt(
@@ -388,7 +393,7 @@ class TestPromptStudioEvaluationEndToEnd:
 
         # Mock chat_api_call to raise an error
         def failing_llm(*args, **kwargs):
-            raise Exception("LLM API Error")
+                     raise Exception("LLM API Error")
 
         with patch('tldw_Server_API.app.core.Prompt_Management.prompt_studio.evaluation_manager.chat_api_call',
                   failing_llm):
@@ -481,7 +486,8 @@ class TestPromptStudioEvaluationEndToEnd:
                 logger.info(f"Async test runner completed {len(results)} tests successfully")
 
     def test_database_integrity(self, test_db):
-        """Test database integrity and constraints."""
+
+             """Test database integrity and constraints."""
         # Test foreign key constraints
         with pytest.raises(Exception):
             # Try to create prompt with non-existent project
@@ -532,7 +538,8 @@ class TestPromptStudioEvaluationEndToEnd:
         logger.info("Database integrity tests passed")
 
     def test_evaluation_persistence(self, test_db, mock_chat_api_call):
-        """Test that evaluation results are properly persisted."""
+
+             """Test that evaluation results are properly persisted."""
         # Setup
         project_id = create_test_project(test_db, "Persistence Test")
         prompt_id = create_test_prompt(

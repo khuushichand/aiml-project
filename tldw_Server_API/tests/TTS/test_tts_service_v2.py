@@ -95,19 +95,23 @@ class MockAdapter(TTSAdapter):
 
 class MetricsStub:
     def register_metric(self, *args, **kwargs):
-        return None
+             return None
 
     def set_gauge(self, *args, **kwargs):
-        return None
+
+             return None
 
     def increment(self, *args, **kwargs):
-        return None
+
+             return None
 
     def observe(self, *args, **kwargs):
-        return None
+
+             return None
 
     def gauge_add(self, *args, **kwargs):
-        return None
+
+             return None
 
 
 class RecordingAdapter(TTSAdapter):
@@ -174,19 +178,23 @@ class TestTTSServiceV2:
 
         class MetricsStub:
             def register_metric(self, *args, **kwargs):
-                return None
+                             return None
 
             def set_gauge(self, *args, **kwargs):
-                return None
+
+                             return None
 
             def increment(self, *args, **kwargs):
-                return None
+
+                             return None
 
             def observe(self, *args, **kwargs):
-                return None
+
+                             return None
 
             def gauge_add(self, *args, **kwargs):
-                return None
+
+                             return None
 
         service.metrics = MetricsStub()
 
@@ -334,19 +342,23 @@ class TestTTSServiceV2:
 
         class MetricsStub:
             def register_metric(self, *args, **kwargs):
-                return None
+                             return None
 
             def set_gauge(self, *args, **kwargs):
-                return None
+
+                             return None
 
             def increment(self, *args, **kwargs):
-                return None
+
+                             return None
 
             def observe(self, *args, **kwargs):
-                return None
+
+                             return None
 
             def gauge_add(self, *args, **kwargs):
-                return None
+
+                             return None
 
         service.metrics = MetricsStub()
 
@@ -391,7 +403,8 @@ async def test_generate_speech_uses_provider_key_for_validation():
     providers = []
 
     def fake_validate(request, provider=None, config=None):
-        providers.append(provider)
+
+             providers.append(provider)
 
     request = OpenAISpeechRequest(
         input="Hello world",
@@ -449,7 +462,8 @@ class TestAudioUtils:
     """Tests for audio processing utilities"""
 
     def test_audio_processor_initialization(self):
-        """Test AudioProcessor initialization"""
+
+             """Test AudioProcessor initialization"""
         processor = AudioProcessor()
         assert processor is not None
         assert "higgs" in processor.PROVIDER_REQUIREMENTS
@@ -457,7 +471,8 @@ class TestAudioUtils:
         assert "vibevoice" in processor.PROVIDER_REQUIREMENTS
 
     def test_validate_audio(self):
-        """Test audio validation"""
+
+             """Test audio validation"""
         processor = AudioProcessor()
 
         # Create a simple WAV header (minimal valid WAV)
@@ -474,7 +489,8 @@ class TestAudioUtils:
             assert isinstance(msg, str)
 
     def test_process_voice_reference(self):
-        """Test voice reference processing"""
+
+             """Test voice reference processing"""
         # Create a base64 encoded simple audio
         audio_data = b'RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00"V\x00\x00D\xac\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00' + b'\x00\x00' * 1000
         base64_audio = base64.b64encode(audio_data).decode('utf-8')
@@ -510,7 +526,8 @@ class TestCircuitBreaker:
     """Tests for Circuit Breaker"""
 
     def test_circuit_breaker_initialization(self):
-        """Test circuit breaker initialization"""
+
+             """Test circuit breaker initialization"""
         cb = CircuitBreaker(
             provider_name="test",
             failure_threshold=3,
@@ -615,7 +632,8 @@ class TestAdapterRegistry:
     """Tests for Adapter Registry"""
 
     def test_registry_initialization(self):
-        """Test registry initialization"""
+
+             """Test registry initialization"""
         config = {
             "providers": {
                 "openai": {"enabled": True},
@@ -698,7 +716,8 @@ class TestVoiceCloning:
         assert request.voice == "clone"
 
     def test_voice_reference_validation(self):
-        """Test voice reference validation"""
+
+             """Test voice reference validation"""
         processor = AudioProcessor()
 
         # Test provider requirements

@@ -35,7 +35,8 @@ class _FakePoolPg:
         self._conn = conn
 
     def acquire(self) -> _AcquireCtx:
-        return _AcquireCtx(self._conn)
+
+             return _AcquireCtx(self._conn)
 
 
 @pytest.mark.asyncio

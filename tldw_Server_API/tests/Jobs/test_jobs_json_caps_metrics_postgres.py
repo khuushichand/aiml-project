@@ -13,7 +13,9 @@ pytestmark = [
 
 
 def test_json_truncation_emits_metrics_postgres(monkeypatch, jobs_pg_dsn):
-    monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
+
+
+     monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
     monkeypatch.setenv("JOBS_MAX_JSON_BYTES", "64")
     monkeypatch.setenv("JOBS_JSON_TRUNCATE", "true")
     reg = get_metrics_registry()

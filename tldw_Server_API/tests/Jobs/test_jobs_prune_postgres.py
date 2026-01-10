@@ -23,7 +23,9 @@ def _backdate_pg(dsn: str, job_id: int, days: int = 2):
 
 
 def test_jobs_prune_dry_run_and_filters_postgres(monkeypatch, jobs_pg_dsn):
-    # Set env so endpoint manager uses PG
+
+
+     # Set env so endpoint manager uses PG
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
@@ -73,7 +75,9 @@ def test_jobs_prune_dry_run_and_filters_postgres(monkeypatch, jobs_pg_dsn):
 
 
 def test_jobs_prune_filters_scope_postgres(monkeypatch, jobs_pg_dsn):
-    # Configure PG and single-user test mode
+
+
+     # Configure PG and single-user test mode
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)

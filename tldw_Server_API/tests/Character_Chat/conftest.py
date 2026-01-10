@@ -3,7 +3,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _override_character_chat_rate_limits_for_character_chat(monkeypatch):
-    """Relax Character-Chat rate limits for this test package to avoid flakiness.
+     """Relax Character-Chat rate limits for this test package to avoid flakiness.
 
     Tests focused on behavior, not rate enforcement, should not fail due to
     incidental shared limiter state. Specific rate-limit tests can override

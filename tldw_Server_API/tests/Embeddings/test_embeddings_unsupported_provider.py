@@ -8,14 +8,14 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
 @pytest.fixture(autouse=True)
 def _testing_env():
-    os.environ["TESTING"] = "true"
+     os.environ["TESTING"] = "true"
     yield
     os.environ.pop("TESTING", None)
 
 
 @pytest.fixture
 def client():
-    with TestClient(app) as c:
+     with TestClient(app) as c:
         c.cookies.set("csrf_token", "csrf")
         c.headers["X-CSRF-Token"] = "csrf"
         c.headers["Authorization"] = "Bearer test-api-key"
@@ -23,7 +23,9 @@ def client():
 
 
 def _override_user(admin=False):
-    async def _f():
+
+
+     async def _f():
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
         return User(id=1, username="u", email="u@x", is_active=True, is_admin=admin)
     return _f
@@ -31,7 +33,7 @@ def _override_user(admin=False):
 
 @pytest.mark.unit
 def test_unsupported_provider_returns_501(client):
-    # Ensure admin bypass does not affect behavior (use non-admin)
+     # Ensure admin bypass does not affect behavior (use non-admin)
     app.dependency_overrides[get_request_user] = _override_user(admin=False)
     # request with an enum-known but not implemented provider (mistral)
     r = client.post(

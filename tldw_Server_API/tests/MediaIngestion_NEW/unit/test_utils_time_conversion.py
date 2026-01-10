@@ -15,16 +15,16 @@ from tldw_Server_API.app.core.Utils.Utils import convert_to_seconds
     ],
 )
 def test_convert_to_seconds_accepts_decimal_inputs(input_value, expected):
-    assert convert_to_seconds(input_value) == expected
+     assert convert_to_seconds(input_value) == expected
 
 
 @pytest.mark.unit
 def test_convert_to_seconds_rejects_negative_values():
-    with pytest.raises(ValueError):
+     with pytest.raises(ValueError):
         convert_to_seconds("-1")
 
 
 @pytest.mark.unit
 def test_convert_to_seconds_rejects_invalid_format():
-    with pytest.raises(ValueError):
+     with pytest.raises(ValueError):
         convert_to_seconds("1:2:3:4")

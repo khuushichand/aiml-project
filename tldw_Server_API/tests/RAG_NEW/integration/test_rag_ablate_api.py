@@ -11,12 +11,12 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture(autouse=True)
 def _test_mode(monkeypatch):
-    monkeypatch.setenv("TEST_MODE", "1")
+     monkeypatch.setenv("TEST_MODE", "1")
 
 
 @pytest.fixture()
 def client_with_overrides(monkeypatch, auth_headers):
-    async def override_user():
+     async def override_user():
         return User(id=1, username="tester", email=None, is_active=True)
 
     async def _noop():
@@ -57,7 +57,9 @@ def client_with_overrides(monkeypatch, auth_headers):
 
 
 def test_rag_ablate_smoke(client_with_overrides, monkeypatch):
-    client = client_with_overrides
+
+
+     client = client_with_overrides
 
     # Patch retrievers for both unified_pipeline and agentic_chunker to return a simple doc
     from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
@@ -108,7 +110,9 @@ def test_rag_ablate_smoke(client_with_overrides, monkeypatch):
 
 
 def test_rag_ablate_capabilities_smoke(auth_headers):
-    # Quick smoke to ensure capabilities advertises new agentic knobs
+
+
+     # Quick smoke to ensure capabilities advertises new agentic knobs
     with TestClient(fastapi_app, headers=auth_headers) as client:
         resp = client.get("/api/v1/rag/capabilities")
         assert resp.status_code == 200, resp.text

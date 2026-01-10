@@ -5,17 +5,20 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 
 def test_claims_webhook_delivery_retries_and_records(monkeypatch, tmp_path):
-    db_path = tmp_path / "media.db"
+
+
+     db_path = tmp_path / "media.db"
     db = MediaDatabase(db_path=str(db_path), client_id="test")
     db.initialize_db()
     db.close_connection()
 
     class DummyClient:
         def __enter__(self):
-            return self
+                     return self
 
         def __exit__(self, exc_type, exc, tb):
-            return False
+
+                     return False
 
     class DummyResponse:
         def __init__(self, status_code: int) -> None:
@@ -25,11 +28,13 @@ def test_claims_webhook_delivery_retries_and_records(monkeypatch, tmp_path):
     delivery_calls = []
 
     def fake_fetch(*_args, **_kwargs):
-        status = responses.pop(0)
+
+             status = responses.pop(0)
         return DummyResponse(status)
 
     def fake_record_delivery(**kwargs):
-        delivery_calls.append(kwargs)
+
+             delivery_calls.append(kwargs)
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.http_client.create_client",
@@ -68,24 +73,28 @@ def test_claims_webhook_delivery_retries_and_records(monkeypatch, tmp_path):
 
 
 def test_claims_webhook_backoff_schedule(monkeypatch, tmp_path):
-    db_path = tmp_path / "media.db"
+
+
+     db_path = tmp_path / "media.db"
     db = MediaDatabase(db_path=str(db_path), client_id="test")
     db.initialize_db()
     db.close_connection()
 
     class DummyClient:
         def __enter__(self):
-            return self
+                     return self
 
         def __exit__(self, exc_type, exc, tb):
-            return False
+
+                     return False
 
     class DummyResponse:
         def __init__(self, status_code: int) -> None:
             self.status_code = status_code
 
     def fake_fetch(*_args, **_kwargs):
-        return DummyResponse(500)
+
+             return DummyResponse(500)
 
     sleeps = []
 

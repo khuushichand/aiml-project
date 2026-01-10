@@ -12,7 +12,9 @@ pytestmark = pytest.mark.integration
 
 
 def test_host_allow_deny_logic(monkeypatch):
-    # Global allow/deny lists
+
+
+     # Global allow/deny lists
     monkeypatch.setenv("WORKFLOWS_WEBHOOK_ALLOWLIST", "*.ok.test,allowed.example")
     monkeypatch.setenv("WORKFLOWS_WEBHOOK_DENYLIST", "deny.test,*.blocked.tld")
     assert dlq_mod._host_allowed("https://foo.ok.test/h", "default") is True
@@ -48,7 +50,7 @@ async def test_dlq_worker_backoff_and_delivery(monkeypatch, tmp_path):
     # Stub afetch behavior: first call fails, second succeeds
     class DummyResp:
         def __init__(self, status_code=200):
-            self.status_code = status_code
+                     self.status_code = status_code
             self.text = "ok"
         async def aclose(self):
             return None

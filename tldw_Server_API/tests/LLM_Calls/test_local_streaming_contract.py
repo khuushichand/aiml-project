@@ -17,23 +17,27 @@ class DummyResponse:
         self._close_calls = 0
 
     def raise_for_status(self) -> None:
-        return None
+
+             return None
 
     def iter_lines(self):
-        for line in self._lines:
+
+             for line in self._lines:
             yield line
 
     def iter_text(self):
-        for line in self._lines:
+
+             for line in self._lines:
             text = line.decode("utf-8", errors="replace") if isinstance(line, bytes) else str(line)
             yield text
 
     def close(self) -> None:
-        self._close_calls += 1
+
+             self._close_calls += 1
 
     @property
     def close_calls(self) -> int:
-        return self._close_calls
+             return self._close_calls
 
 
 class DummyStreamContext:
@@ -43,17 +47,19 @@ class DummyStreamContext:
         self._response = response
 
     def __enter__(self) -> DummyResponse:
-        return self._response
+
+             return self._response
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
-        self._response.close()
+
+             self._response.close()
         # Propagate exceptions so the caller can handle them.
         return False
 
 
 @pytest.mark.unit
 def test_local_streaming_normalizes_sse_and_closes_client():
-    # Simulate a local provider that emits a raw text line and an SSE-formatted line,
+     # Simulate a local provider that emits a raw text line and an SSE-formatted line,
     # without sending a [DONE] sentinel. The helper should normalize the output and
     # append the final sentinel for us.
     raw_lines = [
@@ -68,14 +74,16 @@ def test_local_streaming_normalizes_sse_and_closes_client():
     client_closed = {"called": False}
 
     def fake_stream(method, url, headers=None, json=None, timeout=None):
-        assert method == "POST"
+
+             assert method == "POST"
         assert json["stream"] is True
         return DummyStreamContext(dummy_response)
 
     def fake_close():
-        client_closed["called"] = True
 
-    with patch("tldw_Server_API.app.core.LLM_Calls.local_chat_calls.httpx.Client") as mock_client_cls:
+             client_closed["called"] = True
+
+    with patch("tldw_Server_API.app.core.LLM_Calls.local_chat_calls._hc_create_client") as mock_client_cls:
         mock_client = MagicMock()
         mock_client.stream.side_effect = fake_stream
         mock_client.close.side_effect = fake_close

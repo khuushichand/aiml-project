@@ -14,7 +14,9 @@ def _dummy_request(user_id: int | None):
 
 
 def test_csrf_binding_user_suffix_ok(monkeypatch):
-    reset_settings()
+
+
+     reset_settings()
     monkeypatch.setenv("CSRF_BIND_TO_USER", "true")
     mgr = CSRFTokenManager()
     req = _dummy_request(42)
@@ -26,7 +28,9 @@ def test_csrf_binding_user_suffix_ok(monkeypatch):
 
 
 def test_csrf_binding_unbound_token_rejected(monkeypatch):
-    reset_settings()
+
+
+     reset_settings()
     monkeypatch.setenv("CSRF_BIND_TO_USER", "true")
     mgr = CSRFTokenManager()
     req = _dummy_request(None)
@@ -37,7 +41,9 @@ def test_csrf_binding_unbound_token_rejected(monkeypatch):
 
 
 def test_csrf_no_binding(monkeypatch):
-    reset_settings()
+
+
+     reset_settings()
     monkeypatch.setenv("CSRF_BIND_TO_USER", "false")
     mgr = CSRFTokenManager()
     req = _dummy_request(None)
@@ -47,7 +53,9 @@ def test_csrf_no_binding(monkeypatch):
 
 
 def test_csrf_single_user_bearer_skips_protection(monkeypatch):
-    monkeypatch.setenv("AUTH_MODE", "single_user")
+
+
+     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("SINGLE_USER_API_KEY", "bearer-test-key-1234567890")
     monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
     reset_settings()

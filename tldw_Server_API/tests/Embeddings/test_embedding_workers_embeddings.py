@@ -41,7 +41,7 @@ from tldw_Server_API.app.core.Chunking.constants import FRONTMATTER_SENTINEL_KEY
 
 @pytest.fixture
 def base_worker_config():
-    """Fixture for base worker configuration"""
+     """Fixture for base worker configuration"""
     return WorkerConfig(
         worker_id="test-worker-1",
         worker_type="test",
@@ -59,7 +59,7 @@ def base_worker_config():
 
 @pytest.fixture
 def embedding_worker_config():
-    """Fixture for embedding worker configuration"""
+     """Fixture for embedding worker configuration"""
     return EmbeddingWorkerConfig(
         worker_id="embedding-worker-1",
         worker_type="embedding",
@@ -75,7 +75,7 @@ def embedding_worker_config():
 
 @pytest.fixture
 def chunking_message():
-    """Fixture for a sample chunking message"""
+     """Fixture for a sample chunking message"""
     return ChunkingMessage(
         job_id="test-job-123",
         user_id="user-456",
@@ -95,7 +95,7 @@ def chunking_message():
 
 @pytest.fixture
 def embedding_message():
-    """Fixture for a sample embedding message"""
+     """Fixture for a sample embedding message"""
     return EmbeddingMessage(
         job_id="test-job-123",
         user_id="user-456",
@@ -127,7 +127,7 @@ def embedding_message():
 
 @pytest.fixture
 def storage_message():
-    """Fixture for a sample storage message"""
+     """Fixture for a sample storage message"""
     return StorageMessage(
         job_id="test-job-123",
         user_id="user-456",
@@ -161,7 +161,8 @@ class InMemoryRedis:
     """Minimal in-memory Redis stand-in covering commands used by workers."""
 
     def __init__(self):
-        self.streams = defaultdict(list)
+
+             self.streams = defaultdict(list)
         self.hashes = defaultdict(dict)
         self.expirations = {}
         self.setex_values = {}
@@ -209,12 +210,14 @@ class InMemoryRedis:
 
 @pytest.fixture
 def redis_stub():
-    """Provide in-memory Redis replacement for unit tests."""
+     """Provide in-memory Redis replacement for unit tests."""
     return InMemoryRedis()
 
 
 def _docker_present() -> bool:
-    return shutil.which("docker") is not None
+
+
+     return shutil.which("docker") is not None
 
 
 def _wait_for_port(host: str, port: int, timeout: float = 15.0) -> bool:
@@ -230,7 +233,7 @@ def _wait_for_port(host: str, port: int, timeout: float = 15.0) -> bool:
 
 @pytest.fixture(scope="session")
 def docker_redis_service():
-    """Launch a disposable Redis container when Docker is available and requested.
+     """Launch a disposable Redis container when Docker is available and requested.
 
     Activate by setting USE_DOCKER_REDIS=1. Returns connection URL or None.
     """
@@ -277,7 +280,8 @@ class TestBaseWorker:
     """Test suite for BaseWorker class"""
 
     def test_worker_initialization(self, base_worker_config):
-        """Test that worker initializes correctly"""
+
+             """Test that worker initializes correctly"""
         # Create a concrete implementation for testing
         class TestWorker(BaseWorker):
             async def process_message(self, message: dict) -> bool:
@@ -374,7 +378,8 @@ class TestChunkingWorker:
         assert await redis_stub.xlen(worker.embedding_queue) == 1
 
     def test_chunk_text(self, base_worker_config):
-        """Test text chunking logic returns tuples with offsets"""
+
+             """Test text chunking logic returns tuples with offsets"""
         worker = ChunkingWorker(base_worker_config)
 
         text = "This is a test. It has multiple sentences. Each one should be properly chunked."
@@ -389,7 +394,8 @@ class TestChunkingWorker:
         assert end_idx <= len(text)
 
     def test_chunk_overlap(self, base_worker_config):
-        """Test that chunk overlap works correctly"""
+
+             """Test that chunk overlap works correctly"""
         worker = ChunkingWorker(base_worker_config)
 
         text = "word1 word2 word3 word4 word5 word6 word7 word8"
@@ -534,7 +540,8 @@ class TestWorkerRetryLogic:
                 return True
 
             def _parse_message(self, data):
-                return ChunkingMessage(**data)
+
+                             return ChunkingMessage(**data)
 
             async def _send_to_next_stage(self, result):
                 return None
@@ -557,7 +564,8 @@ class TestWorkerRetryLogic:
                 return True
 
             def _parse_message(self, data):
-                return ChunkingMessage(**data)
+
+                             return ChunkingMessage(**data)
 
             async def _send_to_next_stage(self, result):
                 return None
@@ -615,7 +623,9 @@ class TestWorkerMetrics:
 
 
 def test_worker_orchestration_initial_state():
-    """Ensure worker orchestrator initializes without side effects"""
+
+
+     """Ensure worker orchestrator initializes without side effects"""
     from tldw_Server_API.app.core.Embeddings.worker_orchestrator import WorkerPool
     from tldw_Server_API.app.core.Embeddings.worker_config import ChunkingWorkerPoolConfig
 

@@ -7,7 +7,7 @@ import pytest
 
 @pytest.mark.e2e
 def test_media_add_db_and_list(page, server_url):
-    page.goto(f"{server_url}/webui/")
+     page.goto(f"{server_url}/webui/")
     # Go to Media → Ingestion (DB)
     page.get_by_role("tab", name="Media").click()
     page.get_by_role("tab", name="Ingestion (DB)").click()

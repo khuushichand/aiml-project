@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Optional
+
+from loguru import logger
 
 from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
 
@@ -70,6 +73,55 @@ def get_http_error_text(exc: Exception) -> str:
     if response_text:
         return str(response_text)
     return str(exc)
+
+
+def _redact_sensitive_text(text: str) -> str:
+    if not text:
+        return text
+    try:
+        text = re.sub(r"(?i)(authorization\s*:\s*bearer)\s+[^\s,;]+", r"\1 [REDACTED]", text)
+        text = re.sub(r"(?i)(bearer)\s+[^\s,;]+", r"\1 [REDACTED]", text)
+        text = re.sub(r'(?i)("api[_ -]?key"\s*:\s*)"[^"]+"', r'\1"[REDACTED]"', text)
+        text = re.sub(r"(?i)(api[_ -]?key\s*[:=]\s*)([^\s,;]+)", r"\1[REDACTED]", text)
+    except Exception:
+        return text
+    return text
+
+
+def log_http_400_body(provider: str, exc: Exception, parsed_body: Any = None, max_chars: int = 2000) -> None:
+    try:
+        status = get_http_status_from_exception(exc)
+    except Exception:
+        status = None
+    if status != 400:
+        return
+    body_json = None
+    body_text = None
+    if parsed_body is not None:
+        body_json = parsed_body
+    else:
+        resp = getattr(exc, "response", None)
+        if resp is not None:
+            try:
+                body_json = resp.json()
+            except Exception:
+                body_json = None
+    if body_json is not None:
+        try:
+            body_text = json.dumps(body_json, ensure_ascii=True)
+        except Exception:
+            body_text = str(body_json)
+    else:
+        try:
+            body_text = get_http_error_text(exc)
+        except Exception:
+            body_text = None
+    if not body_text:
+        return
+    body_text = _redact_sensitive_text(str(body_text))
+    if max_chars is not None and len(body_text) > max_chars:
+        body_text = body_text[:max_chars] + "...(truncated)"
+    logger.warning(f"{provider or 'unknown'}: upstream 400 response body: {body_text}")
 
 
 def is_network_error(exc: Exception) -> bool:

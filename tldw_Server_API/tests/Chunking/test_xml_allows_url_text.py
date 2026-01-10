@@ -2,7 +2,9 @@ from tldw_Server_API.app.core.Chunking.strategies.json_xml import XMLChunkingStr
 
 
 def test_xml_allows_urls_in_text_nodes():
-    strategy = XMLChunkingStrategy()
+
+
+     strategy = XMLChunkingStrategy()
     xml = (
         '<?xml version="1.0"?>\n'
         '<root>\n'

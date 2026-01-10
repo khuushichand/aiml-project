@@ -8,7 +8,7 @@ from tldw_Server_API.app.core.Embeddings.queue_schemas import EmbeddingJobMessag
 
 class _FakeRedis:
     def __init__(self):
-        self.zsets = {}
+             self.zsets = {}
         self.streams = {}
         self.hashes = {}
 
@@ -46,7 +46,7 @@ class _FakeRedis:
 
 class _TestWorker(BaseWorker):
     def __init__(self):
-        cfg = WorkerConfig(
+             cfg = WorkerConfig(
             worker_id="embedding-0",
             worker_type="embedding",
             redis_url="redis://localhost:6379",
@@ -61,7 +61,8 @@ class _TestWorker(BaseWorker):
         return None
 
     def _parse_message(self, data):
-        if isinstance(data, EmbeddingJobMessage):
+
+             if isinstance(data, EmbeddingJobMessage):
             return data
         return EmbeddingJobMessage(
             job_id=data.get("job_id", "job-1"),
@@ -77,7 +78,7 @@ class _TestWorker(BaseWorker):
 
 @pytest.mark.unit
 def test_permanent_failure_goes_to_dlq():
-    w = _TestWorker()
+     w = _TestWorker()
     msg = {
         "job_id": "job-perm",
         "user_id": "u",
@@ -97,7 +98,7 @@ def test_permanent_failure_goes_to_dlq():
 
 @pytest.mark.unit
 def test_transient_failure_schedules_retry():
-    w = _TestWorker()
+     w = _TestWorker()
     msg = {
         "job_id": "job-trans",
         "user_id": "u",

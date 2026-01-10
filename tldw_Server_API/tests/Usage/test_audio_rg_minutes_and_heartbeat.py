@@ -66,7 +66,7 @@ async def test_add_daily_minutes_records_ledger_even_on_legacy_failure(monkeypat
 
 class _FakeGovernor:
     def __init__(self):
-        self.renewed = []
+             self.renewed = []
 
     async def renew(self, handle_id: str, ttl_s: int):
         self.renewed.append((handle_id, ttl_s))

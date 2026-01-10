@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture()
 def client_user_only(monkeypatch):
-    """Use full app profile so Notes endpoints are registered."""
+     """Use full app profile so Notes endpoints are registered."""
     # Force full app profile for these tests
     monkeypatch.setenv("MINIMAL_TEST_APP", "0")
     monkeypatch.setenv("ULTRA_MINIMAL_APP", "0")

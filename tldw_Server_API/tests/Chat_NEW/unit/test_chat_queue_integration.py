@@ -23,7 +23,7 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_
 
 @contextmanager
 def _test_db():
-    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
         db_path = tmp.name
     db = CharactersRAGDB(db_path, "test_client")
     db.add_character_card({
@@ -67,7 +67,7 @@ class _QueueStubAdmit:
 
 @pytest.mark.unit
 def test_queue_reject_returns_429(monkeypatch):
-    # Patch TEST_MODE for deterministic auth/rate behavior
+     # Patch TEST_MODE for deterministic auth/rate behavior
     monkeypatch.setenv("TEST_MODE", "true")
 
     with _test_db() as db, TestClient(app) as client:
@@ -94,7 +94,7 @@ def test_queue_reject_returns_429(monkeypatch):
 
 @pytest.mark.unit
 def test_queue_admit_allows_request(monkeypatch):
-    # Patch TEST_MODE for deterministic auth/rate behavior
+     # Patch TEST_MODE for deterministic auth/rate behavior
     monkeypatch.setenv("TEST_MODE", "true")
 
     with _test_db() as db, TestClient(app) as client:

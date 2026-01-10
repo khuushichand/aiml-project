@@ -11,13 +11,17 @@ from tldw_Server_API.app.core.Sandbox.models import RunStatus, RunPhase, Runtime
 
 
 def _client(monkeypatch) -> TestClient:
-    monkeypatch.setenv("TEST_MODE", "1")
+
+
+     monkeypatch.setenv("TEST_MODE", "1")
     # Use in-memory store by default (already defaulted in config)
     return TestClient(app)
 
 
 def _admin_user_dep():
-    # Override get_request_user to return admin
+
+
+     # Override get_request_user to return admin
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
     return User(id=1, username="admin", roles=["admin"], is_admin=True)
 
@@ -42,7 +46,9 @@ def _seed_run(run_id: str, user_id: int, image_digest: str, started_offset_sec: 
 
 
 def test_admin_list_filters_and_pagination(monkeypatch):
-    # Override dependency for admin routes
+
+
+     # Override dependency for admin routes
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
     app.dependency_overrides[get_request_user] = _admin_user_dep
 
@@ -83,7 +89,9 @@ def test_admin_list_filters_and_pagination(monkeypatch):
 
 
 def test_admin_list_filter_by_user_and_phase(monkeypatch):
-    # Override dependency for admin routes
+
+
+     # Override dependency for admin routes
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
     app.dependency_overrides[get_request_user] = _admin_user_dep
 
@@ -110,7 +118,9 @@ def test_admin_list_filter_by_user_and_phase(monkeypatch):
 
 
 def test_admin_list_sort_asc_desc(monkeypatch):
-    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
+
+
+     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
     app.dependency_overrides[get_request_user] = _admin_user_dep
 
     with _client(monkeypatch) as client:

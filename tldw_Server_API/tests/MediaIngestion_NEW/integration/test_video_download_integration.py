@@ -16,7 +16,7 @@ def _serve_directory(directory: Path):
     """Run a temporary HTTP server rooted at ``directory``."""
     class QuietHandler(http.server.SimpleHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
-            super().__init__(*args, directory=str(directory), **kwargs)
+                     super().__init__(*args, directory=str(directory), **kwargs)
 
         def log_message(self, fmt, *args):  # noqa: A003 - keep handler signature
             return
@@ -42,7 +42,7 @@ def _serve_directory(directory: Path):
 
 @pytest.mark.integration
 def test_download_video_real_http(tmp_path):
-    """Exercise download_video end-to-end against a local HTTP server."""
+     """Exercise download_video end-to-end against a local HTTP server."""
     ffmpeg_path = shutil.which("ffmpeg")
     if not ffmpeg_path:
         pytest.skip("ffmpeg not available; skipping HTTP download integration test.")

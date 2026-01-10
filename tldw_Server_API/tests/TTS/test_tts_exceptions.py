@@ -48,7 +48,8 @@ class TestTTSExceptionHierarchy:
     """Test the TTS exception hierarchy structure"""
 
     def test_base_exception_initialization(self):
-        """Test base TTSError initialization"""
+
+             """Test base TTSError initialization"""
         error = TTSError(
             message="Test error",
             provider="test_provider",
@@ -63,7 +64,8 @@ class TestTTSExceptionHierarchy:
         assert error.timestamp is not None
 
     def test_exception_inheritance(self):
-        """Test that all exceptions inherit from TTSError"""
+
+             """Test that all exceptions inherit from TTSError"""
         exceptions = [
             TTSProviderNotConfiguredError("test"),
             TTSProviderInitializationError("test"),
@@ -81,7 +83,8 @@ class TestTTSExceptionHierarchy:
             assert isinstance(exc, Exception)
 
     def test_validation_exception_subtypes(self):
-        """Test validation exception subtypes"""
+
+             """Test validation exception subtypes"""
         text_error = TTSTextTooLongError("Text too long", provider="test", details={"max_length": 1000, "actual_length": 2000})
         assert isinstance(text_error, TTSValidationError)
         assert text_error.details["max_length"] == 1000
@@ -98,7 +101,8 @@ class TestTTSExceptionHierarchy:
         assert format_error.details["supported_formats"] == ["mp3", "wav"]
 
     def test_resource_exception_subtypes(self):
-        """Test resource exception subtypes"""
+
+             """Test resource exception subtypes"""
         memory_error = TTSInsufficientMemoryError(
             "Out of memory",
             provider="test",
@@ -121,7 +125,8 @@ class TestErrorCategorization:
     """Test error categorization functions"""
 
     def test_categorize_error(self):
-        """Test error categorization"""
+
+             """Test error categorization"""
         # Configuration errors
         assert categorize_error(TTSProviderNotConfiguredError("test")) == "configuration"
         assert categorize_error(TTSProviderInitializationError("test")) == "configuration"
@@ -151,7 +156,8 @@ class TestErrorCategorization:
         assert categorize_error(ValueError("test")) == "unknown"
 
     def test_is_retryable_error(self):
-        """Test retryable error detection"""
+
+             """Test retryable error detection"""
         # Retryable errors
         assert is_retryable_error(TTSNetworkError("test")) is True
         assert is_retryable_error(TTSTimeoutError("test")) is True
@@ -167,7 +173,8 @@ class TestErrorCategorization:
         assert is_retryable_error(ValueError("test")) is False
 
     def test_get_http_status_for_error(self):
-        """Test HTTP status code mapping"""
+
+             """Test HTTP status code mapping"""
         # 400 Bad Request
         assert get_http_status_for_error(TTSValidationError("test")) == 400
         assert get_http_status_for_error(TTSTextTooLongError("test")) == 400
@@ -207,7 +214,8 @@ class TestConvenienceFunctions:
     """Test convenience error creation functions"""
 
     def test_auth_error(self):
-        """Test auth_error convenience function"""
+
+             """Test auth_error convenience function"""
         error = auth_error("test_provider", "Invalid API key")
 
         assert isinstance(error, TTSAuthenticationError)
@@ -216,7 +224,8 @@ class TestConvenienceFunctions:
         assert error.details["suggestion"] == "Check your API key configuration"
 
     def test_rate_limit_error(self):
-        """Test rate_limit_error convenience function"""
+
+             """Test rate_limit_error convenience function"""
         error = rate_limit_error("test_provider", retry_after=60)
 
         assert isinstance(error, TTSRateLimitError)
@@ -225,7 +234,8 @@ class TestConvenienceFunctions:
         assert "Rate limit exceeded" in str(error)
 
     def test_network_error(self):
-        """Test network_error convenience function"""
+
+             """Test network_error convenience function"""
         original_error = ConnectionError("Connection failed")
         error = network_error("test_provider", original_error)
 
@@ -234,7 +244,8 @@ class TestConvenienceFunctions:
         assert "Connection failed" in error.details["original_error"]
 
     def test_timeout_error(self):
-        """Test timeout_error convenience function"""
+
+             """Test timeout_error convenience function"""
         error = timeout_error("test_provider", timeout_seconds=30)
 
         assert isinstance(error, TTSTimeoutError)
@@ -242,7 +253,8 @@ class TestConvenienceFunctions:
         assert error.details["timeout_seconds"] == 30
 
     def test_validation_error(self):
-        """Test validation_error convenience function"""
+
+             """Test validation_error convenience function"""
         error = validation_error(
             field="text",
             value="test",
@@ -256,7 +268,8 @@ class TestConvenienceFunctions:
         assert error.details["max"] == 100
 
     def test_resource_error(self):
-        """Test resource_error convenience function"""
+
+             """Test resource_error convenience function"""
         error = resource_error(
             "test_provider",
             resource_type="memory",
@@ -275,7 +288,8 @@ class TestErrorHandlingIntegration:
     """Test error handling in integrated scenarios"""
 
     def test_error_chain_preservation(self):
-        """Test that error chains preserve information"""
+
+             """Test that error chains preserve information"""
         original = ValueError("Original error")
 
         try:
@@ -289,7 +303,8 @@ class TestErrorHandlingIntegration:
             assert "Original error" in e.details["original_error"]
 
     def test_error_context_aggregation(self):
-        """Test aggregating context across error handling"""
+
+             """Test aggregating context across error handling"""
         error = TTSGenerationError(
             "Generation failed",
             provider="test_provider",
@@ -305,7 +320,8 @@ class TestErrorHandlingIntegration:
         assert error.details["attempt"] == 1
 
     def test_error_recovery_metadata(self):
-        """Test that errors include recovery metadata"""
+
+             """Test that errors include recovery metadata"""
         error = TTSRateLimitError(
             "Rate limit hit",
             provider="test",

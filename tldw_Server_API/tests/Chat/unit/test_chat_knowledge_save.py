@@ -24,7 +24,9 @@ def _build_app(db: CharactersRAGDB) -> TestClient:
 
 
 def test_knowledge_save_creates_note_with_backlinks(tmp_path):
-    db_path = tmp_path / "chacha.db"
+
+
+     db_path = tmp_path / "chacha.db"
     db = CharactersRAGDB(db_path=str(db_path), client_id="user-1")
     app = _build_app(db)
 
@@ -56,7 +58,9 @@ def test_knowledge_save_creates_note_with_backlinks(tmp_path):
 
 
 def test_knowledge_save_export_guard(tmp_path, monkeypatch):
-    db_path = tmp_path / "chacha.db"
+
+
+     db_path = tmp_path / "chacha.db"
     db = CharactersRAGDB(db_path=str(db_path), client_id="user-1")
     app = _build_app(db)
 

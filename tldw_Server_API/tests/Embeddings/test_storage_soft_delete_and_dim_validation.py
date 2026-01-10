@@ -8,7 +8,7 @@ from tldw_Server_API.app.core.Embeddings.queue_schemas import StorageMessage, Em
 
 class _FakeRedis:
     def __init__(self):
-        self.kv = {}
+             self.kv = {}
         self.hashes = {}
 
     async def set(self, key, value, ex=None):
@@ -23,29 +23,33 @@ class _FakeRedis:
 
 class _FakeCollection:
     def __init__(self, metadata=None):
-        self.metadata = dict(metadata or {})
+             self.metadata = dict(metadata or {})
         self.deleted_where = None
         self._embs = {}
 
     def delete(self, where=None, ids=None):
-        self.deleted_where = where or {}
+
+             self.deleted_where = where or {}
 
     def get(self, limit=1, include=None):
-        # Return one existing embedding to simulate existing dimension when metadata absent
+
+             # Return one existing embedding to simulate existing dimension when metadata absent
         if include and 'embeddings' in include:
             return {'embeddings': [[0.0, 0.0, 0.0, 0.0]]}
         return {}
 
     def upsert(self, **kwargs):
-        return None
+
+             return None
 
     def add(self, **kwargs):
-        return None
+
+             return None
 
 
 class _StorageSoftDelete(StorageWorker):
     def __init__(self, cfg, fake_collection):
-        super().__init__(cfg)
+             super().__init__(cfg)
         self._fake_collection = fake_collection
 
     async def _get_or_create_collection(self, user_id: str, collection_name: str, collection_metadata=None):
@@ -63,7 +67,7 @@ class _StorageSoftDelete(StorageWorker):
 
 @pytest.mark.unit
 def test_storage_soft_delete_propagates_delete(monkeypatch):
-    cfg = WorkerConfig(
+     cfg = WorkerConfig(
         worker_id="storage-1",
         worker_type="storage",
         redis_url="redis://localhost:6379",
@@ -89,7 +93,7 @@ def test_storage_soft_delete_propagates_delete(monkeypatch):
 
 class _StorageDimCheck(StorageWorker):
     def __init__(self, cfg, fake_collection):
-        super().__init__(cfg)
+             super().__init__(cfg)
         self._fake_collection = fake_collection
 
     async def _get_or_create_collection(self, user_id: str, collection_name: str, collection_metadata=None):
@@ -98,7 +102,7 @@ class _StorageDimCheck(StorageWorker):
 
 @pytest.mark.unit
 def test_storage_dim_mismatch_hard_error(monkeypatch):
-    cfg = WorkerConfig(
+     cfg = WorkerConfig(
         worker_id="storage-2",
         worker_type="storage",
         redis_url="redis://localhost:6379",

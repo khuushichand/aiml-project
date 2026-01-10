@@ -154,7 +154,7 @@ def _drop_postgres_database(config: DatabaseConfig) -> None:
 
 @pytest.fixture(scope="module")
 def prompt_studio_dual_backend_client(tmp_path_factory):
-    """Module-local override: choose exactly one backend for this heavy suite.
+     """Module-local override: choose exactly one backend for this heavy suite.
 
     Backend is selected via env TLDW_PS_BACKEND (sqlite|postgres), default sqlite.
     No cross-backend parameterization here to avoid mixing backends in one run.
@@ -282,7 +282,9 @@ def prompt_studio_dual_backend_client(tmp_path_factory):
 
 
 def _should_stress() -> bool:
-    return os.getenv("TLDW_PS_STRESS", "0").strip() in {"1", "true", "yes", "on", "y"}
+
+
+     return os.getenv("TLDW_PS_STRESS", "0").strip() in {"1", "true", "yes", "on", "y"}
 
 
 def _int_from_env(name: str, default: int) -> int:
@@ -327,7 +329,7 @@ async def _seed_test_cases(client, project_id: int, total: int) -> List[int]:
 
 @pytest.fixture(scope="module")
 def ps_seeded_project(prompt_studio_dual_backend_client):
-    """Create one project and seed test cases once per module to share across tests.
+     """Create one project and seed test cases once per module to share across tests.
 
     Honors TLDW_PS_TC_COUNT with lower defaults; use TLDW_PS_STRESS=1 for larger sizes.
     """

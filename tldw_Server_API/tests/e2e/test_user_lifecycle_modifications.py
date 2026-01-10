@@ -51,6 +51,7 @@ class TestUserLifecycleModifications:
         return media_id in ids
 
     def test_01_upload_embed_and_search(self, api_client, data_tracker):
+
         """Upload a doc with a unique token, generate embeddings, verify search/RAG visibility."""
         content_v1 = f"This is lifecycle v1 with token: {self.token_old}. Some extra context for indexing."
         file_path = create_test_file(content_v1)
@@ -88,6 +89,7 @@ class TestUserLifecycleModifications:
             cleanup_test_file(file_path)
 
     def test_02_update_content_reembed_and_verify_indexes(self, api_client):
+
         """Update media content, regenerate embeddings, verify search/RAG reflect new token and not old."""
         if not TestUserLifecycleModifications.media_id:
             pytest.skip("No media from previous step")
@@ -135,6 +137,7 @@ class TestUserLifecycleModifications:
             pass
 
     def test_03_rollback_to_previous_version_and_verify(self, api_client):
+
         """Rollback to the previous version and verify old token is restored in indexes."""
         if not TestUserLifecycleModifications.media_id:
             pytest.skip("No media from previous step")
@@ -172,7 +175,8 @@ class TestMultiUserDataIsolation:
     """Multi-user isolation checks: user B cannot see or access user A's media."""
 
     def test_user_isolation_upload_as_user_a_and_verify_invisible_to_user_b(self, api_client, test_user_credentials, data_tracker):
-        # Ensure we're in multi-user mode
+
+            # Ensure we're in multi-user mode
         info = api_client.health_check()
         mode_env = os.getenv("AUTH_MODE", "").lower()
         if (info.get("auth_mode") or mode_env) not in {"multi_user", "multi-user", "multiuser"}:

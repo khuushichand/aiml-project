@@ -36,7 +36,7 @@ class TestOpenAIAdapterInitialization:
 
     @pytest.mark.unit
     def test_adapter_initialization_with_config(self):
-        """Test adapter initialization with configuration."""
+             """Test adapter initialization with configuration."""
         config = {
             "openai_api_key": "test-key-123",
             "openai_base_url": "https://api.openai.com/v1/audio/speech",
@@ -160,7 +160,7 @@ class TestOpenAIAdapterInitialization:
 
     @pytest.mark.unit
     def test_adapter_supported_models(self):
-        """Test adapter supports setting known models via config."""
+             """Test adapter supports setting known models via config."""
         adapter_default = OpenAITTSAdapter({"openai_api_key": "test-key"})
         assert adapter_default.model in ("tts-1", "tts-1-hd")
 

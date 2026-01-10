@@ -7,7 +7,9 @@ from tldw_Server_API.app.core.Security.webui_csp import WebUICSPMiddleware
 
 
 def _make_app():
-    app = FastAPI()
+
+
+     app = FastAPI()
     app.add_middleware(WebUICSPMiddleware)
 
     @app.get("/webui/ping")
@@ -36,7 +38,7 @@ def _script_src(header_val: str) -> str:
 
 @pytest.mark.parametrize("truthy", ["1", "true", "TRUE", "Yes", "on", "Y"])  # accepted truthy values
 def test_webui_csp_no_eval_env_truthy_disables_eval(monkeypatch, truthy):
-    monkeypatch.setenv("TLDW_WEBUI_NO_EVAL", truthy)
+     monkeypatch.setenv("TLDW_WEBUI_NO_EVAL", truthy)
     # ensure env default doesn't interfere
     for k in ("ENVIRONMENT", "APP_ENV", "ENV"):
         monkeypatch.delenv(k, raising=False)
@@ -53,7 +55,7 @@ def test_webui_csp_no_eval_env_truthy_disables_eval(monkeypatch, truthy):
 
 @pytest.mark.parametrize("falsy", ["0", "false", "False", "off", "n", "no"])  # common falsy inputs
 def test_webui_csp_no_eval_env_falsy_enables_eval(monkeypatch, falsy):
-    monkeypatch.setenv("TLDW_WEBUI_NO_EVAL", falsy)
+     monkeypatch.setenv("TLDW_WEBUI_NO_EVAL", falsy)
     for k in ("ENVIRONMENT", "APP_ENV", "ENV"):
         monkeypatch.delenv(k, raising=False)
 
@@ -68,7 +70,9 @@ def test_webui_csp_no_eval_env_falsy_enables_eval(monkeypatch, falsy):
 
 
 def test_webui_csp_default_prod_disables_eval(monkeypatch):
-    # Unset NO_EVAL; set prod env
+
+
+     # Unset NO_EVAL; set prod env
     monkeypatch.delenv("TLDW_WEBUI_NO_EVAL", raising=False)
     monkeypatch.setenv("ENVIRONMENT", "production")
     # Clear alternatives to avoid ambiguity
@@ -85,7 +89,9 @@ def test_webui_csp_default_prod_disables_eval(monkeypatch):
 
 
 def test_webui_csp_default_dev_enables_eval(monkeypatch):
-    # Unset NO_EVAL; set non-prod env
+
+
+     # Unset NO_EVAL; set non-prod env
     monkeypatch.delenv("TLDW_WEBUI_NO_EVAL", raising=False)
     monkeypatch.setenv("ENVIRONMENT", "development")
     for k in ("APP_ENV", "ENV"):
@@ -101,7 +107,9 @@ def test_webui_csp_default_dev_enables_eval(monkeypatch):
 
 
 def test_setup_csp_allows_inline_and_eval(monkeypatch):
-    # Regardless of env, /setup should allow both
+
+
+     # Regardless of env, /setup should allow both
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("TLDW_WEBUI_NO_EVAL", "1")  # would disable eval for /webui, but /setup stays permissive
 

@@ -28,6 +28,7 @@ from tldw_Server_API.app.core.config import settings
 
 from tldw_Server_API.app.api.v1.endpoints import media_embeddings as embeddings_endpoint
 from tldw_Server_API.app.core.Chunking.templates import TemplateClassifier
+from tldw_Server_API.app.api.v1.utils.rag_cache import invalidate_rag_caches
 
 
 router = APIRouter(tags=["Media Management"])
@@ -110,6 +111,13 @@ def _delete_embeddings_for_media(media_id: int, user_id: str) -> None:
         ids = (data or {}).get("ids") or []
         if ids:
             collection.delete(ids=ids)
+    try:
+        remaining = collection.get(where={"media_id": str(media_id)}, include=["metadatas"], limit=1)
+        remaining_ids = (remaining or {}).get("ids") or []
+        if remaining_ids:
+            collection.delete(ids=remaining_ids)
+    except Exception as exc:
+        logger.warning("Failed to verify embeddings delete for media %s: %s", media_id, exc)
 
 
 async def _generate_embeddings(
@@ -119,6 +127,7 @@ async def _generate_embeddings(
     request: ReprocessMediaRequest,
     user_id: str,
     db: MediaDatabase,
+    cache_namespaces: Optional[List[str]] = None,
 ) -> None:
     try:
         embedding_model = request.embedding_model or settings.get(
@@ -138,6 +147,7 @@ async def _generate_embeddings(
             chunk_overlap=request.chunk_overlap,
             user_id=user_id,
         )
+        invalidate_rag_caches(None, namespaces=cache_namespaces, media_id=media_id)
     except Exception as exc:
         error_detail = f"{type(exc).__name__}: {exc}"
         logger.error("Embeddings regeneration failed for media %s: %s", media_id, error_detail)
@@ -279,6 +289,17 @@ async def reprocess_media_item(
         except DatabaseError as exc:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
+    cache_namespaces: List[str] = []
+    try:
+        username = getattr(current_user, "username", None)
+        if username:
+            cache_namespaces.append(str(username))
+        user_id_val = getattr(current_user, "id", None)
+        if user_id_val is not None and user_id_val != "":
+            cache_namespaces.append(str(user_id_val))
+    except Exception:
+        cache_namespaces = []
+
     embeddings_started = False
     if payload.generate_embeddings:
         raw_user_id = getattr(current_user, "id", None)
@@ -303,11 +324,14 @@ async def reprocess_media_item(
             request=payload,
             user_id=user_id,
             db=db,
+            cache_namespaces=cache_namespaces,
         )
 
     message = "Reprocess completed."
     if payload.generate_embeddings:
         message = "Reprocess completed; embeddings regeneration started."
+
+    invalidate_rag_caches(current_user, media_id=media_id)
 
     return ReprocessMediaResponse(
         media_id=media_id,

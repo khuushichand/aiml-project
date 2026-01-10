@@ -7,7 +7,9 @@ pytestmark = pytest.mark.unit
 
 
 def _has_httpx():
-    try:
+
+
+     try:
         import httpx  # noqa: F401
         return True
     except Exception:
@@ -19,7 +21,7 @@ requires_httpx = pytest.mark.skipif(not _has_httpx(), reason="httpx not installe
 
 @requires_httpx
 def test_tls_pinning_success(monkeypatch):
-    from tldw_Server_API.app.core import http_client as hc
+     from tldw_Server_API.app.core import http_client as hc
     from tldw_Server_API.app.core.http_client import _check_cert_pinning
 
     fake_der = b"fakecert"
@@ -27,20 +29,23 @@ def test_tls_pinning_success(monkeypatch):
 
     class FakeSSLSocket:
         def __init__(self, der):
-            self._der = der
+                     self._der = der
 
         def getpeercert(self, binary_form=False):
-            return self._der if binary_form else None
+
+                     return self._der if binary_form else None
 
         def __enter__(self):
-            return self
+
+                     return self
 
         def __exit__(self, exc_type, exc, tb):
-            return False
+
+                     return False
 
     class FakeSSLContext:
         def __init__(self):
-            self.minimum_version = None
+                     self.minimum_version = None
 
         def wrap_socket(self, sock, server_hostname=None):  # noqa: ARG002
             return FakeSSLSocket(fake_der)
@@ -50,10 +55,11 @@ def test_tls_pinning_success(monkeypatch):
 
     class FakeSocket:
         def __enter__(self):
-            return self
+                     return self
 
         def __exit__(self, exc_type, exc, tb):
-            return False
+
+                     return False
 
     def fake_create_connection(addr, timeout=None):  # noqa: ARG002
         return FakeSocket()
@@ -72,7 +78,7 @@ def test_tls_pinning_success(monkeypatch):
 
 @requires_httpx
 def test_tls_pinning_mismatch(monkeypatch):
-    from tldw_Server_API.app.core import http_client as hc
+     from tldw_Server_API.app.core import http_client as hc
     from tldw_Server_API.app.core.http_client import _check_cert_pinning
     from tldw_Server_API.app.core.exceptions import EgressPolicyError
 
@@ -80,20 +86,23 @@ def test_tls_pinning_mismatch(monkeypatch):
 
     class FakeSSLSocket:
         def __init__(self, der):
-            self._der = der
+                     self._der = der
 
         def getpeercert(self, binary_form=False):
-            return self._der if binary_form else None
+
+                     return self._der if binary_form else None
 
         def __enter__(self):
-            return self
+
+                     return self
 
         def __exit__(self, exc_type, exc, tb):
-            return False
+
+                     return False
 
     class FakeSSLContext:
         def __init__(self):
-            self.minimum_version = None
+                     self.minimum_version = None
 
         def wrap_socket(self, sock, server_hostname=None):  # noqa: ARG002
             return FakeSSLSocket(fake_der)
@@ -103,10 +112,11 @@ def test_tls_pinning_mismatch(monkeypatch):
 
     class FakeSocket:
         def __enter__(self):
-            return self
+                     return self
 
         def __exit__(self, exc_type, exc, tb):
-            return False
+
+                     return False
 
     def fake_create_connection(addr, timeout=None):  # noqa: ARG002
         return FakeSocket()
@@ -124,7 +134,9 @@ def test_tls_pinning_mismatch(monkeypatch):
 
 
 def test_tls_min_version_mapping():
-    import ssl
+
+
+     import ssl
     from tldw_Server_API.app.core.http_client import _tls_min_version_from_str
 
     assert _tls_min_version_from_str("1.3") == ssl.TLSVersion.TLSv1_3
@@ -133,7 +145,7 @@ def test_tls_min_version_mapping():
 
 @requires_httpx
 def test_env_pins_attached_to_client(monkeypatch):
-    import os
+     import os
     from tldw_Server_API.app.core.http_client import create_client, _get_client_cert_pins
 
     monkeypatch.setenv("HTTP_CERT_PINS", "example.com=deadbeef|cafebabe,api.example.com=abcd")

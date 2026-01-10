@@ -53,7 +53,8 @@ def temp_db(client_id: str = None):
             logging.debug(f"Temporary directory {temp_dir} will be removed.")
 
 def verify_media_db_schema(db):
-    """Ensure critical columns exist in Media table."""
+
+     """Ensure critical columns exist in Media table."""
     # Make sure this function uses the instance's connection method
     conn = None
     try:

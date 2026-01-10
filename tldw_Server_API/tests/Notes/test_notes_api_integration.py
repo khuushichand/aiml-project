@@ -70,7 +70,7 @@ async def override_get_chacha_db_for_user():
 class _StubRateLimiter:
     """Simple stub that denies after N calls per endpoint."""
     def __init__(self):
-        self.enabled = True
+             self.enabled = True
         # endpoint -> max allowed calls before denying
         self._limits: dict[str, int | None] = {}
         # endpoint -> current calls
@@ -82,7 +82,8 @@ class _StubRateLimiter:
         self._calls[endpoint] = 0
 
     def reset(self):
-        self._limits.clear()
+
+             self._limits.clear()
         self._calls.clear()
 
     async def check_user_rate_limit(self, user_id: int, endpoint: str, role: str = "user"):
@@ -105,7 +106,7 @@ async def override_get_rate_limiter_dep():
 
 @pytest.fixture(scope="module")
 def test_app():
-    app = FastAPI()
+     app = FastAPI()
     app.include_router(notes_router_module.router, prefix="/api/v1/notes", tags=["Notes"])
     app.dependency_overrides[notes_router_module.get_chacha_db_for_user] = override_get_chacha_db_for_user
     app.dependency_overrides[notes_router_module.get_rate_limiter_dep] = override_get_rate_limiter_dep
@@ -123,7 +124,7 @@ def client(test_app: FastAPI):
 
 @pytest.fixture(autouse=True)
 def reset_db_mock_calls():
-    mock_chacha_db_instance.reset_mock()
+     mock_chacha_db_instance.reset_mock()
     mock_chacha_db_instance.add_note.side_effect = None
     mock_chacha_db_instance.get_note_by_id.side_effect = None
     mock_chacha_db_instance.update_note.side_effect = None

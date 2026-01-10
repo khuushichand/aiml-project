@@ -5,7 +5,9 @@ pytestmark = pytest.mark.unit
 
 
 def _has_httpx():
-    try:
+
+
+     try:
         import httpx  # noqa: F401
         return True
     except Exception:
@@ -17,7 +19,7 @@ requires_httpx = pytest.mark.skipif(not _has_httpx(), reason="httpx not installe
 
 @requires_httpx
 def test_x_request_id_header_injected(monkeypatch):
-    import httpx
+     import httpx
     import tldw_Server_API.app.core.http_client as hc
     from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager
 

@@ -27,7 +27,9 @@ def _reconstruct_tokens_from_stream(chunks: List[str], max_overlap: int) -> List
 
 
 def test_chunk_file_stream_words_overlap(tmp_path):
-    # Prepare a deterministic whitespace-normalized corpus
+
+
+     # Prepare a deterministic whitespace-normalized corpus
     words = [f"w{i:04d}" for i in range(1, 1200)]
     text = " ".join(words)
     p = tmp_path / "words.txt"
@@ -55,7 +57,9 @@ def test_chunk_file_stream_words_overlap(tmp_path):
 
 
 def test_chunk_file_stream_sentences_overlap(tmp_path):
-    # Build simple sentences
+
+
+     # Build simple sentences
     sents = [f"This is sentence {i}." for i in range(1, 400)]
     text = " ".join(sents)
     p = tmp_path / "sents.txt"
@@ -76,7 +80,9 @@ def test_chunk_file_stream_sentences_overlap(tmp_path):
 
 
 def test_structure_aware_code_fence_no_trailing_newline():
-    ck = Chunker()
+
+
+     ck = Chunker()
     src = (
         "# Title\n\n"
         "```python\n"
@@ -92,7 +98,9 @@ def test_structure_aware_code_fence_no_trailing_newline():
 
 
 def test_language_autodetect_thai():
-    ck = Chunker()
+
+
+     ck = Chunker()
     thai_text = "ภาษาไทยทดสอบ ทดสอบข้อความ เพื่อการตัดประโยคฯ"
     out = ck.process_text(
         thai_text,

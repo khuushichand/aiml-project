@@ -9,7 +9,9 @@ pytestmark = pytest.mark.unit
 
 
 def _req_entries(n_a=5, n_b=5):
-    entries = []
+
+
+     entries = []
     for i in range(n_a):
         entries.append({"composite": f"TOPIC_A {i}", "speaker": "A"})
     for i in range(n_b):
@@ -19,7 +21,7 @@ def _req_entries(n_a=5, n_b=5):
 
 @pytest.fixture(autouse=True)
 def _auth_override():
-    async def _override_user():
+     async def _override_user():
         return User(id=1, username="tester", email="t@example.com", is_active=True)
     app.dependency_overrides[get_request_user] = _override_user
     yield
@@ -28,7 +30,7 @@ def _auth_override():
 
 async def _stub_embedder(chunks):
     def one_hot(line):
-        if "TOPIC_A" in line:
+             if "TOPIC_A" in line:
             return [1.0, 0.0]
         if "TOPIC_B" in line:
             return [0.0, 1.0]
@@ -52,7 +54,9 @@ async def _stub_embedder(chunks):
 
 
 def test_segment_transcript_endpoint(monkeypatch):
-    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Transcript_TreeSegmentation import TreeSegmenter
+
+
+     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Transcript_TreeSegmentation import TreeSegmenter
 
     # Preserve original classmethod to avoid recursion
     orig_create = TreeSegmenter.create_async

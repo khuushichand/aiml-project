@@ -13,7 +13,7 @@ class RaisingState:
 
 class DummyRequest:
     def __init__(self):
-        # Headers mimic API key header presence
+             # Headers mimic API key header presence
         self.headers = {"X-API-KEY": "dummy-key"}
         # Simulate request path for logging context
         self.scope = {"path": "/unit/llm-guard"}
@@ -43,7 +43,8 @@ async def test_enforce_llm_budget_logs_and_raises_on_state_failure(monkeypatch):
     logs = []
 
     def sink(message):
-        logs.append(message)
+
+             logs.append(message)
 
     sink_id = logger.add(sink, level="ERROR")
     try:
@@ -120,7 +121,7 @@ async def test_enforce_llm_budget_happy_path(monkeypatch):
 
     class OkRequest:
         def __init__(self):
-            self.headers = {"X-API-KEY": "dummy-key"}
+                     self.headers = {"X-API-KEY": "dummy-key"}
             self.scope = {"path": "/unit/ok"}
             self.state = NormalState()
 
@@ -177,7 +178,7 @@ async def test_enforce_llm_budget_virtual_under_budget_ok(monkeypatch):
 
     class OkRequest:
         def __init__(self):
-            self.headers = {"X-API-KEY": "dummy-key"}
+                     self.headers = {"X-API-KEY": "dummy-key"}
             self.scope = {"path": "/unit/ok-virtual"}
             self.state = NormalState()
 
@@ -234,7 +235,7 @@ async def test_enforce_llm_budget_virtual_over_budget_raises(monkeypatch):
 
     class OkRequest:
         def __init__(self):
-            self.headers = {"X-API-KEY": "dummy-key"}
+                     self.headers = {"X-API-KEY": "dummy-key"}
             self.scope = {"path": "/unit/over-virtual"}
             self.state = NormalState()
 

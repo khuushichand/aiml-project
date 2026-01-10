@@ -7,7 +7,7 @@ import pytest
 
 @pytest.mark.unit
 def test_tools_endpoint_module_compiles():
-    """Guard against syntax regressions in tools endpoint.
+     """Guard against syntax regressions in tools endpoint.
 
     Compiles the module source directly so failures (e.g., IndentationError)
     are caught even if route gating prevents importing the module at startup.

@@ -36,7 +36,9 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGD
 
 
 def manifest_to_dict(manifest):
-    """Helper to convert manifest to dict for JSON serialization."""
+
+
+     """Helper to convert manifest to dict for JSON serialization."""
     data = {}
     for key, value in manifest.__dict__.items():
         if hasattr(value, 'value'):  # Enum
@@ -50,7 +52,7 @@ def manifest_to_dict(manifest):
 
 @pytest.fixture
 def mock_db():
-    """Create a mock database instance."""
+     """Create a mock database instance."""
     mock = MagicMock()
     mock.execute_query = MagicMock()
     mock.execute_many = MagicMock()
@@ -59,7 +61,7 @@ def mock_db():
 
 @pytest.fixture
 def service(mock_db, tmp_path, monkeypatch):
-    """Create a ChatbookService instance with mocked database and temp directories."""
+     """Create a ChatbookService instance with mocked database and temp directories."""
     # Set environment variable to use temp directory for tests
     monkeypatch.setenv('PYTEST_CURRENT_TEST', 'test')
     monkeypatch.setenv('USER_DB_BASE_DIR', str(tmp_path))
@@ -76,7 +78,7 @@ def service(mock_db, tmp_path, monkeypatch):
 
 @pytest.fixture
 def sample_manifest():
-    """Create a sample chatbook manifest."""
+     """Create a sample chatbook manifest."""
     return ChatbookManifest(
         version=ChatbookVersion.V1,
         exported_at=datetime.now().isoformat(),
@@ -97,7 +99,7 @@ def sample_manifest():
 
 @pytest.fixture
 def sample_content_items():
-    """Create sample content items."""
+     """Create sample content items."""
     return [
         ContentItem(
             id="conv1",
@@ -118,7 +120,8 @@ class TestChatbookService:
     """Test suite for ChatbookService."""
 
     def test_init_creates_tables(self, mock_db, tmp_path, monkeypatch):
-        """Test that initialization creates necessary tables."""
+
+             """Test that initialization creates necessary tables."""
         monkeypatch.setenv('PYTEST_CURRENT_TEST', 'test')
         monkeypatch.setenv('USER_DB_BASE_DIR', str(tmp_path))
 
@@ -138,7 +141,8 @@ class TestChatbookService:
         assert any("CREATE TABLE IF NOT EXISTS import_jobs" in sql for sql in sql_statements)
 
     def test_create_export_job(self, service, mock_db):
-        """Test creating an export job."""
+
+             """Test creating an export job."""
         test_uuid = uuid4()
         job_id = str(test_uuid)
 
@@ -200,7 +204,8 @@ class TestChatbookService:
         assert result["file_path"] == str(archive_path)
 
     def test_get_export_job_parses_varied_timestamps(self, service, mock_db):
-        """Ensure timestamp parser handles common DB formats."""
+
+             """Ensure timestamp parser handles common DB formats."""
         mock_row = {
             "job_id": "job-plain",
             "user_id": service.user_id,
@@ -236,18 +241,21 @@ class TestChatbookService:
         assert job.created_at is not None
 
     def test_parse_timestamp_accepts_numeric_epoch(self, service):
-        """Numeric epoch values should be parsed as UTC datetimes."""
+
+             """Numeric epoch values should be parsed as UTC datetimes."""
         epoch = 1_700_000_000
         parsed = service._parse_timestamp(epoch)
         assert parsed == datetime.utcfromtimestamp(epoch)
 
     def test_parse_timestamp_normalizes_timezone_offsets(self, service):
-        """Timestamps with explicit offsets should normalize to naive UTC."""
+
+             """Timestamps with explicit offsets should normalize to naive UTC."""
         parsed = service._parse_timestamp("2024-01-01T05:30:00+05:30")
         assert parsed == datetime(2024, 1, 1, 0, 0)
 
     def test_import_conversation_restores_inline_images(self, service, mock_db, tmp_path):
-        """Conversations imported from chatbooks should restore embedded images."""
+
+             """Conversations imported from chatbooks should restore embedded images."""
         conv_id = "conv-image"
         content_root = tmp_path / "content" / "conversations"
         assets_dir = content_root / f"conversation_{conv_id}_assets"
@@ -317,7 +325,8 @@ class TestChatbookService:
         assert img_payload["image_mime_type"] == "image/png"
 
     def test_import_conversation_skips_outside_attachments(self, service, mock_db, tmp_path):
-        """Attachment paths that escape extraction boundaries must be ignored."""
+
+             """Attachment paths that escape extraction boundaries must be ignored."""
         conv_id = "conv-path"
         content_root = tmp_path / "content" / "conversations"
         content_root.mkdir(parents=True, exist_ok=True)
@@ -377,7 +386,8 @@ class TestChatbookService:
         assert status.successful_items == 1
 
     def test_import_conversation_warns_on_missing_attachment(self, service, mock_db, tmp_path):
-        """Missing attachment files should log warnings while continuing import."""
+
+             """Missing attachment files should log warnings while continuing import."""
         conv_id = "conv-missing"
         content_root = tmp_path / "content" / "conversations"
         content_root.mkdir(parents=True, exist_ok=True)
@@ -441,7 +451,8 @@ class TestChatbookService:
         assert status.successful_items == 1
 
     def test_import_chatbook_cleans_temp_dir_on_failure(self, service, tmp_path):
-        """Temporary extraction directories should not linger after import errors."""
+
+             """Temporary extraction directories should not linger after import errors."""
         temp_dir = tmp_path / "chatbooks_tmp"
         temp_dir.mkdir(parents=True, exist_ok=True)
         service.temp_dir = temp_dir
@@ -479,7 +490,8 @@ class TestChatbookService:
         assert not any(temp_dir.glob("import_*"))
 
     def test_preview_chatbook_cleans_temp_dir_on_failure(self, service, tmp_path):
-        """Preview extractions must be removed even when parsing fails."""
+
+             """Preview extractions must be removed even when parsing fails."""
         temp_dir = tmp_path / "chatbooks_preview_tmp"
         temp_dir.mkdir(parents=True, exist_ok=True)
         service.temp_dir = temp_dir
@@ -540,10 +552,11 @@ class TestChatbookService:
         }
 
     def test_preview_export(self, service, mock_db):
-        """Test previewing export content."""
+
+             """Test previewing export content."""
         # Mock queries based on what's being queried
         def mock_query(query, params=None):
-            if "conversations" in query.lower():
+                     if "conversations" in query.lower():
                 return [{"id": "conv1"}, {"id": "conv2"}]
             elif "character_cards" in query.lower():
                 return [{"id": "char1"}]
@@ -564,14 +577,16 @@ class TestChatbookService:
         assert result["world_books"] == 0
 
     def test_generate_unique_name_world_book_conflict(self, service, mock_db):
-        """Ensure rename helper terminates when conflicts exist."""
+
+             """Ensure rename helper terminates when conflicts exist."""
         responses = [
             [{"id": 1}],  # Existing name hits conflict
             []            # Next candidate is available
         ]
 
         def side_effect(query, params=None):
-            return responses.pop(0)
+
+                     return responses.pop(0)
 
         mock_db.execute_query.side_effect = side_effect
 
@@ -581,7 +596,8 @@ class TestChatbookService:
         assert responses == []
 
     def test_get_export_job_status(self, service, mock_db):
-        """Test retrieving export job status."""
+
+             """Test retrieving export job status."""
         # Return tuple matching database schema with metadata
         metadata = json.dumps({
             "conversation_count": 5,
@@ -603,7 +619,8 @@ class TestChatbookService:
         assert result["content_summary"]["conversations"] == 5
 
     def test_cancel_export_job(self, service, mock_db):
-        """Test cancelling an export job."""
+
+             """Test cancelling an export job."""
         # Mock database to return a pending job
         mock_db.execute_query.return_value = [{
             "job_id": "job123",
@@ -681,7 +698,8 @@ class TestChatbookService:
         assert call_args[3] is ConflictResolution.SKIP
 
     def test_create_import_job(self, service, mock_db):
-        """Test creating an import job."""
+
+             """Test creating an import job."""
         test_uuid = uuid4()
         job_id = str(test_uuid)
 
@@ -697,7 +715,8 @@ class TestChatbookService:
         assert result["status"] == "pending"
 
     def test_get_import_job_status(self, service, mock_db):
-        """Test retrieving import job status."""
+
+             """Test retrieving import job status."""
         # Return tuple matching database schema
         mock_db.execute_query.return_value = [
             ("job456", "test_user", "completed", "/tmp/import.chatbook",
@@ -714,7 +733,8 @@ class TestChatbookService:
         assert result["conflicts_resolved"]["skipped"] == 2
 
     def test_list_export_jobs(self, service, mock_db):
-        """Test listing export jobs."""
+
+             """Test listing export jobs."""
         # Return tuples matching database schema
         mock_db.execute_query.return_value = [
             ("job1", "test_user", "completed", "Export 1", None,
@@ -730,7 +750,8 @@ class TestChatbookService:
         assert results[1]["status"] == "pending"
 
     def test_list_import_jobs(self, service, mock_db):
-        """Test listing import jobs."""
+
+             """Test listing import jobs."""
         # Return tuples matching database schema
         mock_db.execute_query.return_value = [
             ("job3", "test_user", "completed", "/tmp/import.chatbook",
@@ -746,7 +767,8 @@ class TestChatbookService:
         assert results[1]["error_message"] == "File not found"
 
     def test_clean_old_exports(self, service, mock_db):
-        """Test cleaning old export files."""
+
+             """Test cleaning old export files."""
         # Return tuples with job_id and output_path
         mock_db.execute_query.return_value = [
             ("old1", "/tmp/old1.chatbook"),
@@ -761,7 +783,8 @@ class TestChatbookService:
         assert mock_unlink.call_count == 2
 
     def test_validate_chatbook_file(self, service, sample_manifest):
-        """Test validating a chatbook file structure."""
+
+             """Test validating a chatbook file structure."""
         with tempfile.NamedTemporaryFile(suffix='.chatbook', delete=False) as tmp:
             with zipfile.ZipFile(tmp.name, 'w') as zf:
                 zf.writestr('manifest.json', json.dumps(manifest_to_dict(sample_manifest)))
@@ -775,7 +798,8 @@ class TestChatbookService:
         assert "manifest" in result
 
     def test_validate_invalid_chatbook(self, service):
-        """Test validating an invalid chatbook file."""
+
+             """Test validating an invalid chatbook file."""
         with tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as tmp:
             tmp.write(b"Not a zip file")
             tmp.flush()
@@ -787,7 +811,8 @@ class TestChatbookService:
         assert "error" in result
 
     def test_get_statistics(self, service, mock_db):
-        """Test getting import/export statistics."""
+
+             """Test getting import/export statistics."""
         # Mock returns tuples for status counts
         mock_db.execute_query.side_effect = [
             [("completed", 45), ("failed", 5)],  # Export stats by status
@@ -829,7 +854,8 @@ class TestChatbookService:
         )
 
     def test_user_isolation(self, service, mock_db):
-        """Test that operations are isolated to the current user."""
+
+             """Test that operations are isolated to the current user."""
         # Test export - should only get current user's content
         mock_db.execute_query.return_value = []
 
@@ -844,7 +870,8 @@ class TestChatbookService:
                 "test_user" in str(call_args))
 
     def test_create_chatbook_archive(self, service, sample_manifest, sample_content_items):
-        """Test creating a chatbook archive file."""
+
+             """Test creating a chatbook archive file."""
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir) / "work"
             work_dir.mkdir()
@@ -868,7 +895,8 @@ class TestChatbookService:
                 assert 'manifest.json' in zf.namelist()
 
     def test_process_import_items(self, service, mock_db, sample_content_items):
-        """Test processing individual import items."""
+
+             """Test processing individual import items."""
         mock_db.execute_query.return_value = []  # No conflicts
 
         # Call with correct parameter name (conflict_resolution)

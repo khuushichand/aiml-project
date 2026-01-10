@@ -305,6 +305,7 @@ class TestConcurrentUploads:
     """Test concurrent file upload scenarios."""
 
     def test_concurrent_uploads_same_file(self, authenticated_client, data_tracker):
+
         """Test multiple users uploading the same file simultaneously."""
         # Create a test file
         content = TestDataGenerator.sample_text_content()
@@ -312,6 +313,7 @@ class TestConcurrentUploads:
         data_tracker.add_file(test_file)
 
         def upload_file(client, file_path, attempt_num):
+
             """Upload function for concurrent execution."""
             return client.upload_media(
                 file_path=file_path,
@@ -365,6 +367,7 @@ class TestConcurrentUploads:
         cleanup_test_file(test_file)
 
     def test_rapid_successive_uploads(self, authenticated_client, data_tracker):
+
         """Test rapid successive uploads from the same user."""
         files_to_upload = []
 
@@ -412,6 +415,7 @@ class TestConcurrentUploads:
             cleanup_test_file(file_path)
 
     def test_upload_during_processing(self, authenticated_client, data_tracker):
+
         """Test uploading while previous upload is still processing."""
         # Create a larger file that takes time to process
         large_content = TestDataGenerator.sample_text_content() * 100
@@ -464,6 +468,7 @@ class TestConcurrentCRUD:
     """Test concurrent Create, Read, Update, Delete operations."""
 
     def test_concurrent_note_updates(self, authenticated_client, data_tracker):
+
         """Test multiple concurrent updates to the same note."""
         # Add small delay to avoid rate limiting from previous tests
         _maybe_sleep(0.2)
@@ -479,6 +484,7 @@ class TestConcurrentCRUD:
         data_tracker.add_note(note_id)
 
         def update_note(client, note_id, update_num):
+
             """Update note function for concurrent execution."""
             return client.update_note(
                 note_id=note_id,
@@ -533,8 +539,8 @@ class TestConcurrentCRUD:
         elif len(results['failed']) > 0:
             # Check if failures were due to optimistic locking (good!)
             conflict_failures = sum(1 for f in results['failed']
-                                  if 'conflict' in str(f.get('error', '')).lower()
-                                  or '409' in str(f.get('error', '')))
+                                if 'conflict' in str(f.get('error', '')).lower()
+                                or '409' in str(f.get('error', '')))
             print(f"  Version conflicts detected: {conflict_failures} (this is good!)")
 
             if conflict_failures == 0 and len(results['failed']) > 0:
@@ -549,10 +555,12 @@ class TestConcurrentCRUD:
             pytest.fail(f"Could not verify final note state: {e}")
 
     def test_concurrent_searches(self, authenticated_client):
+
         """Test multiple concurrent search requests - verify no result corruption."""
         search_queries = TestDataGenerator.sample_search_queries()
 
         def perform_search(client, query):
+
             """Search function for concurrent execution."""
             return client.search_media(query, limit=10)
 
@@ -623,6 +631,7 @@ class TestConcurrentCRUD:
         assert avg_response_time < 5, "Average search response should be under 5 seconds"
 
     def test_create_update_delete_race(self, authenticated_client, data_tracker):
+
         """Test race condition between create, update, and delete operations."""
         # Add delay to avoid rate limiting from previous tests
         _maybe_sleep(0.2)
@@ -635,7 +644,8 @@ class TestConcurrentCRUD:
         }
 
         def create_note():
-            try:
+
+                    try:
                 # Add small random delay to spread out requests
                 time.sleep(random.uniform(0.05, 0.15))
                 response = authenticated_client.create_note(
@@ -651,7 +661,8 @@ class TestConcurrentCRUD:
                 return None
 
         def update_note(note_id):
-            if not note_id:
+
+                    if not note_id:
                 return
             try:
                 response = authenticated_client.update_note(
@@ -664,7 +675,8 @@ class TestConcurrentCRUD:
                 results['errors'].append(('update', str(e)))
 
         def delete_note(note_id):
-            if not note_id:
+
+                    if not note_id:
                 return
             try:
                 response = authenticated_client.delete_note(note_id)
@@ -709,6 +721,7 @@ class TestConcurrentCRUD:
             "Most operations should complete despite races"
 
     def test_concurrent_character_chat_sessions(self, authenticated_client, data_tracker):
+
         """Test multiple concurrent chat sessions with characters."""
         # Create a test character first
         character_data = TestDataGenerator.sample_character_card()
@@ -723,6 +736,7 @@ class TestConcurrentCRUD:
             return
 
         def start_chat_session(client, session_num):
+
             """Start a chat session with the character."""
             messages = [
                 {"role": "system", "content": character_data.get('system_prompt', '')},
@@ -762,9 +776,10 @@ class TestLoadPatterns:
     """Test various load patterns and stress scenarios."""
 
     def test_burst_traffic(self, authenticated_client):
+
         """Test handling of burst traffic (100 requests in 1 second)."""
         def make_request():
-            return authenticated_client.health_check()
+                    return authenticated_client.health_check()
 
         # Send 100 requests as fast as possible
         args_list = [()] * 100  # 100 empty arg tuples
@@ -799,7 +814,7 @@ class TestLoadPatterns:
     def test_sustained_load(self, authenticated_client):
         """Test sustained load over 5 seconds."""
         def make_request():
-            # Mix of different request types
+                    # Mix of different request types
             request_type = random.choice(['health', 'list', 'search'])
 
             if request_type == 'health':
@@ -829,6 +844,7 @@ class TestLoadPatterns:
         assert metrics['average_response_time'] < 2, "Average response should be under 2 seconds"
 
     def test_mixed_workload(self, authenticated_client, data_tracker):
+
         """Test mixed workload with reads and writes."""
         # Temporarily reduce HTTP client timeouts so this test cannot hang
         original_timeout = authenticated_client.client.timeout
@@ -846,6 +862,7 @@ class TestLoadPatterns:
         created_note_ids = []
 
         def mixed_operation():
+
             """Perform a random operation."""
             operation = random.choice(['upload', 'read', 'search', 'create_note', 'list'])
 
@@ -981,7 +998,7 @@ class TestLoadPatterns:
         print("\nLoad test summary:")
         for rps, metrics in metrics_by_rps.items():
             print(f"  {rps} RPS: {metrics['success_rate']:.1%} success, "
-                  f"{metrics['average_response_time']:.3f}s avg response")
+                f"{metrics['average_response_time']:.3f}s avg response")
 
         if breaking_point:
             print(f"\nSystem breaking point: ~{breaking_point} RPS")
@@ -993,6 +1010,7 @@ class TestStateConsistency:
     """Test state consistency under concurrent operations."""
 
     def test_optimistic_locking(self, authenticated_client, data_tracker):
+
         """Test optimistic locking mechanism for concurrent updates."""
         # Add delay to avoid rate limiting from previous tests
         time.sleep(1.0)
@@ -1013,7 +1031,7 @@ class TestStateConsistency:
 
         # Two clients try to update with same version
         def update_with_version(content, version):
-            return authenticated_client.update_note(
+                    return authenticated_client.update_note(
                 note_id=note_id,
                 content=content,
                 version=version
@@ -1042,6 +1060,7 @@ class TestStateConsistency:
         assert 'content' in final_note, "Note should be in consistent state"
 
     def test_delete_during_access(self, authenticated_client, data_tracker):
+
         """Test deleting a resource while it's being accessed."""
         # Create a note
         note_response = authenticated_client.create_note(
@@ -1056,7 +1075,8 @@ class TestStateConsistency:
         results = {'read_success': 0, 'read_failed': 0, 'delete_success': False}
 
         def read_note():
-            try:
+
+                    try:
                 response = authenticated_client.client.get(f"{API_PREFIX}/notes/{note_id}")
                 response.raise_for_status()
                 results['read_success'] += 1
@@ -1067,7 +1087,8 @@ class TestStateConsistency:
                     raise
 
         def delete_note():
-            try:
+
+                    try:
                 response = authenticated_client.delete_note(note_id)
                 results['delete_success'] = True
             except:
@@ -1102,6 +1123,7 @@ class TestStateConsistency:
             "All reads should complete with either success or 404"
 
     def test_transaction_isolation(self, authenticated_client, data_tracker):
+
         """Test transaction isolation between concurrent operations."""
         # Add delay to avoid rate limiting from previous tests
         time.sleep(1.0)
@@ -1122,6 +1144,7 @@ class TestStateConsistency:
             data_tracker.add_note(note_id)
 
         def read_all_notes():
+
             """Read all notes and return their content."""
             contents = []
             for note_id in notes_created:
@@ -1134,6 +1157,7 @@ class TestStateConsistency:
             return contents
 
         def update_all_notes(suffix):
+
             """Update all notes with a suffix."""
             for note_id in notes_created:
                 try:

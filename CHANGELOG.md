@@ -14,6 +14,7 @@ and this project adheres to Some kind of Versioning
 ### Removed
 
 ### Fixed
+- Legacy AuthNZ rate limiting now bypasses only when an RG policy is attached, and cancellations propagate correctly in rate limit fallbacks.
 
 
 ## [0.1.14] - 2026-01-06

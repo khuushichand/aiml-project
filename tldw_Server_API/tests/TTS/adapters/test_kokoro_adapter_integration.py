@@ -30,7 +30,8 @@ from tldw_Server_API.app.core.TTS.adapters.base import (
 # Helper Functions
 
 def check_kokoro_model_exists():
-    """Check if Kokoro model files exist"""
+
+     """Check if Kokoro model files exist"""
     # Check for common Kokoro model locations
     model_paths = [
         os.path.expanduser("~/.cache/kokoro/kokoro-v0_19.pth"),
@@ -45,7 +46,8 @@ def check_kokoro_model_exists():
     return False, None
 
 def get_compute_capability():
-    """Detect compute capabilities"""
+
+     """Detect compute capabilities"""
     if platform.system() == "Darwin":
         # macOS with Apple Silicon
         if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():

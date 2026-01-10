@@ -520,7 +520,8 @@ class TestPerformanceAndScaling:
             mock_model = MagicMock()
 
             def mock_encode(texts, *args, **kwargs):
-                batch_size = len(texts) if isinstance(texts, list) else 1
+
+                             batch_size = len(texts) if isinstance(texts, list) else 1
                 return np.random.randn(batch_size, 384)
 
             mock_model.encode = mock_encode

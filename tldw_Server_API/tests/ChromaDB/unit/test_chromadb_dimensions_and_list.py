@@ -7,7 +7,9 @@ from unittest.mock import patch
 
 
 def _make_manager_with_mock(mock_client, tmp_path):
-    user_cfg = {
+
+
+     user_cfg = {
         "USER_DB_BASE_DIR": str(tmp_path),
         "embedding_config": {"default_model_id": "text-embedding-3-large", "models": {}},
         "chroma_client_settings": {"anonymized_telemetry": False, "allow_reset": True},
@@ -18,7 +20,9 @@ def _make_manager_with_mock(mock_client, tmp_path):
 
 
 def test_dimension_metadata_mismatch_recreates_collection(tmp_path):
-    mock_client = MagicMock()
+
+
+     mock_client = MagicMock()
     mock_coll = MagicMock()
     mock_coll.name = "dim_meta"
     # Collection has metadata dimension 256
@@ -48,7 +52,9 @@ def test_dimension_metadata_mismatch_recreates_collection(tmp_path):
 
 
 def test_dimension_sample_mismatch_recreates_collection(tmp_path):
-    mock_client = MagicMock()
+
+
+     mock_client = MagicMock()
     mock_coll = MagicMock()
     mock_coll.name = "dim_sample"
     # No metadata; has items
@@ -79,7 +85,9 @@ def test_dimension_sample_mismatch_recreates_collection(tmp_path):
 
 
 def test_list_collections_propagates(mock_chroma_client, tmp_path):
-    # Reuse fixture mock client from conftest to ensure typical shape
+
+
+     # Reuse fixture mock client from conftest to ensure typical shape
     mgr = _make_manager_with_mock(mock_chroma_client, tmp_path)
     # Simulate two collections
     c1 = MagicMock(); c1.name = "c1"
@@ -91,14 +99,16 @@ def test_list_collections_propagates(mock_chroma_client, tmp_path):
 
 
 def test_delete_collection_calls_client(mock_chroma_client, tmp_path):
-    mgr = _make_manager_with_mock(mock_chroma_client, tmp_path)
+
+
+     mgr = _make_manager_with_mock(mock_chroma_client, tmp_path)
     mgr.delete_collection("to_delete")
     mock_chroma_client.delete_collection.assert_called_with(name="to_delete")
 
 
 @pytest.mark.unit
 def test_minimal_integration_with_real_persistent_client(temp_chroma_path):
-    """Lightweight integration: real PersistentClient in temp dir, basic lifecycle."""
+     """Lightweight integration: real PersistentClient in temp dir, basic lifecycle."""
     # Build manager without patching client
     user_cfg = {
         "USER_DB_BASE_DIR": str(temp_chroma_path),
@@ -128,7 +138,7 @@ def test_minimal_integration_with_real_persistent_client(temp_chroma_path):
 
 @pytest.mark.unit
 def test_vector_search_with_mocked_query_embedding(temp_chroma_path, monkeypatch):
-    """Vector search smoke with real PersistentClient and mocked query embedding."""
+     """Vector search smoke with real PersistentClient and mocked query embedding."""
     user_cfg = {
         "USER_DB_BASE_DIR": str(temp_chroma_path),
         "embedding_config": {"default_model_id": "unused", "models": {}},
@@ -164,7 +174,7 @@ def test_vector_search_with_mocked_query_embedding(temp_chroma_path, monkeypatch
 
 @pytest.mark.unit
 def test_vector_search_k2_ids(temp_chroma_path, monkeypatch):
-    user_cfg = {
+     user_cfg = {
         "USER_DB_BASE_DIR": str(temp_chroma_path),
         "embedding_config": {"default_model_id": "unused", "models": {}},
         "chroma_client_settings": {"anonymized_telemetry": False, "allow_reset": True},
@@ -196,7 +206,7 @@ def test_vector_search_k2_ids(temp_chroma_path, monkeypatch):
 
 @pytest.mark.unit
 def test_vector_search_where_filter(temp_chroma_path, monkeypatch):
-    user_cfg = {
+     user_cfg = {
         "USER_DB_BASE_DIR": str(temp_chroma_path),
         "embedding_config": {"default_model_id": "unused", "models": {}},
         "chroma_client_settings": {"anonymized_telemetry": False, "allow_reset": True},
@@ -230,7 +240,7 @@ def test_vector_search_where_filter(temp_chroma_path, monkeypatch):
 
 @pytest.mark.unit
 def test_vector_search_include_embeddings_returns_embeddings(temp_chroma_path, monkeypatch):
-    user_cfg = {
+     user_cfg = {
         "USER_DB_BASE_DIR": str(temp_chroma_path),
         "embedding_config": {"default_model_id": "unused", "models": {}},
         "chroma_client_settings": {"anonymized_telemetry": False, "allow_reset": True},
@@ -263,7 +273,7 @@ def test_vector_search_include_embeddings_returns_embeddings(temp_chroma_path, m
 
 @pytest.mark.unit
 def test_reset_collection_clears_items_count(temp_chroma_path):
-    user_cfg = {
+     user_cfg = {
         "USER_DB_BASE_DIR": str(temp_chroma_path),
         "embedding_config": {"default_model_id": "unused", "models": {}},
         "chroma_client_settings": {"anonymized_telemetry": False, "allow_reset": True},

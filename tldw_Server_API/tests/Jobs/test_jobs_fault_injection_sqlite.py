@@ -16,7 +16,9 @@ def _parse_sqlite_ts(s: str) -> datetime:
 
 
 def test_acquire_with_transient_db_timeout_then_retry_sqlite(monkeypatch, tmp_path):
-    db_path = tmp_path / "jobs.db"
+
+
+     db_path = tmp_path / "jobs.db"
     ensure_jobs_tables(db_path)
     jm = JobManager(db_path)
     jm.create_job(domain="chatbooks", queue="default", job_type="t", payload={}, owner_user_id="u")
@@ -26,7 +28,8 @@ def test_acquire_with_transient_db_timeout_then_retry_sqlite(monkeypatch, tmp_pa
     called = {"n": 0}
 
     def flaky_connect():
-        if called["n"] == 0:
+
+             if called["n"] == 0:
             called["n"] += 1
             raise sqlite3.OperationalError("database is locked")
         return orig()
@@ -43,7 +46,9 @@ def test_acquire_with_transient_db_timeout_then_retry_sqlite(monkeypatch, tmp_pa
 
 
 def test_complete_transient_error_then_idempotent_finalize_sqlite(monkeypatch, tmp_path):
-    db_path = tmp_path / "jobs2.db"
+
+
+     db_path = tmp_path / "jobs2.db"
     ensure_jobs_tables(db_path)
     jm = JobManager(db_path)
     j = jm.create_job(domain="ps", queue="default", job_type="t", payload={}, owner_user_id="u")
@@ -55,7 +60,8 @@ def test_complete_transient_error_then_idempotent_finalize_sqlite(monkeypatch, t
     called = {"n": 0}
 
     def flaky_connect():
-        if called["n"] == 0:
+
+             if called["n"] == 0:
             called["n"] += 1
             raise sqlite3.OperationalError("transient")
         return orig()
@@ -73,7 +79,9 @@ def test_complete_transient_error_then_idempotent_finalize_sqlite(monkeypatch, t
 
 
 def test_renew_with_clock_skew_does_not_shrink_lease_sqlite(monkeypatch, tmp_path):
-    db_path = tmp_path / "jobs3.db"
+
+
+     db_path = tmp_path / "jobs3.db"
     ensure_jobs_tables(db_path)
     jm = JobManager(db_path)
     jm.create_job(domain="ps", queue="default", job_type="t", payload={}, owner_user_id="u")

@@ -9,7 +9,7 @@ class DummyResp:
     def __init__(self, text: str):
         self.data = {"status": 200, "text": text, "url": "https://example.com", "headers": {}, "backend": "httpx"}
     def __getitem__(self, k):
-        return self.data[k]
+             return self.data[k]
 
 
 class DummyAsyncPlaywright:
@@ -21,7 +21,9 @@ class DummyAsyncPlaywright:
 
 
 def test_js_required_emits_fallback_metric(monkeypatch):
-    # stub robots allow
+
+
+     # stub robots allow
     monkeypatch.setattr(AEL, "is_allowed_by_robots_async", lambda *a, **k: asyncio.Future())
     f = asyncio.Future(); f.set_result(True)
     monkeypatch.setattr(AEL, "is_allowed_by_robots_async", lambda *a, **k: f)
@@ -35,7 +37,7 @@ def test_js_required_emits_fallback_metric(monkeypatch):
     # capture metrics
     calls = []
     def _log_counter(name, labels=None):
-        calls.append((name, dict(labels or {})))
+             calls.append((name, dict(labels or {})))
     monkeypatch.setattr(AEL, "log_counter", _log_counter)
 
     # run

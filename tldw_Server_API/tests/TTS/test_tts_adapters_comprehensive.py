@@ -13,7 +13,7 @@ import base64
 
 @pytest.fixture(autouse=True)
 def clear_tts_env(monkeypatch):
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
     return None
 #
@@ -50,13 +50,13 @@ from tldw_Server_API.app.core.TTS.tts_exceptions import (
 
 @pytest.fixture
 def mock_http_client():
-    """Mock HTTP client for API calls"""
+     """Mock HTTP client for API calls"""
     client = AsyncMock(spec=httpx.AsyncClient)
     return client
 
 @pytest.fixture
 def sample_tts_request():
-    """Sample TTS request for testing"""
+     """Sample TTS request for testing"""
     return TTSRequest(
         text="Hello, this is a test.",
         voice="default",
@@ -69,7 +69,7 @@ def sample_tts_request():
 
 @pytest.fixture
 def mock_audio_response():
-    """Mock audio response data"""
+     """Mock audio response data"""
     return b"FAKE_AUDIO_DATA_" * 100
 
 #######################################################################################################################

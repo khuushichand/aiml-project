@@ -12,7 +12,8 @@ class FakeAsyncRedisSummary:
     """
 
     def __init__(self):
-        # Live queue depths
+
+             # Live queue depths
         self._queues = {
             'embeddings:chunking': 1,
             'embeddings:embedding': 2,

@@ -25,7 +25,9 @@ TARGET_FILES = [
 
 
 def test_no_deprecated_dict_usage():
-    repo_root = Path(__file__).resolve().parents[3]
+
+
+     repo_root = Path(__file__).resolve().parents[3]
     offenders = []
 
     for rel_path in TARGET_FILES:

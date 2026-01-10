@@ -13,7 +13,7 @@ from tldw_Server_API.app.core.RAG.rag_service.analytics_system import UserFeedba
 
 class _StubConnection:
     def __init__(self) -> None:
-        self.statements: List[Tuple[str, Any]] = []
+             self.statements: List[Tuple[str, Any]] = []
 
     def execute(self, statement: str, params: Any = None) -> None:
         self.statements.append((statement, params))
@@ -30,11 +30,13 @@ class _StubChaChaDb:
 
     @property
     def executed(self) -> List[Tuple[str, Any]]:
-        return self._conn.statements
+             return self._conn.statements
 
 
 def test_user_feedback_schema_sqlite_executes_expected_statements() -> None:
-    db = _StubChaChaDb(BackendType.SQLITE)
+
+
+     db = _StubChaChaDb(BackendType.SQLITE)
     UserFeedbackStore(db)
     statements = [stmt for stmt, _ in db.executed]
     assert any('CREATE TABLE IF NOT EXISTS conversation_feedback' in stmt for stmt in statements)
@@ -43,7 +45,9 @@ def test_user_feedback_schema_sqlite_executes_expected_statements() -> None:
 
 
 def test_user_feedback_schema_sqlite_includes_required_fields() -> None:
-    db = _StubChaChaDb(BackendType.SQLITE)
+
+
+     db = _StubChaChaDb(BackendType.SQLITE)
     UserFeedbackStore(db)
     statements = [stmt for stmt, _ in db.executed]
     assert any('helpful INTEGER' in stmt for stmt in statements)
@@ -52,7 +56,9 @@ def test_user_feedback_schema_sqlite_includes_required_fields() -> None:
 
 
 def test_user_feedback_schema_postgres_uses_boolean_and_timestamp() -> None:
-    db = _StubChaChaDb(BackendType.POSTGRESQL)
+
+
+     db = _StubChaChaDb(BackendType.POSTGRESQL)
     UserFeedbackStore(db)
     statements = [stmt for stmt, _ in db.executed]
     assert any('helpful BOOLEAN' in stmt for stmt in statements)
@@ -86,16 +92,19 @@ def test_record_search_sqlite_writes_row(tmp_path: Path) -> None:
 
 
 def test_record_search_postgres_calls_backend_execute() -> None:
-    analytics = AnalyticsDatabase.__new__(AnalyticsDatabase)
+
+
+     analytics = AnalyticsDatabase.__new__(AnalyticsDatabase)
     analytics.backend_type = BackendType.POSTGRESQL
     analytics.backend = MagicMock()
 
     calls: List[Tuple[str, Any]] = []
 
     def transaction_factory():
-        @contextmanager
+
+             @contextmanager
         def _ctx():
-            yield object()
+                     yield object()
         return _ctx()
 
     analytics.transaction = transaction_factory  # type: ignore[assignment]

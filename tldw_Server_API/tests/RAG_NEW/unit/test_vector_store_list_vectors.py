@@ -7,7 +7,7 @@ from tldw_Server_API.app.main import app
 
 class _FakeCollection:
     def __init__(self):
-        self._count = 3
+             self._count = 3
 
     def count(self):  # noqa: D401
         return self._count
@@ -35,7 +35,7 @@ class _FakeManager:
 
 class _FakeAdapter:
     def __init__(self):
-        self._initialized = True
+             self._initialized = True
         self.manager = _FakeManager()
 
     async def initialize(self):  # pragma: no cover
@@ -44,7 +44,7 @@ class _FakeAdapter:
 
 @pytest.mark.unit
 def test_list_vectors_parses_filter_and_sorts(monkeypatch, disable_heavy_startup, admin_user):
-    # Patch adapter factory to return our fake adapter
+     # Patch adapter factory to return our fake adapter
     from tldw_Server_API.app.api.v1.endpoints import vector_stores_openai as vs_mod
 
     async def _fake_get_adapter_for_user(user, dim):  # noqa: ANN001
@@ -72,7 +72,7 @@ def test_list_vectors_parses_filter_and_sorts(monkeypatch, disable_heavy_startup
 
 @pytest.mark.unit
 def test_list_vectors_invalid_filter_returns_400(monkeypatch, disable_heavy_startup, admin_user):
-    from tldw_Server_API.app.api.v1.endpoints import vector_stores_openai as vs_mod
+     from tldw_Server_API.app.api.v1.endpoints import vector_stores_openai as vs_mod
 
     async def _fake_get_adapter_for_user(user, dim):  # noqa: ANN001
         return _FakeAdapter()
@@ -128,7 +128,7 @@ class _FakeAdapterPaginated:
 
 @pytest.mark.unit
 def test_list_vectors_pagination_next_offset_chroma_fallback(monkeypatch, disable_heavy_startup, admin_user):
-    # Fake adapter without list_vectors_paginated triggers Chroma fallback path
+     # Fake adapter without list_vectors_paginated triggers Chroma fallback path
     from tldw_Server_API.app.api.v1.endpoints import vector_stores_openai as vs_mod
 
     async def _fake_get_adapter_for_user(user, dim):  # noqa: ANN001
@@ -153,7 +153,7 @@ def test_list_vectors_pagination_next_offset_chroma_fallback(monkeypatch, disabl
 
 @pytest.mark.unit
 def test_list_vectors_pagination_next_offset_adapter_path(monkeypatch, disable_heavy_startup, admin_user):
-    # Adapter with list_vectors_paginated sets total explicitly
+     # Adapter with list_vectors_paginated sets total explicitly
     from tldw_Server_API.app.api.v1.endpoints import vector_stores_openai as vs_mod
 
     async def _fake_get_adapter_for_user(user, dim):  # noqa: ANN001
@@ -178,7 +178,7 @@ def test_list_vectors_pagination_next_offset_adapter_path(monkeypatch, disable_h
 
 @pytest.mark.unit
 def test_list_vectors_adapter_ordering_asc_desc(monkeypatch, disable_heavy_startup, admin_user):
-    # Ensure adapter receives order_by and order_dir and sorts accordingly
+     # Ensure adapter receives order_by and order_dir and sorts accordingly
     from tldw_Server_API.app.api.v1.endpoints import vector_stores_openai as vs_mod
 
     async def _fake_get_adapter_for_user(user, dim):  # noqa: ANN001
@@ -209,7 +209,7 @@ def test_list_vectors_adapter_ordering_asc_desc(monkeypatch, disable_heavy_start
 
 @pytest.mark.unit
 def test_list_vectors_invalid_order_by_returns_400(monkeypatch, disable_heavy_startup, admin_user):
-    # Invalid order_by should be rejected with 400
+     # Invalid order_by should be rejected with 400
     from tldw_Server_API.app.api.v1.endpoints import vector_stores_openai as vs_mod
 
     async def _fake_get_adapter_for_user(user, dim):  # noqa: ANN001
@@ -228,7 +228,7 @@ def test_list_vectors_invalid_order_by_returns_400(monkeypatch, disable_heavy_st
 
 @pytest.mark.unit
 def test_list_vectors_invalid_order_dir_returns_422(monkeypatch, disable_heavy_startup, admin_user):
-    # order_dir is validated by pydantic pattern → invalid value yields 422
+     # order_dir is validated by pydantic pattern → invalid value yields 422
     from tldw_Server_API.app.api.v1.endpoints import vector_stores_openai as vs_mod
 
     async def _fake_get_adapter_for_user(user, dim):  # noqa: ANN001
@@ -246,7 +246,7 @@ def test_list_vectors_invalid_order_dir_returns_422(monkeypatch, disable_heavy_s
 
 @pytest.mark.unit
 def test_list_vectors_negative_offset_and_limit_one(monkeypatch, disable_heavy_startup, admin_user):
-    # offset < 0 and limit == 1 should be rejected by validation
+     # offset < 0 and limit == 1 should be rejected by validation
     from tldw_Server_API.app.api.v1.endpoints import vector_stores_openai as vs_mod
 
     async def _fake_get_adapter_for_user(user, dim):  # noqa: ANN001
@@ -270,7 +270,7 @@ def test_list_vectors_negative_offset_and_limit_one(monkeypatch, disable_heavy_s
 
 @pytest.mark.unit
 def test_list_vectors_boundary_offsets_adapter_path(monkeypatch, disable_heavy_startup, admin_user):
-    # When offset equals total or exceeds it, items should be empty and next_offset None
+     # When offset equals total or exceeds it, items should be empty and next_offset None
     from tldw_Server_API.app.api.v1.endpoints import vector_stores_openai as vs_mod
 
     async def _fake_get_adapter_for_user(user, dim):  # noqa: ANN001
@@ -302,7 +302,7 @@ def test_list_vectors_boundary_offsets_adapter_path(monkeypatch, disable_heavy_s
 
 @pytest.mark.unit
 def test_list_vectors_order_by_id_adapter_path(monkeypatch, disable_heavy_startup, admin_user):
-    # Ensure ordering by id works in adapter path
+     # Ensure ordering by id works in adapter path
     from tldw_Server_API.app.api.v1.endpoints import vector_stores_openai as vs_mod
 
     async def _fake_get_adapter_for_user(user, dim):  # noqa: ANN001
@@ -329,7 +329,9 @@ def test_list_vectors_order_by_id_adapter_path(monkeypatch, disable_heavy_startu
 
 
 def _assert_envelope(resp_json):
-    assert isinstance(resp_json, dict)
+
+
+     assert isinstance(resp_json, dict)
     assert "data" in resp_json and isinstance(resp_json["data"], list)
     assert "pagination" in resp_json and isinstance(resp_json["pagination"], dict)
     p = resp_json["pagination"]
@@ -343,7 +345,7 @@ def _assert_envelope(resp_json):
 
 @pytest.mark.unit
 def test_envelope_pagination_contract_adapter_path(monkeypatch, disable_heavy_startup, admin_user):
-    # Generic envelope contract validation on adapter path
+     # Generic envelope contract validation on adapter path
     from tldw_Server_API.app.api.v1.endpoints import vector_stores_openai as vs_mod
 
     async def _fake_get_adapter_for_user(user, dim):  # noqa: ANN001
@@ -387,7 +389,7 @@ def test_envelope_pagination_contract_adapter_path(monkeypatch, disable_heavy_st
 
 @pytest.mark.unit
 def test_envelope_pagination_contract_fallback_path(monkeypatch, disable_heavy_startup, admin_user):
-    # Generic envelope contract validation on Chroma fallback path
+     # Generic envelope contract validation on Chroma fallback path
     from tldw_Server_API.app.api.v1.endpoints import vector_stores_openai as vs_mod
 
     async def _fake_get_adapter_for_user(user, dim):  # noqa: ANN001

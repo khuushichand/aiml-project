@@ -29,7 +29,7 @@ class _FakeStripeClientForWebhooks:
 
 @pytest.fixture
 def app() -> FastAPI:
-    app = FastAPI()
+     app = FastAPI()
     app.include_router(webhooks_router, prefix="/api/v1")
     return app
 
@@ -134,7 +134,7 @@ def test_stripe_webhook_retries_failed_event(monkeypatch, app: FastAPI) -> None:
 
     class _RetryingBillingRepo:
         def __init__(self):
-            self.processed = False
+                     self.processed = False
 
         async def record_webhook_event(self, *args, **kwargs):
             return False

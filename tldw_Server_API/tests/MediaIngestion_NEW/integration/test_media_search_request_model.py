@@ -11,12 +11,12 @@ pytestmark = pytest.mark.integration
 
 class _FakeMediaDB:
     def search_media_db(self, **_kwargs):
-        return ([{"id": 1, "title": "Alpha", "type": "document"}], 1)
+             return ([{"id": 1, "title": "Alpha", "type": "document"}], 1)
 
 
 @pytest.fixture()
 def media_search_client(monkeypatch):
-    monkeypatch.setenv("TEST_MODE", "true")
+     monkeypatch.setenv("TEST_MODE", "true")
     app = FastAPI()
     app.include_router(listing_endpoint.router, prefix=f"{API_V1_PREFIX}/media")
     app.dependency_overrides[get_media_db_for_user] = lambda: _FakeMediaDB()
@@ -26,7 +26,9 @@ def media_search_client(monkeypatch):
 
 
 def test_media_search_accepts_minimal_payload(media_search_client):
-    resp = media_search_client.post("/api/v1/media/search", json={"query": "Alpha"})
+
+
+     resp = media_search_client.post("/api/v1/media/search", json={"query": "Alpha"})
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert "items" in body and isinstance(body["items"], list)
@@ -34,7 +36,9 @@ def test_media_search_accepts_minimal_payload(media_search_client):
 
 
 def test_media_search_forbids_extra_keys(media_search_client):
-    resp = media_search_client.post(
+
+
+     resp = media_search_client.post(
         "/api/v1/media/search",
         json={"query": "Alpha", "extra_key": True},
     )
@@ -42,7 +46,9 @@ def test_media_search_forbids_extra_keys(media_search_client):
 
 
 def test_media_search_rejects_bad_fields_type(media_search_client):
-    resp = media_search_client.post(
+
+
+     resp = media_search_client.post(
         "/api/v1/media/search",
         json={"query": "Alpha", "fields": "title"},
     )
@@ -50,7 +56,9 @@ def test_media_search_rejects_bad_fields_type(media_search_client):
 
 
 def test_media_search_rejects_query_too_long(media_search_client):
-    resp = media_search_client.post(
+
+
+     resp = media_search_client.post(
         "/api/v1/media/search",
         json={"query": "a" * 1001},
     )

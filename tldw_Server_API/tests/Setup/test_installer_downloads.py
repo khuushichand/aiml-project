@@ -14,7 +14,7 @@ from tldw_Server_API.app.core.Setup.install_manager import (
 
 @pytest.fixture()
 def fake_hf_module(tmp_path, monkeypatch):
-    """Provide a fake huggingface_hub module to avoid network calls.
+     """Provide a fake huggingface_hub module to avoid network calls.
 
     - hf_hub_download returns a path to a temp file containing known bytes.
     - snapshot_download populates the provided local_dir with a 'voices/' tree
@@ -118,7 +118,9 @@ def test_download_hf_dir_copies_subtree_with_force(tmp_path, fake_hf_module):  #
 
 
 def test_download_hf_dir_raises_if_subdir_missing(tmp_path, monkeypatch):
-    """If the requested subdir is not present in snapshot, raise FileNotFoundError."""
+
+
+     """If the requested subdir is not present in snapshot, raise FileNotFoundError."""
     def empty_snapshot_download(*, repo_id: str, local_dir: str, allow_patterns=None, force_download: bool = False):  # noqa: ARG001
         # Do not create the expected subdir
         return str(local_dir)

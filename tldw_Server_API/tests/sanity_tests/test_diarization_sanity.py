@@ -3,7 +3,9 @@ import pytest
 
 
 def test_agglomerative_metric_fallback(monkeypatch):
-    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Diarization_Lib as dlib
+
+
+     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Diarization_Lib as dlib
 
     calls = []  # track constructor calls to verify fallback path
 
@@ -24,7 +26,8 @@ def test_agglomerative_metric_fallback(monkeypatch):
             self.n_clusters = n_clusters
 
         def fit_predict(self, embeddings):
-            """
+
+                     """
             Return deterministic cluster labels that cycle from 0 up to n_clusters - 1.
 
             Parameters:
@@ -37,7 +40,8 @@ def test_agglomerative_metric_fallback(monkeypatch):
             return np.array([i % max(1, int(self.n_clusters)) for i in range(n)], dtype=int)
 
     def fake_normalize(x, axis=1, norm="l2"):
-        """
+
+             """
         No-op normalization used in tests; returns the input unchanged.
 
         Parameters:
@@ -77,7 +81,9 @@ def test_agglomerative_metric_fallback(monkeypatch):
 
 
 def test_lazy_import_silero_vad_handles_hub_fail(monkeypatch):
-    import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.VAD_Lib as vlib
+
+
+     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.VAD_Lib as vlib
 
     # Reset global cache to ensure test isolation for VAD lazy import
     monkeypatch.setattr(vlib, "_silero_vad_model", None)
@@ -87,7 +93,7 @@ def test_lazy_import_silero_vad_handles_hub_fail(monkeypatch):
 
     class _FakeHub:
         def set_dir(self, path):
-            """
+                     """
             Set the directory path used by the hub loader.
 
             Parameters:
@@ -96,7 +102,8 @@ def test_lazy_import_silero_vad_handles_hub_fail(monkeypatch):
             self._dir = path
 
         def load(self, *args, **kwargs):
-            """
+
+                     """
             Simulate a failed hub model load.
 
             This function always raises a RuntimeError to emulate a failure when loading a model from the hub.
@@ -108,7 +115,7 @@ def test_lazy_import_silero_vad_handles_hub_fail(monkeypatch):
 
     class _FakeTorch:
         def __init__(self):
-            """
+                     """
             Initialize a fake Torch wrapper that exposes a Hub instance for simulating torch.hub behavior.
 
             The instance attribute `hub` is set to a new `_FakeHub`, which can be used to simulate hub directory configuration and load failures in tests.

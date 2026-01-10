@@ -20,7 +20,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGD
 
 @pytest.fixture
 def mock_db():
-    """Create a mock database instance."""
+     """Create a mock database instance."""
     mock = MagicMock()
     mock.execute_query = MagicMock()
     mock.execute_many = MagicMock()
@@ -44,7 +44,7 @@ def mock_db():
 
 @pytest.fixture
 def service(mock_db):
-    """Create a WorldBookService instance with mocked database."""
+     """Create a WorldBookService instance with mocked database."""
     return WorldBookService(mock_db)
 
 
@@ -52,7 +52,8 @@ class TestWorldBookService:
     """Test suite for WorldBookService."""
 
     def test_init_creates_tables(self, mock_db):
-        """Test that initialization creates necessary tables."""
+
+             """Test that initialization creates necessary tables."""
         mock_conn = mock_db.get_connection().__enter__()
         service = WorldBookService(mock_db)
 
@@ -69,7 +70,8 @@ class TestWorldBookService:
         assert len(index_statements) >= 4
 
     def test_create_world_book(self, service, mock_db):
-        """Test creating a new world book."""
+
+             """Test creating a new world book."""
         mock_conn = mock_db.get_connection().__enter__()
         mock_cursor = mock_conn.execute.return_value
         mock_cursor.lastrowid = 1
@@ -93,7 +95,8 @@ class TestWorldBookService:
         assert 500 in call_args[1]  # token_budget
 
     def test_get_world_book_with_entries(self, service, mock_db):
-        """Test retrieving a world book and its entries."""
+
+             """Test retrieving a world book and its entries."""
         # Mock world book data
         mock_conn = mock_db.get_connection().__enter__()
         mock_cursor = mock_conn.execute.return_value
@@ -122,7 +125,8 @@ class TestWorldBookService:
         assert entries[0].keywords == ["dragon", "castle"]
 
     def test_add_entry(self, service, mock_db):
-        """Test adding an entry to a world book."""
+
+             """Test adding an entry to a world book."""
         mock_conn = mock_db.get_connection().__enter__()
         mock_cursor = mock_conn.execute.return_value
         mock_cursor.lastrowid = 1
@@ -143,7 +147,8 @@ class TestWorldBookService:
         assert '["magic", "wizard"]' in call_args[1]
 
     def test_attach_to_character(self, service, mock_db):
-        """Test attaching a world book to a character."""
+
+             """Test attaching a world book to a character."""
         mock_conn = mock_db.get_connection().__enter__()
 
         # Clear previous calls from init
@@ -167,7 +172,8 @@ class TestWorldBookService:
         assert call_args[1] == (1, 1, True, 100)
 
     def test_detach_from_character(self, service, mock_db):
-        """Test detaching a world book from a character."""
+
+             """Test detaching a world book from a character."""
         mock_conn = mock_db.get_connection().__enter__()
 
         result = service.detach_from_character(
@@ -183,7 +189,8 @@ class TestWorldBookService:
         assert call_args[1] == (1, 1)
 
     def test_get_character_world_books(self, service, mock_db):
-        """Test getting all world books for a character."""
+
+             """Test getting all world books for a character."""
         mock_conn = mock_db.get_connection().__enter__()
         mock_cursor = mock_conn.execute.return_value
         mock_cursor.fetchall.return_value = [
@@ -199,7 +206,8 @@ class TestWorldBookService:
         assert result[1]["is_primary"] == False
 
     def test_process_context_keyword_matching(self, service, mock_db):
-        """Test context processing with keyword matching."""
+
+             """Test context processing with keyword matching."""
         # Mock active world books and entries
         mock_conn = mock_db.get_connection().__enter__()
         mock_cursor = mock_conn.execute.return_value
@@ -229,7 +237,8 @@ class TestWorldBookService:
         assert "magic is powerful" in result["processed_context"].lower()
 
     def test_process_context_priority_ordering(self, service, mock_db):
-        """Test that entries are processed by priority."""
+
+             """Test that entries are processed by priority."""
         # Create entries with different priorities
         entries = [
             WorldBookEntry(
@@ -261,7 +270,8 @@ class TestWorldBookService:
         assert "High priority" in result["processed_context"]
 
     def test_process_context_token_budget(self, service, mock_db):
-        """Test that token budget is respected."""
+
+             """Test that token budget is respected."""
         # Create a very long entry
         long_content = " ".join(["word"] * 1000)
 
@@ -284,7 +294,8 @@ class TestWorldBookService:
         assert len(result["processed_context"].split()) < 1000
 
     def test_recursive_scanning(self, service, mock_db):
-        """Test recursive keyword scanning."""
+
+             """Test recursive keyword scanning."""
         # First entry triggers second entry
         mock_conn = mock_db.get_connection().__enter__()
         mock_cursor = mock_conn.execute.return_value
@@ -311,7 +322,8 @@ class TestWorldBookService:
         assert result["entries_matched"] >= 1
 
     def test_import_world_book(self, service, mock_db):
-        """Test importing a world book from JSON."""
+
+             """Test importing a world book from JSON."""
         world_book_data = {
             "world_book": {
                 "name": "Imported World",
@@ -336,7 +348,8 @@ class TestWorldBookService:
         assert mock_conn.execute.call_count >= 3
 
     def test_export_world_book(self, service, mock_db):
-        """Test exporting a world book to JSON."""
+
+             """Test exporting a world book to JSON."""
         mock_conn = mock_db.get_connection().__enter__()
         mock_cursor = mock_conn.execute.return_value
         mock_cursor.fetchone.return_value = {
@@ -355,7 +368,8 @@ class TestWorldBookService:
         # entries are WorldBookEntry objects with to_dict method
 
     def test_delete_world_book_cascade(self, service, mock_db):
-        """Test that deleting a world book cascades properly."""
+
+             """Test that deleting a world book cascades properly."""
         mock_conn = mock_db.get_connection().__enter__()
 
         # Clear calls from __init__
@@ -371,7 +385,8 @@ class TestWorldBookService:
         assert "update world_books set deleted =" in calls[0][0][0].lower()
 
     def test_update_entry(self, service, mock_db):
-        """Test updating a world book entry."""
+
+             """Test updating a world book entry."""
         mock_conn = mock_db.get_connection().__enter__()
 
         result = service.update_entry(
@@ -389,7 +404,8 @@ class TestWorldBookService:
         assert '["new", "keywords"]' in call_args[1]
 
     def test_get_statistics(self, service, mock_db):
-        """Test getting world book statistics."""
+
+             """Test getting world book statistics."""
         mock_conn = mock_db.get_connection().__enter__()
         mock_cursor = mock_conn.execute.return_value
         mock_cursor.fetchone.side_effect = [
@@ -408,7 +424,8 @@ class TestWorldBookService:
         assert stats["average_entries_per_world_book"] == 15.0
 
     def test_search_entries(self, service, mock_db):
-        """Test searching for entries by keyword or content."""
+
+             """Test searching for entries by keyword or content."""
         mock_conn = mock_db.get_connection().__enter__()
         mock_cursor = mock_conn.execute.return_value
         mock_cursor.fetchall.return_value = [
@@ -425,7 +442,8 @@ class TestWorldBookService:
         assert "fire" in results[0]["keywords"]
 
     def test_bulk_operations(self, service, mock_db):
-        """Test bulk enable/disable of entries."""
+
+             """Test bulk enable/disable of entries."""
         mock_conn = mock_db.get_connection().__enter__()
         mock_cursor = mock_conn.execute.return_value
         mock_cursor.rowcount = 3
@@ -445,7 +463,8 @@ class TestWorldBookService:
         assert "SET enabled = ?" in call_args[0]
 
     def test_clone_world_book(self, service, mock_db):
-        """Test cloning a world book with all entries."""
+
+             """Test cloning a world book with all entries."""
         mock_conn = mock_db.get_connection().__enter__()
         mock_cursor = mock_conn.execute.return_value
         mock_cursor.fetchone.side_effect = [
@@ -464,7 +483,8 @@ class TestWorldBookService:
         assert mock_conn.executemany.called or mock_conn.execute.call_count > 2
 
     def test_keyword_normalization(self, service):
-        """Test that keywords are matched case-insensitively by default."""
+
+             """Test that keywords are matched case-insensitively by default."""
         entry = WorldBookEntry(
             entry_id=1,
             world_book_id=1,

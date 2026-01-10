@@ -38,6 +38,22 @@ if TYPE_CHECKING:
     from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 
 
+def _sanitize_media_fts_query(query: Optional[str]) -> Optional[str]:
+    if query is None:
+        return None
+    try:
+        text = str(query).strip()
+    except Exception:
+        return query
+    if not text:
+        return text
+    if text.startswith('"') and text.endswith('"'):
+        return text
+    if "-" in text and " " not in text:
+        return f"\"{text}\""
+    return text
+
+
 @dataclass
 class RetrievalConfig:
     """Configuration for database retrieval."""
@@ -538,10 +554,14 @@ class MediaDBRetriever(BaseRetriever):
             date_range = {'start_date': start, 'end_date': end}
         media_types = [media_type] if media_type else None
         sort_by = 'relevance' if self.config.use_fts else 'last_modified_desc'
+        backend_type = getattr(self.media_db, 'backend_type', None)
+        search_query = query
+        if backend_type == BackendType.SQLITE:
+            search_query = _sanitize_media_fts_query(query)
         try:
             allowed_media_ids = kwargs.get("allowed_media_ids")
             results, _total = self.media_db.search_media_db(
-                search_query=query,
+                search_query=search_query,
                 search_fields=['title', 'content'],
                 media_types=media_types,
                 date_range=date_range,
@@ -556,7 +576,6 @@ class MediaDBRetriever(BaseRetriever):
             logger.error(f"MediaDatabase search failed: {exc}")
             return []
         documents: List[Document] = []
-        backend_type = getattr(self.media_db, 'backend_type', None)
 
         # Normalize scores across results to [0,1] (higher is better)
         raw_vals: List[float] = []

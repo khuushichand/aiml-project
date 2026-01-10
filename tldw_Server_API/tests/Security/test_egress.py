@@ -13,7 +13,7 @@ def _always_public(host: str):
 
 class TestEgressPolicy:
     def test_allowlist_enforces_exact_and_subdomain_matches(self, monkeypatch):
-        monkeypatch.setenv("WORKFLOWS_EGRESS_ALLOWLIST", "example.com")
+             monkeypatch.setenv("WORKFLOWS_EGRESS_ALLOWLIST", "example.com")
         monkeypatch.setenv("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "false")
         monkeypatch.setattr(egress, "_resolve_and_check_private", _always_public)
 
@@ -27,7 +27,8 @@ class TestEgressPolicy:
         assert "allowlist" in exc.value.detail.lower()
 
     def test_ipv4_mapped_ipv6_is_blocked(self, monkeypatch):
-        monkeypatch.delenv("WORKFLOWS_EGRESS_ALLOWLIST", raising=False)
+
+             monkeypatch.delenv("WORKFLOWS_EGRESS_ALLOWLIST", raising=False)
         monkeypatch.setenv("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "true")
 
         url = "http://[::ffff:127.0.0.1]/"
@@ -38,6 +39,7 @@ class TestEgressPolicy:
         assert "private" in exc.value.detail.lower()
 
     def test_invalid_port_is_rejected(self):
-        res = egress.evaluate_url_policy("http://example.com:bad/path")
+
+             res = egress.evaluate_url_policy("http://example.com:bad/path")
         assert res.allowed is False
         assert "port" in (res.reason or "").lower()

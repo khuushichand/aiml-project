@@ -4,7 +4,9 @@ from tldw_Server_API.app.core.Chunking.templates import TemplateClassifier, Temp
 
 
 def test_template_classifier_scores_basic_matches():
-    cfg = {
+
+
+     cfg = {
         "classifier": {
             "media_types": ["document"],
             "title_regex": r"^My Report",
@@ -17,7 +19,9 @@ def test_template_classifier_scores_basic_matches():
 
 
 def test_template_processor_hierarchical_returns_dict_chunks():
-    text = "# Heading\n\nPara one.\n\nPara two."
+
+
+     text = "# Heading\n\nPara one.\n\nPara two."
     template = ChunkingTemplate(
         name="demo",
         base_method="sentences",

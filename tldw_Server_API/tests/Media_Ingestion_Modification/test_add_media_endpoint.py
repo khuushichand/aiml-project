@@ -137,7 +137,7 @@ TEST_VIDEO_END_TIME = "00:00:20"
 # Mock Database Setup (Using test_utils.temp_db pattern from test_media_versions)
 @pytest.fixture(scope="function") # <<< CHANGED HERE
 def db_session_scope():
-    """RENAMED: FUNCTION-scoped temporary database with explicit connection closing."""
+     """RENAMED: FUNCTION-scoped temporary database with explicit connection closing."""
     db: Optional[MediaDatabase] = None
     db_path_str_for_log = "UNKNOWN_DB_PATH_FUNC_SCOPE" # Initialize for logging
     try:
@@ -179,7 +179,7 @@ def db_session_scope():
 
 @pytest.fixture(scope="function")
 def db_session(db_session_scope):
-    """Function-scoped access to the function DB."""
+     """Function-scoped access to the function DB."""
     yield db_session_scope # Directly yield the function-scoped instance
 
 mock_test_user = User(
@@ -204,7 +204,7 @@ async def override_verify_api_key(x_api_key: str = Header(..., alias="X-API-KEY"
 
 # Override get_media_db_for_user to use the temp test DB
 def override_get_media_db_for_user_dependency(db_fixture):
-    """
+     """
     Returns a dependency override function that yields the provided DB fixture.
     """
     async def _override(): # Changed to async def
@@ -244,13 +244,13 @@ def test_api_client(client_user_only, db_session_scope):  # Depends on the FUNCT
 
 @pytest.fixture
 def dummy_headers():
-    """Provides headers required by endpoint signature, even if logic is mocked."""
+     """Provides headers required by endpoint signature, even if logic is mocked."""
     # The actual value doesn't matter because auth is overridden in client_user_only.
     return {"token": "dummy_test_token_for_header"}
 
 @pytest.fixture
 def auth_headers():
-    """Provides authentication/required headers."""
+     """Provides authentication/required headers."""
     return {
         "token": "test_api_token_123",
         #"X-API-KEY": "test_api_key_123" # If you implement API key auth
@@ -258,12 +258,12 @@ def auth_headers():
 
 @pytest.fixture
 def dummy_file_content():
-    """Provides dummy byte content for mock files if needed elsewhere."""
+     """Provides dummy byte content for mock files if needed elsewhere."""
     return b"dummy file content for testing"
 
 @pytest.fixture
 def create_upload_file(dummy_file_content):
-    def _create(filepath: Path) -> Tuple[str, bytes, str]:
+     def _create(filepath: Path) -> Tuple[str, bytes, str]:
         if not filepath.exists():
             pytest.skip(f"Required test file missing: {filepath}")
         mime_map = {
@@ -284,7 +284,7 @@ def create_upload_file(dummy_file_content):
 def check_batch_response(
         response, expected_status_code, expected_processed=None,
         expected_errors=None, expected_warnings=None, check_results_len=None):
-    if response.status_code != expected_status_code:
+     if response.status_code != expected_status_code:
         logger.error(f"Expected status {expected_status_code}, got {response.status_code}. Response text: {response.text}")
     assert response.status_code == expected_status_code
     try:
@@ -311,7 +311,9 @@ def check_batch_response(
 
 
 def check_media_item_result(result, expected_status, check_db_interaction=True, expected_media_type=None):
-    assert isinstance(result, dict), f"Result item is not a dictionary: {result}"
+
+
+     assert isinstance(result, dict), f"Result item is not a dictionary: {result}"
     assert "status" in result, f"Result missing 'status' key: {result}"
     assert result["status"] == expected_status, f"Expected status '{expected_status}', got '{result['status']}' for input '{result.get('input_ref', 'N/A')}'"
     assert "input_ref" in result, "Result missing 'input_ref' key"
@@ -340,7 +342,9 @@ def check_media_item_result(result, expected_status, check_db_interaction=True, 
 
 
 def _build_nested_eml_bytes():
-    # Construct a simple nested .eml in-memory
+
+
+     # Construct a simple nested .eml in-memory
     from email.message import EmailMessage
     inner = EmailMessage()
     inner["From"] = "Inner <inner@example.com>"
@@ -358,7 +362,9 @@ def _build_nested_eml_bytes():
 
 
 def test_add_email_with_children_persists_child(test_api_client, db_session, dummy_headers):
-    # Prepare form for email add with attachment ingestion
+
+
+     # Prepare form for email add with attachment ingestion
     form_data = create_add_media_form_data(
         media_type="email",
         perform_chunking=True,
@@ -391,7 +397,9 @@ def test_add_email_with_children_persists_child(test_api_client, db_session, dum
 
 
 def _build_zip_emails_bytes():
-    # Build two simple EMLs and zip them
+
+
+     # Build two simple EMLs and zip them
     eml1 = (
         b"From: X <x@example.com>\r\n"
         b"To: Y <y@example.com>\r\n"
@@ -417,7 +425,9 @@ def _build_zip_emails_bytes():
 
 
 def test_add_email_archive_persists_children(test_api_client, db_session, dummy_headers):
-    # Similar to nested eml, but provide a .zip and accept_archives=true; expect children persisted
+
+
+     # Similar to nested eml, but provide a .zip and accept_archives=true; expect children persisted
     form_data = create_add_media_form_data(
         media_type="email",
         perform_chunking=True,
@@ -453,7 +463,9 @@ def test_add_email_archive_persists_children(test_api_client, db_session, dummy_
 
 
 def test_add_email_pst_feature_flag_behavior(test_api_client, db_session, dummy_headers):
-    # With accept_pst=true and a small placeholder .pst, expect synthetic parent with children containing informative error
+
+
+     # With accept_pst=true and a small placeholder .pst, expect synthetic parent with children containing informative error
     form_data = create_add_media_form_data(
         media_type="email",
         perform_chunking=False,
@@ -484,7 +496,7 @@ def test_add_email_pst_feature_flag_behavior(test_api_client, db_session, dummy_
 
 @pytest.mark.performance
 def test_add_email_zip_large_container_persists_children(test_api_client, db_session, dummy_headers):
-    # Build a zip with 30 small EMLs; expect children to be persisted
+     # Build a zip with 30 small EMLs; expect children to be persisted
     from io import BytesIO as _BytesIO
     import zipfile as _zipfile
 
@@ -522,7 +534,7 @@ def test_add_email_zip_large_container_persists_children(test_api_client, db_ses
 
 @pytest.mark.performance
 def test_add_email_mbox_large_container_persists_children(test_api_client, db_session, dummy_headers):
-    # Build an mbox with 30 small messages; expect children to be persisted
+     # Build an mbox with 30 small messages; expect children to be persisted
     import mailbox as _mailbox
     import tempfile as _tempfile
     from email.message import EmailMessage
@@ -565,7 +577,9 @@ def test_add_email_mbox_large_container_persists_children(test_api_client, db_se
 
 
 def test_add_email_zip_guardrail_too_many_files(test_api_client, db_session, dummy_headers):
-    # Temporarily lower guardrail to 1 to trigger error list
+
+
+     # Temporarily lower guardrail to 1 to trigger error list
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Email import Email_Processing_Lib as email_lib
     archive_cfg = email_lib.DEFAULT_MEDIA_TYPE_CONFIG.get('archive', {})
     orig = archive_cfg.get('max_internal_files', 100)
@@ -596,7 +610,9 @@ def test_add_email_zip_guardrail_too_many_files(test_api_client, db_session, dum
 
 
 def test_add_email_mbox_guardrail_too_many_messages(test_api_client, db_session, dummy_headers):
-    # Lower guardrail to 1 and create 2-message mbox; expect error in children and no child persistence
+
+
+     # Lower guardrail to 1 and create 2-message mbox; expect error in children and no child persistence
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Email import Email_Processing_Lib as email_lib
     import mailbox as _mailbox
     import tempfile as _tempfile
@@ -635,7 +651,9 @@ def test_add_email_mbox_guardrail_too_many_messages(test_api_client, db_session,
 
 
 def _build_mbox_two_emails_bytes() -> bytes:
-    import mailbox as _mailbox
+
+
+     import mailbox as _mailbox
     import tempfile as _tempfile
     from email.message import EmailMessage
     with _tempfile.NamedTemporaryFile(delete=False) as tmp:
@@ -667,7 +685,9 @@ def _build_mbox_two_emails_bytes() -> bytes:
 
 
 def test_add_email_mbox_persists_children(test_api_client, db_session, dummy_headers):
-    form_data = create_add_media_form_data(
+
+
+     form_data = create_add_media_form_data(
         media_type="email",
         perform_chunking=True,
         chunk_method='sentences',
@@ -704,7 +724,7 @@ def test_add_email_mbox_persists_children(test_api_client, db_session, dummy_hea
 
 # --- Helper for Form Data ---
 def create_add_media_form_data(**overrides) -> Dict[str, Any]:
-    defaults = {
+     defaults = {
         "media_type": "video",
         "urls": None,
         "title": None,
@@ -770,7 +790,8 @@ HAS_FFMPEG = bool(shutil.which('ffmpeg') or os.path.exists('/opt/homebrew/bin/ff
 NETWORK_TESTS_ENABLED = os.getenv('ENABLE_NETWORK_TESTS', '').lower() in {"1", "true", "yes", "on"}
 
 def test_add_media_invalid_media_type_value(test_api_client, dummy_headers):
-    """Test sending an invalid value for the media_type enum."""
+
+     """Test sending an invalid value for the media_type enum."""
     form_data = create_add_media_form_data(media_type="picture", urls=["http://a.com"])
     # Use the RENAMED client variable
     response = test_api_client.post(ADD_MEDIA_ENDPOINT, data=form_data, headers=dummy_headers)
@@ -782,7 +803,8 @@ def test_add_media_invalid_media_type_value(test_api_client, dummy_headers):
                for err in details if 'media_type' in err.get('loc', [])), f"Error details: {details}"
 
 def test_add_media_invalid_field_type(test_api_client, dummy_headers):
-    """Test sending a non-boolean string for a boolean field."""
+
+     """Test sending a non-boolean string for a boolean field."""
     form_data = create_add_media_form_data(media_type="video", urls=["http://a.com"], diarize="maybe")
     response = test_api_client.post(ADD_MEDIA_ENDPOINT, data=form_data, headers=dummy_headers)
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
@@ -797,7 +819,9 @@ def test_add_media_invalid_field_type(test_api_client, dummy_headers):
 
 
 def test_add_media_missing_url_and_file(test_api_client, dummy_headers):
-    """Test calling the endpoint with valid media_type but no sources."""
+
+
+     """Test calling the endpoint with valid media_type but no sources."""
     form_data = create_add_media_form_data(media_type="video", urls=None)
     # Ensure 'urls' key is truly absent if None
     if 'urls' in form_data: del form_data['urls']
@@ -808,7 +832,8 @@ def test_add_media_missing_url_and_file(test_api_client, dummy_headers):
     assert "No valid media sources supplied" in response.json()["detail"]
 
 def test_add_media_missing_required_form_field(test_api_client, dummy_headers):
-    """Test calling without a required field like media_type."""
+
+     """Test calling without a required field like media_type."""
     # Remove media_type from the form data dictionary entirely
     form_data = create_add_media_form_data(media_type="video", urls=["http://a.com"])
     del form_data["media_type"]
@@ -1073,7 +1098,7 @@ def test_add_media_multiple_failures_and_success_pdf(
     create_upload_file,
     dummy_headers
 ):
-    """Test a mix of successful and failed items for PDF media type, mocking _process_document_like_item."""
+     """Test a mix of successful and failed items for PDF media type, mocking _process_document_like_item."""
     if not SAMPLE_PDF_PATH.exists(): pytest.skip(f"Test file not found: {SAMPLE_PDF_PATH}")
 
     good_pdf_file_tuple = create_upload_file(SAMPLE_PDF_PATH)
@@ -1341,7 +1366,7 @@ def test_add_media_processor_handles_invalid_format(test_api_client, db_session,
 @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib.analyze")
 @pytest.mark.timeout(90)
 def test_add_media_pdf_with_analysis_mocked(mock_analyze, test_api_client, db_session, dummy_headers):
-    """Test PDF analysis via /add, mocking only the summarize call."""
+     """Test PDF analysis via /add, mocking only the summarize call."""
     if not SAMPLE_PDF_PATH.exists(): pytest.skip(f"Test file not found: {SAMPLE_PDF_PATH}")
     if not NETWORK_TESTS_ENABLED:
         pytest.skip("Requires network for PDF URL download")
@@ -1432,7 +1457,7 @@ def check_processing_only_item_result_structure(
 @pytest.mark.timeout(120)  # Ebook processing can take a bit
 def test_process_ebook_with_analysis_mocked(mock_analyze, test_api_client, db_session, create_upload_file,
                                             dummy_headers):
-    """Test EPUB analysis via /process-ebooks, mocking only the analyze call."""
+     """Test EPUB analysis via /process-ebooks, mocking only the analyze call."""
     if not SAMPLE_EPUB_PATH.exists():
         pytest.skip(f"Test file not found: {SAMPLE_EPUB_PATH}")
 
@@ -1496,7 +1521,7 @@ def test_process_ebook_with_analysis_mocked(mock_analyze, test_api_client, db_se
 @pytest.mark.timeout(180)  # Audio processing can be slow
 def test_process_audio_with_analysis_mocked(mock_analyze, test_api_client, db_session, create_upload_file,
                                             dummy_headers):
-    """Test Audio analysis via /process-audios, mocking only the analyze call."""
+     """Test Audio analysis via /process-audios, mocking only the analyze call."""
     if not SAMPLE_AUDIO_PATH.exists():
         pytest.skip(f"Test file not found: {SAMPLE_AUDIO_PATH}")
 
@@ -1543,7 +1568,7 @@ def test_process_audio_with_analysis_mocked(mock_analyze, test_api_client, db_se
 @pytest.mark.timeout(240)  # Video processing can be very slow
 def test_process_video_with_analysis_mocked(mock_analyze, test_api_client, db_session, create_upload_file,
                                             dummy_headers):
-    """Test Video analysis via /process-videos, mocking only the analyze call."""
+     """Test Video analysis via /process-videos, mocking only the analyze call."""
     if not SAMPLE_VIDEO_PATH.exists():
         pytest.skip(f"Test file not found: {SAMPLE_VIDEO_PATH}")
 
@@ -1589,7 +1614,7 @@ def test_process_video_with_analysis_mocked(mock_analyze, test_api_client, db_se
 @pytest.mark.timeout(90)
 def test_process_document_with_analysis_mocked(mock_analyze, test_api_client, db_session, create_upload_file,
                                                dummy_headers):
-    """Test Document (TXT) analysis via /process-documents, mocking only the analyze call."""
+     """Test Document (TXT) analysis via /process-documents, mocking only the analyze call."""
     if not SAMPLE_TXT_PATH.exists():
         pytest.skip(f"Test file not found: {SAMPLE_TXT_PATH}")
 

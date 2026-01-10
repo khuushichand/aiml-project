@@ -12,7 +12,9 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_
 
 
 def _make_test_db():
-    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+
+
+     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
         db_path = tmp.name
     db = CharactersRAGDB(db_path, "test_client")
     # Minimal default character required by endpoint
@@ -43,7 +45,7 @@ def _post_with_csrf(client: TestClient, url: str, **kwargs):
 
 @contextmanager
 def _make_test_client(db):
-    with TestClient(app) as client:
+     with TestClient(app) as client:
         # CSRF token for POST
         resp = client.get("/api/v1/health")
         csrf = resp.cookies.get("csrf_token", "")
@@ -52,7 +54,9 @@ def _make_test_client(db):
 
 
 def _auth_headers(client):
-    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
+
+     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     settings = get_settings()
     api_key = settings.SINGLE_USER_API_KEY or os.getenv("API_BEARER", "test-api-key-12345")
     return {"X-API-KEY": api_key, "X-CSRF-Token": getattr(client, 'csrf_token', '')}
@@ -60,7 +64,7 @@ def _auth_headers(client):
 
 @pytest.mark.unit
 def test_endpoint_streaming_normalizes_openai_sse_frames():
-    db, db_path = _make_test_db()
+     db, db_path = _make_test_db()
     try:
         # Cast to Any to avoid static analyzer complaints about dependency_overrides typing
         _app: Any = app
@@ -73,7 +77,8 @@ def test_endpoint_streaming_normalizes_openai_sse_frames():
             chunk2 = {"choices": [{"delta": {"content": " world"}}]}
 
             def upstream_stream():
-                yield f"data: {json.dumps(chunk1)}\n\n"
+
+                             yield f"data: {json.dumps(chunk1)}\n\n"
                 yield f"data: {json.dumps(chunk2)}\n\n"
                 yield "data: [DONE]\n\n"
 
@@ -127,7 +132,7 @@ def test_endpoint_streaming_normalizes_openai_sse_frames():
 
 @pytest.mark.unit
 def test_endpoint_streaming_normalizes_multiline_event_and_data_frames():
-    db, db_path = _make_test_db()
+     db, db_path = _make_test_db()
     try:
         _app: Any = app
         _app.dependency_overrides[get_chacha_db_for_user] = lambda: db
@@ -144,7 +149,8 @@ def test_endpoint_streaming_normalizes_multiline_event_and_data_frames():
             )
 
             def upstream_stream():
-                # A single upstream chunk containing multiple frames
+
+                             # A single upstream chunk containing multiple frames
                 yield multiline
 
             with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False), \

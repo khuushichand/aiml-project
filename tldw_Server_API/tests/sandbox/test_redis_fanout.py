@@ -22,7 +22,7 @@ class _Bus:
 
 class FakePubSub:
     def __init__(self):
-        self._subs = set()
+             self._subs = set()
         self._q: Queue = Queue()
 
     def subscribe(self, channel: str) -> None:
@@ -43,7 +43,8 @@ class FakeRedis:
         return cls()
 
     def ping(self):
-        return True
+
+             return True
 
     def publish(self, channel: str, data: bytes):
         _Bus.publish(channel, data)
@@ -125,7 +126,8 @@ async def test_redis_fanout_cross_worker_real(monkeypatch):
         assert frame["data"] == "ping"
 
 def test_health_includes_redis_ping(monkeypatch):
-    # Setup app with sandbox routes and fake redis
+
+     # Setup app with sandbox routes and fake redis
     monkeypatch.setenv("TEST_MODE", "1")
     chan = f"test:sandbox:health:{uuid.uuid4().hex}"
     monkeypatch.setenv("SANDBOX_WS_REDIS_FANOUT", "true")

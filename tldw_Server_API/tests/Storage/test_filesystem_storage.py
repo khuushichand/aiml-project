@@ -21,21 +21,23 @@ from tldw_Server_API.app.core.Storage.storage_interface import StorageError
 
 @pytest.fixture
 def storage_backend():
-    """Create a FileSystemStorage instance with a temporary directory."""
+     """Create a FileSystemStorage instance with a temporary directory."""
     with tempfile.TemporaryDirectory() as tmpdir:
         yield FileSystemStorage(base_path=tmpdir)
 
 
 @pytest.fixture
 def event_loop():
-    """Create an event loop for async tests."""
+     """Create an event loop for async tests."""
     loop = asyncio.new_event_loop()
     yield loop
     loop.close()
 
 
 def run_async(coro):
-    """Helper to run async functions in sync tests."""
+
+
+     """Helper to run async functions in sync tests."""
     return asyncio.get_event_loop().run_until_complete(coro)
 
 
@@ -44,7 +46,7 @@ class TestFileSystemStorageBasic:
 
     @pytest.mark.unit
     def test_store_and_retrieve_bytes(self, storage_backend):
-        """Test storing and retrieving bytes data."""
+             """Test storing and retrieving bytes data."""
         async def _test():
             data = b"test PDF content here"
             path = await storage_backend.store("user1", 123, "test.pdf", data)
@@ -60,7 +62,7 @@ class TestFileSystemStorageBasic:
 
     @pytest.mark.unit
     def test_store_and_retrieve_file_like(self, storage_backend):
-        """Test storing data from a file-like object."""
+             """Test storing data from a file-like object."""
         async def _test():
             data = b"file-like object content"
             file_obj = BytesIO(data)
@@ -74,7 +76,7 @@ class TestFileSystemStorageBasic:
 
     @pytest.mark.unit
     def test_store_creates_directories(self, storage_backend):
-        """Test that store creates necessary directories."""
+             """Test that store creates necessary directories."""
         async def _test():
             path = await storage_backend.store("newuser", 999, "file.pdf", b"data")
 
@@ -87,7 +89,7 @@ class TestFileSystemStorageBasic:
 
     @pytest.mark.unit
     def test_retrieve_nonexistent_raises(self, storage_backend):
-        """Test that retrieving a non-existent file raises FileNotFoundError."""
+             """Test that retrieving a non-existent file raises FileNotFoundError."""
         async def _test():
             with pytest.raises(FileNotFoundError):
                 await storage_backend.retrieve("user1/media/1/nonexistent.pdf")
@@ -100,7 +102,7 @@ class TestFileSystemStoragePathSecurity:
 
     @pytest.mark.unit
     def test_path_traversal_in_user_id_prevented(self, storage_backend):
-        """Test that directory traversal in user_id is sanitized."""
+             """Test that directory traversal in user_id is sanitized."""
         async def _test():
             # Attempt directory traversal via user_id
             path = await storage_backend.store("../etc", 1, "passwd", b"malicious")
@@ -117,7 +119,7 @@ class TestFileSystemStoragePathSecurity:
 
     @pytest.mark.unit
     def test_path_traversal_in_filename_prevented(self, storage_backend):
-        """Test that directory traversal in filename is sanitized."""
+             """Test that directory traversal in filename is sanitized."""
         async def _test():
             path = await storage_backend.store("user1", 1, "../../../etc/passwd", b"data")
 
@@ -129,7 +131,7 @@ class TestFileSystemStoragePathSecurity:
 
     @pytest.mark.unit
     def test_backslash_in_path_sanitized(self, storage_backend):
-        """Test that backslashes in paths are sanitized."""
+             """Test that backslashes in paths are sanitized."""
         async def _test():
             path = await storage_backend.store("user1", 1, "..\\..\\file.pdf", b"data")
 
@@ -140,7 +142,7 @@ class TestFileSystemStoragePathSecurity:
 
     @pytest.mark.unit
     def test_validate_path_rejects_escape(self, storage_backend):
-        """Test that path validation rejects paths outside base directory."""
+             """Test that path validation rejects paths outside base directory."""
         # Create a path that resolves outside base_path
         outside_path = storage_backend.base_path.parent / "outside.txt"
 
@@ -155,7 +157,7 @@ class TestFileSystemStorageExistsAndDelete:
 
     @pytest.mark.unit
     def test_exists_returns_true_for_existing_file(self, storage_backend):
-        """Test that exists returns True for files that exist."""
+             """Test that exists returns True for files that exist."""
         async def _test():
             path = await storage_backend.store("user1", 1, "file.pdf", b"data")
             assert await storage_backend.exists(path) is True
@@ -164,7 +166,7 @@ class TestFileSystemStorageExistsAndDelete:
 
     @pytest.mark.unit
     def test_exists_returns_false_for_missing_file(self, storage_backend):
-        """Test that exists returns False for files that don't exist."""
+             """Test that exists returns False for files that don't exist."""
         async def _test():
             assert await storage_backend.exists("user1/media/1/missing.pdf") is False
 
@@ -172,7 +174,7 @@ class TestFileSystemStorageExistsAndDelete:
 
     @pytest.mark.unit
     def test_delete_removes_file(self, storage_backend):
-        """Test that delete removes the file."""
+             """Test that delete removes the file."""
         async def _test():
             path = await storage_backend.store("user1", 1, "file.pdf", b"data")
             assert await storage_backend.exists(path) is True
@@ -185,7 +187,7 @@ class TestFileSystemStorageExistsAndDelete:
 
     @pytest.mark.unit
     def test_delete_returns_false_for_missing(self, storage_backend):
-        """Test that delete returns False for non-existent files."""
+             """Test that delete returns False for non-existent files."""
         async def _test():
             deleted = await storage_backend.delete("user1/media/1/nonexistent.pdf")
             assert deleted is False
@@ -194,7 +196,7 @@ class TestFileSystemStorageExistsAndDelete:
 
     @pytest.mark.unit
     def test_delete_cleans_empty_directories(self, storage_backend):
-        """Test that delete removes empty parent directories."""
+             """Test that delete removes empty parent directories."""
         async def _test():
             path = await storage_backend.store("user1", 1, "file.pdf", b"data")
             full_path = storage_backend.base_path / path
@@ -218,7 +220,7 @@ class TestFileSystemStorageSizeAndChecksum:
 
     @pytest.mark.unit
     def test_get_size_returns_correct_size(self, storage_backend):
-        """Test that get_size returns the correct file size."""
+             """Test that get_size returns the correct file size."""
         async def _test():
             data = b"x" * 1000
             path = await storage_backend.store("user1", 1, "file.pdf", data)
@@ -230,7 +232,7 @@ class TestFileSystemStorageSizeAndChecksum:
 
     @pytest.mark.unit
     def test_get_size_raises_for_missing(self, storage_backend):
-        """Test that get_size raises for non-existent files."""
+             """Test that get_size raises for non-existent files."""
         async def _test():
             with pytest.raises(FileNotFoundError):
                 await storage_backend.get_size("user1/media/1/missing.pdf")
@@ -239,7 +241,7 @@ class TestFileSystemStorageSizeAndChecksum:
 
     @pytest.mark.unit
     def test_compute_checksum_sha256(self, storage_backend):
-        """Test that compute_checksum returns correct SHA-256 hash."""
+             """Test that compute_checksum returns correct SHA-256 hash."""
         async def _test():
             data = b"test content for hashing"
             path = await storage_backend.store("user1", 1, "file.pdf", data)
@@ -256,7 +258,7 @@ class TestFileSystemStorageSizeAndChecksum:
 
     @pytest.mark.unit
     def test_compute_checksum_md5(self, storage_backend):
-        """Test that compute_checksum works with MD5 algorithm."""
+             """Test that compute_checksum works with MD5 algorithm."""
         async def _test():
             data = b"test content"
             path = await storage_backend.store("user1", 1, "file.pdf", data)
@@ -270,7 +272,7 @@ class TestFileSystemStorageSizeAndChecksum:
 
     @pytest.mark.unit
     def test_compute_checksum_raises_for_missing(self, storage_backend):
-        """Test that compute_checksum raises for non-existent files."""
+             """Test that compute_checksum raises for non-existent files."""
         async def _test():
             with pytest.raises(FileNotFoundError):
                 await storage_backend.compute_checksum("user1/media/1/missing.pdf")
@@ -283,7 +285,7 @@ class TestFileSystemStorageStreaming:
 
     @pytest.mark.unit
     def test_retrieve_stream_yields_chunks(self, storage_backend):
-        """Test that retrieve_stream yields file content in chunks."""
+             """Test that retrieve_stream yields file content in chunks."""
         async def _test():
             # Store a file larger than chunk size
             data = b"x" * 200000  # 200KB
@@ -304,7 +306,7 @@ class TestFileSystemStorageStreaming:
 
     @pytest.mark.unit
     def test_retrieve_stream_small_file(self, storage_backend):
-        """Test that retrieve_stream works for small files."""
+             """Test that retrieve_stream works for small files."""
         async def _test():
             data = b"small file content"
             path = await storage_backend.store("user1", 1, "small.pdf", data)
@@ -321,7 +323,7 @@ class TestFileSystemStorageStreaming:
 
     @pytest.mark.unit
     def test_retrieve_stream_raises_for_missing(self, storage_backend):
-        """Test that retrieve_stream raises for non-existent files."""
+             """Test that retrieve_stream raises for non-existent files."""
         async def _test():
             chunks = []
             with pytest.raises(FileNotFoundError):
@@ -336,13 +338,13 @@ class TestFileSystemStorageMisc:
 
     @pytest.mark.unit
     def test_get_url_returns_none(self, storage_backend):
-        """Test that get_url returns None (filesystem doesn't support public URLs)."""
+             """Test that get_url returns None (filesystem doesn't support public URLs)."""
         result = storage_backend.get_url("some/path.pdf")
         assert result is None
 
     @pytest.mark.unit
     def test_get_full_path(self, storage_backend):
-        """Test that get_full_path returns the correct absolute path."""
+             """Test that get_full_path returns the correct absolute path."""
         async def _test():
             path = await storage_backend.store("user1", 1, "file.pdf", b"data")
             full_path = storage_backend.get_full_path(path)
@@ -354,13 +356,13 @@ class TestFileSystemStorageMisc:
 
     @pytest.mark.unit
     def test_sanitize_empty_string(self, storage_backend):
-        """Test that sanitizing an empty string returns 'unnamed'."""
+             """Test that sanitizing an empty string returns 'unnamed'."""
         result = storage_backend._sanitize_path_component("")
         assert result == "unnamed"
 
     @pytest.mark.unit
     def test_sanitize_only_dots(self, storage_backend):
-        """Test that sanitizing a string of only dots is handled safely."""
+             """Test that sanitizing a string of only dots is handled safely."""
         result = storage_backend._sanitize_path_component("...")
         # The dots get replaced with underscores, then trailing dots stripped
         assert ".." not in result  # No path traversal

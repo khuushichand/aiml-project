@@ -22,7 +22,7 @@ def _small_wav_bytes(duration_sec: float = 0.25, sr: int = 16000) -> bytes:
 
 @pytest.fixture
 def client(monkeypatch):
-    monkeypatch.setenv("TEST_MODE", "true")
+     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key-1234567890")
     monkeypatch.setenv("SINGLE_USER_FIXED_ID", "1")

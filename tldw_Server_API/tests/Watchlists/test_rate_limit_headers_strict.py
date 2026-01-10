@@ -12,7 +12,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture()
 def client_with_user(monkeypatch):
-    async def override_user():
+     async def override_user():
         return User(id=913, username="wluser", email=None, is_active=True)
 
     # Avoid TEST_MODE so RG policies are applied consistently.
@@ -39,7 +39,9 @@ def client_with_user(monkeypatch):
 
 
 def _has_any_rate_headers(resp) -> bool:
-    hdrs = resp.headers
+
+
+     hdrs = resp.headers
     return any(
         h in hdrs
         for h in (

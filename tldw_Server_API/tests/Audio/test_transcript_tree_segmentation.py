@@ -35,7 +35,9 @@ async def _stub_embedder(chunks: List[str]) -> List[List[float]]:
 
 
 def test_tree_segmentation_three_topics():
-    # Build 30 utterances: 10 of A, 10 of B, 10 of C
+
+
+     # Build 30 utterances: 10 of A, 10 of B, 10 of C
     entries = []
     for i in range(10):
         entries.append({"composite": f"TOPIC_A: statement {i}", "speaker": "A"})
@@ -65,7 +67,9 @@ def test_tree_segmentation_three_topics():
 
 
 def test_tree_segmentation_small_transcript_no_split():
-    # N=6, MIN_SEGMENT_SIZE=4 => 2*min=8 > N, cannot split
+
+
+     # N=6, MIN_SEGMENT_SIZE=4 => 2*min=8 > N, cannot split
     entries = [{"composite": f"TOPIC_A {i}"} for i in range(6)]
     configs = {
         "MIN_SEGMENT_SIZE": 4,
@@ -81,7 +85,9 @@ def test_tree_segmentation_small_transcript_no_split():
 
 
 def test_segments_metadata_preserved():
-    # 8 entries, 4 A then 4 B, with times
+
+
+     # 8 entries, 4 A then 4 B, with times
     entries = []
     t = 0.0
     for i in range(4):

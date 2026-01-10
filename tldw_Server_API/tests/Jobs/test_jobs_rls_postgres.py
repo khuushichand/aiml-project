@@ -11,7 +11,9 @@ pytestmark = pytest.mark.pg_jobs
 
 
 def _dsn_or_skip(monkeypatch):
-    dsn = os.getenv("JOBS_DB_URL")
+
+
+     dsn = os.getenv("JOBS_DB_URL")
     if not dsn:
         pytest.skip("JOBS_DB_URL not configured for Postgres RLS tests")
     # Enable single-update acquire path for consistency (not strictly needed here)
@@ -20,7 +22,9 @@ def _dsn_or_skip(monkeypatch):
 
 
 def _seed(dsn):
-    import psycopg
+
+
+     import psycopg
     with psycopg.connect(dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
             # Minimal cleanup to keep test deterministic
@@ -57,7 +61,9 @@ def _seed(dsn):
 
 
 def test_rls_context_filters_results(monkeypatch):
-    dsn = _dsn_or_skip(monkeypatch)
+
+
+     dsn = _dsn_or_skip(monkeypatch)
     ensure_jobs_tables_pg(dsn)
     _seed(dsn)
 
@@ -82,7 +88,9 @@ def test_rls_context_filters_results(monkeypatch):
 
 
 def test_rls_applies_to_events_and_controls(monkeypatch):
-    dsn = _dsn_or_skip(monkeypatch)
+
+
+     dsn = _dsn_or_skip(monkeypatch)
     ensure_jobs_tables_pg(dsn)
     _seed(dsn)
     import psycopg

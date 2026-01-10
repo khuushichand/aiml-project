@@ -192,6 +192,8 @@ def _restore_auth_env_and_singletons():
 
 
 def _log_lingering_threads():
+
+
     try:
         import sys, traceback
 
@@ -491,6 +493,7 @@ class _TestUsageLogger:
         self.events = []
 
     def log_event(self, name, resource_id=None, tags=None, metadata=None):
+
         self.events.append((name, resource_id, tags, metadata))
 
 
@@ -516,6 +519,7 @@ def client_with_single_user(monkeypatch):
         return User(id=1, username="tester", email=None, is_active=True)
 
     def _override_logger():
+
         return usage_logger
 
     async def _override_principal(request=None):

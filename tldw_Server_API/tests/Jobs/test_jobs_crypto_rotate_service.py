@@ -34,7 +34,8 @@ async def test_jobs_crypto_rotate_worker_invokes_rotate(monkeypatch, tmp_path):
             raise
 
     def fake_rotate(self, *, domain=None, queue=None, job_type=None, old_key_b64=None, new_key_b64=None, fields=None, limit=1000, dry_run=False):
-        calls["n"] += 1
+
+             calls["n"] += 1
         return 3
 
     # Monkeypatch the rotate_encryption_keys method on JobManager
@@ -59,7 +60,8 @@ async def test_jobs_crypto_rotate_worker_repeats_on_timeout(monkeypatch, tmp_pat
     from tldw_Server_API.app.core.Jobs import manager as mgr_mod
 
     def fake_rotate(self, **kwargs):
-        calls["n"] += 1
+
+             calls["n"] += 1
         return 1
 
     monkeypatch.setattr(mgr_mod.JobManager, "rotate_encryption_keys", fake_rotate, raising=False)
@@ -90,7 +92,7 @@ async def test_jobs_crypto_rotate_worker_noop_when_keys_missing(monkeypatch, tmp
     calls = {"n": 0}
     from tldw_Server_API.app.core.Jobs import manager as mgr_mod
     def fake_rotate(self, **kwargs):
-        calls["n"] += 1
+             calls["n"] += 1
         return 1
     monkeypatch.setattr(mgr_mod.JobManager, "rotate_encryption_keys", fake_rotate, raising=False)
 
@@ -124,10 +126,10 @@ async def test_jobs_crypto_rotate_worker_pg_backend_and_invocation(monkeypatch):
         last_db_url = None
         calls = 0
         def __init__(self, *args, **kwargs):
-            FakeJM.last_backend = kwargs.get("backend")
+                     FakeJM.last_backend = kwargs.get("backend")
             FakeJM.last_db_url = kwargs.get("db_url")
         def rotate_encryption_keys(self, **kwargs):
-            FakeJM.calls += 1
+                     FakeJM.calls += 1
             return 2
 
     # Patch the JobManager symbol used inside the service module

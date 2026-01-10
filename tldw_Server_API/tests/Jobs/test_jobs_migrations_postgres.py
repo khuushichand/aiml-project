@@ -12,11 +12,13 @@ pytestmark = [pytest.mark.pg_jobs]
 
 @pytest.fixture(autouse=True)
 def _setup(jobs_pg_dsn):
-    return
+     return
 
 
 def test_pg_forward_migration_adds_missing_columns_and_partial_indexes(jobs_pg_dsn):
-    ensure_jobs_tables_pg(jobs_pg_dsn)
+
+
+     ensure_jobs_tables_pg(jobs_pg_dsn)
     with psycopg.connect(jobs_pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
             # Try to drop a new-ish column to simulate an older schema

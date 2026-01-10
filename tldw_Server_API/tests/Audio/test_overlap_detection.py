@@ -3,7 +3,9 @@ import pytest
 
 
 def test_overlap_detection_fields_via_mock_similarity(monkeypatch):
-    """Verify is_overlapping, primary_confidence, and secondary_speakers are set using a mocked similarity matrix."""
+
+
+     """Verify is_overlapping, primary_confidence, and secondary_speakers are set using a mocked similarity matrix."""
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Diarization_Lib as dlib
 
     svc = dlib.DiarizationService(config={
@@ -30,7 +32,8 @@ def test_overlap_detection_fields_via_mock_similarity(monkeypatch):
     ])
 
     def _fake_lazy_import_sklearn():
-        return {
+
+             return {
             "cosine_similarity": lambda X, Y: sim,
         }
 

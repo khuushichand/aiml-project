@@ -798,3 +798,19 @@ def get_shared_cache(
                 cache = cache_cls(similarity_threshold=similarity_threshold)  # type: ignore[call-arg]
             _SHARED_CACHES[cache_key] = cache
     return cache
+
+
+def clear_shared_caches(namespace: Optional[str] = None) -> int:
+    """Clear shared semantic caches, optionally scoped to a namespace."""
+    cleared = 0
+    namespace_key = _normalize_namespace(namespace)
+    with _SHARED_CACHE_LOCK:
+        for cache_key, cache in list(_SHARED_CACHES.items()):
+            _, key_namespace, *_ = cache_key
+            if namespace_key is None or key_namespace == namespace_key:
+                try:
+                    cache.clear()
+                except Exception:
+                    pass
+                cleared += 1
+    return cleared

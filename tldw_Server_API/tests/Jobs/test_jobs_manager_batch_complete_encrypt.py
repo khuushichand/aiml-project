@@ -7,7 +7,7 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 @pytest.mark.unit
 def test_batch_complete_applies_encryption_with_and_without_domain(tmp_path, monkeypatch):
-    # Enable encryption for domain SECURE
+     # Enable encryption for domain SECURE
     monkeypatch.setenv("JOBS_ENCRYPT_SECURE", "true")
     # Provide a 32-byte AES key for encryption routines
     monkeypatch.setenv("WORKFLOWS_ARTIFACT_ENC_KEY", base64.b64encode(b"0" * 32).decode("ascii"))

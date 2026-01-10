@@ -9,26 +9,33 @@ from tldw_Server_API.app.core.LLM_Calls.sse import sse_done
 
 
 def test_google_streaming_handles_done_sentinel(monkeypatch):
-    class DummyResponse:
+
+
+     class DummyResponse:
         def __init__(self, raw_lines):
-            self._raw_lines = raw_lines
+                     self._raw_lines = raw_lines
             self.closed = False
 
         def raise_for_status(self):
-            return None
+
+                     return None
 
         def __enter__(self):
-            return self
+
+                     return self
 
         def __exit__(self, exc_type, exc, tb):
-            return False
+
+                     return False
 
         def iter_lines(self):
-            for line in self._raw_lines:
+
+                     for line in self._raw_lines:
                 yield line
 
         def close(self):
-            self.closed = True
+
+                     self.closed = True
 
     text_chunk = json.dumps(
         {
@@ -49,17 +56,20 @@ def test_google_streaming_handles_done_sentinel(monkeypatch):
 
     class DummyClient:
         def __init__(self, raw_lines):
-            self._raw_lines = raw_lines
+                     self._raw_lines = raw_lines
 
         def __enter__(self):
-            return self
+
+                     return self
 
         def __exit__(self, exc_type, exc, tb):
-            closed["client"] = True
+
+                     closed["client"] = True
             return False
 
         def stream(self, method, url, **kwargs):
-            return DummyResponse(self._raw_lines)
+
+                     return DummyResponse(self._raw_lines)
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.LLM_Calls.providers.google_adapter.http_client_factory",
@@ -84,7 +94,7 @@ def test_google_streaming_handles_done_sentinel(monkeypatch):
 async def test_huggingface_download_handles_head_failure(tmp_path, monkeypatch):
     class DummyAsyncClient:
         def __init__(self, *args, **kwargs):
-            pass
+                     pass
 
         async def __aenter__(self):
             return self
@@ -96,7 +106,8 @@ async def test_huggingface_download_handles_head_failure(tmp_path, monkeypatch):
             raise RuntimeError("head failed")
 
     def _client_factory(*args, **kwargs):
-        return DummyAsyncClient()
+
+             return DummyAsyncClient()
 
     monkeypatch.setattr(hf_module, "create_async_client", _client_factory, raising=True)
 

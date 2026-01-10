@@ -16,7 +16,7 @@ MOCK_ARTICLE = {
 
 @pytest.fixture
 def mock_scraping_functions():
-    with patch('tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib.scrape_and_summarize_multiple') as mock_multiple, \
+     with patch('tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib.scrape_and_summarize_multiple') as mock_multiple, \
             patch('tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib.scrape_from_sitemap') as mock_sitemap, \
             patch('tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib.scrape_by_url_level') as mock_url_level:
         mock_multiple.return_value = [MOCK_ARTICLE]

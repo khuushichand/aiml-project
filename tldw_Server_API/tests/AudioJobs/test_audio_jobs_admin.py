@@ -3,14 +3,18 @@ from fastapi.testclient import TestClient
 
 
 def _admin_headers():
-    # In single-user test mode, admin can be the same API key; tests elsewhere use X-API-KEY or Bearer
+
+
+     # In single-user test mode, admin can be the same API key; tests elsewhere use X-API-KEY or Bearer
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     s = get_settings()
     return {"X-API-KEY": s.SINGLE_USER_API_KEY}
 
 
 def test_audio_tiers_admin_get_set():
-    from tldw_Server_API.app.main import app
+
+
+     from tldw_Server_API.app.main import app
     with TestClient(app) as client:
         # Get tier (default free)
         r = client.get("/api/v1/audio/jobs/admin/tiers/123", headers=_admin_headers())
@@ -31,7 +35,9 @@ def test_audio_tiers_admin_get_set():
 
 
 def test_audio_jobs_admin_summaries_smoke():
-    from tldw_Server_API.app.main import app
+
+
+     from tldw_Server_API.app.main import app
     with TestClient(app) as client:
         r = client.get("/api/v1/audio/jobs/admin/summary", headers=_admin_headers())
         if r.status_code == 404:
@@ -54,7 +60,9 @@ def test_audio_jobs_admin_summaries_smoke():
 
 
 def test_audio_jobs_admin_list_and_processing_and_auth():
-    from tldw_Server_API.app.main import app
+
+
+     from tldw_Server_API.app.main import app
     with TestClient(app) as client:
         # Submit a job as admin to ensure there is at least one audio job
         submit_resp = client.post(

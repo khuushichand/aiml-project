@@ -17,7 +17,7 @@ def _truthy(v: str | None) -> bool:
 
 @pytest.fixture(scope="session", autouse=True)
 def _bootstrap_jobs_routes_env():
-    """Session-scoped baseline env so Jobs admin routes are mounted eagerly.
+     """Session-scoped baseline env so Jobs admin routes are mounted eagerly.
 
     Ensures that when `tldw_Server_API.app.main` is first imported during test
     discovery or module import, the 'jobs' router is included regardless of the
@@ -70,7 +70,7 @@ def _ensure_local_pg(pg_host: str, pg_port: int, user: str, password: str, datab
 
 @pytest.fixture
 def jobs_pg(monkeypatch):
-    """Ensure Postgres for Jobs tests and set JOBS_DB_URL.
+     """Ensure Postgres for Jobs tests and set JOBS_DB_URL.
 
     - Skips the test unless RUN_PG_JOBS_TESTS is truthy
     - Resolves DSN using tests/helpers/pg_env precedence
@@ -119,7 +119,7 @@ def jobs_pg(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _jobs_minimal_env(monkeypatch):
-    """Ensure a minimal, stable app environment for Jobs tests.
+     """Ensure a minimal, stable app environment for Jobs tests.
 
     - Enables TEST_MODE and MINIMAL_TEST_APP to avoid heavy startup dependencies
     - Ensures Jobs routes are mounted via ROUTES_ENABLE
@@ -167,7 +167,7 @@ def _jobs_minimal_env(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _reset_jobs_acquire_gate():
-    """Reset JobManager acquire gate before and after each test.
+     """Reset JobManager acquire gate before and after each test.
 
     App shutdown flips the acquire gate on; carrying that across tests
     blocks acquisitions. Ensure it's off for each test.
@@ -183,14 +183,14 @@ def _reset_jobs_acquire_gate():
 
 @pytest.fixture
 def route_debugger():
-    """Helper to print app routes when debugging 404s in tests.
+     """Helper to print app routes when debugging 404s in tests.
 
     Usage:
         if resp.status_code == 404:
             route_debugger(app)
     """
     def _debug(app):
-        try:
+             try:
             from starlette.routing import BaseRoute
             lines = []
             for r in getattr(app, "routes", []):
@@ -207,7 +207,7 @@ def route_debugger():
 
 @pytest.fixture(scope="function")
 def jobs_pg_dsn(request, monkeypatch):
-    """Function-scoped DSN for Jobs tests using a temp Postgres DB.
+     """Function-scoped DSN for Jobs tests using a temp Postgres DB.
 
     - Allocates a per-test database via the unified pg_temp_db fixture.
     - Ensures Jobs schema exists on that DB.

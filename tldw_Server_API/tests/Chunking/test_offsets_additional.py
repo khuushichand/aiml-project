@@ -16,7 +16,9 @@ def _assert_offsets_fidelity(text: str, chunks: list[dict]):
 
 
 def test_hierarchical_offsets_with_code_fences():
-    text = (
+
+
+     text = (
         "Intro line\n\n"
         "```\n"
         "print('hi')\n"
@@ -34,7 +36,9 @@ def test_hierarchical_offsets_with_code_fences():
 
 
 def test_hierarchical_offsets_with_repeated_content_monotonic():
-    # Repeated paragraphs and tokens can confuse naive substring mapping
+
+
+     # Repeated paragraphs and tokens can confuse naive substring mapping
     para = "Alpha Beta Alpha Beta Alpha Beta"
     text = f"{para}\n\n{para}\n\n{para}."
     ck = Chunker()

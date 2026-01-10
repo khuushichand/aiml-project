@@ -10,19 +10,21 @@ pytestmark = [pytest.mark.integration, pytest.mark.evaluations]
 
 @pytest.fixture(autouse=True)
 def _setup_env(monkeypatch):
-    # Allow tests to run without admin gating and use testing bypass
+     # Allow tests to run without admin gating and use testing bypass
     monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "false")
     monkeypatch.setenv("TESTING", "true")
 
 
 @pytest.fixture(scope="function")
 def client():
-    with TestClient(app) as c:
+     with TestClient(app) as c:
         yield c
 
 
 def test_batch_propositions_basic(client):
-    body = {
+
+
+     body = {
         "evaluation_type": "propositions",
         "items": [
             {
@@ -48,7 +50,9 @@ def test_batch_propositions_basic(client):
 
 
 def test_batch_ocr_text_items(client):
-    body = {
+
+
+     body = {
         "evaluation_type": "ocr",
         "items": [
             {

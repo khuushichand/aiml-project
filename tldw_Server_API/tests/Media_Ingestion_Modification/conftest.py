@@ -76,7 +76,7 @@ _ensure_nemo_stub()
 
 @pytest.fixture(scope="session")  # The factory itself can be session-scoped for efficiency
 def memory_db_factory():
-    """
+     """
     Pytest factory fixture that provides a function to create
     new, isolated in-memory Database instances.
     """

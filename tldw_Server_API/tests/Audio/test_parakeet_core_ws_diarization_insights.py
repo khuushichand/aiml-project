@@ -7,7 +7,7 @@ import pytest
 
 class DummyWebSocket:
     def __init__(self, messages):
-        """
+             """
         Initialize the DummyWebSocket with a sequence of incoming messages.
 
         Parameters:
@@ -66,7 +66,7 @@ class DummyWebSocket:
     # Helpers
     @property
     def outputs(self):
-        """
+             """
         Get the list of outbound messages recorded by the dummy WebSocket.
 
         Returns:
@@ -83,7 +83,7 @@ async def test_core_ws_with_diarization_and_insights(monkeypatch):
     # Patch in fake diarizer and insights classes if not available
     class _FakeSettings:
         def __init__(self, enabled=True):
-            """
+                     """
             Create a fake settings object indicating whether insights are enabled.
 
             Parameters:
@@ -93,7 +93,7 @@ async def test_core_ws_with_diarization_and_insights(monkeypatch):
 
         @classmethod
         def from_client_payload(cls, payload):
-            """
+                     """
             Create a settings instance from a client-supplied payload.
 
             Parameters:
@@ -108,7 +108,7 @@ async def test_core_ws_with_diarization_and_insights(monkeypatch):
 
     class _FakeInsights:
         def __init__(self, websocket, settings, **kwargs):
-            """
+                     """
             Initialize the fake insights helper used by tests.
 
             Parameters:
@@ -123,7 +123,8 @@ async def test_core_ws_with_diarization_and_insights(monkeypatch):
             self._seen = []
 
         def describe(self):
-            """
+
+                     """
             Report whether insights are enabled.
 
             Returns:
@@ -167,7 +168,7 @@ async def test_core_ws_with_diarization_and_insights(monkeypatch):
 
     class _FakeDiarizer:
         def __init__(self, sample_rate, store_audio=False, storage_dir=None, num_speakers=None):
-            """
+                     """
             Create a test diarizer configured with the given audio parameters.
 
             Parameters:
@@ -266,7 +267,7 @@ async def test_core_ws_with_diarization_and_insights(monkeypatch):
         This coroutine invokes wsmod.websocket_parakeet_core with the test DummyWebSocket and a minimal decode callback to drive the handler through config, audio, commit, and stop events.
         """
         def _decode(audio_np, sr):
-            return "hello"
+                     return "hello"
 
         await wsmod.websocket_parakeet_core(ws, decode_fn=_decode)
 

@@ -13,7 +13,7 @@ from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced impo
 
 @pytest.mark.unit
 def test_orchestrator_summary_endpoint(disable_heavy_startup, admin_user, redis_client):
-    async def _seed():
+     async def _seed():
         queues = {
             "embeddings:chunking": 1,
             "embeddings:embedding": 2,
@@ -63,7 +63,7 @@ def test_orchestrator_summary_endpoint(disable_heavy_startup, admin_user, redis_
 
 @pytest.mark.unit
 def test_orchestrator_summary_endpoint_unauthorized(monkeypatch):
-    # Force multi-user mode so require_admin enforces admin check
+     # Force multi-user mode so require_admin enforces admin check
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     reset_settings()
@@ -124,7 +124,7 @@ def test_orchestrator_summary_endpoint_unauthorized(monkeypatch):
 @pytest.mark.unit
 @pytest.mark.parametrize('stage', ['chunking', 'embedding', 'storage'])
 def test_orchestrator_summary_flags_per_stage(disable_heavy_startup, admin_user, redis_client, stage):
-    # Set flags before request
+     # Set flags before request
     async def _set_flags():
         await redis_client.set(f"embeddings:stage:{stage}:paused", "1")
         await redis_client.set(f"embeddings:stage:{stage}:drain", "1")
@@ -141,7 +141,7 @@ def test_orchestrator_summary_flags_per_stage(disable_heavy_startup, admin_user,
 
 @pytest.mark.unit
 def test_orchestrator_summary_no_redis(monkeypatch, admin_user):
-    # When Redis connection fails, endpoint should return 200 with zeroed structure
+     # When Redis connection fails, endpoint should return 200 with zeroed structure
     import redis.asyncio as aioredis
 
     async def fake_from_url(url, decode_responses=True):
@@ -165,7 +165,7 @@ def test_orchestrator_summary_no_redis(monkeypatch, admin_user):
 
 @pytest.mark.unit
 def test_build_orchestrator_snapshot_age_deterministic(monkeypatch):
-    # Directly call the builder with a fixed now_ts to assert ages precisely
+     # Directly call the builder with a fixed now_ts to assert ages precisely
     fake = FakeAsyncRedisSummary()
     fixed_now = 1700000001.0  # seconds; 1 second after 1700000000000 ms id
 
@@ -183,7 +183,7 @@ def test_build_orchestrator_snapshot_age_deterministic(monkeypatch):
 
 @pytest.mark.unit
 def test_build_orchestrator_snapshot_age_zero_when_empty_xrange():
-    # With empty XRANGE on a queue, age must be exactly 0.0
+     # With empty XRANGE on a queue, age must be exactly 0.0
     fake = FakeAsyncRedisSummary()
 
     import asyncio as _asyncio
@@ -198,7 +198,7 @@ def test_build_orchestrator_snapshot_age_zero_when_empty_xrange():
 
 @pytest.mark.unit
 def test_orchestrator_summary_priority_depths(disable_heavy_startup, admin_user, redis_client, monkeypatch):
-    # Enable priority flag and seed per-priority queue depths
+     # Enable priority flag and seed per-priority queue depths
     monkeypatch.setenv("EMBEDDINGS_PRIORITY_ENABLED", "true")
     async def _seed_priority():
         for name, count in (

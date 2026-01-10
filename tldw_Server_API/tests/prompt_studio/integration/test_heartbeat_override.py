@@ -11,7 +11,9 @@ pytestmark = pytest.mark.integration
 
 
 def _parse_dt(val):
-    if val is None:
+
+
+     if val is None:
         return None
     if isinstance(val, datetime):
         return val

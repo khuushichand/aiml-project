@@ -5,20 +5,9 @@ Qwen, DeepSeek, HuggingFace, and Custom OpenAI-compatible.
 
 from __future__ import annotations
 
-import os
 from typing import AsyncIterator
 
 import pytest
-
-
-@pytest.fixture(autouse=True)
-def _enable_stage3_async(monkeypatch):
-    monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "1")
-    monkeypatch.setenv("LLM_ADAPTERS_QWEN", "1")
-    monkeypatch.setenv("LLM_ADAPTERS_DEEPSEEK", "1")
-    monkeypatch.setenv("LLM_ADAPTERS_HUGGINGFACE", "1")
-    monkeypatch.setenv("LLM_ADAPTERS_CUSTOM_OPENAI", "1")
-    yield
 
 
 @pytest.mark.asyncio

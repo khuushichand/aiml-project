@@ -17,6 +17,7 @@ from tldw_Server_API.app.core.LLM_Calls.error_utils import (
     get_http_error_text,
     get_http_status_from_exception,
     is_http_status_error,
+    log_http_400_body,
 )
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 from loguru import logger
@@ -340,6 +341,7 @@ class DeepSeekAdapter(ChatProvider):
                     body = resp.json()
                 except Exception:
                     body = None
+            log_http_400_body(self.name, exc, body)
             detail = None
             if isinstance(body, dict) and isinstance(body.get("error"), dict):
                 eobj = body["error"]

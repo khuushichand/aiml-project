@@ -280,6 +280,7 @@ class CanaryAdapter(SttProviderAdapter):
 
         path_obj = Path(audio_path)
         if base_dir is not None:
+            # Enforce that local audio paths stay within base_dir for path safety.
             safe_path = resolve_safe_local_path(path_obj, base_dir)
             if safe_path is None:
                 raise ValueError(f"Audio path rejected outside base_dir: {audio_path}")
@@ -416,6 +417,7 @@ class ExternalAdapter(SttProviderAdapter):
         if model_id.startswith("external:"):
             provider_name = model_id.split(":", 1)[1] or "default"
 
+        # Pass base_dir so external providers validate local paths consistently.
         text = transcribe_with_external_provider(
             audio_path,
             provider_name=provider_name,

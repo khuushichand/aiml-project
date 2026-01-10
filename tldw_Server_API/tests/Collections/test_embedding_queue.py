@@ -11,7 +11,7 @@ async def test_enqueue_embeddings_job_uses_manager(monkeypatch):
 
     class FakeManager:
         def __init__(self, config):
-            captured["config"] = config
+                     captured["config"] = config
 
         async def initialize(self):
             captured["initialized"] = True
@@ -49,7 +49,7 @@ async def test_enqueue_embeddings_skips_empty_content(monkeypatch):
 
     class FakeManager:
         def __init__(self, config):
-            called["config"] = config
+                     called["config"] = config
 
         async def initialize(self):
             called["initialized"] = True

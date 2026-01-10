@@ -15,7 +15,6 @@ def _fake_config():
 
 def test_llm_providers_merges_adapter_capabilities(monkeypatch, client_user_only):
     # Force adapters available even though this is not strictly required for the endpoint
-    monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "1")
 
     # Stub configuration loader to return a controlled config
     import tldw_Server_API.app.core.config as core_config

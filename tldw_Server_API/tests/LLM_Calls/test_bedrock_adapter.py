@@ -4,16 +4,18 @@ import pytest
 
 class _FakeResp:
     def __init__(self, status_code=200, json_obj=None, text="", lines=None):
-        self.status_code = status_code
+             self.status_code = status_code
         self._json_obj = json_obj if json_obj is not None else {}
         self.text = text
         self._lines = list(lines or [])
 
     def json(self):
-        return self._json_obj
+
+             return self._json_obj
 
     def raise_for_status(self):
-        import requests
+
+             import requests
 
         if self.status_code and int(self.status_code) >= 400:
             err = requests.exceptions.HTTPError("HTTP error")
@@ -23,13 +25,15 @@ class _FakeResp:
 
     # streaming context manager shape
     def __enter__(self):
-        return self
+             return self
 
     def __exit__(self, exc_type, exc, tb):
-        return False
+
+             return False
 
     def iter_lines(self):
-        for line in self._lines:
+
+             for line in self._lines:
             yield line
 
 
@@ -41,24 +45,30 @@ class _FakeClient:
         self.last_url = None
 
     def __enter__(self):
-        return self
+
+             return self
 
     def __exit__(self, exc_type, exc, tb):
-        return False
+
+             return False
 
     def post(self, url, *, headers=None, json=None):
-        self.last_url = url
+
+             self.last_url = url
         self.last_json = json
         return self._post_resp or _FakeResp(status_code=200, json_obj={"ok": True})
 
     def stream(self, method, url, *, headers=None, json=None):
-        self.last_url = url
+
+             self.last_url = url
         self.last_json = json
         return _FakeResp(status_code=200, lines=self._stream_lines)
 
 
 def test_bedrock_adapter_non_stream_uses_factory_and_sets_stream(monkeypatch):
-    from tldw_Server_API.app.core.LLM_Calls.providers import bedrock_adapter as mod
+
+
+     from tldw_Server_API.app.core.LLM_Calls.providers import bedrock_adapter as mod
 
     fake = _FakeClient(post_resp=_FakeResp(status_code=400, json_obj={}, text="bad"))
     monkeypatch.setattr(mod, "http_client_factory", lambda *a, **k: fake)
@@ -76,7 +86,9 @@ def test_bedrock_adapter_non_stream_uses_factory_and_sets_stream(monkeypatch):
 
 
 def test_bedrock_adapter_base_url_from_runtime_endpoint(monkeypatch):
-    from tldw_Server_API.app.core.LLM_Calls.providers import bedrock_adapter as mod
+
+
+     from tldw_Server_API.app.core.LLM_Calls.providers import bedrock_adapter as mod
 
     fake = _FakeClient(post_resp=_FakeResp(status_code=200, json_obj={"ok": True}))
     monkeypatch.setattr(mod, "http_client_factory", lambda *a, **k: fake)

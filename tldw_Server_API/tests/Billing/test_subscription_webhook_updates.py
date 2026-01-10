@@ -12,7 +12,7 @@ from tldw_Server_API.app.core.Billing.subscription_service import SubscriptionSe
 
 class _FakeBillingRepo:
     def __init__(self) -> None:
-        self.updated: dict | None = None
+             self.updated: dict | None = None
 
     async def get_subscription_by_stripe_customer(self, customer_id: str):
         return {"org_id": 123}

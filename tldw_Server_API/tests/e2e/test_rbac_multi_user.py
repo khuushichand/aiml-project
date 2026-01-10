@@ -34,7 +34,8 @@ class TestRBACAdminAccess:
     """RBAC admin access tests."""
 
     def test_01_non_admin_forbidden_admin_routes(self, api_client):
-        _require_multi_user(api_client)
+
+            _require_multi_user(api_client)
         # Register and login a regular user
         creds = {
             "username": f"e2e_rbac_user_{int(time.time())}",
@@ -58,7 +59,8 @@ class TestRBACAdminAccess:
         assert rc.status_code == 403
 
     def test_02_admin_bearer_can_access_admin_endpoints(self, api_client):
-        _require_multi_user(api_client)
+
+            _require_multi_user(api_client)
         admin_token = os.getenv("E2E_ADMIN_BEARER")
         if not admin_token:
             pytest.skip("E2E_ADMIN_BEARER not set; skipping admin positive tests")
@@ -75,7 +77,8 @@ class TestRBACAdminAccess:
         assert r3.status_code == 200
 
     def test_03_admin_registration_codes_crud(self, api_client):
-        _require_multi_user(api_client)
+
+            _require_multi_user(api_client)
         admin_token = os.getenv("E2E_ADMIN_BEARER")
         if not admin_token:
             pytest.skip("E2E_ADMIN_BEARER not set; skipping registration code CRUD")
@@ -126,7 +129,8 @@ class TestMultiUserIsolation:
         return False
 
     def test_10_isolation_media_retrieval_and_search(self):
-        base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
+
+            base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
         client_a = APIClient(base)
         client_b = APIClient(base)
 
@@ -198,7 +202,8 @@ class TestMultiUserIsolation:
             cleanup_test_file(fp)
 
     def test_11_isolation_embedding_jobs(self):
-        base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
+
+            base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
         client_a = APIClient(base)
         client_b = APIClient(base)
         _require_multi_user(client_a)
@@ -242,7 +247,8 @@ class TestMultiUserIsolation:
             cleanup_test_file(fp)
 
     def test_12_self_virtual_key_access(self):
-        base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
+
+            base = os.getenv("E2E_TEST_BASE_URL", "http://localhost:8000")
         c = APIClient(base)
         _require_multi_user(c)
 
@@ -278,7 +284,8 @@ class TestAdminMintedVirtualKeyConstraints:
     """Admin mints constrained virtual key for another user and validates enforcement."""
 
     def test_20_admin_mints_key_with_allowed_paths_and_methods(self, api_client):
-        _require_multi_user(api_client)
+
+            _require_multi_user(api_client)
         admin_token = os.getenv("E2E_ADMIN_BEARER")
         if not admin_token:
             pytest.skip("E2E_ADMIN_BEARER not set; skipping admin-minted key tests")
@@ -342,7 +349,8 @@ class TestAdminMintedVirtualKeyConstraints:
             vk_client.close()
 
     def test_21_virtual_key_org_team_metadata_propagation(self, api_client):
-        _require_multi_user(api_client)
+
+            _require_multi_user(api_client)
         admin_token = os.getenv("E2E_ADMIN_BEARER")
         if not admin_token:
             pytest.skip("E2E_ADMIN_BEARER not set; skipping org/team metadata propagation test")
@@ -424,7 +432,8 @@ class TestAdminMintedVirtualKeyConstraints:
         # We cannot directly introspect metadata.allowed_paths here; enforcement is validated elsewhere
 
     def test_22_virtual_key_org_only_propagation(self, api_client):
-        _require_multi_user(api_client)
+
+            _require_multi_user(api_client)
         admin_token = os.getenv("E2E_ADMIN_BEARER")
         if not admin_token:
             pytest.skip("E2E_ADMIN_BEARER not set; skipping org-only propagation test")
@@ -473,7 +482,8 @@ class TestAdminMintedVirtualKeyConstraints:
         assert ("team_id" not in details) or details.get("team_id") is None
 
     def test_23_virtual_key_team_only_propagation(self, api_client):
-        _require_multi_user(api_client)
+
+            _require_multi_user(api_client)
         admin_token = os.getenv("E2E_ADMIN_BEARER")
         if not admin_token:
             pytest.skip("E2E_ADMIN_BEARER not set; skipping team-only propagation test")
@@ -528,7 +538,8 @@ class TestAdminMintedVirtualKeyConstraints:
         assert details.get("team_id") == team_id
 
     def test_24_virtual_key_path_mismatch_blocks_audio_and_chat(self, api_client):
-        _require_multi_user(api_client)
+
+            _require_multi_user(api_client)
         admin_token = os.getenv("E2E_ADMIN_BEARER")
         if not admin_token:
             pytest.skip("E2E_ADMIN_BEARER not set; skipping path mismatch tests")
@@ -575,6 +586,7 @@ class TestAdminMintedVirtualKeyConstraints:
             vk_client.close()
 
     def test_25_team_scoped_key_non_member_access_patterns(self, api_client):
+
         """Team-scoped API key for a user not in the team: endpoints that rely on team membership use JWT and deny accordingly.
 
         Note:
@@ -642,6 +654,7 @@ class TestAdminMintedVirtualKeyConstraints:
         assert r_bearer2.status_code == 200
 
     def test_27_admin_promote_demote_team_role_toggles_access(self, api_client):
+
         """Admin removes and re-adds a user's team membership to change role; access toggles accordingly.
 
         Flow:
@@ -712,6 +725,7 @@ class TestAdminMintedVirtualKeyConstraints:
         assert r3.status_code == 403
 
     def test_26_admin_list_api_keys_fields_no_org_team(self, api_client):
+
         """Explicitly confirm admin list API keys does not expose org_id/team_id; rely on audit log for those."""
         _require_multi_user(api_client)
         admin_token = os.getenv("E2E_ADMIN_BEARER")
@@ -783,7 +797,8 @@ class TestOrgsTeamsRBAC:
     """Admin creates org/team and manages memberships; verifies listings reflect assignments."""
 
     def test_30_org_team_membership_crud(self, api_client):
-        _require_multi_user(api_client)
+
+            _require_multi_user(api_client)
         admin_token = os.getenv("E2E_ADMIN_BEARER")
         if not admin_token:
             pytest.skip("E2E_ADMIN_BEARER not set; skipping org/team tests")
@@ -876,7 +891,8 @@ class TestAdminRoleAssignment:
     """Admin elevates/demotes a user role and verifies admin route access toggles accordingly."""
 
     def test_40_admin_elevate_and_demote_role(self, api_client):
-        _require_multi_user(api_client)
+
+            _require_multi_user(api_client)
         admin_token = os.getenv("E2E_ADMIN_BEARER")
         if not admin_token:
             pytest.skip("E2E_ADMIN_BEARER not set; skipping role assignment tests")

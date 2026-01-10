@@ -52,7 +52,7 @@ from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registr
 
 # Helper function to make requests with CSRF token
 def make_request_with_csrf(client, method, url, headers=None, **kwargs):
-    """Helper to make requests with CSRF token included"""
+     """Helper to make requests with CSRF token included"""
     if headers is None:
         headers = {}
 
@@ -74,7 +74,8 @@ def make_request_with_csrf(client, method, url, headers=None, **kwargs):
     return method_func(url, headers=headers, **kwargs)
 
 def get_auth_headers(auth_token):
-    """Get appropriate auth headers based on AUTH_MODE."""
+
+     """Get appropriate auth headers based on AUTH_MODE."""
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     settings = get_settings()
 
@@ -87,7 +88,7 @@ def get_auth_headers(auth_token):
 # Fixture for TestClient with proper CSRF token handling
 @pytest.fixture(scope="function")
 def client():
-    print(f"DEBUG: Creating TestClient, app.dependency_overrides before: {app.dependency_overrides}")
+     print(f"DEBUG: Creating TestClient, app.dependency_overrides before: {app.dependency_overrides}")
     with TestClient(app) as c:
         print(f"DEBUG: Created TestClient, app.dependency_overrides after: {app.dependency_overrides}")
         # Get a CSRF token by making a GET request first
@@ -109,7 +110,7 @@ def client():
 
 @pytest.fixture
 def mock_user():
-    """Create a mock user for testing."""
+     """Create a mock user for testing."""
     return User(
         id=1,
         username="test_user",
@@ -119,7 +120,7 @@ def mock_user():
 
 @pytest.fixture(autouse=True)
 def setup_auth_override(mock_user):
-    """Automatically override authentication for all tests.
+     """Automatically override authentication for all tests.
 
     Note: The chat endpoint doesn't use dependency injection for auth,
     so we need to mock the auth utility functions instead.
@@ -133,7 +134,7 @@ def setup_auth_override(mock_user):
 
 @pytest.fixture
 def valid_auth_token() -> str:
-    """Generate appropriate auth token based on current AUTH_MODE."""
+     """Generate appropriate auth token based on current AUTH_MODE."""
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
     settings = get_settings()
@@ -178,7 +179,7 @@ DEFAULT_USER_MESSAGES_FOR_SCHEMA = [
 # Fixture to provide default chat request data
 @pytest.fixture
 def default_chat_request_data():
-    """Provides a default ChatCompletionRequest object for tests."""
+     """Provides a default ChatCompletionRequest object for tests."""
     return ChatCompletionRequest(
         model=DEFAULT_MODEL_NAME,
         messages=DEFAULT_USER_MESSAGES_FOR_SCHEMA  # Use the locally defined constant
@@ -186,7 +187,7 @@ def default_chat_request_data():
 
 @pytest.fixture
 def default_chat_request_data_error_stream():
-    """Provides a default ChatCompletionRequest object for error streaming tests."""
+     """Provides a default ChatCompletionRequest object for error streaming tests."""
     return ChatCompletionRequest(
         model=DEFAULT_MODEL_NAME,  # Use the locally defined constant
         messages=DEFAULT_USER_MESSAGES_FOR_SCHEMA,  # Use the locally defined constant
@@ -197,7 +198,7 @@ def default_chat_request_data_error_stream():
 # Mocks for DB dependencies
 @pytest.fixture
 def mock_chat_db():
-    db_mock = MagicMock(spec=CharactersRAGDB)
+     db_mock = MagicMock(spec=CharactersRAGDB)
     db_mock.get_character_card_by_id.return_value = None
     # Add default character card for by_name lookup for default character
     db_mock.get_character_card_by_name.return_value = {
@@ -216,7 +217,7 @@ def mock_chat_db():
 
 @pytest.fixture
 def mock_media_db():
-    return MagicMock()
+     return MagicMock()
 
 
 # --- Unit Tests for the Endpoint ---
@@ -231,7 +232,7 @@ def test_create_chat_completion_no_template(
         mock_apply_template, mock_load_template, mock_chat_api_call,
         client, valid_auth_token, mock_media_db, mock_chat_db, default_chat_request_data
 ):
-    # Simulate that when the endpoint tries to load the default template (or any specified one),
+     # Simulate that when the endpoint tries to load the default template (or any specified one),
     # it's not found, making active_template=None in the endpoint.
     mock_load_template.return_value = None
 
@@ -301,7 +302,7 @@ def test_create_chat_completion_success_streaming(  # Added default_chat_request
         mock_apply_template, mock_load_template, mock_chat_api_call,
         client, default_chat_request_data, valid_auth_token, mock_media_db, mock_chat_db
 ):
-    mock_load_template.return_value = None  # Default passthrough
+     mock_load_template.return_value = None  # Default passthrough
     mock_apply_template.side_effect = lambda template_str, data: data.get("message_content", data.get(
         "original_system_message_from_request", ""))
 
@@ -356,7 +357,7 @@ def test_system_message_extraction(
         mock_apply_template, mock_load_template, mock_chat_api_call,
         client, valid_auth_token, mock_media_db, mock_chat_db
 ):
-    mock_load_template.return_value = None  # Default passthrough
+     mock_load_template.return_value = None  # Default passthrough
     mock_apply_template.side_effect = lambda template_str, data: data.get("message_content", data.get(
         "original_system_message_from_request", ""))
     mock_chat_api_call.return_value = {"id": "chatcmpl-123",
@@ -397,7 +398,7 @@ def test_no_system_message_in_payload(
         client, default_chat_request_data, valid_auth_token, mock_media_db, mock_chat_db
         # Added default_chat_request_data
 ):
-    mock_load_template.return_value = None  # Default passthrough because prompt_template_name is None in default_chat_request_data
+     mock_load_template.return_value = None  # Default passthrough because prompt_template_name is None in default_chat_request_data
     # Simulate passthrough for apply_template when default template is used
     mock_apply_template.side_effect = lambda template_str, data: data.get("message_content", data.get(
         "original_system_message_from_request", ""))
@@ -454,7 +455,7 @@ def test_api_key_used_from_config(
         mock_apply_template, mock_load_template,
         client, default_chat_request_data, valid_auth_token, mock_media_db, mock_chat_db
 ):
-    mock_load_template.return_value = None
+     mock_load_template.return_value = None
     mock_apply_template.side_effect = lambda template_str, data: data.get("message_content", data.get(
         "original_system_message_from_request", ""))
 
@@ -522,7 +523,7 @@ def test_missing_api_key_for_required_provider(
         mock_apply_template, mock_load_template,
         client, default_chat_request_data, valid_auth_token, mock_media_db, mock_chat_db, monkeypatch
 ):
-    # Simulate that the default template is found and is a passthrough
+     # Simulate that the default template is found and is a passthrough
     mock_load_template.return_value = DEFAULT_RAW_PASSTHROUGH_TEMPLATE
     mock_apply_template.side_effect = lambda template_str, data: data.get("message_content", data.get(
         "original_system_message_from_request", ""))
@@ -576,7 +577,7 @@ def test_keyless_provider_proceeds_without_key(  # Added default_chat_request_da
         mock_apply_template, mock_load_template,
         client, default_chat_request_data, valid_auth_token, mock_media_db, mock_chat_db
 ):
-    mock_load_template.return_value = None  # Default passthrough
+     mock_load_template.return_value = None  # Default passthrough
     mock_apply_template.side_effect = lambda template_str, data: data.get("message_content", data.get(
         "original_system_message_from_request", ""))
 
@@ -656,7 +657,7 @@ def test_chat_api_call_exception_handling_unit(
         default_chat_request_data,
         error_type, expected_status, expected_detail_substring
 ):
-    mock_load_template.return_value = DEFAULT_RAW_PASSTHROUGH_TEMPLATE
+     mock_load_template.return_value = DEFAULT_RAW_PASSTHROUGH_TEMPLATE
     mock_apply_template.side_effect = lambda template_str, data: data.get("message_content", data.get(
         "original_system_message_from_request", ""))
 
@@ -717,7 +718,7 @@ def test_non_iterable_stream_generator_from_shim(
         mock_apply_template, mock_load_template, mock_chat_api_call,
         client, default_chat_request_data, valid_auth_token, mock_media_db, mock_chat_db
 ):
-    # Simulate that the default template is found and is a passthrough
+     # Simulate that the default template is found and is a passthrough
     mock_load_template.return_value = DEFAULT_RAW_PASSTHROUGH_TEMPLATE
     mock_apply_template.side_effect = lambda template_str, data: data.get("message_content", data.get(
         "original_system_message_from_request", ""))
@@ -752,7 +753,7 @@ def test_error_within_stream_generator(
         mock_apply_template, mock_load_template, mock_chat_api_call,
         client, default_chat_request_data_error_stream, valid_auth_token, mock_media_db, mock_chat_db
 ):
-    # Simulate that the default template (or any) is found and is a passthrough
+     # Simulate that the default template (or any) is found and is a passthrough
     # or correctly loaded if it's DEFAULT_RAW_PASSTHROUGH_TEMPLATE.name
     mock_load_template.return_value = DEFAULT_RAW_PASSTHROUGH_TEMPLATE
     mock_apply_template.side_effect = lambda template_str, data: data.get("message_content", data.get(
@@ -868,7 +869,7 @@ def test_create_chat_completion_with_optional_params(
         mock_load_template, mock_chat_api_call,
         client, valid_auth_token, mock_media_db, mock_chat_db, default_chat_request_data
 ):
-    mock_load_template.return_value = DEFAULT_RAW_PASSTHROUGH_TEMPLATE  # Use the actual default
+     mock_load_template.return_value = DEFAULT_RAW_PASSTHROUGH_TEMPLATE  # Use the actual default
     mock_chat_api_call.return_value = {"id": "chatcmpl-optional", "choices": [
         {"message": {"role": "assistant", "content": "Response with optionals"}}]}
 
@@ -927,7 +928,7 @@ def test_create_chat_completion_with_tools_unit(
         mock_load_template, mock_chat_api_call,
         client, valid_auth_token, mock_media_db, mock_chat_db, default_chat_request_data
 ):
-    mock_load_template.return_value = DEFAULT_RAW_PASSTHROUGH_TEMPLATE
+     mock_load_template.return_value = DEFAULT_RAW_PASSTHROUGH_TEMPLATE
     mock_chat_api_call.return_value = {"id": "chatcmpl-tools",
                                        "choices": [{"message": {"role": "assistant", "tool_calls": []}}]}
 
@@ -972,7 +973,7 @@ def test_save_to_db_not_passed_to_chat_api_call(
         mock_load_template, mock_chat_api_call,
         client, valid_auth_token, mock_media_db, mock_chat_db, default_chat_request_data
 ):
-    mock_load_template.return_value = DEFAULT_RAW_PASSTHROUGH_TEMPLATE
+     mock_load_template.return_value = DEFAULT_RAW_PASSTHROUGH_TEMPLATE
     mock_chat_api_call.return_value = {"id": "chatcmpl-ok", "choices": [{"message": {"role": "assistant", "content": "ok"}}]}
 
     app.dependency_overrides[get_media_db_for_user] = lambda: mock_media_db
@@ -999,7 +1000,7 @@ def test_create_chat_completion_character_not_found_uses_defaults(
         mock_load_template, mock_chat_api_call_shim,
         client, valid_auth_token, mock_media_db, mock_chat_db, default_chat_request_data
 ):
-    # Mock DB to return None for character
+     # Mock DB to return None for character
     mock_chat_db.get_character_card_by_id.return_value = None
     mock_load_template.return_value = DEFAULT_RAW_PASSTHROUGH_TEMPLATE  # Or a specific test template
 
@@ -1044,7 +1045,7 @@ def test_create_chat_completion_template_file_not_found(
         mock_load_template, mock_chat_api_call_shim,
         client, valid_auth_token, mock_media_db, mock_chat_db, default_chat_request_data
 ):
-    # Simulate load_template returning None (template not found)
+     # Simulate load_template returning None (template not found)
     mock_load_template.return_value = None
     # chat_api_call should still be called with DEFAULT_RAW_PASSTHROUGH_TEMPLATE logic
     mock_chat_api_call_shim.return_value = {"id": "res", "choices": [{"message": {"content": "passthrough response"}}]}

@@ -12,11 +12,13 @@ pytestmark = [pytest.mark.pg_jobs]
 
 @pytest.fixture(autouse=True)
 def _setup(jobs_pg_dsn):
-    return
+     return
 
 
 def test_queue_flag_metrics_postgres(monkeypatch, jobs_pg_dsn):
-    reg = get_metrics_registry()
+
+
+     reg = get_metrics_registry()
     reg.values["jobs.queue_flag"].clear()
     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     flags = jm.set_queue_control("ps", "default", "pause")
@@ -26,7 +28,9 @@ def test_queue_flag_metrics_postgres(monkeypatch, jobs_pg_dsn):
 
 
 def test_sla_breaches_metrics_postgres(monkeypatch, jobs_pg_dsn):
-    reg = get_metrics_registry()
+
+
+     reg = get_metrics_registry()
     reg.values["jobs.sla_breaches_total"].clear()
     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     # Directly exercise internal breach recorder (unit-level)

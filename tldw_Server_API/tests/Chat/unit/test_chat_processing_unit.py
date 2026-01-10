@@ -33,19 +33,19 @@ from tldw_Server_API.app.core.Chat.chat_history import update_chat_content
 class TestProcessUserInput:
     @pytest.mark.unit
     def test_process_simple_text_input(self):
-        result = process_user_input("Hello, how are you?", entries=[])
+             result = process_user_input("Hello, how are you?", entries=[])
         assert isinstance(result, str)
         assert result == "Hello, how are you?"
 
     @pytest.mark.unit
     def test_process_empty_input(self):
-        result = process_user_input("", entries=[])
+             result = process_user_input("", entries=[])
         assert isinstance(result, str)
         assert result == ""
 
     @pytest.mark.unit
     def test_process_multiline_input(self):
-        input_text = """Line 1
+             input_text = """Line 1
         Line 2
         Line 3"""
         result = process_user_input(input_text, entries=[])
@@ -54,14 +54,14 @@ class TestProcessUserInput:
 
     @pytest.mark.unit
     def test_process_input_with_special_characters(self):
-        special_input = "Test with special chars: !@#$%^&*()[]{}\"'<>"
+             special_input = "Test with special chars: !@#$%^&*()[]{}\"'<>"
         result = process_user_input(special_input, entries=[])
         assert isinstance(result, str)
         assert result == special_input
 
     @pytest.mark.unit
     def test_process_json_like_input(self):
-        json_input = '{"key": "value", "number": 123}'
+             json_input = '{"key": "value", "number": 123}'
         result = process_user_input(json_input, entries=[])
         assert isinstance(result, str)
         assert result == json_input
@@ -70,7 +70,7 @@ class TestProcessUserInput:
 class TestChatDictionaryUtilities:
     @pytest.mark.unit
     def test_enforce_token_budget_truncates_entries(self):
-        small_entry = ChatDictionary(key="hello", content="hi there")
+             small_entry = ChatDictionary(key="hello", content="hi there")
         large_entry = ChatDictionary(key="world", content="this entry should be trimmed out")
 
         with pytest.warns(TokenBudgetExceededWarning):
@@ -81,7 +81,7 @@ class TestChatDictionaryUtilities:
 
     @pytest.mark.unit
     def test_apply_strategy_prioritizes_global_group(self):
-        global_entry = ChatDictionary(key="alpha", content="global", group="global")
+             global_entry = ChatDictionary(key="alpha", content="global", group="global")
         character_entry = ChatDictionary(key="beta", content="character", group="character")
         default_entry = ChatDictionary(key="gamma", content="default")
 
@@ -95,7 +95,7 @@ class TestChatDictionaryUtilities:
 class TestUpdateChatContent:
     @pytest.mark.unit
     def test_update_content_basic(self):
-        mock_db = MagicMock()
+             mock_db = MagicMock()
         mock_db.get_note_by_id.return_value = {
             'content': '{"content": "Note content", "summary": "Note summary", "prompt": "Note prompt"}',
         }
@@ -116,7 +116,7 @@ class TestUpdateChatContent:
 
     @pytest.mark.unit
     def test_update_content_with_summary(self):
-        mock_db = MagicMock()
+             mock_db = MagicMock()
         mock_db.get_note_by_id.return_value = {
             'content': '{"content": "Note content", "summary": "Note summary", "prompt": "Note prompt"}',
         }
@@ -135,7 +135,7 @@ class TestUpdateChatContent:
 
     @pytest.mark.unit
     def test_update_content_no_selection(self):
-        mock_db = MagicMock()
+             mock_db = MagicMock()
         result, tags = update_chat_content(
             selected_item=None,
             use_content=True,
@@ -150,7 +150,7 @@ class TestUpdateChatContent:
 
     @pytest.mark.unit
     def test_update_content_all_options(self):
-        mock_db = MagicMock()
+             mock_db = MagicMock()
         mock_db.get_note_by_id.return_value = {
             'content': '{"content": "Note content", "summary": "Note summary", "prompt": "Note prompt"}',
             'keywords': 'tag1, tag2',
@@ -176,26 +176,26 @@ class TestUpdateChatContent:
 class TestErrorHandling:
     @pytest.mark.unit
     def test_chat_api_error_creation(self):
-        error = ChatAPIError("API call failed", status_code=500)
+             error = ChatAPIError("API call failed", status_code=500)
         assert str(error) == "API call failed"
         assert error.status_code == 500
 
     @pytest.mark.unit
     def test_rate_limit_error_properties(self):
-        error = ChatRateLimitError("Too many requests", provider="openai")
+             error = ChatRateLimitError("Too many requests", provider="openai")
         assert "Too many requests" in str(error)
         assert error.provider == "openai"
 
     @pytest.mark.unit
     def test_auth_error_properties(self):
-        error = ChatAuthenticationError("Invalid credentials", provider="openai")
+             error = ChatAuthenticationError("Invalid credentials", provider="openai")
         assert "Invalid credentials" in str(error)
         assert error.provider == "openai"
         assert error.status_code == 401
 
     @pytest.mark.unit
     def test_provider_error_properties(self):
-        error = ChatProviderError("Provider unavailable", provider="openai")
+             error = ChatProviderError("Provider unavailable", provider="openai")
         assert "Provider unavailable" in str(error)
         assert error.provider == "openai"
 
@@ -207,14 +207,14 @@ class TestErrorHandling:
 class TestMessageFormatting:
     @pytest.mark.unit
     def test_format_single_message(self):
-        message = {"role": "user", "content": "Hello"}
+             message = {"role": "user", "content": "Hello"}
         formatted = json.dumps(message)
         assert '"role": "user"' in formatted
         assert '"content": "Hello"' in formatted
 
     @pytest.mark.unit
     def test_format_message_list(self):
-        messages = [
+             messages = [
             {"role": "system", "content": "You are helpful"},
             {"role": "user", "content": "Hi"},
         ]
@@ -226,7 +226,7 @@ class TestMessageFormatting:
 
     @pytest.mark.unit
     def test_format_message_with_metadata(self):
-        message = {
+             message = {
             "role": "assistant",
             "content": "Response",
             "name": "Assistant",

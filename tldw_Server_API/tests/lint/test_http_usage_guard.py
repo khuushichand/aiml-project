@@ -27,7 +27,9 @@ def _is_allowed(path: Path) -> bool:
 
 
 def test_no_direct_http_usage_outside_approved_files():
-    # Allow incremental rollout: only enforce when explicitly enabled in CI
+
+
+     # Allow incremental rollout: only enforce when explicitly enabled in CI
     if os.getenv("ENFORCE_HTTP_GUARD", "0") not in {"1", "true", "TRUE"}:
         import pytest
         pytest.skip("HTTP guard enforcement disabled (set ENFORCE_HTTP_GUARD=1 to enable)")

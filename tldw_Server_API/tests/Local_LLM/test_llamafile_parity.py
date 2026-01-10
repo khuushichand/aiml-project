@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import ServerEr
 
 class DummyProc:
     def __init__(self):
-        self.pid = 400
+             self.pid = 400
         self.returncode = None
         self.stdout = None
         self.stderr = None

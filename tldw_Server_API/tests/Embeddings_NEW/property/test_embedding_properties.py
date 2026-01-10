@@ -39,13 +39,13 @@ from tldw_Server_API.app.core.Embeddings.queue_schemas import (
 
 @st.composite
 def valid_embedding_dimension(draw):
-    """Generate valid embedding dimensions."""
+     """Generate valid embedding dimensions."""
     # Common embedding dimensions
     return draw(st.sampled_from([128, 256, 384, 512, 768, 1024, 1536]))
 
 @st.composite
 def valid_embedding_vector(draw, dimension=None):
-    """Generate valid embedding vectors."""
+     """Generate valid embedding vectors."""
     if dimension is None:
         dimension = draw(valid_embedding_dimension())
 
@@ -73,7 +73,7 @@ def valid_embedding_vector(draw, dimension=None):
 
 @st.composite
 def valid_text_for_embedding(draw):
-    """Generate valid text for embedding."""
+     """Generate valid text for embedding."""
     # Generate text that's not too short or too long
     min_words = draw(st.integers(min_value=1, max_value=10))
     max_words = draw(st.integers(min_value=min_words, max_value=100))
@@ -90,7 +90,7 @@ def valid_text_for_embedding(draw):
 
 @st.composite
 def valid_chunk_params(draw):
-    """Generate valid chunking parameters."""
+     """Generate valid chunking parameters."""
     chunk_size = draw(st.integers(min_value=50, max_value=2000))
     chunk_overlap = draw(st.integers(min_value=0, max_value=min(chunk_size // 2, 200)))
 
@@ -101,7 +101,7 @@ def valid_chunk_params(draw):
 
 @st.composite
 def valid_collection_name(draw):
-    """Generate valid ChromaDB collection names."""
+     """Generate valid ChromaDB collection names."""
     # ChromaDB collection names must be 3-63 characters, start/end with alphanumeric
     prefix = draw(st.text(min_size=1, max_size=1, alphabet=st.characters(min_codepoint=97, max_codepoint=122)))
     middle = draw(st.text(min_size=1, max_size=30, alphabet=st.characters(min_codepoint=97, max_codepoint=122)))
@@ -119,7 +119,7 @@ class TestEmbeddingVectorProperties:
     @pytest.mark.property
     @given(dimension=valid_embedding_dimension())
     def test_embedding_dimension_consistency(self, dimension):
-        """Property: Embeddings maintain consistent dimensions."""
+             """Property: Embeddings maintain consistent dimensions."""
         vectors = [np.random.randn(dimension).tolist() for _ in range(10)]
 
         # All vectors should have same dimension
@@ -129,7 +129,7 @@ class TestEmbeddingVectorProperties:
     @settings(suppress_health_check=[HealthCheck.large_base_example, HealthCheck.data_too_large])
     @given(vector=valid_embedding_vector())
     def test_embedding_vector_bounds(self, vector):
-        """Property: Embedding values are within reasonable bounds."""
+             """Property: Embedding values are within reasonable bounds."""
         # Most embedding models produce normalized vectors
         vector_array = np.array(vector)
 
@@ -148,7 +148,7 @@ class TestEmbeddingVectorProperties:
         vector2=valid_embedding_vector(dimension=384)
     )
     def test_cosine_similarity_bounds(self, vector1, vector2):
-        """Property: Cosine similarity is bounded between -1 and 1."""
+             """Property: Cosine similarity is bounded between -1 and 1."""
         v1 = np.array(vector1)
         v2 = np.array(vector2)
 
@@ -164,7 +164,7 @@ class TestEmbeddingVectorProperties:
     @settings(suppress_health_check=[HealthCheck.large_base_example, HealthCheck.data_too_large])
     @given(vectors=st.lists(valid_embedding_vector(dimension=384), min_size=2, max_size=10))
     def test_embedding_distance_triangle_inequality(self, vectors):
-        """Property: Distances satisfy triangle inequality."""
+             """Property: Distances satisfy triangle inequality."""
         if len(vectors) < 3:
             return
 
@@ -191,7 +191,7 @@ class TestTextChunkingProperties:
         params=valid_chunk_params()
     )
     def test_chunking_preserves_text(self, text, params):
-        """Property: Chunking preserves all text content."""
+             """Property: Chunking preserves all text content."""
         chunk_size = params["chunk_size"]
         chunk_overlap = params["chunk_overlap"]
 
@@ -219,7 +219,7 @@ class TestTextChunkingProperties:
         chunk_overlap=st.integers(min_value=0, max_value=100)
     )
     def test_chunk_count_bounds(self, text_length, chunk_size, chunk_overlap):
-        """Property: Number of chunks is bounded."""
+             """Property: Number of chunks is bounded."""
         assume(chunk_overlap < chunk_size)
 
         effective_chunk_size = chunk_size - chunk_overlap
@@ -242,7 +242,7 @@ class TestTextChunkingProperties:
     @pytest.mark.property
     @given(params=valid_chunk_params())
     def test_overlap_consistency(self, params):
-        """Property: Overlap is consistent between chunks."""
+             """Property: Overlap is consistent between chunks."""
         chunk_size = params["chunk_size"]
         chunk_overlap = params["chunk_overlap"]
 
@@ -279,7 +279,7 @@ class TestChromaDBStorageProperties:
         texts=st.lists(valid_text_for_embedding(), min_size=1, max_size=10)
     )
     def test_storage_retrieval_consistency(self, embeddings, texts, chroma_client):
-        """Property: Stored embeddings can be retrieved correctly."""
+             """Property: Stored embeddings can be retrieved correctly."""
         # Ensure same length
         min_len = min(len(embeddings), len(texts))
         embeddings = embeddings[:min_len]
@@ -310,7 +310,7 @@ class TestChromaDBStorageProperties:
         stored_embeddings=st.lists(valid_embedding_vector(dimension=64), min_size=3, max_size=10)
     )
     def test_similarity_search_ordering(self, query_embedding, stored_embeddings, chroma_client):
-        """Property: Similarity search returns results in order of similarity."""
+             """Property: Similarity search returns results in order of similarity."""
         collection_name = f"test_similarity_{uuid4().hex[:8]}"
         collection = chroma_client.create_collection(collection_name)
 
@@ -347,7 +347,7 @@ class TestChromaDBStorageProperties:
     @pytest.mark.property
     @given(collection_name=valid_collection_name())
     def test_collection_name_validation(self, collection_name, chroma_client):
-        """Property: Valid collection names are accepted."""
+             """Property: Valid collection names are accepted."""
         try:
             collection = chroma_client.create_collection(collection_name)
             assert collection.name == collection_name
@@ -372,7 +372,7 @@ class TestJobProcessingProperties:
         media_id=st.integers(min_value=1, max_value=1000)
     )
     def test_job_request_validity(self, job_type, priority, media_id):
-        """Property: Valid job requests can be created."""
+             """Property: Valid job requests can be created."""
         job = JobRequest(
             job_id=f"job_{media_id}",
             job_type=job_type,
@@ -391,7 +391,7 @@ class TestJobProcessingProperties:
         priorities=st.lists(st.integers(min_value=0, max_value=10), min_size=1, max_size=100)
     )
     def test_priority_queue_ordering(self, num_jobs, priorities):
-        """Property: Jobs are processed in priority order."""
+             """Property: Jobs are processed in priority order."""
         # Ensure matching lengths
         priorities = priorities[:num_jobs]
         while len(priorities) < num_jobs:
@@ -415,7 +415,7 @@ class TestJobProcessingProperties:
     @pytest.mark.property
     @given(status=st.sampled_from(list(JobStatus)))
     def test_job_status_transitions(self, status):
-        """Property: Job status transitions are valid."""
+             """Property: Job status transitions are valid."""
         valid_transitions = {
             JobStatus.PENDING: [JobStatus.PROCESSING, JobStatus.FAILED],
             JobStatus.PROCESSING: [JobStatus.COMPLETED, JobStatus.FAILED],
@@ -434,7 +434,8 @@ class EmbeddingSystemStateMachine(RuleBasedStateMachine):
     """Stateful testing for the embedding system."""
 
     def __init__(self):
-        super().__init__()
+
+             super().__init__()
         # Prefer a persistent client on a temp dir for stability across versions
         import tempfile, shutil
         self._tmp_chroma_dir = None
@@ -456,7 +457,8 @@ class EmbeddingSystemStateMachine(RuleBasedStateMachine):
         self.job_queue = []
 
     def teardown(self):
-        # Clean up client and any temp resources
+
+             # Clean up client and any temp resources
         try:
             close_fn = getattr(self.client, "close", None)
             if callable(close_fn):
@@ -479,14 +481,14 @@ class EmbeddingSystemStateMachine(RuleBasedStateMachine):
 
     @initialize()
     def setup(self):
-        """Initialize the state machine."""
+             """Initialize the state machine."""
         self.collections.clear()
         self.stored_embeddings.clear()
         self.job_queue.clear()
 
     @rule(target=collections, name=valid_collection_name())
     def create_collection(self, name):
-        """Rule: Create a new collection."""
+             """Rule: Create a new collection."""
         if name not in self.collections:
             try:
                 collection = self.client.create_collection(name)
@@ -509,7 +511,7 @@ class EmbeddingSystemStateMachine(RuleBasedStateMachine):
         text=valid_text_for_embedding()
     )
     def add_embedding(self, collection, embedding, text):
-        """Rule: Add an embedding to a collection."""
+             """Rule: Add an embedding to a collection."""
         doc_id = f"doc_{len(self.stored_embeddings[collection.name])}"
 
         collection.add(
@@ -526,7 +528,7 @@ class EmbeddingSystemStateMachine(RuleBasedStateMachine):
 
     @rule(collection=collections)
     def query_collection(self, collection):
-        """Rule: Query a collection."""
+             """Rule: Query a collection."""
         if self.stored_embeddings[collection.name]:
             # Use a deterministic stored embedding as query to avoid flakiness
             query_item = self.stored_embeddings[collection.name][0]
@@ -543,7 +545,7 @@ class EmbeddingSystemStateMachine(RuleBasedStateMachine):
 
     @invariant()
     def collection_consistency(self):
-        """Invariant: Collections maintain consistency."""
+             """Invariant: Collections maintain consistency."""
         for name, collection in self.collections.items():
             count = collection.count()
             stored_count = len(self.stored_embeddings[name])
@@ -551,7 +553,7 @@ class EmbeddingSystemStateMachine(RuleBasedStateMachine):
 
     @invariant()
     def embedding_dimensions_consistent(self):
-        """Invariant: All embeddings in a collection have same dimension."""
+             """Invariant: All embeddings in a collection have same dimension."""
         for name, items in self.stored_embeddings.items():
             if items:
                 first_dim = len(items[0]["embedding"])
@@ -574,7 +576,7 @@ class TestPerformanceProperties:
     )
     @settings(max_examples=10, deadline=5000)
     def test_batch_processing_scaling(self, batch_size, embedding_dim):
-        """Property: Batch processing scales linearly."""
+             """Property: Batch processing scales linearly."""
         # Generate batch
         embeddings = [np.random.randn(embedding_dim).tolist() for _ in range(batch_size)]
 
@@ -593,7 +595,7 @@ class TestPerformanceProperties:
     )
     @settings(max_examples=5, deadline=10000)
     def test_memory_usage_bounds(self, num_collections, embeddings_per_collection):
-        """Property: Memory usage is bounded."""
+             """Property: Memory usage is bounded."""
         dimension = 384
         bytes_per_float = 4
 

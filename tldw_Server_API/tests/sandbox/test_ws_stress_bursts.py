@@ -11,7 +11,9 @@ from uuid import uuid4
 
 
 def _client(monkeypatch) -> TestClient:
-    # Fast WS poll and deterministic behavior
+
+
+     # Fast WS poll and deterministic behavior
     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("SANDBOX_WS_POLL_TIMEOUT_SEC", "1")
@@ -31,21 +33,25 @@ def _client(monkeypatch) -> TestClient:
 
 
 def _new_run_id() -> str:
-    # The WS stream endpoint does not require the run to be registered
+
+
+     # The WS stream endpoint does not require the run to be registered
     # in the store; it subscribes to the hub by run_id. We can generate
     # a fresh identifier and publish frames to that channel directly.
     return f"run-{uuid4()}"
 
 
 def test_ws_burst_stdout_stderr_order_and_types(monkeypatch) -> None:
-    with _client(monkeypatch) as client:
+
+
+     with _client(monkeypatch) as client:
         run_id = _new_run_id()
         hub = get_hub()
 
         # Publish a large burst of mixed stdout/stderr while a client is connected
         with client.websocket_connect(f"/api/v1/sandbox/runs/{run_id}/stream") as ws:
             def _publisher() -> None:
-                hub.publish_event(run_id, "start", {"source": "stress"})
+                             hub.publish_event(run_id, "start", {"source": "stress"})
                 # Alternate stdout/stderr bursts
                 for i in range(100):
                     hub.publish_stdout(run_id, f"out-{i}\n".encode("utf-8"))

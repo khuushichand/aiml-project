@@ -24,7 +24,7 @@ from tldw_Server_API.app.core.Embeddings.queue_schemas import (
 @pytest.mark.unit
 class TestBaseConfigs:
     def test_worker_config_minimal(self):
-        cfg = WorkerConfig(
+             cfg = WorkerConfig(
             worker_id="w1",
             worker_type="chunking",
             queue_name="q:chunking",
@@ -39,7 +39,7 @@ class TestBaseConfigs:
 @pytest.mark.unit
 class TestChunkingWorker:
     def _make_chunker(self) -> ChunkingWorker:
-        cfg = WorkerConfig(
+             cfg = WorkerConfig(
             worker_id="chunker",
             worker_type="chunking",
             queue_name="stream:chunking",
@@ -49,7 +49,8 @@ class TestChunkingWorker:
         return ChunkingWorker(cfg)
 
     def test_chunking_simple(self):
-        worker = self._make_chunker()
+
+             worker = self._make_chunker()
         text = "Hello world. This is a test document. Another sentence here."
         chunks = worker._chunk_text(text, chunk_size=20, overlap=5, separator=" ")
         # Non-empty chunks with sane boundaries
@@ -59,7 +60,8 @@ class TestChunkingWorker:
             assert 0 <= start < end <= len(text)
 
     def test_generate_chunk_id(self):
-        worker = self._make_chunker()
+
+             worker = self._make_chunker()
         cid1 = worker._generate_chunk_id("jobA", 0)
         cid2 = worker._generate_chunk_id("jobA", 1)
         assert cid1 != cid2
@@ -69,7 +71,7 @@ class TestChunkingWorker:
 @pytest.mark.unit
 class TestEmbeddingWorker:
     def _make_embedder(self) -> EmbeddingWorker:
-        cfg = EmbeddingWorkerConfig(
+             cfg = EmbeddingWorkerConfig(
             worker_id="embedder",
             worker_type="embedding",
             queue_name="stream:embedding",
@@ -83,18 +85,21 @@ class TestEmbeddingWorker:
         return EmbeddingWorker(cfg)
 
     def test_language_detection(self):
-        worker = self._make_embedder()
+
+             worker = self._make_embedder()
         assert worker._detect_language("Hello world") == "english"
         assert worker._detect_language("Hola señor, cómo estás?") in {"multilingual", "english"}
 
     def test_model_selection_heuristics(self):
-        worker = self._make_embedder()
+
+             worker = self._make_embedder()
         provider, model = worker._select_model("short text", {})
         assert provider in {"huggingface", "openai"}
         assert isinstance(model, str) and model
 
     def test_embedding_cache(self):
-        cache = EmbeddingCache(max_size=2, ttl_seconds=3600)
+
+             cache = EmbeddingCache(max_size=2, ttl_seconds=3600)
         v = [0.1, 0.2]
         cache.put("hello", "m1", v)
         got = cache.get("hello", "m1")
@@ -110,15 +115,15 @@ class TestEmbeddingWorker:
 @pytest.mark.unit
 class TestStorageWorker:
     def _make_storage(self) -> StorageWorker:
-        # Patch ChromaDBManager in module to avoid constructor args
+             # Patch ChromaDBManager in module to avoid constructor args
         from tldw_Server_API.app.core.Embeddings import workers as workers_pkg
         from tldw_Server_API.app.core.Embeddings.workers import storage_worker as sw
 
         class DummyMgr:
             def get_or_create_collection(self, *args, **kwargs):
-                class Col:
+                             class Col:
                     def add(self, *a, **k):
-                        return None
+                                             return None
                 return Col()
 
         sw.ChromaDBManager = DummyMgr  # type: ignore
@@ -132,7 +137,8 @@ class TestStorageWorker:
         return StorageWorker(cfg)
 
     def test_parse_storage_message(self):
-        worker = self._make_storage()
+
+             worker = self._make_storage()
         msg: Dict = {
             "job_id": "j1",
             "user_id": "u1",

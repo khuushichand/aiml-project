@@ -3,7 +3,7 @@ import pytest
 
 @pytest.mark.unit
 def test_stream_limits_shape(client_user_only):
-    client = client_user_only
+     client = client_user_only
     r = client.get("/api/v1/audio/stream/limits")
     assert r.status_code == 200
     data = r.json()

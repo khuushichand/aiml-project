@@ -9,14 +9,18 @@ pytestmark = pytest.mark.performance
 
 
 def _perf_enabled() -> bool:
-    return os.getenv("PERF", "0").lower() in {"1", "true", "yes", "on"}
+
+
+     return os.getenv("PERF", "0").lower() in {"1", "true", "yes", "on"}
 
 
 pytestmark = pytest.mark.skipif(not _perf_enabled(), reason="set PERF=1 to run performance checks")
 
 
 def test_non_streaming_throughput_openai_mock():
-    """Quick non-streaming throughput check using MockTransport.
+
+
+     """Quick non-streaming throughput check using MockTransport.
 
     Prints approximate QPS; does not assert strict thresholds to avoid flakiness.
     """
@@ -79,7 +83,9 @@ async def test_streaming_throughput_openai_mock():
 
 
 def test_download_throughput_mock(tmp_path):
-    """Quick download throughput check using MockTransport and small payloads."""
+
+
+     """Quick download throughput check using MockTransport and small payloads."""
     import httpx
     from tldw_Server_API.app.core.http_client import create_client, download
 

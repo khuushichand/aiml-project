@@ -4,7 +4,9 @@ from tldw_Server_API.app.core.Jobs.migrations import ensure_jobs_tables
 
 
 def test_sqlite_schema_additional_tables_and_indexes(tmp_path):
-    db_path = ensure_jobs_tables(tmp_path / "jobs_mig2.db")
+
+
+     db_path = ensure_jobs_tables(tmp_path / "jobs_mig2.db")
     conn = sqlite3.connect(db_path)
     try:
         # Core auxiliary tables exist

@@ -18,14 +18,17 @@ from starlette.requests import Request
 
 class _Recorder:
     def __init__(self):
-        self.requests = []
+             self.requests = []
 
     def add(self, item):
-        self.requests.append(item)
+
+             self.requests.append(item)
 
 
 def _start_test_server():
-    rec = _Recorder()
+
+
+     rec = _Recorder()
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_POST(self):  # noqa: N802
@@ -60,7 +63,7 @@ def _start_test_server():
 
 @pytest.fixture()
 def admin_client(tmp_path, auth_headers):
-    db = WorkflowsDatabase(str(tmp_path / "wf.db"))
+     db = WorkflowsDatabase(str(tmp_path / "wf.db"))
 
     async def override_user():
         return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True)
@@ -91,7 +94,8 @@ def admin_client(tmp_path, auth_headers):
         return principal
 
     def override_db():
-        return db
+
+             return db
 
     app.dependency_overrides[get_request_user] = override_user
     app.dependency_overrides[get_auth_principal] = override_principal
@@ -104,7 +108,9 @@ def admin_client(tmp_path, auth_headers):
 
 
 def test_dlq_replay_real_allowed(monkeypatch, admin_client):
-    client, db = admin_client
+
+
+     client, db = admin_client
     httpd, thread, port, rec = _start_test_server()
     try:
         # Allow localhost and chosen port; do not block private; set signing secret
@@ -139,7 +145,9 @@ def test_dlq_replay_real_allowed(monkeypatch, admin_client):
 
 
 def test_dlq_replay_real_denied(monkeypatch, admin_client):
-    client, db = admin_client
+
+
+     client, db = admin_client
     httpd, thread, port, rec = _start_test_server()
     try:
         # Block private or deny host explicitly

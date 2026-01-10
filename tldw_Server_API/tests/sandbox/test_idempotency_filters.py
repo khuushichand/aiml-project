@@ -18,7 +18,9 @@ def _z(dt: datetime) -> str:
 
 
 def test_sqlite_idempotency_filters_accept_z_suffix(tmp_path) -> None:
-    db_path = tmp_path / "sandbox_store.db"
+
+
+     db_path = tmp_path / "sandbox_store.db"
     store = SQLiteStore(db_path=str(db_path), idem_ttl_sec=600)
 
     # Insert a sample idempotency record (created_at is set internally to time.time())
@@ -61,7 +63,7 @@ def test_sqlite_idempotency_filters_accept_z_suffix(tmp_path) -> None:
 
 @pytest.mark.parametrize("bad", ["not-a-time", "2021-13-99T25:61:61Z", "", None])
 def test_sqlite_idempotency_filters_invalid_inputs_raise(tmp_path, bad) -> None:
-    db_path = tmp_path / "sandbox_store.db"
+     db_path = tmp_path / "sandbox_store.db"
     store = SQLiteStore(db_path=str(db_path), idem_ttl_sec=600)
 
     # Ensure store is initialized with no records; calling with invalid filters should raise
@@ -78,7 +80,9 @@ def test_sqlite_idempotency_filters_invalid_inputs_raise(tmp_path, bad) -> None:
 
 
 def test_memory_idempotency_filters_accept_z_suffix() -> None:
-    store = InMemoryStore(idem_ttl_sec=600)
+
+
+     store = InMemoryStore(idem_ttl_sec=600)
 
     # Insert a sample idempotency record
     store.store_idempotency(
@@ -119,7 +123,7 @@ def test_memory_idempotency_filters_accept_z_suffix() -> None:
 
 @pytest.mark.parametrize("bad", ["not-a-time", "2021-13-99T25:61:61Z", "", None])
 def test_memory_idempotency_filters_invalid_inputs_ignored(bad) -> None:
-    store = InMemoryStore(idem_ttl_sec=600)
+     store = InMemoryStore(idem_ttl_sec=600)
 
     # Insert one record so results are non-empty when filters are ignored
     store.store_idempotency(

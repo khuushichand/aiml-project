@@ -53,7 +53,7 @@ TEST_SK_KEY = test_config.TEST_SK_KEY
 
 @pytest.fixture(scope="function")
 def client():
-    """Create a test client"""
+     """Create a test client"""
     with TestClient(app) as c:
         yield c
 
@@ -69,13 +69,14 @@ async def async_client():
 
 @pytest.fixture(autouse=True)
 def use_temp_evaluations_db(temp_db_path, monkeypatch, event_loop):
-    """Route all evaluation storage to the per-test temporary database."""
+     """Route all evaluation storage to the per-test temporary database."""
 
     from tldw_Server_API.app.core.Evaluations import unified_evaluation_service as _svc_module
     from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
 
     def _get_db_path(_self, explicit_path=None, **_ignored):
-        if explicit_path:
+
+             if explicit_path:
             try:
                 return Path(explicit_path)
             except Exception:
@@ -143,19 +144,19 @@ def use_temp_evaluations_db(temp_db_path, monkeypatch, event_loop):
 
 @pytest.fixture
 def auth_headers():
-    """Get authentication headers with default API key"""
+     """Get authentication headers with default API key"""
     return test_config.get_auth_headers()
 
 
 @pytest.fixture
 def sk_auth_headers():
-    """Get authentication headers with OpenAI-style sk- key"""
+     """Get authentication headers with OpenAI-style sk- key"""
     return test_config.get_sk_auth_headers()
 
 
 @pytest.fixture
 def sample_evaluation_request():
-    """Create a sample evaluation request"""
+     """Create a sample evaluation request"""
     return {
         "name": "test_evaluation",
         "description": "Test evaluation for unit tests",
@@ -186,7 +187,7 @@ def sample_evaluation_request():
 
 @pytest.fixture
 def sample_run_request():
-    """Create a sample run request"""
+     """Create a sample run request"""
     return {
         "target_model": "gpt-3.5-turbo",
         "config": {
@@ -199,7 +200,7 @@ def sample_run_request():
 
 @pytest.fixture
 def sample_dataset_request():
-    """Create a sample dataset request"""
+     """Create a sample dataset request"""
     return {
         "name": "test_dataset",
         "description": "Test dataset for unit tests",
@@ -218,7 +219,7 @@ def sample_dataset_request():
 
 @pytest.fixture
 def sample_geval_request():
-    """Create a sample G-Eval request"""
+     """Create a sample G-Eval request"""
     return {
         "source_text": "Artificial intelligence is a branch of computer science that aims to create intelligent machines. It has become an essential part of the technology industry.",
         "summary": "AI is a field of computer science focused on creating intelligent machines.",
@@ -230,7 +231,7 @@ def sample_geval_request():
 
 @pytest.fixture
 def sample_rag_request():
-    """Create a sample RAG evaluation request"""
+     """Create a sample RAG evaluation request"""
     return {
         "query": "What is machine learning?",
         "retrieved_contexts": [
@@ -248,7 +249,8 @@ class TestUnifiedEvaluationCRUD:
     """Test CRUD operations for unified evaluations API"""
 
     def test_create_evaluation(self, client, auth_headers, sample_evaluation_request):
-        """Test creating a new evaluation"""
+
+             """Test creating a new evaluation"""
         response = client.post(
             "/api/v1/evaluations",
             json=sample_evaluation_request,
@@ -262,7 +264,8 @@ class TestUnifiedEvaluationCRUD:
         assert "created_at" in data
 
     def test_get_evaluation(self, client, auth_headers, sample_evaluation_request):
-        """Test getting an evaluation by ID"""
+
+             """Test getting an evaluation by ID"""
         # First create an evaluation
         create_response = client.post(
             "/api/v1/evaluations",
@@ -279,7 +282,8 @@ class TestUnifiedEvaluationCRUD:
         assert data["name"] == sample_evaluation_request["name"]
 
     def test_update_evaluation(self, client, auth_headers, sample_evaluation_request):
-        """Test updating an evaluation"""
+
+             """Test updating an evaluation"""
         # Create evaluation
         create_response = client.post(
             "/api/v1/evaluations",
@@ -304,7 +308,8 @@ class TestUnifiedEvaluationCRUD:
         assert data["metadata"]["custom"]["updated"] is True
 
     def test_delete_evaluation(self, client, auth_headers, sample_evaluation_request):
-        """Test deleting an evaluation"""
+
+             """Test deleting an evaluation"""
         # Create evaluation
         create_response = client.post(
             "/api/v1/evaluations",
@@ -323,7 +328,8 @@ class TestUnifiedEvaluationCRUD:
         assert get_response.status_code in [404, 200]
 
     def test_list_evaluations(self, client, auth_headers, sample_evaluation_request):
-        """Test listing evaluations with pagination"""
+
+             """Test listing evaluations with pagination"""
         # Create multiple evaluations
         for i in range(3):
             request = sample_evaluation_request.copy()
@@ -349,7 +355,8 @@ class TestTldwSpecificEndpoints:
         sample_geval_request,
         monkeypatch,
     ):
-        """Missing provider credentials should return 503 with error code."""
+
+             """Missing provider credentials should return 503 with error code."""
         from tldw_Server_API.app.api.v1.endpoints import evaluations_unified as eval_ep
         from tldw_Server_API.app.core.AuthNZ.byok_runtime import ResolvedByokCredentials
 
@@ -377,7 +384,8 @@ class TestTldwSpecificEndpoints:
         assert detail.get("error_code") == "missing_provider_credentials"
 
     def test_geval_endpoint(self, client, auth_headers, sample_geval_request):
-        """Test G-Eval summarization endpoint"""
+
+             """Test G-Eval summarization endpoint"""
         # Mock multiple potential service paths
         with patch('tldw_Server_API.app.core.Evaluations.ms_g_eval.run_geval') as mock_run_geval:
             # Mock the actual run_geval function that the endpoint uses
@@ -512,7 +520,8 @@ class TestRunManagement:
     """Test evaluation run management"""
 
     def test_create_run(self, client, auth_headers, sample_evaluation_request, sample_run_request):
-        """Test creating an evaluation run"""
+
+             """Test creating an evaluation run"""
         # First create an evaluation
         eval_response = client.post(
             "/api/v1/evaluations",
@@ -535,7 +544,8 @@ class TestRunManagement:
             assert data["target_model"] == sample_run_request["target_model"]
 
     def test_get_run_status(self, client, auth_headers, sample_evaluation_request, sample_run_request):
-        """Test getting run status"""
+
+             """Test getting run status"""
         # Create evaluation and run
         eval_response = client.post(
             "/api/v1/evaluations",
@@ -560,7 +570,8 @@ class TestRunManagement:
         assert "status" in data
 
     def test_cancel_run(self, client, auth_headers, sample_evaluation_request, sample_run_request):
-        """Test cancelling a run"""
+
+             """Test cancelling a run"""
         # Create evaluation and run
         eval_response = client.post(
             "/api/v1/evaluations",
@@ -589,7 +600,8 @@ class TestDatasetManagement:
     """Test dataset management endpoints"""
 
     def test_create_dataset(self, client, auth_headers, sample_dataset_request):
-        """Test creating a dataset"""
+
+             """Test creating a dataset"""
         response = client.post(
             "/api/v1/evaluations/datasets",
             json=sample_dataset_request,
@@ -601,7 +613,8 @@ class TestDatasetManagement:
         assert data["sample_count"] == len(sample_dataset_request["samples"])
 
     def test_get_dataset(self, client, auth_headers, sample_dataset_request):
-        """Test getting a dataset"""
+
+             """Test getting a dataset"""
         # Create dataset
         create_response = client.post(
             "/api/v1/evaluations/datasets",
@@ -618,7 +631,8 @@ class TestDatasetManagement:
         assert data["name"] == sample_dataset_request["name"]
 
     def test_list_datasets(self, client, auth_headers, sample_dataset_request):
-        """Test listing datasets"""
+
+             """Test listing datasets"""
         # Create multiple datasets
         for i in range(3):
             request = sample_dataset_request.copy()
@@ -633,7 +647,8 @@ class TestDatasetManagement:
         assert len(data["data"]) <= 2
 
     def test_delete_dataset(self, client, auth_headers, sample_dataset_request):
-        """Test deleting a dataset"""
+
+             """Test deleting a dataset"""
         # Create dataset
         create_response = client.post(
             "/api/v1/evaluations/datasets",
@@ -651,7 +666,8 @@ class TestWebhooks:
     """Test webhook functionality"""
 
     def test_register_webhook(self, client, auth_headers):
-        """Test webhook registration"""
+
+             """Test webhook registration"""
         with patch('tldw_Server_API.app.core.Evaluations.webhook_manager.webhook_manager.register_webhook') as mock_register:
             mock_register.return_value = {
                 "webhook_id": 1,
@@ -679,7 +695,8 @@ class TestWebhooks:
             assert data["url"] == request_data["url"]
 
     def test_list_webhooks(self, client, auth_headers):
-        """Test listing webhooks"""
+
+             """Test listing webhooks"""
         with patch('tldw_Server_API.app.core.Evaluations.webhook_manager.webhook_manager.get_webhook_status') as mock_status:
             mock_status.return_value = [
                 {
@@ -699,7 +716,8 @@ class TestWebhooks:
             assert data[0]["webhook_id"] == 1
 
     def test_test_webhook(self, client, auth_headers):
-        """Test webhook testing endpoint"""
+
+             """Test webhook testing endpoint"""
         with patch('tldw_Server_API.app.core.Evaluations.webhook_manager.webhook_manager.test_webhook') as mock_test:
             mock_test.return_value = {
                 "success": True,
@@ -726,7 +744,8 @@ class TestHealthAndMetrics:
     """Test health check and metrics endpoints"""
 
     def test_health_check(self, client, auth_headers):
-        """Test health check endpoint"""
+
+             """Test health check endpoint"""
         response = client.get("/api/v1/evaluations/health", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
@@ -736,7 +755,8 @@ class TestHealthAndMetrics:
         assert "database" in data
 
     def test_metrics_endpoint(self, client, auth_headers):
-        """Test metrics endpoint"""
+
+             """Test metrics endpoint"""
         response = client.get("/api/v1/evaluations/metrics", headers=auth_headers)
         assert response.status_code == 200
         # Response can be JSON or Prometheus text format
@@ -752,7 +772,8 @@ class TestRateLimiting:
     """Test rate limiting functionality"""
 
     def test_rate_limit_status(self, client, auth_headers):
-        """Test getting rate limit status"""
+
+             """Test getting rate limit status"""
         from datetime import datetime, timezone
         with patch('tldw_Server_API.app.core.Evaluations.user_rate_limiter.user_rate_limiter.get_usage_summary') as mock_summary:
             mock_summary.return_value = {
@@ -774,7 +795,8 @@ class TestRateLimiting:
             assert "usage" in data
 
     def test_rate_limit_exceeded(self, client, auth_headers, sample_geval_request):
-        """Test rate limit exceeded response"""
+
+             """Test rate limit exceeded response"""
         # Mock rate limiter to always reject
         with patch('tldw_Server_API.app.core.AuthNZ.rate_limiter.RateLimiter.check_rate_limit') as mock_check:
             mock_check.return_value = (False, {"retry_after": 60})
@@ -868,7 +890,8 @@ class TestErrorHandling:
     """Test error handling"""
 
     def test_missing_auth(self, client):
-        """Test request without authentication"""
+
+             """Test request without authentication"""
         response = client.get("/api/v1/evaluations")
         assert response.status_code == 401
         detail = response.json().get("detail")
@@ -878,7 +901,8 @@ class TestErrorHandling:
         assert "message" in error
 
     def test_invalid_evaluation_type(self, client, auth_headers):
-        """Test creating evaluation with invalid type"""
+
+             """Test creating evaluation with invalid type"""
         request_data = {
             "name": "test",
             "eval_type": "invalid_type",
@@ -892,7 +916,8 @@ class TestErrorHandling:
         assert response.status_code == 422  # Validation error
 
     def test_not_found(self, client, auth_headers):
-        """Test getting non-existent evaluation"""
+
+             """Test getting non-existent evaluation"""
         response = client.get(
             "/api/v1/evaluations/eval_nonexistent",
             headers=auth_headers
@@ -906,19 +931,21 @@ class TestAuthentication:
     """Test authentication modes"""
 
     def test_bearer_token_auth(self, client, auth_headers):
-        """Test authentication with Bearer token"""
+
+             """Test authentication with Bearer token"""
         response = client.get("/api/v1/evaluations", headers=auth_headers)
         assert response.status_code == 200
 
     def test_x_api_key_auth(self, client):
-        """Test authentication with X-API-KEY header"""
+
+             """Test authentication with X-API-KEY header"""
         headers = {"X-API-KEY": DEFAULT_API_KEY}
         response = client.get("/api/v1/evaluations", headers=headers)
         assert response.status_code == 200
 
     @patch.dict(os.environ, {"SINGLE_USER_API_KEY": TEST_SK_KEY})
     def test_openai_style_auth(self, client, sk_auth_headers):
-        """Test authentication with OpenAI-style sk- key"""
+             """Test authentication with OpenAI-style sk- key"""
         response = client.get("/api/v1/evaluations", headers=sk_auth_headers)
         # Should work if environment is set up correctly
         assert response.status_code in [200, 401]  # Depends on env setup

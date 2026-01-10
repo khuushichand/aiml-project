@@ -8,7 +8,9 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
 def _setup_env(monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
+
+
+     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("JOBS_EVENTS_OUTBOX", "true")
@@ -32,7 +34,7 @@ def _setup_env(monkeypatch, tmp_path):
 
 @pytest.mark.integration
 def test_outbox_list_and_sse_sqlite(monkeypatch, tmp_path):
-    _setup_env(monkeypatch, tmp_path)
+     _setup_env(monkeypatch, tmp_path)
 
     # Import app after env
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
@@ -99,7 +101,7 @@ def test_outbox_list_and_sse_sqlite(monkeypatch, tmp_path):
 
 @pytest.mark.integration
 def test_outbox_after_id_and_filters_sqlite(monkeypatch, tmp_path):
-    _setup_env(monkeypatch, tmp_path)
+     _setup_env(monkeypatch, tmp_path)
 
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
     reset_settings()

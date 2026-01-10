@@ -37,7 +37,9 @@ pytestmark = pytest.mark.skipif(_PG_DRIVER is None, reason="Postgres driver not 
 
 
 def _base_postgres_config() -> DatabaseConfig:
-    from tldw_Server_API.tests.helpers.pg_env import get_pg_env
+
+
+     from tldw_Server_API.tests.helpers.pg_env import get_pg_env
     _pg = get_pg_env()
     return DatabaseConfig(
         backend_type=BackendType.POSTGRESQL,
@@ -117,7 +119,7 @@ def _drop_postgres_database(config: DatabaseConfig) -> None:
 
 @pytest.fixture()
 def temp_postgres_config() -> DatabaseConfig:
-    base = _base_postgres_config()
+     base = _base_postgres_config()
     cfg = _create_temp_postgres_database(base)
     try:
         return cfg

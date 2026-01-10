@@ -7,7 +7,9 @@ from starlette.websockets import WebSocketDisconnect
 
 
 def test_audio_ws_quota_error_includes_error_type_and_closes_1008(monkeypatch):
-    """Quota errors should include error_type and close with code 1008.
+
+
+     """Quota errors should include error_type and close with code 1008.
 
     Compatibility: also accepts legacy top-level 'quota' while data.quota remains the canonical field.
     """

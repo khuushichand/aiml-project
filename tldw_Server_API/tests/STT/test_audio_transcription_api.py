@@ -17,7 +17,7 @@ from tldw_Server_API.app.api.v1.endpoints import audio as audio_endpoints
 
 # Mock audio data for testing
 def create_test_audio(duration=1.0, sample_rate=16000):
-    """Create a simple test audio file (sine wave)."""
+     """Create a simple test audio file (sine wave)."""
     t = np.linspace(0, duration, int(sample_rate * duration), False)
     frequency = 440  # A4 note
     audio_data = np.sin(frequency * 2 * np.pi * t).astype(np.float32)
@@ -236,7 +236,9 @@ async def test_translation_endpoint(bypass_api_limits):
 
 
 def test_sync_transcription(bypass_api_limits):
-    """Test synchronous transcription using TestClient."""
+
+
+     """Test synchronous transcription using TestClient."""
     from tldw_Server_API.app.main import app
 
     with bypass_api_limits(app), TestClient(app) as client:
@@ -273,7 +275,7 @@ def test_sync_transcription(bypass_api_limits):
 
 # Example usage with curl commands
 def print_curl_examples():
-    """Print example curl commands for testing the API."""
+     """Print example curl commands for testing the API."""
     print("""
     # Example curl commands for testing the transcription API:
 

@@ -12,7 +12,7 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 @pytest.fixture
 def test_db():
-    # Create DB under repository workspace to satisfy sandbox
+     # Create DB under repository workspace to satisfy sandbox
     # Ensure the tmp directory exists on clean environments
     os.makedirs("tmp", exist_ok=True)
     db_path = os.path.join("tmp", "pstest_eval_bg.db")
@@ -49,7 +49,7 @@ def test_db():
 
 @pytest.fixture
 def override_db_dependency(test_db):
-    async def _override_db():
+     async def _override_db():
         return test_db
 
     app.dependency_overrides[deps.get_prompt_studio_db] = _override_db
@@ -58,7 +58,9 @@ def override_db_dependency(test_db):
 
 
 def test_create_evaluation_async_schedules_with_request_id(monkeypatch, override_db_dependency):
-    called = {"request_id": None}
+
+
+     called = {"request_id": None}
 
     # Ensure code path schedules background task (unset pytest env marker)
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)

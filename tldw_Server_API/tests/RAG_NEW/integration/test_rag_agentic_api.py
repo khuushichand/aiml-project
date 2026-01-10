@@ -12,11 +12,13 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture(autouse=True)
 def _set_test_mode_env(monkeypatch):
-    monkeypatch.setenv("TEST_MODE", "1")
+     monkeypatch.setenv("TEST_MODE", "1")
 
 
 def test_rag_capabilities_agentic_features(auth_headers):
-    # Basic smoke: capabilities exposes agentic feature block
+
+
+     # Basic smoke: capabilities exposes agentic feature block
     with TestClient(fastapi_app, headers=auth_headers) as client:
         resp = client.get("/api/v1/rag/capabilities")
         assert resp.status_code == 200, resp.text
@@ -43,7 +45,9 @@ def test_rag_capabilities_agentic_features(auth_headers):
 
 
 def test_rag_capabilities_agentic_new_knobs(auth_headers):
-    # Verify new agentic knobs are advertised
+
+
+     # Verify new agentic knobs are advertised
     with TestClient(fastapi_app, headers=auth_headers) as client:
         resp = client.get("/api/v1/rag/capabilities")
         assert resp.status_code == 200, resp.text
@@ -67,7 +71,9 @@ def test_rag_capabilities_agentic_new_knobs(auth_headers):
 
 
 def test_rag_capabilities_quick_start_multihop_vlm(auth_headers):
-    # Ensure capabilities advertises the multi-hop agentic with VLM quick-start
+
+
+     # Ensure capabilities advertises the multi-hop agentic with VLM quick-start
     with TestClient(fastapi_app, headers=auth_headers) as client:
         resp = client.get("/api/v1/rag/capabilities")
         assert resp.status_code == 200, resp.text
@@ -77,7 +83,9 @@ def test_rag_capabilities_quick_start_multihop_vlm(auth_headers):
 
 
 def test_rag_capabilities_quick_start_explain(auth_headers):
-    with TestClient(fastapi_app, headers=auth_headers) as client:
+
+
+     with TestClient(fastapi_app, headers=auth_headers) as client:
         resp = client.get("/api/v1/rag/capabilities")
         assert resp.status_code == 200, resp.text
         data = resp.json()
@@ -86,12 +94,14 @@ def test_rag_capabilities_quick_start_explain(auth_headers):
 
 
 def test_rag_agentic_streaming_plan_spans_then_delta(client_with_agentic_overrides, monkeypatch):
-    # Patch retriever for agentic assembly
+
+
+     # Patch retriever for agentic assembly
     from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
 
     class FakeRetriever:
         def __init__(self, *args, **kwargs):
-            pass
+                     pass
         async def retrieve(self, *args, **kwargs):
             return [Document(id="mZ", content="Accuracy table A|B|C\n1|2|3", metadata={"title": "Tbl"}, source=DataSource.MEDIA_DB, score=0.8)]
 
@@ -112,7 +122,7 @@ def test_rag_agentic_streaming_plan_spans_then_delta(client_with_agentic_overrid
     # Patch the endpoint's own MultiDatabaseRetriever to avoid DB access
     class FakeEP_Retriever:
         def __init__(self, *args, **kwargs):
-            self.retrievers = {}
+                     self.retrievers = {}
         async def retrieve(self, *args, **kwargs):
             return [Document(id="e1", content="Doc body", metadata={"title": "T"}, source=DataSource.MEDIA_DB, score=0.5)]
     monkeypatch.setattr(rag_ep, "MultiDatabaseRetriever", FakeEP_Retriever)
@@ -150,7 +160,7 @@ def test_rag_agentic_streaming_plan_spans_then_delta(client_with_agentic_overrid
 
 @pytest.fixture()
 def client_with_agentic_overrides(monkeypatch, auth_headers):
-    # Override auth dependencies: accept any test user; disable rate limits
+     # Override auth dependencies: accept any test user; disable rate limits
     async def override_user():
         return User(id=1, username="tester", email=None, is_active=True)
 
@@ -192,7 +202,9 @@ def client_with_agentic_overrides(monkeypatch, auth_headers):
 
 
 def test_rag_agentic_search_smoke_api(client_with_agentic_overrides, monkeypatch):
-    client = client_with_agentic_overrides
+
+
+     client = client_with_agentic_overrides
 
     # Patch retriever used inside agentic pipeline to return a single simple doc
     from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
@@ -242,14 +254,16 @@ def test_rag_agentic_search_smoke_api(client_with_agentic_overrides, monkeypatch
 
 
 def test_rag_agentic_search_verification_flags(client_with_agentic_overrides, monkeypatch):
-    client = client_with_agentic_overrides
+
+
+     client = client_with_agentic_overrides
 
     # Patch retriever inside agentic_chunker to return a numeric-bearing doc
     from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
 
     class FakeRetriever:
         def __init__(self, *args, **kwargs):
-            pass
+                     pass
 
         async def retrieve(self, *args, **kwargs):
             return [
@@ -268,7 +282,7 @@ def test_rag_agentic_search_verification_flags(client_with_agentic_overrides, mo
     # Patch AnswerGenerator in generation module to return an answer referencing the number
     class FakeAnswerGenerator:
         def __init__(self, *args, **kwargs):
-            pass
+                     pass
 
         async def generate(self, *, query: str, context: str, prompt_template=None, max_tokens=None, temperature=None):  # noqa: ARG002
             return {"answer": "We ran 42 experiments. The findings were consistent."}

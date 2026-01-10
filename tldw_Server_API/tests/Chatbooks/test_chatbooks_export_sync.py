@@ -11,32 +11,37 @@ from tldw_Server_API.app.api.v1.endpoints import chatbooks as chatbooks_mod
 
 class _DummyConn:
     def execute(self, *_args, **_kwargs):
-        return None
+             return None
 
     def close(self):
-        return None
+
+             return None
 
 
 class _DummyCursor:
     def __init__(self, rows):
-        self._rows = rows
+             self._rows = rows
 
     def fetchall(self):
-        return list(self._rows)
+
+             return list(self._rows)
 
 
 class FakeDB:
     """Minimal in-memory DB to satisfy ChatbookService job storage during tests."""
 
     def __init__(self):
-        self._export_jobs = {}
+
+             self._export_jobs = {}
         self._import_jobs = {}
 
     def get_connection(self):
-        return _DummyConn()
+
+             return _DummyConn()
 
     def execute_query(self, sql, params=(), commit=False):
-        sql_norm = " ".join(str(sql).strip().split()).lower()
+
+             sql_norm = " ".join(str(sql).strip().split()).lower()
         # Create tables: no-op
         if sql_norm.startswith("create table if not exists export_jobs"):
             return _DummyCursor([])
@@ -84,7 +89,7 @@ class FakeDB:
 
 @pytest.fixture()
 def client_override(tmp_path):
-    # Ensure test mode to avoid global rate limiter
+     # Ensure test mode to avoid global rate limiter
     os.environ["TEST_MODE"] = "true"
 
     async def override_user():
@@ -94,7 +99,8 @@ def client_override(tmp_path):
     _shared_db = FakeDB()
 
     def override_db():
-        return _shared_db
+
+             return _shared_db
 
     app.dependency_overrides[get_request_user] = override_user
     app.dependency_overrides[chatbooks_mod.get_chacha_db] = override_db
@@ -102,9 +108,9 @@ def client_override(tmp_path):
     # Stub audit logger to avoid strict signature requirements in tests
     class _DummyAudit:
         def log_event(self, *args, **kwargs):
-            return None
+                     return None
         def log_security_event(self, *args, **kwargs):
-            return None
+                     return None
 
     chatbooks_mod.audit_logger = _DummyAudit()
 

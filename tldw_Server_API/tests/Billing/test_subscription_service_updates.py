@@ -13,7 +13,7 @@ from tldw_Server_API.app.core.Billing.stripe_client import CheckoutSession
 
 class _FakeStripeClient:
     def __init__(self) -> None:
-        self.is_available = True
+             self.is_available = True
         self.last_price_id: str | None = None
 
     def get_price_id(self, plan_name: str, billing_cycle: str = "monthly") -> str | None:
@@ -77,7 +77,7 @@ async def test_checkout_session_uses_yearly_price_from_db(monkeypatch) -> None:
 
 class _FakeRepoForWebhook:
     def __init__(self) -> None:
-        self.updated: dict[str, object] | None = None
+             self.updated: dict[str, object] | None = None
 
     async def get_subscription_by_stripe_customer(self, customer_id: str):
         return {"org_id": 123}

@@ -8,29 +8,31 @@ from tldw_Server_API.app.api.v1.API_Deps import prompt_studio_deps as deps
 
 class _StubCursor:
     def __init__(self):
-        self.lastrowid = 1
+             self.lastrowid = 1
 
     def execute(self, *args, **kwargs):
-        # Do nothing; simulate successful INSERT
+
+             # Do nothing; simulate successful INSERT
         self.lastrowid = 1
 
 
 class _StubConn:
     def cursor(self):
-        return _StubCursor()
+             return _StubCursor()
 
     def commit(self):
-        pass
+
+             pass
 
 
 class _StubDB:
     def get_connection(self):
-        return _StubConn()
+             return _StubConn()
 
 
 @pytest.fixture
 def override_ps_deps(monkeypatch):
-    async def _override_db():
+     async def _override_db():
         return _StubDB()
 
     async def _override_user():
@@ -52,7 +54,9 @@ def override_ps_deps(monkeypatch):
 
 
 def test_evaluation_async_add_task_receives_request_id(monkeypatch, override_ps_deps):
-    # Force scheduling branch (not inline) by removing PyTest env hint and disabling TEST_MODE
+
+
+     # Force scheduling branch (not inline) by removing PyTest env hint and disabling TEST_MODE
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     monkeypatch.setenv("TEST_MODE", "false")
 

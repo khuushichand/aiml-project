@@ -34,10 +34,11 @@ def _build_app_with_overrides(
     # Stub topic monitoring service to avoid touching real DBs
     class _FakeMonitoringService:
         def list_watchlists(self) -> list[dict]:
-            return []
+                     return []
 
     def _fake_get_topic_monitoring_service() -> _FakeMonitoringService:
-        return _FakeMonitoringService()
+
+             return _FakeMonitoringService()
 
     monitoring_mod.get_topic_monitoring_service = _fake_get_topic_monitoring_service  # type: ignore[assignment]
 

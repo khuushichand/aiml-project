@@ -12,12 +12,14 @@ pytestmark = [pytest.mark.pg_jobs]
 
 @pytest.fixture(autouse=True)
 def _setup(jobs_pg_dsn):
-    # jobs_pg_dsn ensures a fresh temp DB and schema per test and exports JOBS_DB_URL
+     # jobs_pg_dsn ensures a fresh temp DB and schema per test and exports JOBS_DB_URL
     return
 
 
 def _client_pg(monkeypatch):
-    # DSN already set via jobs_pg_dsn fixture
+
+
+     # DSN already set via jobs_pg_dsn fixture
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
     reset_settings()
     from tldw_Server_API.app.main import app
@@ -36,7 +38,9 @@ def _client_pg(monkeypatch):
 
 
 def test_queue_control_and_status_postgres(monkeypatch):
-    app, headers = _client_pg(monkeypatch)
+
+
+     app, headers = _client_pg(monkeypatch)
     with TestClient(app, headers=headers) as client:
         r = client.post("/api/v1/jobs/queue/control", json={"domain": "ps", "queue": "default", "action": "pause"})
         assert r.status_code == 200
@@ -45,7 +49,9 @@ def test_queue_control_and_status_postgres(monkeypatch):
 
 
 def test_attachments_and_sla_postgres(monkeypatch, jobs_pg_dsn):
-    app, headers = _client_pg(monkeypatch)
+
+
+     app, headers = _client_pg(monkeypatch)
     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     j = jm.create_job(domain="ps", queue="default", job_type="exp", payload={}, owner_user_id="u")
     with TestClient(app, headers=headers) as client:
@@ -60,7 +66,9 @@ def test_attachments_and_sla_postgres(monkeypatch, jobs_pg_dsn):
 
 
 def test_reschedule_and_retry_now_postgres(monkeypatch, jobs_pg_dsn):
-    app, headers = _client_pg(monkeypatch)
+
+
+     app, headers = _client_pg(monkeypatch)
     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     # Seed a scheduled queued job
     from datetime import datetime, timedelta
@@ -84,7 +92,9 @@ def test_reschedule_and_retry_now_postgres(monkeypatch, jobs_pg_dsn):
 
 
 def test_crypto_rotate_postgres(monkeypatch, jobs_pg_dsn):
-    app, headers = _client_pg(monkeypatch)
+
+
+     app, headers = _client_pg(monkeypatch)
     # Configure encryption for domain and set ENV key (old)
     monkeypatch.setenv("JOBS_ENCRYPT", "true")
     old_key = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo0NTY3ODkwMTIzNDU2Nzg5MDEy"[:44]

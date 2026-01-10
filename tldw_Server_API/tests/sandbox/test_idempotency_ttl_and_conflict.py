@@ -27,7 +27,9 @@ def _run_body(msg: str = "echo") -> Dict[str, Any]:
 
 
 def test_idempotency_conflict_on_mismatch(monkeypatch) -> None:
-    with _client(monkeypatch) as client:
+
+
+     with _client(monkeypatch) as client:
         key = "k-conflict-1"
         r1 = client.post("/api/v1/sandbox/runs", headers={"Idempotency-Key": key}, json=_run_body("echo 1"))
         assert r1.status_code == 200
@@ -45,7 +47,9 @@ def test_idempotency_conflict_on_mismatch(monkeypatch) -> None:
 
 
 def test_idempotency_ttl_expiry_allows_new_execution(monkeypatch) -> None:
-    # TTL = 0 means immediate expiry
+
+
+     # TTL = 0 means immediate expiry
     with _client(monkeypatch, ttl_sec=0) as client:
         key = "k-expire-1"
         r1 = client.post("/api/v1/sandbox/runs", headers={"Idempotency-Key": key}, json=_run_body("echo 1"))

@@ -9,7 +9,9 @@ pytestmark = pytest.mark.unit
 
 
 def _recv_until(client, predicate, timeout=2.0):
-    import time
+
+
+     import time
     start = time.time()
     while time.time() - start < timeout:
         msg = client.receive_text()
@@ -23,7 +25,9 @@ def _recv_until(client, predicate, timeout=2.0):
 
 
 def test_persona_websocket_plan_and_confirm():
-    with TestClient(fastapi_app) as c:
+
+
+     with TestClient(fastapi_app) as c:
         with c.websocket_connect("/api/v1/persona/stream") as ws:
             # Initial notice
             init = json.loads(ws.receive_text())

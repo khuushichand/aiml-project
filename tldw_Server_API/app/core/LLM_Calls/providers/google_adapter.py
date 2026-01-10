@@ -310,7 +310,8 @@ class GoogleAdapter(ChatProvider):
             return
         cands = event.get("candidates") or []
         tool_index = 0
-        for cand in cands:
+        for idx, cand in enumerate(cands):
+            emitted = False
             content = (cand or {}).get("content") or {}
             parts = content.get("parts") or []
             for part in parts:
@@ -320,6 +321,7 @@ class GoogleAdapter(ChatProvider):
                     text = part.get("text") or ""
                     if text:
                         yield openai_delta_chunk(text)
+                        emitted = True
                 elif isinstance(part.get("functionCall"), dict):
                     fc = part.get("functionCall") or {}
                     name = str(fc.get("name") or "")
@@ -330,7 +332,7 @@ class GoogleAdapter(ChatProvider):
                         arg_str = "{}"
                     yield sse_data({
                         "choices": [{
-                            "index": 0,
+                            "index": idx,
                             "delta": {
                                 "tool_calls": [{
                                     "index": tool_index,
@@ -342,12 +344,25 @@ class GoogleAdapter(ChatProvider):
                         }]
                     })
                     tool_index += 1
+                    emitted = True
+            finish_reason_raw = cand.get("finishReason")
+            if finish_reason_raw and not emitted:
+                finish_map = {"STOP": "stop", "MAX_TOKENS": "length"}
+                finish_reason = finish_map.get(str(finish_reason_raw).upper(), finish_reason_raw)
+                yield sse_data({
+                    "choices": [{
+                        "index": idx,
+                        "delta": {},
+                        "finish_reason": finish_reason,
+                    }]
+                })
 
     def normalize_error(self, exc: Exception):  # type: ignore[override]
         from tldw_Server_API.app.core.LLM_Calls.error_utils import (
             get_http_status_from_exception,
             get_http_error_text,
             is_http_status_error,
+            log_http_400_body,
         )
         if is_http_status_error(exc):
             from tldw_Server_API.app.core.Chat.Chat_Deps import (
@@ -364,6 +379,7 @@ class GoogleAdapter(ChatProvider):
                 body = resp.json()
             except Exception:
                 body = None
+            log_http_400_body(self.name, exc, body)
             detail = None
             if isinstance(body, dict) and isinstance(body.get("error"), dict):
                 err = body["error"]

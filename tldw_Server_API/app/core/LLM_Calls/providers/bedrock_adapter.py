@@ -49,17 +49,16 @@ class BedrockAdapter(ChatProvider):
 
     def _base_url(self) -> str:
         # Allow explicit base override; otherwise derive from runtime endpoint or region
+        runtime = os.getenv("BEDROCK_RUNTIME_ENDPOINT")
+        if runtime:
+            # Expect a hostname like https://bedrock-runtime.us-west-2.amazonaws.com
+            return runtime.rstrip("/") + "/openai"
         base = (
             os.getenv("BEDROCK_API_BASE_URL")
             or os.getenv("BEDROCK_OPENAI_BASE_URL")
         )
         if base:
             return base
-
-        runtime = os.getenv("BEDROCK_RUNTIME_ENDPOINT")
-        if runtime:
-            # Expect a hostname like https://bedrock-runtime.us-west-2.amazonaws.com
-            return runtime.rstrip("/") + "/openai"
 
         region = os.getenv("BEDROCK_REGION") or "us-west-2"
         return f"https://bedrock-runtime.{region}.amazonaws.com/openai"
@@ -173,6 +172,7 @@ class BedrockAdapter(ChatProvider):
             get_http_status_from_exception,
             get_http_error_text,
             is_http_status_error,
+            log_http_400_body,
         )
         if is_http_status_error(exc):
             from tldw_Server_API.app.core.Chat.Chat_Deps import (
@@ -189,6 +189,7 @@ class BedrockAdapter(ChatProvider):
                 body = resp.json()
             except Exception:
                 body = None
+            log_http_400_body(self.name, exc, body)
             detail = None
             if isinstance(body, dict) and isinstance(body.get("error"), dict):
                 eobj = body["error"]

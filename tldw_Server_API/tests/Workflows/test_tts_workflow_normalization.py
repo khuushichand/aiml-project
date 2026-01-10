@@ -51,7 +51,7 @@ async def test_run_tts_adapter_post_process_normalization(monkeypatch, tmp_path)
 
         class _FakeProc:
             def __init__(self):
-                self.returncode = 0
+                             self.returncode = 0
 
             async def communicate(self):
                 # Simulate successful execution with no output

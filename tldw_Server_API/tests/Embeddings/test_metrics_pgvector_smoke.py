@@ -9,7 +9,8 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.pgvector_adapter imp
 
 def test_metrics_contains_pgvector_after_ops(pgvector_dsn):
 
-    client = TestClient(app)
+
+      client = TestClient(app)
     dim = 8
     coll = 'metrics_demo'
     adapter = PGVectorAdapter(VectorStoreConfig(store_type=VectorStoreType.PGVECTOR, connection_params={'dsn': pgvector_dsn}, embedding_dim=dim, user_id='t'))

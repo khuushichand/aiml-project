@@ -19,7 +19,7 @@ async def test_agentic_tool_trace_and_metrics(monkeypatch):
     # Fake retriever returns single document
     class FakeRetriever:
         def __init__(self, *args, **kwargs):
-            pass
+                     pass
         async def retrieve(self, *args, **kwargs):
             return [
                 _make_doc(
@@ -63,7 +63,7 @@ async def test_agentic_hard_citations_and_numeric(monkeypatch):
     # Patch retriever
     class FakeRetriever:
         def __init__(self, *args, **kwargs):
-            pass
+                     pass
         async def retrieve(self, *args, **kwargs):
             # Include a numeric token 42 in the source
             return [_make_doc("m2", "We observed 42 experiments with consistent results.", title="Exp")]
@@ -73,7 +73,7 @@ async def test_agentic_hard_citations_and_numeric(monkeypatch):
     # Patch AnswerGenerator to return a small answer referencing the number
     class FakeAnswerGenerator:
         def __init__(self, *args, **kwargs):
-            pass
+                     pass
         async def generate(self, *, query: str, context: str, prompt_template=None, max_tokens=None, temperature=None):  # noqa: ARG002
             return {"answer": "We ran 42 experiments. The findings were consistent."}
 

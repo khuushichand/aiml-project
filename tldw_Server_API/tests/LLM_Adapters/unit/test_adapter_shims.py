@@ -5,12 +5,6 @@ import pytest
 from unittest.mock import patch
 
 
-@pytest.fixture(autouse=True)
-def _enable_adapters_env(monkeypatch):
-    monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "1")
-    yield
-
-
 def _messages() -> List[Dict[str, Any]]:
     return [{"role": "user", "content": "hi"}]
 
@@ -26,7 +20,6 @@ def test_openai_shim_preserves_streaming_none_and_topp_fallback(monkeypatch):
         return {"ok": True}
 
     # Force adapter path
-    monkeypatch.setenv("LLM_ADAPTERS_OPENAI", "1")
     with patch(
         "tldw_Server_API.app.core.LLM_Calls.chat_calls.chat_with_openai",
         _fake_openai,
@@ -57,7 +50,6 @@ def test_openai_shim_streaming_true_single_done(monkeypatch):
         yield "data: [DONE]\n\n"
 
     # Force adapter path
-    monkeypatch.setenv("LLM_ADAPTERS_OPENAI", "1")
     with patch(
         "tldw_Server_API.app.core.LLM_Calls.chat_calls.chat_with_openai",
         _fake_openai,
@@ -83,7 +75,6 @@ def test_anthropic_shim_stop_sequences_mapping(monkeypatch):
         captured.update(kwargs)
         return {"ok": True}
 
-    monkeypatch.setenv("LLM_ADAPTERS_ANTHROPIC", "1")
     with patch(
         "tldw_Server_API.app.core.LLM_Calls.chat_calls.chat_with_anthropic",
         _fake_anthropic,
@@ -110,7 +101,6 @@ def test_groq_shim_logprobs_toplogprobs_forwarding(monkeypatch):
         captured.update(kwargs)
         return {"ok": True}
 
-    monkeypatch.setenv("LLM_ADAPTERS_GROQ", "1")
     with patch(
         "tldw_Server_API.app.core.LLM_Calls.chat_calls.chat_with_groq",
         _fake_groq,
@@ -136,7 +126,6 @@ def test_openrouter_shim_top_k_min_p_forwarding(monkeypatch):
         captured.update(kwargs)
         return {"ok": True}
 
-    monkeypatch.setenv("LLM_ADAPTERS_OPENROUTER", "1")
     with patch(
         "tldw_Server_API.app.core.LLM_Calls.chat_calls.chat_with_openrouter",
         _fake_openrouter,
@@ -164,7 +153,6 @@ def test_google_shim_generation_config_mapping(monkeypatch):
         captured.update(kwargs)
         return {"ok": True}
 
-    monkeypatch.setenv("LLM_ADAPTERS_GOOGLE", "1")
     with patch(
         "tldw_Server_API.app.core.LLM_Calls.chat_calls.chat_with_google",
         _fake_google,
@@ -192,7 +180,6 @@ def test_mistral_shim_random_seed_top_k_safe_prompt(monkeypatch):
         captured.update(kwargs)
         return {"ok": True}
 
-    monkeypatch.setenv("LLM_ADAPTERS_MISTRAL", "1")
     with patch(
         "tldw_Server_API.app.core.LLM_Calls.chat_calls.chat_with_mistral",
         _fake_mistral,
@@ -211,7 +198,7 @@ def test_mistral_shim_random_seed_top_k_safe_prompt(monkeypatch):
         assert captured.get("safe_prompt") is True
 
 
-def test_cohere_shim_uses_adapter_when_flags_disabled(monkeypatch):
+def test_cohere_shim_uses_adapter_registry(monkeypatch):
     from tldw_Server_API.app.core.LLM_Calls import adapter_calls as shims
 
     expected = {"ok": True, "message": "parity"}
@@ -227,8 +214,6 @@ def test_cohere_shim_uses_adapter_when_flags_disabled(monkeypatch):
         def register_adapter(self, name, adapter):
             return None
 
-    monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "0")
-    monkeypatch.setenv("LLM_ADAPTERS_COHERE", "0")
     monkeypatch.setattr(shims, "get_registry", lambda: DummyRegistry())
     resp = shims.cohere_chat_handler(
         input_data=_messages(),
@@ -245,19 +230,16 @@ def test_cohere_shim_uses_adapter_when_flags_disabled(monkeypatch):
         {
             "name": "moonshot",
             "handler": "moonshot_chat_handler",
-            "flag": "LLM_ADAPTERS_MOONSHOT",
             "kwargs": {"input_data": _messages(), "model": "moonshot-test", "api_key": "dummy"},
         },
         {
             "name": "zai",
             "handler": "zai_chat_handler",
-            "flag": "LLM_ADAPTERS_ZAI",
             "kwargs": {"input_data": _messages(), "model": "zai-test", "api_key": "dummy"},
         },
         {
             "name": "local-llm",
             "handler": "local_llm_chat_handler",
-            "flag": "LLM_ADAPTERS_LOCAL_LLM",
             "kwargs": {"input_data": _messages(), "model": "local-test"},
         },
     ],
@@ -285,8 +267,6 @@ def test_shim_uses_adapter_moonshot_zai_local(monkeypatch, provider_case, stream
         def register_adapter(self, name, adapter):
             return None
 
-    monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "0")
-    monkeypatch.setenv(provider_case["flag"], "0")
     monkeypatch.setattr(shims, "get_registry", lambda: DummyRegistry())
     handler = getattr(shims, provider_case["handler"])
     resp = handler(streaming=streaming, **provider_case["kwargs"])

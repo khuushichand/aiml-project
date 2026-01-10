@@ -26,7 +26,7 @@ class TestServiceInitialization:
 
     @pytest.mark.unit
     def test_service_initialization(self, test_db_path):
-        """Test basic service initialization."""
+             """Test basic service initialization."""
         service = NotesInteropService(
             base_db_directory=str(test_db_path.parent),
             api_client_id="test_client"
@@ -40,7 +40,7 @@ class TestServiceInitialization:
 
     @pytest.mark.unit
     def test_service_get_db_for_user(self, mock_notes_service):
-        """Test getting database instance for a user."""
+             """Test getting database instance for a user."""
         service = mock_notes_service
 
         # First call should create instance
@@ -53,14 +53,15 @@ class TestServiceInitialization:
 
     @pytest.mark.unit
     def test_service_thread_safety(self, mock_notes_service):
-        """Test thread-safe database access."""
+             """Test thread-safe database access."""
         service = mock_notes_service
 
         import threading
         results = []
 
         def get_db(user_id):
-            db = service._get_db(user_id)
+
+                     db = service._get_db(user_id)
             results.append(db)
 
         threads = []
@@ -84,7 +85,7 @@ class TestNoteCRUDOperations:
 
     @pytest.mark.unit
     def test_create_note(self, mock_notes_service, sample_note):
-        """Test note creation."""
+             """Test note creation."""
         service = mock_notes_service
 
         note_id = service.create_note(**sample_note)
@@ -98,7 +99,7 @@ class TestNoteCRUDOperations:
 
     @pytest.mark.unit
     def test_get_note(self, mock_notes_service):
-        """Test getting a note."""
+             """Test getting a note."""
         service = mock_notes_service
 
         note = service.get_note(note_id=1, user_id="test_user")
@@ -110,7 +111,7 @@ class TestNoteCRUDOperations:
 
     @pytest.mark.unit
     def test_list_notes(self, mock_notes_service):
-        """Test listing notes."""
+             """Test listing notes."""
         service = mock_notes_service
         mock_db = service._db_instances["test_user"]
 
@@ -127,7 +128,7 @@ class TestNoteCRUDOperations:
 
     @pytest.mark.unit
     def test_update_note(self, mock_notes_service):
-        """Test updating a note."""
+             """Test updating a note."""
         service = mock_notes_service
 
         result = service.update_note(
@@ -143,7 +144,7 @@ class TestNoteCRUDOperations:
 
     @pytest.mark.unit
     def test_delete_note(self, mock_notes_service):
-        """Test deleting a note."""
+             """Test deleting a note."""
         service = mock_notes_service
 
         result = service.delete_note(note_id=1, user_id="test_user")
@@ -160,7 +161,7 @@ class TestKeywordOperations:
 
     @pytest.mark.unit
     def test_create_keyword(self, mock_notes_service, sample_keyword):
-        """Test keyword creation."""
+             """Test keyword creation."""
         service = mock_notes_service
 
         keyword_id = service.create_keyword(**sample_keyword)
@@ -170,7 +171,7 @@ class TestKeywordOperations:
 
     @pytest.mark.unit
     def test_get_keyword(self, mock_notes_service):
-        """Test getting a keyword."""
+             """Test getting a keyword."""
         service = mock_notes_service
 
         keyword = service.get_keyword(keyword_id=1, user_id="test_user")
@@ -181,7 +182,7 @@ class TestKeywordOperations:
 
     @pytest.mark.unit
     def test_list_keywords(self, mock_notes_service):
-        """Test listing keywords."""
+             """Test listing keywords."""
         service = mock_notes_service
         mock_db = service._db_instances["test_user"]
 
@@ -197,7 +198,7 @@ class TestKeywordOperations:
 
     @pytest.mark.unit
     def test_delete_keyword(self, mock_notes_service):
-        """Test deleting a keyword."""
+             """Test deleting a keyword."""
         service = mock_notes_service
 
         result = service.delete_keyword(keyword_id=1, user_id="test_user")
@@ -214,7 +215,7 @@ class TestNoteKeywordLinking:
 
     @pytest.mark.unit
     def test_link_note_keyword(self, mock_notes_service):
-        """Test linking a note to a keyword."""
+             """Test linking a note to a keyword."""
         service = mock_notes_service
 
         result = service.link_note_keyword(
@@ -228,7 +229,7 @@ class TestNoteKeywordLinking:
 
     @pytest.mark.unit
     def test_unlink_note_keyword(self, mock_notes_service):
-        """Test unlinking a note from a keyword."""
+             """Test unlinking a note from a keyword."""
         service = mock_notes_service
 
         result = service.unlink_note_keyword(
@@ -242,7 +243,7 @@ class TestNoteKeywordLinking:
 
     @pytest.mark.unit
     def test_get_keywords_for_note(self, mock_notes_service):
-        """Test getting keywords for a note."""
+             """Test getting keywords for a note."""
         service = mock_notes_service
         mock_db = service._db_instances["test_user"]
 
@@ -258,7 +259,7 @@ class TestNoteKeywordLinking:
 
     @pytest.mark.unit
     def test_get_notes_for_keyword(self, mock_notes_service):
-        """Test getting notes for a keyword."""
+             """Test getting notes for a keyword."""
         service = mock_notes_service
         mock_db = service._db_instances["test_user"]
 
@@ -281,7 +282,7 @@ class TestSearchOperations:
 
     @pytest.mark.unit
     def test_search_notes(self, mock_notes_service):
-        """Test searching notes."""
+             """Test searching notes."""
         service = mock_notes_service
         mock_db = service._db_instances["test_user"]
 
@@ -306,7 +307,7 @@ class TestSearchOperations:
 
     @pytest.mark.unit
     def test_search_keywords(self, mock_notes_service):
-        """Test searching keywords."""
+             """Test searching keywords."""
         service = mock_notes_service
         mock_db = service._db_instances["test_user"]
 
@@ -332,7 +333,7 @@ class TestErrorHandling:
 
     @pytest.mark.unit
     def test_handle_input_error(self, mock_notes_service):
-        """Test handling of input errors."""
+             """Test handling of input errors."""
         service = mock_notes_service
         mock_db = service._db_instances["test_user"]
 
@@ -349,7 +350,7 @@ class TestErrorHandling:
 
     @pytest.mark.unit
     def test_handle_conflict_error(self, mock_notes_service):
-        """Test handling of version conflicts."""
+             """Test handling of version conflicts."""
         service = mock_notes_service
         mock_db = service._db_instances["test_user"]
 
@@ -367,7 +368,7 @@ class TestErrorHandling:
 
     @pytest.mark.unit
     def test_handle_not_found(self, mock_notes_service):
-        """Test handling of not found errors."""
+             """Test handling of not found errors."""
         service = mock_notes_service
         mock_db = service._db_instances["test_user"]
 
@@ -379,7 +380,7 @@ class TestErrorHandling:
 
     @pytest.mark.unit
     def test_handle_database_locked(self, mock_notes_service):
-        """Test handling of database lock errors."""
+             """Test handling of database lock errors."""
         service = mock_notes_service
         mock_db = service._db_instances["test_user"]
 
@@ -403,7 +404,7 @@ class TestUserIsolation:
 
     @pytest.mark.unit
     def test_separate_user_databases(self, mock_notes_service):
-        """Test that different users get different database instances."""
+             """Test that different users get different database instances."""
         service = mock_notes_service
 
         # Mock different databases for different users
@@ -420,7 +421,7 @@ class TestUserIsolation:
 
     @pytest.mark.unit
     def test_user_cannot_access_other_notes(self, mock_notes_service):
-        """Test that users cannot access other users' notes."""
+             """Test that users cannot access other users' notes."""
         service = mock_notes_service
 
         # Create note as user1
@@ -446,7 +447,7 @@ class TestConnectionManagement:
 
     @pytest.mark.unit
     def test_close_user_connection(self, mock_notes_service):
-        """Test closing a user's database connection."""
+             """Test closing a user's database connection."""
         service = mock_notes_service
         mock_db = MagicMock()
         service._db_instances["test_user"] = mock_db
@@ -458,7 +459,7 @@ class TestConnectionManagement:
 
     @pytest.mark.unit
     def test_close_all_connections(self, mock_notes_service):
-        """Test closing all database connections."""
+             """Test closing all database connections."""
         service = mock_notes_service
 
         # Add multiple mock databases
@@ -475,7 +476,7 @@ class TestConnectionManagement:
 
     @pytest.mark.unit
     def test_connection_cleanup_on_error(self, mock_notes_service):
-        """Test connection cleanup when errors occur."""
+             """Test connection cleanup when errors occur."""
         service = mock_notes_service
         mock_db = MagicMock()
         mock_db.close.side_effect = Exception("Close failed")

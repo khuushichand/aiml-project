@@ -27,7 +27,9 @@ def _mk_prompt(client, project_id: int, backend_label: str) -> int:
 
 
 def test_hyperparameter_validation(prompt_studio_dual_backend_client):
-    backend_label, client, db = prompt_studio_dual_backend_client
+
+
+     backend_label, client, db = prompt_studio_dual_backend_client
     pid = _mk_project(client, backend_label)
     prompt_id = _mk_prompt(client, pid, backend_label)
 
@@ -65,7 +67,9 @@ def test_hyperparameter_validation(prompt_studio_dual_backend_client):
 
 
 def test_random_search_trials(prompt_studio_dual_backend_client):
-    backend_label, client, db = prompt_studio_dual_backend_client
+
+
+     backend_label, client, db = prompt_studio_dual_backend_client
     pid = _mk_project(client, backend_label)
     prompt_id = _mk_prompt(client, pid, backend_label)
 
@@ -91,7 +95,9 @@ def test_random_search_trials(prompt_studio_dual_backend_client):
 
 
 def test_beam_search_diversity_rate(prompt_studio_dual_backend_client):
-    backend_label, client, db = prompt_studio_dual_backend_client
+
+
+     backend_label, client, db = prompt_studio_dual_backend_client
     pid = _mk_project(client, backend_label)
     prompt_id = _mk_prompt(client, pid, backend_label)
 

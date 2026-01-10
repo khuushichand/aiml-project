@@ -41,7 +41,8 @@ from tldw_Server_API.app.core.TTS.tts_exceptions import (
 # =====================================================================
 
 def pytest_configure(config):
-    """Register custom markers for test categorization."""
+
+     """Register custom markers for test categorization."""
     config.addinivalue_line("markers", "unit: Unit tests with minimal mocking")
     config.addinivalue_line("markers", "integration: Integration tests with real components")
     config.addinivalue_line("markers", "property: Property-based tests")
@@ -56,7 +57,7 @@ def pytest_configure(config):
 
 @pytest.fixture
 def test_env_vars(monkeypatch):
-    """Set up test environment variables without polluting global state."""
+     """Set up test environment variables without polluting global state."""
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("TTS_DEFAULT_PROVIDER", "openai")
     monkeypatch.setenv("TTS_DEFAULT_MODEL", "tts-1")
@@ -72,7 +73,7 @@ def test_env_vars(monkeypatch):
 
 @pytest.fixture
 def sample_audio_bytes() -> bytes:
-    """Generate sample audio bytes for testing."""
+     """Generate sample audio bytes for testing."""
     # Create a simple sine wave audio
     sample_rate = 24000
     duration = 1.0  # 1 second
@@ -96,14 +97,14 @@ def sample_audio_bytes() -> bytes:
 
 @pytest.fixture
 def sample_mp3_bytes() -> bytes:
-    """Generate sample MP3 bytes (mock)."""
+     """Generate sample MP3 bytes (mock)."""
     # For testing, return a minimal MP3 header
     # Real MP3 generation would require an encoder
     return b'ID3\x04\x00\x00\x00\x00\x00\x00' + b'\x00' * 1024
 
 @pytest.fixture
 def streaming_audio_generator():
-    """Factory for streaming audio chunks."""
+     """Factory for streaming audio chunks."""
 
     class _StreamingFactory:
         def __init__(self, default_total: int = 4096, default_chunk: int = 1024) -> None:
@@ -121,7 +122,8 @@ def streaming_audio_generator():
             return _generator()
 
         def __aiter__(self):
-            return self().__call__()
+
+                     return self().__call__()
 
     return _StreamingFactory()
 
@@ -131,7 +133,7 @@ def streaming_audio_generator():
 
 @pytest.fixture
 def basic_tts_request() -> TTSRequest:
-    """Basic TTS request object."""
+     """Basic TTS request object."""
     return TTSRequest(
         text="Hello, this is a test.",
         voice="alloy",
@@ -142,7 +144,7 @@ def basic_tts_request() -> TTSRequest:
 
 @pytest.fixture
 def advanced_tts_request() -> TTSRequest:
-    """Advanced TTS request with all settings."""
+     """Advanced TTS request with all settings."""
     return TTSRequest(
         text="This is a more complex test with various settings.",
         voice="nova",
@@ -159,7 +161,7 @@ def advanced_tts_request() -> TTSRequest:
 
 @pytest.fixture
 def long_text_request() -> TTSRequest:
-    """TTS request with long text for chunking tests."""
+     """TTS request with long text for chunking tests."""
     long_text = " ".join([f"Sentence number {i}." for i in range(100)])
     return TTSRequest(
         text=long_text,
@@ -171,7 +173,7 @@ def long_text_request() -> TTSRequest:
 
 @pytest.fixture
 def mock_tts_response(sample_audio_bytes) -> TTSResponse:
-    """Mock TTS response object."""
+     """Mock TTS response object."""
     return TTSResponse(
         audio_content=sample_audio_bytes,
         format=AudioFormat.WAV,
@@ -191,7 +193,7 @@ def mock_tts_response(sample_audio_bytes) -> TTSResponse:
 
 @pytest.fixture
 def provider_configs():
-    """Configuration for different TTS providers."""
+     """Configuration for different TTS providers."""
     return {
         "openai": {
             "api_key": "test-openai-key",
@@ -215,7 +217,7 @@ def provider_configs():
 
 @pytest.fixture
 def openai_config():
-    """OpenAI TTS provider configuration."""
+     """OpenAI TTS provider configuration."""
     return {
         "api_key": "test-openai-key",
         "base_url": "https://api.openai.com/v1",
@@ -231,7 +233,7 @@ def openai_config():
 
 @pytest.fixture
 def mock_openai_adapter():
-    """Mock OpenAI TTS adapter."""
+     """Mock OpenAI TTS adapter."""
     adapter = MagicMock()
     adapter.provider = "openai"
     adapter.is_available = True
@@ -255,13 +257,14 @@ def mock_openai_adapter():
 
 @pytest.fixture
 def mock_adapter_factory():
-    """Mock adapter factory."""
+     """Mock adapter factory."""
     factory = MagicMock()
 
     adapters = {}
 
     def get_adapter(provider):
-        if provider not in adapters:
+
+             if provider not in adapters:
             adapter = MagicMock()
             adapter.provider = provider
             adapter.is_available = True
@@ -313,7 +316,7 @@ async def real_tts_service():
 
 @pytest.fixture
 def mock_circuit_breaker():
-    """Mock circuit breaker for testing."""
+     """Mock circuit breaker for testing."""
     breaker = MagicMock()
     breaker.is_open = False
     breaker.call = AsyncMock(side_effect=lambda func, *args, **kwargs: func(*args, **kwargs))
@@ -329,7 +332,7 @@ def mock_circuit_breaker():
 
 @pytest.fixture
 def mock_resource_manager():
-    """Mock resource manager for testing."""
+     """Mock resource manager for testing."""
     manager = MagicMock()
     manager.check_resources = AsyncMock(return_value=True)
     manager.allocate_resources = AsyncMock(return_value=True)
@@ -345,7 +348,7 @@ def mock_resource_manager():
 
 @pytest.fixture
 def valid_requests():
-    """Collection of valid TTS requests."""
+     """Collection of valid TTS requests."""
     return [
         {"text": "Simple text", "voice": "alloy"},
         {"text": "Text with settings", "voice": "nova", "speed": 1.2},
@@ -355,7 +358,7 @@ def valid_requests():
 
 @pytest.fixture
 def invalid_requests():
-    """Collection of invalid TTS requests."""
+     """Collection of invalid TTS requests."""
     return [
         {},  # Missing required fields
         {"text": ""},  # Empty text
@@ -371,7 +374,7 @@ def invalid_requests():
 
 @pytest.fixture
 def test_client(test_env_vars, bypass_api_limits):
-    """Create a test client for the FastAPI app with auth override."""
+     """Create a test client for the FastAPI app with auth override."""
     from tldw_Server_API.app.main import app
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 
@@ -387,7 +390,7 @@ def test_client(test_env_vars, bypass_api_limits):
 
 @pytest.fixture
 def auth_headers():
-    """Authentication headers for API requests."""
+     """Authentication headers for API requests."""
     return {
         "Authorization": "Bearer test-api-key",
         "Content-Type": "application/json"
@@ -399,7 +402,7 @@ def auth_headers():
 
 @pytest.fixture
 def tts_errors():
-    """Collection of TTS errors for testing."""
+     """Collection of TTS errors for testing."""
     return {
         "rate_limit": TTSRateLimitError("Rate limit exceeded", retry_after=60),
         "generation": TTSGenerationError("Failed to generate audio"),
@@ -413,14 +416,14 @@ def tts_errors():
 
 @pytest.fixture
 def test_audio_dir() -> Generator[Path, None, None]:
-    """Create a temporary directory for test audio files."""
+     """Create a temporary directory for test audio files."""
     with tempfile.TemporaryDirectory() as temp_dir:
         audio_dir = Path(temp_dir)
         yield audio_dir
 
 @pytest.fixture
 def test_audio_file(test_audio_dir, sample_audio_bytes) -> Path:
-    """Create a test audio file."""
+     """Create a test audio file."""
     audio_path = test_audio_dir / "test_audio.wav"
     audio_path.write_bytes(sample_audio_bytes)
     return audio_path
@@ -431,7 +434,7 @@ def test_audio_file(test_audio_dir, sample_audio_bytes) -> Path:
 
 @pytest.fixture(autouse=True)
 def cleanup_after_test():
-    """Cleanup after each test."""
+     """Cleanup after each test."""
     yield
     # Any cleanup code here
     import gc

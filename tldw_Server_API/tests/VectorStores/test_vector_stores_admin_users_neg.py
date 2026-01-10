@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
 @pytest.fixture(autouse=True)
 def testing_env(monkeypatch, tmp_path):
-    os.environ['TESTING'] = 'true'
+     os.environ['TESTING'] = 'true'
     from tldw_Server_API.app.core import config as cfg
     monkeypatch.setitem(cfg.settings, 'USER_DB_BASE_DIR', tmp_path)
     yield
@@ -19,7 +19,9 @@ def testing_env(monkeypatch, tmp_path):
 
 
 def test_admin_users_403_for_non_admin():
-    async def override_user():
+
+
+     async def override_user():
         return User(id=3, username='user', email='u@e.com', is_active=True, is_admin=False)
     async def override_principal():
         return AuthPrincipal(

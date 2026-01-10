@@ -7,7 +7,9 @@ from fastapi.testclient import TestClient
 
 
 def test_jobs_events_sse_sqlite_smoke(monkeypatch):
-    # Guard against environments where SSE streaming is unreliable (CI/sandbox)
+
+
+     # Guard against environments where SSE streaming is unreliable (CI/sandbox)
     if os.getenv("CI") or str(os.getenv("TLDW_TEST_NO_SSE", "")).strip().lower() in {"1", "true", "yes", "on"}:
         pytest.skip("Skipping SSE smoke test in CI/sandbox environment")
     # Configure minimal app and SQLite jobs DB in a temp path

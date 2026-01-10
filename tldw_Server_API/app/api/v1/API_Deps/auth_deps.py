@@ -379,9 +379,15 @@ async def get_session_manager_dep() -> SessionManager:
 
                 async def store_ephemeral_value(self, key: str, value: str, ttl_seconds: int) -> None:
                     ttl = max(int(ttl_seconds), 1)
-                    expires_at = time.monotonic() + ttl
+                    now = time.monotonic()
+                    expires_at = now + ttl
                     with _TEST_EPHEMERAL_STATE_GUARD:
-                        _TEST_EPHEMERAL_STATE["values"][key] = (value, expires_at)
+                        # Opportunistic pruning to keep long-running test suites bounded.
+                        values = _TEST_EPHEMERAL_STATE["values"]
+                        for k, (_v, exp) in list(values.items()):
+                            if exp <= now:
+                                values.pop(k, None)
+                        values[key] = (value, expires_at)
 
                 async def get_ephemeral_value(self, key: str) -> Optional[str]:
                     now = time.monotonic()
@@ -1271,18 +1277,16 @@ async def get_optional_current_user(
 
 def _rg_enabled_for_request(request: Request) -> bool:
     state = getattr(request, "state", None)
-    if state is not None and getattr(state, "rg_policy_id", None):
-        return True
-    from tldw_Server_API.app.core.config import rg_enabled
-    return bool(rg_enabled(False))
+    return bool(state is not None and getattr(state, "rg_policy_id", None))
 
 
 async def check_rate_limit(request: Request) -> None:
     """
     RG-first rate limit dependency with legacy fallback.
 
-    When Resource Governor (RG) is enabled, this is a no-op. Otherwise it uses
-    the legacy AuthNZ rate limiter (user-scoped when available, else IP-scoped).
+    When Resource Governor (RG) has already governed this request, this is a
+    no-op. Otherwise it uses the legacy AuthNZ rate limiter (user-scoped when
+    available, else IP-scoped).
     """
     # TODO(Q2-2026): remove legacy fallback after RG enabled in all production environments; track via metrics.record_rate_limit_fallback().
     if _rg_enabled_for_request(request):
@@ -1294,6 +1298,8 @@ async def check_rate_limit(request: Request) -> None:
 
     try:
         rate_limiter = get_rate_limiter()
+    except asyncio.CancelledError:
+        raise
     except Exception as exc:
         metrics.record_rate_limit_fallback()
         logger.warning(
@@ -1323,6 +1329,8 @@ async def check_rate_limit(request: Request) -> None:
                 limit=settings.RATE_LIMIT_PER_MINUTE,
                 window_minutes=1,
             )
+    except asyncio.CancelledError:
+        raise
     except Exception as exc:
         metrics.record_rate_limit_fallback()
         logger.warning(
@@ -1351,6 +1359,8 @@ async def check_auth_rate_limit(request: Request) -> None:
 
     try:
         rate_limiter = get_rate_limiter()
+    except asyncio.CancelledError:
+        raise
     except Exception as exc:
         metrics.record_rate_limit_fallback()
         logger.warning(
@@ -1371,6 +1381,8 @@ async def check_auth_rate_limit(request: Request) -> None:
             limit=settings.RATE_LIMIT_PER_MINUTE,
             window_minutes=1,
         )
+    except asyncio.CancelledError:
+        raise
     except Exception as exc:
         metrics.record_rate_limit_fallback()
         logger.warning(
@@ -1630,7 +1642,7 @@ def require_token_scope(
                                     raise HTTPException(status_code=403, detail="Forbidden: token quota exceeded")
                             except HTTPException:
                                 raise
-                            except Exception as err:  # noqa: BLE001
+                            except Exception as err:
                                 # Defensive: fall back to process-local counters if quota backend fails.
                                 cur = int(_VK_USAGE.get(key, 0))
                                 if cur >= int(max_calls):
@@ -1736,7 +1748,7 @@ def require_token_scope(
                                         raise HTTPException(status_code=403, detail="Forbidden: API key quota exceeded")
                                 except HTTPException:
                                     raise
-                                except Exception as err:  # noqa: BLE001
+                                except Exception as err:
                                     # Defensive: fall back to process-local counters if quota backend fails.
                                     key = (f"apikey:{key_id}", str(count_as))
                                     cur = int(_VK_USAGE.get(key, 0))

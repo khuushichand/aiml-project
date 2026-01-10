@@ -5,7 +5,7 @@ from tldw_Server_API.app.main import app
 
 @pytest.mark.unit
 def test_batch_endpoint_adds_rate_headers(disable_heavy_startup, admin_user, monkeypatch, test_client):
-    # Patch backpressure/quotas checker to inject rate limit state
+     # Patch backpressure/quotas checker to inject rate limit state
     import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as emb_mod
 
     async def _stub_check(request, user):

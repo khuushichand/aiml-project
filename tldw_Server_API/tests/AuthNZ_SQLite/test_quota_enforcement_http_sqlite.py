@@ -6,17 +6,23 @@ from fastapi.testclient import TestClient
 
 
 def _jwt_service():
-    from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
+
+
+     from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
     return get_jwt_service()
 
 
 def _app():
-    from tldw_Server_API.app.main import app
+
+
+     from tldw_Server_API.app.main import app
     return app
 
 
 def _chat_stub_response():
-    return {
+
+
+     return {
         "id": "chatcmpl-test",
         "object": "chat.completion",
         "created": 1234567890,

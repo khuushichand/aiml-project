@@ -6,7 +6,7 @@ from tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_manager import
 
 class _StubMetricsManager:
     def __init__(self):
-        self.set_gauge_calls = []  # tuples: (name, value, labels)
+             self.set_gauge_calls = []  # tuples: (name, value, labels)
         self.observe_calls = []    # tuples: (name, value, labels)
 
     def set_gauge(self, name: str, value: float, labels=None):
@@ -18,7 +18,7 @@ class _StubMetricsManager:
 
 class _StubMetrics:
     def __init__(self):
-        self.metrics_manager = _StubMetricsManager()
+             self.metrics_manager = _StubMetricsManager()
         self.queued_updates = []  # tuples: (job_type, queued_count)
 
     def update_job_queue_size(self, job_type: str, queued_count: int):

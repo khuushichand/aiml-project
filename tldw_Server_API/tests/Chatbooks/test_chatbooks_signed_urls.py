@@ -11,7 +11,7 @@ from tldw_Server_API.app.main import app
 
 @pytest.fixture(scope="module")
 def client():
-    with TestClient(app) as c:
+     with TestClient(app) as c:
         yield c
 
 
@@ -32,7 +32,9 @@ def _make_export_payload(async_mode: bool = False):
 
 
 def test_signed_download_happy_path(client, monkeypatch):
-    # Enable signed URLs
+
+
+     # Enable signed URLs
     monkeypatch.setenv("CHATBOOKS_SIGNED_URLS", "true")
     monkeypatch.setenv("CHATBOOKS_SIGNING_SECRET", "secret123")
     monkeypatch.setenv("CHATBOOKS_ENFORCE_EXPIRY", "true")
@@ -55,7 +57,9 @@ def test_signed_download_happy_path(client, monkeypatch):
 
 
 def test_signed_download_invalid_token(client, monkeypatch):
-    monkeypatch.setenv("CHATBOOKS_SIGNED_URLS", "true")
+
+
+     monkeypatch.setenv("CHATBOOKS_SIGNED_URLS", "true")
     monkeypatch.setenv("CHATBOOKS_SIGNING_SECRET", "secret123")
     monkeypatch.setenv("CHATBOOKS_ENFORCE_EXPIRY", "true")
     monkeypatch.setenv("CHATBOOKS_URL_TTL_SECONDS", "3600")
@@ -81,7 +85,9 @@ def test_signed_download_invalid_token(client, monkeypatch):
 
 
 def test_signed_download_expired_exp_param(client, monkeypatch):
-    monkeypatch.setenv("CHATBOOKS_SIGNED_URLS", "true")
+
+
+     monkeypatch.setenv("CHATBOOKS_SIGNED_URLS", "true")
     monkeypatch.setenv("CHATBOOKS_SIGNING_SECRET", "secret123")
     monkeypatch.setenv("CHATBOOKS_ENFORCE_EXPIRY", "true")
     monkeypatch.setenv("CHATBOOKS_URL_TTL_SECONDS", "3600")

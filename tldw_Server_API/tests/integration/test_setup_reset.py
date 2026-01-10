@@ -8,7 +8,9 @@ from starlette.requests import Request
 
 
 def test_admin_reset_calls_reset_flags(mocker):
-    app = FastAPI()
+
+
+     app = FastAPI()
     app.include_router(setup_endpoint.router, prefix="/api/v1")
 
     # Override claim-first principal dependency to present an admin principal
@@ -41,7 +43,7 @@ def test_admin_reset_calls_reset_flags(mocker):
 
     called = {"count": 0}
     def fake_reset():
-        called["count"] += 1
+             called["count"] += 1
 
     mocker.patch.object(setup_endpoint.setup_manager, "reset_setup_flags", side_effect=fake_reset)
 

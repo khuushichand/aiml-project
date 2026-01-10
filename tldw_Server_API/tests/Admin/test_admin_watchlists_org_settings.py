@@ -12,7 +12,9 @@ pytestmark = pytest.mark.integration
 
 
 def test_admin_update_org_watchlists_settings(monkeypatch, tmp_path, authnz_schema_ready_sync):
-    # Isolate AuthNZ DB and enable TEST_MODE
+
+
+     # Isolate AuthNZ DB and enable TEST_MODE
     base_dir = tmp_path / "test_admin_org_settings"
     base_dir.mkdir(parents=True, exist_ok=True)
     db_path = base_dir / "authnz_admin.db"
@@ -113,7 +115,9 @@ def test_admin_update_org_watchlists_settings(monkeypatch, tmp_path, authnz_sche
 
 
 def test_admin_create_org_conflict_returns_409(monkeypatch, tmp_path, authnz_schema_ready_sync):
-    # Isolate DB; verify second creation conflicts
+
+
+     # Isolate DB; verify second creation conflicts
     base_dir = tmp_path / "test_admin_org_settings_conflict"
     base_dir.mkdir(parents=True, exist_ok=True)
     db_path = base_dir / "authnz_admin_conflict.db"
@@ -171,7 +175,9 @@ def test_admin_create_org_conflict_returns_409(monkeypatch, tmp_path, authnz_sch
 
 
 def test_admin_watchlists_org_settings_404(monkeypatch, authnz_schema_ready_sync):
-    # Isolate DB
+
+
+     # Isolate DB
     base_dir = Path.cwd() / "Databases" / "test_admin_org_settings_404"
     base_dir.mkdir(parents=True, exist_ok=True)
     db_path = base_dir / "authnz_admin_404.db"

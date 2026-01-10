@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture()
 def llamacpp_client() -> Tuple[TestClient, dict]:
-    os.environ.setdefault("AUTH_MODE", "single_user")
+     os.environ.setdefault("AUTH_MODE", "single_user")
     os.environ.setdefault("TESTING", "true")
     # Enable llamacpp router
     cur = os.getenv("ROUTES_ENABLE", "")
@@ -26,14 +26,14 @@ def llamacpp_client() -> Tuple[TestClient, dict]:
 
 @pytest.mark.integration
 def test_llamacpp_inference_happy_path(llamacpp_client, monkeypatch):
-    client, headers = llamacpp_client
+     client, headers = llamacpp_client
 
     # Patch llm_manager on the endpoint module
     class _Mgr:
         llamacpp = True
         class _Logger:
             def error(self, *a, **kw):
-                pass
+                             pass
         logger = _Logger()
         async def get_server_status(self, backend: str):
             return {"backend": backend, "model": "mock.gguf"}

@@ -27,7 +27,7 @@ _ALLOWED_NAME_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01234
 
 @composite
 def valid_message_content(draw):
-    """Generate valid message content."""
+     """Generate valid message content."""
     return draw(st.one_of(
         st.text(min_size=1, max_size=1000),  # Regular text
         st.text(min_size=0, max_size=0).map(lambda _: " "),  # Single space
@@ -36,12 +36,12 @@ def valid_message_content(draw):
 
 @composite
 def valid_role(draw):
-    """Generate valid message roles."""
+     """Generate valid message roles."""
     return draw(st.sampled_from(["system", "user", "assistant"]))
 
 @composite
 def valid_message(draw):
-    """Generate a valid message dictionary."""
+     """Generate a valid message dictionary."""
     role = draw(valid_role())
     content = draw(valid_message_content())
     message = {"role": role, "content": content}
@@ -55,7 +55,7 @@ def valid_message(draw):
 
 @composite
 def valid_message_list(draw, min_size=1, max_size=10):
-    """Generate a valid list of messages."""
+     """Generate a valid list of messages."""
     messages = draw(st.lists(valid_message(), min_size=min_size, max_size=max_size))
 
     # Ensure at least one user message
@@ -67,12 +67,12 @@ def valid_message_list(draw, min_size=1, max_size=10):
 
 @composite
 def valid_temperature(draw):
-    """Generate valid temperature values."""
+     """Generate valid temperature values."""
     return draw(st.floats(min_value=0.0, max_value=2.0))
 
 @composite
 def valid_max_tokens(draw):
-    """Generate valid max_tokens values."""
+     """Generate valid max_tokens values."""
     return draw(st.one_of(
         st.none(),  # Optional parameter
         st.integers(min_value=1, max_value=4096)
@@ -88,7 +88,7 @@ class TestMessageRoleInvariants:
     @pytest.mark.property
     @given(messages=valid_message_list())
     def test_role_preservation(self, messages):
-        """Property: Message roles are preserved through processing."""
+             """Property: Message roles are preserved through processing."""
         request = ChatCompletionRequest(
             model="gpt-3.5-turbo",
             messages=messages
@@ -101,7 +101,7 @@ class TestMessageRoleInvariants:
     @pytest.mark.property
     @given(messages=valid_message_list())
     def test_role_constraints(self, messages):
-        """Property: Only valid roles are accepted."""
+             """Property: Only valid roles are accepted."""
         request = ChatCompletionRequest(
             model="gpt-3.5-turbo",
             messages=messages
@@ -114,7 +114,7 @@ class TestMessageRoleInvariants:
     @pytest.mark.property
     @given(messages=valid_message_list(min_size=2, max_size=10))
     def test_conversation_flow_validity(self, messages):
-        """Property: Conversation flow follows valid patterns."""
+             """Property: Conversation flow follows valid patterns."""
         request = ChatCompletionRequest(
             model="gpt-3.5-turbo",
             messages=messages
@@ -139,7 +139,7 @@ class TestMessageContentInvariants:
     @pytest.mark.property
     @given(content=valid_message_content())
     def test_content_preservation(self, content):
-        """Property: Message content is preserved exactly."""
+             """Property: Message content is preserved exactly."""
         msg = ChatCompletionUserMessageParam(
             role="user",
             content=content
@@ -149,7 +149,7 @@ class TestMessageContentInvariants:
     @pytest.mark.property
     @given(messages=valid_message_list())
     def test_content_never_null(self, messages):
-        """Property: Message content is never null after validation."""
+             """Property: Message content is never null after validation."""
         request = ChatCompletionRequest(
             model="gpt-3.5-turbo",
             messages=messages
@@ -164,7 +164,7 @@ class TestMessageContentInvariants:
         role=valid_role()
     )
     def test_content_length_handling(self, content, role):
-        """Property: Any length content is accepted (within reasonable bounds)."""
+             """Property: Any length content is accepted (within reasonable bounds)."""
         if role == "system":
             msg = ChatCompletionSystemMessageParam(role=role, content=content)
         elif role == "user":
@@ -177,7 +177,7 @@ class TestMessageContentInvariants:
     @pytest.mark.property
     @given(special_chars=st.text(alphabet=st.characters(categories=["Cc", "Cf", "Co", "Cs"])))
     def test_special_character_handling(self, special_chars):
-        """Property: Special/control characters are handled safely."""
+             """Property: Special/control characters are handled safely."""
         msg = ChatCompletionUserMessageParam(
             role="user",
             content=f"Message with special chars: {special_chars}"
@@ -199,7 +199,7 @@ class TestRequestStructureInvariants:
         max_tokens=valid_max_tokens()
     )
     def test_request_completeness(self, messages, temperature, max_tokens):
-        """Property: Valid requests always have required fields."""
+             """Property: Valid requests always have required fields."""
         request = ChatCompletionRequest(
             model="gpt-3.5-turbo",
             messages=messages,
@@ -215,7 +215,7 @@ class TestRequestStructureInvariants:
     @pytest.mark.property
     @given(messages=valid_message_list(min_size=1, max_size=100))
     def test_message_count_preservation(self, messages):
-        """Property: Message count is preserved."""
+             """Property: Message count is preserved."""
         request = ChatCompletionRequest(
             model="gpt-3.5-turbo",
             messages=messages
@@ -226,7 +226,7 @@ class TestRequestStructureInvariants:
     @pytest.mark.property
     @given(messages=valid_message_list())
     def test_message_order_preservation(self, messages):
-        """Property: Message order is preserved."""
+             """Property: Message order is preserved."""
         request = ChatCompletionRequest(
             model="gpt-3.5-turbo",
             messages=messages
@@ -246,7 +246,7 @@ class TestParameterBoundaryInvariants:
     @pytest.mark.property
     @given(temperature=st.floats(min_value=0.0, max_value=2.0, allow_nan=False))
     def test_temperature_bounds_invariant(self, temperature):
-        """Property: Temperature is always within valid bounds."""
+             """Property: Temperature is always within valid bounds."""
         request = ChatCompletionRequest(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "test"}],
@@ -258,7 +258,7 @@ class TestParameterBoundaryInvariants:
     @pytest.mark.property
     @given(n=st.integers(min_value=1, max_value=128))
     def test_n_parameter_bounds(self, n):
-        """Property: n parameter is always within valid bounds."""
+             """Property: n parameter is always within valid bounds."""
         request = ChatCompletionRequest(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "test"}],
@@ -273,7 +273,7 @@ class TestParameterBoundaryInvariants:
         presence_penalty=st.floats(min_value=-2.0, max_value=2.0, allow_nan=False)
     )
     def test_penalty_bounds(self, frequency_penalty, presence_penalty):
-        """Property: Penalty parameters are within bounds."""
+             """Property: Penalty parameters are within bounds."""
         request = ChatCompletionRequest(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "test"}],
@@ -294,7 +294,7 @@ class TestSerializationInvariants:
     @pytest.mark.property
     @given(messages=valid_message_list())
     def test_json_round_trip(self, messages):
-        """Property: Messages survive JSON round-trip."""
+             """Property: Messages survive JSON round-trip."""
         request = ChatCompletionRequest(
             model="gpt-3.5-turbo",
             messages=messages
@@ -314,7 +314,7 @@ class TestSerializationInvariants:
     @pytest.mark.property
     @given(messages=valid_message_list())
     def test_json_serialization_always_valid(self, messages):
-        """Property: Serialization always produces valid JSON."""
+             """Property: Serialization always produces valid JSON."""
         request = ChatCompletionRequest(
             model="gpt-3.5-turbo",
             messages=messages
@@ -340,7 +340,7 @@ class TestErrorHandlingInvariants:
     @pytest.mark.property
     @given(invalid_role=st.text(min_size=1, max_size=20).filter(lambda x: x not in ["system", "user", "assistant", "tool"]))
     def test_invalid_role_always_rejected(self, invalid_role):
-        """Property: Invalid roles are always rejected."""
+             """Property: Invalid roles are always rejected."""
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError):
@@ -357,7 +357,7 @@ class TestErrorHandlingInvariants:
         max_size=5
     ), min_size=1, max_size=5))
     def test_malformed_messages_handled_gracefully(self, messages):
-        """Property: Malformed messages are handled gracefully."""
+             """Property: Malformed messages are handled gracefully."""
         # Ensure messages don't accidentally have correct structure
         assume(not all("role" in msg and "content" in msg for msg in messages))
 

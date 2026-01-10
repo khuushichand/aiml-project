@@ -100,7 +100,7 @@ async def test_rg_capabilities_endpoint_redis_stub(monkeypatch, tmp_path):
 
     class _DummyLoader:
         def get_policy(self, _pid):
-            # Allow the diag capabilities request even if RG middleware is active
+                     # Allow the diag capabilities request even if RG middleware is active
             # and reuses a cached route_map from earlier tests.
             return {"requests": {"rpm": 120, "burst": 1.0}}
 

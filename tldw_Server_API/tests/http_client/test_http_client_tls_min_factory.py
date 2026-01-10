@@ -5,7 +5,9 @@ pytestmark = pytest.mark.unit
 
 
 def test_create_client_applies_min_tls(monkeypatch):
-    import ssl
+
+
+     import ssl
     import tldw_Server_API.app.core.http_client as hc
 
     captured = {}
@@ -14,12 +16,12 @@ def test_create_client_applies_min_tls(monkeypatch):
         captured.update(kwargs)
         class Dummy:
             def close(self):
-                pass
+                             pass
         return Dummy()
 
     class FakeCtx:
         def __init__(self):
-            self.minimum_version = None
+                     self.minimum_version = None
 
     def fake_create_default_context(*args, **kwargs):  # noqa: ARG001
         return FakeCtx()
@@ -49,7 +51,7 @@ async def test_create_async_client_applies_min_tls(monkeypatch):
 
     class FakeCtx:
         def __init__(self):
-            self.minimum_version = None
+                     self.minimum_version = None
 
     def fake_create_default_context(*args, **kwargs):  # noqa: ARG001
         return FakeCtx()

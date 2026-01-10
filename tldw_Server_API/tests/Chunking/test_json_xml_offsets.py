@@ -2,7 +2,9 @@ from tldw_Server_API.app.core.Chunking import Chunker
 
 
 def test_chunk_with_metadata_json_offsets_match_source():
-    text = '{ "data": [ {"a": 1}, {"b": 2} ], "meta": "x" }'
+
+
+     text = '{ "data": [ {"a": 1}, {"b": 2} ], "meta": "x" }'
     chunker = Chunker()
 
     results = chunker.chunk_text_with_metadata(
@@ -20,7 +22,9 @@ def test_chunk_with_metadata_json_offsets_match_source():
 
 
 def test_chunk_with_metadata_xml_offsets_match_source():
-    text = "<root><a>Alpha one</a><b>Beta two</b></root>"
+
+
+     text = "<root><a>Alpha one</a><b>Beta two</b></root>"
     chunker = Chunker()
 
     results = chunker.chunk_text_with_metadata(

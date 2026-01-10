@@ -129,6 +129,7 @@ class TestMediaUpdatePropagation:
             cleanup_test_file(path)
 
     def test_safe_metadata_patch_and_metadata_search_normalization(self, api_client, data_tracker):
+
         """PATCH safe_metadata with DOI and verify metadata-search normalization indexes correctly."""
         token = f"META_TOKEN_{uuid.uuid4().hex[:6]}"
         path = create_test_file(f"Paper content for metadata normalization {token}")
@@ -183,6 +184,7 @@ class TestMediaUpdatePropagation:
             cleanup_test_file(path)
 
     def test_delete_last_active_version_returns_400_and_media_remains_searchable(self, api_client, data_tracker):
+
         """Deleting the only active version should return 400 and item should remain searchable."""
         token = f"DEL_LAST_VER_{uuid.uuid4().hex[:6]}"
         path = create_test_file(f"This document contains {token} and has one version only.")

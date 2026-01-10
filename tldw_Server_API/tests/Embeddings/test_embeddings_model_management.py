@@ -16,7 +16,7 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPri
 
 @pytest.fixture
 def restore_embedding_settings():
-    snapshot = {
+     snapshot = {
         "EMBEDDING_CONFIG": copy.deepcopy(settings.get("EMBEDDING_CONFIG")),
         "ALLOWED_EMBEDDING_PROVIDERS": copy.deepcopy(settings.get("ALLOWED_EMBEDDING_PROVIDERS")),
         "ALLOWED_EMBEDDING_MODELS": copy.deepcopy(settings.get("ALLOWED_EMBEDDING_MODELS")),
@@ -30,13 +30,17 @@ def restore_embedding_settings():
 
 
 def _client():
-    c = TestClient(app)
+
+
+     c = TestClient(app)
     c.cookies.set("csrf_token", "test-csrf")
     return c
 
 
 def _csrf_headers():
-    return {"X-CSRF-Token": "test-csrf"}
+
+
+     return {"X-CSRF-Token": "test-csrf"}
 
 
 class _DummyUser:
@@ -84,7 +88,9 @@ def _principal_override(user_id: int, is_admin: bool):
 
 
 def test_list_models_exposes_defaults_and_policy(restore_embedding_settings):
-    os.environ["TESTING"] = "true"
+
+
+     os.environ["TESTING"] = "true"
     try:
         # Configure defaults and allowlists
         cfg = copy.deepcopy(settings.get("EMBEDDING_CONFIG", {}) or {})
@@ -111,7 +117,9 @@ def test_list_models_exposes_defaults_and_policy(restore_embedding_settings):
 
 
 def test_warmup_requires_admin_and_invokes_backend(restore_embedding_settings):
-    os.environ["TESTING"] = "true"
+
+
+     os.environ["TESTING"] = "true"
     try:
         # Allow model
         settings["ALLOWED_EMBEDDING_PROVIDERS"] = ["openai"]
@@ -153,7 +161,9 @@ def test_warmup_requires_admin_and_invokes_backend(restore_embedding_settings):
 
 
 def test_download_requires_admin_and_invokes_backend(restore_embedding_settings):
-    os.environ["TESTING"] = "true"
+
+
+     os.environ["TESTING"] = "true"
     try:
         # Allow model
         settings["ALLOWED_EMBEDDING_PROVIDERS"] = ["huggingface", "openai"]
@@ -176,7 +186,9 @@ def test_download_requires_admin_and_invokes_backend(restore_embedding_settings)
 
 
 def test_warmup_rejects_disallowed_provider_and_model(restore_embedding_settings):
-    os.environ["TESTING"] = "true"
+
+
+     os.environ["TESTING"] = "true"
     try:
         # Only allow huggingface, and only specific HF model
         settings["ALLOWED_EMBEDDING_PROVIDERS"] = ["huggingface"]
@@ -202,7 +214,9 @@ def test_warmup_rejects_disallowed_provider_and_model(restore_embedding_settings
 
 
 def test_download_rejects_disallowed_provider_and_model(restore_embedding_settings):
-    os.environ["TESTING"] = "true"
+
+
+     os.environ["TESTING"] = "true"
     try:
         # Only allow openai and a specific openai model
         settings["ALLOWED_EMBEDDING_PROVIDERS"] = ["openai"]
@@ -228,7 +242,9 @@ def test_download_rejects_disallowed_provider_and_model(restore_embedding_settin
 
 
 def test_list_models_reflects_disallowed_models(restore_embedding_settings):
-    os.environ["TESTING"] = "true"
+
+
+     os.environ["TESTING"] = "true"
     try:
         # Disallow text-embedding-3-small specifically
         settings["ALLOWED_EMBEDDING_PROVIDERS"] = ["openai"]

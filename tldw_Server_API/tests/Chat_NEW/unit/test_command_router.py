@@ -79,7 +79,9 @@ async def test_rbac_enforcement(monkeypatch):
 
 
 def test_dispatch_command_removed_raises():
-    ctx = command_router.CommandContext(user_id="legacy")
+
+
+     ctx = command_router.CommandContext(user_id="legacy")
     with pytest.raises(RuntimeError):
         command_router.dispatch_command(ctx, "time", None)
 

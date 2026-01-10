@@ -7,7 +7,9 @@ from tldw_Server_API.app.core.Character_Chat.modules.character_io import import_
 
 
 def test_ccv3_validate_and_parse_happy_path():
-    card = {
+
+
+     card = {
         "spec": "chara_card_v3",
         "spec_version": "3.0",
         "data": {
@@ -34,7 +36,9 @@ def test_ccv3_validate_and_parse_happy_path():
 
 
 def test_ccv3_missing_required_fields_returns_none():
-    card = {
+
+
+     card = {
         "spec": "chara_card_v3",
         "spec_version": "3.0",
         "data": {
@@ -53,7 +57,7 @@ def test_ccv3_missing_required_fields_returns_none():
 
 @pytest.mark.parametrize("image_key", ["char_image", "image"])
 def test_ccv3_parser_preserves_image_fields(image_key):
-    sample_b64 = "aGVsbG8="
+     sample_b64 = "aGVsbG8="
     card = {
         "spec": "chara_card_v3",
         "spec_version": "3.0",

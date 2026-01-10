@@ -57,7 +57,6 @@ class _FakeClient:
 
 @pytest.fixture(autouse=True)
 def _enable_native(monkeypatch):
-    monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "1")
     monkeypatch.setenv("LLM_ADAPTERS_NATIVE_HTTP_GROQ", "1")
     monkeypatch.setenv("LLM_ADAPTERS_NATIVE_HTTP_OPENROUTER", "1")
     monkeypatch.setenv("LOGURU_LEVEL", "ERROR")

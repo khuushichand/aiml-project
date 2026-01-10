@@ -13,7 +13,7 @@ async def test_concurrent_processing_non_streaming():
 
     async def submit_job(idx: int):
         def proc():
-            time.sleep(0.2)
+                     time.sleep(0.2)
             return {"idx": idx}
 
         fut = await q.enqueue(
@@ -57,7 +57,8 @@ async def test_streaming_job_pumps_and_done():
     await q.start(num_workers=1)
 
     def streaming_proc():
-        def gen():
+
+             def gen():
             yield "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n"
             yield "data: {\"choices\":[{\"delta\":{\"content\":\"b\"}}]}\n\n"
             yield "data: [DONE]\n\n"
@@ -98,7 +99,8 @@ async def test_streaming_processor_error_emits_error_and_done():
     await q.start(num_workers=1)
 
     def failing_proc():
-        raise RuntimeError("boom")
+
+             raise RuntimeError("boom")
 
     ch: asyncio.Queue = asyncio.Queue(maxsize=10)
     fut = await q.enqueue(
@@ -136,7 +138,7 @@ async def test_priority_preempts_backlog():
 
     async def submit_low(idx: int):
         def proc():
-            time.sleep(0.2)
+                     time.sleep(0.2)
             return {"id": f"L{idx}", "t": time.time()}
 
         fut = await q.enqueue(
@@ -152,7 +154,7 @@ async def test_priority_preempts_backlog():
 
     async def submit_high():
         def proc():
-            time.sleep(0.01)
+                     time.sleep(0.01)
             return {"id": "H", "t": time.time()}
 
         fut = await q.enqueue(
@@ -188,12 +190,13 @@ async def test_streaming_sequence_preserved():
     await q.start(num_workers=1)
 
     def gen():
-        yield ": heartbeat 1\n\n"
+
+             yield ": heartbeat 1\n\n"
         yield "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n"
         yield ": heartbeat 2\n\n"
         yield "data: [DONE]\n\n"
     def streaming_proc():
-        return gen()
+             return gen()
 
     ch: asyncio.Queue = asyncio.Queue(maxsize=10)
     await q.enqueue(
@@ -230,7 +233,7 @@ async def test_multi_client_alternating_no_starvation():
 
     async def submit(client: str, idx: int):
         def proc():
-            time.sleep(0.05)
+                     time.sleep(0.05)
             return {"client": client, "idx": idx, "t": time.time()}
 
         fut = await q.enqueue(
@@ -271,7 +274,7 @@ async def test_two_streams_interleaved_heartbeats_arrive():
 
     # Fast heartbeat streams
     def stream_gen(tag):
-        def gen():
+             def gen():
             yield f": hb {tag}1\n\n"
             time.sleep(0.02)
             yield f"data: {{\"choices\":[{{\"delta\":{{\"content\":\"{tag}x\"}}}}]}}\n\n"

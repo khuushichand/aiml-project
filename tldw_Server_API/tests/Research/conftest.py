@@ -12,7 +12,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
 
 @pytest.fixture
 def paper_search_app() -> FastAPI:
-    """Provide a lightweight FastAPI app with only the paper-search routes registered."""
+     """Provide a lightweight FastAPI app with only the paper-search routes registered."""
     app = FastAPI()
     app.include_router(paper_search_router, prefix="/api/v1/paper-search")
     app.dependency_overrides[get_request_user] = get_single_user_instance

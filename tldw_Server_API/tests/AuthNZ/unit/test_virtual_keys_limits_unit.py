@@ -11,17 +11,19 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_setting
 
 class _Req:
     def __init__(self, method="POST", path="/api/v1/scheduler/workflows/dry-run"):
-        self.method = method
+             self.method = method
         class _U:
             def __init__(self, p):
-                self.path = p
+                             self.path = p
         self.url = _U(path)
         self.path_params = {}
         self.headers = {}
 
 
 def test_allowed_endpoints_and_max_calls(monkeypatch):
-    monkeypatch.setenv("TEST_MODE", "1")
+
+
+     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     monkeypatch.setenv("JWT_ALGORITHM", "HS256")
     monkeypatch.setenv("JWT_SECRET_KEY", "x" * 40)

@@ -29,6 +29,7 @@ class TestMediaProcessingEdgeCases:
     """Test edge cases in media file processing."""
 
     def test_corrupted_pdf_handling(self, api_client, data_tracker):
+
         """Test handling of corrupted PDF files."""
         # Create a corrupted PDF (invalid header)
         corrupted_pdf = self._create_corrupted_file(
@@ -76,6 +77,7 @@ class TestMediaProcessingEdgeCases:
             os.unlink(corrupted_pdf)
 
     def test_large_document_processing(self, api_client, data_tracker):
+
         """Test processing of very large documents."""
         # Create a large text file (5MB)
         large_content = "Large document test content. " * 50000
@@ -122,6 +124,7 @@ class TestMediaProcessingEdgeCases:
             os.unlink(large_file)
 
     def test_unsupported_file_type(self, api_client):
+
         """Test uploading unsupported file types."""
         # Create an executable file (should be rejected)
         exec_content = b"#!/bin/bash\necho 'This should not be processed'"
@@ -148,6 +151,7 @@ class TestMediaProcessingEdgeCases:
             os.unlink(exec_file)
 
     def test_unicode_filename_handling(self, api_client, data_tracker):
+
         """Test files with unicode characters in filenames."""
         content = "Unicode filename test content"
         # Create file with unicode characters
@@ -182,6 +186,7 @@ class TestMediaProcessingEdgeCases:
             os.unlink(unicode_file)
 
     def test_empty_file_handling(self, api_client):
+
         """Test uploading empty files."""
         empty_file = self._create_temp_file("", suffix=".txt")
 
@@ -251,6 +256,7 @@ class TestAudioVideoProcessing:
     """Test audio and video file processing."""
 
     def test_silent_audio_file(self, api_client, data_tracker):
+
         """Test processing of silent audio files."""
         # Create a silent WAV file
         silent_wav = create_test_audio()  # This creates a silent WAV
@@ -286,6 +292,7 @@ class TestAudioVideoProcessing:
             os.unlink(silent_wav)
 
     def test_video_without_audio_track(self, api_client, data_tracker):
+
         """Test video file without audio track."""
         # This would require creating a video without audio
         # For now, we'll test with the sample video
@@ -320,6 +327,7 @@ class TestAudioVideoProcessing:
             print(f"Video processing test skipped: {e}")
 
     def test_long_audio_processing(self, api_client, data_tracker):
+
         """Test processing of long audio files."""
         # Create a longer audio file (would need actual long audio)
         # For now, test with standard audio
@@ -360,6 +368,7 @@ class TestDocumentParsing:
     """Test document parsing for various formats."""
 
     def test_encrypted_pdf(self, api_client):
+
         """Test handling of encrypted/password-protected PDFs."""
         # Create a mock encrypted PDF (would need actual encrypted PDF)
         encrypted_content = b"%PDF-1.4\n%Encrypted\nThis would be an encrypted PDF"
@@ -391,6 +400,7 @@ class TestDocumentParsing:
             os.unlink(encrypted_pdf)
 
     def test_complex_docx_formatting(self, api_client, data_tracker):
+
         """Test DOCX files with complex formatting."""
         # Would need actual DOCX file with tables, images, etc.
         # For now, test with simple DOCX-like content
@@ -420,6 +430,7 @@ class TestDocumentParsing:
             os.unlink(docx_file)
 
     def test_malformed_html(self, api_client, data_tracker):
+
         """Test parsing of malformed HTML."""
         malformed_html = """
         <!DOCTYPE html>
@@ -466,6 +477,7 @@ class TestDocumentParsing:
             os.unlink(html_file)
 
     def test_special_characters_in_content(self, api_client, data_tracker):
+
         """Test documents with special characters and encodings."""
         special_content = """
         Special Characters Test:
@@ -544,6 +556,7 @@ class TestFileUploadValidation:
     """Test file upload validation and limits."""
 
     def test_file_size_limits(self, api_client):
+
         """Test file size limit enforcement."""
         # Create a file at the size limit (would need to know actual limit)
         # Assuming 100MB limit for testing
@@ -571,6 +584,7 @@ class TestFileUploadValidation:
             os.unlink(large_file)
 
     def test_path_traversal_in_filename(self, api_client):
+
         """Test path traversal attempts in filenames."""
         content = "Path traversal test content"
 

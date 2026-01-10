@@ -7,21 +7,70 @@ type AuthTokenKind = 'jwt' | 'apiKey';
 
 const AUTH_CACHE_TTL_MS = 30_000;
 const AUTH_NEGATIVE_CACHE_TTL_MS = 5_000;
+const MAX_CACHE_SIZE = 500;
 const authCache = new Map<string, { ok: boolean; expiresAt: number }>();
 
+const hashToken = async (token: string): Promise<string> => {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) {
+    throw new Error('crypto.subtle unavailable');
+  }
+  const digest = await subtle.digest('SHA-256', new TextEncoder().encode(token));
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+};
+
+const buildAuthCacheKey = async (
+  kind: AuthTokenKind,
+  token: string
+): Promise<string | null> => {
+  try {
+    const hashedToken = await hashToken(token);
+    return `${kind}:${hashedToken}`;
+  } catch {
+    return null;
+  }
+};
+
+const pruneExpiredCacheEntries = (): void => {
+  const now = Date.now();
+  for (const [key, entry] of authCache) {
+    if (entry.expiresAt <= now) {
+      authCache.delete(key);
+    }
+  }
+};
+
+const enforceCacheSizeLimit = (): void => {
+  while (authCache.size > MAX_CACHE_SIZE) {
+    const oldestKey = authCache.keys().next().value;
+    if (oldestKey === undefined) return;
+    authCache.delete(oldestKey);
+  }
+};
+
 const getCachedAuth = (cacheKey: string): boolean | null => {
+  pruneExpiredCacheEntries();
   const cached = authCache.get(cacheKey);
   if (!cached) return null;
   if (cached.expiresAt <= Date.now()) {
     authCache.delete(cacheKey);
     return null;
   }
+  authCache.delete(cacheKey);
+  authCache.set(cacheKey, cached);
   return cached.ok;
 };
 
 const setCachedAuth = (cacheKey: string, ok: boolean, ttlMs: number): void => {
   if (ttlMs <= 0) return;
+  pruneExpiredCacheEntries();
+  if (authCache.has(cacheKey)) {
+    authCache.delete(cacheKey);
+  }
   authCache.set(cacheKey, { ok, expiresAt: Date.now() + ttlMs });
+  enforceCacheSizeLimit();
 };
 
 const safeDecodeCookieValue = (value: string): string => {
@@ -138,21 +187,27 @@ const verifyTokenWithApi = async (token: string, kind: AuthTokenKind): Promise<b
     headers.set('Authorization', `Bearer ${token}`);
   }
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 2000);
+
   try {
     const response = await fetch(buildApiUrl('/users/me'), {
       method: 'GET',
       headers,
       cache: 'no-store',
+      signal: controller.signal,
     });
     return response.ok;
   } catch {
     return false;
+  } finally {
+    clearTimeout(timeoutId);
   }
 };
 
 const verifyAuthToken = async (token: string, kind: AuthTokenKind): Promise<boolean> => {
-  const cacheKey = `${kind}:${token}`;
-  const cached = getCachedAuth(cacheKey);
+  const cacheKey = await buildAuthCacheKey(kind, token);
+  const cached = cacheKey ? getCachedAuth(cacheKey) : null;
   if (cached !== null) return cached;
 
   let ok = false;
@@ -175,7 +230,9 @@ const verifyAuthToken = async (token: string, kind: AuthTokenKind): Promise<bool
     ok = await verifyTokenWithApi(token, kind);
   }
 
-  setCachedAuth(cacheKey, ok, ok ? ttlMs : AUTH_NEGATIVE_CACHE_TTL_MS);
+  if (cacheKey) {
+    setCachedAuth(cacheKey, ok, ok ? ttlMs : AUTH_NEGATIVE_CACHE_TTL_MS);
+  }
   return ok;
 };
 

@@ -14,7 +14,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture(autouse=True)
 def _test_mode_env(monkeypatch, tmp_path):
-    # Force offline behavior
+     # Force offline behavior
     monkeypatch.setenv("TEST_MODE", "1")
     # Route per-user DBs into a temp directory under project
     base_dir = Path.cwd() / "Databases" / "test_user_dbs_pipeline"
@@ -333,7 +333,8 @@ async def test_watchlist_run_enqueues_embeddings(monkeypatch):
     )
 
     def fake_add_media_with_keywords(self, **kwargs):
-        return 123, "uuid-123", "created"
+
+             return 123, "uuid-123", "created"
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.Watchlists.pipeline.MediaDatabase.add_media_with_keywords",

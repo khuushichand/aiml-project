@@ -11,7 +11,9 @@ from pathlib import Path
 
 
 def run_tests_with_coverage():
-    """Run all evaluation tests with coverage reporting."""
+
+
+     """Run all evaluation tests with coverage reporting."""
 
     # Get the test directory
     test_dir = Path(__file__).parent
@@ -74,7 +76,9 @@ def run_tests_with_coverage():
 
 
 def run_specific_test_suite(suite_name):
-    """Run a specific test suite."""
+
+
+     """Run a specific test suite."""
 
     suites = {
         "unit": [
@@ -119,7 +123,9 @@ def run_specific_test_suite(suite_name):
 
 
 def main():
-    """Main entry point."""
+
+
+     """Main entry point."""
     import argparse
 
     parser = argparse.ArgumentParser(

@@ -28,7 +28,8 @@ async def test_handle_audio_transcribe_stage_uses_normalized_artifact(monkeypatc
     }
 
     def _fake_run_stt_job_via_registry(path, model, language, base_dir=None):
-        assert str(path) == str(wav_path)
+
+             assert str(path) == str(wav_path)
         assert base_dir is None
         return fake_artifact
 

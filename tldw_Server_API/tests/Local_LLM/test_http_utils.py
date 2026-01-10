@@ -12,7 +12,7 @@ from tldw_Server_API.app.core.Local_LLM.http_utils import (
 
 class FakeClient:
     def __init__(self):
-        self.calls = 0
+             self.calls = 0
 
     async def request(self, method, url, json=None, headers=None):
         self.calls += 1
@@ -38,28 +38,35 @@ async def test_request_json_retries_on_5xx():
 # --- Tests for redact_cmd_args improvements ---
 
 def test_redact_cmd_args_basic():
-    """Test basic space-separated flag redaction."""
+
+     """Test basic space-separated flag redaction."""
     args = ["cmd", "--api-key", "secret123", "-m", "model.gguf"]
     result = redact_cmd_args(args)
     assert result == ["cmd", "--api-key", "REDACTED", "-m", "model.gguf"]
 
 
 def test_redact_cmd_args_equals_format():
-    """Test equals-separated flag redaction (--flag=value)."""
+
+
+     """Test equals-separated flag redaction (--flag=value)."""
     args = ["cmd", "--api-key=secret123", "-m", "model.gguf"]
     result = redact_cmd_args(args)
     assert result == ["cmd", "--api-key=REDACTED", "-m", "model.gguf"]
 
 
 def test_redact_cmd_args_multiple_flags():
-    """Test redaction of multiple sensitive flags."""
+
+
+     """Test redaction of multiple sensitive flags."""
     args = ["cmd", "--hf-token", "tok1", "--password", "pass", "--other", "val"]
     result = redact_cmd_args(args)
     assert result == ["cmd", "--hf-token", "REDACTED", "--password", "REDACTED", "--other", "val"]
 
 
 def test_redact_cmd_args_new_flags():
-    """Test redaction of newly added sensitive flags."""
+
+
+     """Test redaction of newly added sensitive flags."""
     new_flags = ["--password", "--secret", "--auth", "--bearer", "--credential",
                  "--credentials", "--access-token", "--refresh-token", "--client-secret"]
     for flag in new_flags:
@@ -69,14 +76,18 @@ def test_redact_cmd_args_new_flags():
 
 
 def test_redact_cmd_args_mixed_formats():
-    """Test redaction with mixed space and equals formats."""
+
+
+     """Test redaction with mixed space and equals formats."""
     args = ["cmd", "--api-key=secret1", "--hf-token", "secret2", "--password=secret3"]
     result = redact_cmd_args(args)
     assert result == ["cmd", "--api-key=REDACTED", "--hf-token", "REDACTED", "--password=REDACTED"]
 
 
 def test_redact_cmd_args_non_sensitive_equals():
-    """Test that non-sensitive equals args are not redacted."""
+
+
+     """Test that non-sensitive equals args are not redacted."""
     args = ["cmd", "--model=gpt-4", "--port=8080"]
     result = redact_cmd_args(args)
     assert result == ["cmd", "--model=gpt-4", "--port=8080"]

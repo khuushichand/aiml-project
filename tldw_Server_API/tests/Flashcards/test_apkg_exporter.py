@@ -93,7 +93,9 @@ def _import_rows_from_apkg(apkg_bytes: bytes):
 
 
 def test_apkg_basic_reverse_two_cards():
-    rows = [
+
+
+     rows = [
         {
             "deck_name": "TestDeck",
             "model_type": "basic_reverse",
@@ -129,7 +131,9 @@ def test_apkg_basic_reverse_two_cards():
 
 
 def test_apkg_cloze_multi_generates_multiple_cards():
-    # Text contains two clozes: c1 and c2
+
+
+     # Text contains two clozes: c1 and c2
     text = "The capital of {{c1::France}} is {{c2::Paris}}."
     rows = [
         {
@@ -167,7 +171,9 @@ def test_apkg_cloze_multi_generates_multiple_cards():
 
 
 def test_apkg_media_data_uri_extracted_and_linked():
-    # Small transparent PNG (1x1) as data URI
+
+
+     # Small transparent PNG (1x1) as data URI
     data_uri = (
         "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
     )
@@ -213,7 +219,9 @@ def test_apkg_media_data_uri_extracted_and_linked():
 
 
 def test_apkg_round_trip_models_and_fields():
-    rows = [
+
+
+     rows = [
         {
             "deck_name": "RoundDeck",
             "model_type": "basic_reverse",
@@ -277,7 +285,9 @@ def test_apkg_round_trip_models_and_fields():
 
 
 def test_apkg_importer_stub_round_trip_content():
-    rows = [
+
+
+     rows = [
         {
             "deck_name": "RTDeck",
             "model_type": "basic",
@@ -308,7 +318,9 @@ def test_apkg_importer_stub_round_trip_content():
 
 
 def test_apkg_importer_stub_scheduling_and_decks():
-    now_iso = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+
+
+     now_iso = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
     rows = [
         # New
         {
@@ -351,7 +363,7 @@ def test_apkg_importer_stub_scheduling_and_decks():
     imported = _import_rows_from_apkg(apkg)
     # Helper to classify
     def classify(card):
-        if card['type'] == 0 and card['queue'] == 0:
+             if card['type'] == 0 and card['queue'] == 0:
             return 'new'
         if card['type'] == 1 and card['queue'] == 1:
             return 'learning'
@@ -366,7 +378,9 @@ def test_apkg_importer_stub_scheduling_and_decks():
 
 
 def test_migration_v6_to_v7_adds_reverse_column(tmp_path):
-    # Build a DB at v6: apply V4 full schema, then v4->v5, then v5->v6.
+
+
+     # Build a DB at v6: apply V4 full schema, then v4->v5, then v5->v6.
     db_path = tmp_path / "ChaChaNotes.db"
     conn = sqlite3.connect(str(db_path))
     try:
@@ -401,7 +415,9 @@ def test_migration_v6_to_v7_adds_reverse_column(tmp_path):
 
 
 def test_migration_to_v6_adds_modeltype_and_extra(tmp_path):
-    db_path = tmp_path / "migrate_v6.db"
+
+
+     db_path = tmp_path / "migrate_v6.db"
     conn = sqlite3.connect(str(db_path))
     try:
         v4 = CharactersRAGDB._FULL_SCHEMA_SQL_V4
@@ -420,7 +436,9 @@ def test_migration_to_v6_adds_modeltype_and_extra(tmp_path):
 
 
 def test_reverse_inference_model_type_and_flag(tmp_path):
-    db_path = tmp_path / "ChaChaNotes.db"
+
+
+     db_path = tmp_path / "ChaChaNotes.db"
     db = CharactersRAGDB(str(db_path), client_id="test")
     try:
         # Case 1: model_type basic_reverse only
@@ -462,7 +480,9 @@ def test_reverse_inference_model_type_and_flag(tmp_path):
 
 
 def test_apkg_scheduling_mapping():
-    now_iso = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+
+
+     now_iso = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
     rows = [
         # New
         {

@@ -12,7 +12,7 @@ from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 @pytest.mark.unit
 def test_ws_queue_overflow_drops_and_metrics() -> None:
-    # Use a fresh hub to avoid cross-test state
+     # Use a fresh hub to avoid cross-test state
     hub = RunStreamHub()
 
     # Create a small queue (maxsize=5) to force overflows

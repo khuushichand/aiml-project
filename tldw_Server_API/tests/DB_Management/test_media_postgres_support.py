@@ -78,7 +78,9 @@ def test_rebuild_claims_fts_sqlite_populates_index(tmp_path: Path) -> None:
 
 
 def test_rebuild_claims_fts_postgres_uses_backend() -> None:
-    db = MediaDatabase.__new__(MediaDatabase)
+
+
+     db = MediaDatabase.__new__(MediaDatabase)
     db.backend_type = BackendType.POSTGRESQL
     db.backend = MagicMock()
     executed: List[Tuple[str, Any]] = []
@@ -89,9 +91,10 @@ def test_rebuild_claims_fts_postgres_uses_backend() -> None:
     conn = _Conn()
 
     def fake_transaction():
-        @contextmanager
+
+             @contextmanager
         def _ctx():
-            yield conn
+                     yield conn
         return _ctx()
 
     db.transaction = fake_transaction  # type: ignore[assignment]
@@ -121,12 +124,16 @@ def test_rebuild_claims_fts_postgres_uses_backend() -> None:
 
 
 def test_postgres_migrations_include_v6() -> None:
-    migrations = MediaDatabase._get_postgres_migrations(MediaDatabase.__new__(MediaDatabase))
+
+
+     migrations = MediaDatabase._get_postgres_migrations(MediaDatabase.__new__(MediaDatabase))
     assert 6 in migrations
 
 
 def test_postgres_migrate_to_v6_creates_identifier_table() -> None:
-    db = MediaDatabase.__new__(MediaDatabase)
+
+
+     db = MediaDatabase.__new__(MediaDatabase)
     db.backend_type = BackendType.POSTGRESQL
     db.backend = MagicMock()
 
@@ -159,7 +166,9 @@ def test_postgres_migrate_to_v6_creates_identifier_table() -> None:
 
 
 def test_update_fts_media_postgres_updates_vector() -> None:
-    db = MediaDatabase.__new__(MediaDatabase)
+
+
+     db = MediaDatabase.__new__(MediaDatabase)
     db.backend_type = BackendType.POSTGRESQL
     db._execute_with_connection = MagicMock()  # type: ignore[attr-defined]
 
@@ -173,7 +182,9 @@ def test_update_fts_media_postgres_updates_vector() -> None:
 
 
 def test_delete_fts_media_postgres_nulls_vector() -> None:
-    db = MediaDatabase.__new__(MediaDatabase)
+
+
+     db = MediaDatabase.__new__(MediaDatabase)
     db.backend_type = BackendType.POSTGRESQL
     db._execute_with_connection = MagicMock()  # type: ignore[attr-defined]
 
@@ -187,7 +198,9 @@ def test_delete_fts_media_postgres_nulls_vector() -> None:
 
 
 def test_update_fts_keyword_postgres_updates_vector() -> None:
-    db = MediaDatabase.__new__(MediaDatabase)
+
+
+     db = MediaDatabase.__new__(MediaDatabase)
     db.backend_type = BackendType.POSTGRESQL
     db._execute_with_connection = MagicMock()  # type: ignore[attr-defined]
 
@@ -201,7 +214,9 @@ def test_update_fts_keyword_postgres_updates_vector() -> None:
 
 
 def test_delete_fts_keyword_postgres_nulls_vector() -> None:
-    db = MediaDatabase.__new__(MediaDatabase)
+
+
+     db = MediaDatabase.__new__(MediaDatabase)
     db.backend_type = BackendType.POSTGRESQL
     db._execute_with_connection = MagicMock()  # type: ignore[attr-defined]
 
@@ -228,7 +243,9 @@ def test_backup_database_postgres_returns_false(tmp_path: Path) -> None:
 
 
 def test_search_media_db_postgres_uses_tsquery():
-    db = MediaDatabase.__new__(MediaDatabase)
+
+
+     db = MediaDatabase.__new__(MediaDatabase)
     db.backend_type = BackendType.POSTGRESQL
     db.client_id = "pg-test"
     db.db_path_str = "pg-test-db"
@@ -237,11 +254,11 @@ def test_search_media_db_postgres_uses_tsquery():
 
     class _CountCursor:
         def fetchone(self):
-            return (1,)
+                     return (1,)
 
     class _ResultCursor:
         def fetchall(self):
-            return [{"id": 1, "title": "Deep Learning", "relevance_score": 0.5}]
+                     return [{"id": 1, "title": "Deep Learning", "relevance_score": 0.5}]
 
     def fake_execute(sql: str, params: Tuple[Any, ...] | None = None):
         captured_params = tuple(params) if params is not None else tuple()
@@ -274,16 +291,19 @@ def test_search_media_db_postgres_uses_tsquery():
 
 
 def test_soft_delete_keyword_postgres_uses_backend_helpers() -> None:
-    db = MediaDatabase.__new__(MediaDatabase)
+
+
+     db = MediaDatabase.__new__(MediaDatabase)
     db.backend_type = BackendType.POSTGRESQL
     db.client_id = "tenant-42"
 
     conn = object()
 
     def fake_transaction():
-        @contextmanager
+
+             @contextmanager
         def _ctx():
-            yield conn
+                     yield conn
         return _ctx()
 
     db.transaction = fake_transaction  # type: ignore[assignment]
@@ -294,7 +314,8 @@ def test_soft_delete_keyword_postgres_uses_backend_helpers() -> None:
             self.rowcount = rowcount
 
         def fetchall(self):
-            return self._rows
+
+                     return self._rows
 
     db._fetchone_with_connection = MagicMock(  # type: ignore[attr-defined]
         side_effect=[
@@ -321,16 +342,19 @@ def test_soft_delete_keyword_postgres_uses_backend_helpers() -> None:
 
 
 def test_batch_insert_chunks_postgres_handles_dict_rows() -> None:
-    db = MediaDatabase.__new__(MediaDatabase)
+
+
+     db = MediaDatabase.__new__(MediaDatabase)
     db.backend_type = BackendType.POSTGRESQL
     db.client_id = "tenant-42"
 
     conn = object()
 
     def fake_transaction():
-        @contextmanager
+
+             @contextmanager
         def _ctx():
-            yield conn
+                     yield conn
         return _ctx()
 
     db.transaction = fake_transaction  # type: ignore[assignment]
@@ -338,7 +362,8 @@ def test_batch_insert_chunks_postgres_handles_dict_rows() -> None:
     base_chunk_count = 2
 
     def fetch_side_effect(connection, query, params=None):
-        assert connection is conn
+
+             assert connection is conn
         if "SELECT 1 FROM Media" in query:
             return {'exists': 1}
         if "SELECT COUNT(*)" in query:
@@ -372,13 +397,15 @@ def test_batch_insert_chunks_postgres_handles_dict_rows() -> None:
 
 
 def test_process_chunks_postgres_avoids_direct_connection_execute() -> None:
-    db = MediaDatabase.__new__(MediaDatabase)
+
+
+     db = MediaDatabase.__new__(MediaDatabase)
     db.backend_type = BackendType.POSTGRESQL
     db.client_id = "tenant-42"
 
     class FailingConnection:
         def execute(self, *args, **kwargs):
-            raise AssertionError("execute should not be called directly on backend connections")
+                     raise AssertionError("execute should not be called directly on backend connections")
 
     check_conn = FailingConnection()
     db.get_connection = MagicMock(return_value=check_conn)  # type: ignore[attr-defined]
@@ -386,9 +413,10 @@ def test_process_chunks_postgres_avoids_direct_connection_execute() -> None:
     tx_conn = object()
 
     def fake_transaction():
-        @contextmanager
+
+             @contextmanager
         def _ctx():
-            yield tx_conn
+                     yield tx_conn
         return _ctx()
 
     db.transaction = fake_transaction  # type: ignore[assignment]

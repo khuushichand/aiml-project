@@ -5,7 +5,9 @@ import pytest
 
 
 def _has_tiktoken():
-    try:
+
+
+     try:
         import tiktoken  # noqa: F401
         return True
     except Exception:
@@ -13,7 +15,9 @@ def _has_tiktoken():
 
 
 def test_tokens_offsets_tiktoken_monotonic_and_slice_match():
-    if not _has_tiktoken():
+
+
+     if not _has_tiktoken():
         pytest.skip("tiktoken not available")
 
     from tldw_Server_API.app.core.Chunking.strategies.tokens import (
@@ -46,7 +50,9 @@ def test_tokens_offsets_tiktoken_monotonic_and_slice_match():
 
 
 def test_tokens_offsets_tiktoken_repeated_substrings_heavy_overlap():
-    if not _has_tiktoken():
+
+
+     if not _has_tiktoken():
         pytest.skip("tiktoken not available")
 
     from tldw_Server_API.app.core.Chunking.strategies.tokens import (
@@ -72,7 +78,9 @@ def test_tokens_offsets_tiktoken_repeated_substrings_heavy_overlap():
 
 
 def test_tokens_offsets_tiktoken_unicode_emojis_multibyte():
-    if not _has_tiktoken():
+
+
+     if not _has_tiktoken():
         pytest.skip("tiktoken not available")
 
     from tldw_Server_API.app.core.Chunking.strategies.tokens import (
@@ -104,7 +112,9 @@ def test_tokens_offsets_tiktoken_unicode_emojis_multibyte():
 
 
 def test_tokens_offsets_transformers_path_via_mock():
-    """Exercise the transformers offset_mapping logic via a mocked tokenizer."""
+
+
+     """Exercise the transformers offset_mapping logic via a mocked tokenizer."""
     from tldw_Server_API.app.core.Chunking.strategies.tokens import (
         TokenChunkingStrategy,
     )
@@ -123,7 +133,8 @@ def test_tokens_offsets_transformers_path_via_mock():
             return {"input_ids": input_ids, "offset_mapping": offsets}
 
         def decode(self, token_ids):
-            # map -1/-2 to empty, others index into original text
+
+                     # map -1/-2 to empty, others index into original text
             out = []
             for tid in token_ids:
                 if tid in (-1, -2):
@@ -153,7 +164,9 @@ def test_tokens_offsets_transformers_path_via_mock():
 
 
 def test_tokens_offsets_fallback_path():
-    from tldw_Server_API.app.core.Chunking.strategies.tokens import (
+
+
+     from tldw_Server_API.app.core.Chunking.strategies.tokens import (
         TokenChunkingStrategy,
         FallbackTokenizer,
     )

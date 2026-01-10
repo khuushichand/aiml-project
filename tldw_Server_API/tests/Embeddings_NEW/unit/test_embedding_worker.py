@@ -35,7 +35,7 @@ class TestEmbeddingWorkerInitialization:
 
     @pytest.mark.unit
     def test_worker_initialization_default_model(self):
-        """Test worker initialization with default model."""
+             """Test worker initialization with default model."""
         cfg = EmbeddingWorkerConfig(
             worker_id="w1",
             worker_type="embedding",
@@ -52,7 +52,7 @@ class TestEmbeddingWorkerInitialization:
 
     @pytest.mark.unit
     def test_worker_initialization_custom_model(self):
-        """Test worker initialization with custom model."""
+             """Test worker initialization with custom model."""
         cfg = EmbeddingWorkerConfig(
             worker_id="w2",
             worker_type="embedding",
@@ -68,7 +68,7 @@ class TestEmbeddingWorkerInitialization:
     @pytest.mark.unit
     @patch('tldw_Server_API.app.core.Embeddings.workers.embedding_worker.create_embeddings_batch')
     def test_model_loading(self, mock_create):
-        """Test embedding generation pipeline calls create_embeddings_batch."""
+             """Test embedding generation pipeline calls create_embeddings_batch."""
         mock_create.side_effect = lambda *args, **kwargs: [np.random.randn(384).tolist()]
         cfg = EmbeddingWorkerConfig(
             worker_id="w3",
@@ -87,7 +87,7 @@ class TestEmbeddingWorkerInitialization:
 
     @pytest.mark.unit
     def test_worker_configuration_validation(self):
-        """Test worker configuration validation."""
+             """Test worker configuration validation."""
         cfg = EmbeddingWorkerConfig(
             worker_id="w4",
             worker_type="embedding",
@@ -323,7 +323,7 @@ class TestPerformanceOptimization:
     async def test_memory_efficient_processing(self, mock_create, large_text_corpus):
         """Test memory-efficient processing of large corpus."""
         def mock_encode(texts, *args, **kwargs):
-            # Simulate memory-efficient encoding
+                     # Simulate memory-efficient encoding
             batch_size = len(texts) if isinstance(texts, list) else 1
             out = np.random.randn(batch_size, 384).tolist() if batch_size > 1 else [np.random.randn(384).tolist()]
             return out
@@ -385,7 +385,7 @@ class TestModelSpecificBehavior:
     @pytest.mark.unit
     @patch('tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create.create_embeddings_batch')
     def test_minilm_model_configuration(self, mock_create):
-        """Test MiniLM model specific configuration."""
+             """Test MiniLM model specific configuration."""
         mock_create.return_value = [np.random.randn(384).tolist()]
         cfg = EmbeddingWorkerConfig(
             worker_id="w15",
@@ -401,7 +401,7 @@ class TestModelSpecificBehavior:
     @pytest.mark.unit
     @patch('tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create.create_embeddings_batch')
     def test_mpnet_model_configuration(self, mock_create):
-        """Test MPNet model specific configuration."""
+             """Test MPNet model specific configuration."""
         cfg = EmbeddingWorkerConfig(
             worker_id="w16",
             worker_type="embedding",
@@ -441,7 +441,8 @@ class TestErrorRecovery:
         call_count = 0
 
         def mock_encode(texts, *args, **kwargs):
-            nonlocal call_count
+
+                     nonlocal call_count
             call_count += 1
             if call_count < 3:
                 raise RuntimeError("Transient error")
@@ -464,7 +465,7 @@ class TestErrorRecovery:
         """Test fallback to alternative model on failure."""
         # Primary fails twice then fallback
         def side_effect(texts, model_name, provider, api_url, api_key):
-            if model_name == "primary-model":
+                     if model_name == "primary-model":
                 raise Exception("Primary model failed")
             return [np.random.randn(384).tolist()]
         mock_create.side_effect = side_effect
@@ -485,7 +486,7 @@ class TestErrorRecovery:
     async def test_graceful_degradation(self, mock_create):
         """Test graceful degradation when resources are limited."""
         def mock_encode(texts, *args, **kwargs):
-            # Simulate resource constraints
+                     # Simulate resource constraints
             if len(texts) > 16:
                 raise MemoryError("Batch too large")
             return np.random.randn(len(texts), 384).tolist()

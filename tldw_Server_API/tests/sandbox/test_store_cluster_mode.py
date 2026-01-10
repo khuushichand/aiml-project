@@ -5,7 +5,9 @@ import pytest
 
 
 def _has_psycopg() -> bool:
-    try:
+
+
+     try:
         import psycopg  # noqa: F401
         return True
     except Exception:
@@ -13,7 +15,9 @@ def _has_psycopg() -> bool:
 
 
 def test_cluster_mode_falls_back_to_sqlite(monkeypatch):
-    # Request cluster without DSN; expect get_store_mode to report sqlite fallback
+
+
+     # Request cluster without DSN; expect get_store_mode to report sqlite fallback
     from tldw_Server_API.app.core.config import clear_config_cache
 
     monkeypatch.setenv("SANDBOX_STORE_BACKEND", "cluster")
@@ -30,7 +34,7 @@ def test_cluster_mode_falls_back_to_sqlite(monkeypatch):
 
 @pytest.mark.integration
 def test_cluster_mode_smoke_with_postgres(monkeypatch):
-    # Requires SANDBOX_TEST_PG_DSN and psycopg installed
+     # Requires SANDBOX_TEST_PG_DSN and psycopg installed
     dsn = os.getenv("SANDBOX_TEST_PG_DSN")
     if not dsn or not _has_psycopg():
         pytest.skip("Postgres DSN not provided or psycopg not installed")

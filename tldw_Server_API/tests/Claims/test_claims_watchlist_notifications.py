@@ -11,7 +11,9 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
 def test_watchlist_cluster_notifications():
-    from tldw_Server_API.app.core.config import settings as app_settings
+
+
+     from tldw_Server_API.app.core.config import settings as app_settings
 
     base_dir = tempfile.mkdtemp(prefix="claims_watchlist_notify_")
     orig_user_db = app_settings.get("USER_DB_BASE_DIR")
@@ -65,7 +67,7 @@ def test_watchlist_cluster_notifications():
 
         class _User:
             def __init__(self) -> None:
-                self.id = 1
+                             self.id = 1
                 self.username = "reviewer"
                 self.is_admin = False
 

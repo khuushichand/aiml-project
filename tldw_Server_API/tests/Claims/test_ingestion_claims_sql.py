@@ -10,7 +10,9 @@ from tldw_Server_API.app.core.Chunking import chunk_for_embedding
 
 
 def test_ingestion_time_claims_extract_and_store_sql():
-    # Setup temp DB
+
+
+     # Setup temp DB
     temp_dir = tempfile.mkdtemp(prefix="claims_sql_")
     db_path = os.path.join(temp_dir, "media.db")
     db = MediaDatabase(db_path=db_path, client_id="test_client")
@@ -48,7 +50,9 @@ def test_ingestion_time_claims_extract_and_store_sql():
 
 
 def test_ingestion_time_claims_extract_auto_multilingual():
-    temp_dir = tempfile.mkdtemp(prefix="claims_sql_")
+
+
+     temp_dir = tempfile.mkdtemp(prefix="claims_sql_")
     db_path = os.path.join(temp_dir, "media.db")
     db = MediaDatabase(db_path=db_path, client_id="test_client")
     db.initialize_db()

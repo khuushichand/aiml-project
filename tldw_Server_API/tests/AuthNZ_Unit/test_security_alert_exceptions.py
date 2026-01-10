@@ -14,7 +14,9 @@ from tldw_Server_API.app.core.exceptions import (
 
 
 def _make_record():
-    return {
+
+
+     return {
         "subject": "Test",
         "message": "Test message",
         "severity": "high",
@@ -81,7 +83,9 @@ def _make_settings_with_webhook(url: str):
 
 
 def test_file_sink_raises_custom_error(tmp_path):
-    # Make file_path a directory so opening it as a file fails
+
+
+     # Make file_path a directory so opening it as a file fails
     bad_path = tmp_path / "alerts_dir"
     bad_path.mkdir()
     dispatcher = SecurityAlertDispatcher(settings=_make_settings_with_file(str(bad_path)))
@@ -90,29 +94,37 @@ def test_file_sink_raises_custom_error(tmp_path):
 
 
 def test_email_sink_raises_custom_error_on_starttls(monkeypatch):
-    class FakeSMTP:
+
+
+     class FakeSMTP:
         def __init__(self, host, port, timeout):
-            self.host = host
+                     self.host = host
             self.port = port
             self.timeout = timeout
 
         def __enter__(self):
-            return self
+
+                     return self
 
         def __exit__(self, exc_type, exc, tb):
-            return False
+
+                     return False
 
         def ehlo(self):
-            pass
+
+                     pass
 
         def starttls(self):
-            raise smtplib.SMTPException("starttls failed")
+
+                     raise smtplib.SMTPException("starttls failed")
 
         def login(self, user, pwd):
-            pass
+
+                     pass
 
         def send_message(self, message):
-            pass
+
+                     pass
 
     monkeypatch.setattr("smtplib.SMTP", FakeSMTP)
 

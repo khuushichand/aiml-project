@@ -252,6 +252,7 @@ class ChatbookService:
 
         # Optional Prompt Studio JobManager adapter
         self._ps_job_adapter = None
+        self._jobs_adapter = None
         self._jobs_db_path: Optional[Path] = None
         if self._jobs_backend == "prompt_studio":
             try:
@@ -270,6 +271,11 @@ class ChatbookService:
                 self._jobs_db_path = ensure_jobs_tables()
             except Exception as exc:
                 logger.debug(f"Jobs core backend migrations skipped: {exc}")
+            try:
+                from .jobs_adapter import ChatbooksJobsAdapter
+                self._jobs_adapter = ChatbooksJobsAdapter(owner_user_id=self.user_id)
+            except Exception as exc:
+                logger.debug(f"Chatbooks: core Jobs adapter unavailable: {exc}")
 
         # Initialize job tracking tables
         self._init_job_tables()
@@ -1839,6 +1845,11 @@ class ChatbookService:
                         job.status = mapped
             except Exception:
                 pass
+        if job and getattr(self, "_jobs_backend", "core") == "core" and getattr(self, "_jobs_adapter", None) is not None:
+            try:
+                self._jobs_adapter.apply_export_status(job)
+            except Exception:
+                pass
         return job
 
     def get_import_job(self, job_id: str) -> Optional[ImportJob]:
@@ -1860,6 +1871,11 @@ class ChatbookService:
                     mapped = status_map.get(ps_status)
                     if mapped and job.status not in {ImportStatus.COMPLETED, ImportStatus.FAILED}:
                         job.status = mapped
+            except Exception:
+                pass
+        if job and getattr(self, "_jobs_backend", "core") == "core" and getattr(self, "_jobs_adapter", None) is not None:
+            try:
+                self._jobs_adapter.apply_import_status(job)
             except Exception:
                 pass
         return job
@@ -1966,6 +1982,17 @@ class ChatbookService:
                         pass
                 jobs.append(job)
 
+            if getattr(self, "_jobs_backend", "core") == "core" and getattr(self, "_jobs_adapter", None) is not None:
+                try:
+                    job_ids = [job.job_id for job in jobs]
+                    job_map = self._jobs_adapter.map_jobs(job_ids=job_ids, job_type="export", limit=len(job_ids) or 1)
+                    for job in jobs:
+                        row = job_map.get(job.job_id)
+                        if row:
+                            self._jobs_adapter.apply_export_status(job, job_row=row)
+                except Exception:
+                    pass
+
             return jobs
         except Exception as e:
             logger.error(f"Error listing export jobs: {e}")
@@ -2071,6 +2098,17 @@ class ChatbookService:
                     except Exception:
                         pass
                 jobs.append(job)
+
+            if getattr(self, "_jobs_backend", "core") == "core" and getattr(self, "_jobs_adapter", None) is not None:
+                try:
+                    job_ids = [job.job_id for job in jobs]
+                    job_map = self._jobs_adapter.map_jobs(job_ids=job_ids, job_type="import", limit=len(job_ids) or 1)
+                    for job in jobs:
+                        row = job_map.get(job.job_id)
+                        if row:
+                            self._jobs_adapter.apply_import_status(job, job_row=row)
+                except Exception:
+                    pass
 
             return jobs
         except Exception as e:
@@ -3489,7 +3527,7 @@ class ChatbookService:
 
     def get_export_job_status(self, job_id: str) -> Dict[str, Any]:
         """Get export job status."""
-        job = self._get_export_job(job_id)
+        job = self.get_export_job(job_id)
         if not job:
             raise JobError(f"Export job {job_id} not found", job_id=job_id)
 
@@ -3552,7 +3590,8 @@ class ChatbookService:
                     for j in jobs:
                         try:
                             payload = j.get("payload") or {}
-                            if payload.get("chatbooks_job_id") == job_id:
+                            job_uuid = str(j.get("uuid") or j.get("id"))
+                            if payload.get("chatbooks_job_id") == job_id or job_uuid == job_id:
                                 jm.cancel_job(int(j["id"]))
                         except Exception:
                             pass
@@ -3592,7 +3631,8 @@ class ChatbookService:
                     for j in jobs:
                         try:
                             payload = j.get("payload") or {}
-                            if payload.get("chatbooks_job_id") == job_id:
+                            job_uuid = str(j.get("uuid") or j.get("id"))
+                            if payload.get("chatbooks_job_id") == job_id or job_uuid == job_id:
                                 jm.cancel_job(int(j["id"]))
                         except Exception:
                             pass
@@ -3633,7 +3673,7 @@ class ChatbookService:
 
     def get_import_job_status(self, job_id: str) -> Dict[str, Any]:
         """Get import job status."""
-        job = self._get_import_job(job_id)
+        job = self.get_import_job(job_id)
         if not job:
             raise JobError(f"Import job {job_id} not found", job_id=job_id)
 

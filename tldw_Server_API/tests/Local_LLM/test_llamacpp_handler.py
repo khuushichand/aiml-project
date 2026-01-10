@@ -11,7 +11,7 @@ import httpx
 
 class DummyProcess:
     def __init__(self):
-        self.pid = 12345
+             self.pid = 12345
         self.returncode = None
         self.stdout = None
         self.stderr = None
@@ -20,7 +20,8 @@ class DummyProcess:
         return 0
 
     def terminate(self):
-        self.returncode = 0
+
+             self.returncode = 0
 
 
 @pytest.mark.asyncio
@@ -126,12 +127,12 @@ async def test_llamacpp_stop_timeout(monkeypatch, tmp_path: Path):
 
     class SlowProc:
         def __init__(self):
-            self.pid = 88
+                     self.pid = 88
             self.returncode = None
         async def wait(self):
             return 0
         def terminate(self):
-            self.returncode = None
+                     self.returncode = None
 
     handler._active_server_process = SlowProc()
     handler._active_server_model = "toy.gguf"

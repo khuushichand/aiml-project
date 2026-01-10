@@ -67,7 +67,7 @@ def _build_app_with_overrides(
     # Stub governor to keep diagnostics endpoints fast and deterministic
     class _FakeGovernor:
         def capabilities(self):
-            return {"backend": "stub"}
+                     return {"backend": "stub"}
 
     _app.state.rg_governor = _FakeGovernor()
 

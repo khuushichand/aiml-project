@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.TTS.tts_config import TTSConfigManager
 
 @pytest.fixture(autouse=True)
 def _reset_config_cache(monkeypatch):
-    core_config.clear_config_cache()
+     core_config.clear_config_cache()
     for key in (
         "TLDW_CONFIG_FILE",
         "TLDW_CONFIG_PATH",
@@ -32,7 +32,9 @@ def _reset_config_cache(monkeypatch):
 
 
 def test_merge_layers_sources():
-    from tldw_Server_API.app.core.config_utils import merge_config_layers
+
+
+     from tldw_Server_API.app.core.config_utils import merge_config_layers
 
     merged, sources = merge_config_layers(
         [
@@ -49,7 +51,9 @@ def test_merge_layers_sources():
 
 
 def test_tts_precedence_env_over_config_and_yaml(tmp_path, monkeypatch):
-    yaml_path = tmp_path / "tts_providers_config.yaml"
+
+
+     yaml_path = tmp_path / "tts_providers_config.yaml"
     yaml_path.write_text("default_provider: yaml_provider\nproviders: {}\n", encoding="utf-8")
 
     config_path = tmp_path / "config.txt"
@@ -67,7 +71,9 @@ def test_tts_precedence_env_over_config_and_yaml(tmp_path, monkeypatch):
 
 
 def test_embeddings_precedence_env_over_config_over_yaml(tmp_path, monkeypatch):
-    config_dir = tmp_path
+
+
+     config_dir = tmp_path
     yaml_path = config_dir / "embeddings_config.yaml"
     yaml_path.write_text(
         "\n".join(
@@ -111,7 +117,9 @@ def test_embeddings_precedence_env_over_config_over_yaml(tmp_path, monkeypatch):
 
 
 def test_evaluations_precedence_env_over_config_over_yaml(tmp_path, monkeypatch):
-    yaml_path = tmp_path / "evaluations_config.yaml"
+
+
+     yaml_path = tmp_path / "evaluations_config.yaml"
     yaml_path.write_text(
         "\n".join(
             [

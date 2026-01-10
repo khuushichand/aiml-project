@@ -13,13 +13,14 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture()
 def client_with_wf(tmp_path, auth_headers):
-    db = WorkflowsDatabase(str(tmp_path / "wf.db"))
+     db = WorkflowsDatabase(str(tmp_path / "wf.db"))
 
     async def override_user():
         return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True)
 
     def override_db():
-        return db
+
+             return db
 
     app.dependency_overrides[get_request_user] = override_user
     app.dependency_overrides[wf_mod._get_db] = override_db
@@ -193,13 +194,13 @@ async def test_webhook_hmac_and_ssrf(monkeypatch, client_with_wf: TestClient):
     captured = {"headers": None, "data": None, "calls": 0}
     class _CapClient:
         def __init__(self, timeout=None):
-            pass
+                     pass
         def __enter__(self):
-            return self
+                     return self
         def __exit__(self, exc_type, exc, tb):
-            return False
+                     return False
         def post(self, url, data=None, headers=None):
-            captured["calls"] += 1
+                     captured["calls"] += 1
             captured["headers"] = headers
             captured["data"] = data
             return type("Resp", (), {"status_code": 200})()

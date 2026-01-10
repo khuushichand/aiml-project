@@ -7,7 +7,9 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
 def _env(monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
+
+
+     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("JOBS_DB_PATH", os.path.join(os.getcwd(), "Databases", "jobs.db"))
@@ -31,19 +33,25 @@ def _env(monkeypatch, tmp_path):
 
 
 def _get_api(app):
-    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
+
+     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     return {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
 
 
 def _stats(client, domain="chatbooks", queue="default", job_type="export"):
-    r = client.get("/api/v1/jobs/stats", params={"domain": domain, "queue": queue, "job_type": job_type})
+
+
+     r = client.get("/api/v1/jobs/stats", params={"domain": domain, "queue": queue, "job_type": job_type})
     assert r.status_code == 200
     rows = r.json(); assert len(rows) == 1
     return rows[0]
 
 
 def test_batch_cancel_updates_counters_and_gauges(monkeypatch, tmp_path):
-    _env(monkeypatch, tmp_path)
+
+
+     _env(monkeypatch, tmp_path)
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     reset_settings()
     from tldw_Server_API.app.main import app
@@ -76,7 +84,9 @@ def test_batch_cancel_updates_counters_and_gauges(monkeypatch, tmp_path):
 
 
 def test_complete_queued_updates_counters(monkeypatch, tmp_path):
-    _env(monkeypatch, tmp_path)
+
+
+     _env(monkeypatch, tmp_path)
     jm = JobManager()
     domain = "chatbooks"; queue = "default"; jt = "export"
 
@@ -117,7 +127,9 @@ def test_complete_queued_updates_counters(monkeypatch, tmp_path):
 
 
 def test_batch_reschedule_moves_ready_to_scheduled(monkeypatch, tmp_path):
-    _env(monkeypatch, tmp_path)
+
+
+     _env(monkeypatch, tmp_path)
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     reset_settings()
     from tldw_Server_API.app.main import app
@@ -143,7 +155,9 @@ def test_batch_reschedule_moves_ready_to_scheduled(monkeypatch, tmp_path):
 
 
 def test_batch_requeue_quarantined_adjusts_counters(monkeypatch, tmp_path):
-    _env(monkeypatch, tmp_path)
+
+
+     _env(monkeypatch, tmp_path)
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     reset_settings()
     from tldw_Server_API.app.main import app

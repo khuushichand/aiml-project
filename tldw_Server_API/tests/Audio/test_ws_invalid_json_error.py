@@ -6,7 +6,9 @@ from fastapi.testclient import TestClient
 
 
 def test_audio_ws_invalid_json_yields_validation_error(monkeypatch):
-    from tldw_Server_API.app.main import app
+
+
+     from tldw_Server_API.app.main import app
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
     token = get_settings().SINGLE_USER_API_KEY

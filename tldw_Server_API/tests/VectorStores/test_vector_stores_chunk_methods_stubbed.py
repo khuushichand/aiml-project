@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 
 @pytest.fixture(autouse=True)
 def testing_env(monkeypatch, tmp_path):
-    os.environ['TESTING']='true'
+     os.environ['TESTING']='true'
     from tldw_Server_API.app.core import config as cfg
     monkeypatch.setitem(cfg.settings, 'USER_DB_BASE_DIR', tmp_path)
     yield
@@ -19,15 +19,15 @@ def testing_env(monkeypatch, tmp_path):
 
 @pytest.fixture()
 def client(monkeypatch):
-    # Fake adapter minimal
+     # Fake adapter minimal
     class FakeCol:
         def __init__(self):
-            self.data={'ids':[], 'embeddings':[], 'documents':[], 'metadatas':[]}
+                     self.data={'ids':[], 'embeddings':[], 'documents':[], 'metadatas':[]}
         def count(self): return len(self.data['ids'])
         def get(self, **kw): return {'ids': []}
     class FakeAdapter:
         def __init__(self):
-            self._initialized=False
+                     self._initialized=False
             self.config=types.SimpleNamespace(embedding_dim=32)
             self._col = FakeCol()
             self.manager = types.SimpleNamespace(get_or_create_collection=lambda name: self._col)
@@ -53,14 +53,14 @@ def client(monkeypatch):
         return fake
     monkeypatch.setattr(vs, '_adapter_for_user', fake_adapter_for_user)
     def fake_create_embeddings_batch(texts, app_config, model_id):
-        return [[0.0]*fake.config.embedding_dim for _ in texts]
+             return [[0.0]*fake.config.embedding_dim for _ in texts]
     monkeypatch.setattr(vs, 'create_embeddings_batch', fake_create_embeddings_batch)
 
     # Stub Chunker to produce desired number of chunks regardless of method
     class StubChunker:
         def __init__(self, *a, **k): pass
         def chunk_text(self, text, method=None, max_size=None, overlap=None):
-            # pretend to create 3 chunks
+                     # pretend to create 3 chunks
             return ['c1','c2','c3']
     monkeypatch.setattr(vs, 'Chunker', StubChunker)
 
@@ -72,10 +72,12 @@ def client(monkeypatch):
 
 
 def test_tokens_method_flow(client, monkeypatch):
-    # Fake DB returning one media item
+
+
+     # Fake DB returning one media item
     class FakeDB:
         def get_media_by_id(self, mid):
-            return {'id': mid, 'title': 'T', 'content': 'dummy text'}
+                     return {'id': mid, 'title': 'T', 'content': 'dummy text'}
     from tldw_Server_API.app.api.v1.endpoints.vector_stores_openai import get_media_db_for_user
     app.dependency_overrides[get_media_db_for_user] = lambda: FakeDB()
 
@@ -91,10 +93,12 @@ def test_tokens_method_flow(client, monkeypatch):
 
 
 def test_semantic_method_flow(client):
-    # Same as tokens; chunker stub returns 3 chunks
+
+
+     # Same as tokens; chunker stub returns 3 chunks
     class FakeDB:
         def get_media_by_id(self, mid):
-            return {'id': mid, 'title': 'T', 'content': 'dummy text'}
+                     return {'id': mid, 'title': 'T', 'content': 'dummy text'}
     from tldw_Server_API.app.api.v1.endpoints.vector_stores_openai import get_media_db_for_user
     app.dependency_overrides[get_media_db_for_user] = lambda: FakeDB()
 

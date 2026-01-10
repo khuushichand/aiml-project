@@ -16,7 +16,8 @@ class TestChatUnit:
     """Unit tests for chat endpoint functionality."""
 
     def test_chat_completion_basic(self, unit_test_client, sample_chat_request):
-        """Test basic chat completion with mocked LLM."""
+
+             """Test basic chat completion with mocked LLM."""
         response = unit_test_client.post_with_auth(
             "/api/v1/chat/completions",
             json_data=sample_chat_request.model_dump()
@@ -29,7 +30,8 @@ class TestChatUnit:
         assert data["choices"][0]["message"]["content"] == "This is a test response"
 
     def test_chat_with_character(self, unit_test_client, isolated_db):
-        """Test chat with specific character."""
+
+             """Test chat with specific character."""
         # Add a test character
         char_id = isolated_db.add_character_card({
             "name": "TestBot",
@@ -61,7 +63,8 @@ class TestChatUnit:
         assert "choices" in data
 
     def test_conversation_persistence(self, unit_test_client, isolated_db):
-        """Test that conversations are persisted correctly."""
+
+             """Test that conversations are persisted correctly."""
         # Don't create a conversation upfront - let the endpoint create it
         request_data = {
             "model": "test-model",
@@ -93,7 +96,8 @@ class TestChatUnit:
         assert len(messages) > 0, f"No messages found in conversation {conv_id}"
 
     def test_invalid_api_provider(self, unit_test_client):
-        """Test handling of missing API key for provider."""
+
+             """Test handling of missing API key for provider."""
         request_data = {
             "model": "test-model",
             "api_provider": "nonexistent_provider",  # Provider that doesn't exist
@@ -113,7 +117,7 @@ class TestChatUnit:
 
     @pytest.mark.skip(reason="Streaming tests hang with TestClient")
     def test_streaming_request(self, unit_test_client):
-        """Test that streaming requests are accepted (though not actually streamed in tests)."""
+             """Test that streaming requests are accepted (though not actually streamed in tests)."""
         request_data = {
             "model": "test-model",
             "api_provider": "openai",
@@ -130,7 +134,8 @@ class TestChatUnit:
         assert response.status_code == status.HTTP_200_OK
 
     def test_system_message_handling(self, unit_test_client):
-        """Test that system messages are handled correctly."""
+
+             """Test that system messages are handled correctly."""
         request_data = {
             "model": "test-model",
             "api_provider": "openai",
@@ -150,7 +155,8 @@ class TestChatUnit:
         assert "choices" in data
 
     def test_temperature_parameter(self, unit_test_client):
-        """Test that temperature parameter is accepted."""
+
+             """Test that temperature parameter is accepted."""
         request_data = {
             "model": "test-model",
             "api_provider": "openai",
@@ -166,7 +172,8 @@ class TestChatUnit:
         assert response.status_code == status.HTTP_200_OK
 
     def test_max_tokens_parameter(self, unit_test_client):
-        """Test that max_tokens parameter is accepted."""
+
+             """Test that max_tokens parameter is accepted."""
         request_data = {
             "model": "test-model",
             "api_provider": "openai",
@@ -182,7 +189,8 @@ class TestChatUnit:
         assert response.status_code == status.HTTP_200_OK
 
     def test_missing_messages(self, unit_test_client):
-        """Test that missing messages field returns error."""
+
+             """Test that missing messages field returns error."""
         request_data = {
             "model": "test-model",
             "api_provider": "openai"
@@ -198,7 +206,9 @@ class TestChatUnit:
 
 
     def test_empty_messages(self, unit_test_client):
-        """Test that empty messages array returns error."""
+
+
+             """Test that empty messages array returns error."""
         request_data = {
             "model": "test-model",
             "api_provider": "openai",
@@ -214,7 +224,7 @@ class TestChatUnit:
 
     @pytest.mark.skip(reason="Authentication works differently in single-user mode")
     def test_authentication_required(self, isolated_db, isolated_chat_endpoint_mocks):
-        """Test that authentication is required."""
+             """Test that authentication is required."""
         from fastapi.testclient import TestClient
         from tldw_Server_API.app.main import app
         from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
@@ -251,7 +261,7 @@ class TestChatUnit:
 
     @pytest.mark.skip(reason="Authentication works differently in single-user mode")
     def test_invalid_auth_token(self, isolated_db, isolated_chat_endpoint_mocks):
-        """Test that invalid auth token is rejected."""
+             """Test that invalid auth token is rejected."""
         from fastapi.testclient import TestClient
         from tldw_Server_API.app.main import app
         from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
@@ -293,7 +303,8 @@ class TestChatErrorHandling:
     """Test error handling in chat endpoint."""
 
     def test_llm_api_error(self, isolated_db):
-        """Test handling of LLM API errors."""
+
+             """Test handling of LLM API errors."""
         from fastapi.testclient import TestClient
         from tldw_Server_API.app.main import app
         from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
@@ -342,7 +353,8 @@ class TestChatErrorHandling:
         app.dependency_overrides = original_overrides
 
     def test_database_error(self, unit_test_client, isolated_db):
-        """Test handling of invalid conversation ID."""
+
+             """Test handling of invalid conversation ID."""
         request_data = {
             "model": "test-model",
             "api_provider": "openai",
@@ -361,7 +373,8 @@ class TestChatErrorHandling:
         assert response.status_code == 200  # Should succeed with new conversation
 
     def test_invalid_message_format(self, unit_test_client):
-        """Test handling of invalid message format."""
+
+             """Test handling of invalid message format."""
         request_data = {
             "model": "test-model",
             "api_provider": "openai",

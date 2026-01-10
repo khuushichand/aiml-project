@@ -8,7 +8,7 @@ from tldw_Server_API.app.core.Embeddings.workers.base_worker import BaseWorker, 
 
 class _FakeRedisSkip:
     def __init__(self):
-        self.kv = {}
+             self.kv = {}
 
     async def set(self, key, value, ex=None):
         self.kv[key] = value
@@ -23,7 +23,7 @@ class _FakeRedisSkip:
 
 @pytest.mark.unit
 def test_job_skip_mark_and_status(monkeypatch, admin_user):
-    client = TestClient(app)
+     client = TestClient(app)
     client.cookies.set("csrf_token", "x")
     client.headers["X-CSRF-Token"] = "x"
     client.headers["Authorization"] = "Bearer key"
@@ -49,9 +49,9 @@ def test_job_skip_mark_and_status(monkeypatch, admin_user):
 
 @pytest.mark.unit
 def test_worker_is_job_skipped_check():
-    class _W(BaseWorker):
+     class _W(BaseWorker):
         def __init__(self):
-            cfg = WorkerConfig(
+                     cfg = WorkerConfig(
                 worker_id="storage-0",
                 worker_type="storage",
                 redis_url="redis://localhost:6379",
@@ -65,7 +65,8 @@ def test_worker_is_job_skipped_check():
             return None
 
         def _parse_message(self, data):
-            from tldw_Server_API.app.core.Embeddings.queue_schemas import StorageMessage
+
+                     from tldw_Server_API.app.core.Embeddings.queue_schemas import StorageMessage
             return StorageMessage(
                 job_id=data.get("job_id", "j"),
                 user_id="u",

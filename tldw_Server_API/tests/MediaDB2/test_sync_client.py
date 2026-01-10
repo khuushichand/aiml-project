@@ -20,19 +20,19 @@ from tldw_Server_API.app.core.Sync.Sync_Client import ClientSyncEngine
 
 class DummyHTTPStatusError(Exception):
     def __init__(self, response):
-        super().__init__("HTTP error")
+             super().__init__("HTTP error")
         self.response = response
 
 
 @pytest.fixture
 def client_db(memory_db_factory):
-    """Provides a fresh client DB instance."""
+     """Provides a fresh client DB instance."""
     # Use a specific client ID matching potential state file content
     return memory_db_factory("client_test_eng")
 
 @pytest.fixture
 def client_state_file(temp_state_file):
-    """Provides path to temp state file and ensures it starts empty or with defaults."""
+     """Provides path to temp state file and ensures it starts empty or with defaults."""
     # Ensure file is empty before test if it exists from fixture creation
     if os.path.exists(temp_state_file):
         os.remove(temp_state_file)
@@ -43,7 +43,7 @@ def client_state_file(temp_state_file):
 
 @pytest.fixture
 def sync_engine(client_db, client_state_file):
-    """Provides an initialized ClientSyncEngine instance."""
+     """Provides an initialized ClientSyncEngine instance."""
     # Use a dummy server URL for unit tests, mocking network calls
     engine = ClientSyncEngine(
         db_instance=client_db,
@@ -65,7 +65,7 @@ def create_mock_log_entry(change_id, entity, uuid, op, client, version, payload_
 
 class TestClientSyncEngineState:
     def test_state_load_no_file(self, client_db, temp_state_file):
-        """Test initialization when state file doesn't exist."""
+             """Test initialization when state file doesn't exist."""
         engine = ClientSyncEngine(client_db, "http://mock", "c1", temp_state_file)
         assert engine.last_local_log_id_sent == 0
         assert engine.last_server_log_id_processed == 0
@@ -77,7 +77,9 @@ class TestClientSyncEngineState:
 
 
     def test_state_load_existing_file(self, client_db, temp_state_file):
-        """Test initialization with a pre-existing state file."""
+
+
+             """Test initialization with a pre-existing state file."""
         initial_state = {'last_local_log_id_sent': 10, 'last_server_log_id_processed': 25}
         with open(temp_state_file, 'w') as f:
             json.dump(initial_state, f)
@@ -87,7 +89,8 @@ class TestClientSyncEngineState:
         assert engine.last_server_log_id_processed == 25
 
     def test_state_save(self, sync_engine):
-        """Test saving the state updates the file."""
+
+             """Test saving the state updates the file."""
         sync_engine.last_local_log_id_sent = 15
         sync_engine.last_server_log_id_processed = 30
         sync_engine._save_sync_state()
@@ -97,7 +100,8 @@ class TestClientSyncEngineState:
             assert state == {'last_local_log_id_sent': 15, 'last_server_log_id_processed': 30}
 
     def test_state_load_corrupt_file(self, client_db, temp_state_file):
-         """Test handling of corrupt state file."""
+
+              """Test handling of corrupt state file."""
          with open(temp_state_file, 'w') as f:
               f.write("this is not json")
          engine = ClientSyncEngine(client_db, "http://mock", "c1", temp_state_file)
@@ -114,14 +118,14 @@ class TestClientSyncEnginePush:
 
     @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch') # Mock the fetch method used in sync_client
     def test_push_no_local_changes(self, mock_post, sync_engine):
-        """Test push phase when there are no local changes."""
+             """Test push phase when there are no local changes."""
         sync_engine._push_local_changes()
         mock_post.assert_not_called() # Network call should not happen
         assert sync_engine.last_local_log_id_sent == 0 # State unchanged
 
     @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
     def test_push_successful(self, mock_post, sync_engine, client_db):
-        """Test successful push of local changes."""
+             """Test successful push of local changes."""
         # 1. Create local changes
         kw_id, kw_uuid = client_db.add_keyword("push_test_kw")
         # (Assume add_keyword creates log entry 1)
@@ -149,7 +153,7 @@ class TestClientSyncEnginePush:
 
     @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
     def test_push_http_error(self, mock_post, sync_engine, client_db):
-        """Test push phase when server returns an HTTP error."""
+             """Test push phase when server returns an HTTP error."""
         client_db.add_keyword("push_fail_kw")  # Log entry 1
 
         mock_http_response = MagicMock()
@@ -175,7 +179,7 @@ class TestClientSyncEnginePullApply:
 
     @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
     def test_pull_no_remote_changes(self, mock_get, sync_engine):
-        """Test pull phase when server has no new changes."""
+             """Test pull phase when server has no new changes."""
         # Configure mock response
         mock_response = MagicMock()
         mock_response.raise_for_status.return_value = None
@@ -193,7 +197,7 @@ class TestClientSyncEnginePullApply:
 
     @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
     def test_pull_and_apply_create_success(self, mock_get, sync_engine, client_db):
-        """Test pulling and applying a 'create' change successfully."""
+             """Test pulling and applying a 'create' change successfully."""
         kw_uuid = "uuid-from-server-create"
         kw_name = "server_created_keyword"
         server_change = create_mock_log_entry(
@@ -228,7 +232,7 @@ class TestClientSyncEnginePullApply:
 
     @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
     def test_pull_and_apply_update_success(self, mock_get, sync_engine, client_db):
-        """Test pulling and applying an 'update' change successfully."""
+             """Test pulling and applying an 'update' change successfully."""
         # 1. Setup initial state locally
         kw_uuid = "uuid-for-update"
         client_db.add_keyword("initial_name") # Assume this creates version 1, kw_uuid = '...' - need the actual uuid
@@ -264,7 +268,7 @@ class TestClientSyncEnginePullApply:
 
     @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
     def test_pull_and_apply_delete_success(self, mock_get, sync_engine, client_db):
-        """Test pulling and applying a 'delete' change successfully."""
+             """Test pulling and applying a 'delete' change successfully."""
         # 1. Setup initial state locally
         kw_uuid = "uuid-for-delete"
         client_db.add_keyword("to_be_deleted")
@@ -297,7 +301,7 @@ class TestClientSyncEnginePullApply:
 
     @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
     def test_apply_idempotency(self, mock_get, sync_engine, client_db):
-        """Test that applying the same change twice has no adverse effect."""
+             """Test that applying the same change twice has no adverse effect."""
         # 1. Apply a change once
         kw_uuid = "uuid-idempotent"
         server_change = create_mock_log_entry(101, "Keywords", kw_uuid, "create", "other", 1, {"keyword":"idem"}, "ts1")
@@ -325,7 +329,7 @@ class TestClientSyncEnginePullApply:
 
     @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
     def test_apply_old_change(self, mock_get, sync_engine, client_db):
-        """Test that applying a change older than local state is skipped."""
+             """Test that applying a change older than local state is skipped."""
         # 1. Setup local state (V2)
         kw_uuid = "uuid-old-change"
         client_db.add_keyword("v1")  # Create V1
@@ -359,7 +363,7 @@ class TestClientSyncEngineConflict:
 
      @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
      def test_conflict_detected_and_remote_wins_lww(self, mock_get, sync_engine, client_db):
-          """Test conflict where remote change wins based on LWW timestamp."""
+                """Test conflict where remote change wins based on LWW timestamp."""
           # 1. Setup initial synced state (V1)
           kw_uuid = "uuid-conflict-remote-wins"
           client_db.add_keyword("synced_v1")
@@ -406,7 +410,7 @@ class TestClientSyncEngineConflict:
 
      @patch('tldw_Server_API.app.core.Sync.Sync_Client.fetch')
      def test_conflict_detected_and_local_wins_lww(self, mock_get, sync_engine, client_db):
-           """Test conflict where local change wins based on LWW timestamp."""
+                 """Test conflict where local change wins based on LWW timestamp."""
            # 1. Setup initial synced state (V1)
            kw_uuid = "uuid-conflict-local-wins"
            client_db.add_keyword("synced_v1_lw")

@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.TTS.adapters.base import TTSAdapter, TTSRequest, T
 
 class BlockingAdapter(TTSAdapter):
     def __init__(self, state):
-        super().__init__({})
+             super().__init__({})
         self._status = ProviderStatus.AVAILABLE
         self._initialized = True
         self.state = state  # dict with keys: current, max, event

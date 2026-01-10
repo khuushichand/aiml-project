@@ -23,7 +23,9 @@ TEST_RLS_ROLE = "tldw_rls_tester"
 
 
 def _has_postgres_dependencies() -> bool:
-    try:
+
+
+     try:
         import psycopg  # noqa: F401
         return True
     except Exception:
@@ -38,7 +40,7 @@ def _has_postgres_dependencies() -> bool:
 )
 @pytest.mark.usefixtures("setup_test_database", "clean_database")
 def test_media_rls_enforces_scope_postgres():
-    dsn = (os.getenv("DATABASE_URL") or os.getenv("TEST_DATABASE_URL") or "").strip()
+     dsn = (os.getenv("DATABASE_URL") or os.getenv("TEST_DATABASE_URL") or "").strip()
     assert dsn, "Postgres test database URL not configured"
 
     base_config = DatabaseConfig.from_env()

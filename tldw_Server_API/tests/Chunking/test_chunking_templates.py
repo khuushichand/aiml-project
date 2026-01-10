@@ -37,7 +37,7 @@ from tldw_Server_API.app.api.v1.schemas.chunking_templates_schemas import (
 # Fixtures
 @pytest.fixture
 def temp_db():
-    """Create a temporary database for testing with proper cleanup."""
+     """Create a temporary database for testing with proper cleanup."""
     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
         db_path = tmp.name
 
@@ -62,7 +62,7 @@ def temp_db():
 
 @pytest.fixture
 def test_client(temp_db):
-    """Create a test client for API testing with proper database override."""
+     """Create a test client for API testing with proper database override."""
     from tldw_Server_API.app.main import app
     from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 
@@ -70,7 +70,7 @@ def test_client(temp_db):
 
     # Override the database dependency
     def override_get_db():
-        return db
+             return db
 
     app.dependency_overrides[get_media_db_for_user] = override_get_db
 
@@ -83,7 +83,7 @@ def test_client(temp_db):
 
 @pytest.fixture
 def auth_headers():
-    """Authentication headers for API requests."""
+     """Authentication headers for API requests."""
     api_key = get_settings().SINGLE_USER_API_KEY or os.getenv("SINGLE_USER_API_KEY", "test-api-key-that-is-long-enough")
     return {
         "X-API-KEY": api_key,
@@ -93,7 +93,7 @@ def auth_headers():
 
 @pytest.fixture
 def sample_template():
-    """Create a sample template for testing."""
+     """Create a sample template for testing."""
     return {
         "name": "test_template",
         "description": "Test template for unit tests",
@@ -125,7 +125,8 @@ class TestDatabaseOperations:
     """Test database CRUD operations for chunking templates."""
 
     def test_create_template(self, temp_db):
-        """Test creating a new template."""
+
+             """Test creating a new template."""
         db, _ = temp_db
 
         template = db.create_chunking_template(
@@ -142,7 +143,8 @@ class TestDatabaseOperations:
         assert "test" in template["tags"]
 
     def test_create_duplicate_template(self, temp_db):
-        """Test that duplicate template names are rejected."""
+
+             """Test that duplicate template names are rejected."""
         db, _ = temp_db
 
         # Create first template
@@ -163,7 +165,8 @@ class TestDatabaseOperations:
         assert "already exists" in str(exc_info.value)
 
     def test_get_template(self, temp_db):
-        """Test retrieving a template."""
+
+             """Test retrieving a template."""
         db, _ = temp_db
 
         # Create template
@@ -184,7 +187,8 @@ class TestDatabaseOperations:
         assert template is None
 
     def test_list_templates(self, temp_db):
-        """Test listing templates."""
+
+             """Test listing templates."""
         db, _ = temp_db
 
         # Create multiple templates
@@ -209,7 +213,8 @@ class TestDatabaseOperations:
         assert any(t["name"] == "list_test_1" for t in templates)
 
     def test_update_template(self, temp_db):
-        """Test updating a template."""
+
+             """Test updating a template."""
         db, _ = temp_db
 
         # Create template
@@ -236,7 +241,8 @@ class TestDatabaseOperations:
         assert updated["version"] == created["version"] + 1
 
     def test_cannot_update_builtin(self, temp_db):
-        """Test that built-in templates cannot be updated."""
+
+             """Test that built-in templates cannot be updated."""
         db, _ = temp_db
 
         # Create a builtin template
@@ -257,7 +263,8 @@ class TestDatabaseOperations:
         assert "built-in" in str(exc_info.value).lower()
 
     def test_delete_template(self, temp_db):
-        """Test deleting a template (soft delete)."""
+
+             """Test deleting a template (soft delete)."""
         db, _ = temp_db
 
         # Create template
@@ -280,7 +287,8 @@ class TestDatabaseOperations:
         assert result is False
 
     def test_cannot_delete_builtin(self, temp_db):
-        """Test that built-in templates cannot be deleted."""
+
+             """Test that built-in templates cannot be deleted."""
         db, _ = temp_db
 
         # Create a builtin template
@@ -303,7 +311,8 @@ class TestTemplateInitialization:
     """Test template loading and initialization."""
 
     def test_load_builtin_templates(self):
-        """Test loading built-in templates from files."""
+
+             """Test loading built-in templates from files."""
         templates = load_builtin_templates()
 
         assert isinstance(templates, list)
@@ -320,7 +329,8 @@ class TestTemplateInitialization:
         assert expected_names.issubset(template_names)
 
     def test_seed_builtin_templates(self, temp_db):
-        """Test seeding built-in templates into database."""
+
+             """Test seeding built-in templates into database."""
         db, _ = temp_db
 
         # Initialize templates
@@ -342,7 +352,8 @@ class TestAPIEndpoints:
     """Test REST API endpoints for template management."""
 
     def test_list_templates_endpoint(self, test_client, auth_headers, temp_db):
-        """Test GET /api/v1/chunking/templates endpoint."""
+
+             """Test GET /api/v1/chunking/templates endpoint."""
         db, _ = temp_db
 
         # Create test templates
@@ -369,7 +380,8 @@ class TestAPIEndpoints:
         assert all("api" in t["tags"] for t in data["templates"])
 
     def test_get_template_endpoint(self, test_client, auth_headers, temp_db):
-        """Test GET /api/v1/chunking/templates/{name} endpoint."""
+
+             """Test GET /api/v1/chunking/templates/{name} endpoint."""
         db, _ = temp_db
 
         # Create template
@@ -392,7 +404,8 @@ class TestAPIEndpoints:
         assert response.status_code == 404
 
     def test_create_template_endpoint(self, test_client, auth_headers, sample_template):
-        """Test POST /api/v1/chunking/templates endpoint."""
+
+             """Test POST /api/v1/chunking/templates endpoint."""
         # Create template via API
         request_data = {
             "name": sample_template["name"],
@@ -418,7 +431,8 @@ class TestAPIEndpoints:
         assert response.status_code == 409
 
     def test_update_template_endpoint(self, test_client, auth_headers, temp_db):
-        """Test PUT /api/v1/chunking/templates/{name} endpoint."""
+
+             """Test PUT /api/v1/chunking/templates/{name} endpoint."""
         db, _ = temp_db
 
         # Create template first
@@ -446,7 +460,8 @@ class TestAPIEndpoints:
         assert response.status_code == 404
 
     def test_delete_template_endpoint(self, test_client, auth_headers, temp_db):
-        """Test DELETE /api/v1/chunking/templates/{name} endpoint."""
+
+             """Test DELETE /api/v1/chunking/templates/{name} endpoint."""
         db, _ = temp_db
 
         # Create template first
@@ -469,7 +484,8 @@ class TestAPIEndpoints:
         assert response.status_code == 404
 
     def test_validate_template_endpoint(self, test_client, auth_headers):
-        """Test POST /api/v1/chunking/templates/validate endpoint."""
+
+             """Test POST /api/v1/chunking/templates/validate endpoint."""
         # Valid template
         valid_template = {
             "preprocessing": [
@@ -502,7 +518,8 @@ class TestAPIEndpoints:
         assert data["errors"] is not None
 
     def test_validate_template_with_hierarchical_boundaries_valid(self, test_client, auth_headers):
-        """Validate accepts hierarchical_template with a small set of safe boundaries."""
+
+             """Validate accepts hierarchical_template with a small set of safe boundaries."""
         payload = {
             "chunking": {
                 "method": "sentences",
@@ -525,7 +542,8 @@ class TestAPIEndpoints:
         assert body.get("errors") in (None, [])
 
     def test_validate_template_with_hierarchical_boundaries_limits(self, test_client, auth_headers):
-        """Validation rejects too many boundaries and overlong patterns/flags."""
+
+             """Validation rejects too many boundaries and overlong patterns/flags."""
         # >20 boundaries should trigger an error
         many_boundaries = [{"kind": f"k{i}", "pattern": r"^X$", "flags": "m"} for i in range(25)]
         payload_too_many = {
@@ -586,7 +604,8 @@ class TestTemplateProcessing:
     """Test template processing functionality."""
 
     def test_template_processor_operations(self):
-        """Test individual operations in TemplateProcessor."""
+
+             """Test individual operations in TemplateProcessor."""
         processor = TemplateProcessor()
 
         # Test normalize_whitespace
@@ -607,7 +626,8 @@ class TestTemplateProcessing:
         assert all(len(chunk) >= 10 or chunk == result[-1] for chunk in result)
 
     def test_process_template(self):
-        """Test processing text through a template."""
+
+             """Test processing text through a template."""
         processor = TemplateProcessor()
 
         # Create a simple template
@@ -646,7 +666,8 @@ class TestTemplateProcessing:
             assert len(result) == 2  # After filtering out "Short."
 
     def test_process_template_db_style_schema(self):
-        """TemplateProcessor should accept DB-style operation/config schema via stages."""
+
+             """TemplateProcessor should accept DB-style operation/config schema via stages."""
         processor = TemplateProcessor()
 
         # Build stages using DB-style operation/config entries
@@ -687,7 +708,8 @@ class TestIntegration:
     """Test integration between components."""
 
     def test_apply_template_endpoint(self, test_client, auth_headers, temp_db):
-        """Test applying a template to text via API."""
+
+             """Test applying a template to text via API."""
         db, _ = temp_db
 
         # Create a template
@@ -732,7 +754,8 @@ class TestIntegration:
             assert "metadata" in data
 
     def test_apply_template_endpoint_real_processor(self, test_client, auth_headers, temp_db):
-        """Apply template without mocking, ensure end-to-end DB schema mapping works."""
+
+             """Apply template without mocking, ensure end-to-end DB schema mapping works."""
         db, _ = temp_db
 
         # Create a simple words-based template that should work with real processor
@@ -763,7 +786,8 @@ class TestIntegration:
         assert len(body["chunks"]) >= 2
 
     def test_template_in_chunking_endpoint(self):
-        """Test using templates in the main chunking endpoint."""
+
+             """Test using templates in the main chunking endpoint."""
         from tldw_Server_API.app.api.v1.endpoints.chunking import process_text_for_chunking_json
         from tldw_Server_API.app.api.v1.schemas.chunking_schema import ChunkingTextRequest, ChunkingOptionsRequest
 

@@ -79,7 +79,8 @@ def _build_app_with_admin_cleanup(principal: AuthPrincipal) -> FastAPI:
     tmp.touch(exist_ok=True)
 
     def _fake_get_single_user_id() -> int:
-        return principal.user_id or 1
+
+             return principal.user_id or 1
 
     def _fake_get_user_base_directory(_user_id: int) -> Path:
         return tmp.parent
@@ -105,7 +106,7 @@ def _build_app_with_admin_cleanup(principal: AuthPrincipal) -> FastAPI:
 
 @pytest.mark.unit
 def test_require_admin_helper_respects_env_guard(monkeypatch):
-    from fastapi import HTTPException
+     from fastapi import HTTPException
     from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import require_admin
 
     user = SimpleNamespace(is_admin=False, role="user", roles=["user"])
@@ -121,7 +122,7 @@ def test_require_admin_helper_respects_env_guard(monkeypatch):
 
 @pytest.mark.unit
 def test_admin_cleanup_idempotency_forbidden_without_admin_role(monkeypatch):
-    principal = _make_principal(roles=["user"], permissions=[], is_admin=False)
+     principal = _make_principal(roles=["user"], permissions=[], is_admin=False)
     app = _build_app_with_admin_cleanup(principal)
     monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "true")
 
@@ -135,7 +136,7 @@ def test_admin_cleanup_idempotency_forbidden_without_admin_role(monkeypatch):
 
 @pytest.mark.unit
 def test_admin_cleanup_idempotency_allowed_for_admin(monkeypatch):
-    principal = _make_principal(roles=["admin"], permissions=[], is_admin=True)
+     principal = _make_principal(roles=["admin"], permissions=[], is_admin=True)
     app = _build_app_with_admin_cleanup(principal)
     monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "true")
 
@@ -154,7 +155,7 @@ def test_admin_cleanup_idempotency_allowed_for_admin(monkeypatch):
 
 @pytest.mark.unit
 def test_admin_cleanup_idempotency_allows_roles_admin_without_is_admin(monkeypatch):
-    """
+     """
     Ensure that a principal with roles=['admin'] but is_admin=False is still
     treated as admin by the heavy-evals gate.
     """

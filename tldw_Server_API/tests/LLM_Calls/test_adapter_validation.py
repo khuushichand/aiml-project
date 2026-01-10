@@ -10,7 +10,9 @@ from tldw_Server_API.app.core.LLM_Calls.providers.cohere_adapter import CohereAd
 
 
 def test_openai_adapter_rejects_provider_unsupported_fields(monkeypatch):
-    def _fail_factory(*_args, **_kwargs):
+
+
+     def _fail_factory(*_args, **_kwargs):
         raise AssertionError("http_client_factory should not be called on validation errors")
 
     monkeypatch.setattr(
@@ -25,29 +27,36 @@ def test_openai_adapter_rejects_provider_unsupported_fields(monkeypatch):
 
 
 def test_openrouter_adapter_normalizes_topk_alias(monkeypatch):
-    captured = {}
+
+
+     captured = {}
 
     class FakeResp:
         status_code = 200
 
         def raise_for_status(self):
-            return None
+
+                     return None
 
         def json(self):
-            return {"choices": []}
+
+                     return {"choices": []}
 
     class FakeClient:
         def __init__(self, *_args, **_kwargs):
-            pass
+                     pass
 
         def __enter__(self):
-            return self
+
+                     return self
 
         def __exit__(self, exc_type, exc, tb):
-            return False
+
+                     return False
 
         def post(self, url, headers=None, json=None):
-            captured["url"] = url
+
+                     captured["url"] = url
             captured["headers"] = headers
             captured["json"] = json
             return FakeResp()
@@ -72,7 +81,9 @@ def test_openrouter_adapter_normalizes_topk_alias(monkeypatch):
 
 
 def test_mistral_adapter_rejects_min_p(monkeypatch):
-    def _fail_factory(*_args, **_kwargs):
+
+
+     def _fail_factory(*_args, **_kwargs):
         raise AssertionError("http_client_factory should not be called on validation errors")
 
     monkeypatch.setattr(
@@ -87,7 +98,9 @@ def test_mistral_adapter_rejects_min_p(monkeypatch):
 
 
 def test_cohere_adapter_rejects_tool_choice(monkeypatch):
-    def _fail_handler(*_args, **_kwargs):
+
+
+     def _fail_handler(*_args, **_kwargs):
         raise AssertionError("_to_handler_args should not be called on validation errors")
 
     monkeypatch.setattr(CohereAdapter, "_to_handler_args", _fail_handler, raising=True)

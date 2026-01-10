@@ -13,7 +13,7 @@ from tldw_Server_API.app.core.Embeddings.vector_store_batches_db import init_db 
 
 @pytest.fixture(autouse=True)
 def testing_env(monkeypatch, tmp_path):
-    os.environ['TESTING'] = 'true'
+     os.environ['TESTING'] = 'true'
     from tldw_Server_API.app.core import config as cfg
     monkeypatch.setitem(cfg.settings, 'USER_DB_BASE_DIR', tmp_path)
     yield
@@ -23,7 +23,7 @@ def testing_env(monkeypatch, tmp_path):
 
 @pytest.fixture()
 def client_admin():
-    async def override_user():
+     async def override_user():
         return User(id=1, username='admin', email='a@e.com', is_active=True, is_admin=True)
 
     async def override_principal():
@@ -47,7 +47,9 @@ def client_admin():
 
 
 def test_admin_users_list(client_admin, tmp_path):
-    # Prepare two users with meta/batch DBs
+
+
+     # Prepare two users with meta/batch DBs
     base = tmp_path
     for uid in ['1','2']:
         init_meta_db(uid)

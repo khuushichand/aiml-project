@@ -54,7 +54,6 @@ class _FakeClient:
 
 @pytest.mark.unit
 def test_analyze_uses_adapter_non_stream(monkeypatch):
-    monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "1")
     fake_json = {"choices": [{"message": {"content": "summary"}}]}
     monkeypatch.setattr(openai_mod, "http_client_factory", lambda *a, **k: _FakeClient(json_data=fake_json))
 
@@ -74,7 +73,6 @@ def test_analyze_uses_adapter_non_stream(monkeypatch):
 
 @pytest.mark.unit
 def test_analyze_uses_adapter_stream(monkeypatch):
-    monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "1")
     lines = [
         'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n',
         'data: {"choices":[{"delta":{"content":" world"}}]}\n\n',

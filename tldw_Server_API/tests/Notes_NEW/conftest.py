@@ -32,7 +32,8 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 # =====================================================================
 
 def pytest_configure(config):
-    """Register custom markers for test categorization."""
+
+     """Register custom markers for test categorization."""
     config.addinivalue_line("markers", "unit: Unit tests with minimal mocking")
     config.addinivalue_line("markers", "integration: Integration tests with real components")
     config.addinivalue_line("markers", "property: Property-based tests")
@@ -46,7 +47,7 @@ def pytest_configure(config):
 
 @pytest.fixture(scope="session")
 def test_env_vars():
-    """Set up test environment variables."""
+     """Set up test environment variables."""
     original_env = os.environ.copy()
 
     # Set test mode
@@ -65,7 +66,7 @@ def test_env_vars():
 
 @pytest.fixture
 def test_db_path() -> Generator[Path, None, None]:
-    """Create a temporary database file that gets cleaned up."""
+     """Create a temporary database file that gets cleaned up."""
     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp_file:
         db_path = Path(tmp_file.name)
 
@@ -80,7 +81,7 @@ def test_db_path() -> Generator[Path, None, None]:
 
 @pytest.fixture
 def test_chacha_db(test_db_path) -> Generator[CharactersRAGDB, None, None]:
-    """Create a real CharactersRAGDB instance for testing."""
+     """Create a real CharactersRAGDB instance for testing."""
     db = CharactersRAGDB(
         db_path=str(test_db_path),
         client_id="test_client"
@@ -99,7 +100,7 @@ def test_chacha_db(test_db_path) -> Generator[CharactersRAGDB, None, None]:
 
 @pytest.fixture
 def populated_chacha_db(test_chacha_db) -> CharactersRAGDB:
-    """Create a CharactersRAGDB with test data."""
+     """Create a CharactersRAGDB with test data."""
     db = test_chacha_db
 
     # Create test notes
@@ -135,7 +136,7 @@ def populated_chacha_db(test_chacha_db) -> CharactersRAGDB:
 
 @pytest.fixture
 def test_notes_service(test_db_path) -> Generator[NotesInteropService, None, None]:
-    """Create a NotesInteropService with a real test database."""
+     """Create a NotesInteropService with a real test database."""
     # Create a temporary directory for the service
     with tempfile.TemporaryDirectory() as temp_dir:
         service = NotesInteropService(
@@ -160,7 +161,7 @@ def test_notes_service(test_db_path) -> Generator[NotesInteropService, None, Non
 
 @pytest.fixture
 def mock_chacha_db():
-    """Create a mock CharactersRAGDB for unit tests."""
+     """Create a mock CharactersRAGDB for unit tests."""
     db = MagicMock(spec=CharactersRAGDB)
 
     # Mock note methods
@@ -200,7 +201,7 @@ def mock_chacha_db():
 
 @pytest.fixture
 def mock_notes_service(mock_chacha_db):
-    """Create a NotesInteropService with mocked database for unit tests."""
+     """Create a NotesInteropService with mocked database for unit tests."""
     with tempfile.TemporaryDirectory() as temp_dir:
         with patch('tldw_Server_API.app.core.Notes.Notes_Library.CharactersRAGDB', return_value=mock_chacha_db):
             service = NotesInteropService(
@@ -217,7 +218,7 @@ def mock_notes_service(mock_chacha_db):
 
 @pytest.fixture
 def sample_note():
-    """Sample note data."""
+     """Sample note data."""
     return {
         'title': 'Test Note',
         'content': 'This is a test note with some content.',
@@ -226,7 +227,7 @@ def sample_note():
 
 @pytest.fixture
 def sample_notes():
-    """Multiple sample notes."""
+     """Multiple sample notes."""
     return [
         {
             'title': 'Note 1',
@@ -247,7 +248,7 @@ def sample_notes():
 
 @pytest.fixture
 def long_note():
-    """Long note for testing content limits."""
+     """Long note for testing content limits."""
     return {
         'title': 'Long Note',
         'content': ' '.join(['This is sentence number {}.'.format(i) for i in range(1000)]),
@@ -256,7 +257,7 @@ def long_note():
 
 @pytest.fixture
 def markdown_note():
-    """Note with markdown formatting."""
+     """Note with markdown formatting."""
     return {
         'title': 'Markdown Note',
         'content': """# Header 1
@@ -272,7 +273,7 @@ def markdown_note():
 
 ```python
 def hello():
-    print("Hello")
+     print("Hello")
 ```
         """,
         'user_id': 'test_user'
@@ -284,7 +285,7 @@ def hello():
 
 @pytest.fixture
 def sample_keyword():
-    """Sample keyword data."""
+     """Sample keyword data."""
     return {
         'keyword': 'test-keyword',
         'user_id': 'test_user'
@@ -292,7 +293,7 @@ def sample_keyword():
 
 @pytest.fixture
 def sample_keywords():
-    """Multiple sample keywords."""
+     """Multiple sample keywords."""
     return [
         {'keyword': 'python', 'user_id': 'test_user'},
         {'keyword': 'testing', 'user_id': 'test_user'},
@@ -303,7 +304,7 @@ def sample_keywords():
 
 @pytest.fixture
 def hierarchical_keywords():
-    """Keywords with hierarchical structure."""
+     """Keywords with hierarchical structure."""
     return [
         {'keyword': 'programming', 'user_id': 'test_user'},
         {'keyword': 'programming/python', 'user_id': 'test_user'},
@@ -317,7 +318,7 @@ def hierarchical_keywords():
 
 @pytest.fixture
 def version_conflict_scenario():
-    """Setup for version conflict testing."""
+     """Setup for version conflict testing."""
     return {
         'note_id': 1,
         'original_version': 1,
@@ -337,7 +338,7 @@ def version_conflict_scenario():
 
 @pytest.fixture
 def search_queries():
-    """Various search query patterns."""
+     """Various search query patterns."""
     return {
         'simple': 'test',
         'phrase': '"exact phrase"',
@@ -354,7 +355,7 @@ def search_queries():
 
 @pytest.fixture
 def rate_limiter_config():
-    """Rate limiter configuration."""
+     """Rate limiter configuration."""
     return {
         'max_requests_per_minute': 30,
         'window_size': 60,  # seconds
@@ -363,7 +364,7 @@ def rate_limiter_config():
 
 @pytest.fixture
 def mock_rate_limiter():
-    """Mock rate limiter for testing."""
+     """Mock rate limiter for testing."""
     from tldw_Server_API.app.api.v1.endpoints.notes import SimpleRateLimiter
     limiter = SimpleRateLimiter(max_requests_per_minute=30)
     return limiter
@@ -374,7 +375,7 @@ def mock_rate_limiter():
 
 @pytest.fixture
 def note_create_request():
-    """Note creation API request."""
+     """Note creation API request."""
     return {
         'title': 'API Test Note',
         'content': 'Content created via API',
@@ -383,7 +384,7 @@ def note_create_request():
 
 @pytest.fixture
 def note_update_request():
-    """Note update API request."""
+     """Note update API request."""
     return {
         'title': 'Updated Title',
         'content': 'Updated content',
@@ -392,7 +393,7 @@ def note_update_request():
 
 @pytest.fixture
 def expected_note_response():
-    """Expected note API response structure."""
+     """Expected note API response structure."""
     return {
         'id': int,
         'title': str,
@@ -409,7 +410,7 @@ def expected_note_response():
 
 @pytest.fixture
 def test_users():
-    """Multiple test users for isolation testing."""
+     """Multiple test users for isolation testing."""
     return [
         {'id': 'user1', 'name': 'Test User 1'},
         {'id': 'user2', 'name': 'Test User 2'},
@@ -418,7 +419,7 @@ def test_users():
 
 @pytest.fixture
 def user_headers():
-    """Headers for different test users."""
+     """Headers for different test users."""
     return {
         'user1': {'X-User-ID': 'user1', 'Authorization': 'Bearer token1'},
         'user2': {'X-User-ID': 'user2', 'Authorization': 'Bearer token2'},
@@ -431,7 +432,7 @@ def user_headers():
 
 @pytest.fixture
 def large_note_collection():
-    """Generate a large collection of notes for performance testing."""
+     """Generate a large collection of notes for performance testing."""
     notes = []
     for i in range(1000):
         notes.append({
@@ -443,7 +444,7 @@ def large_note_collection():
 
 @pytest.fixture
 def performance_metrics():
-    """Track performance metrics during tests."""
+     """Track performance metrics during tests."""
     return {
         'create_times': [],
         'read_times': [],
@@ -458,7 +459,7 @@ def performance_metrics():
 
 @pytest.fixture
 def concurrent_operations():
-    """Setup for concurrent operation testing."""
+     """Setup for concurrent operation testing."""
     return {
         'num_threads': 5,
         'operations_per_thread': 10,
@@ -472,7 +473,7 @@ def concurrent_operations():
 
 @pytest.fixture
 def error_scenarios():
-    """Various error scenarios for testing."""
+     """Various error scenarios for testing."""
     return {
         'database_locked': sqlite3.OperationalError("database is locked"),
         'constraint_violation': InputError("UNIQUE constraint failed"),
@@ -487,14 +488,14 @@ def error_scenarios():
 
 @pytest.fixture
 def test_client(test_env_vars):
-    """Create a test client for the FastAPI app."""
+     """Create a test client for the FastAPI app."""
     from tldw_Server_API.app.main import app
     with TestClient(app) as client:
         yield client
 
 @pytest.fixture
 def auth_headers():
-    """Authentication headers for API requests."""
+     """Authentication headers for API requests."""
     return {
         "Authorization": "Bearer test-api-key",
         "Content-Type": "application/json"
@@ -506,7 +507,7 @@ def auth_headers():
 
 @pytest.fixture(autouse=True)
 def cleanup_after_test():
-    """Cleanup after each test."""
+     """Cleanup after each test."""
     yield
     # Cleanup any temporary files or resources
     import gc
@@ -517,7 +518,8 @@ def cleanup_after_test():
 # =====================================================================
 
 def create_test_note(db, **kwargs):
-    """Helper to create a test note."""
+
+     """Helper to create a test note."""
     note_data = {
         'title': 'Test Note',
         'content': 'Test content',
@@ -527,7 +529,8 @@ def create_test_note(db, **kwargs):
     return db.create_note(**note_data)
 
 def create_test_keyword(db, **kwargs):
-    """Helper to create a test keyword."""
+
+     """Helper to create a test keyword."""
     keyword_data = {
         'keyword': 'test-keyword',
         'user_id': 'test_user'

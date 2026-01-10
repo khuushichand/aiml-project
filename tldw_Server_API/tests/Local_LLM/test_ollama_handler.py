@@ -77,16 +77,16 @@ async def test_ollama_serve_model_not_ready(monkeypatch):
 
     class DummyProc:
         def __init__(self):
-            self.pid = 123
+                     self.pid = 123
             self.returncode = None
             self.stderr = DummyStderr()
         async def wait(self):
             self.returncode = 0
             return 0
         def terminate(self):
-            self.returncode = 0
+                     self.returncode = 0
         def kill(self):
-            self.returncode = -9
+                     self.returncode = -9
 
     async def fake_cpe(*args, **kwargs):
         return DummyProc()

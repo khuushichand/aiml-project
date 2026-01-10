@@ -7,7 +7,7 @@ from tldw_Server_API.app.main import app
 
 class _FakeAsyncRedis:
     def __init__(self):
-        self.streams = {}
+             self.streams = {}
         self.kv = {}
         self.hash = {}
 
@@ -52,7 +52,7 @@ class _FakeAsyncRedis:
 
 @pytest.mark.unit
 def test_dlq_quarantine_blocks_requeue_then_approve(monkeypatch, admin_user):
-    client = TestClient(app)
+     client = TestClient(app)
     client.cookies.set("csrf_token", "x")
     client.headers["X-CSRF-Token"] = "x"
     client.headers["Authorization"] = "Bearer key"

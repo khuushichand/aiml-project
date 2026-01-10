@@ -17,7 +17,7 @@ class TestContextualChunking:
 
     @pytest.fixture
     def mock_config(self):
-        """Create a mock configuration with contextual settings."""
+             """Create a mock configuration with contextual settings."""
         return {
             "USER_DB_BASE_DIR": "/tmp/test_db",
             "embedding_config": {
@@ -39,7 +39,7 @@ class TestContextualChunking:
 
     @pytest.fixture
     def mock_chroma_manager(self, mock_config):
-        """Create a mock ChromaDBManager instance."""
+             """Create a mock ChromaDBManager instance."""
         with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.Path'):
             with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chromadb'):
                 manager = ChromaDBManager(
@@ -49,11 +49,13 @@ class TestContextualChunking:
                 return manager
 
     def test_contextual_chunking_disabled_by_default(self, mock_chroma_manager):
-        """Test that contextual chunking is disabled by default."""
+
+             """Test that contextual chunking is disabled by default."""
         assert mock_chroma_manager.embedding_config.get("enable_contextual_chunking", False) == False
 
     def test_contextual_chunking_config_override(self, mock_config):
-        """Test that config settings can override contextual chunking default."""
+
+             """Test that config settings can override contextual chunking default."""
         mock_config["embedding_config"]["enable_contextual_chunking"] = True
 
         with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.Path'):
@@ -74,7 +76,7 @@ class TestContextualChunking:
         mock_chunk_for_embedding,
         mock_chroma_manager
     ):
-        """Test that contextualization is applied when explicitly enabled."""
+             """Test that contextualization is applied when explicitly enabled."""
         # Setup mocks
         mock_chunk_for_embedding.return_value = [
             {"text": "chunk1", "metadata": {}},
@@ -117,7 +119,7 @@ class TestContextualChunking:
         mock_chunk_for_embedding,
         mock_chroma_manager
     ):
-        """Test that contextualization is NOT applied when disabled."""
+             """Test that contextualization is NOT applied when disabled."""
         # Setup mocks
         mock_chunk_for_embedding.return_value = [
             {"text": "chunk1", "metadata": {}},
@@ -156,7 +158,7 @@ class TestContextualChunking:
         mock_chunk_for_embedding,
         mock_chroma_manager
     ):
-        """Test that None value for create_contextualized uses config default."""
+             """Test that None value for create_contextualized uses config default."""
         # Setup config to have contextualization enabled
         mock_chroma_manager.embedding_config["enable_contextual_chunking"] = True
 
@@ -184,7 +186,8 @@ class TestContextualChunking:
             mock_situate.assert_called()
 
     def test_situate_context_generates_summary(self, mock_chroma_manager):
-        """Test that situate_context generates appropriate context."""
+
+             """Test that situate_context generates appropriate context."""
         with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.analyze') as mock_analyze:
             mock_analyze.return_value = "This chunk discusses machine learning concepts."
 
@@ -203,7 +206,8 @@ class TestContextualChunking:
             assert "Neural networks are..." in str(call_args)
 
     def test_situate_context_handles_errors_gracefully(self, mock_chroma_manager):
-        """Test that situate_context handles LLM errors gracefully."""
+
+             """Test that situate_context handles LLM errors gracefully."""
         with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.analyze') as mock_analyze:
             mock_analyze.side_effect = Exception("LLM API error")
 
@@ -217,7 +221,8 @@ class TestContextualChunking:
             assert result == ""
 
     def test_contextual_llm_model_selection(self, mock_chroma_manager):
-        """Test that the correct LLM model is selected for contextualization."""
+
+             """Test that the correct LLM model is selected for contextualization."""
         # Test default model
         assert mock_chroma_manager.embedding_config.get("contextual_llm_model", "gpt-3.5-turbo") == "gpt-3.5-turbo"
 
@@ -235,7 +240,7 @@ class TestContextualChunking:
         mock_chunk_for_embedding,
         mock_chroma_manager
     ):
-        """Test that chunk metadata includes contextualization information."""
+             """Test that chunk metadata includes contextualization information."""
         # Setup mocks
         mock_chunk_for_embedding.return_value = [
             {"text": "chunk1", "metadata": {}}

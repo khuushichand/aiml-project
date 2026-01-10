@@ -62,7 +62,8 @@ class _StubLimiter:
         }
 
     def clear_all_locks(self) -> None:
-        """Reset lockout state to simulate expiry."""
+
+             """Reset lockout state to simulate expiry."""
         self._attempts.clear()
         self._locked_ids.clear()
 
@@ -133,7 +134,7 @@ class TestAuthLoginLockoutViaAuthGovernor:
 
         # Ensure settings see rate limiting as enabled if consulted elsewhere
         def _fake_settings():
-            from tldw_Server_API.app.core.AuthNZ.settings import Settings
+                     from tldw_Server_API.app.core.AuthNZ.settings import Settings
 
             return Settings(RATE_LIMIT_ENABLED=True)
 
@@ -148,7 +149,8 @@ class TestAuthLoginLockoutViaAuthGovernor:
         _app.dependency_overrides.pop(auth_deps.get_rate_limiter_dep, None)
 
     def test_repeated_invalid_logins_lead_to_lockout(self):
-        # First attempt: invalid password, should be 401 (no lockout yet)
+
+             # First attempt: invalid password, should be 401 (no lockout yet)
         r1 = self.client.post(
             "/api/v1/auth/login",
             data={"username": self.username, "password": "WrongPassword1!"},
@@ -175,7 +177,8 @@ class TestAuthLoginLockoutViaAuthGovernor:
         assert retry_after > 0, "Expected positive Retry-After when locked out"
 
     def test_successful_login_after_lockout_expires(self):
-        # Drive the identifier into a locked state via repeated failures.
+
+             # Drive the identifier into a locked state via repeated failures.
         for _ in range(3):
             resp = self.client.post(
                 "/api/v1/auth/login",

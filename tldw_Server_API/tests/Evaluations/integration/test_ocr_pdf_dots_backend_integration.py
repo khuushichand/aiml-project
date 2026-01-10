@@ -11,7 +11,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.evaluations]
 
 
 def test_ocr_pdf_endpoint_with_dots_backend_integration(monkeypatch):
-    # Skip unless dots_ocr is importable
+
+
+     # Skip unless dots_ocr is importable
     pytest.importorskip("dots_ocr")
 
     # Import app and endpoint module

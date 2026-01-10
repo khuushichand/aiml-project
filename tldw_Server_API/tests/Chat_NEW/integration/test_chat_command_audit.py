@@ -4,7 +4,7 @@ import pytest
 
 @pytest.mark.integration
 def test_chat_command_audit_logged_system_mode(monkeypatch, test_client, auth_headers):
-    monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "1")
+     monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "1")
     monkeypatch.setenv("CHAT_COMMAND_INJECTION_MODE", "system")
 
     # Capture audit events
@@ -42,7 +42,7 @@ def test_chat_command_audit_logged_system_mode(monkeypatch, test_client, auth_he
 
 @pytest.mark.integration
 def test_chat_command_audit_logged_preface_mode(monkeypatch, test_client, auth_headers):
-    monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "1")
+     monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "1")
     monkeypatch.setenv("CHAT_COMMAND_INJECTION_MODE", "preface")
 
     captured_events = {"events": []}
@@ -60,7 +60,7 @@ def test_chat_command_audit_logged_preface_mode(monkeypatch, test_client, auth_h
     from tldw_Server_API.app.api.v1.endpoints import chat as chat_endpoint
     captured_msg = {"messages": None}
     def fake_call(**kwargs):
-        captured_msg["messages"] = kwargs.get("messages_payload")
+             captured_msg["messages"] = kwargs.get("messages_payload")
         return {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
     monkeypatch.setattr(chat_endpoint, "perform_chat_api_call", fake_call)
 
@@ -98,7 +98,7 @@ def test_chat_command_audit_logged_preface_mode(monkeypatch, test_client, auth_h
 
 @pytest.mark.integration
 def test_chat_command_rbac_enforcement(monkeypatch, test_client, auth_headers):
-    monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "1")
+     monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "1")
     monkeypatch.setenv("CHAT_COMMANDS_REQUIRE_PERMISSIONS", "1")
     # Force multi-user mode in router and steer permission checks
     from tldw_Server_API.app.core.Chat import command_router
@@ -134,7 +134,7 @@ def test_chat_command_rbac_enforcement(monkeypatch, test_client, auth_headers):
 
 @pytest.mark.integration
 def test_chat_command_weather_default_location_system_mode(monkeypatch, test_client, auth_headers):
-    # Enable commands and system injection; ensure env default_location not set
+     # Enable commands and system injection; ensure env default_location not set
     monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "1")
     monkeypatch.setenv("CHAT_COMMAND_INJECTION_MODE", "system")
     monkeypatch.delenv("DEFAULT_LOCATION", raising=False)
@@ -150,7 +150,7 @@ def test_chat_command_weather_default_location_system_mode(monkeypatch, test_cli
     # Mock weather provider
     class OkClient:
         def get_current(self, location=None, lat=None, lon=None):
-            class R:
+                     class R:
                 ok = True
                 summary = f"Sunny at {location or 'nowhere'}"
                 metadata = {"provider": "test"}
@@ -161,7 +161,7 @@ def test_chat_command_weather_default_location_system_mode(monkeypatch, test_cli
     from tldw_Server_API.app.api.v1.endpoints import chat as chat_endpoint
     captured = {"system_message": None}
     def fake_call(**kwargs):
-        captured["system_message"] = kwargs.get("system_message")
+             captured["system_message"] = kwargs.get("system_message")
         return {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
     monkeypatch.setattr(chat_endpoint, "perform_chat_api_call", fake_call)
 

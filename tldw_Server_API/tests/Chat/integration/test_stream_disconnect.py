@@ -13,7 +13,7 @@ async def test_chat_stream_disconnect_no_generatorexit(async_client, auth_header
 
     # Mock provider to return a simple sync generator of text chunks
     def provider_stream_generator():
-        yield "This is"
+             yield "This is"
         yield " a streaming"
         yield " response."
 

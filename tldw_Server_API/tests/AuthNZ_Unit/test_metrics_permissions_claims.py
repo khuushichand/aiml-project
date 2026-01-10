@@ -68,7 +68,7 @@ def _build_app_with_overrides(
 
 @pytest.mark.unit
 def test_metrics_reset_401_when_principal_unavailable():
-    app = _build_app_with_overrides(principal=None, fail_with_401=True)
+     app = _build_app_with_overrides(principal=None, fail_with_401=True)
 
     with TestClient(app) as client:
         resp = client.post("/api/v1/metrics/reset")
@@ -79,7 +79,7 @@ def test_metrics_reset_401_when_principal_unavailable():
 
 @pytest.mark.unit
 def test_metrics_reset_403_when_missing_admin_role():
-    principal = _make_principal(
+     principal = _make_principal(
         is_admin=False,
         roles=["user"],
         permissions=[],
@@ -94,7 +94,7 @@ def test_metrics_reset_403_when_missing_admin_role():
 
 @pytest.mark.unit
 def test_metrics_reset_200_for_admin_principal():
-    principal = _make_principal(
+     principal = _make_principal(
         is_admin=True,
         roles=["admin"],
         permissions=[],

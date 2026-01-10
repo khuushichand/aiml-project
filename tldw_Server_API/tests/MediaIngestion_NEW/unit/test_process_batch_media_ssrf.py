@@ -15,10 +15,12 @@ async def test_process_batch_media_blocks_unsafe_url(monkeypatch, tmp_path):
     blocked_url = "http://blocked.example"
 
     def fake_evaluate_url_policy(_url, **_kwargs):
-        return SimpleNamespace(allowed=False, reason="blocked")
+
+             return SimpleNamespace(allowed=False, reason="blocked")
 
     def fake_process_audio_files(**_kwargs):
-        raise AssertionError("process_audio_files should not be called for blocked URLs")
+
+             raise AssertionError("process_audio_files should not be called for blocked URLs")
 
     monkeypatch.setattr(egress, "evaluate_url_policy", fake_evaluate_url_policy)
     monkeypatch.setattr(Audio_Files, "process_audio_files", fake_process_audio_files)

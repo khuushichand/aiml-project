@@ -27,6 +27,8 @@ This allows for semantic search across the content.
 
 
 def _is_inprocess_client(api_client) -> bool:
+
+
     base_url = str(getattr(api_client.client, "base_url", ""))
     if "testserver" in base_url:
         return True
@@ -37,6 +39,8 @@ def _is_inprocess_client(api_client) -> bool:
 
 
 def _build_async_client(api_client):
+
+
     auth_headers = api_client.get_auth_headers()
     if _is_inprocess_client(api_client):
         from tldw_Server_API.app.main import app
@@ -164,12 +168,14 @@ class TestEmbeddingsE2E:
     """End-to-end tests for embeddings functionality."""
 
     def teardown_method(self):
+
         """Clean up after each test method."""
         # Note: In a real scenario, we might want to delete test media items
         # from the database, but for now we'll rely on overwrite_existing
         pass
 
     def test_generate_text_embeddings(self, api_client):
+
         """Test basic text embedding generation via the embeddings API."""
         # Test single text embedding
         response = api_client.client.post(
@@ -193,6 +199,7 @@ class TestEmbeddingsE2E:
         print(f"✓ Generated embedding with {len(result['data'][0]['embedding'])} dimensions")
 
     def test_batch_embeddings(self, api_client):
+
         """Test batch embedding generation."""
         texts = [
             "First test sentence.",
@@ -431,6 +438,7 @@ class TestEmbeddingsE2E:
                 os.unlink(temp_file_path)
 
     def test_embedding_model_fallback(self, api_client):
+
         """Test that system falls back to default model when requested model unavailable."""
         response = api_client.client.post(
             f"{api_client.base_url}/api/v1/embeddings",
@@ -541,6 +549,7 @@ class TestEmbeddingsPerformance:
     """Performance and edge case tests for embeddings."""
 
     def test_large_document_embeddings(self, api_client):
+
         """Test embedding generation for large documents."""
         # Create a large document (1MB of text)
         large_content = "This is a test sentence. " * 50000

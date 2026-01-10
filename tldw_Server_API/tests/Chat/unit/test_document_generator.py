@@ -26,7 +26,7 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHA
 
 @pytest.fixture
 def real_db():
-    """Create a real database instance for testing."""
+     """Create a real database instance for testing."""
     # Create a temporary directory for the test database
     temp_dir = tempfile.mkdtemp(prefix="test_docgen_")
     db_path = os.path.join(temp_dir, "test_docgen.db")
@@ -95,19 +95,19 @@ def real_db():
 
 @pytest.fixture
 def mock_db(real_db):
-    """Alias for real_db to match test expectations."""
+     """Alias for real_db to match test expectations."""
     return real_db
 
 
 @pytest.fixture
 def service(real_db):
-    """Create a DocumentGeneratorService instance with real database."""
+     """Create a DocumentGeneratorService instance with real database."""
     return DocumentGeneratorService(real_db, user_id="test_user")
 
 
 @pytest.fixture
 def sample_conversation():
-    """Create sample conversation data."""
+     """Create sample conversation data."""
     return {
         "id": "conv123",
         "title": "Test Conversation",
@@ -125,7 +125,8 @@ class TestDocumentGeneratorService:
     """Test suite for DocumentGeneratorService."""
 
     def test_init_creates_tables(self, real_db):
-        """Test that initialization creates necessary tables."""
+
+             """Test that initialization creates necessary tables."""
         service = DocumentGeneratorService(real_db, "test_user")
 
         # Check that service was initialized properly
@@ -139,7 +140,8 @@ class TestDocumentGeneratorService:
         assert len(table_names) >= 2  # Should have at least some tables
 
     def test_generate_timeline(self, service, real_db):
-        """Test timeline document generation."""
+
+             """Test timeline document generation."""
         # Use the real conversation created in the fixture
         conv_id = real_db.test_conversation_id
 
@@ -160,7 +162,8 @@ class TestDocumentGeneratorService:
         mock_llm.assert_called_once()
 
     def test_generate_study_guide(self, service, real_db):
-        """Test study guide document generation."""
+
+             """Test study guide document generation."""
         # Use the real conversation created in the fixture
         conv_id = real_db.test_conversation_id
 
@@ -179,7 +182,8 @@ class TestDocumentGeneratorService:
         mock_llm.assert_called_once()
 
     def test_generate_briefing(self, service, real_db):
-        """Test executive briefing document generation."""
+
+             """Test executive briefing document generation."""
         conv_id = real_db.test_conversation_id
 
         with patch('tldw_Server_API.app.core.Chat.document_generator.chat_api_call') as mock_llm:
@@ -197,7 +201,8 @@ class TestDocumentGeneratorService:
         mock_llm.assert_called_once()
 
     def test_generate_summary(self, service, real_db):
-        """Test summary document generation."""
+
+             """Test summary document generation."""
         conv_id = real_db.test_conversation_id
 
         with patch('tldw_Server_API.app.core.Chat.document_generator.chat_api_call') as mock_llm:
@@ -215,7 +220,8 @@ class TestDocumentGeneratorService:
         mock_llm.assert_called_once()
 
     def test_generate_qa_pairs(self, service, real_db):
-        """Test Q&A pairs document generation."""
+
+             """Test Q&A pairs document generation."""
         conv_id = real_db.test_conversation_id
 
         with patch('tldw_Server_API.app.core.Chat.document_generator.chat_api_call') as mock_llm:
@@ -233,7 +239,8 @@ class TestDocumentGeneratorService:
         mock_llm.assert_called_once()
 
     def test_generate_meeting_notes(self, service, real_db):
-        """Test meeting notes document generation."""
+
+             """Test meeting notes document generation."""
         conv_id = real_db.test_conversation_id
 
         with patch('tldw_Server_API.app.core.Chat.document_generator.chat_api_call') as mock_llm:
@@ -251,7 +258,8 @@ class TestDocumentGeneratorService:
         mock_llm.assert_called_once()
 
     def test_custom_prompt(self, service, real_db):
-        """Test using custom prompt for generation."""
+
+             """Test using custom prompt for generation."""
         conv_id = real_db.test_conversation_id
         custom_prompt = "Extract only the technical terms mentioned"
 
@@ -271,7 +279,8 @@ class TestDocumentGeneratorService:
         mock_llm.assert_called_once()
 
     def test_async_job_creation(self, service, real_db):
-        """Test creating an async generation job."""
+
+             """Test creating an async generation job."""
         conv_id = real_db.test_conversation_id
 
         # DocumentGeneratorService may not have create_generation_job method
@@ -290,43 +299,50 @@ class TestDocumentGeneratorService:
         assert result is not None
 
     def test_get_job_status(self, service, real_db):
-        """Test retrieving job status."""
+
+             """Test retrieving job status."""
         # Skip if method doesn't exist
         if not hasattr(service, 'get_job_status'):
             pytest.skip("get_job_status not implemented")
 
     def test_cancel_job(self, service, real_db):
-        """Test cancelling a generation job."""
+
+             """Test cancelling a generation job."""
         # Skip if method doesn't exist
         if not hasattr(service, 'cancel_job'):
             pytest.skip("cancel_job not implemented")
 
     def test_get_document(self, service, real_db):
-        """Test retrieving a generated document."""
+
+             """Test retrieving a generated document."""
         # Skip if method doesn't exist
         if not hasattr(service, 'get_document'):
             pytest.skip("get_document not implemented")
 
     def test_list_documents(self, service, real_db):
-        """Test listing generated documents."""
+
+             """Test listing generated documents."""
         # Skip if method doesn't exist
         if not hasattr(service, 'list_documents'):
             pytest.skip("list_documents not implemented")
 
     def test_delete_document(self, service, real_db):
-        """Test deleting a generated document."""
+
+             """Test deleting a generated document."""
         # Skip if method doesn't exist
         if not hasattr(service, 'delete_document'):
             pytest.skip("delete_document not implemented")
 
     def test_save_custom_prompt_config(self, service, real_db):
-        """Test saving custom prompt configuration."""
+
+             """Test saving custom prompt configuration."""
         # Skip if method doesn't exist
         if not hasattr(service, 'save_prompt_config'):
             pytest.skip("save_prompt_config not implemented")
 
     def test_get_prompt_config(self, service, real_db):
-        """Test retrieving custom prompt configuration."""
+
+             """Test retrieving custom prompt configuration."""
         # Skip if method doesn't exist
         if not hasattr(service, 'get_prompt_config'):
             pytest.skip("get_prompt_config not implemented")
@@ -339,13 +355,15 @@ class TestDocumentGeneratorService:
             pytest.skip("bulk_generate not implemented")
 
     def test_get_statistics(self, service, real_db):
-        """Test getting generation statistics."""
+
+             """Test getting generation statistics."""
         # Skip if method doesn't exist
         if not hasattr(service, 'get_statistics'):
             pytest.skip("get_statistics not implemented")
 
     def test_error_handling(self, service, real_db):
-        """Test error handling during generation."""
+
+             """Test error handling during generation."""
         conv_id = "invalid_conversation_id"
 
         with patch('tldw_Server_API.app.core.Chat.document_generator.chat_api_call') as mock_llm:
@@ -363,7 +381,8 @@ class TestDocumentGeneratorService:
         assert result is not None
 
     def test_conversation_not_found(self, service, real_db):
-        """Test handling when conversation doesn't exist."""
+
+             """Test handling when conversation doesn't exist."""
         result = service.generate_document(
             conversation_id="nonexistent",
             document_type=DocumentType.TIMELINE,

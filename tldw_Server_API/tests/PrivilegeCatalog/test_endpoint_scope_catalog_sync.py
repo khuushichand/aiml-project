@@ -48,7 +48,9 @@ def load_catalog_scope_ids(catalog_path: Path) -> set[str]:
 
 
 def test_endpoint_ids_have_catalog_entries():
-    repo_root = Path(__file__).resolve().parents[3]
+
+
+     repo_root = Path(__file__).resolve().parents[3]
     endpoints_dir = repo_root / "tldw_Server_API" / "app" / "api" / "v1" / "endpoints"
     catalog_path = repo_root / "tldw_Server_API" / "Config_Files" / "privilege_catalog.yaml"
 

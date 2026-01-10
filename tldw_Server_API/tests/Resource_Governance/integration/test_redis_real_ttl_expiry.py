@@ -16,7 +16,7 @@ async def test_real_redis_streams_ttl_expiry_allows_later(real_redis, rg_unique_
 
     class _Loader:
         def get_policy(self, pid):
-            return {"streams": {"max_concurrent": 1, "ttl_sec": 2}, "scopes": ["global", "user"]}
+                     return {"streams": {"max_concurrent": 1, "ttl_sec": 2}, "scopes": ["global", "user"]}
 
     rg = RedisResourceGovernor(policy_loader=_Loader(), ns=rg_unique_ns)
     if not await rg._is_real_redis():

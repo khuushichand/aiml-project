@@ -108,7 +108,8 @@ class TestAuthLoginLockoutRealRateLimiter:
         _app.dependency_overrides.pop(auth_deps.get_rate_limiter_dep, None)
 
     def test_repeated_invalid_logins_lead_to_lockout_real_limiter(self):
-        # First attempt: invalid password, should be 401 (no lockout yet)
+
+             # First attempt: invalid password, should be 401 (no lockout yet)
         r1 = self.client.post(
             "/api/v1/auth/login",
             data={"username": self.username, "password": "WrongPassword1!"},

@@ -27,7 +27,9 @@ TEST_DB_PASSWORD = _pg.password
 
 
 def _has_postgres_dependencies() -> bool:
-    """Check if PostgreSQL dependencies are available."""
+
+
+     """Check if PostgreSQL dependencies are available."""
     try:
         import psycopg  # noqa: F401
         return True
@@ -81,7 +83,7 @@ class TestBillingWebhooksIntegration:
 
         class _FakeStripeClient:
             def __init__(self) -> None:
-                self.is_available = True
+                             self.is_available = True
 
             def construct_webhook_event(self, payload: Any, signature: str) -> Dict[str, Any]:
                 return {
@@ -92,7 +94,7 @@ class TestBillingWebhooksIntegration:
 
         class _FakeSubscriptionService:
             def __init__(self) -> None:
-                self.call_count = 0
+                             self.call_count = 0
 
             async def handle_webhook_event(self, event_type: str, event_data: Dict[str, Any]) -> Dict[str, Any]:
                 self.call_count += 1
@@ -159,7 +161,7 @@ class TestBillingWebhooksIntegration:
 
         class _FakeStripeClient:
             def __init__(self) -> None:
-                self.is_available = True
+                             self.is_available = True
 
             def construct_webhook_event(self, payload: Any, signature: str) -> Dict[str, Any]:
                 return {
@@ -170,7 +172,7 @@ class TestBillingWebhooksIntegration:
 
         class _FakeSubscriptionService:
             def __init__(self) -> None:
-                self.call_count = 0
+                             self.call_count = 0
 
             async def handle_webhook_event(self, event_type: str, event_data: Dict[str, Any]) -> Dict[str, Any]:
                 self.call_count += 1

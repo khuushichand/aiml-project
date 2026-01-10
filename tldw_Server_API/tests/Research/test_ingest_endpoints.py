@@ -9,7 +9,8 @@ class _FakeResp:
         self.headers = {"Content-Disposition": "attachment; filename=\"file.pdf\""}
 
     def raise_for_status(self):
-        if not (200 <= self._status < 300):
+
+             if not (200 <= self._status < 300):
             raise Exception("HTTPError")
 
 
@@ -18,7 +19,8 @@ class _FakeSession:
         self._content = content
 
     def get(self, url, timeout=30):
-        return _FakeResp(self._content)
+
+             return _FakeResp(self._content)
 
 
 @pytest.mark.asyncio
@@ -28,9 +30,9 @@ async def test_arxiv_ingest_success(monkeypatch, paper_search_app):
 
     class _FakeDB:
         def __init__(self):
-            self.calls = []
+                     self.calls = []
         def add_media_with_keywords(self, **kwargs):
-            self.calls.append(kwargs)
+                     self.calls.append(kwargs)
             return 5, "uuid-arxiv", "ok"
 
     fake_db = _FakeDB()
@@ -84,9 +86,9 @@ async def test_s2_ingest_success(monkeypatch, paper_search_app):
 
     class _FakeDB:
         def __init__(self):
-            self.calls = []
+                     self.calls = []
         def add_media_with_keywords(self, **kwargs):
-            self.calls.append(kwargs)
+                     self.calls.append(kwargs)
             return 7, "uuid-s2", "ok"
 
     fake_db = _FakeDB()
@@ -95,7 +97,8 @@ async def test_s2_ingest_success(monkeypatch, paper_search_app):
     from tldw_Server_API.app.core.Third_Party import Semantic_Scholar as _S2
 
     def _fake_s2_details(paper_id):
-        return {
+
+             return {
             "paperId": paper_id,
             "title": "Graph Neural Networks",
             "authors": [{"name": "A"}],

@@ -44,6 +44,7 @@ from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
 )
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.optimization_engine import OptimizationEngine
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_manager import JobManager, JobType
+from tldw_Server_API.app.core.Prompt_Management.prompt_studio.jobs_adapter import PromptStudioJobsAdapter
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import DatabaseError
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import prompt_studio_metrics
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
@@ -862,9 +863,18 @@ async def get_optimization(
 
 # Compatibility: GET job status by job_id returning direct job data
 @router.get("/{job_id}")
-async def get_optimization_job_status(job_id: str, db: PromptStudioDatabase = Depends(get_prompt_studio_db)) -> Dict[str, Any]:
-    jm = JobManager(db)
-    job = jm.get_job(job_id)
+async def get_optimization_job_status(
+    job_id: str,
+    db: PromptStudioDatabase = Depends(get_prompt_studio_db),
+    user_context: Dict = Depends(get_prompt_studio_user),
+) -> Dict[str, Any]:
+    adapter = PromptStudioJobsAdapter()
+    job = adapter.get_job(
+        job_id,
+        db=db,
+        user_id=user_context.get("user_id"),
+        job_type=JobType.OPTIMIZATION.value,
+    )
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
@@ -1090,13 +1100,18 @@ async def get_optimization_history(
             db=db,
         )
 
-        job = db.get_latest_job_for_entity(
-            JobType.OPTIMIZATION.value,
-            optimization_id,
+        adapter = PromptStudioJobsAdapter()
+        job = adapter.get_latest_job_for_entity(
+            db=db,
+            user_id=user_context.get("user_id"),
+            job_type=JobType.OPTIMIZATION.value,
+            entity_id=optimization_id,
         )
-        timeline_records = db.list_jobs_for_entity(
-            JobType.OPTIMIZATION.value,
-            optimization_id,
+        timeline_records = adapter.list_jobs_for_entity(
+            db=db,
+            user_id=user_context.get("user_id"),
+            job_type=JobType.OPTIMIZATION.value,
+            entity_id=optimization_id,
             limit=50,
             ascending=True,
         )

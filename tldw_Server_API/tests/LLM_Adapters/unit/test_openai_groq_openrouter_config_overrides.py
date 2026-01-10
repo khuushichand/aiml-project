@@ -39,7 +39,6 @@ class _FakeClient:
 
 @pytest.fixture(autouse=True)
 def _enable_adapters(monkeypatch):
-    monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "1")
     monkeypatch.setenv("LLM_ADAPTERS_NATIVE_HTTP_OPENAI", "1")
     monkeypatch.setenv("LLM_ADAPTERS_NATIVE_HTTP_GROQ", "1")
     monkeypatch.setenv("LLM_ADAPTERS_NATIVE_HTTP_OPENROUTER", "1")

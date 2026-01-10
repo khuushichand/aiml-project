@@ -6,7 +6,9 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
 def _set_env(monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
+
+
+     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
@@ -14,7 +16,9 @@ def _set_env(monkeypatch, tmp_path):
 
 
 def test_prune_ttl_batch_require_confirm_header(monkeypatch, tmp_path):
-    _set_env(monkeypatch, tmp_path)
+
+
+     _set_env(monkeypatch, tmp_path)
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
     reset_settings()
     from tldw_Server_API.app.main import app

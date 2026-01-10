@@ -8,7 +8,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
 @pytest.fixture
 def client():
-    with TestClient(app) as c:
+     with TestClient(app) as c:
         c.cookies.set("csrf_token", "test-csrf")
         c.headers["X-CSRF-Token"] = "test-csrf"
         c.headers["Authorization"] = "Bearer test-api-key"
@@ -16,7 +16,9 @@ def client():
 
 
 def _override_user(admin=False):
-    async def _f():
+
+
+     async def _f():
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
         return User(id=1, username="u", email="u@x", is_active=True, is_admin=admin)
     return _f
@@ -24,7 +26,7 @@ def _override_user(admin=False):
 
 @pytest.mark.unit
 def test_policy_toggle_off_allows_request(client, monkeypatch):
-    # Ensure policy enforcement is OFF (explicit override in TESTING)
+     # Ensure policy enforcement is OFF (explicit override in TESTING)
     os.environ["EMBEDDINGS_ENFORCE_POLICY"] = "false"
     os.environ["TESTING"] = "true"
     os.environ.pop("USE_REAL_OPENAI_IN_TESTS", None)
@@ -56,7 +58,7 @@ def test_policy_toggle_off_allows_request(client, monkeypatch):
 
 @pytest.mark.unit
 def test_policy_toggle_on_blocks_request(client):
-    # Enable policy enforcement
+     # Enable policy enforcement
     os.environ["EMBEDDINGS_ENFORCE_POLICY"] = "true"
     os.environ["TESTING"] = "true"
 

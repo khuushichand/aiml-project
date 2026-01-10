@@ -4,7 +4,7 @@ import pytest
 
 @pytest.mark.unit
 def test_points_backend_available_returns_bool():
-    from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.points_reader import (
+     from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.points_reader import (
         PointsReaderBackend,
     )
     assert isinstance(PointsReaderBackend.available(), bool)
@@ -12,7 +12,7 @@ def test_points_backend_available_returns_bool():
 
 @pytest.mark.unit
 def test_points_backend_sglang_mock(monkeypatch):
-    # Force SGLang mode and stub requests.post
+     # Force SGLang mode and stub requests.post
     monkeypatch.setenv("POINTS_MODE", "sglang")
     monkeypatch.setenv("POINTS_SGLANG_URL", "http://127.0.0.1:9999/v1/chat/completions")
     monkeypatch.setenv("POINTS_SGLANG_MODEL", "WePoints")
@@ -22,10 +22,12 @@ def test_points_backend_sglang_mock(monkeypatch):
         text = "{\"choices\":[{\"message\":{\"content\":\"MOCK_TEXT\"}}]}"
 
         def raise_for_status(self):
-            return None
+
+                     return None
 
         def json(self):
-            import json as _json
+
+                     import json as _json
             return _json.loads(self.text)
 
     # Patch the correct call site used by points backend (http_client.fetch_json)

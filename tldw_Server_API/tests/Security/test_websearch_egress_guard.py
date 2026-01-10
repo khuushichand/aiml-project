@@ -3,7 +3,9 @@ import pytest
 
 
 def test_brave_search_blocked_by_egress(monkeypatch):
-    """Unit-test that WebSearch honors centralized egress policy (denied)."""
+
+
+     """Unit-test that WebSearch honors centralized egress policy (denied)."""
     from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
 
     # Stub evaluate_url_policy to deny

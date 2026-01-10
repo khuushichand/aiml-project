@@ -18,7 +18,9 @@ def _svc(secret: str, secondary: str | None = None) -> JWTService:
 
 
 def test_dual_key_decode_fallback_hs256():
-    primary = "A" * 40
+
+
+     primary = "A" * 40
     secondary = "B" * 40
 
     # Encode with secondary-only service

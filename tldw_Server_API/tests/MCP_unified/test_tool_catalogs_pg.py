@@ -7,7 +7,7 @@ from tldw_Server_API.tests.AuthNZ.integration.test_rbac_admin_endpoints import _
 
 @pytest.mark.pg_integration
 def test_tool_catalogs_postgres_list_filter(monkeypatch, isolated_test_environment):
-    monkeypatch.setenv("MCP_ENABLE_MEDIA_MODULE", "true")
+     monkeypatch.setenv("MCP_ENABLE_MEDIA_MODULE", "true")
     monkeypatch.setenv("TEST_MODE", "true")
 
     # Ensure MCP config/server pick up fresh env toggles (media module)

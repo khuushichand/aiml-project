@@ -3,7 +3,7 @@ import pytest
 
 @pytest.mark.e2e
 def test_webui_loads_and_shows_connected(page, server_url):
-    page.goto(f"{server_url}/webui/")
+     page.goto(f"{server_url}/webui/")
     page.get_by_text("TLDW API Testing Interface").wait_for()
 
     # Global settings visible

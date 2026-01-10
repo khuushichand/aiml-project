@@ -24,7 +24,9 @@ from tldw_Server_API.tests.test_utils import create_test_media
 
 
 def _principal_override():
-    """Create a test principal override for authentication."""
+
+
+     """Create a test principal override for authentication."""
     async def _override(request=None) -> AuthPrincipal:
         principal = AuthPrincipal(
             kind="user",
@@ -57,7 +59,7 @@ async def _mock_retrieve_stream(path: str, chunk_size: int = 65536):
 
 @pytest.fixture
 def mock_storage():
-    """Create a mock storage backend."""
+     """Create a mock storage backend."""
     storage = MagicMock()
     storage.exists = AsyncMock(return_value=True)
     storage.retrieve = AsyncMock(return_value=BytesIO(b"%PDF-1.4 mock PDF content"))
@@ -71,7 +73,7 @@ class TestGetMediaFile:
 
     @pytest.mark.integration
     def test_get_file_returns_pdf_content(self, tmp_path, mock_storage):
-        """Test that GET /media/{id}/file returns the file content."""
+             """Test that GET /media/{id}/file returns the file content."""
         from tldw_Server_API.app.main import app as fastapi_app
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
         from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
@@ -125,7 +127,7 @@ class TestGetMediaFile:
 
     @pytest.mark.integration
     def test_get_file_includes_content_length(self, tmp_path, mock_storage):
-        """Test that GET /media/{id}/file includes Content-Length header."""
+             """Test that GET /media/{id}/file includes Content-Length header."""
         from tldw_Server_API.app.main import app as fastapi_app
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
         from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
@@ -176,7 +178,7 @@ class TestGetMediaFile:
 
     @pytest.mark.integration
     def test_get_file_404_when_media_not_found(self, tmp_path):
-        """Test that GET returns 404 when media doesn't exist."""
+             """Test that GET returns 404 when media doesn't exist."""
         from tldw_Server_API.app.main import app as fastapi_app
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
         from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
@@ -211,7 +213,7 @@ class TestGetMediaFile:
 
     @pytest.mark.integration
     def test_get_file_404_when_no_file_record(self, tmp_path, mock_storage):
-        """Test that GET returns 404 when media exists but has no file."""
+             """Test that GET returns 404 when media exists but has no file."""
         from tldw_Server_API.app.main import app as fastapi_app
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
         from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
@@ -253,7 +255,7 @@ class TestGetMediaFileHeaders:
 
     @pytest.mark.integration
     def test_content_disposition_uses_rfc5987_encoding(self, tmp_path, mock_storage):
-        """Test that Content-Disposition uses RFC 5987 encoding for filenames."""
+             """Test that Content-Disposition uses RFC 5987 encoding for filenames."""
         from tldw_Server_API.app.main import app as fastapi_app
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
         from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
@@ -308,7 +310,7 @@ class TestGetMediaFileHeaders:
 
     @pytest.mark.integration
     def test_accept_ranges_header_present(self, tmp_path, mock_storage):
-        """Test that Accept-Ranges header is present in response."""
+             """Test that Accept-Ranges header is present in response."""
         from tldw_Server_API.app.main import app as fastapi_app
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
         from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
@@ -362,7 +364,7 @@ class TestRangeRequests:
 
     @pytest.mark.integration
     def test_range_request_returns_206(self, tmp_path, mock_storage):
-        """Test that Range requests return 206 Partial Content."""
+             """Test that Range requests return 206 Partial Content."""
         from tldw_Server_API.app.main import app as fastapi_app
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
         from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
@@ -419,7 +421,7 @@ class TestETagCaching:
 
     @pytest.mark.integration
     def test_etag_header_present_when_checksum_available(self, tmp_path, mock_storage):
-        """Test that ETag header is present when file has checksum."""
+             """Test that ETag header is present when file has checksum."""
         from tldw_Server_API.app.main import app as fastapi_app
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
         from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
@@ -471,7 +473,7 @@ class TestETagCaching:
 
     @pytest.mark.integration
     def test_if_none_match_returns_304(self, tmp_path, mock_storage):
-        """Test that matching If-None-Match returns 304 Not Modified."""
+             """Test that matching If-None-Match returns 304 Not Modified."""
         from tldw_Server_API.app.main import app as fastapi_app
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
         from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
@@ -529,7 +531,7 @@ class TestHeadMediaFile:
 
     @pytest.mark.integration
     def test_head_returns_headers_without_body(self, tmp_path, mock_storage):
-        """Test that HEAD returns headers but no body."""
+             """Test that HEAD returns headers but no body."""
         from tldw_Server_API.app.main import app as fastapi_app
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
         from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
@@ -583,7 +585,7 @@ class TestHeadMediaFile:
 
     @pytest.mark.integration
     def test_head_404_for_missing_media(self, tmp_path):
-        """Test that HEAD returns 404 for non-existent media."""
+             """Test that HEAD returns 404 for non-existent media."""
         from tldw_Server_API.app.main import app as fastapi_app
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
         from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal

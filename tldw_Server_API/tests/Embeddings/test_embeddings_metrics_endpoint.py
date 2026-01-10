@@ -7,7 +7,7 @@ from tldw_Server_API.app.main import app
 
 @pytest.fixture
 def client():
-    with TestClient(app) as c:
+     with TestClient(app) as c:
         c.cookies.set("csrf_token", "x")
         c.headers["X-CSRF-Token"] = "x"
         c.headers["Authorization"] = "Bearer key"
@@ -16,7 +16,7 @@ def client():
 
 @pytest.mark.unit
 def test_metrics_endpoint_details_shape(client, admin_user):
-    # Make a simple request to increment counters
+     # Make a simple request to increment counters
     os.environ["TESTING"] = "true"
     try:
         r1 = client.post(

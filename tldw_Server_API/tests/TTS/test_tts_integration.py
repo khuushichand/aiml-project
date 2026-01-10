@@ -46,7 +46,8 @@ from tldw_Server_API.app.core.TTS.adapters.vibevoice_adapter import VibeVoiceAda
 # Platform Detection Utilities
 
 def get_compute_capability() -> str:
-    """
+
+     """
     Detect compute capabilities: cuda, mps, or cpu.
 
     Returns:

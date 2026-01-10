@@ -3,7 +3,9 @@ import asyncio
 
 
 def test_cer_basic():
-    ref = "hello world"
+
+
+     ref = "hello world"
     hyp = "hello wurld"
     cer = char_error_rate(hyp, ref)
     # 1 substitution out of 11 chars -> ~0.0909
@@ -11,7 +13,9 @@ def test_cer_basic():
 
 
 def test_wer_basic():
-    ref = "the quick brown fox"
+
+
+     ref = "the quick brown fox"
     hyp = "the quick brown fx"
     wer = word_error_rate(hyp, ref)
     # 1 substitution out of 4 words -> 0.25
@@ -19,7 +23,9 @@ def test_wer_basic():
 
 
 def test_ocr_evaluator_extracted_text_only():
-    items = [
+
+
+     items = [
         {
             "id": "doc1",
             "extracted_text": "hello world",

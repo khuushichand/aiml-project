@@ -5,13 +5,13 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_File
 
 @pytest.mark.unit
 def test_process_audio_files_uses_check_transcription_model_status(monkeypatch, tmp_path):
-    """process_audio_files should consult check_transcription_model_status and surface warnings."""
+     """process_audio_files should consult check_transcription_model_status and surface warnings."""
     audio_path = tmp_path / "sample.wav"
     audio_path.write_bytes(b"\x00" * 2048)
 
     # Stub speech_to_text so no real STT runs
     def fake_speech_to_text(audio_file_path=None, whisper_model=None, selected_source_lang=None, vad_filter=None, diarize=None, **kwargs):
-        return [{"start_seconds": 0, "end_seconds": 0, "Text": "hello"}]
+             return [{"start_seconds": 0, "end_seconds": 0, "Text": "hello"}]
 
     monkeypatch.setattr(audio_files, "speech_to_text", fake_speech_to_text)
 

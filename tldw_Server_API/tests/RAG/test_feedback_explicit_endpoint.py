@@ -11,7 +11,9 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGD
 
 
 def _row_to_dict(row, cursor):
-    if isinstance(row, dict):
+
+
+     if isinstance(row, dict):
         return row
     try:
         return dict(row)
@@ -22,7 +24,7 @@ def _row_to_dict(row, cursor):
 
 @pytest.fixture()
 def feedback_setup(tmp_path, client_user_only):
-    db = CharactersRAGDB(
+     db = CharactersRAGDB(
         db_path=str(tmp_path / "feedback_chacha.db"),
         client_id="1",
     )
@@ -63,7 +65,7 @@ def feedback_setup(tmp_path, client_user_only):
 
 @pytest.mark.integration
 def test_explicit_feedback_derives_query_from_message(feedback_setup):
-    client, db, conversation_id, message_id = feedback_setup
+     client, db, conversation_id, message_id = feedback_setup
 
     payload = {
         "conversation_id": conversation_id,
@@ -90,7 +92,7 @@ def test_explicit_feedback_derives_query_from_message(feedback_setup):
 
 @pytest.mark.integration
 def test_explicit_feedback_idempotent_merge_updates_issues_and_notes(feedback_setup):
-    client, db, conversation_id, message_id = feedback_setup
+     client, db, conversation_id, message_id = feedback_setup
 
     payload = {
         "conversation_id": conversation_id,
@@ -141,7 +143,7 @@ def test_explicit_feedback_idempotent_merge_updates_issues_and_notes(feedback_se
 
 @pytest.mark.integration
 def test_explicit_feedback_rag_only_accepts_query(feedback_setup):
-    client, _db, _conversation_id, _message_id = feedback_setup
+     client, _db, _conversation_id, _message_id = feedback_setup
 
     payload = {
         "feedback_type": "relevance",
@@ -158,7 +160,7 @@ def test_explicit_feedback_rag_only_accepts_query(feedback_setup):
 
 @pytest.mark.integration
 def test_explicit_feedback_rejects_empty_query(feedback_setup):
-    client, _db, _conversation_id, _message_id = feedback_setup
+     client, _db, _conversation_id, _message_id = feedback_setup
 
     payload = {
         "feedback_type": "helpful",

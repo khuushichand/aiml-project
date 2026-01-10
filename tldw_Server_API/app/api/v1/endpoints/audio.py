@@ -975,7 +975,7 @@ async def create_transcription(
             tmp_file.write(contents)
             temp_audio_path = tmp_file.name
 
-        # Convert to canonical 16k mono WAV for consistent processing
+        # Convert to canonical 16k mono WAV for consistent processing; base_dir constrains output location.
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
                 convert_to_wav as _convert_to_wav,
@@ -2968,6 +2968,8 @@ async def websocket_audio_chat_stream(
                 llm_provider,
                 app_config,
             )
+            if not provider_api_key:
+                raise ValueError("No API key available for provider")
             messages_payload = list(chat_history)
             messages_payload.append({"role": "user", "content": transcript_text})
             try:

@@ -36,7 +36,9 @@ def _get_client(monkeypatch, env: dict):
 
 
 def test_security_critical_when_high_risk_meets_threshold(monkeypatch):
-    # Configure thresholds
+
+
+     # Configure thresholds
     client = _get_client(monkeypatch, {
         "AUDIT_SEC_CRITICAL_HIGH_RISK_MIN": 3,
         "AUDIT_SEC_ELEVATED_FAILURE_MIN": 10,
@@ -51,7 +53,9 @@ def test_security_critical_when_high_risk_meets_threshold(monkeypatch):
 
 
 def test_security_elevated_when_failures_meet_threshold(monkeypatch):
-    client = _get_client(monkeypatch, {
+
+
+     client = _get_client(monkeypatch, {
         "AUDIT_SEC_CRITICAL_HIGH_RISK_MIN": 5,
         "AUDIT_SEC_ELEVATED_FAILURE_MIN": 7,
     })
@@ -64,7 +68,9 @@ def test_security_elevated_when_failures_meet_threshold(monkeypatch):
 
 
 def test_security_low_when_some_failures_below_threshold(monkeypatch):
-    client = _get_client(monkeypatch, {
+
+
+     client = _get_client(monkeypatch, {
         "AUDIT_SEC_CRITICAL_HIGH_RISK_MIN": 2,
         "AUDIT_SEC_ELEVATED_FAILURE_MIN": 10,
     })

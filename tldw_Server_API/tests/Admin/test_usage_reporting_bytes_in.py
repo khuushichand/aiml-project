@@ -10,7 +10,9 @@ from tldw_Server_API.app.main import app
 
 
 def _setup_env():
-    os.environ["AUTH_MODE"] = "single_user"
+
+
+     os.environ["AUTH_MODE"] = "single_user"
     os.environ["SINGLE_USER_API_KEY"] = "unit-test-api-key-bytes-in"
     os.environ["USAGE_LOG_ENABLED"] = "true"
     # Exclude all paths to avoid middleware logging interfering with aggregation

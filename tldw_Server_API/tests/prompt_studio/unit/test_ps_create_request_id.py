@@ -6,18 +6,19 @@ from tldw_Server_API.app.main import app
 
 class _StubDB:
     def __init__(self):
-        self.client_id = "test-client"
+             self.client_id = "test-client"
 
     def get_prompt_with_project(self, prompt_id: int, include_deleted: bool = False):
         return {"id": prompt_id, "project_id": 321}
 
     def create_optimization(self, **kwargs):
-        return {"id": 555, **kwargs}
+
+             return {"id": 555, **kwargs}
 
 
 @pytest.fixture
 def override_db_dependency(monkeypatch):
-    from tldw_Server_API.app.api.v1.API_Deps import prompt_studio_deps as deps
+     from tldw_Server_API.app.api.v1.API_Deps import prompt_studio_deps as deps
 
     async def _override_db():
         return _StubDB()
@@ -35,7 +36,9 @@ def override_db_dependency(monkeypatch):
 
 
 def test_create_optimization_includes_request_id_in_job_payload(monkeypatch, override_db_dependency):
-    # Force TEST_MODE for deterministic behavior (skip background task spawn)
+
+
+     # Force TEST_MODE for deterministic behavior (skip background task spawn)
     monkeypatch.setenv("TEST_MODE", "true")
 
     captured = {}

@@ -42,7 +42,7 @@ REAL_OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 @pytest.fixture(autouse=True)
 def clear_tts_env(monkeypatch):
-    """Default to cleared API keys; individual tests restore as needed."""
+     """Default to cleared API keys; individual tests restore as needed."""
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
     return None
@@ -55,7 +55,8 @@ class TestTTSAdapterBase:
     """Test the base TTSAdapter class"""
 
     def test_adapter_initialization(self):
-        """Test basic adapter initialization"""
+
+             """Test basic adapter initialization"""
         # Create a concrete implementation for testing
         class TestAdapter(TTSAdapter):
             async def initialize(self) -> bool:
@@ -127,7 +128,8 @@ class TestTTSAdapterBase:
         assert "exceeds maximum length" in error
 
     def test_parse_dialogue(self):
-        """Test dialogue parsing"""
+
+             """Test dialogue parsing"""
         class TestAdapter(TTSAdapter):
             async def initialize(self) -> bool:
                 return True
@@ -197,7 +199,8 @@ class TestOpenAIAdapter:
         assert not caps.supports_voice_cloning
 
     def test_voice_mapping(self):
-        """Test voice mapping"""
+
+             """Test voice mapping"""
         adapter = OpenAIAdapter({})
 
         # Direct OpenAI voice
@@ -247,7 +250,8 @@ class TestKokoroAdapter:
         assert caps.supports_multi_speaker  # Voice mixing
 
     def test_voice_processing(self):
-        """Test voice processing and mixing"""
+
+             """Test voice processing and mixing"""
         adapter = KokoroAdapter({})
 
         # Single voice
@@ -262,7 +266,8 @@ class TestKokoroAdapter:
         assert adapter._process_voice("british_female") == "bf_emma"
 
     def test_language_detection(self):
-        """Test language detection from voice"""
+
+             """Test language detection from voice"""
         adapter = KokoroAdapter({})
 
         # American voices
@@ -277,7 +282,8 @@ class TestKokoroAdapter:
         assert adapter._get_language_from_voice("af_bella+bf_emma") == "en-us"
 
     def test_text_chunking(self):
-        """Test text chunking for optimal processing"""
+
+             """Test text chunking for optimal processing"""
         adapter = KokoroAdapter({})
 
         # Short text (single chunk)
@@ -372,7 +378,8 @@ class TestAdapterRegistry:
         assert caps[TTSProvider.OPENAI].provider_name == "OpenAI"
 
     def test_status_summary(self):
-        """Test status summary"""
+
+             """Test status summary"""
         registry = TTSAdapterRegistry()
 
         summary = registry.get_status_summary()
@@ -419,7 +426,8 @@ class TestTTSAdapterFactory:
         assert adapter is not None
 
     def test_get_status(self):
-        """Test factory status"""
+
+             """Test factory status"""
         factory = TTSAdapterFactory()
 
         status = factory.get_status()
@@ -459,7 +467,8 @@ class TestTTSServiceV2:
         assert len(caps) > 0  # Should have at least one provider
 
     def test_get_status(self):
-        """Test service status"""
+
+             """Test service status"""
         factory = TTSAdapterFactory()
         service = TTSServiceV2(factory)
 

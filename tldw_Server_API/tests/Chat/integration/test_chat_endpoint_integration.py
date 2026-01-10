@@ -23,7 +23,7 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
 
 @pytest.fixture
 def test_db():
-    """Create a temporary test database."""
+     """Create a temporary test database."""
     import sqlite3
     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
         db_path = tmp.name
@@ -76,7 +76,7 @@ def test_db():
 
 @pytest.fixture
 def test_client(test_db):
-    """Create test client with database dependency override."""
+     """Create test client with database dependency override."""
     from unittest.mock import patch
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
     from tldw_Server_API.app.core.Chat.rate_limiter import (
@@ -172,7 +172,7 @@ async def async_test_client():
 # Configuration for tests to use a local LLM or test endpoint
 @pytest.fixture
 def configure_test_llm():
-    """Configure tests to use a test LLM endpoint."""
+     """Configure tests to use a test LLM endpoint."""
     # Set up test configuration
     import os
     # Tests should use a local LLM or test endpoint configured in config.txt
@@ -186,7 +186,7 @@ def configure_test_llm():
 
 @pytest.fixture
 def auth_headers(test_client):
-    """Provide test authentication headers."""
+     """Provide test authentication headers."""
     # Import settings to get the actual API key used in single-user mode
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     settings = get_settings()
@@ -202,7 +202,8 @@ class TestChatEndpointIntegration:
     """Integration tests for the chat endpoint using actual components."""
 
     def test_chat_completion_basic(self, test_client, test_db, auth_headers, caplog):
-        """Test basic chat completion through the actual endpoint."""
+
+             """Test basic chat completion through the actual endpoint."""
         import logging
         caplog.set_level(logging.DEBUG)
 
@@ -236,7 +237,8 @@ class TestChatEndpointIntegration:
             # Don't check content - it's from real LLM
 
     def test_chat_with_character(self, test_client, test_db, auth_headers):
-        """Test chat with character context."""
+
+             """Test chat with character context."""
         response = test_client.post(
             "/api/v1/chat/completions",
             json={
@@ -264,7 +266,8 @@ class TestChatEndpointIntegration:
         assert "choices" in data or "error" in data
 
     def test_conversation_persistence(self, test_client, test_db, auth_headers):
-        """Test that conversations are persisted in the database."""
+
+             """Test that conversations are persisted in the database."""
         # First message
         response1 = test_client.post(
             "/api/v1/chat/completions",
@@ -314,7 +317,7 @@ class TestChatEndpointIntegration:
 
     @pytest.mark.skip(reason="TestClient doesn't properly handle streaming responses")
     def test_streaming_response(self, test_client, test_db, auth_headers):
-        """Test streaming chat completion request is accepted."""
+             """Test streaming chat completion request is accepted."""
         # Note: TestClient doesn't properly support streaming responses,
         # so we just verify the endpoint accepts streaming requests
         response = test_client.post(
@@ -338,7 +341,8 @@ class TestChatEndpointIntegration:
         assert response.status_code in [200, 503]
 
     def test_message_validation(self, test_client, test_db, auth_headers):
-        """Test message validation and error handling."""
+
+             """Test message validation and error handling."""
         # Test empty messages
         response = test_client.post(
             "/api/v1/chat/completions",
@@ -374,7 +378,8 @@ class TestChatEndpointIntegration:
         assert "temperature" in error_detail
 
     def test_image_handling(self, test_client, test_db, auth_headers):
-        """Test handling of image inputs."""
+
+             """Test handling of image inputs."""
         # Small valid PNG image (1x1 pixel red dot)
         image_data = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
 
@@ -410,7 +415,8 @@ class TestChatEndpointIntegration:
             assert any(msg.get("image_data") or msg.get("has_image") for msg in messages)
 
     def test_tool_usage(self, test_client, test_db, auth_headers):
-        """Test chat with tool definitions - currently tools validation is strict."""
+
+             """Test chat with tool definitions - currently tools validation is strict."""
         response = test_client.post(
             "/api/v1/chat/completions",
             json={
@@ -443,7 +449,8 @@ class TestChatEndpointIntegration:
         assert response.status_code in [200, 400]  # Accept either success or validation error
 
     def test_transaction_handling(self, test_client, test_db, auth_headers):
-        """Test database transaction handling - messages are persisted correctly."""
+
+             """Test database transaction handling - messages are persisted correctly."""
         # Test that messages are properly saved to the database
         response = test_client.post(
             "/api/v1/chat/completions",
@@ -473,7 +480,8 @@ class TestChatEndpointIntegration:
         assert len(messages) >= 2  # User and assistant messages
 
     def test_concurrent_requests(self, test_client, test_db, auth_headers):
-        """Test handling of concurrent requests."""
+
+             """Test handling of concurrent requests."""
         import threading
         import time
 
@@ -481,7 +489,8 @@ class TestChatEndpointIntegration:
         errors = []
 
         def make_request(index):
-            try:
+
+                     try:
                 response = test_client.post(
                     "/api/v1/chat/completions",
                     json={
@@ -514,7 +523,8 @@ class TestChatEndpointIntegration:
         assert len(errors) == 0
 
     def test_rate_limiting(self, test_client, test_db, auth_headers):
-        """Test rate limiting functionality."""
+
+             """Test rate limiting functionality."""
         # Make multiple rapid requests
         responses = []
         for i in range(10):
@@ -539,7 +549,8 @@ class TestChatEndpointSecurity:
     """Security-focused integration tests."""
 
     def test_sql_injection_prevention(self, test_client, test_db, auth_headers):
-        """Test SQL injection prevention."""
+
+             """Test SQL injection prevention."""
         response = test_client.post(
             "/api/v1/chat/completions",
             json={
@@ -561,7 +572,8 @@ class TestChatEndpointSecurity:
         assert test_db.list_character_cards() is not None
 
     def test_xss_prevention(self, test_client, test_db, auth_headers):
-        """Test XSS prevention."""
+
+             """Test XSS prevention."""
         response = test_client.post(
             "/api/v1/chat/completions",
             json={
@@ -589,7 +601,8 @@ class TestChatEndpointSecurity:
             assert any("<script>" in msg["content"] for msg in messages)
 
     def test_large_request_dos_prevention(self, test_client, test_db, auth_headers):
-        """Test DoS prevention for large requests."""
+
+             """Test DoS prevention for large requests."""
         # Create a very large message
         large_content = "x" * 500000  # 500KB of text
 
@@ -625,7 +638,8 @@ class TestChatEndpointSecurity:
             assert ("too long" in detail_text) or ("too large" in detail_text) or ("maximum length" in detail_text)
 
     def test_authentication_required(self, test_client, test_db):
-        """Test authentication behavior based on auth mode."""
+
+             """Test authentication behavior based on auth mode."""
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings
         settings = get_settings()
 

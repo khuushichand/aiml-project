@@ -14,7 +14,9 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 
 def _seed_review_metrics_db() -> str:
-    tmpdir = tempfile.mkdtemp(prefix="claims_review_metrics_api_")
+
+
+     tmpdir = tempfile.mkdtemp(prefix="claims_review_metrics_api_")
     db_path = os.path.join(tmpdir, "media.db")
     db = MediaDatabase(db_path=db_path, client_id="1")
     db.initialize_db()
@@ -88,7 +90,9 @@ def _seed_review_metrics_db() -> str:
 
 
 def _principal_override_admin():
-    async def _override(request=None):
+
+
+     async def _override(request=None):
         principal = AuthPrincipal(
             kind="user",
             user_id=1,
@@ -118,11 +122,13 @@ def _principal_override_admin():
 
 
 def test_claims_review_metrics_endpoint():
-    from tldw_Server_API.app.main import app as fastapi_app
+
+
+     from tldw_Server_API.app.main import app as fastapi_app
 
     class _User:
         def __init__(self) -> None:
-            self.id = 1
+                     self.id = 1
             self.username = "admin"
             self.is_admin = True
 

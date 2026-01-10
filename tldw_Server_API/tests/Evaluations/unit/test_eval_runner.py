@@ -8,7 +8,8 @@ async def test_eval_summarization_parses_geval_dict(monkeypatch, tmp_path):
     runner = EvaluationRunner(db_path=str(tmp_path / "evals.db"))
 
     def mock_run_geval(*args, **kwargs):
-        assert kwargs.get("api_name") == "openai"
+
+             assert kwargs.get("api_name") == "openai"
         assert kwargs.get("api_key") is None
         return {
             "metrics": {

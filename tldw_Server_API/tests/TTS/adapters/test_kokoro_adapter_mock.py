@@ -166,7 +166,7 @@ class TestKokoroAdapterMock:
             def write_chunk(self, audio_data=None, finalize: bool=False):
                 return b'D' if not finalize else b'F'
             def close(self):
-                pass
+                             pass
 
         # Patch the writer used by the adapter
         monkeypatch.setattr(
@@ -184,7 +184,7 @@ class TestKokoroAdapterMock:
 
         # Sync generator that yields two chunks with a custom sample rate
         def sync_stream(text, voice, speed, lang):
-            yield (np.array([0.0, 0.1], dtype=np.float32), 12345)
+                     yield (np.array([0.0, 0.1], dtype=np.float32), 12345)
             yield (np.array([0.2, -0.2], dtype=np.float32), 12345)
 
         adapter.kokoro_instance = type('K', (), { 'create_stream': staticmethod(sync_stream) })

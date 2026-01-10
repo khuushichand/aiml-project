@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.Embeddings.queue_schemas import StorageMessage, Em
 
 class FakeCollection:
     def __init__(self):
-        self.items: Dict[str, Dict[str, Any]] = {}
+             self.items: Dict[str, Dict[str, Any]] = {}
 
     def upsert(self, ids: List[str], embeddings: List[List[float]], documents: List[str], metadatas: List[Dict[str, Any]]):
         for i, _id in enumerate(ids):
@@ -27,7 +27,7 @@ class FakeCollection:
 
 @pytest.mark.unit
 def test_storage_worker_idempotent_upsert(monkeypatch):
-    cfg = WorkerConfig(
+     cfg = WorkerConfig(
         worker_id="storage-worker-1",
         worker_type="storage",
         redis_url="redis://localhost:6379",

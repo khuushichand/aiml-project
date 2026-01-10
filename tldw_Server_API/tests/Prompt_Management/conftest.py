@@ -30,20 +30,20 @@ from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptSt
 
 @pytest.fixture(scope="session")
 def test_user():
-    return User(id=1, username="testuser")
+     return User(id=1, username="testuser")
 
 
 @pytest.fixture(scope="session")
 def test_api_token():
-    # This should match what your verify_prompts_auth expects if not mocked away completely
+     # This should match what your verify_prompts_auth expects if not mocked away completely
     return "fixed_test_api_token_for_pytest"
 
 
 @pytest.fixture(scope="module")
 def client(test_user, test_api_token):
-    # --- Override dependencies ---
+     # --- Override dependencies ---
     def override_get_request_user():
-        return test_user
+             return test_user
 
     async def override_verify_prompts_auth():  # Make it async if original is
         return True  # Bypass token check for tests
@@ -54,7 +54,8 @@ def client(test_user, test_api_token):
     temp_test_user_db_base_dir = Path("fuck_temp_test_user_dbs_prompts_api")
 
     def setup_test_db_environment():
-        settings.USER_DB_BASE_DIR = temp_test_user_db_base_dir
+
+             settings.USER_DB_BASE_DIR = temp_test_user_db_base_dir
         if temp_test_user_db_base_dir.exists():
             shutil.rmtree(temp_test_user_db_base_dir)
         temp_test_user_db_base_dir.mkdir(parents=True, exist_ok=True)
@@ -72,7 +73,8 @@ def client(test_user, test_api_token):
         # `close_all_cached_prompts_db_instances()` at the end is important.
 
     def teardown_test_db_environment():
-        close_all_cached_prompts_db_instances()  # Important
+
+             close_all_cached_prompts_db_instances()  # Important
         if temp_test_user_db_base_dir.exists():
             shutil.rmtree(temp_test_user_db_base_dir)
 

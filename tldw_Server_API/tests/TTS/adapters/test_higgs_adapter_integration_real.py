@@ -8,7 +8,9 @@ pytestmark = [pytest.mark.integration]
 
 
 def _local_model_paths():
-    """Resolve local model/tokenizer paths from environment variables.
+
+
+     """Resolve local model/tokenizer paths from environment variables.
 
     Set env vars:
       HIGGS_MODEL_LOCAL_DIR: path to the Higgs model directory (contains config.json)
@@ -27,7 +29,9 @@ def _local_model_paths():
 
 
 def _boson_available():
-    try:
+
+
+     try:
         import boson_multimodal  # noqa: F401
         return True
     except Exception:

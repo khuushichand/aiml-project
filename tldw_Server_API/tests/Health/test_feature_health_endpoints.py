@@ -5,12 +5,14 @@ from tldw_Server_API.app.main import app
 
 @pytest.fixture(scope="module")
 def client():
-    with TestClient(app) as c:
+     with TestClient(app) as c:
         yield c
 
 
 def test_notes_health_endpoint(client):
-    resp = client.get("/api/v1/notes/health")
+
+
+     resp = client.get("/api/v1/notes/health")
     assert resp.status_code == 200
     data = resp.json()
     assert data.get("service") == "notes"
@@ -18,7 +20,9 @@ def test_notes_health_endpoint(client):
 
 
 def test_prompts_health_endpoint(client):
-    resp = client.get("/api/v1/prompts/health")
+
+
+     resp = client.get("/api/v1/prompts/health")
     assert resp.status_code == 200
     data = resp.json()
     assert data.get("service") == "prompts"
@@ -26,7 +30,9 @@ def test_prompts_health_endpoint(client):
 
 
 def test_chatbooks_health_endpoint(client):
-    resp = client.get("/api/v1/chatbooks/health")
+
+
+     resp = client.get("/api/v1/chatbooks/health")
     assert resp.status_code == 200
     data = resp.json()
     assert data.get("service") == "chatbooks"
@@ -34,7 +40,9 @@ def test_chatbooks_health_endpoint(client):
 
 
 def test_llm_health_endpoint(client):
-    resp = client.get("/api/v1/llm/health")
+
+
+     resp = client.get("/api/v1/llm/health")
     assert resp.status_code == 200
     data = resp.json()
     assert data.get("service") == "llm_inference"

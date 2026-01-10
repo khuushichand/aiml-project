@@ -15,7 +15,9 @@ from tldw_Server_API.app.core.security_utils import redact_secret
 
 
 def test_chat_completion_works(client, auth_token, mock_chacha_db, setup_dependencies, configure_for_mock_server):
-    """Test that chat completion works with proper auth."""
+
+
+     """Test that chat completion works with proper auth."""
 
     # Set the app to debug mode for better error messages
     from tldw_Server_API.app.main import app as main_app

@@ -90,7 +90,7 @@ def test_rate_limit_backoff_retry_envelope(api_client):
     # Now call through the backoff wrapper
     start = time.time()
     def _call():
-        resp = api_client.client.post("/api/v1/chatbooks/export", json=payload)
+            resp = api_client.client.post("/api/v1/chatbooks/export", json=payload)
         try:
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:

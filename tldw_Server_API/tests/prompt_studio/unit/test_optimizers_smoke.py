@@ -24,7 +24,7 @@ from tldw_Server_API.app.core.Prompt_Management.prompt_studio.optimization_strat
 
 @pytest.fixture
 def temp_ps_db(tmp_path) -> PromptStudioDatabase:
-    # Ensure test mode to relax auth paths inside some helpers
+     # Ensure test mode to relax auth paths inside some helpers
     os.environ.setdefault("TEST_MODE", "true")
     db_path = tmp_path / "ps_smoke.db"
     db = PromptStudioDatabase(str(db_path), client_id="smoke-test")

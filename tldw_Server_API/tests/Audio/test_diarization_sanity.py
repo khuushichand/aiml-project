@@ -3,7 +3,9 @@ import pytest
 
 
 def test_agglomerative_metric_fallback(monkeypatch):
-    # Import module under test
+
+
+     # Import module under test
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Diarization_Lib as dlib
 
     # Build a fake sklearn bundle where AgglomerativeClustering rejects 'metric'
@@ -31,7 +33,8 @@ def test_agglomerative_metric_fallback(monkeypatch):
             self.affinity = affinity
 
         def fit_predict(self, embeddings):
-            # Simple round-robin cluster assignment
+
+                     # Simple round-robin cluster assignment
             """
             Assigns cluster labels to the provided embeddings in a round-robin fashion.
 
@@ -45,7 +48,8 @@ def test_agglomerative_metric_fallback(monkeypatch):
             return np.array([i % max(1, int(self.n_clusters)) for i in range(n)], dtype=int)
 
     def fake_normalize(x, axis=1, norm="l2"):
-        """
+
+             """
         No-op placeholder normalization used for testing; returns the input unchanged.
 
         Parameters:
@@ -85,7 +89,9 @@ def test_agglomerative_metric_fallback(monkeypatch):
 
 
 def test_lazy_import_silero_vad_handles_hub_fail(monkeypatch):
-    # Import module under test
+
+
+     # Import module under test
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.VAD_Lib as vlib
 
     # Reset global cache to ensure test isolation for VAD lazy import
@@ -98,7 +104,7 @@ def test_lazy_import_silero_vad_handles_hub_fail(monkeypatch):
     # Provide a fake torch with hub API. set_dir should not crash; load should raise.
     class _FakeHub:
         def set_dir(self, path):
-            # accept any path
+                     # accept any path
             """
             Set the internal directory path used by this instance.
 
@@ -108,7 +114,8 @@ def test_lazy_import_silero_vad_handles_hub_fail(monkeypatch):
             self._dir = path
 
         def load(self, *args, **kwargs):
-            # Simulate network/cache failure
+
+                     # Simulate network/cache failure
             """
             Simulate a hub loading failure by raising a RuntimeError.
 
@@ -121,7 +128,7 @@ def test_lazy_import_silero_vad_handles_hub_fail(monkeypatch):
 
     class _FakeTorch:
         def __init__(self):
-            """
+                     """
             Initialize the fake hub container.
 
             Creates and assigns a `_FakeHub` instance to the `hub` attribute for use in tests that simulate torch.hub behavior.
@@ -136,7 +143,9 @@ def test_lazy_import_silero_vad_handles_hub_fail(monkeypatch):
 
 
 def test_cluster_speakers_with_real_sklearn():
-    # Skip if sklearn is not actually installed in the environment
+
+
+     # Skip if sklearn is not actually installed in the environment
     sklearn = pytest.importorskip("sklearn")
 
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Diarization_Lib as dlib
@@ -157,7 +166,9 @@ def test_cluster_speakers_with_real_sklearn():
 
 
 def test_detect_speech_fallback_full_span(monkeypatch):
-    # Verify _detect_speech falls back to a full-span region when VAD load fails
+
+
+     # Verify _detect_speech falls back to a full-span region when VAD load fails
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Diarization_Lib as dlib
 
     # Ensure VAD loader fails
@@ -174,7 +185,9 @@ def test_detect_speech_fallback_full_span(monkeypatch):
 
 
 def test_overlap_detection_label_mapping(monkeypatch):
-    """Ensure overlap detection maps label -> center index correctly when labels are {2,4}."""
+
+
+     """Ensure overlap detection maps label -> center index correctly when labels are {2,4}."""
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Diarization_Lib as dlib
 
     # Fake sklearn bundle that returns a fixed similarity matrix, regardless of inputs
@@ -236,7 +249,8 @@ async def test_streaming_diarizer_persists_without_soundfile(tmp_path, monkeypat
     real_import = builtins.__import__
 
     def fake_import(name, *args, **kwargs):
-        """
+
+             """
         Simulates imports but forces a simulated ImportError for the "soundfile" module.
 
         Parameters:
@@ -259,7 +273,7 @@ async def test_streaming_diarizer_persists_without_soundfile(tmp_path, monkeypat
     # Stub diarization service to avoid heavy deps and still allow finalize() path
     class _StubDiarizationService:
         def __init__(self, *args, **kwargs):
-            """
+                     """
             Initialize the instance and mark it as available.
 
             Sets the instance attribute `is_available` to True.
@@ -267,7 +281,8 @@ async def test_streaming_diarizer_persists_without_soundfile(tmp_path, monkeypat
             self.is_available = True
 
         def diarize(self, audio_path, transcription_segments=None, num_speakers=None):
-            # pass through segments with a dummy speaker
+
+                     # pass through segments with a dummy speaker
             """
             Assign all provided transcription segments to a single dummy speaker and return the segments and speaker list.
 
@@ -330,7 +345,9 @@ async def test_streaming_diarizer_persists_without_soundfile(tmp_path, monkeypat
 
 
 def test_detect_speech_fallback_when_hub_disabled(monkeypatch):
-    """When enable_torch_hub_fetch=False, VAD load fails fast and falls back to a full span."""
+
+
+     """When enable_torch_hub_fetch=False, VAD load fails fast and falls back to a full span."""
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Diarization_Lib as dlib
 
     # Ensure any attempt to import Silero returns (None, None) if reached

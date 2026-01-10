@@ -5,37 +5,43 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 class FakeCursor:
     def __init__(self, responses=None):
-        self._responses = responses or {}
+             self._responses = responses or {}
         self._last_sql = None
 
     def __enter__(self):
-        return self
+
+             return self
 
     def __exit__(self, exc_type, exc, tb):
-        return False
+
+             return False
 
     def execute(self, sql, params=None):
-        self._last_sql = str(sql)
+
+             self._last_sql = str(sql)
 
     def fetchone(self):
-        # Return a mapping compatible with dict_row (uses .get)
+
+             # Return a mapping compatible with dict_row (uses .get)
         return {"c": 42}
 
     def fetchall(self):
-        return []
+
+             return []
 
 
 class FakeConn:
     def __init__(self):
-        pass
+             pass
 
     def close(self):
-        pass
+
+             pass
 
 
 @pytest.mark.unit
 def test_pg_dict_row_count_alias_used(monkeypatch, tmp_path):
-    # Instantiate as SQLite to skip PG migrations, then flip backend
+     # Instantiate as SQLite to skip PG migrations, then flip backend
     jm = JobManager(db_path=tmp_path / "dummy.db")
     jm.backend = "postgres"
 

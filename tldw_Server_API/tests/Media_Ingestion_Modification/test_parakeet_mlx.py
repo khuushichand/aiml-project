@@ -20,7 +20,7 @@ class TestParakeetMLX:
 
     @pytest.fixture
     def sample_audio_data(self):
-        """Generate realistic audio data for testing."""
+             """Generate realistic audio data for testing."""
         sample_rate = 16000
         duration = 2.0
         # Create a more complex waveform simulating speech patterns
@@ -39,7 +39,7 @@ class TestParakeetMLX:
 
     @pytest.fixture
     def long_audio_data(self):
-        """Generate long audio data for chunking tests."""
+             """Generate long audio data for chunking tests."""
         sample_rate = 16000
         duration = 120.0  # 2 minutes
         t = np.linspace(0, duration, int(sample_rate * duration), False)
@@ -51,7 +51,7 @@ class TestParakeetMLX:
 
     @pytest.fixture
     def temp_audio_file(self, sample_audio_data):
-        """Create a temporary audio file for testing."""
+             """Create a temporary audio file for testing."""
         audio_data, sample_rate = sample_audio_data
         with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_file:
             sf.write(tmp_file.name, audio_data, sample_rate)
@@ -61,7 +61,8 @@ class TestParakeetMLX:
             os.remove(tmp_file.name)
 
     def test_import_module(self):
-        """Test that the MLX module can be imported."""
+
+             """Test that the MLX module can be imported."""
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
                 transcribe_with_parakeet_mlx,
@@ -76,7 +77,7 @@ class TestParakeetMLX:
 
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.check_mlx_available')
     def test_mlx_availability_check(self, mock_check):
-        """Test MLX availability checking."""
+             """Test MLX availability checking."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
             check_mlx_available
         )
@@ -90,14 +91,15 @@ class TestParakeetMLX:
         assert check_mlx_available() == False
 
     def test_model_loading(self, monkeypatch):
-        """Test Parakeet MLX model loading."""
+
+             """Test Parakeet MLX model loading."""
         import sys, types
         # Create mock parakeet_mlx module and inject into sys.modules
         mock_parakeet_mlx = types.ModuleType('parakeet_mlx')
         mock_model = MagicMock()
         mock_model.name = "parakeet-tdt-0.6b"
         def _from_pretrained(*args, **kwargs):
-            return mock_model
+                     return mock_model
         mock_parakeet_mlx.from_pretrained = MagicMock(side_effect=_from_pretrained)
         monkeypatch.setitem(sys.modules, 'parakeet_mlx', mock_parakeet_mlx)
 
@@ -121,12 +123,13 @@ class TestParakeetMLX:
         assert mock_parakeet_mlx.from_pretrained.call_count == 1  # Still only called once
 
     def test_model_loading_with_custom_path(self, monkeypatch):
-        """Test loading model from custom path."""
+
+             """Test loading model from custom path."""
         import sys, types
         mock_parakeet_mlx = types.ModuleType('parakeet_mlx')
         mock_model = MagicMock()
         def _from_pretrained(*args, **kwargs):
-            return mock_model
+                     return mock_model
         mock_parakeet_mlx.from_pretrained = MagicMock(side_effect=_from_pretrained)
         monkeypatch.setitem(sys.modules, 'parakeet_mlx', mock_parakeet_mlx)
 
@@ -143,7 +146,7 @@ class TestParakeetMLX:
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.load_parakeet_mlx_model')
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.check_mlx_available')
     def test_transcribe_simple(self, mock_check_mlx, mock_load_model, sample_audio_data):
-        """Test simple transcription without chunking."""
+             """Test simple transcription without chunking."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
             transcribe_with_parakeet_mlx
         )
@@ -171,7 +174,7 @@ class TestParakeetMLX:
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.load_parakeet_mlx_model')
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.check_mlx_available')
     def test_transcribe_with_chunking(self, mock_check_mlx, mock_load_model, long_audio_data):
-        """Test transcription with chunking."""
+             """Test transcription with chunking."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
             transcribe_with_parakeet_mlx
         )
@@ -189,7 +192,7 @@ class TestParakeetMLX:
         # Track chunk callbacks
         chunk_callbacks = []
         def chunk_callback(current, total):
-            chunk_callbacks.append((current, total))
+                     chunk_callbacks.append((current, total))
 
         # Transcribe with chunking
         result = transcribe_with_parakeet_mlx(
@@ -212,7 +215,7 @@ class TestParakeetMLX:
 
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.check_mlx_available')
     def test_transcribe_mlx_not_available(self, mock_check_mlx, sample_audio_data):
-        """Test transcription when MLX is not available."""
+             """Test transcription when MLX is not available."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
             transcribe_with_parakeet_mlx
         )
@@ -232,7 +235,7 @@ class TestParakeetMLX:
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.load_parakeet_mlx_model')
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.check_mlx_available')
     def test_transcribe_from_file_path(self, mock_check_mlx, mock_load_model, temp_audio_file):
-        """Test transcription from file path."""
+             """Test transcription from file path."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
             transcribe_with_parakeet_mlx
         )
@@ -258,7 +261,7 @@ class TestParakeetMLX:
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.load_parakeet_mlx_model')
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.check_mlx_available')
     def test_transcribe_error_handling(self, mock_check_mlx, mock_load_model, sample_audio_data):
-        """Test error handling during transcription."""
+             """Test error handling during transcription."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
             transcribe_with_parakeet_mlx
         )
@@ -278,7 +281,8 @@ class TestParakeetMLX:
         assert "Model error" in result
 
     def test_chunk_callback_functionality(self):
-        """Test that chunk callbacks work correctly."""
+
+             """Test that chunk callbacks work correctly."""
         callbacks_received = []
 
         def test_callback(current: int, total: int):
@@ -297,7 +301,7 @@ class TestParakeetMLX:
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.load_parakeet_mlx_model')
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.check_mlx_available')
     def test_audio_preprocessing(self, mock_check_mlx, mock_load_model, mock_sf_write, sample_audio_data):
-        """Test audio preprocessing (resampling, mono conversion)."""
+             """Test audio preprocessing (resampling, mono conversion)."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
             transcribe_with_parakeet_mlx
         )
@@ -332,7 +336,7 @@ class TestParakeetMLXIntegration:
 
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo.transcribe_with_parakeet')
     def test_integration_with_nemo_module(self, mock_transcribe):
-        """Test integration with Audio_Transcription_Nemo module."""
+             """Test integration with Audio_Transcription_Nemo module."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
             transcribe_with_nemo
         )
@@ -352,7 +356,7 @@ class TestParakeetMLXIntegration:
 
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.transcribe_audio')
     def test_integration_with_main_library(self, mock_transcribe):
-        """Test integration with main transcription library."""
+             """Test integration with main transcription library."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
             transcribe_audio
         )
@@ -375,7 +379,7 @@ class TestParakeetMLXPerformance:
 
     @pytest.fixture
     def benchmark_audio(self):
-        """Generate audio for benchmarking."""
+             """Generate audio for benchmarking."""
         durations = [10, 30, 60, 120, 300]  # Various durations in seconds
         sample_rate = 16000
         audios = []
@@ -388,7 +392,7 @@ class TestParakeetMLXPerformance:
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.load_parakeet_mlx_model')
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.check_mlx_available')
     def test_performance_scaling(self, mock_check_mlx, mock_load_model, benchmark_audio):
-        """Test performance scaling with audio duration."""
+             """Test performance scaling with audio duration."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
             transcribe_with_parakeet_mlx
         )
@@ -401,7 +405,8 @@ class TestParakeetMLXPerformance:
         mock_model = MagicMock()
 
         def mock_transcribe(*args, **kwargs):
-            # Simulate processing time proportional to audio length
+
+                     # Simulate processing time proportional to audio length
             time.sleep(0.01)  # Small delay
             result = MagicMock()
             result.text = "Benchmark transcription"
@@ -432,7 +437,7 @@ class TestParakeetMLXPerformance:
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.load_parakeet_mlx_model')
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.check_mlx_available')
     def test_chunking_performance(self, mock_check_mlx, mock_load_model):
-        """Test performance difference between chunked and non-chunked processing."""
+             """Test performance difference between chunked and non-chunked processing."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
             transcribe_with_parakeet_mlx
         )

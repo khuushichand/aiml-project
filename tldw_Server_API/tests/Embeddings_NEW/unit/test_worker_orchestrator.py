@@ -18,7 +18,7 @@ from tldw_Server_API.app.core.Embeddings.worker_config import (
 
 @pytest.mark.unit
 def test_orchestrator_constructs_with_default_config():
-    """Orchestrator should accept a full OrchestrationConfig and expose it."""
+     """Orchestrator should accept a full OrchestrationConfig and expose it."""
     cfg = OrchestrationConfig.default_config()
     orch = WorkerOrchestrator(cfg)
     assert orch.config is cfg

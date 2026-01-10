@@ -24,7 +24,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture()
 def client_with_user():
-    async def override_user():
+     async def override_user():
         return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True)
     mini_app.dependency_overrides[get_request_user] = override_user
     with TestClient(mini_app) as client:
@@ -52,7 +52,8 @@ def test_websearch_aggregate_path(client_with_user: TestClient, monkeypatch: pyt
     from tldw_Server_API.app.api.v1.endpoints import research as research_module
 
     def fake_generate_and_search(question, params):
-        return {
+
+             return {
             "web_search_results_dict": {"results": [], "total_results_found": 0},
             "sub_query_dict": {"main_goal": question, "sub_questions": []},
         }

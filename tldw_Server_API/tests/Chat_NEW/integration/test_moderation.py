@@ -20,7 +20,8 @@ app.include_router(health_router, prefix="/api/v1")
 app.include_router(chat_router, prefix="/api/v1/chat")
 
 def _make_test_db():
-    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+
+     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
         db_path = tmp.name
     db = CharactersRAGDB(db_path, "test_client")
     # Minimal default character required by endpoint
@@ -43,7 +44,9 @@ def _post_with_csrf(client: TestClient, url: str, **kwargs):
 
 
 def _auth_headers(client):
-    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
+
+     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     settings = get_settings()
     api_key = settings.SINGLE_USER_API_KEY or os.getenv("API_BEARER", "test-api-key-12345")
     return {"X-API-KEY": api_key, "X-CSRF-Token": getattr(client, 'csrf_token', '')}
@@ -51,7 +54,7 @@ def _auth_headers(client):
 
 class _StubPolicy:
     def __init__(self, enabled=True, input_action='block', output_action='redact', redact='[REDACTED]', patterns=None):
-        self.enabled = enabled
+             self.enabled = enabled
         self.input_enabled = True
         self.output_enabled = True
         self.input_action = input_action
@@ -109,7 +112,7 @@ class _EvalModerationService:
 
 @pytest.mark.unit
 def test_input_block_returns_400(monkeypatch):
-    db, db_path = _make_test_db()
+     db, db_path = _make_test_db()
     try:
         app.dependency_overrides[get_chacha_db_for_user] = lambda: db
         policy = _StubPolicy(enabled=True, input_action='block', output_action='redact')
@@ -140,7 +143,7 @@ def test_input_block_returns_400(monkeypatch):
 
 @pytest.mark.unit
 def test_output_redaction_non_streaming(monkeypatch):
-    db, db_path = _make_test_db()
+     db, db_path = _make_test_db()
     try:
         app.dependency_overrides[get_chacha_db_for_user] = lambda: db
         policy = _StubPolicy(enabled=True, input_action='warn', output_action='redact', redact='[REDACTED]')
@@ -184,13 +187,14 @@ def test_output_redaction_non_streaming(monkeypatch):
 
 @pytest.mark.unit
 def test_streaming_redaction_applied():
-    db, db_path = _make_test_db()
+     db, db_path = _make_test_db()
     try:
         app.dependency_overrides[get_chacha_db_for_user] = lambda: db
         policy = _StubPolicy(enabled=True, input_action='warn', output_action='redact', redact='[REDACTED]')
 
         def upstream_stream():
-            chunk1 = {"choices": [{"delta": {"content": "leak: secret"}}]}
+
+                     chunk1 = {"choices": [{"delta": {"content": "leak: secret"}}]}
             chunk2 = {"choices": [{"delta": {"content": " appears"}}]}
             yield f"data: {json.dumps(chunk1)}\n\n"
             yield f"data: {json.dumps(chunk2)}\n\n"
@@ -241,14 +245,15 @@ def test_streaming_redaction_applied():
 
 @pytest.mark.unit
 def test_streaming_block_emits_sse_error_and_finishes():
-    db, db_path = _make_test_db()
+     db, db_path = _make_test_db()
     try:
         app.dependency_overrides[get_chacha_db_for_user] = lambda: db
         # Block on output
         policy = _StubPolicy(enabled=True, input_action='warn', output_action='block', redact='[REDACTED]')
 
         def upstream_stream():
-            chunk1 = {"choices": [{"delta": {"content": "this contains secret"}}]}
+
+                     chunk1 = {"choices": [{"delta": {"content": "this contains secret"}}]}
             chunk2 = {"choices": [{"delta": {"content": " should be blocked"}}]}
             yield f"data: {json.dumps(chunk1)}\n\n"
             yield f"data: {json.dumps(chunk2)}\n\n"
@@ -284,14 +289,15 @@ def test_streaming_block_emits_sse_error_and_finishes():
 
 @pytest.mark.unit
 def test_streaming_cross_chunk_redaction_persisted(monkeypatch):
-    db, db_path = _make_test_db()
+     db, db_path = _make_test_db()
     try:
         monkeypatch.setenv("STREAMS_UNIFIED", "0")
         app.dependency_overrides[get_chacha_db_for_user] = lambda: db
         policy = _StubPolicy(enabled=True, input_action='warn', output_action='redact', redact='[REDACTED]')
 
         def upstream_stream():
-            chunk1 = {"choices": [{"delta": {"content": "sec"}}]}
+
+                     chunk1 = {"choices": [{"delta": {"content": "sec"}}]}
             chunk2 = {"choices": [{"delta": {"content": "ret data"}}]}
             yield f"data: {json.dumps(chunk1)}\n\n"
             yield f"data: {json.dumps(chunk2)}\n\n"

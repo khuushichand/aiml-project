@@ -20,11 +20,15 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Media_Update_lib import
 
 
 def _make_media_db() -> MediaDatabase:
-    return MediaDatabase(db_path=":memory:", client_id="tests-db")
+
+
+     return MediaDatabase(db_path=":memory:", client_id="tests-db")
 
 
 def test_batch_insert_chunks_generates_unique_ids_across_calls():
-    db = _make_media_db()
+
+
+     db = _make_media_db()
     media_id, _, _ = db.add_media_with_keywords(
         title="Chunked Doc",
         media_type="text",
@@ -57,14 +61,17 @@ def test_batch_insert_chunks_generates_unique_ids_across_calls():
 
 
 def test_soft_delete_keyword_uses_execute_with_connection(monkeypatch):
-    db = _make_media_db()
+
+
+     db = _make_media_db()
     db.add_keyword("alpha")
 
     executed: list[str] = []
     original = db._execute_with_connection
 
     def spy(self, conn, query, params=None):
-        executed.append(query)
+
+             executed.append(query)
         return original(conn, query, params)
 
     db._execute_with_connection = types.MethodType(spy, db)
@@ -73,7 +80,9 @@ def test_soft_delete_keyword_uses_execute_with_connection(monkeypatch):
 
 
 def test_soft_delete_document_version_uses_execute_with_connection(monkeypatch):
-    db = _make_media_db()
+
+
+     db = _make_media_db()
     media_id, _, _ = db.add_media_with_keywords(
         title="Doc",
         media_type="text",
@@ -88,7 +97,8 @@ def test_soft_delete_document_version_uses_execute_with_connection(monkeypatch):
     original = db._execute_with_connection
 
     def spy(self, conn, query, params=None):
-        executed.append(query)
+
+             executed.append(query)
         return original(conn, query, params)
 
     db._execute_with_connection = types.MethodType(spy, db)
@@ -97,7 +107,9 @@ def test_soft_delete_document_version_uses_execute_with_connection(monkeypatch):
 
 
 def test_process_media_update_wraps_transaction_and_commits():
-    db = _make_media_db()
+
+
+     db = _make_media_db()
     media_id, _, _ = db.add_media_with_keywords(
         title="Doc",
         media_type="text",
@@ -109,7 +121,8 @@ def test_process_media_update_wraps_transaction_and_commits():
     original_transaction = db.transaction
 
     def tracking_transaction(self):
-        nonlocal enter_count
+
+             nonlocal enter_count
         enter_count += 1
         return original_transaction()
 
@@ -170,7 +183,9 @@ def test_media_db_backup_helpers_create_and_rotate(tmp_path: Path):
 
 
 def test_add_media_with_keywords_overwrite_preserves_sharing_state():
-    db = MediaDatabase(db_path=":memory:", client_id="1")
+
+
+     db = MediaDatabase(db_path=":memory:", client_id="1")
     url = "https://example.com/shared-doc"
 
     media_id, media_uuid, _ = db.add_media_with_keywords(

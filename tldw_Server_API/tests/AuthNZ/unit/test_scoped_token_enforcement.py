@@ -43,7 +43,9 @@ def _build_app(with_scope_dep: bool) -> FastAPI:
 
 
 def _make_scoped_token() -> str:
-    svc = JWTService(get_settings())
+
+
+     svc = JWTService(get_settings())
     return svc.create_access_token(
         user_id=1,
         username="tester",
@@ -53,7 +55,9 @@ def _make_scoped_token() -> str:
 
 
 def test_scoped_token_requires_scope_dependency(monkeypatch):
-    monkeypatch.setenv("TEST_MODE", "1")
+
+
+     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     monkeypatch.setenv("JWT_ALGORITHM", "HS256")
     monkeypatch.setenv("JWT_SECRET_KEY", "unit-test-secret-key-1234567890-abcdef")
@@ -83,7 +87,9 @@ def test_scoped_token_requires_scope_dependency(monkeypatch):
 
 
 def test_scoped_token_allows_when_scope_dependency_present(monkeypatch):
-    monkeypatch.setenv("TEST_MODE", "1")
+
+
+     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     monkeypatch.setenv("JWT_ALGORITHM", "HS256")
     monkeypatch.setenv("JWT_SECRET_KEY", "unit-test-secret-key-1234567890-abcdef")

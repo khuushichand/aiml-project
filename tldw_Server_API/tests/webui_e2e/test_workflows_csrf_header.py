@@ -3,7 +3,7 @@ import pytest
 
 @pytest.mark.e2e
 def test_workflow_posts_include_csrf_header(page, server_url):
-    page.goto(f"{server_url}/webui/")
+     page.goto(f"{server_url}/webui/")
     page.wait_for_function("() => window.apiClient && window.apiClient.baseUrl")
 
     # Prime CSRF cookie by performing an authenticated GET

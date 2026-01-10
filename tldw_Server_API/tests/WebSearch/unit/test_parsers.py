@@ -13,7 +13,9 @@ pytestmark = pytest.mark.unit
 
 
 def test_parse_duckduckgo_results_minimal():
-    raw = {
+
+
+     raw = {
         "results": [
             {"title": "Example", "href": "https://example.com", "body": "A snippet"}
         ]
@@ -29,7 +31,9 @@ def test_parse_duckduckgo_results_minimal():
 
 
 def test_parse_brave_results_minimal():
-    raw = {
+
+
+     raw = {
         "query": {"original": "test", "country": "US"},
         "web": {
             "results": [
@@ -53,7 +57,9 @@ def test_parse_brave_results_minimal():
 
 
 def test_parse_google_results_minimal():
-    raw = {
+
+
+     raw = {
         "searchInformation": {"totalResults": "1", "searchTime": 0.12},
         "queries": {"request": [{"searchTerms": "q", "language": "en", "count": 1}]},
         "items": [
@@ -75,7 +81,9 @@ def test_parse_google_results_minimal():
 
 
 def test_parse_kagi_results_minimal():
-    raw = {
+
+
+     raw = {
         "meta": {"ms": 120, "id": "abc"},
         "data": [
             {"t": 0, "title": "Kagi", "url": "https://kagi.example", "snippet": "k-snippet"},

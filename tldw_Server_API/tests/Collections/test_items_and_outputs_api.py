@@ -52,7 +52,7 @@ def _insert_output_row_raw(
 
 @pytest.fixture()
 def client_with_user(monkeypatch):
-    async def override_user():
+     async def override_user():
         return User(id=123, username="tester", email=None, is_active=True)
 
     # Use full app profile for Collections/outputs endpoints
@@ -87,7 +87,9 @@ def client_with_user(monkeypatch):
 
 
 def test_items_endpoint_minimal(client_with_user):
-    client = client_with_user
+
+
+     client = client_with_user
     r = client.get("/api/v1/items", params={"ids": [1, 2]})
     assert r.status_code == 200, r.text
     data = r.json()
@@ -95,7 +97,9 @@ def test_items_endpoint_minimal(client_with_user):
 
 
 def test_items_endpoint_uses_collections_layer(client_with_user):
-    client = client_with_user
+
+
+     client = client_with_user
     collections_db = CollectionsDatabase.for_user(user_id=123)
     collections_db.upsert_content_item(
         origin="watchlist",
@@ -130,7 +134,9 @@ def test_items_endpoint_uses_collections_layer(client_with_user):
 
 
 def test_outputs_preview_with_inline_data_and_generate(client_with_user, tmp_path):
-    client = client_with_user
+
+
+     client = client_with_user
 
     # Create a template
     payload = {
@@ -201,7 +207,9 @@ def test_outputs_preview_with_inline_data_and_generate(client_with_user, tmp_pat
 
 
 def test_outputs_create_sanitizes_title_and_enforces_base_dir(client_with_user):
-    client = client_with_user
+
+
+     client = client_with_user
 
     payload = {
         "name": "path-safety",
@@ -225,7 +233,9 @@ def test_outputs_create_sanitizes_title_and_enforces_base_dir(client_with_user):
 
 
 def test_outputs_download_rejects_storage_path_outside_base(client_with_user, tmp_path):
-    client = client_with_user
+
+
+     client = client_with_user
 
     external = tmp_path / "outside.md"
     external.write_text("nope", encoding="utf-8")
@@ -251,7 +261,9 @@ def test_outputs_download_rejects_storage_path_outside_base(client_with_user, tm
 
 
 def test_outputs_download_normalizes_legacy_absolute_path(client_with_user):
-    client = client_with_user
+
+
+     client = client_with_user
 
     base_dir = DatabasePaths.get_user_base_directory(123) / "outputs"
     base_dir.mkdir(parents=True, exist_ok=True)
@@ -272,7 +284,9 @@ def test_outputs_download_normalizes_legacy_absolute_path(client_with_user):
 
 
 def test_outputs_delete_skips_invalid_path_file_removal(client_with_user, tmp_path):
-    client = client_with_user
+
+
+     client = client_with_user
 
     external = tmp_path / "external.txt"
     external.write_text("keep", encoding="utf-8")
@@ -306,7 +320,9 @@ def test_outputs_delete_skips_invalid_path_file_removal(client_with_user, tmp_pa
 
 
 def test_outputs_purge_skips_invalid_path_delete_files(client_with_user, tmp_path):
-    client = client_with_user
+
+
+     client = client_with_user
 
     external = tmp_path / "purge.txt"
     external.write_text("keep", encoding="utf-8")

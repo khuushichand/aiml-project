@@ -25,7 +25,9 @@ def _register_and_login(client, username: str, password: str) -> str:
 
 
 def _coerce_expiry(exp_value) -> datetime:
-    if isinstance(exp_value, datetime):
+
+
+     if isinstance(exp_value, datetime):
         return exp_value
     if isinstance(exp_value, (int, float)):
         return datetime.fromtimestamp(exp_value, tz=timezone.utc)

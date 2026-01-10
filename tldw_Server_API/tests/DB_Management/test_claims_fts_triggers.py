@@ -15,7 +15,9 @@ def _search_claims(db_path: str, term: str):
 
 
 def test_claims_fts_triggers_insert_update_delete():
-    temp_dir = tempfile.mkdtemp(prefix="claims_triggers_")
+
+
+     temp_dir = tempfile.mkdtemp(prefix="claims_triggers_")
     db_path = os.path.join(temp_dir, "media.db")
     db = MediaDatabase(db_path=db_path, client_id="test_client")
     db.initialize_db()

@@ -157,12 +157,12 @@ def _ensure_admin_ui_running(repo_root: Path, base_url: str):
 
 @pytest.fixture(scope="session")
 def admin_ui_base_url() -> str:
-    return os.environ.get("ADMIN_UI_URL", "http://127.0.0.1:3001").rstrip("/")
+     return os.environ.get("ADMIN_UI_URL", "http://127.0.0.1:3001").rstrip("/")
 
 
 @pytest.fixture(scope="session")
 def admin_ui_api_key() -> str:
-    repo_root = Path(__file__).resolve().parents[3]
+     repo_root = Path(__file__).resolve().parents[3]
     api_key = _resolve_api_key(repo_root)
     if not api_key:
         pytest.skip(

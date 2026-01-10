@@ -11,16 +11,17 @@ pytestmark = pytest.mark.rate_limit
 
 class _Snap:
     def __init__(self, route_map):
-        self.route_map = route_map
+             self.route_map = route_map
 
 
 class _Loader:
     def __init__(self, route_map, policy):
-        self._snap = _Snap(route_map)
+             self._snap = _Snap(route_map)
         self._policy = policy
 
     def get_snapshot(self):
-        return self._snap
+
+             return self._snap
 
     def get_policy(self, policy_id: str):
         return dict(self._policy or {})
@@ -28,7 +29,7 @@ class _Loader:
 
 class _Gov:
     def __init__(self):
-        pass
+             pass
 
     async def reserve(self, req, op_id=None):
         pid = (req.tags or {}).get("policy_id")
@@ -62,7 +63,9 @@ class _Gov:
 
 
 def _make_app_with_tokens_headers():
-    app = FastAPI()
+
+
+     app = FastAPI()
     app.add_middleware(RGSimpleMiddleware)
 
     @app.get("/api/v1/chat/completions", tags=["chat"])

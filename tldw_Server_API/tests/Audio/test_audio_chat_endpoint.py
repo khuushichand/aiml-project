@@ -22,7 +22,7 @@ def _encode_silence_base64(duration_sec: float = 0.1, sr: int = 16000) -> str:
 
 @pytest.fixture
 def client(monkeypatch):
-    monkeypatch.setenv("TEST_MODE", "true")
+     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("SINGLE_USER_API_KEY", TEST_API_KEY)
     monkeypatch.setenv("SINGLE_USER_FIXED_ID", "1")

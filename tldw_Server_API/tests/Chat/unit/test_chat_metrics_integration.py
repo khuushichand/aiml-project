@@ -18,7 +18,8 @@ class TestChatMetricsCollector:
     """Test ChatMetricsCollector functionality."""
 
     def test_initialization(self):
-        """Test metrics collector initialization."""
+
+             """Test metrics collector initialization."""
         collector = ChatMetricsCollector()
 
         assert collector.telemetry is not None
@@ -88,7 +89,8 @@ class TestChatMetricsCollector:
             span.set_attribute("rows_affected", 1)
 
     def test_track_validation_failure(self):
-        """Test validation failure tracking."""
+
+             """Test validation failure tracking."""
         collector = ChatMetricsCollector()
 
         with patch('tldw_Server_API.app.core.Chat.chat_metrics.logger') as mock_logger:
@@ -100,7 +102,8 @@ class TestChatMetricsCollector:
             mock_logger.warning.assert_called_once()
 
     def test_track_auth_failure(self):
-        """Test authentication failure tracking."""
+
+             """Test authentication failure tracking."""
         collector = ChatMetricsCollector()
 
         with patch('tldw_Server_API.app.core.Chat.chat_metrics.logger') as mock_logger:
@@ -109,7 +112,8 @@ class TestChatMetricsCollector:
             mock_logger.warning.assert_called_once()
 
     def test_track_rate_limit(self):
-        """Test rate limit tracking."""
+
+             """Test rate limit tracking."""
         collector = ChatMetricsCollector()
 
         with patch('tldw_Server_API.app.core.Chat.chat_metrics.logger') as mock_logger:
@@ -118,7 +122,8 @@ class TestChatMetricsCollector:
             mock_logger.info.assert_called_once()
 
     def test_track_tokens(self):
-        """Test token usage tracking."""
+
+             """Test token usage tracking."""
         collector = ChatMetricsCollector()
 
         with patch('tldw_Server_API.app.core.Chat.chat_metrics.logger') as mock_logger:
@@ -133,7 +138,8 @@ class TestChatMetricsCollector:
             mock_logger.debug.assert_called()
 
     def test_track_character_access(self):
-        """Test character access tracking."""
+
+             """Test character access tracking."""
         collector = ChatMetricsCollector()
 
         # Track cache hit
@@ -143,7 +149,8 @@ class TestChatMetricsCollector:
         collector.track_character_access("char_456", cache_hit=False)
 
     def test_track_conversation(self):
-        """Test conversation tracking."""
+
+             """Test conversation tracking."""
         collector = ChatMetricsCollector()
 
         # Track new conversation
@@ -153,14 +160,16 @@ class TestChatMetricsCollector:
         collector.track_conversation("conv_existing", is_new=False)
 
     def test_track_message_saved(self):
-        """Test message save tracking."""
+
+             """Test message save tracking."""
         collector = ChatMetricsCollector()
 
         collector.track_message_saved("conv_123", "user")
         collector.track_message_saved("conv_123", "assistant")
 
     def test_track_image_processing(self):
-        """Test image processing tracking."""
+
+             """Test image processing tracking."""
         collector = ChatMetricsCollector()
 
         collector.track_image_processing(
@@ -169,7 +178,8 @@ class TestChatMetricsCollector:
         )
 
     def test_track_transaction(self):
-        """Test transaction tracking."""
+
+             """Test transaction tracking."""
         collector = ChatMetricsCollector()
 
         # Successful transaction with retries
@@ -179,7 +189,8 @@ class TestChatMetricsCollector:
         collector.track_transaction(success=False, retries=0)
 
     def test_track_llm_call(self):
-        """Test LLM call tracking."""
+
+             """Test LLM call tracking."""
         collector = ChatMetricsCollector()
 
         # Successful call
@@ -200,7 +211,8 @@ class TestChatMetricsCollector:
         )
 
     def test_get_active_metrics(self):
-        """Test getting active operation counts."""
+
+             """Test getting active operation counts."""
         collector = ChatMetricsCollector()
 
         collector.active_requests = 3
@@ -216,7 +228,8 @@ class TestChatMetricsCollector:
         }
 
     def test_cost_estimation(self):
-        """Test token cost estimation."""
+
+             """Test token cost estimation."""
         collector = ChatMetricsCollector()
 
         # Test with known model
@@ -246,14 +259,16 @@ class TestGetChatMetrics:
     """Test the global metrics instance."""
 
     def test_singleton_pattern(self):
-        """Test that get_chat_metrics returns singleton."""
+
+             """Test that get_chat_metrics returns singleton."""
         metrics1 = get_chat_metrics()
         metrics2 = get_chat_metrics()
 
         assert metrics1 is metrics2
 
     def test_instance_type(self):
-        """Test that instance is correct type."""
+
+             """Test that instance is correct type."""
         metrics = get_chat_metrics()
         assert isinstance(metrics, ChatMetricsCollector)
 

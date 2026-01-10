@@ -21,7 +21,7 @@ async def test_reset_password_integration_success(monkeypatch):
     # Ensure MFA import path is stubbed prior to auth import
     class _StubMFA:
         def generate_secret(self) -> str:
-            return "IGNORED"
+                     return "IGNORED"
 
     mfa_stub_mod = types.ModuleType("mfa_service")
     setattr(mfa_stub_mod, "get_mfa_service", lambda: _StubMFA())
@@ -118,7 +118,7 @@ async def test_mfa_setup_verify_disable_integration(isolated_test_environment, t
     # Prepare stub MFA and Email services
     class _StubMFA:
         def generate_secret(self) -> str:
-            return "STUBSECRET"
+                     return "STUBSECRET"
 
         def generate_totp_uri(self, secret: str, username: str) -> str:
             return f"otpauth://totp/{username}?secret={secret}&issuer=TLDW"
@@ -127,7 +127,8 @@ async def test_mfa_setup_verify_disable_integration(isolated_test_environment, t
             return b"PNGDATA"
 
         def generate_backup_codes(self):
-            return ["code1", "code2", "code3"]
+
+                     return ["code1", "code2", "code3"]
 
         def verify_totp(self, secret: str, token: str) -> bool:
             return secret == "STUBSECRET" and token == "000000"

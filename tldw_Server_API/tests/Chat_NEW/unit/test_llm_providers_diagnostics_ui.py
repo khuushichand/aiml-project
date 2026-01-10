@@ -7,12 +7,12 @@ from tldw_Server_API.app.main import app
 
 class _FakeProviderManager:
     def get_health_report(self):
-        return {}
+             return {}
 
 
 @pytest.mark.unit
 def test_llm_providers_includes_diagnostics_ui(monkeypatch):
-    monkeypatch.setenv("TEST_MODE", "true")
+     monkeypatch.setenv("TEST_MODE", "true")
     with TestClient(app) as client:
         # Patch provider manager to avoid relying on background tasks
         with patch("tldw_Server_API.app.api.v1.endpoints.llm_providers.get_provider_manager", return_value=_FakeProviderManager()):

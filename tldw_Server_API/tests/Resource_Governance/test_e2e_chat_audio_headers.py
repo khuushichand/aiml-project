@@ -9,13 +9,15 @@ pytestmark = pytest.mark.rate_limit
 
 
 def _repo_policy_path() -> str:
-    # tldw_Server_API/tests/Resource_Governance → tldw_Server_API
+
+
+     # tldw_Server_API/tests/Resource_Governance → tldw_Server_API
     return str(Path(__file__).resolve().parents[2] / "Config_Files" / "resource_governor_policies.yaml")
 
 
 @contextlib.contextmanager
 def _with_rg_middleware(app):
-    """Temporarily install RGSimpleMiddleware for tests that set RG_ENABLED after app import."""
+     """Temporarily install RGSimpleMiddleware for tests that set RG_ENABLED after app import."""
     try:
         from tldw_Server_API.app.core.Resource_Governance.middleware_simple import RGSimpleMiddleware
         from starlette.middleware import Middleware
@@ -45,7 +47,9 @@ def _with_rg_middleware(app):
 
 
 def _reset_rg_state(app) -> None:
-    """
+
+
+     """
     Ensure each test starts with a fresh ResourceGovernor / policy loader.
 
     Tests in this module mutate RG_POLICY_PATH and related envs; reusing the
@@ -489,7 +493,8 @@ async def test_e2e_audio_transcriptions_headers_and_mocked_stt(monkeypatch, tmp_
     import numpy as np
 
     def fake_sf_read(fd, dtype="float32"):
-        _ = (fd, dtype)
+
+             _ = (fd, dtype)
         data = np.zeros((1600,), dtype="float32")
         sr = 16000
         return data, sr
@@ -508,7 +513,8 @@ async def test_e2e_audio_transcriptions_headers_and_mocked_stt(monkeypatch, tmp_
         return_language=False,
         **kwargs,
     ):
-        _ = (
+
+             _ = (
             path,
             whisper_model,
             selected_source_lang,

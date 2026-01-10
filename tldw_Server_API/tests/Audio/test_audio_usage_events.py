@@ -14,9 +14,9 @@ pytestmark = pytest.mark.unit
 
 class _DummyLogger:
     def __init__(self):
-        self.events = []
+             self.events = []
     def log_event(self, name, resource_id=None, tags=None, metadata=None):
-        self.events.append((name, resource_id, tags, metadata))
+             self.events.append((name, resource_id, tags, metadata))
 
 
 class _FakeTTSService:
@@ -34,13 +34,14 @@ class _FakeTTSService:
 
 @pytest.fixture()
 def client_with_overrides(bypass_api_limits):
-    dummy = _DummyLogger()
+     dummy = _DummyLogger()
 
     async def override_user():
         return User(id=1, username="tester", email=None, is_active=True)
 
     def override_logger():
-        return dummy
+
+             return dummy
 
     async def override_tts():
         return _FakeTTSService()
@@ -57,7 +58,9 @@ def client_with_overrides(bypass_api_limits):
 
 
 def test_tts_usage_event_logged(client_with_overrides):
-    client, dummy = client_with_overrides
+
+
+     client, dummy = client_with_overrides
     payload = {
         "model": "tts-1",
         "input": "hello",

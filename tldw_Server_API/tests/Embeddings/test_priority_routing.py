@@ -11,7 +11,7 @@ from tldw_Server_API.app.core.Embeddings.queue_schemas import ChunkingMessage, C
 
 class FakeRedisPR:
     def __init__(self):
-        self.writes = []  # list[(stream, fields)]
+             self.writes = []  # list[(stream, fields)]
         self.kv = {}
 
     async def xadd(self, stream, fields):

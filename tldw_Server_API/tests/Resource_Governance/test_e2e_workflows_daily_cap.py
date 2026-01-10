@@ -8,7 +8,9 @@ pytestmark = pytest.mark.rate_limit
 
 
 def _reset_rg_state(app):
-    for attr in ("rg_governor", "rg_policy_loader", "rg_policy_store", "rg_policy_version", "rg_policy_count"):
+
+
+     for attr in ("rg_governor", "rg_policy_loader", "rg_policy_store", "rg_policy_version", "rg_policy_count"):
         try:
             if hasattr(app.state, attr):
                 setattr(app.state, attr, None)
@@ -18,7 +20,7 @@ def _reset_rg_state(app):
 
 @contextlib.contextmanager
 def _with_rg_middleware(app):
-    """Temporarily install RGSimpleMiddleware for tests that set RG_ENABLED after app import."""
+     """Temporarily install RGSimpleMiddleware for tests that set RG_ENABLED after app import."""
     try:
         from tldw_Server_API.app.core.Resource_Governance.middleware_simple import RGSimpleMiddleware
         from starlette.middleware import Middleware

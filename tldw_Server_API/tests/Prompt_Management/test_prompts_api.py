@@ -64,7 +64,7 @@ def get_sample_keyword_payload(text_suffix: str = "") -> Dict[str, str]:
 # Fixture for a specific API token value for direct testing of verify_prompts_auth
 @pytest.fixture(scope="session")
 def actual_test_api_key() -> str:
-    return "this_is_the_actual_single_user_key_for_testing"
+     return "this_is_the_actual_single_user_key_for_testing"
 
 # Standalone tests for verify_prompts_auth (if they are in test_prompts_api.py)
 @pytest.mark.asyncio
@@ -153,7 +153,7 @@ def test_api_token(actual_test_api_key: str): # Depends on the actual_test_api_k
 
 @pytest.fixture(scope="session")
 def test_user_instance() -> User:
-    """Provides a consistent test user instance."""
+     """Provides a consistent test user instance."""
     # In a real multi-user scenario, SINGLE_USER_FIXED_ID might not be relevant.
     # For testing, a fixed ID is fine.
     user_id = getattr(settings, "SINGLE_USER_FIXED_ID", TEST_USER_ID) if getattr(settings, "SINGLE_USER_MODE",
@@ -163,7 +163,7 @@ def test_user_instance() -> User:
 
 @pytest.fixture(scope="session")
 def actual_api_token_value() -> str:
-    """Returns the API token value that verify_prompts_auth would expect."""
+     """Returns the API token value that verify_prompts_auth would expect."""
     # This should align with what settings.API_BEARER would be in a real scenario.
     # For testing, we can use a fixed value and monkeypatch settings.API_BEARER.
     return FIXED_TEST_API_TOKEN
@@ -186,7 +186,7 @@ def client_env_setup(tmp_path: Path, monkeypatch, test_user_instance: User):
 
     # Override get_request_user dependency
     def override_get_request_user_dependency():
-        return test_user_instance
+             return test_user_instance
 
     fastapi_app.dependency_overrides[get_request_user] = override_get_request_user_dependency
 
@@ -222,7 +222,8 @@ def client(test_user: User, test_api_token: str, tmp_path: Path, monkeypatch):
     monkeypatch.setattr(Prompts_DB_Deps, "MAIN_USER_DATA_BASE_DIR", tmp_path)
 
     def override_get_request_user():
-        return test_user
+
+             return test_user
 
     async def override_verify_prompts_auth_dependency_for_client_tests():
         return True
@@ -303,13 +304,13 @@ def auth_headers(actual_api_token_value: str) -> Dict[str, str]:
 
 @pytest.fixture
 def no_auth_headers() -> Dict[str, str]:
-    """Empty headers for testing unauthenticated requests."""
+     """Empty headers for testing unauthenticated requests."""
     return {}
 
 
 @pytest.fixture
 def invalid_auth_headers() -> Dict[str, str]:
-    """Invalid authentication headers."""
+     """Invalid authentication headers."""
     return {"Token": "Bearer invalidone"}
 
 
@@ -470,7 +471,8 @@ class TestPromptEndpoints:
         mock_db_instance.add_prompt.side_effect = InputError("DB validation failed")
 
         def override_get_prompts_db_for_input_error():
-            return mock_db_instance
+
+                     return mock_db_instance
 
         original_override = fastapi_app.dependency_overrides.get(get_prompts_db_for_user)
         fastapi_app.dependency_overrides[get_prompts_db_for_user] = override_get_prompts_db_for_input_error
@@ -763,7 +765,7 @@ class TestKeywordEndpoints:
 class TestExportEndpoints:
     @pytest.fixture(autouse=True)
     def setup_mocks(self, monkeypatch, tmp_path):
-        self.mock_db_export_prompts_formatted = MagicMock()             # Corrected attribute name
+             self.mock_db_export_prompts_formatted = MagicMock()             # Corrected attribute name
         self.mock_db_export_prompt_keywords_to_csv = MagicMock()        # Corrected attribute name
 
         # Patch where these functions are imported and used in the endpoint module.

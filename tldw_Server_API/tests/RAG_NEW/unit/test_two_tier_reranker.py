@@ -57,7 +57,7 @@ class _FakeLLM(BaseReranker):
 
 @pytest.mark.unit
 def test_two_tier_reranker_calibration_and_gating(monkeypatch):
-    # Force strict gating to validate the path
+     # Force strict gating to validate the path
     monkeypatch.setenv("RAG_MIN_RELEVANCE_PROB", "0.95")
     monkeypatch.setenv("RAG_SENTINEL_MARGIN", "0.50")
 

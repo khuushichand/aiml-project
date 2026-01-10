@@ -8,7 +8,7 @@ pytestmark = pytest.mark.usefixtures("admin_user")
 
 class _FakeAdapterWithIndex:
     def __init__(self):
-        self.set_val = None
+             self.set_val = None
     async def initialize(self):
         return None
     async def get_index_info(self, store):
@@ -27,11 +27,13 @@ class _FakeAdapterNoIndex:
 
 @pytest.fixture(autouse=True)
 def _env_defaults(monkeypatch):
-    monkeypatch.setenv('TEST_MODE','true')
+     monkeypatch.setenv('TEST_MODE','true')
 
 
 def test_admin_set_ef_search_happy(monkeypatch):
-    # Patch adapter factory path
+
+
+     # Patch adapter factory path
     from tldw_Server_API.app.api.v1.endpoints import vector_stores_openai as mod
     async def _fake_get_adapter_for_user(_user, _dim):
         return _FakeAdapterWithIndex()
@@ -44,7 +46,9 @@ def test_admin_set_ef_search_happy(monkeypatch):
 
 
 def test_admin_rebuild_index_happy(monkeypatch):
-    from tldw_Server_API.app.api.v1.endpoints import vector_stores_openai as mod
+
+
+     from tldw_Server_API.app.api.v1.endpoints import vector_stores_openai as mod
     async def _fake_get_adapter_for_user(_user, _dim):
         return _FakeAdapterWithIndex()
     monkeypatch.setattr(mod, '_get_adapter_for_user', _fake_get_adapter_for_user)
@@ -57,7 +61,9 @@ def test_admin_rebuild_index_happy(monkeypatch):
 
 
 def test_admin_rebuild_index_not_supported(monkeypatch):
-    from tldw_Server_API.app.api.v1.endpoints import vector_stores_openai as mod
+
+
+     from tldw_Server_API.app.api.v1.endpoints import vector_stores_openai as mod
     async def _fake_get_adapter_for_user(_user, _dim):
         return _FakeAdapterNoIndex()
     monkeypatch.setattr(mod, '_get_adapter_for_user', _fake_get_adapter_for_user)

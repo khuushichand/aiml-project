@@ -25,7 +25,7 @@ def _make_token(scope: str) -> str:
 
 @pytest.fixture()
 def client_with_graph_db(tmp_path, monkeypatch):
-    # Configure multi-user mode with a virtual JWT secret
+     # Configure multi-user mode with a virtual JWT secret
     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     monkeypatch.setenv("JWT_ALGORITHM", "HS256")
@@ -47,7 +47,8 @@ def client_with_graph_db(tmp_path, monkeypatch):
     from tldw_Server_API.app import main as app_main
 
     def override_db_dep():
-        return db
+
+             return db
 
     # Reload app after env tweaks so router gating sees MINIMAL_TEST_APP=0
     importlib.reload(app_main)

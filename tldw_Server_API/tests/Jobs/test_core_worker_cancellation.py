@@ -32,13 +32,13 @@ async def test_core_worker_honors_mid_processing_cancellation(monkeypatch, tmp_p
 
     class FakeChatbookService:
         def __init__(self, user_id, db, **kwargs):
-            self._jobs = {}
+                     self._jobs = {}
         def _get_export_job(self, jid: str):
             return self._jobs.get(jid)
         def _save_export_job(self, ej):
-            self._jobs[ej.job_id] = ej
+                     self._jobs[ej.job_id] = ej
         def _build_download_url(self, job_id, _exp):
-            return f"http://test/{job_id}"
+                     return f"http://test/{job_id}"
         async def _create_chatbook_sync_wrapper(self, **kwargs):
             # Simulate long work
             await asyncio.sleep(0.5)
@@ -49,9 +49,9 @@ async def test_core_worker_honors_mid_processing_cancellation(monkeypatch, tmp_p
 
     class JMProxy:
         def __init__(self):
-            self._jm = jm
+                     self._jm = jm
         def __getattr__(self, name):
-            return getattr(self._jm, name)
+                     return getattr(self._jm, name)
 
     monkeypatch.setattr(worker, "JobManager", JMProxy)
     monkeypatch.setattr(worker, "ChatbookService", FakeChatbookService)
@@ -64,7 +64,7 @@ async def test_core_worker_honors_mid_processing_cancellation(monkeypatch, tmp_p
     # Ensure the worker built in module will find the ej when it constructs svc anew
     # by monkeypatching _get_export_job to always refer to our seeded state
     def _fake_get_export_job(self, jid):
-        # Avoid recursion by reading from the seeded instance dictionary directly
+             # Avoid recursion by reading from the seeded instance dictionary directly
         return svc._jobs.get(jid)
     monkeypatch.setattr(FakeChatbookService, "_get_export_job", _fake_get_export_job)
 

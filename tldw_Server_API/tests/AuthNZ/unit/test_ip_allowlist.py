@@ -6,17 +6,23 @@ from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allow
 
 
 def _settings(allowed):
-    return SimpleNamespace(SINGLE_USER_ALLOWED_IPS=allowed)
+
+
+     return SimpleNamespace(SINGLE_USER_ALLOWED_IPS=allowed)
 
 
 def test_allowlist_empty_allows_any_ip():
-    settings = _settings([])
+
+
+     settings = _settings([])
     assert is_single_user_ip_allowed("198.51.100.5", settings) is True
     assert is_single_user_ip_allowed(None, settings) is True
 
 
 def test_allowlist_denies_missing_client_ip():
-    settings = _settings(["203.0.113.10"])
+
+
+     settings = _settings(["203.0.113.10"])
     assert is_single_user_ip_allowed(None, settings) is False
 
 
@@ -32,15 +38,19 @@ def test_allowlist_denies_missing_client_ip():
     ],
 )
 def test_allowlist_ip_and_cidr_matching(allowed, ip, expected):
-    settings = _settings(allowed)
+     settings = _settings(allowed)
     assert is_single_user_ip_allowed(ip, settings) is expected
 
 
 def test_allowlist_invalid_entry_is_ignored():
-    settings = _settings(["not-an-ip"])
+
+
+     settings = _settings(["not-an-ip"])
     assert is_single_user_ip_allowed("192.0.2.1", settings) is False
 
 
 def test_allowlist_invalid_client_ip_rejected():
-    settings = _settings(["203.0.113.10"])
+
+
+     settings = _settings(["203.0.113.10"])
     assert is_single_user_ip_allowed("999.999.999.999", settings) is False

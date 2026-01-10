@@ -25,7 +25,9 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGD
 
 
 def manifest_to_dict(manifest):
-    """Helper to convert manifest to dict handling enums."""
+
+
+     """Helper to convert manifest to dict handling enums."""
     data = manifest.to_dict()
     if hasattr(manifest.version, 'value'):
         data['version'] = manifest.version.value
@@ -34,14 +36,14 @@ def manifest_to_dict(manifest):
 
 @pytest.fixture
 def test_db_path(tmp_path):
-    """Create a temporary database path."""
+     """Create a temporary database path."""
     db_path = tmp_path / "test_chatbook.db"
     return str(db_path)
 
 
 @pytest.fixture
 def test_db(test_db_path):
-    """Create a real test database."""
+     """Create a real test database."""
     db = CharactersRAGDB(db_path=test_db_path, client_id="test_client")
 
     # The database initializes itself in __init__, no need to call initialize_db
@@ -74,7 +76,7 @@ def test_db(test_db_path):
 
 @pytest.fixture
 def service(test_db, tmp_path):
-    """Create ChatbookService with real database."""
+     """Create ChatbookService with real database."""
     # Set up test environment
     os.environ['PYTEST_CURRENT_TEST'] = 'test'
     os.environ['USER_DB_BASE_DIR'] = str(tmp_path)
@@ -90,7 +92,7 @@ def service(test_db, tmp_path):
 
 @pytest.fixture
 def sample_chatbook_file(tmp_path):
-    """Create a sample chatbook file for import tests."""
+     """Create a sample chatbook file for import tests."""
     chatbook_path = tmp_path / "sample.chatbook"
 
     manifest = ChatbookManifest(
@@ -143,7 +145,8 @@ class TestChatbookIntegration:
     """Integration tests for Chatbook service."""
 
     def test_service_initialization(self, service, test_db):
-        """Test that service initializes with real database."""
+
+             """Test that service initializes with real database."""
         assert service.db == test_db
         assert service.user_id == "test_user"
 
@@ -153,7 +156,8 @@ class TestChatbookIntegration:
         assert service.temp_dir.exists()
 
     def test_create_export_job(self, service):
-        """Test creating an export job with real database."""
+
+             """Test creating an export job with real database."""
         result = service.create_export_job(
             name="Test Export",
             description="Test export job",
@@ -219,7 +223,8 @@ class TestChatbookIntegration:
         # For now, just check that no errors occurred
 
     def test_preview_export(self, service):
-        """Test preview export with real database data."""
+
+             """Test preview export with real database data."""
         result = service.preview_export(
             content_types=["conversations", "notes"]
         )
@@ -231,7 +236,8 @@ class TestChatbookIntegration:
         assert result["notes"] >= 0
 
     def test_validate_chatbook_file(self, service, sample_chatbook_file):
-        """Test validating a real chatbook file."""
+
+             """Test validating a real chatbook file."""
         result = service.validate_chatbook_file(sample_chatbook_file)
 
         assert result["is_valid"] is True
@@ -239,7 +245,8 @@ class TestChatbookIntegration:
         assert result["error"] is None
 
     def test_validate_invalid_file(self, service, tmp_path):
-        """Test validating an invalid file."""
+
+             """Test validating an invalid file."""
         invalid_file = tmp_path / "invalid.txt"
         invalid_file.write_text("Not a chatbook")
 
@@ -249,7 +256,8 @@ class TestChatbookIntegration:
         assert result["error"] is not None
 
     def test_list_export_jobs(self, service):
-        """Test listing export jobs from real database."""
+
+             """Test listing export jobs from real database."""
         # Create a few jobs
         result1 = service.create_export_job(
             name="Export 1",
@@ -274,7 +282,8 @@ class TestChatbookIntegration:
         assert job_id2 in job_ids
 
     def test_get_export_job_status(self, service):
-        """Test getting export job status from real database."""
+
+             """Test getting export job status from real database."""
         # Create a job
         result = service.create_export_job(
             name="Status Test",
@@ -291,7 +300,8 @@ class TestChatbookIntegration:
         assert status["chatbook_name"] == "Status Test"
 
     def test_clean_old_exports(self, service, tmp_path):
-        """Test cleaning old exports with real file system."""
+
+             """Test cleaning old exports with real file system."""
         # Create some old export files
         old_file1 = service.export_dir / "old1.chatbook"
         old_file2 = service.export_dir / "old2.chatbook"
@@ -317,7 +327,8 @@ class TestChatbookIntegration:
         assert not old_file2.exists()
 
     def test_get_statistics(self, service):
-        """Test getting statistics from real database."""
+
+             """Test getting statistics from real database."""
         # Create some test data
         service.create_export_job(name="Export 1", description="Test 1", content_types=[])
         service.create_export_job(name="Export 2", description="Test 2", content_types=[])
@@ -402,7 +413,8 @@ class TestChatbookIntegration:
         assert "skip" in result2[1].lower() or "conflict" in result2[1].lower() or "imported" in result2[1].lower()
 
     def test_cancel_export_job(self, service):
-        """Test cancelling an export job."""
+
+             """Test cancelling an export job."""
         # Create a job
         result = service.create_export_job(
             name="Cancel Test",

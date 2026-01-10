@@ -32,7 +32,7 @@ class TestEvaluationIntegration:
 
     @pytest.fixture
     def temp_db_path(self):
-        """Create a temporary database for testing."""
+             """Create a temporary database for testing."""
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
             db_path = Path(f.name)
         yield db_path
@@ -43,7 +43,7 @@ class TestEvaluationIntegration:
 
     @pytest.fixture
     def evaluation_manager(self, temp_db_path):
-        """Create an evaluation manager with temporary database."""
+             """Create an evaluation manager with temporary database."""
         # Patch the db_path after initialization since EvaluationManager doesn't take db_path arg
         manager = EvaluationManager()
         manager.db_path = temp_db_path
@@ -148,7 +148,8 @@ class TestEvaluationIntegration:
                 assert results.get("partial_results") is True
 
     def test_database_migration(self, temp_db_path):
-        """Test that database migrations work correctly."""
+
+             """Test that database migrations work correctly."""
         # Apply migrations
         migrate_evaluations_database(temp_db_path)
 
@@ -289,7 +290,7 @@ class TestAuthentication:
 
     @pytest.fixture
     def mock_settings(self):
-        """Create mock settings."""
+             """Create mock settings."""
         settings = Mock()
         settings.AUTH_MODE = "single_user"
         settings.RATE_LIMIT_PER_MINUTE = 60

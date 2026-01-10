@@ -75,7 +75,9 @@ def test_evaluations_list_jwt_principal_and_state_alignment(
     monkeypatch,
     bypass_api_limits,
 ):
-    """
+
+
+     """
     Multi-user JWT happy path for a representative Evaluations route:
 
     - Register and log in a user.
@@ -183,7 +185,9 @@ def test_evaluations_admin_cleanup_jwt_principal_and_state_alignment(
     tmp_path,
     bypass_api_limits,
 ):
-    """
+
+
+     """
     Multi-user JWT happy path for an Evaluations admin endpoint:
 
     - Register and log in a user.
@@ -256,7 +260,8 @@ def test_evaluations_admin_cleanup_jwt_principal_and_state_alignment(
     db_file.touch()
 
     def _fake_get_single_user_id() -> int:
-        return 1
+
+             return 1
 
     def _fake_get_user_base_directory(_user_id: int) -> Path:
         return tmp_path
@@ -329,7 +334,9 @@ def test_evaluations_admin_cleanup_api_key_principal_and_state_alignment(
     tmp_path,
     bypass_api_limits,
 ):
-    """
+
+
+     """
     Multi-user API-key happy path for an Evaluations admin endpoint:
 
     - Register a user and create a real API key.
@@ -407,7 +414,8 @@ def test_evaluations_admin_cleanup_api_key_principal_and_state_alignment(
     db_file.touch()
 
     def _fake_get_single_user_id() -> int:
-        return 1
+
+             return 1
 
     def _fake_get_user_base_directory(_user_id: int) -> Path:
         return tmp_path

@@ -23,7 +23,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
 # --- Tests for Message Content Parts ---
 @pytest.mark.unit
 def test_chat_message_content_part_image_url_valid():
-    valid_http_url = "http://example.com/image.png"
+     valid_http_url = "http://example.com/image.png"
     valid_data_url = "data:image/png;base64,abcdef12345="
 
     # HTTP URL directly passed (Pydantic v2 might convert it)
@@ -43,7 +43,7 @@ def test_chat_message_content_part_image_url_valid():
 
 @pytest.mark.unit
 def test_chat_message_content_part_image_url_invalid():
-    invalid_string_url = "example.com/image.png"  # Not a data URI
+     invalid_string_url = "example.com/image.png"  # Not a data URI
     with pytest.raises(ValidationError) as exc_info:
         ChatCompletionRequestMessageContentPartImageURL(url=invalid_string_url)
     assert "data URI for base64 encoded images" in str(exc_info.value)
@@ -52,7 +52,7 @@ def test_chat_message_content_part_image_url_invalid():
 # --- Tests for Message Types ---
 @pytest.mark.unit
 def test_chat_completion_assistant_message_param_validation():
-    # Valid: content only
+     # Valid: content only
     msg_content = ChatCompletionAssistantMessageParam(role="assistant", content="Hello")
     assert msg_content.content == "Hello"
 
@@ -79,7 +79,7 @@ def test_chat_completion_assistant_message_param_validation():
 # --- Tests for ChatCompletionRequest ---
 @pytest.mark.unit
 def test_chat_completion_request_logprobs_validation():
-    base_messages = [ChatCompletionUserMessageParam(role="user", content="hi")]
+     base_messages = [ChatCompletionUserMessageParam(role="user", content="hi")]
     # Valid: logprobs=True, top_logprobs=5
     req_valid = ChatCompletionRequest(model="m", messages=base_messages, logprobs=True, top_logprobs=5)
     assert req_valid.logprobs is True
@@ -97,7 +97,7 @@ def test_chat_completion_request_logprobs_validation():
 
 @pytest.mark.unit
 def test_chat_completion_request_valid_api_provider():
-    # Assuming "openai" is in SUPPORTED_API_ENDPOINTS
+     # Assuming "openai" is in SUPPORTED_API_ENDPOINTS
     req = ChatCompletionRequest(
         model="test-m",
         messages=[ChatCompletionUserMessageParam(role="user", content="hi")],
@@ -108,7 +108,7 @@ def test_chat_completion_request_valid_api_provider():
 
 @pytest.mark.unit
 def test_chat_completion_request_invalid_api_provider():
-    with pytest.raises(ValidationError):
+     with pytest.raises(ValidationError):
         ChatCompletionRequest(
             model="test-m",
             messages=[ChatCompletionUserMessageParam(role="user", content="hi")],
@@ -120,7 +120,7 @@ def test_chat_completion_request_invalid_api_provider():
 
 @pytest.mark.unit
 def test_function_definition_valid_parameters():
-    """Test that valid JSON Schema parameters are accepted."""
+     """Test that valid JSON Schema parameters are accepted."""
     valid_params = {
         "type": "object",
         "properties": {
@@ -135,7 +135,7 @@ def test_function_definition_valid_parameters():
 
 @pytest.mark.unit
 def test_function_definition_empty_parameters():
-    """Test that empty/None parameters are accepted."""
+     """Test that empty/None parameters are accepted."""
     func1 = FunctionDefinition(name="noop", parameters={})
     assert func1.parameters == {}
 
@@ -145,7 +145,7 @@ def test_function_definition_empty_parameters():
 
 @pytest.mark.unit
 def test_function_definition_invalid_type():
-    """Test that invalid JSON Schema types are rejected."""
+     """Test that invalid JSON Schema types are rejected."""
     invalid_params = {
         "type": "invalid_type",  # Not a valid JSON Schema type
         "properties": {}
@@ -157,7 +157,7 @@ def test_function_definition_invalid_type():
 
 @pytest.mark.unit
 def test_function_definition_excessive_depth():
-    """Test that deeply nested parameters are rejected (DoS prevention)."""
+     """Test that deeply nested parameters are rejected (DoS prevention)."""
     # Build a structure deeper than MAX_PARAMETER_DEPTH (10)
     deep_params = {"type": "object", "properties": {}}
     current = deep_params["properties"]
@@ -172,7 +172,7 @@ def test_function_definition_excessive_depth():
 
 @pytest.mark.unit
 def test_function_definition_excessive_size():
-    """Test that oversized parameters are rejected (DoS prevention)."""
+     """Test that oversized parameters are rejected (DoS prevention)."""
     # Create a large but shallow structure (> 5KB)
     large_params = {
         "type": "object",
@@ -188,7 +188,7 @@ def test_function_definition_excessive_size():
 
 @pytest.mark.unit
 def test_function_definition_invalid_required_field():
-    """Test that invalid 'required' field structure is rejected."""
+     """Test that invalid 'required' field structure is rejected."""
     invalid_params = {
         "type": "object",
         "properties": {"name": {"type": "string"}},
@@ -201,7 +201,7 @@ def test_function_definition_invalid_required_field():
 
 @pytest.mark.unit
 def test_function_definition_invalid_properties_field():
-    """Test that invalid 'properties' field structure is rejected."""
+     """Test that invalid 'properties' field structure is rejected."""
     invalid_params = {
         "type": "object",
         "properties": ["name", "age"]  # Should be an object, not an array
@@ -213,7 +213,7 @@ def test_function_definition_invalid_properties_field():
 
 @pytest.mark.unit
 def test_function_definition_array_items_validation():
-    """Test that array items schema is validated."""
+     """Test that array items schema is validated."""
     valid_array_params = {
         "type": "array",
         "items": {"type": "string"}
@@ -232,7 +232,7 @@ def test_function_definition_array_items_validation():
 
 @pytest.mark.unit
 def test_function_definition_type_array():
-    """Test that type arrays (union types) are validated."""
+     """Test that type arrays (union types) are validated."""
     valid_union_params = {
         "type": ["string", "null"],
         "description": "Optional string"

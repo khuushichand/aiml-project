@@ -4,7 +4,7 @@ import pytest
 
 @pytest.mark.unit
 def test_openrouter_preserves_namespaced_model(monkeypatch):
-    # Ensure pytest test-mode alias logic is enabled if referenced
+     # Ensure pytest test-mode alias logic is enabled if referenced
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "chat_service_normalization::preserve")
     from tldw_Server_API.app.core.Chat.chat_service import (
         normalize_request_provider_and_model,
@@ -12,7 +12,7 @@ def test_openrouter_preserves_namespaced_model(monkeypatch):
 
     class Req:
         def __init__(self):
-            self.api_provider = "openrouter"
+                     self.api_provider = "openrouter"
             self.model = "z-ai/glm-4.6"
 
     req = Req()
@@ -25,14 +25,14 @@ def test_openrouter_preserves_namespaced_model(monkeypatch):
 
 @pytest.mark.unit
 def test_openrouter_strips_redundant_openrouter_prefix(monkeypatch):
-    monkeypatch.setenv("PYTEST_CURRENT_TEST", "chat_service_normalization::strip_openrouter")
+     monkeypatch.setenv("PYTEST_CURRENT_TEST", "chat_service_normalization::strip_openrouter")
     from tldw_Server_API.app.core.Chat.chat_service import (
         normalize_request_provider_and_model,
     )
 
     class Req:
         def __init__(self):
-            self.api_provider = "openrouter"
+                     self.api_provider = "openrouter"
             self.model = "openrouter/gpt-4o-mini"
 
     req = Req()
@@ -45,7 +45,7 @@ def test_openrouter_strips_redundant_openrouter_prefix(monkeypatch):
 
 @pytest.mark.unit
 def test_openrouter_alias_dummy_maps_and_preserves_namespace(monkeypatch):
-    # Enable test-mode alias overrides inside normalize_request_provider_and_model
+     # Enable test-mode alias overrides inside normalize_request_provider_and_model
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "chat_service_normalization::alias_dummy")
     from tldw_Server_API.app.core.Chat.chat_service import (
         normalize_request_provider_and_model,
@@ -53,7 +53,7 @@ def test_openrouter_alias_dummy_maps_and_preserves_namespace(monkeypatch):
 
     class Req:
         def __init__(self):
-            self.api_provider = "openrouter"
+                     self.api_provider = "openrouter"
             self.model = "dummy"
 
     req = Req()

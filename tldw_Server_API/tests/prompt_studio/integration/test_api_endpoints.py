@@ -27,7 +27,7 @@ from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import get_prompt_st
 
 @pytest.fixture
 def client(mock_user, test_db):
-    """Create a test client for the FastAPI app with mocked authentication."""
+     """Create a test client for the FastAPI app with mocked authentication."""
     os.environ["TEST_MODE"] = "true"
     # Override the auth dependency
     app.dependency_overrides[get_current_active_user] = lambda: mock_user
@@ -45,7 +45,7 @@ def client(mock_user, test_db):
 
 @pytest.fixture
 def test_db():
-    """Create a temporary test database."""
+     """Create a temporary test database."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name
 
@@ -61,7 +61,7 @@ def test_db():
 
 @pytest.fixture
 def auth_headers():
-    """Create authentication headers for testing."""
+     """Create authentication headers for testing."""
     return {
         "Authorization": "Bearer test-token",
         "Content-Type": "application/json"
@@ -69,7 +69,7 @@ def auth_headers():
 
 @pytest.fixture
 def mock_user():
-    """Mock user for authentication."""
+     """Mock user for authentication."""
     return {
         "id": "test-user-123",
         "username": "testuser",
@@ -85,7 +85,8 @@ class TestProjectEndpoints:
     """Test project-related API endpoints."""
 
     def test_create_project(self, client, test_db):
-        """Test creating a new project."""
+
+             """Test creating a new project."""
         project_data = {
             "name": "Test Project",
             "description": "A test project for integration testing",
@@ -112,7 +113,8 @@ class TestProjectEndpoints:
         assert "uuid" in data["data"]
 
     def test_list_projects(self, client, test_db):
-        """Test listing projects."""
+
+             """Test listing projects."""
         # First create a project
         project_data = {
             "name": "List Test Project",
@@ -131,7 +133,8 @@ class TestProjectEndpoints:
         assert isinstance(data["data"], list)
 
     def test_get_project(self, client, test_db):
-        """Test getting a specific project."""
+
+             """Test getting a specific project."""
         # First create a project
         create_response = client.post(
             "/api/v1/prompt-studio/projects/",
@@ -153,7 +156,8 @@ class TestProjectEndpoints:
         assert data["data"]["name"] == "Get Test"
 
     def test_update_project(self, client, test_db):
-        """Test updating a project."""
+
+             """Test updating a project."""
         # First create a project
         create_response = client.post(
             "/api/v1/prompt-studio/projects/",
@@ -181,7 +185,8 @@ class TestProjectEndpoints:
         assert data["data"]["status"] == "active"
 
     def test_delete_project(self, client, test_db):
-        """Test deleting a project."""
+
+             """Test deleting a project."""
         # First create a project
         create_response = client.post(
             "/api/v1/prompt-studio/projects/",
@@ -214,7 +219,7 @@ class TestPromptEndpoints:
 
     @pytest.fixture
     def project_id(self, client, test_db):
-        """Create a project and return its ID."""
+             """Create a project and return its ID."""
         response = client.post(
             "/api/v1/prompt-studio/projects/",
             json={"name": "Prompt Test Project", "description": "For prompt testing"}
@@ -224,7 +229,8 @@ class TestPromptEndpoints:
         return None
 
     def test_create_prompt(self, client, test_db, project_id, auth_headers):
-        """Test creating a new prompt."""
+
+             """Test creating a new prompt."""
         if not project_id:
             pytest.skip("Project creation failed")
 
@@ -249,7 +255,8 @@ class TestPromptEndpoints:
         assert data["project_id"] == project_id
 
     def test_list_prompts(self, client, auth_headers, mock_user, project_id):
-        """Test listing prompts for a project."""
+
+             """Test listing prompts for a project."""
         if not project_id:
             pytest.skip("Project creation failed")
 
@@ -266,7 +273,8 @@ class TestPromptEndpoints:
             assert "metadata" in data
 
     def test_execute_prompt(self, client, auth_headers, mock_user):
-        """Test executing a prompt."""
+
+             """Test executing a prompt."""
         with patch('tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps.get_current_active_user', return_value=mock_user):
             with patch('tldw_Server_API.app.core.Prompt_Management.prompt_studio.prompt_executor.PromptExecutor.execute') as mock_execute:
                 mock_execute.return_value = {
@@ -302,7 +310,7 @@ class TestTestCaseEndpoints:
 
     @pytest.fixture
     def project_id(self, client, auth_headers, mock_user):
-        """Create a project and return its ID."""
+             """Create a project and return its ID."""
         with patch('tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps.get_current_active_user', return_value=mock_user):
             response = client.post(
                 "/api/v1/prompt-studio/projects",
@@ -314,7 +322,8 @@ class TestTestCaseEndpoints:
             return None
 
     def test_create_test_case(self, client, auth_headers, mock_user, project_id):
-        """Test creating a test case."""
+
+             """Test creating a test case."""
         if not project_id:
             pytest.skip("Project creation failed")
 
@@ -341,7 +350,8 @@ class TestTestCaseEndpoints:
             assert data["project_id"] == project_id
 
     def test_run_test_cases(self, client, auth_headers, mock_user):
-        """Test running test cases."""
+
+             """Test running test cases."""
         with patch('tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps.get_current_active_user', return_value=mock_user):
             with patch('tldw_Server_API.app.core.Prompt_Management.prompt_studio.test_case_manager.TestCaseManager.run_batch_tests') as mock_run:
                 mock_run.return_value = [
@@ -379,7 +389,8 @@ class TestEvaluationEndpoints:
     """Test evaluation-related API endpoints."""
 
     def test_create_evaluation(self, client, auth_headers, mock_user):
-        """Test creating an evaluation."""
+
+             """Test creating an evaluation."""
         with patch('tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps.get_current_active_user', return_value=mock_user):
             evaluation_data = {
                 "project_id": 1,
@@ -408,7 +419,8 @@ class TestEvaluationEndpoints:
             assert data["metrics"]["accuracy"] == 0.95
 
     def test_missing_provider_credentials_returns_503(self, client, auth_headers, mock_user, monkeypatch):
-        """Missing provider credentials should return 503 with error code."""
+
+             """Missing provider credentials should return 503 with error code."""
         from tldw_Server_API.app.api.v1.endpoints import prompt_studio_evaluations as ps_eval
         from tldw_Server_API.app.core.AuthNZ.byok_runtime import ResolvedByokCredentials
 
@@ -452,7 +464,8 @@ class TestEvaluationEndpoints:
             assert detail.get("error_code") == "missing_provider_credentials"
 
     def test_list_evaluations(self, client, auth_headers, mock_user):
-        """Test listing evaluations."""
+
+             """Test listing evaluations."""
         with patch('tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps.get_current_active_user', return_value=mock_user):
             response = client.get(
                 "/api/v1/prompt-studio/evaluations?project_id=1",
@@ -472,7 +485,8 @@ class TestOptimizationEndpoints:
     """Test optimization-related API endpoints."""
 
     def test_start_optimization(self, client, auth_headers, mock_user):
-        """Test starting an optimization job."""
+
+             """Test starting an optimization job."""
         with patch('tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps.get_current_active_user', return_value=mock_user):
             with patch('tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_manager.JobManager.create_job') as mock_create:
                 mock_create.return_value = {
@@ -504,7 +518,8 @@ class TestOptimizationEndpoints:
                 assert data["status"] == "pending"
 
     def test_get_optimization_status(self, client, auth_headers, mock_user):
-        """Test getting optimization job status."""
+
+             """Test getting optimization job status."""
         with patch('tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps.get_current_active_user', return_value=mock_user):
             with patch('tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_manager.JobManager.get_job') as mock_get:
                 mock_get.return_value = {
@@ -533,7 +548,8 @@ class TestWebSocketEndpoints:
     """Test WebSocket functionality."""
 
     def test_websocket_connection(self, client):
-        """Test WebSocket connection."""
+
+             """Test WebSocket connection."""
         with client.websocket_connect("/api/v1/prompt-studio/ws") as websocket:
             # Send a test message
             websocket.send_json({
@@ -547,7 +563,8 @@ class TestWebSocketEndpoints:
             assert data["project_id"] == 1
 
     def test_websocket_job_updates(self, client):
-        """Test receiving job updates via WebSocket."""
+
+             """Test receiving job updates via WebSocket."""
         with client.websocket_connect("/api/v1/prompt-studio/ws") as websocket:
             # Subscribe to job updates
             websocket.send_json({
@@ -583,12 +600,14 @@ class TestErrorHandling:
     """Test API error handling."""
 
     def test_unauthorized_access(self, client):
-        """Test accessing endpoints without authentication."""
+
+             """Test accessing endpoints without authentication."""
         response = client.get("/api/v1/prompt-studio/projects")
         assert response.status_code == 401
 
     def test_invalid_project_id(self, client, auth_headers, mock_user):
-        """Test accessing non-existent project."""
+
+             """Test accessing non-existent project."""
         with patch('tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps.get_current_active_user', return_value=mock_user):
             response = client.get(
                 "/api/v1/prompt-studio/projects/99999",
@@ -597,7 +616,8 @@ class TestErrorHandling:
             assert response.status_code == 404
 
     def test_invalid_request_data(self, client, auth_headers, mock_user):
-        """Test sending invalid data."""
+
+             """Test sending invalid data."""
         with patch('tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps.get_current_active_user', return_value=mock_user):
             # Missing required field
             invalid_data = {
@@ -615,7 +635,8 @@ class TestErrorHandling:
             assert "detail" in data
 
     def test_rate_limiting(self, client, auth_headers, mock_user):
-        """Test rate limiting."""
+
+             """Test rate limiting."""
         with patch('tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps.get_current_active_user', return_value=mock_user):
             # Make many rapid requests
             responses = []
@@ -638,7 +659,8 @@ class TestPagination:
     """Test pagination functionality."""
 
     def test_project_pagination(self, client, auth_headers, mock_user):
-        """Test paginating project list."""
+
+             """Test paginating project list."""
         with patch('tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps.get_current_active_user', return_value=mock_user):
             # First page
             response = client.get(
@@ -671,7 +693,8 @@ class TestSearchAndFilter:
     """Test search and filtering functionality."""
 
     def test_search_projects(self, client, auth_headers, mock_user):
-        """Test searching projects."""
+
+             """Test searching projects."""
         with patch('tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps.get_current_active_user', return_value=mock_user):
             response = client.get(
                 "/api/v1/prompt-studio/projects?search=test&status=active",
@@ -688,7 +711,8 @@ class TestSearchAndFilter:
                 assert project["status"] == "active"
 
     def test_filter_by_date(self, client, auth_headers, mock_user):
-        """Test filtering by date range."""
+
+             """Test filtering by date range."""
         with patch('tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps.get_current_active_user', return_value=mock_user):
             response = client.get(
                 "/api/v1/prompt-studio/projects?created_after=2024-01-01&created_before=2024-12-31",

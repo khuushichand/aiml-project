@@ -16,17 +16,23 @@ client = TestClient(app)
 
 
 def _run(coro):
-    return asyncio.run(coro)
+
+
+     return asyncio.run(coro)
 
 
 def test_tools_execute_unauth_401():
-    payload = {"tool_name": "echo", "arguments": {"message": "hi"}}
+
+
+     payload = {"tool_name": "echo", "arguments": {"message": "hi"}}
     r = client.post("/api/v1/mcp/tools/execute", json=payload)
     assert r.status_code == 401, r.text
 
 
 def test_tools_execute_with_bearer_token_no_permission_403():
-    # Use MCP JWT (auto-seeded secret) to authenticate
+
+
+     # Use MCP JWT (auto-seeded secret) to authenticate
     mgr = get_jwt_manager()
     token = mgr.create_access_token(subject="42", username="tester")
 
@@ -45,7 +51,9 @@ def test_tools_execute_with_bearer_token_no_permission_403():
 
 
 def test_tools_execute_with_api_key_and_role_permission_allows_200(tmp_path):
-    # Point AuthNZ DB to a fresh SQLite file
+
+
+     # Point AuthNZ DB to a fresh SQLite file
     db_file = tmp_path / "mcp_allow.sqlite"
     os.environ["DATABASE_URL"] = f"sqlite:///{db_file}"
     os.environ["AUTH_MODE"] = "single_user"

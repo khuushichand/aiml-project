@@ -7,7 +7,9 @@ pytestmark = pytest.mark.rate_limit
 
 
 def _reset_rg_state(app):
-    """
+
+
+     """
     Ensure each test starts with a fresh ResourceGovernor / policy loader.
 
     Tests in this module mutate RG_POLICY_PATH and related envs; reusing the
@@ -25,7 +27,7 @@ def _reset_rg_state(app):
 
 @contextlib.contextmanager
 def _with_rg_middleware(app):
-    """Temporarily install RGSimpleMiddleware for tests that set RG_ENABLED after app import."""
+     """Temporarily install RGSimpleMiddleware for tests that set RG_ENABLED after app import."""
     try:
         from tldw_Server_API.app.core.Resource_Governance.middleware_simple import RGSimpleMiddleware
         from starlette.middleware import Middleware

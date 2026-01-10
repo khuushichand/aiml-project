@@ -12,10 +12,11 @@ from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registr
 
 class _FakeResponse:
     def __init__(self, lines):
-        self._lines = lines
+             self._lines = lines
 
     def iter_lines(self, decode_unicode=True):
-        for ln in self._lines:
+
+             for ln in self._lines:
             # Simulate raw provider bytes when decode_unicode=False
             yield ln
 
@@ -34,7 +35,9 @@ def env_override(key: str, value: str):
 
 
 def test_iter_normalization_passthru_off_drops_control_lines():
-    lines = [
+
+
+     lines = [
         b"event: chunk",
         b"id: 42",
         b"retry: 1000",
@@ -50,7 +53,9 @@ def test_iter_normalization_passthru_off_drops_control_lines():
 
 
 def test_iter_normalization_passthru_on_preserves_control_lines():
-    lines = [
+
+
+     lines = [
         b"event: chunk",
         b"id: 42",
         b"retry: 1000",
@@ -68,7 +73,9 @@ def test_iter_normalization_passthru_on_preserves_control_lines():
 
 
 def test_iter_normalization_control_filter_maps_and_drops():
-    lines = [
+
+
+     lines = [
         b"event: original",
         b"id: 99",
         b"data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}",
@@ -286,7 +293,7 @@ async def test_sse_stream_comment_heartbeat_mode(monkeypatch):
 
 class _StubWebSocket:
     def __init__(self):
-        self.sent = []
+             self.sent = []
         self.accepted = False
         self.closed = False
         self.close_code = None

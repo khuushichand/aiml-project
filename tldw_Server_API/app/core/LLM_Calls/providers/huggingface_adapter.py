@@ -157,6 +157,7 @@ class HuggingFaceAdapter(ChatProvider):
             get_http_status_from_exception,
             get_http_error_text,
             is_http_status_error,
+            log_http_400_body,
         )
         if is_http_status_error(exc):
             from tldw_Server_API.app.core.Chat.Chat_Deps import (
@@ -174,6 +175,7 @@ class HuggingFaceAdapter(ChatProvider):
                 body = resp.json() if resp is not None else None
             except Exception:
                 body = None
+            log_http_400_body(self.name, exc, body)
             if isinstance(body, dict):
                 err = body.get("error")
                 if isinstance(err, dict):

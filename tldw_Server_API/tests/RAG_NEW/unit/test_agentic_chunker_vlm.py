@@ -17,7 +17,7 @@ async def test_agentic_vlm_late_chunking_smoke(monkeypatch):
         # Fake retriever returns a doc with a local PDF url
         class FakeRetriever:
             def __init__(self, *a, **k):
-                pass
+                             pass
             async def retrieve(self, *a, **k):
                 return [
                     Document(
@@ -32,7 +32,7 @@ async def test_agentic_vlm_late_chunking_smoke(monkeypatch):
         # Stub VLM backend registry to return a backend with process_pdf
         class StubRes:
             def __init__(self):
-                self.extra = {
+                             self.extra = {
                     "by_page": [
                         {
                             "page": 1,

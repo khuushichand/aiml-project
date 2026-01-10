@@ -63,16 +63,28 @@ def _get_db_path_for_user(user_id: int) -> Path:
     # Test-mode safety: isolate user DBs to a per-process temp dir unless explicitly overridden
     if not base_dir_env and str(os.getenv("TESTING", "")).lower() in {"1", "true", "yes", "on"}:
         try:
-            import tempfile, time
-            run_tag = f"pid{os.getpid()}"
-            # Use project Databases/user_databases_test/<run_tag> to keep nearby but isolated
+            import tempfile
+            run_tag = (
+                os.getenv("TLDW_TEST_RUN_ID")
+                or os.getenv("PYTEST_XDIST_WORKER")
+                or "default"
+            )
+            safe_run_tag = "".join(
+                ch if ch.isalnum() or ch in "-_." else "_"
+                for ch in str(run_tag)
+            )
+            # Use project Databases/user_databases_test/<run_tag> to keep nearby but stable across processes
             project_root = settings.get("PROJECT_ROOT")  # type: ignore[attr-defined]
             if project_root:
-                base_dir_env = str(Path(project_root) / "Databases" / "user_databases_test" / run_tag)
+                base_dir_env = str(
+                    Path(project_root) / "Databases" / "user_databases_test" / safe_run_tag
+                )
             else:
-                base_dir_env = tempfile.mkdtemp(prefix="user_databases_test_")
+                base_dir_env = str(
+                    Path(tempfile.gettempdir()) / "tldw_user_databases_test" / safe_run_tag
+                )
             # Set env so subsequent calls use the same directory
-            os.environ["USER_DB_BASE_DIR"] = base_dir_env
+            os.environ.setdefault("USER_DB_BASE_DIR", base_dir_env)
         except Exception:
             pass
     base_dir = Path(base_dir_env) if base_dir_env else Path(settings["USER_DB_BASE_DIR"])  # type: ignore[index]
@@ -262,15 +274,18 @@ def reset_media_db_cache() -> None:
 
 
 async def try_get_media_db_for_user(
-    current_user: User = Depends(get_request_user)
+    request: Request,
+    current_user: User = Depends(get_request_user),
 ) -> Optional[MediaDatabase]:
     """
     Optional version of get_media_db_for_user for endpoints that can operate without DB.
     Returns None instead of raising on initialization failures.
     """
     try:
-        return await get_media_db_for_user(current_user=current_user)
+        return await get_media_db_for_user(request=request, current_user=current_user)
     except HTTPException as e:
+        if e.status_code in {status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN}:
+            raise
         logger.warning(f"Optional Media DB unavailable for user {getattr(current_user, 'id', '?')}: {e.detail}")
         return None
     except Exception as e:

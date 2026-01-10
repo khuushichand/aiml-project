@@ -26,7 +26,6 @@ from tldw_Server_API.tests._plugins import chat_fixtures as _chat_pl  # noqa: F4
 
 @pytest.fixture(autouse=True)
 def _enable_unified(monkeypatch):
-    monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "1")
     monkeypatch.setenv("STREAMS_UNIFIED", "1")
     monkeypatch.setenv("LOGURU_LEVEL", "ERROR")
     yield

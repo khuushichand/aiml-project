@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import VectorSt
 
 class _FakeAdapter:
     def __init__(self):
-        self.deleted_filters = []
+             self.deleted_filters = []
         self._initialized = True
         class _Cfg:
             def __init__(self, t): self.store_type = t; self.connection_params = {}
@@ -26,7 +26,9 @@ class _FakeAdapter:
 
 
 def _build_message() -> StorageMessage:
-    emb = EmbeddingData(
+
+
+     emb = EmbeddingData(
         chunk_id="c1",
         embedding=[0.1, 0.2, 0.3],
         model_used="test-model",
@@ -47,7 +49,7 @@ def _build_message() -> StorageMessage:
 
 @pytest.mark.parametrize("store_type", [VectorStoreType.PGVECTOR, VectorStoreType.CHROMADB])
 def test_soft_delete_uses_delete_by_filter(monkeypatch, store_type):
-    from tldw_Server_API.app.core.RAG.rag_service import vector_stores as _vs
+     from tldw_Server_API.app.core.RAG.rag_service import vector_stores as _vs
 
     base = type("_Base", (), {"config": type("_Cfg", (), {"store_type": store_type, "connection_params": {}})})()
     monkeypatch.setattr(_vs.VectorStoreFactory, "create_from_settings", classmethod(lambda cls, settings, user_id='0': base))

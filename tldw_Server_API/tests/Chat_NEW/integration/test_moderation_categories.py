@@ -19,7 +19,9 @@ app.include_router(chat_router, prefix="/api/v1/chat")
 
 
 def _make_test_db():
-    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+
+
+     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
         db_path = tmp.name
     db = CharactersRAGDB(db_path, "test_client")
     db.add_character_card({
@@ -41,7 +43,9 @@ def _post_with_csrf(client: TestClient, url: str, **kwargs):
 
 
 def _auth_headers(client):
-    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
+
+     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     settings = get_settings()
     api_key = settings.SINGLE_USER_API_KEY or os.getenv("API_BEARER", "test-api-key-12345")
     return {"X-API-KEY": api_key, "X-CSRF-Token": getattr(client, 'csrf_token', '')}
@@ -93,7 +97,7 @@ class _Svc:
 
 @pytest.mark.unit
 def test_categories_allow_pii_redaction():
-    db, db_path = _make_test_db()
+     db, db_path = _make_test_db()
     try:
         app.dependency_overrides[get_chacha_db_for_user] = lambda: db
         policy = _Policy(categories_enabled={'pii'})
@@ -136,7 +140,7 @@ def test_categories_allow_pii_redaction():
 
 @pytest.mark.unit
 def test_categories_disable_pii_redaction():
-    db, db_path = _make_test_db()
+     db, db_path = _make_test_db()
     try:
         app.dependency_overrides[get_chacha_db_for_user] = lambda: db
         policy = _Policy(categories_enabled={'confidential'})  # no 'pii'

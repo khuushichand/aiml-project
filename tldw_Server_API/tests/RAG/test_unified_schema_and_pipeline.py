@@ -2,7 +2,9 @@ import pytest
 
 
 def test_unified_schema_alias_min_relevance_score():
-    """UnifiedRAGRequest should accept legacy alias 'min_relevance_score' and map to 'min_score'."""
+
+
+     """UnifiedRAGRequest should accept legacy alias 'min_relevance_score' and map to 'min_score'."""
     from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import UnifiedRAGRequest
 
     payload = {

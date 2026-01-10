@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 class _FakeEmailService:
     def __init__(self) -> None:
-        self.sent = []
+             self.sent = []
 
     async def send_email(self, *, to_email: str, subject: str, html_body: str, text_body: str):
         self.sent.append(
@@ -24,7 +24,9 @@ class _FakeEmailService:
 
 
 def _seed_review_notification_db() -> MediaDatabase:
-    tmpdir = tempfile.mkdtemp(prefix="claims_review_notify_")
+
+
+     tmpdir = tempfile.mkdtemp(prefix="claims_review_notify_")
     db_path = os.path.join(tmpdir, "media.db")
     db = MediaDatabase(db_path=db_path, client_id="1")
     db.initialize_db()
@@ -56,7 +58,9 @@ def _seed_review_notification_db() -> MediaDatabase:
 
 
 def test_claims_review_notifications_deliver_email(monkeypatch):
-    from tldw_Server_API.app.core.AuthNZ import email_service as email_module
+
+
+     from tldw_Server_API.app.core.AuthNZ import email_service as email_module
 
     fake_service = _FakeEmailService()
     monkeypatch.setattr(email_module, "get_email_service", lambda: fake_service)

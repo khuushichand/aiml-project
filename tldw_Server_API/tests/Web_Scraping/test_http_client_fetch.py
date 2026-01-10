@@ -16,19 +16,21 @@ class DummyResp:
 
 class DummyClient:
     def __init__(self, timeout=None, trust_env=None, proxies=None):
-        self.last_headers = None
+             self.last_headers = None
     def __enter__(self):
-        return self
+             return self
     def __exit__(self, exc_type, exc, tb):
-        return False
+             return False
     def request(self, method, url, headers=None, cookies=None, follow_redirects=None):
-        self.last_headers = headers or {}
+             self.last_headers = headers or {}
         # echo headers back in response for assertions
         return DummyResp(url, self.last_headers)
 
 
 def test_httpx_fetch_sanitizes_accept_encoding_and_backend_label(monkeypatch):
-    # allow egress
+
+
+     # allow egress
     monkeypatch.setattr(hc, "_is_url_allowed", lambda url: True)
     # patch httpx.Client
     monkeypatch.setattr(hc.httpx, "Client", DummyClient)
@@ -41,7 +43,9 @@ def test_httpx_fetch_sanitizes_accept_encoding_and_backend_label(monkeypatch):
 
 
 def test_httpx_fetch_accept_encoding_case_and_params(monkeypatch):
-    # allow egress
+
+
+     # allow egress
     monkeypatch.setattr(hc, "_is_url_allowed", lambda url: True)
     # patch httpx.Client
     monkeypatch.setattr(hc.httpx, "Client", DummyClient)
@@ -58,7 +62,9 @@ def test_httpx_fetch_accept_encoding_case_and_params(monkeypatch):
 
 
 def test_httpx_fetch_accept_encoding_all_removed(monkeypatch):
-    # allow egress
+
+
+     # allow egress
     monkeypatch.setattr(hc, "_is_url_allowed", lambda url: True)
     # patch httpx.Client
     monkeypatch.setattr(hc.httpx, "Client", DummyClient)
@@ -72,6 +78,8 @@ def test_httpx_fetch_accept_encoding_all_removed(monkeypatch):
 
 
 def test_fetch_egress_denied_raises(monkeypatch):
-    monkeypatch.setattr(hc, "_is_url_allowed", lambda url: False)
+
+
+     monkeypatch.setattr(hc, "_is_url_allowed", lambda url: False)
     with pytest.raises(ValueError):
         hc.fetch("https://example.com/")

@@ -5,7 +5,7 @@ import tldw_Server_API.app.api.v1.endpoints.setup as setup_endpoint
 
 class _FakeSQLiteConn:
     def __init__(self) -> None:
-        self.calls = []
+             self.calls = []
         self.commits = 0
 
     async def execute(self, query, params):
@@ -17,7 +17,7 @@ class _FakeSQLiteConn:
 
 class _FakeAsyncPGConn:
     def __init__(self) -> None:
-        self.calls = []
+             self.calls = []
 
     async def execute(self, query, *params):
         self.calls.append((query, params))

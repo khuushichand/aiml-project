@@ -29,7 +29,7 @@ class TestMessageValidation:
 
     @pytest.mark.unit
     def test_valid_user_message(self):
-        """Test valid user message creation."""
+             """Test valid user message creation."""
         msg = ChatCompletionUserMessageParam(
             role="user",
             content="Hello, how are you?"
@@ -39,7 +39,7 @@ class TestMessageValidation:
 
     @pytest.mark.unit
     def test_valid_system_message(self):
-        """Test valid system message creation."""
+             """Test valid system message creation."""
         msg = ChatCompletionSystemMessageParam(
             role="system",
             content="You are a helpful assistant."
@@ -49,7 +49,7 @@ class TestMessageValidation:
 
     @pytest.mark.unit
     def test_valid_assistant_message(self):
-        """Test valid assistant message creation."""
+             """Test valid assistant message creation."""
         msg = ChatCompletionAssistantMessageParam(
             role="assistant",
             content="I'm doing well, thank you!"
@@ -59,7 +59,7 @@ class TestMessageValidation:
 
     @pytest.mark.unit
     def test_message_with_name(self):
-        """Test message with optional name field."""
+             """Test message with optional name field."""
         msg = ChatCompletionUserMessageParam(
             role="user",
             content="Test message",
@@ -69,7 +69,7 @@ class TestMessageValidation:
 
     @pytest.mark.unit
     def test_multimodal_user_message(self):
-        """Test user message with multimodal content (text + image)."""
+             """Test user message with multimodal content (text + image)."""
         # User messages can have List content for multimodal
         msg = ChatCompletionUserMessageParam(
             role="user",
@@ -91,7 +91,7 @@ class TestChatCompletionRequest:
 
     @pytest.mark.unit
     def test_minimal_valid_request(self):
-        """Test minimal valid chat completion request."""
+             """Test minimal valid chat completion request."""
         request = ChatCompletionRequest(
             model="gpt-3.5-turbo",
             messages=[
@@ -104,7 +104,7 @@ class TestChatCompletionRequest:
 
     @pytest.mark.unit
     def test_request_with_all_parameters(self):
-        """Test request with all optional parameters."""
+             """Test request with all optional parameters."""
         request = ChatCompletionRequest(
             api_provider="openai",
             model="gpt-4",
@@ -129,7 +129,7 @@ class TestChatCompletionRequest:
 
     @pytest.mark.unit
     def test_request_without_messages_fails(self):
-        """Test that request without messages fails validation."""
+             """Test that request without messages fails validation."""
         with pytest.raises(ValidationError) as exc_info:
             ChatCompletionRequest(model="gpt-3.5-turbo")
 
@@ -138,7 +138,7 @@ class TestChatCompletionRequest:
 
     @pytest.mark.unit
     def test_request_with_empty_messages_fails(self):
-        """Test that request with empty messages list fails."""
+             """Test that request with empty messages list fails."""
         with pytest.raises(ValidationError) as exc_info:
             ChatCompletionRequest(
                 model="gpt-3.5-turbo",
@@ -150,7 +150,7 @@ class TestChatCompletionRequest:
 
     @pytest.mark.unit
     def test_temperature_bounds(self):
-        """Test temperature parameter bounds (0.0 to 2.0)."""
+             """Test temperature parameter bounds (0.0 to 2.0)."""
         # Valid temperatures
         request = ChatCompletionRequest(
             model="gpt-3.5-turbo",
@@ -184,7 +184,7 @@ class TestChatCompletionRequest:
 
     @pytest.mark.unit
     def test_provider_validation(self):
-        """Test API provider validation."""
+             """Test API provider validation."""
         valid_providers = ["openai", "anthropic", "cohere", "groq", "mistral"]
 
         for provider in valid_providers:
@@ -197,7 +197,7 @@ class TestChatCompletionRequest:
 
     @pytest.mark.unit
     def test_streaming_parameter(self):
-        """Test streaming parameter."""
+             """Test streaming parameter."""
         request = ChatCompletionRequest(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "test"}],
@@ -221,7 +221,7 @@ class TestResponseFormat:
 
     @pytest.mark.unit
     def test_json_response_format(self):
-        """Test JSON response format specification."""
+             """Test JSON response format specification."""
         format_spec = ResponseFormat(type="json_object")
         assert format_spec.type == "json_object"
 
@@ -234,7 +234,7 @@ class TestResponseFormat:
 
     @pytest.mark.unit
     def test_text_response_format(self):
-        """Test text response format (default)."""
+             """Test text response format (default)."""
         format_spec = ResponseFormat(type="text")
         assert format_spec.type == "text"
 
@@ -247,7 +247,7 @@ class TestToolsAndFunctions:
 
     @pytest.mark.unit
     def test_function_definition(self):
-        """Test function definition for tool calling."""
+             """Test function definition for tool calling."""
         func = FunctionDefinition(
             name="get_weather",
             description="Get weather for a location",
@@ -265,7 +265,7 @@ class TestToolsAndFunctions:
 
     @pytest.mark.unit
     def test_tool_definition(self):
-        """Test tool definition with function."""
+             """Test tool definition with function."""
         tool = ToolDefinition(
             type="function",
             function={
@@ -285,7 +285,7 @@ class TestToolsAndFunctions:
 
     @pytest.mark.unit
     def test_request_with_tools(self):
-        """Test request with tool definitions."""
+             """Test request with tool definitions."""
         request = ChatCompletionRequest(
             model="gpt-4",
             messages=[{"role": "user", "content": "What's the weather?"}],
@@ -318,7 +318,7 @@ class TestEdgeCasesAndErrors:
 
     @pytest.mark.unit
     def test_invalid_role_fails(self):
-        """Test that invalid message role fails validation."""
+             """Test that invalid message role fails validation."""
         with pytest.raises(ValidationError):
             ChatCompletionUserMessageParam(
                 role="invalid_role",  # Should be "user"
@@ -327,13 +327,13 @@ class TestEdgeCasesAndErrors:
 
     @pytest.mark.unit
     def test_missing_content_fails(self):
-        """Test that message without content fails."""
+             """Test that message without content fails."""
         with pytest.raises(ValidationError):
             ChatCompletionUserMessageParam(role="user")
 
     @pytest.mark.unit
     def test_max_tokens_bounds(self):
-        """Test max_tokens parameter bounds."""
+             """Test max_tokens parameter bounds."""
         request = ChatCompletionRequest(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "test"}],
@@ -351,7 +351,7 @@ class TestEdgeCasesAndErrors:
 
     @pytest.mark.unit
     def test_n_parameter_bounds(self):
-        """Test n parameter bounds (1 to 128)."""
+             """Test n parameter bounds (1 to 128)."""
         request = ChatCompletionRequest(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "test"}],
@@ -376,7 +376,7 @@ class TestEdgeCasesAndErrors:
 
     @pytest.mark.unit
     def test_extra_fields_allowed(self):
-        """Test that extra fields are allowed (for provider-specific params)."""
+             """Test that extra fields are allowed (for provider-specific params)."""
         request = ChatCompletionRequest(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "test"}],

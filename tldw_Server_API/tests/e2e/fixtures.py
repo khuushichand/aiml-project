@@ -259,7 +259,7 @@ class APIClient:
 
     # Media endpoints
     def upload_media(self, file_path: str, title: str, media_type: str = "document",
-                     generate_embeddings: bool = False) -> Dict[str, Any]:
+                    generate_embeddings: bool = False) -> Dict[str, Any]:
         """Upload a media file."""
         with open(file_path, "rb") as f:
             # The endpoint expects 'files' (plural) not 'file'
@@ -282,8 +282,8 @@ class APIClient:
         return response.json()
 
     def process_media(self, url: Optional[str] = None, file_path: Optional[str] = None,
-                     title: Optional[str] = None, custom_prompt: Optional[str] = None,
-                     persist: bool = True, media_type: Optional[str] = None) -> Dict[str, Any]:
+                    title: Optional[str] = None, custom_prompt: Optional[str] = None,
+                    persist: bool = True, media_type: Optional[str] = None) -> Dict[str, Any]:
         """Process media from URL or file.
 
         Args:
@@ -470,7 +470,7 @@ class APIClient:
         return self._handle_rate_limit(_get)
 
     def update_note(self, note_id: str, title: Optional[str] = None,
-                   content: Optional[str] = None, version: int = 1) -> Dict[str, Any]:
+                content: Optional[str] = None, version: int = 1) -> Dict[str, Any]:
         """Update an existing note."""
         def _update():
             data = {}

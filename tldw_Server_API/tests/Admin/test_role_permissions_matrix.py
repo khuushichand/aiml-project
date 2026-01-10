@@ -9,7 +9,9 @@ from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
 
 
 def _fresh_client() -> TestClient:
-    """Create a TestClient against a fresh single-user SQLite auth DB.
+
+
+     """Create a TestClient against a fresh single-user SQLite auth DB.
 
     Ensures RBAC migrations (including seeded roles/permissions) run on a new DB file.
     """
@@ -36,7 +38,9 @@ def _fresh_client() -> TestClient:
 
 
 def test_list_role_permissions_for_user_role():
-    """Smoke: user role should include seeded baseline permissions."""
+
+
+     """Smoke: user role should include seeded baseline permissions."""
     with _fresh_client() as client:
         # Find the 'user' role
         r_roles = client.get("/api/v1/admin/roles")
@@ -59,7 +63,9 @@ def test_list_role_permissions_for_user_role():
 
 
 def test_roles_matrix_includes_user_baseline():
-    """Smoke: matrix endpoint returns roles, permissions, and grants; 'user' has baseline grants.
+
+
+     """Smoke: matrix endpoint returns roles, permissions, and grants; 'user' has baseline grants.
 
     Skips gracefully if RBAC tables/migrations are not available in this environment.
     """
@@ -90,7 +96,9 @@ def test_roles_matrix_includes_user_baseline():
 
 
 def test_roles_boolean_matrix_shape():
-    """Smoke: boolean matrix returns aligned shapes and includes roles/permissions.
+
+
+     """Smoke: boolean matrix returns aligned shapes and includes roles/permissions.
 
     Skips gracefully if RBAC tables/migrations are not available.
     """

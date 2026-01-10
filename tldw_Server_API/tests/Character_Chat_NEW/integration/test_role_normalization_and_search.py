@@ -77,7 +77,8 @@ async def test_complete_v2_uses_normalized_roles_via_stubbed_provider(monkeypatc
         import tldw_Server_API.app.api.v1.endpoints.character_chat_sessions as mod
 
         def _stub_chat_api_call(api_endpoint, messages_payload, **kwargs):
-            captured["messages"] = messages_payload
+
+                     captured["messages"] = messages_payload
             return {"choices": [{"message": {"content": "ok"}}]}
 
         monkeypatch.setattr(mod, "perform_chat_api_call", _stub_chat_api_call)

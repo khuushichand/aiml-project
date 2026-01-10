@@ -907,6 +907,19 @@ async def unified_rag_pipeline(
                                 break
 
                 if result.cache_hit:
+                    empty_cached_docs = False
+                    if isinstance(cached_documents, dict):
+                        docs = cached_documents.get("documents")
+                        if isinstance(docs, list) and not docs:
+                            empty_cached_docs = True
+                    elif isinstance(cached_documents, list) and not cached_documents:
+                        empty_cached_docs = True
+                    if empty_cached_docs:
+                        # Treat empty cached results as a miss to avoid stale false negatives.
+                        result.cache_hit = False
+                        cached_documents = None
+
+                if result.cache_hit:
                     if isinstance(cached_documents, dict):
                         ans = cached_documents.get("answer")
                         if ans is not None:

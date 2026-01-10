@@ -49,7 +49,8 @@ async def test_async_rate_limiter_uses_rg_when_enabled(monkeypatch):
     monkeypatch.setattr(rate_limiter, "_maybe_enforce_with_rg", _fake_rg)
 
     def _legacy_called(*args, **kwargs):
-        raise AssertionError("legacy limiter should not be called when RG is enabled")
+
+             raise AssertionError("legacy limiter should not be called when RG is enabled")
 
     monkeypatch.setattr(limiter, "check_rate_limit", _legacy_called)
 

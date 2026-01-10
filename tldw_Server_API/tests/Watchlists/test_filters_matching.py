@@ -6,7 +6,9 @@ from tldw_Server_API.app.core.Watchlists.filters import normalize_filters, evalu
 
 
 def test_keyword_any_and_all():
-    payload = {
+
+
+     payload = {
         "filters": [
             {"type": "keyword", "action": "exclude", "value": {"keywords": ["ai", "ml"], "match": "any"}, "priority": 5},
             {"type": "keyword", "action": "flag", "value": {"keywords": ["research", "paper"], "match": "all"}, "priority": 1},
@@ -27,7 +29,9 @@ def test_keyword_any_and_all():
 
 
 def test_regex_flags_and_field():
-    payload = {
+
+
+     payload = {
         "filters": [
             {"type": "regex", "action": "exclude", "value": {"pattern": "(?i)breaking", "field": "title"}},
             {"type": "regex", "action": "flag", "value": {"pattern": "^Author:.*Doe$", "flags": "i", "field": "author"}},
@@ -43,7 +47,9 @@ def test_regex_flags_and_field():
 
 
 def test_date_range_max_age_days():
-    from datetime import datetime, timezone, timedelta
+
+
+     from datetime import datetime, timezone, timedelta
 
     recent_iso = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
     old_iso = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()

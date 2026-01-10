@@ -11,7 +11,9 @@ pytestmark = pytest.mark.integration
 
 
 def _override_admin_dep(app):
-    # Override auth principal for tests to satisfy admin role checks
+
+
+     # Override auth principal for tests to satisfy admin role checks
     from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
     from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
 
@@ -46,7 +48,9 @@ def _override_admin_dep(app):
 
 
 def test_admin_orgs_list_with_total_and_search(monkeypatch, tmp_path, authnz_schema_ready_sync):
-    # Use SQLite and TEST_MODE to avoid network and simplify setup
+
+
+     # Use SQLite and TEST_MODE to avoid network and simplify setup
     db_path = tmp_path / "authnz_admin_search.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
     monkeypatch.setenv("TEST_MODE", "1")

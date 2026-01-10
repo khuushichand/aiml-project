@@ -9,7 +9,9 @@ import pytest
 
 
 def test_embeddings_orchestrator_events_unified_sse(redis_client, monkeypatch):
-    # Enable unified streams
+
+
+     # Enable unified streams
     os.environ["STREAMS_UNIFIED"] = "1"
     os.environ["STREAM_HEARTBEAT_MODE"] = "data"
     try:

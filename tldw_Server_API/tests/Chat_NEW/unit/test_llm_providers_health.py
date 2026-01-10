@@ -9,7 +9,7 @@ from tldw_Server_API.app.main import app
 
 class _FakeProviderManager:
     def get_health_report(self):
-        return {
+             return {
             'openai': {
                 'status': 'healthy',
                 'success_count': 10,
@@ -25,7 +25,7 @@ class _FakeProviderManager:
 
 @pytest.mark.unit
 def test_llm_providers_includes_health(monkeypatch):
-    # Force TEST_MODE to ensure deterministic behavior
+     # Force TEST_MODE to ensure deterministic behavior
     monkeypatch.setenv("TEST_MODE", "true")
 
     with TestClient(app) as client:

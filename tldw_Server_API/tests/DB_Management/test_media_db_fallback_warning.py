@@ -5,7 +5,9 @@ import pytest
 
 
 def test_fallback_logs_warning_when_no_path_and_no_backend(monkeypatch):
-    # Import module under test
+
+
+     # Import module under test
     import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as m
 
     # Capture warnings emitted by fallback path
@@ -46,7 +48,9 @@ def test_fallback_logs_warning_when_no_path_and_no_backend(monkeypatch):
 
 
 def test_explicit_db_path_avoids_fallback_and_logs_no_warning(monkeypatch, tmp_path):
-    # Import module under test
+
+
+     # Import module under test
     import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as m
     from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
@@ -70,7 +74,7 @@ def test_explicit_db_path_avoids_fallback_and_logs_no_warning(monkeypatch, tmp_p
 
     class _LogStub:
         def warning(self, msg, *args, **kwargs):
-            logs.append(str(msg))
+                     logs.append(str(msg))
 
     monkeypatch.setattr(m, "logging", _LogStub(), raising=True)
 

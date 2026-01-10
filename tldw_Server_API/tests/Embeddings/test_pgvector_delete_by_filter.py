@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import VectorSt
 
 @pytest.mark.usefixtures("pgvector_temp_table")
 def test_pgvector_delete_by_filter_removes_matching_rows(pgvector_dsn, pgvector_temp_table):
-    # Derive collection name from table (strip leading 'vs_' as adapter prefixes it)
+     # Derive collection name from table (strip leading 'vs_' as adapter prefixes it)
     table_name: str = pgvector_temp_table
     assert table_name.startswith("vs_")
     collection = table_name[3:]

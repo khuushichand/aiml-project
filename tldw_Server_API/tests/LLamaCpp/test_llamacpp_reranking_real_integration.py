@@ -12,22 +12,28 @@ os.environ.setdefault("TEST_MODE", "true")
 
 
 def _has_llama_embedding() -> bool:
-    return shutil.which("llama-embedding") is not None
+
+
+     return shutil.which("llama-embedding") is not None
 
 
 def _model_path() -> str:
-    # Allow test-specific override to avoid touching prod config
+
+
+     # Allow test-specific override to avoid touching prod config
     return os.getenv("TEST_QWEN_GGUF_MODEL") or os.getenv("RAG_LLAMA_RERANKER_MODEL") or ""
 
 
 def _model_available() -> bool:
-    m = _model_path()
+
+
+     m = _model_path()
     return bool(m and os.path.exists(m))
 
 
 @pytest.fixture(scope="module")
 def client():
-    settings = get_settings()
+     settings = get_settings()
     headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
     with TestClient(app, headers=headers) as c:
         yield c
@@ -40,7 +46,9 @@ pytestmark = [
 
 
 def _skip_if_unavailable():
-    if not _has_llama_embedding():
+
+
+     if not _has_llama_embedding():
         pytest.skip("llama-embedding binary not found on PATH; set RUN with llama.cpp installed")
     if not _model_available():
         pytest.skip("TEST_QWEN_GGUF_MODEL or RAG_LLAMA_RERANKER_MODEL not set to a readable GGUF file")

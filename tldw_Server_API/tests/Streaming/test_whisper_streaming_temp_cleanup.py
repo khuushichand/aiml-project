@@ -12,28 +12,31 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_U
 
 @pytest.mark.unit
 def test_whisper_streaming_tempfile_cleanup_on_error(monkeypatch, tmp_path):
-    config = UnifiedStreamingConfig(sample_rate=16000)
+     config = UnifiedStreamingConfig(sample_rate=16000)
     transcriber = WhisperStreamingTranscriber(config)
     transcriber.transcribe_options = {}
 
     class _BoomModel:
         def transcribe(self, *args, **kwargs):
-            raise RuntimeError("boom")
+                     raise RuntimeError("boom")
 
     transcriber.model = _BoomModel()
 
     temp_path = tmp_path / "streaming_temp.wav"
 
     def fake_tempfile(*args, **kwargs):
-        class _Dummy:
+
+             class _Dummy:
             name = str(temp_path)
 
             def __enter__(self):
-                temp_path.touch()
+
+                             temp_path.touch()
                 return self
 
             def __exit__(self, exc_type, exc, tb):
-                return False
+
+                             return False
 
         return _Dummy()
 

@@ -11,7 +11,8 @@ class FakeTime:
         self.t = t0
 
     def __call__(self) -> float:
-        return self.t
+
+             return self.t
 
     def advance(self, s: float) -> None:
         self.t += s
@@ -27,7 +28,7 @@ class FakeTime:
 async def test_tokens_refund_parity_and_steady_no_denials(per_min, first_units, commit_actual):
     class _Loader:
         def get_policy(self, pid):
-            return {"tokens": {"per_min": int(per_min)}, "scopes": ["global", "user"]}
+                     return {"tokens": {"per_min": int(per_min)}, "scopes": ["global", "user"]}
 
     ft = FakeTime(0.0)
     ns = "rg_p_tok_refund"

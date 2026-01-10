@@ -7,7 +7,9 @@ pytestmark = pytest.mark.integration
 
 
 def _make_jobs(db, count=3):
-    jobs = []
+
+
+     jobs = []
     for i in range(count):
         job = db.create_job(
             job_type="optimization",
@@ -20,7 +22,9 @@ def _make_jobs(db, count=3):
 
 
 def test_pg_advisory_concurrent_acquire_returns_distinct(prompt_studio_dual_backend_db):
-    label, db = prompt_studio_dual_backend_db
+
+
+     label, db = prompt_studio_dual_backend_db
     if label != "postgres":
         pytest.skip("Postgres-specific test")
 
@@ -29,7 +33,8 @@ def test_pg_advisory_concurrent_acquire_returns_distinct(prompt_studio_dual_back
     results = []
 
     def worker(out_list):
-        job = db.acquire_next_job()
+
+             job = db.acquire_next_job()
         out_list.append(job)
 
     t1 = threading.Thread(target=worker, args=(results,))
@@ -43,7 +48,9 @@ def test_pg_advisory_concurrent_acquire_returns_distinct(prompt_studio_dual_back
 
 
 def test_pg_advisory_locked_high_priority_is_skipped(prompt_studio_dual_backend_db):
-    label, db = prompt_studio_dual_backend_db
+
+
+     label, db = prompt_studio_dual_backend_db
     if label != "postgres":
         pytest.skip("Postgres-specific test")
 
@@ -63,7 +70,9 @@ def test_pg_advisory_locked_high_priority_is_skipped(prompt_studio_dual_backend_
 
 
 def test_pg_advisory_unlocks_on_terminal_status(prompt_studio_dual_backend_db):
-    label, db = prompt_studio_dual_backend_db
+
+
+     label, db = prompt_studio_dual_backend_db
     if label != "postgres":
         pytest.skip("Postgres-specific test")
 
@@ -88,7 +97,9 @@ def test_pg_advisory_unlocks_on_terminal_status(prompt_studio_dual_backend_db):
 
 
 def test_pg_advisory_unlocks_on_retry(prompt_studio_dual_backend_db):
-    label, db = prompt_studio_dual_backend_db
+
+
+     label, db = prompt_studio_dual_backend_db
     if label != "postgres":
         pytest.skip("Postgres-specific test")
 

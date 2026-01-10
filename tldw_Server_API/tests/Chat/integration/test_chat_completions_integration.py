@@ -50,7 +50,7 @@ API_BEARER = os.getenv("API_BEARER", "test-api-key-12345")
 
 @pytest.fixture
 def mock_user():
-    """Create a mock user for testing."""
+     """Create a mock user for testing."""
     import datetime
     return User(
         id=1,
@@ -64,7 +64,7 @@ def mock_user():
 
 @pytest.fixture(autouse=True)
 def setup_auth_override(mock_user):
-    """Automatically override authentication for all tests based on AUTH_MODE."""
+     """Automatically override authentication for all tests based on AUTH_MODE."""
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
     settings = get_settings()
@@ -86,7 +86,7 @@ def setup_auth_override(mock_user):
 
 # Helper function to make requests with CSRF token
 def make_request_with_csrf(client, method, url, headers=None, **kwargs):
-    """Helper to make requests with CSRF token included"""
+     """Helper to make requests with CSRF token included"""
     if headers is None:
         headers = {}
 
@@ -106,7 +106,7 @@ def make_request_with_csrf(client, method, url, headers=None, **kwargs):
 
 @pytest.fixture(scope="function")
 def client():
-    """Yields a TestClient instance for making requests to the app."""
+     """Yields a TestClient instance for making requests to the app."""
     with TestClient(app) as c:
         # Get a CSRF token by making a GET request first
         response = c.get("/api/v1/health")
@@ -124,7 +124,7 @@ def client():
 
 @pytest.fixture
 def valid_auth_token() -> str:
-    """Generate appropriate auth token based on current AUTH_MODE."""
+     """Generate appropriate auth token based on current AUTH_MODE."""
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
     settings = get_settings()
@@ -178,7 +178,9 @@ except ImportError:
 
 
 def get_commercial_providers_with_keys_integration():
-    """
+
+
+     """
     Returns a list of commercial providers for which API keys are actually set
     and non-empty, as understood by the application's schema.
 
@@ -200,7 +202,9 @@ def get_commercial_providers_with_keys_integration():
 
 
 def get_local_providers_integration():
-    """
+
+
+     """
     Returns a list of providers considered "local" or that might use URLs/config
     instead of globally managed API keys.
     """
@@ -403,7 +407,7 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHA
 
 @pytest.fixture
 def mock_db_dependencies_for_integration():
-    mock_media_db_inst = MagicMock()
+     mock_media_db_inst = MagicMock()
     mock_chat_db_inst = MagicMock(spec=CharactersRAGDB)
 
     # --- Configure mock_chat_db_inst ---
@@ -416,7 +420,7 @@ def mock_db_dependencies_for_integration():
         # e.g., client_id if it's directly on the card (though less likely)
     }
     def mock_get_character_card_by_name(name_or_id):
-        if name_or_id == DEFAULT_CHARACTER_NAME:
+             if name_or_id == DEFAULT_CHARACTER_NAME:
             return default_char_card_data
         return None # For any other name
 
@@ -466,7 +470,7 @@ def mock_db_dependencies_for_integration():
 def test_commercial_provider_non_streaming_no_template(
         client, provider_name, valid_auth_token, mock_db_dependencies_for_integration
 ):
-    # This test uses the DEFAULT_RAW_PASSTHROUGH_TEMPLATE because prompt_template_name is None
+     # This test uses the DEFAULT_RAW_PASSTHROUGH_TEMPLATE because prompt_template_name is None
 
     selected_model = resolve_test_model_from_catalog(provider_name)
     if not selected_model and not _configured_default_model(provider_name):
@@ -515,7 +519,7 @@ def test_commercial_provider_non_streaming_no_template(
 def test_commercial_provider_streaming_no_template(
         client, provider_name, valid_auth_token, mock_db_dependencies_for_integration
 ):
-    selected_model = resolve_test_model_from_catalog(provider_name)
+     selected_model = resolve_test_model_from_catalog(provider_name)
     if not selected_model and not _configured_default_model(provider_name):
         pytest.skip(f"No default model configured for {provider_name}; set {provider_name.upper()}_TEST_MODEL or config.")
     base_url_override = _provider_base_url_override(provider_name)
@@ -604,7 +608,7 @@ def test_commercial_provider_streaming_no_template(
 def test_commercial_provider_with_template_and_char_data_openai_integration(
         client, valid_auth_token, mock_db_dependencies_for_integration
 ):
-    provider_name = "openai"
+     provider_name = "openai"
     if provider_name not in COMMERCIAL_PROVIDERS_FOR_TEST:
         pytest.skip(f"{provider_name} not configured with API key for this templating test.")
 
@@ -632,7 +636,7 @@ def test_commercial_provider_with_template_and_char_data_openai_integration(
 
     # Ensure get_character_card_by_name returns the pirate when called with "pirate_blackheart"
     def specific_char_by_name_lookup(name_or_id):
-        if name_or_id == test_char_id_for_template:  # "pirate_blackheart"
+             if name_or_id == test_char_id_for_template:  # "pirate_blackheart"
             return mock_character_data_for_template
         if name_or_id == DEFAULT_CHARACTER_NAME:  # Still handle default if needed elsewhere
             return {'id': 10000, 'name': DEFAULT_CHARACTER_NAME, 'system_prompt': 'Default'}
@@ -691,7 +695,7 @@ def test_local_provider_non_streaming_no_template(
         client, provider_name, valid_auth_token, mock_db_dependencies_for_integration, request
         # request is a pytest fixture
 ):
-    # Configuration for local provider URLs (examples, adjust to your env var names)
+     # Configuration for local provider URLs (examples, adjust to your env var names)
     config_var_map = {
         "ollama": "OLLAMA_HOST", "llama.cpp": "LLAMA_CPP_URL", "ooba": "OOBA_URL",
         "vllm": "VLLM_URL", "tabbyapi": "TABBYAPI_URL",
@@ -746,7 +750,7 @@ def test_local_provider_non_streaming_no_template(
 def test_chat_integration_invalid_key_for_commercial_provider_standalone(
     mock_chat_api_call_shim, client, valid_auth_token, mock_db_dependencies_for_integration
 ):
-    provider_to_test_invalid_key = "openai"
+     provider_to_test_invalid_key = "openai"
     # Simulate that the call to the provider resulted in an auth error
     mock_chat_api_call_shim.side_effect = ChatAuthenticationError(
         provider=provider_to_test_invalid_key,
@@ -776,7 +780,7 @@ def test_chat_integration_invalid_key_for_commercial_provider_standalone(
 def test_chat_integration_bad_request_missing_messages_standalone(
         client, valid_auth_token, mock_db_dependencies_for_integration  # Add DB mock for consistency
 ):
-    request_body = {
+     request_body = {
         "api_provider": "openai",  # Could be any provider
         "model": "test-model",
         # "messages" field is intentionally missing

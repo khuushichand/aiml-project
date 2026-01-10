@@ -59,7 +59,7 @@ class TestMoonshotProvider:
 
     @pytest.fixture
     def mock_response(self):
-        """Mock response for Moonshot API."""
+             """Mock response for Moonshot API."""
         return {
             "id": "cmpl-test123",
             "object": "chat.completion",
@@ -81,7 +81,8 @@ class TestMoonshotProvider:
         }
 
     def test_moonshot_basic_chat(self, mock_response):
-        """Test basic chat functionality."""
+
+             """Test basic chat functionality."""
         with patch('tldw_Server_API.app.core.LLM_Calls.chat_calls.create_session_with_retries') as mock_factory:
             fake_session = Mock()
             mock_factory.return_value = fake_session
@@ -110,7 +111,7 @@ class TestMoonshotProvider:
 
     @patch('tldw_Server_API.app.core.LLM_Calls.chat_calls.create_session_with_retries')
     def test_moonshot_with_system_message(self, mock_factory, mock_response):
-        """Test chat with system message."""
+             """Test chat with system message."""
         fake_session = Mock()
         mock_factory.return_value = fake_session
         mock_response_obj = Mock()
@@ -133,7 +134,7 @@ class TestMoonshotProvider:
 
     @patch('tldw_Server_API.app.core.LLM_Calls.chat_calls.create_session_with_retries')
     def test_moonshot_vision_model(self, mock_factory, mock_response):
-        """Test vision model with image content."""
+             """Test vision model with image content."""
         mock_response['model'] = "moonshot-v1-8k-vision-preview"
         fake_session = Mock()
         mock_factory.return_value = fake_session
@@ -165,7 +166,7 @@ class TestMoonshotProvider:
 
     @patch('requests.Session.post')
     def test_moonshot_streaming(self, mock_post):
-        """Test streaming response."""
+             """Test streaming response."""
         # Mock SSE streaming response
         mock_response = Mock()
         mock_response.status_code = 200
@@ -196,14 +197,15 @@ class TestMoonshotProvider:
 
     @patch('tldw_Server_API.app.core.LLM_Calls.chat_calls._legacy_create_session_with_retries')
     def test_moonshot_streaming_session_lifecycle(self, mock_legacy_factory):
-        """Ensure streaming keeps the session open until iteration finishes."""
+             """Ensure streaming keeps the session open until iteration finishes."""
         session_state = {"closed": False}
         response_state = {"closed": False}
 
         session_instance = MagicMock()
 
         def close_session():
-            session_state["closed"] = True
+
+                     session_state["closed"] = True
 
         session_instance.close.side_effect = close_session
 
@@ -212,16 +214,19 @@ class TestMoonshotProvider:
         response.raise_for_status = Mock()
 
         def close_response():
-            response_state["closed"] = True
+
+                     response_state["closed"] = True
 
         response.close.side_effect = close_response
 
         def iter_lines(decode_unicode=False):
-            if session_state["closed"]:
+
+                     if session_state["closed"]:
                 raise AssertionError("Session closed before iteration started")
 
             def generator():
-                if session_state["closed"]:
+
+                             if session_state["closed"]:
                     raise AssertionError("Session closed before yielding first chunk")
                 yield 'data: {"choices":[{"delta":{"content":"Hello"}}]}'
                 if session_state["closed"]:
@@ -253,7 +258,7 @@ class TestMoonshotProvider:
 
     @patch('tldw_Server_API.app.core.LLM_Calls.chat_calls.create_session_with_retries')
     def test_moonshot_error_handling(self, mock_factory):
-        """Test error handling."""
+             """Test error handling."""
         fake_session = Mock()
         mock_factory.return_value = fake_session
         response = make_response(401, '{"error": {"message": "Unauthorized"}}')
@@ -273,7 +278,7 @@ class TestZAIProvider:
 
     @pytest.fixture
     def mock_response(self):
-        """Mock response for Z.AI API."""
+             """Mock response for Z.AI API."""
         return {
             "id": "chat-test123",
             "object": "chat.completion",
@@ -297,7 +302,7 @@ class TestZAIProvider:
 
     @patch('tldw_Server_API.app.core.LLM_Calls.chat_calls.create_session_with_retries')
     def test_zai_basic_chat(self, mock_factory, mock_response):
-        """Test basic chat functionality."""
+             """Test basic chat functionality."""
         fake_session = Mock()
         mock_factory.return_value = fake_session
         mock_response_obj = Mock()
@@ -324,7 +329,7 @@ class TestZAIProvider:
 
     @patch('tldw_Server_API.app.core.LLM_Calls.chat_calls.create_session_with_retries')
     def test_zai_with_request_id(self, mock_factory, mock_response):
-        """Test chat with request_id."""
+             """Test chat with request_id."""
         fake_session = Mock()
         mock_factory.return_value = fake_session
         mock_response_obj = Mock()
@@ -346,7 +351,7 @@ class TestZAIProvider:
 
     @patch('tldw_Server_API.app.core.LLM_Calls.chat_calls.create_session_with_retries')
     def test_zai_model_variants(self, mock_factory, mock_response):
-        """Test different model variants."""
+             """Test different model variants."""
         models = ["glm-4.5", "glm-4.5-air", "glm-4.5-flash", "glm-4-32b-0414-128k"]
 
         for model in models:
@@ -372,7 +377,7 @@ class TestZAIProvider:
 
     @patch('requests.Session.post')
     def test_zai_streaming(self, mock_post):
-        """Test streaming response."""
+             """Test streaming response."""
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.headers = {'content-type': 'text/event-stream'}
@@ -431,7 +436,7 @@ class TestZAIProvider:
     ],
 )
 def test_provider_http_error_mapping(func, kwargs, status_code, expected_exception):
-    if func is chat_with_google:
+     if func is chat_with_google:
         with patch(
             "tldw_Server_API.app.core.LLM_Calls.providers.google_adapter.http_client_factory"
         ) as mock_client_factory:
@@ -523,12 +528,12 @@ class TestHuggingFaceAPI:
 
     @pytest.fixture
     def api_client(self):
-        """Create HuggingFace API client."""
+             """Create HuggingFace API client."""
         return HuggingFaceAPI(token="test_token")
 
     @pytest.fixture
     def mock_model_response(self):
-        """Mock model search response."""
+             """Mock model search response."""
         return [
             {
                 "modelId": "TheBloke/Llama-2-7B-GGUF",
@@ -646,7 +651,8 @@ class TestHuggingFaceAPI:
         progress_calls = []
 
         def progress_callback(downloaded, total):
-            progress_calls.append((downloaded, total))
+
+                     progress_calls.append((downloaded, total))
 
         with patch('httpx.AsyncClient.head', new_callable=AsyncMock) as mock_head:
             with patch('httpx.AsyncClient.stream', new_callable=Mock) as mock_stream:
@@ -788,7 +794,7 @@ class TestSSENormalization:
 
     @patch('requests.Session.post')
     def test_cohere_stream_normalized(self, mock_post):
-        mock_response = Mock()
+             mock_response = Mock()
         mock_response.status_code = 200
         mock_response.raise_for_status = Mock()
         mock_response.iter_lines = Mock(return_value=[
@@ -813,7 +819,8 @@ class TestSSENormalization:
         assert '[DONE]' in chunks[-1]
 
     def test_cohere_stream_session_lifecycle(self, monkeypatch):
-        stream_lines = [
+
+             stream_lines = [
             b'data: {"event_type":"text-generation","text":"Hello"}',
             b'data: {"event_type":"stream-end","finish_reason":"end_turn"}',
         ]
@@ -853,19 +860,20 @@ class TestSSENormalization:
         assert remaining[-1].strip().lower() == "data: [done]"
 
     def test_qwen_stream_normalized(self, monkeypatch):
-        class _Client:
+
+             class _Client:
             def __enter__(self):
-                return self
+                             return self
             def __exit__(self, exc_type, exc, tb):
-                return False
+                             return False
             def stream(self, *args, **kwargs):
-                class _Resp:
+                             class _Resp:
                     status_code = 200
                     def raise_for_status(self): return None
                     def __enter__(self): return self
                     def __exit__(self, exc_type, exc, tb): return False
                     def iter_lines(self):
-                        return iter([
+                                             return iter([
                             'data: {"choices":[{"delta":{"content":"Hi"}}]}',
                             'data: {"choices":[{"delta":{"content":"!"}}]}',
                         ])
@@ -887,22 +895,23 @@ class TestSSENormalization:
         assert '[DONE]' in chunks[-1]
 
     def test_groq_stream_normalized(self, monkeypatch):
-        class _Client:
+
+             class _Client:
             def __enter__(self):
-                return self
+                             return self
             def __exit__(self, exc_type, exc, tb):
-                return False
+                             return False
             def stream(self, *args, **kwargs):
-                class _Resp:
+                             class _Resp:
                     status_code = 200
                     def raise_for_status(self):
-                        return None
+                                             return None
                     def __enter__(self):
-                        return self
+                                             return self
                     def __exit__(self, exc_type, exc, tb):
-                        return False
+                                             return False
                     def iter_lines(self):
-                        return iter([
+                                             return iter([
                             'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n',
                             'data: {"choices":[{"delta":{"content":" Groq"}}]}\n\n',
                             'data: [DONE]\n\n',
@@ -923,27 +932,28 @@ class TestSSENormalization:
         assert chunks[-1].strip() == 'data: [DONE]'
 
     def test_google_gemini_stream_normalized(self, monkeypatch):
-        class _Client:
+
+             class _Client:
             def __enter__(self):
-                return self
+                             return self
             def __exit__(self, exc_type, exc, tb):
-                return False
+                             return False
             def stream(self, method, url, *, headers=None, json=None):
-                class _Resp:
+                             class _Resp:
                     status_code = 200
                     def raise_for_status(self):
-                        return None
+                                             return None
                     def __enter__(self):
-                        return self
+                                             return self
                     def __exit__(self, exc_type, exc, tb):
-                        return False
+                                             return False
                     def iter_lines(self):
-                        return iter([
+                                             return iter([
                             b'data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]}}]}',
                             b'data: {"candidates":[{"content":{"parts":[{"text":" Gemini"}]}}]}',
                         ])
                     def close(self):
-                        return None
+                                             return None
                 return _Resp()
         monkeypatch.setattr(
             "tldw_Server_API.app.core.LLM_Calls.providers.google_adapter.http_client_factory",
@@ -964,28 +974,29 @@ class TestSSENormalization:
         assert '[DONE]' in chunks[-1]
 
     def test_google_gemini_stream_tool_calls(self, monkeypatch):
-        tool_chunk = (
+
+             tool_chunk = (
             b'data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"lookup","args":{"query":"mars"}}}]},'
             b'"finishReason":"FUNCTION_CALL"}]}'
         )
         class _Client:
             def __enter__(self):
-                return self
+                             return self
             def __exit__(self, exc_type, exc, tb):
-                return False
+                             return False
             def stream(self, method, url, *, headers=None, json=None):
-                class _Resp:
+                             class _Resp:
                     status_code = 200
                     def raise_for_status(self):
-                        return None
+                                             return None
                     def __enter__(self):
-                        return self
+                                             return self
                     def __exit__(self, exc_type, exc, tb):
-                        return False
+                                             return False
                     def iter_lines(self):
-                        return iter([tool_chunk])
+                                             return iter([tool_chunk])
                     def close(self):
-                        return None
+                                             return None
                 return _Resp()
         monkeypatch.setattr(
             "tldw_Server_API.app.core.LLM_Calls.providers.google_adapter.http_client_factory",
@@ -1010,22 +1021,23 @@ class TestSSENormalization:
         assert chunks[-1].strip() == "data: [DONE]"
 
     def test_bedrock_stream_normalized(self, monkeypatch):
-        class _Client:
+
+             class _Client:
             def __enter__(self):
-                return self
+                             return self
             def __exit__(self, exc_type, exc, tb):
-                return False
+                             return False
             def stream(self, method, url, *, headers=None, json=None):
-                class _Resp:
+                             class _Resp:
                     status_code = 200
                     def raise_for_status(self):
-                        return None
+                                             return None
                     def __enter__(self):
-                        return self
+                                             return self
                     def __exit__(self, exc_type, exc, tb):
-                        return False
+                                             return False
                     def iter_lines(self):
-                        return iter([
+                                             return iter([
                             b'data: {"choices":[{"delta":{"content":"Hi"}}]}',
                             b'data: {"choices":[{"delta":{"content":" Bedrock"}}]}',
                         ])
@@ -1046,22 +1058,23 @@ class TestSSENormalization:
         assert '[DONE]' in chunks[-1]
 
     def test_bedrock_stream_error_chunked(self, monkeypatch):
-        class _Client:
+
+             class _Client:
             def __enter__(self):
-                return self
+                             return self
             def __exit__(self, exc_type, exc, tb):
-                return False
+                             return False
             def stream(self, method, url, *, headers=None, json=None):
-                class _Resp:
+                             class _Resp:
                     status_code = 200
                     def raise_for_status(self):
-                        return None
+                                             return None
                     def __enter__(self):
-                        return self
+                                             return self
                     def __exit__(self, exc_type, exc, tb):
-                        return False
+                                             return False
                     def iter_lines(self):
-                        raise RuntimeError('boom')
+                                             raise RuntimeError('boom')
                 return _Resp()
         monkeypatch.setattr(
             "tldw_Server_API.app.core.LLM_Calls.providers.bedrock_adapter.http_client_factory",
@@ -1076,24 +1089,25 @@ class TestSSENormalization:
             ))
 
     def test_gemini_stream_error_chunked(self, monkeypatch):
-        class _Client:
+
+             class _Client:
             def __enter__(self):
-                return self
+                             return self
             def __exit__(self, exc_type, exc, tb):
-                return False
+                             return False
             def stream(self, method, url, *, headers=None, json=None):
-                class _Resp:
+                             class _Resp:
                     status_code = 200
                     def raise_for_status(self):
-                        return None
+                                             return None
                     def __enter__(self):
-                        return self
+                                             return self
                     def __exit__(self, exc_type, exc, tb):
-                        return False
+                                             return False
                     def iter_lines(self):
-                        raise RuntimeError('boom')
+                                             raise RuntimeError('boom')
                     def close(self):
-                        return None
+                                             return None
                 return _Resp()
         monkeypatch.setattr(
             "tldw_Server_API.app.core.LLM_Calls.providers.google_adapter.http_client_factory",
@@ -1110,27 +1124,28 @@ class TestSSENormalization:
             ))
 
     def test_gemini_stream_finish_reason(self, monkeypatch):
-        class _Client:
+
+             class _Client:
             def __enter__(self):
-                return self
+                             return self
             def __exit__(self, exc_type, exc, tb):
-                return False
+                             return False
             def stream(self, method, url, *, headers=None, json=None):
-                class _Resp:
+                             class _Resp:
                     status_code = 200
                     def raise_for_status(self):
-                        return None
+                                             return None
                     def __enter__(self):
-                        return self
+                                             return self
                     def __exit__(self, exc_type, exc, tb):
-                        return False
+                                             return False
                     def iter_lines(self):
-                        return iter([
+                                             return iter([
                             b'data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]}}]}',
                             b'data: {"candidates":[{"finishReason":"STOP"}]}',
                         ])
                     def close(self):
-                        return None
+                                             return None
                 return _Resp()
         monkeypatch.setattr(
             "tldw_Server_API.app.core.LLM_Calls.providers.google_adapter.http_client_factory",
@@ -1148,22 +1163,23 @@ class TestSSENormalization:
         assert '[DONE]' in chunks[-1]
 
     def test_anthropic_stream_finish_reason(self, monkeypatch):
-        class _Client:
+
+             class _Client:
             def __enter__(self):
-                return self
+                             return self
             def __exit__(self, exc_type, exc, tb):
-                return False
+                             return False
             def stream(self, *args, **kwargs):
-                class _Resp:
+                             class _Resp:
                     status_code = 200
                     def raise_for_status(self):
-                        return None
+                                             return None
                     def __enter__(self):
-                        return self
+                                             return self
                     def __exit__(self, exc_type, exc, tb):
-                        return False
+                                             return False
                     def iter_lines(self):
-                        return iter([
+                                             return iter([
                             'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}',
                             'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}',
                         ])
@@ -1182,27 +1198,28 @@ class TestSSENormalization:
         assert any('[DONE]' in c for c in chunks)
 
     def test_mistral_stream_normalized(self, monkeypatch):
-        class _Client:
+
+             class _Client:
             def __enter__(self):
-                return self
+                             return self
             def __exit__(self, exc_type, exc, tb):
-                return False
+                             return False
             def stream(self, method, url, *, headers=None, json=None):
-                class _Resp:
+                             class _Resp:
                     status_code = 200
                     def raise_for_status(self):
-                        return None
+                                             return None
                     def __enter__(self):
-                        return self
+                                             return self
                     def __exit__(self, exc_type, exc, tb):
-                        return False
+                                             return False
                     def iter_lines(self):
-                        return iter([
+                                             return iter([
                             'data: {"choices":[{"delta":{"content":"Hi"}}]}',
                             'data: {"choices":[{"delta":{"content":", Mistral"}}]}',
                         ])
                     def close(self):
-                        return None
+                                             return None
                 return _Resp()
         monkeypatch.setattr(
             "tldw_Server_API.app.core.LLM_Calls.providers.mistral_adapter.http_client_factory",
@@ -1222,22 +1239,23 @@ class TestSSENormalization:
         assert '[DONE]' in chunks[-1]
 
     def test_openrouter_stream_normalized(self, monkeypatch):
-        class _Client:
+
+             class _Client:
             def __enter__(self):
-                return self
+                             return self
             def __exit__(self, exc_type, exc, tb):
-                return False
+                             return False
             def stream(self, *args, **kwargs):
-                class _Resp:
+                             class _Resp:
                     status_code = 200
                     def raise_for_status(self):
-                        return None
+                                             return None
                     def __enter__(self):
-                        return self
+                                             return self
                     def __exit__(self, exc_type, exc, tb):
-                        return False
+                                             return False
                     def iter_lines(self):
-                        return iter([
+                                             return iter([
                             'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n',
                             'data: {"choices":[{"delta":{"content":" OpenRouter"}}]}\n\n',
                             'data: [DONE]\n\n',
@@ -1258,17 +1276,18 @@ class TestSSENormalization:
         assert chunks[-1].strip() == 'data: [DONE]'
 
     def test_deepseek_stream_normalized(self, monkeypatch):
-        class _Client:
+
+             class _Client:
             def __enter__(self): return self
             def __exit__(self, exc_type, exc, tb): return False
             def stream(self, *args, **kwargs):
-                class _Resp:
+                             class _Resp:
                     status_code = 200
                     def raise_for_status(self): return None
                     def __enter__(self): return self
                     def __exit__(self, exc_type, exc, tb): return False
                     def iter_lines(self):
-                        return iter([
+                                             return iter([
                             'data: {"choices":[{"delta":{"content":"Hello"}}]}',
                             'data: {"choices":[{"delta":{"content":" DeepSeek"}}]}',
                         ])
@@ -1289,17 +1308,18 @@ class TestSSENormalization:
         assert '[DONE]' in chunks[-1]
 
     def test_huggingface_stream_normalized(self, monkeypatch):
-        class _Client:
+
+             class _Client:
             def __enter__(self): return self
             def __exit__(self, exc_type, exc, tb): return False
             def stream(self, *args, **kwargs):
-                class _Resp:
+                             class _Resp:
                     status_code = 200
                     def raise_for_status(self): return None
                     def __enter__(self): return self
                     def __exit__(self, exc_type, exc, tb): return False
                     def iter_lines(self):
-                        return iter([
+                                             return iter([
                             b'data: {"choices":[{"delta":{"content":"Hi"}}]}',
                             b'data: {"choices":[{"delta":{"content":" HF"}}]}',
                         ])
@@ -1320,22 +1340,23 @@ class TestSSENormalization:
         assert '[DONE]' in chunks[-1]
 
     def test_anthropic_stream_includes_done(self, monkeypatch):
-        class _Client:
+
+             class _Client:
             def __enter__(self):
-                return self
+                             return self
             def __exit__(self, exc_type, exc, tb):
-                return False
+                             return False
             def stream(self, *args, **kwargs):
-                class _Resp:
+                             class _Resp:
                     status_code = 200
                     def raise_for_status(self):
-                        return None
+                                             return None
                     def __enter__(self):
-                        return self
+                                             return self
                     def __exit__(self, exc_type, exc, tb):
-                        return False
+                                             return False
                     def iter_lines(self):
-                        return iter([
+                                             return iter([
                             'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello"}}',
                             'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}',
                         ])
@@ -1352,22 +1373,23 @@ class TestSSENormalization:
         assert any('[DONE]' in c for c in chunks)
 
     def test_anthropic_stream_emits_tool_calls(self, monkeypatch):
-        class _Client:
+
+             class _Client:
             def __enter__(self):
-                return self
+                             return self
             def __exit__(self, exc_type, exc, tb):
-                return False
+                             return False
             def stream(self, *args, **kwargs):
-                class _Resp:
+                             class _Resp:
                     status_code = 200
                     def raise_for_status(self):
-                        return None
+                                             return None
                     def __enter__(self):
-                        return self
+                                             return self
                     def __exit__(self, exc_type, exc, tb):
-                        return False
+                                             return False
                     def iter_lines(self):
-                        return iter([
+                                             return iter([
                             'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool_1","name":"lookup","input":{}}}',
                             'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"city\\":\\"Paris\\"}"}}',
                             'data: {"type":"message_delta","delta":{"stop_reason":"tool_use"}}',
@@ -1386,25 +1408,26 @@ class TestSSENormalization:
         assert any('[DONE]' in c for c in chunks)
 
     def test_anthropic_stream_error_chunked(self, monkeypatch):
-        # Simulate a midstream error: adapter.normalize_error should raise a Chat*Error
+
+             # Simulate a midstream error: adapter.normalize_error should raise a Chat*Error
         class _ErrClient:
             def __enter__(self):
-                return self
+                             return self
             def __exit__(self, exc_type, exc, tb):
-                return False
+                             return False
             def stream(self, *args, **kwargs):
-                class _Resp:
+                             class _Resp:
                     def raise_for_status(self):
-                        import httpx
+                                             import httpx
                         req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
                         resp = httpx.Response(400, request=req, content=b'{"error":{"message":"bad"}}')
                         raise httpx.HTTPStatusError("err", request=req, response=resp)
                     def __enter__(self):
-                        return self
+                                             return self
                     def __exit__(self, exc_type, exc, tb):
-                        return False
+                                             return False
                     def iter_lines(self):
-                        return iter([])
+                                             return iter([])
                 return _Resp()
         monkeypatch.setattr(
             "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.http_client_factory",
@@ -1417,20 +1440,21 @@ class TestSSENormalization:
             ))
 
     def test_anthropic_payload_includes_image_url(self, monkeypatch):
-        captured = {"json": None}
+
+             captured = {"json": None}
         class _Client:
             def __enter__(self):
-                return self
+                             return self
             def __exit__(self, exc_type, exc, tb):
-                return False
+                             return False
             def post(self, url, headers=None, json=None):
-                captured["json"] = json
+                             captured["json"] = json
                 class R:
                     status_code = 200
                     def raise_for_status(self):
-                        return None
+                                             return None
                     def json(self):
-                        return {"id": "ok", "type": "message", "usage": {"input_tokens": 1, "output_tokens": 1}}
+                                             return {"id": "ok", "type": "message", "usage": {"input_tokens": 1, "output_tokens": 1}}
                 return R()
         monkeypatch.setattr(
             "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.http_client_factory",
@@ -1450,20 +1474,21 @@ class TestSSENormalization:
         assert image_source['url'] == 'https://example.com/cat.png'
 
     def test_anthropic_payload_includes_base64_image(self, monkeypatch):
-        captured = {"json": None}
+
+             captured = {"json": None}
         class _Client:
             def __enter__(self):
-                return self
+                             return self
             def __exit__(self, exc_type, exc, tb):
-                return False
+                             return False
             def post(self, url, headers=None, json=None):
-                captured["json"] = json
+                             captured["json"] = json
                 class R:
                     status_code = 200
                     def raise_for_status(self):
-                        return None
+                                             return None
                     def json(self):
-                        return {"id": "ok", "type": "message", "usage": {"input_tokens": 1, "output_tokens": 1}}
+                                             return {"id": "ok", "type": "message", "usage": {"input_tokens": 1, "output_tokens": 1}}
                 return R()
         monkeypatch.setattr(
             "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.http_client_factory",
@@ -1484,17 +1509,18 @@ class TestSSENormalization:
         assert image_source['data'] == 'QUJD'
 
     def test_mistral_stream_error_chunked(self, monkeypatch):
-        class _Client:
+
+             class _Client:
             def __enter__(self): return self
             def __exit__(self, exc_type, exc, tb): return False
             def stream(self, *args, **kwargs):
-                class _Resp:
+                             class _Resp:
                     status_code = 200
                     def raise_for_status(self): return None
                     def __enter__(self): return self
                     def __exit__(self, exc_type, exc, tb): return False
                     def iter_lines(self):
-                        raise RuntimeError('boom')
+                                             raise RuntimeError('boom')
                 return _Resp()
         monkeypatch.setattr(
             "tldw_Server_API.app.core.LLM_Calls.providers.mistral_adapter.http_client_factory",
@@ -1509,17 +1535,18 @@ class TestSSENormalization:
             ))
 
     def test_openrouter_stream_error_chunked(self, monkeypatch):
-        class _Client:
+
+             class _Client:
             def __enter__(self): return self
             def __exit__(self, exc_type, exc, tb): return False
             def stream(self, *args, **kwargs):
-                class _Resp:
+                             class _Resp:
                     status_code = 200
                     def raise_for_status(self): return None
                     def __enter__(self): return self
                     def __exit__(self, exc_type, exc, tb): return False
                     def iter_lines(self):
-                        raise RuntimeError('boom')
+                                             raise RuntimeError('boom')
                 return _Resp()
         monkeypatch.setattr(
             "tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter.http_client_factory",
@@ -1548,23 +1575,24 @@ class TestSSENormalization:
         }
 
         def _make_response():
-            class R:
+
+                     class R:
                 status_code = 200
                 def raise_for_status(self):
-                    return None
+                                     return None
                 def json(self):
-                    return copy.deepcopy(response_payload)
+                                     return copy.deepcopy(response_payload)
             return R()
 
         class _Client:
             def __enter__(self):
-                return self
+                             return self
             def __exit__(self, exc_type, exc, tb):
-                return False
+                             return False
             def post(self, *args, **kwargs):
-                return _make_response()
+                             return _make_response()
             def stream(self, *args, **kwargs):
-                raise AssertionError("Streaming not expected in this test.")
+                             raise AssertionError("Streaming not expected in this test.")
         monkeypatch.setattr(
             "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.http_client_factory",
             lambda *a, **k: _Client(),
@@ -1587,14 +1615,16 @@ class TestSSENormalization:
 
 
 def test_openai_defaults_with_blank_config(monkeypatch):
-    captured = {}
+
+
+     captured = {}
 
     class FakeResp:
         status_code = 200
         def raise_for_status(self):
-            return None
+                     return None
         def json(self):
-            return {
+                     return {
                 "choices": [
                     {
                         "index": 0,
@@ -1607,13 +1637,13 @@ def test_openai_defaults_with_blank_config(monkeypatch):
 
     class FakeClient:
         def __init__(self, *_, **kwargs):
-            captured["timeout"] = kwargs.get("timeout")
+                     captured["timeout"] = kwargs.get("timeout")
         def __enter__(self):
-            return self
+                     return self
         def __exit__(self, exc_type, exc, tb):
-            return False
+                     return False
         def post(self, url, headers=None, json=None):
-            captured["url"] = url
+                     captured["url"] = url
             captured["headers"] = headers
             captured["json"] = json
             return FakeResp()
@@ -1639,29 +1669,36 @@ def test_openai_defaults_with_blank_config(monkeypatch):
 
 
 def test_openai_sync_gpt5_payload(monkeypatch):
-    captured = {}
+
+
+     captured = {}
 
     class FakeResp:
         status_code = 200
 
         def raise_for_status(self):
-            return None
+
+                     return None
 
         def json(self):
-            return {"choices": []}
+
+                     return {"choices": []}
 
     class FakeClient:
         def __init__(self, *_, **kwargs):
-            captured["timeout"] = kwargs.get("timeout")
+                     captured["timeout"] = kwargs.get("timeout")
 
         def __enter__(self):
-            return self
+
+                     return self
 
         def __exit__(self, exc_type, exc, tb):
-            return False
+
+                     return False
 
         def post(self, url, headers=None, json=None):
-            captured["url"] = url
+
+                     captured["url"] = url
             captured["headers"] = headers
             captured["json"] = json
             return FakeResp()
@@ -1697,10 +1734,12 @@ async def test_openai_async_streaming_normalized(monkeypatch):
         status_code = 200
 
         def raise_for_status(self):
-            return None
+
+                     return None
 
         def iter_lines(self):
-            yield 'event: completion.delta'
+
+                     yield 'event: completion.delta'
             yield 'data: {"choices":[{"delta":{"content":"Hello"}}]}'
             yield 'id: chunk-1'
             yield 'data: {"choices":[{"delta":{"content":" async"}}]}'
@@ -1709,29 +1748,34 @@ async def test_openai_async_streaming_normalized(monkeypatch):
 
     class FakeStreamCtx:
         def __enter__(self):
-            return FakeResp()
+                     return FakeResp()
 
         def __exit__(self, exc_type, exc, tb):
-            return False
+
+                     return False
 
     class FakeClient:
         def __init__(self, *_, **kwargs):
-            self.timeout = kwargs.get("timeout")
+                     self.timeout = kwargs.get("timeout")
 
         def __enter__(self):
-            return self
+
+                     return self
 
         def __exit__(self, exc_type, exc, tb):
-            return False
+
+                     return False
 
         def stream(self, method, url, *, headers=None, json=None):
-            captured["url"] = url
+
+                     captured["url"] = url
             captured["headers"] = headers
             captured["payload"] = json
             return FakeStreamCtx()
 
     def fake_factory(*args, **kwargs):
-        captured["timeout"] = kwargs.get("timeout")
+
+             captured["timeout"] = kwargs.get("timeout")
         return FakeClient(**kwargs)
 
     monkeypatch.setattr(
@@ -1762,35 +1806,42 @@ async def test_openai_async_non_streaming_preserves_payload(monkeypatch):
     captured: Dict[str, Any] = {}
 
     def fake_config():
-        return {"openai_api": {"api_key": "cfg-key"}}
+
+             return {"openai_api": {"api_key": "cfg-key"}}
 
     class FakeResp:
         status_code = 200
 
         def raise_for_status(self):
-            return None
+
+                     return None
 
         def json(self):
-            return expected_response
+
+                     return expected_response
 
     class FakeClient:
         def __init__(self, *_, **kwargs):
-            self.timeout = kwargs.get("timeout")
+                     self.timeout = kwargs.get("timeout")
 
         def __enter__(self):
-            return self
+
+                     return self
 
         def __exit__(self, exc_type, exc, tb):
-            return False
+
+                     return False
 
         def post(self, url, headers=None, json=None):
-            captured["url"] = url
+
+                     captured["url"] = url
             captured["headers"] = headers
             captured["payload"] = json
             return FakeResp()
 
     def fake_factory(*args, **kwargs):
-        captured["timeout"] = kwargs.get("timeout")
+
+             captured["timeout"] = kwargs.get("timeout")
         return FakeClient(**kwargs)
 
     monkeypatch.setattr(
@@ -1820,7 +1871,8 @@ async def test_openai_async_gpt5_payload(monkeypatch):
     captured: Dict[str, Any] = {}
 
     def fake_config():
-        return {
+
+             return {
             "openai_api": {
                 "api_key": "cfg-key",
                 "model": "gpt-5-mini",
@@ -1834,26 +1886,31 @@ async def test_openai_async_gpt5_payload(monkeypatch):
         status_code = 200
 
         def raise_for_status(self):
-            return None
+
+                     return None
 
         def json(self):
-            return {"choices": []}
+
+                     return {"choices": []}
 
     class FakeClient:
         def __enter__(self):
-            return self
+                     return self
 
         def __exit__(self, exc_type, exc, tb):
-            return False
+
+                     return False
 
         def post(self, url, headers=None, json=None):
-            captured["url"] = url
+
+                     captured["url"] = url
             captured["headers"] = headers
             captured["payload"] = json
             return FakeResp()
 
     def fake_factory(*args, **kwargs):
-        captured["timeout"] = kwargs.get("timeout")
+
+             captured["timeout"] = kwargs.get("timeout")
         return FakeClient()
 
     monkeypatch.setattr(
@@ -1888,35 +1945,42 @@ async def test_groq_async_non_streaming_preserves_payload(monkeypatch):
     captured: Dict[str, Any] = {}
 
     def fake_config():
-        return {"groq_api": {"api_key": "groq-key"}}
+
+             return {"groq_api": {"api_key": "groq-key"}}
 
     class FakeResp:
         status_code = 200
 
         def raise_for_status(self):
-            return None
+
+                     return None
 
         def json(self):
-            return expected_response
+
+                     return expected_response
 
     class FakeClient:
         def __init__(self, *_, **kwargs):
-            self.timeout = kwargs.get("timeout")
+                     self.timeout = kwargs.get("timeout")
 
         def __enter__(self):
-            return self
+
+                     return self
 
         def __exit__(self, exc_type, exc, tb):
-            return False
+
+                     return False
 
         def post(self, url, headers=None, json=None):
-            captured["url"] = url
+
+                     captured["url"] = url
             captured["headers"] = headers
             captured["payload"] = json
             return FakeResp()
 
     def fake_factory(*args, **kwargs):
-        captured["timeout"] = kwargs.get("timeout")
+
+             captured["timeout"] = kwargs.get("timeout")
         return FakeClient(**kwargs)
 
     monkeypatch.setattr(
@@ -1943,42 +2007,49 @@ async def test_groq_async_non_streaming_preserves_payload(monkeypatch):
 @pytest.mark.asyncio
 async def test_openrouter_async_streaming_filters_control_lines(monkeypatch):
     def fake_config():
-        return {"openrouter_api": {"api_key": "router-key"}}
+             return {"openrouter_api": {"api_key": "router-key"}}
 
     class FakeResp:
         status_code = 200
 
         def raise_for_status(self):
-            return None
+
+                     return None
 
         def iter_lines(self):
-            yield "event: ping"
+
+                     yield "event: ping"
             yield 'data: {"choices":[{"delta":{"content":"chunk"}}]}'
             yield "id: 123"
             yield "data: [DONE]"
 
     class FakeStreamCtx:
         def __enter__(self):
-            return FakeResp()
+                     return FakeResp()
 
         def __exit__(self, exc_type, exc, tb):
-            return False
+
+                     return False
 
     class FakeClient:
         def __init__(self, *_, **kwargs):
-            pass
+                     pass
 
         def __enter__(self):
-            return self
+
+                     return self
 
         def __exit__(self, exc_type, exc, tb):
-            return False
+
+                     return False
 
         def stream(self, method, url, *, headers=None, json=None):
-            return FakeStreamCtx()
+
+                     return FakeStreamCtx()
 
     def fake_factory(*args, **kwargs):
-        return FakeClient(**kwargs)
+
+             return FakeClient(**kwargs)
 
     monkeypatch.setattr(
         'tldw_Server_API.app.core.LLM_Calls.chat_calls.load_and_log_configs',
@@ -2006,27 +2077,29 @@ async def test_openrouter_async_streaming_filters_control_lines(monkeypatch):
 
 
 def test_openai_non_streaming_session_closed(monkeypatch):
-    closed = {"v": False}
+
+
+     closed = {"v": False}
 
     class FakeResp:
         status_code = 200
         def raise_for_status(self):
-            return None
+                     return None
         def json(self):
-            return {"choices": [], "id": "test"}
+                     return {"choices": [], "id": "test"}
         def close(self):
-            return None
+                     return None
 
     class FakeClient:
         def __enter__(self):
-            return self
+                     return self
         def __exit__(self, exc_type, exc, tb):
-            closed["v"] = True
+                     closed["v"] = True
             return True
         def post(self, *a, **k):
-            return FakeResp()
+                     return FakeResp()
         def close(self):
-            return None
+                     return None
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.http_client_factory",
@@ -2044,7 +2117,9 @@ def test_openai_non_streaming_session_closed(monkeypatch):
 
 
 def test_cohere_config_fallbacks(monkeypatch):
-    def fake_config():
+
+
+     def fake_config():
         return {
             "cohere_api": {
                 "api_key": "cohere-key",
@@ -2107,7 +2182,9 @@ def test_cohere_config_fallbacks(monkeypatch):
 
 
 def test_google_config_fallbacks(monkeypatch):
-    def fake_config():
+
+
+     def fake_config():
         return {
             "google_api": {
                 "api_key": "google-key",
@@ -2143,11 +2220,11 @@ def test_google_config_fallbacks(monkeypatch):
     captured = {}
     class _Client:
         def __enter__(self):
-            return self
+                     return self
         def __exit__(self, exc_type, exc, tb):
-            return False
+                     return False
         def post(self, url, headers=None, json=None):
-            captured["json"] = json
+                     captured["json"] = json
             return response
 
     monkeypatch.setattr(
@@ -2176,31 +2253,33 @@ def test_google_config_fallbacks(monkeypatch):
 
 
 def test_mistral_stream_session_closed(monkeypatch):
-    closed = {"client": False, "response": False}
+
+
+     closed = {"client": False, "response": False}
 
     class _Client:
         def __enter__(self):
-            return self
+                     return self
         def __exit__(self, exc_type, exc, tb):
-            closed["client"] = True
+                     closed["client"] = True
             return False
         def stream(self, method, url, *, headers=None, json=None):
-            class _Resp:
+                     class _Resp:
                 status_code = 200
                 def raise_for_status(self):
-                    return None
+                                     return None
                 def __enter__(self):
-                    return self
+                                     return self
                 def __exit__(self, exc_type, exc, tb):
-                    closed["response"] = True
+                                     closed["response"] = True
                     return False
                 def iter_lines(self):
-                    return iter([
+                                     return iter([
                         'data: {"choices":[{"delta":{"content":"Hello"}}]}',
                         'data: [DONE]',
                     ])
                 def close(self):
-                    closed["response"] = True
+                                     closed["response"] = True
                     return None
             return _Resp()
 
@@ -2222,7 +2301,9 @@ def test_mistral_stream_session_closed(monkeypatch):
 
 
 def test_zai_http_error_normalized(monkeypatch):
-    session = MagicMock()
+
+
+     session = MagicMock()
     response = MagicMock()
     response.status_code = 429
     response.text = '{"error":{"message":"Rate limit"}}'

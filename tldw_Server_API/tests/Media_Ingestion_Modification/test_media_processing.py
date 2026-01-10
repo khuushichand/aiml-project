@@ -131,7 +131,7 @@ TEST_VIDEO_END_TIME = "00:00:20"
 def client_module_processing(db_instance_session): # Assuming similar DB fixture pattern
     """ TestClient for media processing tests with overrides """
     def override_get_media_db_for_user_processing():
-        yield db_instance_session
+             yield db_instance_session
 
     original_overrides = app.dependency_overrides.copy()
     app.dependency_overrides[get_request_user] = override_get_request_user
@@ -146,7 +146,7 @@ def client_module_processing(db_instance_session): # Assuming similar DB fixture
 
 @pytest.fixture(scope="session")
 def db_instance_session_proc():
-    """Session-scoped temporary database for processing tests."""
+     """Session-scoped temporary database for processing tests."""
     db = None
     try:
         with temp_db() as db:
@@ -158,7 +158,7 @@ def db_instance_session_proc():
 
 @pytest.fixture(scope="function")
 def db_session_proc(db_instance_session_proc):
-     """Function-scoped access to the session DB. No cleanup needed for processing tests."""
+      """Function-scoped access to the session DB. No cleanup needed for processing tests."""
      yield db_instance_session_proc
      # No DB modifications expected in these endpoints, so cleanup might be omitted
      # logger.debug("DB session yield finished for processing test.")
@@ -166,13 +166,13 @@ def db_session_proc(db_instance_session_proc):
 
 @pytest.fixture
 def dummy_headers():
-    """Provides headers required by endpoint signature, even if logic is mocked."""
+     """Provides headers required by endpoint signature, even if logic is mocked."""
     # The actual value doesn't matter because get_request_user is mocked
     return {"token": "dummy_test_token_for_header"}
 
 @pytest.fixture()
 def client(client_user_only):
-    """
+     """
     Use the shared single-user TestClient fixture for processing tests.
 
     This keeps auth and DB wiring consistent with the rest of the suite and
@@ -257,7 +257,8 @@ def check_batch_response(
         expected_errors=None,
         check_results_len=None,
 ):
-    """Helper to check common aspects of the batch response."""
+
+     """Helper to check common aspects of the batch response."""
     if response.status_code != expected_status_code:
         logger.error(f"Expected status {expected_status_code}, got {response.status_code}. Response text: {response.text}")
     assert response.status_code == expected_status_code
@@ -339,7 +340,8 @@ class TestProcessVideos:
     ENDPOINT = "/api/v1/media/process-videos"
 
     def test_process_video_url_success(self, client, dummy_headers):
-        """Test processing a single valid video URL."""
+
+             """Test processing a single valid video URL."""
         skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
         form_data = {
             "urls": [VALID_VIDEO_URL],
@@ -368,7 +370,8 @@ class TestProcessVideos:
         assert result["content"] is not None and len(result["content"]) > 0
 
     def test_process_video_upload_success(self, client, dummy_headers):
-        """Test processing a single valid video file upload."""
+
+             """Test processing a single valid video file upload."""
         skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
         form_data = {
             "perform_analysis": "false",
@@ -392,7 +395,8 @@ class TestProcessVideos:
         assert result["content"] is not None and len(result["content"]) > 0
 
     def test_process_video_multiple_success(self, client, dummy_headers):
-        """Test processing multiple valid inputs (URL and Upload)."""
+
+             """Test processing multiple valid inputs (URL and Upload)."""
         skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
         form_data = {
             "urls": [VALID_VIDEO_URL],
@@ -424,7 +428,8 @@ class TestProcessVideos:
         assert {r["input_ref"] for r in data["results"]} == {VALID_VIDEO_URL, SAMPLE_VIDEO_PATH.name}
 
     def test_process_video_multi_status_mixed(self, client, dummy_headers):
-        """Test processing one valid URL and one invalid URL -> 207."""
+
+             """Test processing one valid URL and one invalid URL -> 207."""
         skip_if_transcription_model_unavailable(TEST_VIDEO_TRANSCRIPTION_MODEL)
         form_data = {
             "urls": [VALID_VIDEO_URL, INVALID_URL],
@@ -465,7 +470,8 @@ class TestProcessVideos:
                or "timed out" in error_result["error"]
 
     def test_process_video_no_input(self, client, dummy_headers):
-        """Test sending request with no URLs or files."""
+
+             """Test sending request with no URLs or files."""
         # Need to send *some* valid form data key for TestClient to not error early
         # Send a default value that doesn't affect processing much
         response = client.post(self.ENDPOINT, data={"perform_analysis": "false"}, headers=dummy_headers)
@@ -474,7 +480,8 @@ class TestProcessVideos:
         assert "No valid media sources supplied" in response.json()["detail"]
 
     def test_process_video_validation_error(self, client, dummy_headers):
-        """Test sending invalid form data (e.g., bad chunk overlap)."""
+
+             """Test sending invalid form data (e.g., bad chunk overlap)."""
         form_data = {
             "urls": [VALID_VIDEO_URL],
             "chunk_size": "100",
@@ -503,7 +510,7 @@ class TestProcessVideos:
 
     @pytest.mark.skip(reason="Analysis requires LLM setup or mocking")
     def test_process_video_with_analysis_and_chunking(self, client, dummy_headers):
-        """Test enabling analysis and chunking (requires setup)."""
+             """Test enabling analysis and chunking (requires setup)."""
         form_data = {
             "urls": [VALID_VIDEO_URL],
             "perform_analysis": "true",
@@ -528,7 +535,8 @@ class TestProcessAudios:
     ENDPOINT = "/api/v1/media/process-audios"
 
     def test_process_audio_url_success_no_analysis_no_chunking(self, client, dummy_headers):
-        form_data = {
+
+             form_data = {
             "urls": [VALID_AUDIO_URL],
             "perform_analysis": "false",
             "perform_chunking": "false"
@@ -571,7 +579,8 @@ class TestProcessAudios:
         # On real audio, check > 0: assert len(result["content"]) > 0
 
     def test_process_audio_upload_success_defaults(self, client, dummy_headers):
-        """Test processing audio file upload with default settings (chunking=True, analysis=True)."""
+
+             """Test processing audio file upload with default settings (chunking=True, analysis=True)."""
         # Requires analysis setup (API keys) or a mock LLM
         pytest.skip("Skipping test requiring analysis until LLM/API config is confirmed/mocked.")
 
@@ -599,7 +608,8 @@ class TestProcessAudios:
         assert result["analysis"] is not None and len(result["analysis"]) > 0 # Expect analysis due to default
 
     def test_process_audio_multi_status_mixed(self, client, dummy_headers):
-        """Test one valid upload and one invalid URL -> 207."""
+
+             """Test one valid upload and one invalid URL -> 207."""
         form_data = {
             "urls": [URL_404], # Use a reliable 404 URL
             "perform_analysis": "false", # Disable analysis for faster test
@@ -637,7 +647,8 @@ class TestProcessAudios:
         assert success_result["chunks"] is not None # Chunking was true
 
     def test_process_audio_upload_success(self, client, dummy_headers):
-        """Test processing a single valid audio file upload."""
+
+             """Test processing a single valid audio file upload."""
         form_data = {"perform_analysis": "false"}
         with open(SAMPLE_AUDIO_PATH, "rb") as f:
             files = {"files": (SAMPLE_AUDIO_PATH.name, f, "audio/mpeg")}
@@ -653,13 +664,15 @@ class TestProcessAudios:
         assert data["results"][0]["content"] is not None and len(data["results"][0]["content"]) > 0
 
     def test_process_audio_no_input(self, client, dummy_headers):
-        """Test sending request with no URLs or files."""
+
+             """Test sending request with no URLs or files."""
         response = client.post(self.ENDPOINT, data={"perform_analysis": "false"}, headers=dummy_headers)
         assert response.status_code == 400
         assert "No valid media sources supplied" in response.json()["detail"]
 
     def test_process_audio_upload_invalid_format_pdf(self, client, dummy_headers):
-        """Test uploading a non-audio file (PDF) which should fail early."""  # <-- Updated docstring slightly
+
+             """Test uploading a non-audio file (PDF) which should fail early."""  # <-- Updated docstring slightly
         form_data = {"perform_analysis": "false"}  # Disable analysis
         with open(SAMPLE_PDF_PATH, "rb") as f:
             files = {"files": (SAMPLE_PDF_PATH.name, f, "application/pdf")}  # Correct MIME for PDFs
@@ -685,7 +698,8 @@ class TestProcessPdfs:
     ENDPOINT = "/api/v1/media/process-pdfs"
 
     def test_process_pdf_url_success(self, client, dummy_headers):
-        """Test processing a single valid PDF URL."""
+
+             """Test processing a single valid PDF URL."""
         # Use pymupdf4llm parser by default
         form_data = {"urls": [VALID_PDF_URL], "perform_analysis": "false"}
         response = client.post(self.ENDPOINT, data=form_data, headers=dummy_headers)
@@ -699,7 +713,7 @@ class TestProcessPdfs:
 
     @pytest.mark.parametrize("pdf_engine_to_test", PDF_ENGINES_TO_TEST)
     def test_process_pdf_upload_success(self, client, dummy_headers, pdf_engine_to_test):
-        """Test processing a single valid PDF file upload with different engines."""
+             """Test processing a single valid PDF file upload with different engines."""
         logger.info(f"Testing PDF upload success with engine: {pdf_engine_to_test}")
         form_data = {
             "perform_analysis": "false",
@@ -722,7 +736,7 @@ class TestProcessPdfs:
 
     @pytest.mark.parametrize("pdf_engine_to_test", PDF_ENGINES_TO_TEST)
     def test_process_pdf_multi_status_mixed(self, client, dummy_headers, pdf_engine_to_test):
-        """Test one valid PDF upload, one invalid URL -> 207 with different engines."""
+             """Test one valid PDF upload, one invalid URL -> 207 with different engines."""
         logger.info(f"Testing PDF multi status mixed with engine: {pdf_engine_to_test}")
         form_data = {
             "urls": [INVALID_URL],
@@ -751,7 +765,8 @@ class TestProcessPdfs:
         assert "Download failed" in error_result["error"] or "Download/preparation failed" in error_result["error"]
 
     def test_process_pdf_no_input(self, client, dummy_headers):
-        response = client.post(self.ENDPOINT, data={"perform_analysis": "false"}, headers=dummy_headers)
+
+             response = client.post(self.ENDPOINT, data={"perform_analysis": "false"}, headers=dummy_headers)
         assert response.status_code == 400
         assert "No valid media sources supplied" in response.json()["detail"]
 
@@ -794,7 +809,7 @@ class TestProcessPdfs:
     @pytest.mark.parametrize("pdf_engine_to_test", PDF_ENGINES_TO_TEST)
     @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib.analyze") # Ensure this path is correct
     def test_process_pdf_with_analysis_and_chunking(self, mock_analyze, client, dummy_headers, pdf_engine_to_test):
-        """Test PDF analysis and chunking with different engines (if analysis relies on engine's text)."""
+             """Test PDF analysis and chunking with different engines (if analysis relies on engine's text)."""
         logger.info(f"Testing PDF with analysis and chunking with engine: {pdf_engine_to_test}")
         mock_analysis_text = f"This is the mocked analysis result for {pdf_engine_to_test}."
         # If analyze is async:
@@ -841,7 +856,8 @@ class TestProcessEbooks:
     # --- Happy Path Tests ---
 
     def test_process_ebook_url_success_defaults(self, client, dummy_headers):
-        """Test processing a single valid EPUB URL with default settings."""
+
+             """Test processing a single valid EPUB URL with default settings."""
         # Defaults: analysis=True, chunking=True, extraction='filtered'
         # Skip analysis for speed if not mocking/configured
         pytest.skip("Skipping analysis test until LLM mock/config confirmed.")
@@ -861,7 +877,8 @@ class TestProcessEbooks:
         assert result["analysis"] is not None and len(result["analysis"]) > 0 # Expect analysis due to default
 
     def test_process_ebook_url_success_no_analysis_no_chunking(self, client, dummy_headers):
-        """Test processing EPUB URL, disabling analysis and chunking."""
+
+             """Test processing EPUB URL, disabling analysis and chunking."""
         form_data = {
             "urls": [VALID_EPUB_URL],
             "perform_analysis": "false",
@@ -880,7 +897,8 @@ class TestProcessEbooks:
         assert result["analysis"] is None # Analysis was disabled
 
     def test_process_ebook_upload_success_defaults(self, client, dummy_headers):
-        """Test processing a single valid EPUB file upload with defaults."""
+
+             """Test processing a single valid EPUB file upload with defaults."""
         # Skip analysis for speed if not mocking/configured
         form_data = {"perform_analysis": "false"}
         with open(SAMPLE_EPUB_PATH, "rb") as f:
@@ -897,7 +915,8 @@ class TestProcessEbooks:
         assert result["chunks"] is not None and len(result["chunks"]) > 0 # Default chunking=True
 
     def test_process_ebook_multiple_success(self, client, dummy_headers):
-        """Test processing multiple valid inputs (URL and Upload)."""
+
+             """Test processing multiple valid inputs (URL and Upload)."""
         form_data = {"urls": [VALID_EPUB_URL], "perform_analysis": "false"}
         with open(SAMPLE_EPUB_PATH, "rb") as f:
             files = {"files": (SAMPLE_EPUB_PATH.name, f, "application/epub+zip")}
@@ -919,7 +938,8 @@ class TestProcessEbooks:
         assert found_url and found_file, "Did not find results for both URL and file"
 
     def test_process_ebook_overrides(self, client, dummy_headers):
-        """Test applying title, author, and keyword overrides."""
+
+             """Test applying title, author, and keyword overrides."""
         test_title = "My Custom Ebook Title"
         test_author = "Testy McTestface"
         test_keywords_str = "test,ebook,override"
@@ -943,7 +963,8 @@ class TestProcessEbooks:
     # --- Error Handling Tests ---
 
     def test_process_ebook_multi_status_mixed(self, client, dummy_headers):
-        """Test processing one valid URL and one invalid URL -> 207."""
+
+             """Test processing one valid URL and one invalid URL -> 207."""
         form_data = {"urls": [VALID_EPUB_URL, INVALID_URL], "perform_analysis": "false"}
         response = client.post(self.ENDPOINT, data=form_data, headers=dummy_headers)
 
@@ -965,14 +986,16 @@ class TestProcessEbooks:
         assert "Download/preparation failed" in error_result["error"] # Check download helper error
 
     def test_process_ebook_no_input(self, client, dummy_headers):
-        """Test sending request with no URLs or files."""
+
+             """Test sending request with no URLs or files."""
         response = client.post(self.ENDPOINT, data={}, headers=dummy_headers)
         # Expect 400 based on _validate_inputs logic
         assert response.status_code == 400, f"Expected 400, got {response.status_code}. Body: {response.text}"
         assert "At least one 'url' in the 'urls' list or one 'file' in the 'files' list must be provided." in response.json()["detail"]
 
     def test_process_ebook_upload_invalid_format(self, client, dummy_headers):
-        """Test uploading a non-EPUB file (e.g., PDF), expecting upload helper rejection."""
+
+             """Test uploading a non-EPUB file (e.g., PDF), expecting upload helper rejection."""
         form_data = {}
         with open(SAMPLE_PDF_PATH, "rb") as f:
             files = {"files": (SAMPLE_PDF_PATH.name, f, "application/pdf")}
@@ -989,7 +1012,8 @@ class TestProcessEbooks:
         assert ".epub" in result["error"]  # And that the allowed extension is mentioned
 
     def test_process_ebook_validation_error_bad_method(self, client, dummy_headers):
-        """Test sending invalid form data (invalid extraction_method)."""
+
+             """Test sending invalid form data (invalid extraction_method)."""
         form_data = {
             "urls": [VALID_EPUB_URL],
             "extraction_method": "invalid_method" # Not in Literal[...]
@@ -1007,7 +1031,7 @@ class TestProcessEbooks:
 
     @pytest.mark.parametrize("method", ['filtered', 'markdown', 'basic'])
     def test_process_ebook_options_extraction_method(self, method, client, dummy_headers):
-        """Test different valid extraction methods."""
+             """Test different valid extraction methods."""
         form_data = {
             "urls": [VALID_EPUB_URL],
             "extraction_method": method,
@@ -1024,7 +1048,7 @@ class TestProcessEbooks:
     # IMPORTANT: Replace "path.to.your_ebook_processing_module.analyze" with the correct path
     @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_Lib.analyze")
     def test_process_ebook_with_analysis_mocked(self, mock_analyze, client):
-        """Test enabling analysis with mocking."""
+             """Test enabling analysis with mocking."""
         mock_analysis_text = "This is the mocked ebook analysis."
         mock_analyze.return_value = mock_analysis_text
 
@@ -1072,7 +1096,7 @@ class TestProcessDocuments:
     # --- Helper to create dummy files ---
     @pytest.fixture(autouse=True, scope="class")
     def create_sample_doc_files(self):
-        """Create dummy files for tests if they don't exist."""
+             """Create dummy files for tests if they don't exist."""
         TEST_MEDIA_DIR.mkdir(exist_ok=True)
         if not SAMPLE_TXT_PATH.exists(): SAMPLE_TXT_PATH.write_text("This is sample text content.\nSecond line.", encoding='utf-8')
         if not SAMPLE_MD_PATH.exists(): SAMPLE_MD_PATH.write_text("# Sample Markdown\n\nThis is *markdown*.\n\n- Item 1\n- Item 2", encoding='utf-8')
@@ -1093,7 +1117,7 @@ class TestProcessDocuments:
         pytest.param(SAMPLE_RTF_PATH, "application/rtf", "rtf", marks=[pytest.mark.skipif(not SAMPLE_RTF_PATH.exists(), reason="sample.rtf not found"), pytest.mark.xfail(reason="Requires pandoc binary installed")])
     ])
     def test_process_doc_upload_various_formats(self, file_path, mime_type, expected_format, client, dummy_headers):
-        """Test uploading various supported document formats."""
+             """Test uploading various supported document formats."""
         form_data = {"perform_analysis": "false"}
         with open(file_path, "rb") as f:
             files = {"files": (file_path.name, f, mime_type)}
@@ -1123,7 +1147,7 @@ class TestProcessDocuments:
         ),
     ])
     def test_process_doc_url_various_formats(self, url, check_content_part, expected_status, expected_error_part, client, dummy_headers):
-        """Test processing various document URLs."""
+             """Test processing various document URLs."""
         form_data = {"urls": [url], "perform_analysis": "false"}
         response = client.post(self.ENDPOINT, data=form_data, headers=dummy_headers)
 
@@ -1186,7 +1210,8 @@ class TestProcessDocuments:
             assert expected_error_part in result["error"]
 
     def test_process_doc_multiple_success(self, client, dummy_headers):
-        """Test processing multiple valid inputs (URL and Upload)."""
+
+             """Test processing multiple valid inputs (URL and Upload)."""
         form_data = {"urls": [VALID_TXT_URL], "perform_analysis": "false"}
         with open(SAMPLE_MD_PATH, "rb") as f:
             files = {"files": (SAMPLE_MD_PATH.name, f, "text/markdown")}
@@ -1205,7 +1230,8 @@ class TestProcessDocuments:
         assert found_url and found_file
 
     def test_process_doc_overrides_and_options(self, client, dummy_headers):
-        """Test title/author/keywords overrides and disabling chunking."""
+
+             """Test title/author/keywords overrides and disabling chunking."""
         test_title = "My Doc Title"
         test_author = "Doc Author"
         test_keywords_str = "doc,test,override"
@@ -1231,7 +1257,8 @@ class TestProcessDocuments:
     # --- Error Handling Tests ---
 
     def test_process_doc_multi_status_mixed(self, client, dummy_headers):
-        """Test processing one valid URL and one invalid URL -> 207."""
+
+             """Test processing one valid URL and one invalid URL -> 207."""
         form_data = {"urls": [VALID_TXT_URL, INVALID_URL], "perform_analysis": "false"}
         response = client.post(self.ENDPOINT, data=form_data, headers=dummy_headers)
 
@@ -1250,13 +1277,15 @@ class TestProcessDocuments:
         assert "Download/preparation failed" in error_result["error"]
 
     def test_process_doc_no_input(self, client, dummy_headers):
-        """Test sending request with no URLs or files."""
+
+             """Test sending request with no URLs or files."""
         response = client.post(self.ENDPOINT, data={}, headers=dummy_headers)
         assert response.status_code == 400
         assert "At least one 'url' in the 'urls' list or one 'file' in the 'files' list must be provided." in response.json()["detail"]
 
     def test_process_doc_upload_invalid_extension(self, client, dummy_headers):
-        """Test uploading a file with an unsupported extension (e.g., epub)."""
+
+             """Test uploading a file with an unsupported extension (e.g., epub)."""
         # Use epub as an example of unsupported by this endpoint's ALLOWED_DOC_EXTENSIONS
         if not SAMPLE_EPUB_PATH.exists(): pytest.skip("sample.epub needed for invalid format test")
         form_data = {}
@@ -1275,7 +1304,7 @@ class TestProcessDocuments:
     @pytest.mark.skipif(not SAMPLE_RTF_PATH.exists(), reason="sample.rtf not found")
     @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files.convert_file", side_effect=ValueError("Mocked pandoc failure"))
     def test_process_doc_rtf_conversion_failure(self, _mock_convert, client):
-        """Test RTF processing when pandoc conversion fails."""
+             """Test RTF processing when pandoc conversion fails."""
         form_data = {"perform_analysis": "false"}
         with open(SAMPLE_RTF_PATH, "rb") as f:
             files = {"files": (SAMPLE_RTF_PATH.name, f, "application/rtf")}
@@ -1289,7 +1318,8 @@ class TestProcessDocuments:
         assert "Mocked pandoc failure" in result["error"] # Check the original mocked message is included
 
     def test_process_doc_validation_error_chunking(self, client, dummy_headers):
-        """Test invalid chunking parameters -> 422."""
+
+             """Test invalid chunking parameters -> 422."""
         form_data = {
             "urls": [VALID_TXT_URL],
             "chunk_size": "50",
@@ -1303,7 +1333,7 @@ class TestProcessDocuments:
     # IMPORTANT: Update patch path if needed
     @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files.analyze")
     def test_process_doc_with_analysis_mocked(self, mock_analyze, client, dummy_headers):
-        """Test enabling analysis with mocking."""
+             """Test enabling analysis with mocking."""
         mock_analysis_text = "This is the mocked document analysis."
         mock_analyze.return_value = mock_analysis_text
 
@@ -1343,7 +1373,8 @@ class TestDocumentVersioningV2:
     # We can add specific tests if create_document_version is used independently.
 
     def test_create_document_version_standalone(self, db_instance):
-        """Test creating subsequent document versions explicitly."""
+
+             """Test creating subsequent document versions explicitly."""
         title = "Doc Version Test"
         content1 = "Content V1"
         # Setup initial media and first version
@@ -1400,7 +1431,7 @@ class TestDocumentVersioningV2:
 
     @pytest.mark.skipif(get_document_version is None, reason="get_document_version not imported")
     def test_get_document_version_latest(self, db_instance):
-        media_id, _, _ = db_instance.add_media_with_keywords(title="GetLatest", content="V1", media_type="doc")
+             media_id, _, _ = db_instance.add_media_with_keywords(title="GetLatest", content="V1", media_type="doc")
         db_instance.create_document_version(media_id=media_id, content="V2 Content", prompt="P2", analysis_content="A2")
 
         result = get_document_version(db_instance=db_instance, media_id=media_id) # version_number=None gets latest active
@@ -1414,7 +1445,7 @@ class TestDocumentVersioningV2:
 
     @pytest.mark.skipif(get_document_version is None, reason="get_document_version not imported")
     def test_get_document_version_specific(self, db_instance):
-        media_id, _, _ = db_instance.add_media_with_keywords(title="GetSpecific", content="V1 Content", prompt="P1", analysis_content="A1", media_type="doc")
+             media_id, _, _ = db_instance.add_media_with_keywords(title="GetSpecific", content="V1 Content", prompt="P1", analysis_content="A1", media_type="doc")
         db_instance.create_document_version(media_id=media_id, content="V2 Content", prompt="P2", analysis_content="A2")
 
         result = get_document_version(db_instance=db_instance, media_id=media_id, version_number=1)
@@ -1428,7 +1459,7 @@ class TestDocumentVersioningV2:
 
     @pytest.mark.skipif(get_document_version is None, reason="get_document_version not imported")
     def test_get_document_version_without_content(self, db_instance):
-        media_id, _, _ = db_instance.add_media_with_keywords(title="GetNoContent", content="V1 Content", prompt="P1", media_type="doc")
+             media_id, _, _ = db_instance.add_media_with_keywords(title="GetNoContent", content="V1 Content", prompt="P1", media_type="doc")
 
         result = get_document_version(db_instance=db_instance, media_id=media_id, version_number=1, include_content=False)
 
@@ -1439,7 +1470,7 @@ class TestDocumentVersioningV2:
 
     @pytest.mark.skipif(get_document_version is None, reason="get_document_version not imported")
     def test_get_document_version_not_found(self, db_instance):
-        media_id, _, _ = db_instance.add_media_with_keywords(title="GetNotFound", content="V1", media_type="doc")
+             media_id, _, _ = db_instance.add_media_with_keywords(title="GetNotFound", content="V1", media_type="doc")
 
         # Specific version doesn't exist
         result_specific = get_document_version(db_instance=db_instance, media_id=media_id, version_number=5)
@@ -1453,7 +1484,7 @@ class TestDocumentVersioningV2:
 
     @pytest.mark.skipif(get_all_document_versions is None, reason="get_all_document_versions not imported")
     def test_get_all_document_versions(self, db_instance):
-        media_id, _, _ = db_instance.add_media_with_keywords(title="GetAll", content="V1", prompt="P1", analysis_content="A1", media_type="doc")
+             media_id, _, _ = db_instance.add_media_with_keywords(title="GetAll", content="V1", prompt="P1", analysis_content="A1", media_type="doc")
         db_instance.create_document_version(media_id=media_id, content="V2", prompt="P2", analysis_content="A2")
         # Create a deleted version - should NOT be returned by default
         deleted_v3_info = db_instance.create_document_version(media_id=media_id, content="V3 - Deleted")
@@ -1478,7 +1509,7 @@ class TestDocumentVersioningV2:
 
     @pytest.mark.skipif(get_all_document_versions is None, reason="get_all_document_versions not imported")
     def test_get_all_document_versions_pagination(self, db_instance):
-        media_id, _, _ = db_instance.add_media_with_keywords(title="GetAllPaginated", content="V1", media_type="doc")
+             media_id, _, _ = db_instance.add_media_with_keywords(title="GetAllPaginated", content="V1", media_type="doc")
         db_instance.create_document_version(media_id=media_id, content="V2")
         db_instance.create_document_version(media_id=media_id, content="V3")
 
@@ -1497,7 +1528,8 @@ class TestDocumentVersioningV2:
     # === Test Deleting Document Versions ===
 
     def test_delete_document_version_success(self, db_instance):
-        media_id, _, _ = db_instance.add_media_with_keywords(title="DeleteVersion", content="V1", media_type="doc")
+
+             media_id, _, _ = db_instance.add_media_with_keywords(title="DeleteVersion", content="V1", media_type="doc")
         v2_info = db_instance.create_document_version(media_id=media_id, content="V2")
         v2_uuid = v2_info['uuid']
         initial_sync_version = get_entity_version(db_instance, "DocumentVersions", v2_uuid) # Should be 1
@@ -1529,7 +1561,8 @@ class TestDocumentVersioningV2:
         assert log_entry['version'] == initial_sync_version + 1
 
     def test_delete_last_document_version_fails(self, db_instance):
-        media_id, media_uuid, _ = db_instance.add_media_with_keywords(title="DeleteLastVersion", content="V1", media_type="doc")
+
+             media_id, media_uuid, _ = db_instance.add_media_with_keywords(title="DeleteLastVersion", content="V1", media_type="doc")
         v1_info = get_document_version(db_instance, media_id=media_id, version_number=1)
         assert v1_info is not None
         v1_uuid = v1_info['uuid']
@@ -1546,7 +1579,8 @@ class TestDocumentVersioningV2:
         assert get_entity_version(db_instance, "DocumentVersions", v1_uuid) == 1 # Still version 1
 
     def test_delete_nonexistent_version_fails(self, db_instance):
-        media_id, _, _ = db_instance.add_media_with_keywords(title="DeleteNonExistent", content="V1", media_type="doc")
+
+             media_id, _, _ = db_instance.add_media_with_keywords(title="DeleteNonExistent", content="V1", media_type="doc")
         non_existent_uuid = db_instance._generate_uuid() # Generate a valid but unused UUID
 
         result = db_instance.soft_delete_document_version(version_uuid=non_existent_uuid)
@@ -1556,7 +1590,8 @@ class TestDocumentVersioningV2:
     # === Test Rollback to Version ===
 
     def test_rollback_to_version_success(self, db_instance):
-        # 1. Setup: Media with two versions
+
+             # 1. Setup: Media with two versions
         title = "Rollback Test"
         content1 = "Version 1 content - Original"
         prompt1 = "Prompt V1"
@@ -1640,7 +1675,8 @@ class TestDocumentVersioningV2:
         assert total_fts_old == 0
 
     def test_rollback_to_nonexistent_version(self, db_instance):
-        media_id, _, _ = db_instance.add_media_with_keywords(title="RollbackNonExistent", content="V1", media_type="doc")
+
+             media_id, _, _ = db_instance.add_media_with_keywords(title="RollbackNonExistent", content="V1", media_type="doc")
         initial_media_version = get_entity_version(db_instance, "Media", _)
 
         result = db_instance.rollback_to_version(media_id=media_id, target_version_number=5) # Version 5 doesn't exist
@@ -1659,7 +1695,8 @@ class TestDocumentVersioningV2:
         assert latest_version['version_number'] == 1
 
     def test_rollback_to_latest_version_fails(self, db_instance):
-        media_id, media_uuid, _ = db_instance.add_media_with_keywords(title="RollbackLatest", content="V1", media_type="doc")
+
+             media_id, media_uuid, _ = db_instance.add_media_with_keywords(title="RollbackLatest", content="V1", media_type="doc")
         db_instance.create_document_version(media_id=media_id, content="V2") # V2 is latest
 
         result = db_instance.rollback_to_version(media_id=media_id, target_version_number=2) # Attempt rollback to latest
@@ -1675,7 +1712,8 @@ class TestDocumentVersioningV2:
         assert latest_version['content'] == "V2"
 
     def test_rollback_target_version_no_content(self, db_instance):
-        media_id, media_uuid, _ = db_instance.add_media_with_keywords(title="RollbackNoContent", content="V1", media_type="doc")
+
+             media_id, media_uuid, _ = db_instance.add_media_with_keywords(title="RollbackNoContent", content="V1", media_type="doc")
         # Manually insert a version with NULL content to simulate the edge case
         v2_uuid = db_instance._generate_uuid()
         with db_instance.transaction() as conn:

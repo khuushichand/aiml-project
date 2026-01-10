@@ -147,12 +147,23 @@ CREATE INDEX IF NOT EXISTS idx_job_dependencies_dep ON job_dependencies(depends_
 - Bulk operations (cancel/retry/reschedule) enforce the same scoping rules as list/detail actions.
 - Job events/audit logs include `owner_user_id` for traceability.
 - Dependency edges are constrained to the same `owner_user_id` and `domain`; cross-owner/domain edges are rejected.
+- Single-user mode: set `owner_user_id = SINGLE_USER_FIXED_ID` for all user-initiated jobs to preserve consistent scoping.
+- System jobs (maintenance, pruning, migrations) use `owner_user_id = "system"` and are admin-only in read/list endpoints.
+- Admin actions on behalf of a user set `owner_user_id` to the target user id and include `actor_user_id` in payload/audit metadata.
+- Migration/backfill jobs must either use the target `owner_user_id` or `"system"`; never leave `owner_user_id` null.
 
 ### 8.8 Storage, Indexing, and Retention
 - Maintain indexes on `(domain, queue, job_type, status, available_at)` and `owner_user_id` to support common queries.
 - `job_dependencies` must index both columns and support fast "all deps completed" checks.
 - Enforce payload size guardrails with a configurable maximum and JSON truncation metrics.
 - Define a retention policy for completed/failed/cancelled jobs (with optional archive) to prevent unbounded growth.
+
+Retention defaults (proposed):
+- Completed jobs: retain 30 days (default `jobs/prune` payload: `older_than_days=30`).
+- Failed/cancelled jobs: retain 60 days.
+- Quarantined jobs: retain 90 days (requires prune support for `quarantined` status).
+- Prune cadence: daily scheduled job (off-peak), using `/api/v1/jobs/prune` with explicit domain/queue scopes.
+- Archive policy: default `JOBS_ARCHIVE_BEFORE_DELETE=false`; enable with `JOBS_ARCHIVE_BEFORE_DELETE=true` and `JOBS_ARCHIVE_COMPRESS=true` in production.
 
 ### 8.9 Endpoint Contract Mapping
 - Provide a mapping table per domain that lists old status/fields and new Jobs equivalents.
@@ -188,6 +199,58 @@ Example rows (current codebase):
 | chatbooks | /api/v1/chatbooks/import/jobs/{job_id} | validating | status | processing | status | map `validating` -> `processing`; job_type=`validate_chatbook` | ImportStatus in chatbook_models.py |
 | prompt_studio | /api/v1/prompt-studio/optimizations/{job_id} | queued | status | queued | status | 1:1 mapping for queued/processing/completed/failed/cancelled | JobStatus in prompt_studio/job_manager.py |
 | prompt_studio | /api/v1/prompt-studio/optimizations/{job_id} | n/a | job_type | n/a | job_type | map evaluation/optimization/generation -> same job_type values | JobType in prompt_studio/job_manager.py |
+
+Expanded mapping matrix (draft, per domain):
+
+Embeddings (public endpoints)
+| Domain | Legacy Endpoint | Legacy Status | Legacy Field | Jobs Status | Jobs Field | Adapter Rule | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| embeddings | /api/v1/media/embeddings/jobs | pending/processing/chunking/embedding/storing/completed/failed/cancelled | status | queued/processing/completed/failed/cancelled | status | map stage statuses -> `processing`; `pending` -> `queued` | list endpoint |
+| embeddings | /api/v1/media/embeddings/jobs/{job_id} | pending/processing/chunking/embedding/storing/completed/failed/cancelled | status | queued/processing/completed/failed/cancelled | status | map stage statuses -> `processing`; `pending` -> `queued` | job_id maps to root job uuid |
+| embeddings | /api/v1/media/embeddings/jobs/{job_id} | n/a | job_id | n/a | uuid | map job_id -> jobs.uuid | preserve legacy job_id format |
+| embeddings | /api/v1/media/embeddings/jobs/{job_id} | n/a | embedding_model | n/a | result.embedding_model | copy from root job result | preserve legacy field |
+| embeddings | /api/v1/media/embeddings/jobs/{job_id} | n/a | embedding_count | n/a | result.embedding_count | copy from root job result | preserve legacy field |
+| embeddings | /api/v1/media/embeddings/jobs/{job_id} | n/a | chunks_processed | n/a | result.chunks_processed | copy from root job result | preserve legacy field |
+| embeddings | /api/v1/media/embeddings/jobs/{job_id} | n/a | error | n/a | error_message | map error_message -> error | preserve legacy field |
+| embeddings | /api/v1/media/embeddings/jobs/{job_id} | n/a | total_chunks | n/a | result.total_chunks | copy from root job result | gated by EMBEDDINGS_JOBS_EXPOSE_PROGRESS |
+| embeddings | /api/v1/media/embeddings/jobs/{job_id} | n/a | progress_percent | n/a | progress_percent | copy from root job | gated by EMBEDDINGS_JOBS_EXPOSE_PROGRESS |
+| embeddings | /api/v1/media/{media_id}/embeddings/status | n/a | has_embeddings | n/a | n/a | no change; read from media DB | Jobs not in this path |
+
+Chatbooks (public endpoints)
+| Domain | Legacy Endpoint | Legacy Status | Legacy Field | Jobs Status | Jobs Field | Adapter Rule | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| chatbooks | /api/v1/chatbooks/export/jobs | pending/in_progress/completed/failed/cancelled/expired | status | queued/processing/completed/failed/cancelled | status | map `pending` -> `queued`; `in_progress` -> `processing`; `expired` -> `cancelled` | list endpoint |
+| chatbooks | /api/v1/chatbooks/export/jobs/{job_id} | pending/in_progress/completed/failed/cancelled/expired | status | queued/processing/completed/failed/cancelled | status | same as export list mapping | job_id maps to jobs.uuid |
+| chatbooks | /api/v1/chatbooks/export/jobs/{job_id} | n/a | download_url | n/a | result.download_url | copy from job result | preserve legacy field |
+| chatbooks | /api/v1/chatbooks/export/jobs/{job_id} | n/a | expires_at | n/a | result.expires_at | copy from job result | preserve legacy field |
+| chatbooks | /api/v1/chatbooks/import/jobs | pending/validating/in_progress/completed/failed/cancelled | status | queued/processing/completed/failed/cancelled | status | map `pending` -> `queued`; `validating`/`in_progress` -> `processing` | list endpoint |
+| chatbooks | /api/v1/chatbooks/import/jobs/{job_id} | pending/validating/in_progress/completed/failed/cancelled | status | queued/processing/completed/failed/cancelled | status | validating -> job_type `validate_chatbook`; in_progress -> `import_chatbook` | job_id maps to jobs.uuid |
+| chatbooks | /api/v1/chatbooks/import/jobs/{job_id} | n/a | items_imported | n/a | result.items_imported | copy from job result | preserve legacy field |
+| chatbooks | /api/v1/chatbooks/import/jobs/{job_id} | n/a | conflicts_found | n/a | result.conflicts_found | copy from job result | preserve legacy field |
+| chatbooks | /api/v1/chatbooks/import/jobs/{job_id} | n/a | progress | n/a | progress_percent | copy from job | preserve legacy field |
+
+Prompt Studio (public endpoints)
+| Domain | Legacy Endpoint | Legacy Status | Legacy Field | Jobs Status | Jobs Field | Adapter Rule | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| prompt_studio | /api/v1/prompt-studio/optimizations/{job_id} | queued/processing/completed/failed/cancelled | status | queued/processing/completed/failed/cancelled | status | 1:1 mapping | job_id maps to jobs.uuid |
+| prompt_studio | /api/v1/prompt-studio/optimizations/{job_id} | n/a | job_type | n/a | job_type | map evaluation/optimization/generation -> same | preserve legacy field |
+| prompt_studio | /api/v1/prompt-studio/optimizations/{optimization_id}/history | queued/processing/completed/failed/cancelled | status | queued/processing/completed/failed/cancelled | status | map legacy job status in timeline entries | job_id maps to jobs.uuid |
+
+### 8.10 Backpressure, Quotas, and Payload Guardrails (Defaults)
+Payload guardrails (defaults):
+- `JOBS_MAX_JSON_BYTES=1048576` (1 MiB) for payload and result JSON blobs.
+- `JOBS_JSON_TRUNCATE=false` in production; if enabled, log truncation metrics and set `result.truncated=true`.
+
+Recommended per-domain quotas (env keys support domain/user overrides; see `JobManager._quota_get`):
+| Domain | JOBS_QUOTA_MAX_QUEUED | JOBS_QUOTA_MAX_INFLIGHT | JOBS_QUOTA_SUBMITS_PER_MIN | Notes |
+| --- | --- | --- | --- | --- |
+| embeddings | 5000 | 200 | 600 | Higher limits to avoid starving media pipelines |
+| chatbooks | 50 | 2 | 20 | Aligns with chatbooks concurrent-job caps |
+| prompt_studio | 500 | 20 | 120 | Suitable for evaluations/optimizations |
+
+Backpressure behavior:
+- On quota exceed, creation returns 429 with `Retry-After` (1s default, configurable).
+- Quotas can be disabled by setting the value to `0` (current JobManager behavior).
 
 ## 9. Design Overview
 ### 9.1 Core Jobs as Canonical Engine
@@ -241,6 +304,19 @@ Example rows (current codebase):
 - Cutover sequence: stop legacy workers, drain or cancel legacy queues, enable Jobs-backed adapters, then start Jobs workers.
 - If regressions are detected, stop Jobs workers, disable Jobs adapters via flags, and restore legacy workers (dev-only fallback).
 - Avoid dual writers; only one system should enqueue or mutate jobs for a domain at a time.
+
+### Cutover Flags and In-Flight Handling (Defaults)
+Proposed flags (env):
+- `EMBEDDINGS_JOBS_BACKEND=redis|jobs` (default `redis` until Phase 2 cutover).
+- `PROMPT_STUDIO_JOBS_BACKEND=prompt_studio|core` (default `prompt_studio` until Phase 2 cutover).
+- `CHATBOOKS_JOBS_BACKEND=core|prompt_studio` (default `core`; keep as-is, no cutover required).
+- `JOBS_ADAPTER_READ_LEGACY_{DOMAIN}=true|false` (default `true` during Phase 1-2; `false` after legacy removal).
+- `JOBS_ADAPTER_WRITE_LEGACY=false` (always; no dual writes).
+
+In-flight handling:
+- Freeze legacy enqueue first (`*_BACKEND=jobs`, `JOBS_ADAPTER_WRITE_LEGACY=false`).
+- Let legacy workers drain for a fixed window (recommend 24h); after that, cancel remaining legacy jobs with `reason="migration_cutover"`.
+- Read-path fallback during transition: if a job id is not found in Jobs and `JOBS_ADAPTER_READ_LEGACY_{DOMAIN}=true`, consult legacy storage and map status; Jobs always take precedence.
 
 ## 11. Risks & Mitigations
 - Risk: Embeddings throughput regresses without Redis streams.

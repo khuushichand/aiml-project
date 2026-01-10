@@ -5,7 +5,7 @@ from httpx import AsyncClient, ASGITransport
 @pytest.mark.asyncio
 async def test_repec_by_handle_success(monkeypatch, paper_search_app):
     def _fake_getref(handle):
-        return {
+             return {
             "id": handle,
             "title": "Sample RePEc Working Paper",
             "authors": "Doe, J.; Roe, R.",
@@ -35,7 +35,7 @@ async def test_repec_by_handle_success(monkeypatch, paper_search_app):
 @pytest.mark.asyncio
 async def test_repec_by_handle_not_found(monkeypatch, paper_search_app):
     def _fake_getref_nf(handle):
-        return None, None
+             return None, None
 
     from tldw_Server_API.app.core.Third_Party import RePEc as _Repec
     monkeypatch.setattr(_Repec, "get_ref_by_handle", _fake_getref_nf)
@@ -51,7 +51,7 @@ async def test_repec_by_handle_not_found(monkeypatch, paper_search_app):
 @pytest.mark.asyncio
 async def test_repec_by_handle_not_configured(monkeypatch, paper_search_app):
     def _fake_getref_err(handle):
-        return None, "RePEc/IDEAS API not configured. Set REPEC_API_CODE to enable this provider."
+             return None, "RePEc/IDEAS API not configured. Set REPEC_API_CODE to enable this provider."
 
     from tldw_Server_API.app.core.Third_Party import RePEc as _Repec
     monkeypatch.setattr(_Repec, "get_ref_by_handle", _fake_getref_err)
@@ -68,7 +68,7 @@ async def test_repec_by_handle_not_configured(monkeypatch, paper_search_app):
 @pytest.mark.asyncio
 async def test_repec_citations_success(monkeypatch, paper_search_app):
     def _fake_citec(handle):
-        return {
+             return {
             "handle": handle,
             "cited_by": 42,
             "cites": 10,
@@ -93,7 +93,7 @@ async def test_repec_citations_success(monkeypatch, paper_search_app):
 @pytest.mark.asyncio
 async def test_repec_citations_not_found(monkeypatch, paper_search_app):
     def _fake_citec_nf(handle):
-        return None, None
+             return None, None
 
     from tldw_Server_API.app.core.Third_Party import RePEc as _Repec
     monkeypatch.setattr(_Repec, "get_citations_plain", _fake_citec_nf)

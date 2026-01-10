@@ -17,7 +17,7 @@ class TestCase:
     """Mock TestCase model."""
     def __init__(self, id=None, name="", description="", inputs=None, expected_outputs=None,
                  tags=None, is_golden=False, metadata=None):
-        self.id = id or str(uuid.uuid4())
+             self.id = id or str(uuid.uuid4())
         self.name = name
         self.description = description
         self.inputs = inputs or {}
@@ -27,7 +27,8 @@ class TestCase:
         self.metadata = metadata or {}
 
     def to_dict(self):
-        return {
+
+             return {
             "id": self.id,
             "name": self.name,
             "description": self.description,
@@ -40,13 +41,13 @@ class TestCase:
 
     @classmethod
     def from_dict(cls, data):
-        return cls(**data)
+             return cls(**data)
 
 class TestResult:
     """Mock TestResult model."""
     def __init__(self, test_case_id, actual_outputs, passed, execution_time,
                  error_message=None, metadata=None):
-        self.test_case_id = test_case_id
+             self.test_case_id = test_case_id
         self.actual_outputs = actual_outputs
         self.passed = passed
         self.execution_time = execution_time
@@ -54,7 +55,8 @@ class TestResult:
         self.metadata = metadata or {}
 
     def calculate_improvement(self):
-        if hasattr(self, 'before_analysis') and hasattr(self, 'after_analysis'):
+
+             if hasattr(self, 'before_analysis') and hasattr(self, 'after_analysis'):
             return self.after_analysis.clarity_score - self.before_analysis.clarity_score
         return 0
 
@@ -66,7 +68,7 @@ class TestTestCaseManager:
 
     @pytest.fixture
     def mock_db(self):
-        """Create a mock database."""
+             """Create a mock database."""
         mock = Mock()
         mock.client_id = "test-client"
         mock.get_connection = Mock()
@@ -86,18 +88,20 @@ class TestTestCaseManager:
 
     @pytest.fixture
     def manager(self, mock_db):
-        """Create a TestCaseManager instance."""
+             """Create a TestCaseManager instance."""
         return TestCaseManager(mock_db)
 
     def test_manager_initialization(self, mock_db):
-        """Test TestCaseManager initialization."""
+
+             """Test TestCaseManager initialization."""
         manager = TestCaseManager(mock_db)
         assert manager.db == mock_db
         assert hasattr(manager, 'test_cases')
         assert hasattr(manager, 'results')
 
     def test_create_test_case(self, manager, mock_db):
-        """Test creating a test case."""
+
+             """Test creating a test case."""
         mock_db.create_test_case.return_value = {
             "id": 1,
             "name": "New Test",
@@ -129,7 +133,8 @@ class TestTestCaseManager:
         assert test_case["name"] == "New Test"
 
     def test_create_duplicate_test_case(self, manager, mock_db):
-        """Test creating duplicate test case raises error."""
+
+             """Test creating duplicate test case raises error."""
         mock_db.create_test_case.side_effect = ConflictError("duplicate")
 
         with pytest.raises(ConflictError):
@@ -142,7 +147,8 @@ class TestTestCaseManager:
             )
 
     def test_get_test_case(self, manager, mock_db):
-        """Test getting a test case."""
+
+             """Test getting a test case."""
         mock_test_case = {
             "id": 1,
             "uuid": "test-uuid",
@@ -165,13 +171,15 @@ class TestTestCaseManager:
         mock_db.get_test_case.assert_called_once_with(1, include_deleted=False)
 
     def test_get_nonexistent_test_case(self, manager, mock_db):
-        """Test getting non-existent test case returns None."""
+
+             """Test getting non-existent test case returns None."""
         mock_db.get_test_case.return_value = None
         test_case = manager.get_test_case(999)
         assert test_case is None
 
     def test_list_test_cases(self, manager, mock_db):
-        """Test listing test cases for a project."""
+
+             """Test listing test cases for a project."""
         mock_db.list_test_cases.return_value = [
             {"id": 1, "name": "Test 1", "is_golden": 0},
             {"id": 2, "name": "Test 2", "is_golden": 1},
@@ -197,7 +205,8 @@ class TestTestCaseManager:
         mock_db.list_test_cases.reset_mock()
 
     def test_list_golden_test_cases(self, manager, mock_db):
-        """Test listing only golden test cases."""
+
+             """Test listing only golden test cases."""
         mock_db.list_test_cases.return_value = [
             {"id": 1, "name": "Golden 1", "is_golden": 1}
         ]
@@ -219,7 +228,8 @@ class TestTestCaseManager:
         assert golden_cases[0]["is_golden"] == 1
 
     def test_update_test_case(self, manager, mock_db):
-        """Test updating a test case."""
+
+             """Test updating a test case."""
         mock_db.update_test_case.return_value = {
             "id": 1,
             "name": "New Name",
@@ -235,7 +245,8 @@ class TestTestCaseManager:
         assert updated["name"] == "New Name"
 
     def test_update_nonexistent_test_case(self, manager, mock_db):
-        """Test updating non-existent test case."""
+
+             """Test updating non-existent test case."""
         mock_db.update_test_case.side_effect = InputError("not found")
 
         with pytest.raises(InputError):
@@ -245,7 +256,8 @@ class TestTestCaseManager:
             )
 
     def test_delete_test_case(self, manager, mock_db):
-        """Test deleting a test case."""
+
+             """Test deleting a test case."""
         mock_db.delete_test_case.return_value = True
 
         deleted = manager.delete_test_case(1)
@@ -254,14 +266,16 @@ class TestTestCaseManager:
         assert deleted is True
 
     def test_delete_nonexistent_test_case(self, manager, mock_db):
-        """Test deleting non-existent test case."""
+
+             """Test deleting non-existent test case."""
         mock_db.delete_test_case.return_value = False
 
         deleted = manager.delete_test_case(999)
         assert deleted is False
 
     def test_run_test_case(self, manager, mock_db):
-        """Test running a test case."""
+
+             """Test running a test case."""
         # Mock test case
         test_case = TestCase(
             id="test-1",
@@ -272,7 +286,7 @@ class TestTestCaseManager:
 
         # Mock executor function
         def mock_executor(inputs):
-            return {"y": inputs["x"] * 2}
+                     return {"y": inputs["x"] * 2}
 
         # Mock the run_test_case method
         manager.run_test_case = Mock(return_value=TestResult(
@@ -289,7 +303,8 @@ class TestTestCaseManager:
         assert result.passed is True
 
     def test_run_test_case_with_failure(self, manager, mock_db):
-        """Test running a test case that fails."""
+
+             """Test running a test case that fails."""
         test_case = TestCase(
             id="test-2",
             name="Failing Test",
@@ -298,7 +313,8 @@ class TestTestCaseManager:
         )
 
         def mock_executor(inputs):
-            return {"y": inputs["x"] * 2}
+
+                     return {"y": inputs["x"] * 2}
 
         # Mock the run_test_case method
         manager.run_test_case = Mock(return_value=TestResult(
@@ -314,7 +330,8 @@ class TestTestCaseManager:
         assert result.actual_outputs == {"y": 2}
 
     def test_run_test_case_with_exception(self, manager, mock_db):
-        """Test running a test case that raises exception."""
+
+             """Test running a test case that raises exception."""
         test_case = TestCase(
             id="test-3",
             name="Error Test",
@@ -323,7 +340,8 @@ class TestTestCaseManager:
         )
 
         def mock_executor(inputs):
-            raise ValueError("Execution error")
+
+                     raise ValueError("Execution error")
 
         # Mock the run_test_case method
         manager.run_test_case = Mock(return_value=TestResult(
@@ -340,7 +358,8 @@ class TestTestCaseManager:
         assert "Execution error" in result.error_message
 
     def test_run_batch_tests(self, manager, mock_db):
-        """Test running multiple test cases."""
+
+             """Test running multiple test cases."""
         test_cases = [
             TestCase(id="1", name="Test1", inputs={"x": 1}, expected_outputs={"y": 2}),
             TestCase(id="2", name="Test2", inputs={"x": 2}, expected_outputs={"y": 4}),
@@ -348,7 +367,8 @@ class TestTestCaseManager:
         ]
 
         def mock_executor(inputs):
-            return {"y": inputs["x"] * 2}
+
+                     return {"y": inputs["x"] * 2}
 
         # Mock the run_batch_tests method
         manager.run_batch_tests = Mock(return_value=[
@@ -363,7 +383,8 @@ class TestTestCaseManager:
         assert all(r.passed for r in results)
 
     def test_calculate_test_metrics(self, manager):
-        """Test calculating test metrics."""
+
+             """Test calculating test metrics."""
         results = [
             TestResult("1", {"y": 2}, True, 1.0),
             TestResult("2", {"y": 4}, True, 1.5),
@@ -391,7 +412,8 @@ class TestTestCaseManager:
         assert metrics["total_time"] == 5.0
 
     def test_export_test_cases(self, manager, mock_db):
-        """Test exporting test cases to JSON."""
+
+             """Test exporting test cases to JSON."""
         test_cases = [
             TestCase(id="1", name="Test1", inputs={"x": 1}, expected_outputs={"y": 2}),
             TestCase(id="2", name="Test2", inputs={"x": 2}, expected_outputs={"y": 4}),
@@ -409,7 +431,8 @@ class TestTestCaseManager:
         assert data[1]["inputs"]["x"] == 2
 
     def test_import_test_cases(self, manager, mock_db):
-        """Test importing test cases from JSON."""
+
+             """Test importing test cases from JSON."""
         json_data = json.dumps([
             {
                 "name": "Imported1",
@@ -439,10 +462,11 @@ class TestTestCaseManager:
         assert imported[1].is_golden is True
 
     def test_validate_test_case(self, manager):
-        """Test validating test case data."""
+
+             """Test validating test case data."""
         # Mock the validate_test_case method
         def mock_validate(name, inputs, expected_outputs):
-            if not name:
+                     if not name:
                 return False
             if inputs is None:
                 return False
@@ -475,10 +499,11 @@ class TestTestCaseManager:
         assert invalid2 is False
 
     def test_compare_outputs(self, manager):
-        """Test comparing actual vs expected outputs."""
+
+             """Test comparing actual vs expected outputs."""
         # Mock the compare_outputs method
         def mock_compare(actual, expected):
-            return actual == expected
+                     return actual == expected
 
         manager.compare_outputs = mock_compare
 
@@ -504,10 +529,11 @@ class TestTestCaseManager:
         assert diff_keys is False
 
     def test_fuzzy_compare_outputs(self, manager):
-        """Test fuzzy comparison of outputs."""
+
+             """Test fuzzy comparison of outputs."""
         # Mock the fuzzy_compare_outputs method
         def mock_fuzzy_compare(actual, expected, threshold=0.9):
-            # Simple mock implementation
+                     # Simple mock implementation
             if "text" in actual and "text" in expected:
                 a = actual["text"].lower()
                 b = expected["text"].lower()
@@ -534,7 +560,8 @@ class TestTestCaseManager:
         assert different is False
 
     def test_generate_test_report(self, manager):
-        """Test generating test report."""
+
+             """Test generating test report."""
         results = [
             TestResult("1", {"y": 2}, True, 1.0),
             TestResult("2", {"y": 4}, False, 1.5, "Mismatch"),
@@ -551,7 +578,8 @@ class TestTestCaseManager:
         assert "Pass Rate: 50.0%" in report
 
     def test_save_test_results(self, manager, mock_db):
-        """Test saving test results to database."""
+
+             """Test saving test results to database."""
         results = [
             TestResult("test-1", {"y": 2}, True, 1.0),
             TestResult("test-2", {"y": 4}, False, 1.5, "Error"),
@@ -566,7 +594,8 @@ class TestTestCaseManager:
         manager.save_results.assert_called_once()
 
     def test_load_test_results(self, manager, mock_db):
-        """Test loading test results from database."""
+
+             """Test loading test results from database."""
         # Mock the load_results method
         manager.load_results = Mock(return_value=[
             TestResult("test-1", {"y": 2}, True, 1.0),
@@ -587,13 +616,14 @@ class TestErrorHandling:
 
     @pytest.fixture
     def manager(self):
-        """Create manager with mock database."""
+             """Create manager with mock database."""
         mock_db = Mock()
         mock_db.create_test_case = Mock()
         return TestCaseManager(mock_db)
 
     def test_database_error_handling(self, manager):
-        """Test handling database errors."""
+
+             """Test handling database errors."""
         manager.db.create_test_case.side_effect = DatabaseError("Connection failed")
 
         with pytest.raises(DatabaseError):
@@ -607,7 +637,7 @@ class TestErrorHandling:
 
     @pytest.mark.skip(reason="import_test_cases method not yet implemented")
     def test_json_parsing_error(self, manager):
-        """Test handling JSON parsing errors."""
+             """Test handling JSON parsing errors."""
         invalid_json = "not valid json"
 
         # TODO: Implement import_test_cases method
@@ -615,7 +645,8 @@ class TestErrorHandling:
             manager.import_test_cases(project_id=1, json_data=invalid_json)
 
     def test_validation_error(self, manager):
-        """Test validation error handling."""
+
+             """Test validation error handling."""
         with pytest.raises(InputError):
             manager.create_test_case(
                 project_id=1,
@@ -632,7 +663,8 @@ class TestThreadSafety:
     """Test thread safety of TestCaseManager."""
 
     def test_concurrent_test_execution(self):
-        """Test concurrent test case execution."""
+
+             """Test concurrent test case execution."""
         import threading
         from concurrent.futures import ThreadPoolExecutor
 
@@ -645,7 +677,8 @@ class TestThreadSafety:
         ]
 
         def executor(inputs):
-            import time
+
+                     import time
             time.sleep(0.01)  # Simulate work
             return {"y": inputs["x"] * 2}
 
@@ -653,7 +686,8 @@ class TestThreadSafety:
         lock = threading.Lock()
 
         def run_test(test_case):
-            # Mock result for thread safety test
+
+                     # Mock result for thread safety test
             result = TestResult(
                 test_case_id=test_case.id,
                 actual_outputs={"y": test_case.inputs["x"] * 2},

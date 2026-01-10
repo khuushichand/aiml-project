@@ -27,7 +27,7 @@ async def test_unified_pipeline_with_hyde_merges_results():
 
     class _FakeMultiRetriever:
         def __init__(self, *args, **kwargs):
-            self.retrievers = {DataSource.MEDIA_DB: _FakeMediaRetriever()}
+                     self.retrievers = {DataSource.MEDIA_DB: _FakeMediaRetriever()}
         async def retrieve(self, *args, **kwargs):
             return base_docs
 

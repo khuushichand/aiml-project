@@ -21,14 +21,14 @@ except ImportError as e:
         def close_connection(self): pass
         def get_sync_log_entries(self, *args, **kwargs): return []
         def execute_query(self, *args, **kwargs):
-             class MockCursor:
+                      class MockCursor:
                   rowcount = 0
                   def fetchone(self): return None
                   def fetchall(self): return []
                   def execute(self, *a, **k): pass
              return MockCursor()
         def transaction(self):
-             class MockTransaction:
+                      class MockTransaction:
                   def __enter__(self): return None # Return a mock connection/cursor if needed
                   def __exit__(self, *args): pass
              return MockTransaction()
@@ -38,7 +38,7 @@ except ImportError as e:
 
 @pytest.fixture(scope="function")
 def temp_db_path():
-    """Creates a temporary directory and returns a unique DB path within it."""
+     """Creates a temporary directory and returns a unique DB path within it."""
     temp_dir = tempfile.mkdtemp()
     db_file = Path(temp_dir) / "test_db.sqlite"
     yield str(db_file) # Provide the path to the test function
@@ -47,10 +47,10 @@ def temp_db_path():
 
 @pytest.fixture(scope="function")
 def memory_db_factory():
-    """Factory fixture to create in-memory Database instances."""
+     """Factory fixture to create in-memory Database instances."""
     created_dbs = []
     def _create_db(client_id="test_client"):
-        db = MediaDatabase(db_path=":memory:", client_id=client_id)
+             db = MediaDatabase(db_path=":memory:", client_id=client_id)
         created_dbs.append(db)
         return db
     yield _create_db
@@ -63,7 +63,7 @@ def memory_db_factory():
 
 @pytest.fixture(scope="function")
 def file_db(temp_db_path):
-    """Creates a file-based Database instance using a temporary path."""
+     """Creates a file-based Database instance using a temporary path."""
     db = MediaDatabase(db_path=temp_db_path, client_id="file_client")
     yield db
     db.close_connection() # Ensure connection is closed
@@ -72,7 +72,7 @@ def file_db(temp_db_path):
 
 @pytest.fixture(scope="function")
 def temp_state_file():
-    """Provides a path to a temporary file for sync state."""
+     """Provides a path to a temporary file for sync state."""
     # Use NamedTemporaryFile which handles deletion automatically
     with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix=".json") as tf:
         state_path = tf.name

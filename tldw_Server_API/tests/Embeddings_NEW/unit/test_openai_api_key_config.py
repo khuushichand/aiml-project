@@ -2,10 +2,13 @@ from tldw_Server_API.app.core.Embeddings.Embeddings_Server import Embeddings_Cre
 
 
 def test_openai_modelcfg_api_key_used(monkeypatch, tmp_path):
-    captured = {}
+
+
+     captured = {}
 
     def fake_batch(texts, model, app_config=None, dimensions=None):
-        captured["app_config"] = app_config
+
+             captured["app_config"] = app_config
         return [[0.0] for _ in texts]
 
     monkeypatch.setattr(EC, "get_openai_embeddings_batch", fake_batch)

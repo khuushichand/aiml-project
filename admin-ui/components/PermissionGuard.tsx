@@ -1,8 +1,8 @@
 'use client';
 
 import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from 'react';
-import { useRouter } from 'next/navigation';
-import { api } from '@/lib/api-client';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { api, ApiError } from '@/lib/api-client';
 import { User } from '@/types';
 import { getRoleRank, hasRoleAccess, isAdminRole, isMemberRole, isSuperAdminRole } from '@/lib/roles';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -44,12 +44,20 @@ export function usePermissions() {
   return useContext(PermissionContext);
 }
 
+const normalizeRoleValue = (role: unknown): string =>
+  typeof role === 'string' ? role.trim().toLowerCase() : '';
+
 const normalizeRoles = (userData: User): string[] => {
   const extraRoles = Array.isArray(userData.roles) ? userData.roles : [];
   const combined = [userData.role, ...extraRoles]
-    .map((role) => (typeof role === 'string' ? role.trim() : ''))
+    .map((role) => normalizeRoleValue(role))
     .filter((role) => role.length > 0);
   return Array.from(new Set(combined));
+};
+
+const normalizeRoleInput = (role: string | string[]): string[] => {
+  const roles = Array.isArray(role) ? role : [role];
+  return roles.map((entry) => normalizeRoleValue(entry)).filter((entry) => entry.length > 0);
 };
 
 const getHighestRole = (roles: string[]): string | undefined => {
@@ -118,7 +126,12 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
       }
     } catch (error) {
       console.error('Failed to load user permissions:', error);
-      setAuthError(true);
+      // Only set authError for 401/403 to trigger login redirect.
+      // Other errors (network, 5xx, etc.) should show loading state, not redirect.
+      const status = error instanceof ApiError
+        ? error.status
+        : (error as { response?: { status?: number } })?.response?.status;
+      setAuthError(status === 401 || status === 403);
       setUser(null);
       setPermissions([]);
       setPermissionHints([]);
@@ -140,8 +153,8 @@ export function PermissionProvider({ children }: PermissionProviderProps) {
   };
 
   const hasRole = (role: string | string[]): boolean => {
-    const requiredRoles = Array.isArray(role) ? role : [role];
-    if (roles.length === 0) {
+    const requiredRoles = normalizeRoleInput(role);
+    if (requiredRoles.length === 0 || roles.length === 0) {
       return false;
     }
     return roles.some((userRole) => hasRoleAccess(userRole, requiredRoles));
@@ -197,6 +210,126 @@ interface PermissionGuardProps {
   variant?: 'inline' | 'route';
 }
 
+type GuardDecision = 'loading' | 'unauthenticated' | 'denied' | 'allowed';
+
+const usePermissionGuardDecision = ({
+  permission,
+  permissions: requiredPermissions,
+  requireAll,
+  role,
+  requireAuth,
+}: PermissionGuardProps) => {
+  const {
+    hasPermission,
+    hasAnyPermission,
+    hasAllPermissions,
+    hasRole,
+    loading,
+    user,
+    authError,
+  } = usePermissions();
+
+  if (loading) {
+    return { decision: 'loading' as GuardDecision, user, authError };
+  }
+
+  if ((requireAuth ?? false) && !user) {
+    return { decision: 'unauthenticated' as GuardDecision, user, authError };
+  }
+
+  if (role && !hasRole(role)) {
+    return { decision: 'denied' as GuardDecision, user, authError };
+  }
+
+  if (permission && !hasPermission(permission)) {
+    return { decision: 'denied' as GuardDecision, user, authError };
+  }
+
+  if (requiredPermissions && requiredPermissions.length > 0) {
+    const requireAllPermissions = requireAll ?? false;
+    const hasAccess = requireAllPermissions
+      ? hasAllPermissions(requiredPermissions)
+      : hasAnyPermission(requiredPermissions);
+    if (!hasAccess) {
+      return { decision: 'denied' as GuardDecision, user, authError };
+    }
+  }
+
+  return { decision: 'allowed' as GuardDecision, user, authError };
+};
+
+const renderRouteLoading = () => (
+  <div className="flex h-screen items-center justify-center">
+    <div className="text-muted-foreground">Loading...</div>
+  </div>
+);
+
+const renderRouteDenied = () => (
+  <div className="flex h-screen items-center justify-center p-8">
+    <Alert variant="destructive" className="max-w-md">
+      <AlertDescription>
+        You do not have permission to access this page.
+      </AlertDescription>
+    </Alert>
+  </div>
+);
+
+function RoutePermissionGuard(props: PermissionGuardProps) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const { decision, user, authError } = usePermissionGuardDecision(props);
+  const requireAuth = props.requireAuth ?? false;
+  const shouldAuthRedirect = requireAuth && !user && authError;
+  const search = searchParams?.toString();
+  const redirectTo = search ? `${pathname}?${search}` : pathname;
+
+  useEffect(() => {
+    if (!shouldAuthRedirect) {
+      return;
+    }
+    router.replace(`/login?redirectTo=${encodeURIComponent(redirectTo)}`);
+  }, [router, shouldAuthRedirect, redirectTo]);
+
+  if (decision === 'loading') {
+    return renderRouteLoading();
+  }
+
+  if (decision === 'unauthenticated') {
+    if (authError) {
+      return (
+        <div className="flex h-screen items-center justify-center">
+          <div className="text-muted-foreground">Redirecting to login...</div>
+        </div>
+      );
+    }
+    return renderRouteLoading();
+  }
+
+  if (decision === 'denied') {
+    return renderRouteDenied();
+  }
+
+  return <>{props.children}</>;
+}
+
+function InlinePermissionGuard(props: PermissionGuardProps) {
+  const { decision } = usePermissionGuardDecision(props);
+
+  if (decision === 'loading') {
+    if (props.showLoading) {
+      return <div className="animate-pulse bg-muted h-8 rounded" />;
+    }
+    return null;
+  }
+
+  if (decision === 'unauthenticated' || decision === 'denied') {
+    return <>{props.fallback ?? null}</>;
+  }
+
+  return <>{props.children}</>;
+}
+
 export function PermissionGuard({
   children,
   permission,
@@ -208,99 +341,23 @@ export function PermissionGuard({
   requireAuth = false,
   variant = 'inline',
 }: PermissionGuardProps) {
-  const router = useRouter();
-  const {
-    hasPermission,
-    hasAnyPermission,
-    hasAllPermissions,
-    hasRole,
-    loading,
-    user,
-    authError,
-  } = usePermissions();
-  const shouldAuthRedirect = requireAuth && !user && variant === 'route' && authError;
+  const resolvedProps: PermissionGuardProps = {
+    children,
+    permission,
+    permissions: requiredPermissions,
+    requireAll,
+    role,
+    fallback,
+    showLoading,
+    requireAuth,
+    variant,
+  };
 
-  useEffect(() => {
-    if (!shouldAuthRedirect) {
-      return;
-    }
-    const redirectTo = typeof window !== 'undefined'
-      ? `${window.location.pathname}${window.location.search}`
-      : '/';
-    router.replace(`/login?redirectTo=${encodeURIComponent(redirectTo)}`);
-  }, [router, shouldAuthRedirect]);
-
-  const renderRouteLoading = () => (
-    <div className="flex h-screen items-center justify-center">
-      <div className="text-muted-foreground">Loading...</div>
-    </div>
-  );
-
-  const renderRouteDenied = () => (
-    <div className="flex h-screen items-center justify-center p-8">
-      <Alert variant="destructive" className="max-w-md">
-        <AlertDescription>
-          You do not have permission to access this page.
-        </AlertDescription>
-      </Alert>
-    </div>
-  );
-
-  if (loading) {
-    if (variant === 'route') {
-      return renderRouteLoading();
-    }
-    if (showLoading) {
-      return <div className="animate-pulse bg-muted h-8 rounded" />;
-    }
-    return null;
+  if (variant === 'route') {
+    return <RoutePermissionGuard {...resolvedProps} />;
   }
 
-  if (requireAuth && !user) {
-    if (variant === 'route') {
-      if (authError) {
-        return (
-          <div className="flex h-screen items-center justify-center">
-            <div className="text-muted-foreground">Redirecting to login...</div>
-          </div>
-        );
-      }
-      return renderRouteLoading();
-    }
-    return <>{fallback}</>;
-  }
-
-  // Check role first if specified
-  if (role && !hasRole(role)) {
-    if (variant === 'route') {
-      return renderRouteDenied();
-    }
-    return <>{fallback}</>;
-  }
-
-  // Check single permission
-  if (permission && !hasPermission(permission)) {
-    if (variant === 'route') {
-      return renderRouteDenied();
-    }
-    return <>{fallback}</>;
-  }
-
-  // Check multiple permissions
-  if (requiredPermissions && requiredPermissions.length > 0) {
-    const hasAccess = requireAll
-      ? hasAllPermissions(requiredPermissions)
-      : hasAnyPermission(requiredPermissions);
-
-    if (!hasAccess) {
-      if (variant === 'route') {
-        return renderRouteDenied();
-      }
-      return <>{fallback}</>;
-    }
-  }
-
-  return <>{children}</>;
+  return <InlinePermissionGuard {...resolvedProps} />;
 }
 
 // Higher-order component for protecting entire pages

@@ -6,7 +6,9 @@ from tldw_Server_API.app.core.Web_Scraping.ua_profiles import (
 
 
 def test_build_browser_headers_shape():
-    profile = pick_ua_profile("fixed")
+
+
+     profile = pick_ua_profile("fixed")
     headers = build_browser_headers(profile, accept_lang="en-US,en;q=0.9")
 
     # Core browser header fields
@@ -24,7 +26,9 @@ def test_build_browser_headers_shape():
 
 
 def test_profile_to_impersonate_mapping():
-    profile = pick_ua_profile("fixed")
+
+
+     profile = pick_ua_profile("fixed")
     imp = profile_to_impersonate(profile)
     # For known profiles we expect a non-empty impersonation token
     assert imp is None or isinstance(imp, str)

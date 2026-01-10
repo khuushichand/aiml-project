@@ -9,7 +9,8 @@ class FakeTime:
         self.t = t0
 
     def __call__(self) -> float:
-        return self.t
+
+             return self.t
 
     def advance(self, s: float) -> None:
         self.t += s
@@ -22,7 +23,7 @@ async def test_rg_denials_counter_increments_on_reserve_denial(monkeypatch):
 
     class _Loader:
         def get_policy(self, pid):
-            return {"requests": {"rpm": 1}, "scopes": ["global", "user"]}
+                     return {"requests": {"rpm": 1}, "scopes": ["global", "user"]}
 
     ft = FakeTime(0.0)
     rg = RedisResourceGovernor(policy_loader=_Loader(), time_source=ft, ns="rg_micro_denial")

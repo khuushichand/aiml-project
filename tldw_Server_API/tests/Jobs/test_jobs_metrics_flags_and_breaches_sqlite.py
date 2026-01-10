@@ -7,7 +7,9 @@ from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registr
 
 
 def _reset_env(monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
+
+
+     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
@@ -15,7 +17,9 @@ def _reset_env(monkeypatch, tmp_path):
 
 
 def test_queue_flag_metrics_sqlite(monkeypatch, tmp_path):
-    _reset_env(monkeypatch, tmp_path)
+
+
+     _reset_env(monkeypatch, tmp_path)
     ensure_jobs_tables(tmp_path / "jobs.db")
     reg = get_metrics_registry()
     reg.values["jobs.queue_flag"].clear()
@@ -33,7 +37,9 @@ def test_queue_flag_metrics_sqlite(monkeypatch, tmp_path):
 
 
 def test_sla_breaches_metrics_sqlite(monkeypatch, tmp_path):
-    _reset_env(monkeypatch, tmp_path)
+
+
+     _reset_env(monkeypatch, tmp_path)
     ensure_jobs_tables(tmp_path / "jobs.db")
     reg = get_metrics_registry()
     reg.values["jobs.sla_breaches_total"].clear()

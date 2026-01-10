@@ -34,7 +34,8 @@ class FakePool:
         self.fetchone_calls = 0
 
     def transaction(self):
-        return _DummyTransCtx()
+
+             return _DummyTransCtx()
 
     async def fetchone(self, query: str, *args):
         # Return consistent shape expected by service

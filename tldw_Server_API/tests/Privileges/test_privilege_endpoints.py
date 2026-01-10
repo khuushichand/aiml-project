@@ -14,7 +14,7 @@ from tldw_Server_API.app.core.PrivilegeMaps.service import get_privilege_map_ser
 
 class InMemoryTrendStore:
     def __init__(self) -> None:
-        self.snapshots = []
+             self.snapshots = []
 
     async def record_snapshot(self, *, scope, group_by, catalog_version, generated_at, buckets, team_id=None):  # type: ignore[no-untyped-def]
         self.snapshots.append((scope, group_by, generated_at, buckets, team_id))
@@ -39,7 +39,7 @@ class InMemoryTrendStore:
 
 class FakePrivilegeMapService(PrivilegeMapService):
     def __init__(self) -> None:
-        fake_registry = {
+             fake_registry = {
             "media.ingest": [
                 RouteMetadata(
                     path="/api/v1/media/process",
@@ -154,7 +154,7 @@ class FakePrivilegeMapService(PrivilegeMapService):
 
 @pytest.fixture()
 def privilege_test_client():
-    fake_service = FakePrivilegeMapService()
+     fake_service = FakePrivilegeMapService()
     snapshot_store = PrivilegeSnapshotStore()
     previous_validate_env = os.environ.get("PRIVILEGE_METADATA_VALIDATE_ON_STARTUP")
     os.environ["PRIVILEGE_METADATA_VALIDATE_ON_STARTUP"] = "0"
@@ -253,7 +253,8 @@ def privilege_test_client():
     asyncio.run(seed_snapshots())
 
     def override_current_user():
-        return {"id": "admin-1", "username": "Admin User", "role": "admin", "is_admin": True}
+
+             return {"id": "admin-1", "username": "Admin User", "role": "admin", "is_admin": True}
 
     fastapi_app.dependency_overrides[get_current_active_user] = override_current_user
     fastapi_app.dependency_overrides[get_privilege_map_service] = lambda: fake_service

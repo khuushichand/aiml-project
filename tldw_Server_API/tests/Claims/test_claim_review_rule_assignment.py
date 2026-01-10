@@ -23,7 +23,9 @@ def _seed_db(url: str) -> tuple[MediaDatabase, int, str]:
 
 
 def test_claim_review_rule_assignment_applies():
-    db, media_id, content = _seed_db("https://example.com/article")
+
+
+     db, media_id, content = _seed_db("https://example.com/article")
     try:
         db.create_claim_review_rule(
             user_id="1",
@@ -54,7 +56,9 @@ def test_claim_review_rule_assignment_applies():
 
 
 def test_claim_review_rule_assignment_skips_mismatch():
-    db, media_id, content = _seed_db("https://example.com/article")
+
+
+     db, media_id, content = _seed_db("https://example.com/article")
     try:
         db.create_claim_review_rule(
             user_id="1",

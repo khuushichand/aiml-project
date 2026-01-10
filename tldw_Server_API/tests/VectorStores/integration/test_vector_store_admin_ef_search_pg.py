@@ -14,7 +14,9 @@ pytestmark = pytest.mark.pg_integration
 
 
 def test_admin_set_ef_search_persists_within_session(pgvector_dsn, monkeypatch, admin_user):
-    # Create a single adapter instance to be returned on each call
+
+
+     # Create a single adapter instance to be returned on each call
     cfg = VectorStoreConfig(
         store_type=VectorStoreType.PGVECTOR,
         connection_params={"dsn": pgvector_dsn},

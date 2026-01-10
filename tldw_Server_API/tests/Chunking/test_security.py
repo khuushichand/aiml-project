@@ -22,7 +22,8 @@ class TestXXEProtection:
     """Test protection against XML External Entity (XXE) attacks."""
 
     def test_xxe_file_disclosure_prevented(self):
-        """Test that XXE file disclosure attacks are prevented."""
+
+             """Test that XXE file disclosure attacks are prevented."""
         strategy = XMLChunkingStrategy()
 
         # Classic XXE attack trying to read /etc/passwd
@@ -39,7 +40,8 @@ class TestXXEProtection:
             strategy.chunk(malicious_xml, max_size=100)
 
     def test_xxe_ssrf_prevented(self):
-        """Test that XXE SSRF (Server-Side Request Forgery) attacks are prevented."""
+
+             """Test that XXE SSRF (Server-Side Request Forgery) attacks are prevented."""
         strategy = XMLChunkingStrategy()
 
         # XXE attempting to make HTTP request
@@ -55,7 +57,8 @@ class TestXXEProtection:
             strategy.chunk(malicious_xml, max_size=100)
 
     def test_billion_laughs_dos_prevented(self):
-        """Test that Billion Laughs (XML bomb) DoS attacks are prevented."""
+
+             """Test that Billion Laughs (XML bomb) DoS attacks are prevented."""
         strategy = XMLChunkingStrategy()
 
         # Billion Laughs attack - exponential entity expansion
@@ -72,7 +75,8 @@ class TestXXEProtection:
             strategy.chunk(malicious_xml, max_size=100)
 
     def test_external_dtd_prevented(self):
-        """Test that external DTD loading is prevented."""
+
+             """Test that external DTD loading is prevented."""
         strategy = XMLChunkingStrategy()
 
         # Attempt to load external DTD
@@ -86,7 +90,8 @@ class TestXXEProtection:
             strategy.chunk(malicious_xml, max_size=100)
 
     def test_safe_xml_parsing_works(self):
-        """Test that legitimate XML still parses correctly."""
+
+             """Test that legitimate XML still parses correctly."""
         strategy = XMLChunkingStrategy()
 
         # Safe, legitimate XML
@@ -107,7 +112,8 @@ class TestReDoSProtection:
     """Test protection against Regular Expression Denial of Service (ReDoS) attacks."""
 
     def test_complex_regex_timeout(self):
-        """Test that complex regex patterns have reasonable timeouts."""
+
+             """Test that complex regex patterns have reasonable timeouts."""
         chunker = Chunker()
 
         # Potentially dangerous regex pattern (catastrophic backtracking)
@@ -136,7 +142,8 @@ class TestReDoSProtection:
         assert elapsed_time < 5.0, "Regex processing took too long, possible ReDoS vulnerability"
 
     def test_regex_complexity_limit(self):
-        """Test that overly complex regex patterns are rejected."""
+
+             """Test that overly complex regex patterns are rejected."""
         chunker = Chunker()
 
         # Nested quantifiers that could cause issues
@@ -168,7 +175,8 @@ class TestInputSanitization:
     """Test input sanitization and validation."""
 
     def test_null_byte_injection_prevented(self):
-        """Test that null byte injection is handled safely."""
+
+             """Test that null byte injection is handled safely."""
         chunker = Chunker()
 
         # Text with null bytes that could cause issues
@@ -182,7 +190,8 @@ class TestInputSanitization:
             assert '\x00' not in chunk or chunk.count('\x00') == malicious_text.count('\x00')
 
     def test_unicode_normalization(self):
-        """Test that unicode is properly normalized to prevent bypasses."""
+
+             """Test that unicode is properly normalized to prevent bypasses."""
         chunker = Chunker()
 
         # Different unicode representations of the same character
@@ -200,7 +209,8 @@ class TestInputSanitization:
         assert len(results[0]) == len(results[1])
 
     def test_oversized_input_rejected(self):
-        """Test that oversized inputs are rejected to prevent DoS."""
+
+             """Test that oversized inputs are rejected to prevent DoS."""
         chunker = Chunker()
 
         # Try to create text larger than allowed limit
@@ -210,7 +220,8 @@ class TestInputSanitization:
             chunker.chunk_text(huge_text)
 
     def test_deeply_nested_json_limited(self):
-        """Test that deeply nested JSON has depth limits."""
+
+             """Test that deeply nested JSON has depth limits."""
         from tldw_Server_API.app.core.Chunking.strategies.json_xml import JSONChunkingStrategy
         strategy = JSONChunkingStrategy()
 
@@ -233,7 +244,8 @@ class TestResourceLimits:
     """Test that resource limits are properly enforced."""
 
     def test_memory_limit_enforcement(self):
-        """Test that memory usage is limited."""
+
+             """Test that memory usage is limited."""
         chunker = Chunker()
 
         # Large but within limits
@@ -244,7 +256,8 @@ class TestResourceLimits:
         assert len(result) > 0
 
     def test_concurrent_request_limits(self):
-        """Test that concurrent requests are limited."""
+
+             """Test that concurrent requests are limited."""
         from tldw_Server_API.app.core.Chunking.async_chunker import AsyncChunker
         import asyncio
 
@@ -275,7 +288,8 @@ class TestSecurityHeaders:
     """Test security-related configurations and headers."""
 
     def test_default_safe_configuration(self):
-        """Test that default configuration is secure."""
+
+             """Test that default configuration is secure."""
         chunker = Chunker()
 
         # Check that security features are enabled by default
@@ -283,7 +297,8 @@ class TestSecurityHeaders:
         assert chunker.config.enable_cache is not None  # Cache config exists
 
     def test_configuration_validation(self):
-        """Test that invalid configurations are rejected."""
+
+             """Test that invalid configurations are rejected."""
         from tldw_Server_API.app.core.Chunking.base import ChunkerConfig
 
         # Try to create config with invalid values

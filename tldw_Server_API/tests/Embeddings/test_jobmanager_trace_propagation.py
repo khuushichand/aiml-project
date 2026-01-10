@@ -5,7 +5,7 @@ import pytest
 
 class FakeRedis:
     def __init__(self):
-        self.streams = []
+             self.streams = []
         self.hashes = {}
         self.sets = {}
         self.zsets = {}
@@ -54,7 +54,7 @@ async def test_jobmanager_enqueues_with_trace_id(monkeypatch):
         trace_id = int("1234", 16)  # small hex
     class _Span:
         def get_span_context(self):
-            return _SpanCtx()
+                     return _SpanCtx()
     fake_tm.get_current_span = lambda: _Span()
     monkeypatch.setattr(jm, "get_tracing_manager", lambda: fake_tm)
 

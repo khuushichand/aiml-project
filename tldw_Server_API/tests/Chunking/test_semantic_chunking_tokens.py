@@ -4,7 +4,9 @@ from tldw_Server_API.app.core.Chunking.strategies.semantic import SemanticChunki
 
 
 def test_semantic_chunking_tokens_unit_runs_without_tokenizer():
-    strategy = SemanticChunkingStrategy()
+
+
+     strategy = SemanticChunkingStrategy()
     if not strategy._sklearn_available:
         pytest.skip("scikit-learn not available for semantic chunking")
 

@@ -23,7 +23,7 @@ class TestMediaEndpointContextualIntegration:
 
     @pytest.fixture
     def test_client(self, client_user_only):
-        """Use the shared authenticated TestClient with a stub Media DB."""
+             """Use the shared authenticated TestClient with a stub Media DB."""
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user as dep_get_db
 
         mock_db = Mock(
@@ -58,7 +58,7 @@ class TestMediaEndpointContextualIntegration:
 
     @pytest.fixture
     def auth_headers(self):
-        # Real app runs in single_user mode by default in tests; use test API key
+             # Real app runs in single_user mode by default in tests; use test API key
         api_key = os.getenv("SINGLE_USER_API_KEY", "test-api-key-12345")
         return {
             "X-API-KEY": api_key,
@@ -66,7 +66,8 @@ class TestMediaEndpointContextualIntegration:
         }
 
     def test_add_media_with_contextual_chunking_enabled(self, test_client, auth_headers):
-        """Test adding media with contextual chunking enabled."""
+
+             """Test adding media with contextual chunking enabled."""
         # Prepare request data
         form_data = {
             "media_type": "document",
@@ -98,7 +99,8 @@ class TestMediaEndpointContextualIntegration:
                 assert chunk_options.get('context_window_size') == 750
 
     def test_add_media_with_contextual_chunking_disabled(self, test_client, auth_headers):
-        """Test adding media with contextual chunking explicitly disabled."""
+
+             """Test adding media with contextual chunking explicitly disabled."""
         form_data = {
             "media_type": "document",
             "urls": json.dumps(["https://example.com/test.pdf"]),
@@ -124,7 +126,8 @@ class TestMediaEndpointContextualIntegration:
                 assert chunk_options.get('enable_contextual_chunking') == False
 
     def test_add_media_contextual_defaults_from_config(self, test_client, auth_headers):
-        """Test that contextual chunking uses config defaults when not specified."""
+
+             """Test that contextual chunking uses config defaults when not specified."""
         form_data = {
             "media_type": "document",
             "urls": json.dumps(["https://example.com/test.pdf"]),
@@ -153,7 +156,8 @@ class TestMediaEndpointContextualIntegration:
                 assert chunk_options.get('context_window_size') is None
 
     def test_add_media_file_upload_with_contextual(self, test_client):
-        """Test file upload with contextual chunking options."""
+
+             """Test file upload with contextual chunking options."""
         # Create a test file
         test_content = b"Test document content for contextual chunking"
         test_file = io.BytesIO(test_content)
@@ -203,7 +207,7 @@ class TestMediaEndpointContextualIntegration:
         media_type,
         expected_method
     ):
-        """Test contextual chunking works with different media types."""
+             """Test contextual chunking works with different media types."""
         form_data = {
             "media_type": media_type,
             "urls": json.dumps([f"https://example.com/test.{media_type}"]),
@@ -237,7 +241,8 @@ class TestMediaEndpointContextualIntegration:
                 assert chunk_options.get('method') == expected_method
 
     def test_batch_media_with_contextual_chunking(self, test_client, auth_headers):
-        """Test batch media processing with contextual chunking."""
+
+             """Test batch media processing with contextual chunking."""
         form_data = {
             "media_type": "document",
             "urls": json.dumps([
@@ -256,7 +261,7 @@ class TestMediaEndpointContextualIntegration:
             # Avoid real network: mock smart_download to create a temporary file inside provided temp_dir
             from pathlib import Path
             def _fake_download(url, temp_dir, allowed_extensions=None):
-                p = Path(str(temp_dir)) / (Path(url).name or "test.pdf")
+                             p = Path(str(temp_dir)) / (Path(url).name or "test.pdf")
                 p.write_text("dummy content")
                 return p
             with patch('tldw_Server_API.app.api.v1.endpoints.media.smart_download', side_effect=_fake_download):
@@ -276,7 +281,8 @@ class TestMediaEndpointContextualIntegration:
                 assert chunk_options.get('contextual_llm_model') == "claude-opus-4.1"
 
     def test_contextual_options_validation(self, test_client, auth_headers):
-        """Test validation of contextual chunking options."""
+
+             """Test validation of contextual chunking options."""
         # Test with invalid context_window_size (too small)
         form_data = {
             "media_type": "document",
@@ -307,7 +313,8 @@ class TestMediaEndpointContextualIntegration:
         assert response.status_code == 422
 
     def test_contextual_chunking_preserves_other_options(self, test_client, auth_headers):
-        """Test that contextual options don't interfere with other chunking options."""
+
+             """Test that contextual options don't interfere with other chunking options."""
         form_data = {
             "media_type": "document",
             "urls": json.dumps(["https://example.com/test.pdf"]),

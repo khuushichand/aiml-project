@@ -10,7 +10,9 @@ from tldw_Server_API.app.core.DB_Management.db_migration import (
 
 
 def test_migrations_dir_allows_db_subdir(tmp_path):
-    db_path = tmp_path / "data.db"
+
+
+     db_path = tmp_path / "data.db"
     db_path.touch()
     migrations_dir = tmp_path / "migrations"
 
@@ -20,7 +22,9 @@ def test_migrations_dir_allows_db_subdir(tmp_path):
 
 
 def test_migrations_dir_rejects_outside_db_and_package(tmp_path):
-    db_path = tmp_path / "data.db"
+
+
+     db_path = tmp_path / "data.db"
     db_path.touch()
     outside_dir = tmp_path.parent / "outside_migrations"
     outside_dir.mkdir()
@@ -30,7 +34,9 @@ def test_migrations_dir_rejects_outside_db_and_package(tmp_path):
 
 
 def test_rollback_rejects_backup_outside_backup_dir(tmp_path):
-    db_path = tmp_path / "data.db"
+
+
+     db_path = tmp_path / "data.db"
     with sqlite3.connect(db_path) as conn:
         conn.execute("CREATE TABLE entries (val TEXT)")
         conn.execute("INSERT INTO entries (val) VALUES ('baseline')")
@@ -46,5 +52,7 @@ def test_rollback_rejects_backup_outside_backup_dir(tmp_path):
 
 
 def test_in_memory_db_path_rejected():
-    with pytest.raises(MigrationError):
+
+
+     with pytest.raises(MigrationError):
         DatabaseMigrator(":memory:")

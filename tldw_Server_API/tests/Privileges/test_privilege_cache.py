@@ -16,7 +16,7 @@ from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registr
 
 @pytest.mark.parametrize("backend", ["memory", "redis"])
 def test_distributed_privilege_cache_basic_roundtrip(monkeypatch, backend):
-    monkeypatch.setenv("PRIVILEGE_CACHE_BACKEND", backend)
+     monkeypatch.setenv("PRIVILEGE_CACHE_BACKEND", backend)
     if backend == "redis":
         # Force fallback to in-memory stub when real Redis is unavailable.
         monkeypatch.setenv("PRIVILEGE_CACHE_REDIS_URL", "redis://127.0.0.1:6399/15")
@@ -101,7 +101,9 @@ def test_distributed_privilege_cache_basic_roundtrip(monkeypatch, backend):
 
 
 def test_privilege_cache_ttl_none_does_not_inherit_previous(monkeypatch):
-    monkeypatch.setenv("PRIVILEGE_CACHE_BACKEND", "redis")
+
+
+     monkeypatch.setenv("PRIVILEGE_CACHE_BACKEND", "redis")
     monkeypatch.setenv("PRIVILEGE_CACHE_REDIS_URL", "redis://127.0.0.1:6399/15")
 
     reset_privilege_cache()

@@ -25,7 +25,7 @@ class GroqAdapter(ChatProvider):
         return {
             "supports_streaming": True,
             "supports_tools": True,
-            "default_timeout_seconds": 60,
+            "default_timeout_seconds": 90,
             "max_output_tokens_default": 4096,
         }
 
@@ -171,6 +171,7 @@ class GroqAdapter(ChatProvider):
             get_http_status_from_exception,
             get_http_error_text,
             is_http_status_error,
+            log_http_400_body,
         )
         if is_http_status_error(exc):
             from tldw_Server_API.app.core.Chat.Chat_Deps import (
@@ -187,6 +188,7 @@ class GroqAdapter(ChatProvider):
                 body = resp.json()
             except Exception:
                 body = None
+            log_http_400_body(self.name, exc, body)
             detail = None
             if isinstance(body, dict) and isinstance(body.get("error"), dict):
                 eobj = body["error"]

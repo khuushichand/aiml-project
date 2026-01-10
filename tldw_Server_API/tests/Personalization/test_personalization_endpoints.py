@@ -15,14 +15,15 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture()
 def client_with_personalization_db(tmp_path):
-    db_path = tmp_path / "personalization.db"
+     db_path = tmp_path / "personalization.db"
     db = PersonalizationDB(str(db_path))
 
     async def override_user():
         return User(id=1, username="tester", email=None, is_active=True)
 
     def override_db_dep():
-        return db
+
+             return db
 
     fastapi_app.dependency_overrides[get_request_user] = override_user
     fastapi_app.dependency_overrides[get_personalization_db_for_user] = override_db_dep

@@ -32,7 +32,8 @@ class TestMemoryMonitor:
     """Test the MemoryMonitor class"""
 
     def test_memory_monitor_initialization(self):
-        """Test MemoryMonitor initialization"""
+
+             """Test MemoryMonitor initialization"""
         monitor = MemoryMonitor()
 
         assert monitor.critical_threshold == 90
@@ -41,7 +42,8 @@ class TestMemoryMonitor:
         assert monitor._last_memory_usage is None
 
     def test_get_memory_usage(self):
-        """Test getting memory usage statistics"""
+
+             """Test getting memory usage statistics"""
         monitor = MemoryMonitor()
         usage = monitor.get_memory_usage()
 
@@ -56,7 +58,8 @@ class TestMemoryMonitor:
         assert usage["percent"] <= 100
 
     def test_memory_thresholds(self):
-        """Test memory threshold checks"""
+
+             """Test memory threshold checks"""
         monitor = MemoryMonitor(critical_threshold=50, warning_threshold=30)
 
         # Mock psutil to control memory values
@@ -89,7 +92,8 @@ class TestMemoryMonitor:
             assert monitor.is_memory_warning() is False
 
     def test_memory_check_caching(self):
-        """Test that memory checks are cached"""
+
+             """Test that memory checks are cached"""
         monitor = MemoryMonitor(check_interval=1.0)
 
         with patch('psutil.virtual_memory') as mock_memory:
@@ -118,7 +122,7 @@ class TestHTTPConnectionPool:
 
     @pytest.fixture
     def pool(self):
-        """Create a connection pool instance"""
+             """Create a connection pool instance"""
         return HTTPConnectionPool(max_connections=5, timeout=30.0)
 
     @pytest.mark.asyncio
@@ -201,7 +205,8 @@ class TestStreamingSession:
     """Test the StreamingSession class"""
 
     def test_streaming_session_creation(self):
-        """Test creating a streaming session"""
+
+             """Test creating a streaming session"""
         session = StreamingSession(
             session_id="test123",
             provider="openai"
@@ -215,7 +220,8 @@ class TestStreamingSession:
         assert session.is_active is True
 
     def test_streaming_session_update(self):
-        """Test updating streaming session stats"""
+
+             """Test updating streaming session stats"""
         session = StreamingSession(
             session_id="test123",
             provider="openai"
@@ -239,7 +245,7 @@ class TestStreamingSessionManager:
 
     @pytest.fixture
     def manager(self):
-        """Create a session manager instance"""
+             """Create a session manager instance"""
         return StreamingSessionManager()
 
     @pytest.mark.asyncio
@@ -351,7 +357,7 @@ class TestTTSResourceManager:
 
     @pytest.fixture
     def resource_manager(self):
-        """Create a resource manager instance"""
+             """Create a resource manager instance"""
         config = {
             "max_connections": 10,
             "connection_timeout": 60,
@@ -361,7 +367,8 @@ class TestTTSResourceManager:
         return TTSResourceManager(config)
 
     def test_resource_manager_initialization(self, resource_manager):
-        """Test ResourceManager initialization"""
+
+             """Test ResourceManager initialization"""
         assert resource_manager.connection_pool is not None
         assert resource_manager.memory_monitor is not None
         assert resource_manager.session_manager is not None
@@ -379,7 +386,8 @@ class TestTTSResourceManager:
         assert isinstance(client, httpx.AsyncClient)
 
     def test_register_model(self, resource_manager):
-        """Test registering a model"""
+
+             """Test registering a model"""
         mock_model = Mock()
         mock_cleanup = Mock()
 
@@ -444,7 +452,8 @@ class TestTTSResourceManager:
         assert session_id not in resource_manager.session_manager._sessions
 
     def test_get_resource_statistics(self, resource_manager):
-        """Test getting resource statistics"""
+
+             """Test getting resource statistics"""
         # Register a model
         resource_manager.register_model("test", Mock(), Mock())
 

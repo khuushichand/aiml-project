@@ -44,7 +44,7 @@ def _concat_normalized_chunks(chunks: List[tuple[str, int, int]]) -> str:
     overlap=st.integers(min_value=0, max_value=30),
 )
 def test_chunking_concat_matches_global_normalization(text, ws, chunk_size, overlap):
-    """For any text and config, the concatenation of normalized chunk texts
+     """For any text and config, the concatenation of normalized chunk texts
     must equal the globally-normalized original text (whitespace/Unicode invariant)."""
     w = ChunkingWorker(
         WorkerConfig(
@@ -77,7 +77,7 @@ def test_chunking_concat_matches_global_normalization(text, ws, chunk_size, over
     s=st.text(min_size=0, max_size=200),
 )
 def test_content_hash_normalization_stability(s):
-    """Normalized content hashing should be stable across Unicode forms and whitespace variations."""
+     """Normalized content hashing should be stable across Unicode forms and whitespace variations."""
     w = ChunkingWorker(
         WorkerConfig(
             worker_id="w",

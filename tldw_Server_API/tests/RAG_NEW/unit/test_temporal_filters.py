@@ -11,7 +11,7 @@ _capture = {}
 
 class _RecorderRetriever:
     def __init__(self, *args, **kwargs):
-        self.retrievers = {}
+             self.retrievers = {}
         self.last_config = None
         _capture['instance'] = self
 

@@ -11,7 +11,9 @@ pytestmark = pytest.mark.integration
 
 
 def _install_stub_serve_engine():
-    """Install a stubbed boson_multimodal.serve.serve_engine module into sys.modules."""
+
+
+     """Install a stubbed boson_multimodal.serve.serve_engine module into sys.modules."""
     # Root package
     bm = types.ModuleType("boson_multimodal")
     bm.__path__ = []  # mark as package
@@ -25,13 +27,13 @@ def _install_stub_serve_engine():
 
     class HiggsAudioResponse:
         def __init__(self, audio, sampling_rate=24000, generated_text=""):
-            self.audio = audio
+                     self.audio = audio
             self.sampling_rate = sampling_rate
             self.generated_text = generated_text
 
     class StubEngine:
         def __init__(self, *args, **kwargs):
-            self.args = args
+                     self.args = args
             self.kwargs = kwargs
             self.last_chat_ml_sample = None
             # default attributes referenced by adapter after init
@@ -42,7 +44,8 @@ def _install_stub_serve_engine():
             self.hamming_window_len = 2 * self.audio_num_codebooks * self.samples_per_token
 
         def generate(self, **kwargs):
-            # capture the chat_ml_sample for assertions
+
+                     # capture the chat_ml_sample for assertions
             self.last_chat_ml_sample = kwargs.get("chat_ml_sample")
             audio = np.zeros(8000, dtype=np.float32)
             return HiggsAudioResponse(audio=audio, sampling_rate=24000, generated_text="stub")
@@ -116,10 +119,11 @@ async def test_voice_reference_integration_message_injection():
 
                 # Find assistant message and ensure it contains audio content
                 def _role(m):
-                    return getattr(m, "role", m.get("role") if isinstance(m, dict) else None)
+                                     return getattr(m, "role", m.get("role") if isinstance(m, dict) else None)
 
                 def _content(m):
-                    return getattr(m, "content", m.get("content") if isinstance(m, dict) else None)
+
+                                     return getattr(m, "content", m.get("content") if isinstance(m, dict) else None)
 
                 assistant = next((m for m in messages if _role(m) == "assistant"), None)
                 assert assistant is not None

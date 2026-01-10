@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.Embeddings.worker_config import OrchestrationConfi
 
 class _FakeRedisDrainer:
     def __init__(self):
-        self._zsets = {}  # key -> list[(score, raw)]
+             self._zsets = {}  # key -> list[(score, raw)]
         self._streams = {}  # key -> list[(id, fields)]
 
     async def zrangebyscore(self, key, min='-inf', max='+inf', start=0, num=None):
@@ -38,7 +38,7 @@ class _FakeRedisDrainer:
 
     # Helpers for test setup
     def seed_delayed(self, key, payloads):
-        now_ms = int(time.time() * 1000)
+             now_ms = int(time.time() * 1000)
         items = []
         for i, pl in enumerate(payloads):
             raw = json.dumps(pl)
@@ -48,24 +48,24 @@ class _FakeRedisDrainer:
 
 class _JMStub:
     def __init__(self, client):
-        self.redis_client = client
+             self.redis_client = client
 
 
 class _PoolCfgStub:
     def __init__(self, queue_name):
-        self.queue_name = queue_name
+             self.queue_name = queue_name
 
 
 @pytest.mark.unit
 def test_drainer_moves_due_items_to_live_queue(monkeypatch):
-    orch = WorkerOrchestrator(OrchestrationConfig.default_config())
+     orch = WorkerOrchestrator(OrchestrationConfig.default_config())
     fake = _FakeRedisDrainer()
     # Provide a job manager stub with our fake redis
     orch.job_manager = _JMStub(fake)
     # Provide minimal pool configs so drainer discovers queues
     class _PoolStub:
         def __init__(self, q):
-            self.config = _PoolCfgStub(q)
+                     self.config = _PoolCfgStub(q)
     orch.pools = {
         'embedding': _PoolStub('embeddings:embedding')
     }

@@ -6,11 +6,11 @@ Minimal helper utilities to skip the current pytest test without aborting the wh
 Usage examples:
 - from tests.utils.pytest_helpers import skip_now
   def test_something():
-      skip_now("Feature not available on Windows CI")
+         skip_now("Feature not available on Windows CI")
 
 - from tests.utils.pytest_helpers import skip_unless
   def test_gpu_only():
-      has_gpu = detect_gpu()
+         has_gpu = detect_gpu()
       skip_unless(has_gpu, "Requires GPU to run")
 
 These helpers simply delegate to pytest.skip, which marks the current test as

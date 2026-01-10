@@ -83,7 +83,9 @@ async def test_reclaim_expired_processing_dual_backend(prompt_studio_dual_backen
 
 
 def test_clear_lease_on_completion_dual_backend(prompt_studio_dual_backend_db, monkeypatch):
-    backend_label, db = prompt_studio_dual_backend_db
+
+
+     backend_label, db = prompt_studio_dual_backend_db
 
     monkeypatch.setenv("TLDW_PS_JOB_LEASE_SECONDS", "5")
 
@@ -101,7 +103,9 @@ def test_clear_lease_on_completion_dual_backend(prompt_studio_dual_backend_db, m
 
 
 def test_lease_owner_enforced_dual_backend(prompt_studio_dual_backend_db):
-    backend_label, db = prompt_studio_dual_backend_db
+
+
+     backend_label, db = prompt_studio_dual_backend_db
 
     job = db.create_job("evaluation", 7, payload={})
     jm = JobManager(db, worker_id="ps-worker-test")

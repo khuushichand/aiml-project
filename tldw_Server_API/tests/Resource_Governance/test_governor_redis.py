@@ -12,7 +12,8 @@ class FakeTime:
         self.t = t0
 
     def __call__(self) -> float:
-        return self.t
+
+             return self.t
 
     def advance(self, s: float) -> None:
         self.t += s
@@ -23,7 +24,7 @@ async def test_requests_sliding_window_with_stub_redis():
     # Policies loader stub with simple get_policy
     class _Loader:
         def get_policy(self, pid):
-            return {"requests": {"rpm": 2}, "scopes": ["global", "user"]}
+                     return {"requests": {"rpm": 2}, "scopes": ["global", "user"]}
 
     ft = FakeTime(0.0)
     ns = "rg_t_reqsliding"
@@ -59,7 +60,7 @@ async def test_requests_sliding_window_with_stub_redis():
 async def test_tokens_lua_script_retry_after():
     class _Loader:
         def get_policy(self, pid):
-            return {"tokens": {"per_min": 2, "burst": 1.0}, "scopes": ["global", "user"]}
+                     return {"tokens": {"per_min": 2, "burst": 1.0}, "scopes": ["global", "user"]}
 
     ft = FakeTime(0.0)
     ns = "rg_t_tokens"
@@ -99,7 +100,7 @@ async def test_tokens_lua_script_retry_after():
 async def test_tokens_per_min_zero_is_unbounded_in_reserve():
     class _Loader:
         def get_policy(self, pid):
-            return {"tokens": {"per_min": 0}, "scopes": ["global", "user"]}
+                     return {"tokens": {"per_min": 0}, "scopes": ["global", "user"]}
 
     ft = FakeTime(0.0)
     ns = "rg_t_tok_unbounded"
@@ -157,7 +158,7 @@ async def test_tokens_daily_cap_denial_short_circuits_reserve(monkeypatch, tmp_p
 
     class _Loader:
         def get_policy(self, pid):
-            return {"tokens": {"per_min": 1000000, "daily_cap": 1}, "scopes": ["user"]}
+                     return {"tokens": {"per_min": 1000000, "daily_cap": 1}, "scopes": ["user"]}
 
     rg = RedisResourceGovernor(policy_loader=_Loader(), ns="rg_t_daily_cap")
     req = RGRequest(entity="user:1", categories={"tokens": {"units": 1}}, tags={"policy_id": "p"})
@@ -170,7 +171,7 @@ async def test_tokens_daily_cap_denial_short_circuits_reserve(monkeypatch, tmp_p
 async def test_concurrency_leases_with_zrem_capability():
     class _Loader:
         def get_policy(self, pid):
-            return {"streams": {"max_concurrent": 1, "ttl_sec": 60}, "scopes": ["global", "user"]}
+                     return {"streams": {"max_concurrent": 1, "ttl_sec": 60}, "scopes": ["global", "user"]}
 
     ft = FakeTime(0.0)
     ns = "rg_t_conc"
@@ -201,7 +202,7 @@ async def test_concurrency_leases_with_zrem_capability():
 async def test_concurrency_streams_units_enforced():
     class _Loader:
         def get_policy(self, pid):
-            return {"streams": {"max_concurrent": 2, "ttl_sec": 60}, "scopes": ["user"]}
+                     return {"streams": {"max_concurrent": 2, "ttl_sec": 60}, "scopes": ["user"]}
 
     ft = FakeTime(0.0)
     ns = "rg_t_conc_units"
@@ -239,7 +240,7 @@ async def test_concurrency_streams_units_enforced():
 async def test_per_category_fail_mode_override_on_error(monkeypatch):
     class _Loader:
         def get_policy(self, pid):
-            return {"tokens": {"per_min": 1, "fail_mode": "fail_open"}, "scopes": ["global", "user"]}
+                     return {"tokens": {"per_min": 1, "fail_mode": "fail_open"}, "scopes": ["global", "user"]}
 
     ft = FakeTime(0.0)
     ns = "rg_t_burst"
@@ -276,7 +277,7 @@ async def test_requests_burst_and_retry_after_behavior():
     pytest.xfail("FIXME: stabilize Redis burst retry_after/deny floor determinism")
     class _Loader:
         def get_policy(self, pid):
-            return {"requests": {"rpm": 5}, "scopes": ["global", "user"]}
+                     return {"requests": {"rpm": 5}, "scopes": ["global", "user"]}
 
     ft = FakeTime(0.0)
     ns = "rg_t_burst2"
@@ -318,7 +319,7 @@ async def test_requests_burst_and_retry_after_behavior():
 async def test_requests_steady_rate_no_denials():
     class _Loader:
         def get_policy(self, pid):
-            # 6 rpm → one every 10s should always pass
+                     # 6 rpm → one every 10s should always pass
             return {"requests": {"rpm": 6}, "scopes": ["global", "user"]}
 
     ft = FakeTime(0.0)
@@ -352,7 +353,7 @@ async def test_partial_add_rollback_yields_denial_and_cleans_up_members():
     """Simulate a partial add failure: allow requests but deny tokens; ensure rollback and denial decision."""
     class _Loader:
         def get_policy(self, pid):
-            # 1 rpm and 1 token per minute; both scoped to global+user
+                     # 1 rpm and 1 token per minute; both scoped to global+user
             return {"requests": {"rpm": 1}, "tokens": {"per_min": 1}, "scopes": ["global", "user"]}
 
     ft = FakeTime(0.0)
@@ -399,7 +400,7 @@ async def test_partial_add_rollback_yields_denial_and_cleans_up_members():
 async def test_tokens_refund_allows_additional_within_window():
     class _Loader:
         def get_policy(self, pid):
-            return {"tokens": {"per_min": 3}, "scopes": ["global", "user"]}
+                     return {"tokens": {"per_min": 3}, "scopes": ["global", "user"]}
 
     ft = FakeTime(0.0)
     ns = "rg_t_refund"

@@ -3,7 +3,9 @@ from loguru import logger
 
 
 def test_get_corpus_synonyms_logs_selection_and_does_not_create(tmp_path, monkeypatch):
-    # Ensure no env overrides so defaults are used
+
+
+     # Ensure no env overrides so defaults are used
     monkeypatch.delenv("TLDW_CONFIG_DIR", raising=False)
     monkeypatch.delenv("TLDW_CONFIG_PATH", raising=False)
 
@@ -14,7 +16,8 @@ def test_get_corpus_synonyms_logs_selection_and_does_not_create(tmp_path, monkey
     messages = []
 
     def _sink(msg):
-        try:
+
+             try:
             messages.append(str(msg))
         except Exception:
             pass

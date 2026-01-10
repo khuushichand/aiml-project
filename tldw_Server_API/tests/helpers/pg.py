@@ -74,7 +74,7 @@ def truncate_jobs_table(dsn: str) -> None:
 
 @pytest.fixture(scope="module")
 def pg_schema_and_cleanup():
-    """Shared PG fixture: ensure DB, ensure schema, and truncate jobs table.
+     """Shared PG fixture: ensure DB, ensure schema, and truncate jobs table.
 
     Sets standard test env defaults for reliable behavior.
     """

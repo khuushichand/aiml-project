@@ -10,7 +10,8 @@ from fastapi.testclient import TestClient
 from typing import Dict, Any
 
 def _get_app():
-    from tldw_Server_API.app.main import app as _app
+
+     from tldw_Server_API.app.main import app as _app
     return _app
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
@@ -23,7 +24,7 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHA
 
 @pytest.fixture(scope="function")
 def isolated_db():
-    """Create an isolated database for each test."""
+     """Create an isolated database for each test."""
     import sqlite3
     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
         db_path = tmp.name
@@ -62,7 +63,7 @@ def isolated_db():
 
 @pytest.fixture(scope="function")
 def isolated_client(isolated_db):
-    """Create an isolated test client with its own database."""
+     """Create an isolated test client with its own database."""
     from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 
     # Create a new TestClient instance with isolated overrides
@@ -88,7 +89,7 @@ def isolated_client(isolated_db):
 
 @pytest.fixture(scope="function")
 def mock_api_keys():
-    """Return mock API keys without modifying global state."""
+     """Return mock API keys without modifying global state."""
     return {
         "openai": "sk-mock-key-12345",
         "local-llm": "dummy-key",
@@ -98,7 +99,7 @@ def mock_api_keys():
 
 @pytest.fixture(scope="function")
 def isolated_auth_token():
-    """Generate an isolated auth token for testing."""
+     """Generate an isolated auth token for testing."""
     settings = get_settings()
     if settings.AUTH_MODE == "multi_user":
         # In multi-user mode, create a JWT token
@@ -119,7 +120,7 @@ def isolated_auth_token():
 
 @pytest.fixture(scope="function")
 def mock_llm_response():
-    """Provide a standard mock LLM response."""
+     """Provide a standard mock LLM response."""
     return {
         "id": "chatcmpl-test",
         "object": "chat.completion",
@@ -140,7 +141,7 @@ def mock_llm_response():
 
 @pytest.fixture(scope="function")
 def isolated_chat_endpoint_mocks(mock_api_keys, mock_llm_response):
-    """Create isolated mocks for chat endpoint without global modifications."""
+     """Create isolated mocks for chat endpoint without global modifications."""
     with patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", mock_api_keys), \
          patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_perform, \
          patch("tldw_Server_API.app.core.Chat.chat_orchestrator.chat_api_call") as mock_chat_call:
@@ -161,7 +162,7 @@ def isolated_chat_endpoint_mocks(mock_api_keys, mock_llm_response):
 
 @pytest.fixture(scope="function")
 def unit_test_client(isolated_db, isolated_chat_endpoint_mocks):
-    """Client for unit tests with all external dependencies mocked."""
+     """Client for unit tests with all external dependencies mocked."""
     from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 
     test_app = _get_app()
@@ -179,7 +180,7 @@ def unit_test_client(isolated_db, isolated_chat_endpoint_mocks):
 
     # Add helper method for authenticated requests
     def post_with_auth(url, json_data, auth_token="Bearer sk-mock-key-12345"):
-        # In single-user mode, the API expects X-API-KEY to match settings.
+             # In single-user mode, the API expects X-API-KEY to match settings.
         # Keep legacy 'Token' header for backward compatibility in tests.
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
         _settings = _get_settings()
@@ -208,7 +209,7 @@ def unit_test_client(isolated_db, isolated_chat_endpoint_mocks):
 
 @pytest.fixture(scope="session")
 def mock_server_url():
-    """Return the mock server URL if it's running."""
+     """Return the mock server URL if it's running."""
     import requests
     try:
         response = requests.get("http://localhost:8080/v1/models", timeout=1)
@@ -223,7 +224,7 @@ def mock_server_url():
 
 @pytest.fixture(scope="function")
 def integration_test_client(isolated_db, mock_server_url):
-    """Client for integration tests that need the mock server."""
+     """Client for integration tests that need the mock server."""
     from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 
     test_app = app
@@ -250,7 +251,7 @@ def integration_test_client(isolated_db, mock_server_url):
 
             # Add helper for authenticated requests
             def post_with_auth(url, json_data, auth_token="Bearer sk-mock-key-12345"):
-                from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
+                             from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
                 _settings = _get_settings()
                 headers = {"X-CSRF-Token": csrf_token}
                 try:
@@ -275,7 +276,7 @@ def integration_test_client(isolated_db, mock_server_url):
 
 @pytest.fixture
 def sample_chat_request():
-    """Provide a sample chat request for testing."""
+     """Provide a sample chat request for testing."""
     from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
         ChatCompletionRequest,
         ChatCompletionUserMessageParam
@@ -292,7 +293,7 @@ def sample_chat_request():
 
 @pytest.fixture
 def mock_character():
-    """Provide a mock character for testing."""
+     """Provide a mock character for testing."""
     return {
         "id": 1,
         "name": "TestCharacter",

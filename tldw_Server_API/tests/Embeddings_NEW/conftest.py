@@ -53,7 +53,8 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 # =====================================================================
 
 def pytest_configure(config):
-    """Register custom markers for test categorization."""
+
+     """Register custom markers for test categorization."""
     config.addinivalue_line("markers", "unit: Unit tests with minimal mocking")
     config.addinivalue_line("markers", "integration: Integration tests with real components")
     config.addinivalue_line("markers", "property: Property-based tests")
@@ -67,7 +68,7 @@ def pytest_configure(config):
 
 @pytest.fixture(scope="session")
 def test_env_vars():
-    """Set up test environment variables."""
+     """Set up test environment variables."""
     original_env = os.environ.copy()
 
     # Set test mode
@@ -223,7 +224,7 @@ def test_env_vars():
 
 @pytest.fixture(autouse=True)
 def _sanitize_jsonschema_module(monkeypatch):
-    """Ensure sys.modules['jsonschema'] is hashable (Hypothesis introspects it)."""
+     """Ensure sys.modules['jsonschema'] is hashable (Hypothesis introspects it)."""
     mod = sys.modules.get("jsonschema")
     if mod is not None and not isinstance(mod, types.ModuleType):
         wrapper = types.ModuleType("jsonschema")
@@ -237,7 +238,7 @@ def _sanitize_jsonschema_module(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _patch_hypothesis_local_constants(monkeypatch):
-    """Guard Hypothesis against unhashable stubs left in sys.modules."""
+     """Guard Hypothesis against unhashable stubs left in sys.modules."""
     try:
         from hypothesis.internal.conjecture import providers as _providers  # type: ignore
     except Exception:
@@ -277,7 +278,7 @@ def _patch_hypothesis_local_constants(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _reset_chromadb_shared_state():
-    """Reset shared Chromadb client caches between tests to avoid cross-test leakage."""
+     """Reset shared Chromadb client caches between tests to avoid cross-test leakage."""
     try:
         from chromadb.api import client as _client  # local import to avoid circulars
         _client.SharedSystemClient.clear_system_cache()
@@ -293,7 +294,7 @@ def _reset_chromadb_shared_state():
 
 @pytest.fixture(autouse=True)
 def _chromadb_inmemory_clients(monkeypatch):
-    """Route chromadb Client/PersistentClient calls to the in-memory stub for deterministic tests."""
+     """Route chromadb Client/PersistentClient calls to the in-memory stub for deterministic tests."""
     try:
         import chromadb as _chromadb
     except Exception:
@@ -310,7 +311,8 @@ def _chromadb_inmemory_clients(monkeypatch):
     stub_cache: Dict[str, _InMemoryChromaClient] = {}
 
     def _stub_persistent_client(*args, **kwargs):
-        key = str(kwargs.get("path") or "default")
+
+             key = str(kwargs.get("path") or "default")
         cli = stub_cache.get(key)
         if cli is None:
             cli = _InMemoryChromaClient()
@@ -318,7 +320,8 @@ def _chromadb_inmemory_clients(monkeypatch):
         return cli
 
     def _stub_client(*args, **kwargs):
-        return _InMemoryChromaClient()
+
+             return _InMemoryChromaClient()
 
     monkeypatch.setattr(_chromadb, "PersistentClient", _stub_persistent_client, raising=False)
     monkeypatch.setattr(_chromadb, "Client", _stub_client, raising=False)
@@ -327,7 +330,7 @@ def _chromadb_inmemory_clients(monkeypatch):
 
 @pytest.fixture(scope="session", autouse=True)
 def _chromadb_stub_clients_session():
-    """Global safeguard so unittest-style tests also get the in-memory chroma stub."""
+     """Global safeguard so unittest-style tests also get the in-memory chroma stub."""
     try:
         import chromadb as _chromadb
     except Exception:
@@ -344,10 +347,12 @@ def _chromadb_stub_clients_session():
     original_client = getattr(_chromadb, "Client", None)
 
     def _stub_persistent_client(*args, **kwargs):
-        return _InMemoryChromaClient()
+
+             return _InMemoryChromaClient()
 
     def _stub_client(*args, **kwargs):
-        return _InMemoryChromaClient()
+
+             return _InMemoryChromaClient()
 
     if original_persistent is not None:
         _chromadb.PersistentClient = _stub_persistent_client  # type: ignore[attr-defined]
@@ -367,20 +372,20 @@ def _chromadb_stub_clients_session():
 
 @pytest.fixture
 def sample_embedding() -> List[float]:
-    """Generate a sample embedding vector."""
+     """Generate a sample embedding vector."""
     # Standard 384-dimensional vector for all-MiniLM-L6-v2
     np.random.seed(42)
     return np.random.randn(384).tolist()
 
 @pytest.fixture
 def sample_embeddings_batch() -> List[List[float]]:
-    """Generate a batch of embedding vectors."""
+     """Generate a batch of embedding vectors."""
     np.random.seed(42)
     return [np.random.randn(384).tolist() for _ in range(10)]
 
 @pytest.fixture
 def text_chunks() -> List[str]:
-    """Sample text chunks for embedding."""
+     """Sample text chunks for embedding."""
     return [
         "This is the first chunk of text about machine learning.",
         "The second chunk discusses natural language processing.",
@@ -396,7 +401,7 @@ def text_chunks() -> List[str]:
 
 @pytest.fixture
 def document_metadata() -> List[Dict[str, Any]]:
-    """Sample metadata for documents."""
+     """Sample metadata for documents."""
     return [
         {"source": "doc1.pdf", "page": 1, "chunk_id": 0},
         {"source": "doc1.pdf", "page": 2, "chunk_id": 1},
@@ -416,7 +421,7 @@ def document_metadata() -> List[Dict[str, Any]]:
 
 @pytest.fixture
 def chroma_client():
-    """Return the same per-user Chroma client the API uses."""
+     """Return the same per-user Chroma client the API uses."""
     from tldw_Server_API.app.core.config import settings as app_settings
 
     prev_force_stub = os.environ.get("CHROMADB_FORCE_STUB")
@@ -460,7 +465,7 @@ def chroma_client():
 
 @pytest.fixture
 def chroma_collection(chroma_client):
-    """Create a test collection in ChromaDB."""
+     """Create a test collection in ChromaDB."""
     collection_name = f"test_collection_{uuid.uuid4().hex[:8]}"
     return chroma_client.create_collection(
         name=collection_name,
@@ -469,7 +474,7 @@ def chroma_collection(chroma_client):
 
 @pytest.fixture
 def populated_chroma_collection(chroma_collection, sample_embeddings_batch, text_chunks, document_metadata):
-    """Create a ChromaDB collection with test data."""
+     """Create a ChromaDB collection with test data."""
     ids = [f"doc_{i}" for i in range(len(text_chunks))]
 
     chroma_collection.add(
@@ -483,7 +488,7 @@ def populated_chroma_collection(chroma_collection, sample_embeddings_batch, text
 
 @pytest.fixture
 def chromadb_manager(chroma_client):
-    """Create a ChromaDBManager instance for testing."""
+     """Create a ChromaDBManager instance for testing."""
     manager = ChromaDBManager()
     manager.client = chroma_client
     manager.collection = None
@@ -495,7 +500,7 @@ def chromadb_manager(chroma_client):
 
 @pytest.fixture
 def mock_embedding_worker():
-    """Create a mock embedding worker."""
+     """Create a mock embedding worker."""
     worker = MagicMock()
     worker.process = AsyncMock(return_value=np.random.randn(10, 384).tolist())
     worker.batch_size = 32
@@ -504,7 +509,7 @@ def mock_embedding_worker():
 
 @pytest.fixture
 def mock_chunking_worker():
-    """Create a mock chunking worker."""
+     """Create a mock chunking worker."""
     worker = MagicMock()
     worker.process = AsyncMock(return_value=[
         {"text": "chunk1", "metadata": {"chunk_id": 0}},
@@ -516,7 +521,7 @@ def mock_chunking_worker():
 
 @pytest.fixture
 def mock_storage_worker():
-    """Create a mock storage worker."""
+     """Create a mock storage worker."""
     worker = MagicMock()
     worker.store = AsyncMock(return_value={"status": "success", "stored_count": 10})
     worker.retrieve = AsyncMock(return_value=[])
@@ -524,7 +529,7 @@ def mock_storage_worker():
 
 @pytest.fixture
 def worker_orchestrator(mock_embedding_worker, mock_chunking_worker, mock_storage_worker):
-    """Create a worker orchestrator with mock workers."""
+     """Create a worker orchestrator with mock workers."""
     # Lazy import to avoid import-time errors; fallback to simple object
     try:
         from tldw_Server_API.app.core.Embeddings.worker_orchestrator import WorkerOrchestrator
@@ -543,7 +548,7 @@ def worker_orchestrator(mock_embedding_worker, mock_chunking_worker, mock_storag
 
 @pytest.fixture
 def sample_job_request() -> Dict[str, Any]:
-    """Create a sample job request (dict fallback if schemas unavailable)."""
+     """Create a sample job request (dict fallback if schemas unavailable)."""
     if JobRequest and JobType:
         return JobRequest(
             job_id=str(uuid.uuid4()),
@@ -569,7 +574,7 @@ def sample_job_request() -> Dict[str, Any]:
 
 @pytest.fixture
 def batch_job_requests() -> List[Any]:
-    """Create multiple job requests."""
+     """Create multiple job requests."""
     jobs = []
     for i in range(5):
         if JobRequest and JobType:
@@ -599,7 +604,7 @@ def batch_job_requests() -> List[Any]:
 
 @pytest.fixture
 def job_result() -> Dict[str, Any]:
-    """Create a sample job result."""
+     """Create a sample job result."""
     if JobResult and JobStatus:
         return JobResult(
             job_id=str(uuid.uuid4()),
@@ -626,7 +631,7 @@ def job_result() -> Dict[str, Any]:
 
 @pytest.fixture
 def media_database(test_client) -> MediaDatabase:
-    """Return the shared MediaDatabase used by API routes."""
+     """Return the shared MediaDatabase used by API routes."""
     from tldw_Server_API.app.main import app
 
     db = getattr(app.state, "test_media_db", None)
@@ -642,7 +647,7 @@ def media_database(test_client) -> MediaDatabase:
 
 @pytest.fixture
 def populated_media_database(media_database) -> MediaDatabase:
-    """Create a media database with test data."""
+     """Create a media database with test data."""
     # Add test media items
     for i in range(5):
         media_database.add_media_with_keywords(
@@ -661,7 +666,7 @@ def populated_media_database(media_database) -> MediaDatabase:
 
 @pytest.fixture
 def embedding_models():
-    """Available embedding models configuration."""
+     """Available embedding models configuration."""
     return {
         "sentence-transformers/all-MiniLM-L6-v2": {
             "dimension": 384,
@@ -687,7 +692,7 @@ def embedding_models():
 
 @pytest.fixture
 def chunking_strategies():
-    """Available chunking strategies."""
+     """Available chunking strategies."""
     return {
         "fixed": {
             "chunk_size": 500,
@@ -713,7 +718,7 @@ def chunking_strategies():
 
 @pytest.fixture
 def mock_openai_embedding_response():
-    """Mock OpenAI embedding API response."""
+     """Mock OpenAI embedding API response."""
     return {
         "object": "list",
         "data": [
@@ -732,7 +737,7 @@ def mock_openai_embedding_response():
 
 @pytest.fixture
 def mock_huggingface_embedding_response():
-    """Mock HuggingFace embedding API response."""
+     """Mock HuggingFace embedding API response."""
     return np.random.randn(5, 384).tolist()  # Batch of 5 embeddings
 
 # =====================================================================
@@ -741,7 +746,7 @@ def mock_huggingface_embedding_response():
 
 @pytest.fixture
 def large_text_corpus() -> List[str]:
-    """Generate a large corpus for performance testing."""
+     """Generate a large corpus for performance testing."""
     base_texts = [
         "Machine learning algorithms can identify patterns in data.",
         "Natural language processing enables computers to understand text.",
@@ -760,7 +765,7 @@ def large_text_corpus() -> List[str]:
 
 @pytest.fixture
 def performance_metrics():
-    """Track performance metrics during tests."""
+     """Track performance metrics during tests."""
     return {
         "embedding_time": [],
         "storage_time": [],
@@ -775,7 +780,7 @@ def performance_metrics():
 
 @pytest.fixture
 def mock_circuit_breaker():
-    """Mock circuit breaker for testing."""
+     """Mock circuit breaker for testing."""
     breaker = MagicMock()
     breaker.is_open = False
     breaker.call = AsyncMock(side_effect=lambda func, *args, **kwargs: func(*args, **kwargs))
@@ -785,7 +790,7 @@ def mock_circuit_breaker():
 
 @pytest.fixture
 def mock_rate_limiter():
-    """Mock rate limiter for testing."""
+     """Mock rate limiter for testing."""
     limiter = MagicMock()
     limiter.check_rate_limit = AsyncMock(return_value=True)
     limiter.consume = AsyncMock()
@@ -798,7 +803,7 @@ def mock_rate_limiter():
 
 @pytest.fixture
 def test_client(test_env_vars):
-    """Create a test client for the FastAPI app with DB override to isolate per-user database."""
+     """Create a test client for the FastAPI app with DB override to isolate per-user database."""
     from tldw_Server_API.app.main import app
 
     # Prepare a clean per-user database to avoid repo-level migrations
@@ -829,7 +834,7 @@ def test_client(test_env_vars):
 
 @pytest.fixture
 def auth_headers():
-    """Authentication headers for API requests."""
+     """Authentication headers for API requests."""
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
     settings = get_settings()
@@ -849,7 +854,7 @@ def auth_headers():
 
 @pytest.fixture
 def mock_embedding_backends():
-    """Patch embedding generation calls to avoid external provider dependencies."""
+     """Patch embedding generation calls to avoid external provider dependencies."""
 
     fake_vector = [0.05] * 384
 
@@ -860,7 +865,8 @@ def mock_embedding_backends():
         return [fake_vector.copy() for _ in texts]
 
     def fake_sync_embeddings(texts, *args, **kwargs):
-        payloads = texts if isinstance(texts, list) else [texts]
+
+             payloads = texts if isinstance(texts, list) else [texts]
         return [fake_vector.copy() for _ in payloads]
 
     with patch(
@@ -881,7 +887,7 @@ def mock_embedding_backends():
 
 @pytest.fixture(autouse=True)
 def cleanup_after_test():
-    """Cleanup after each test."""
+     """Cleanup after each test."""
     yield
     # Cleanup any temporary files or resources
     import gc

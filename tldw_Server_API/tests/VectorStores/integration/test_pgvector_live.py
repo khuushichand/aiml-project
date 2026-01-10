@@ -8,7 +8,9 @@ pytestmark = pytest.mark.pg_integration
 
 
 def test_pgvector_live_smoke(pgvector_dsn):
-    from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import VectorStoreConfig, VectorStoreType
+
+
+     from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import VectorStoreConfig, VectorStoreType
     from tldw_Server_API.app.core.RAG.rag_service.vector_stores.pgvector_adapter import PGVectorAdapter
     import asyncio
 

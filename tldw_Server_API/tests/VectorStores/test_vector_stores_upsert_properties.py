@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 
 @pytest.fixture(autouse=True)
 def testing_env(monkeypatch, tmp_path):
-    os.environ['TESTING'] = 'true'
+     os.environ['TESTING'] = 'true'
     from tldw_Server_API.app.core import config as cfg
     monkeypatch.setitem(cfg.settings, 'USER_DB_BASE_DIR', tmp_path)
     yield
@@ -20,15 +20,15 @@ def testing_env(monkeypatch, tmp_path):
 
 @pytest.fixture()
 def client(monkeypatch):
-    # Use in-memory fake adapter to avoid filesystem DB in property tests
+     # Use in-memory fake adapter to avoid filesystem DB in property tests
     class FakeCol:
         def __init__(self):
-            self.ids=[]; self.emb=[]; self.docs=[]; self.metas=[]
+                     self.ids=[]; self.emb=[]; self.docs=[]; self.metas=[]
         def count(self): return len(self.ids)
         def get(self, **kw): return {'ids': self.ids[:1]}
     class FakeAdapter:
         def __init__(self):
-            self._initialized=False
+                     self._initialized=False
             self.config=types.SimpleNamespace(embedding_dim=1536)
             self.col = FakeCol()
             self.manager = types.SimpleNamespace(get_or_create_collection=lambda name: self.col)
@@ -62,7 +62,9 @@ def client(monkeypatch):
 
 
 def make_store(client, name, dim):
-    r = client.post('/api/v1/vector_stores', json={'name': name, 'dimensions': dim})
+
+
+     r = client.post('/api/v1/vector_stores', json={'name': name, 'dimensions': dim})
     assert r.status_code == 200, r.text
     return r.json()['id']
 
@@ -73,7 +75,7 @@ def make_store(client, name, dim):
     num=st.integers(min_value=1, max_value=5),
 )
 def test_upsert_accepts_correct_dimension(client, dim, num):
-    unique = uuid.uuid4().hex[:8]
+     unique = uuid.uuid4().hex[:8]
     store_id = make_store(client, f"S{dim}_{num}_{unique}", dim)
     records = []
     for i in range(num):
@@ -90,7 +92,7 @@ def test_upsert_accepts_correct_dimension(client, dim, num):
     bad_dim=st.integers(min_value=2, max_value=8)
 )
 def test_upsert_rejects_wrong_dimension(client, good_dim, bad_dim):
-    if bad_dim == good_dim:
+     if bad_dim == good_dim:
         bad_dim = good_dim + 1
     unique = uuid.uuid4().hex[:6]
     store_id = make_store(client, f"Reject_{good_dim}_{unique}", good_dim)
@@ -104,7 +106,9 @@ def test_upsert_rejects_wrong_dimension(client, good_dim, bad_dim):
 
 
 def test_upsert_infers_dim_on_empty_collection(client):
-    # Create with default dim but first vector provides 7 -> should adapt
+
+
+     # Create with default dim but first vector provides 7 -> should adapt
     unique = uuid.uuid4().hex[:6]
     store_id = make_store(client, f"Infer_{unique}", 1536)
     r = client.post(f"/api/v1/vector_stores/{store_id}/vectors", json={'records': [{'id':'a','values':[0.0]*7, 'content':'x', 'metadata': {'k':1}}]})

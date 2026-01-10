@@ -9,7 +9,9 @@ pytestmark = pytest.mark.unit
 
 
 def _has_httpx():
-    try:
+
+
+     try:
         import httpx  # noqa: F401
         return True
     except Exception:
@@ -21,7 +23,7 @@ requires_httpx = pytest.mark.skipif(not _has_httpx(), reason="httpx not installe
 
 @requires_httpx
 def test_egress_denied_private_ip(monkeypatch):
-    from tldw_Server_API.app.core.http_client import fetch_json
+     from tldw_Server_API.app.core.http_client import fetch_json
     from tldw_Server_API.app.core.exceptions import EgressPolicyError
 
     # Ensure private IP blocking is enabled for this test
@@ -60,7 +62,7 @@ async def test_retry_succeeds_on_third_attempt():
 
 @requires_httpx
 def test_fetch_json_content_type_validation():
-    import httpx
+     import httpx
     from tldw_Server_API.app.core.http_client import fetch_json, create_client
     from tldw_Server_API.app.core.exceptions import JSONDecodeError
 
@@ -170,7 +172,7 @@ async def test_redirect_without_location_is_error():
 
 @requires_httpx
 def test_proxy_allowlist_denial():
-    from tldw_Server_API.app.core.http_client import create_client
+     from tldw_Server_API.app.core.http_client import create_client
     from tldw_Server_API.app.core.exceptions import EgressPolicyError
 
     # Denied since PROXY_ALLOWLIST is empty by default
@@ -180,7 +182,7 @@ def test_proxy_allowlist_denial():
 
 @requires_httpx
 def test_json_max_bytes_guard():
-    import httpx
+     import httpx
     from tldw_Server_API.app.core.http_client import fetch_json, create_client
     from tldw_Server_API.app.core.exceptions import JSONDecodeError
 
@@ -225,7 +227,7 @@ async def test_stream_cancellation_propagates():
 
 @requires_httpx
 def test_metrics_increment_on_successful_request():
-    import httpx
+     import httpx
     from tldw_Server_API.app.core.http_client import fetch, create_client
     from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
@@ -246,7 +248,7 @@ def test_metrics_increment_on_successful_request():
 
 @requires_httpx
 def test_proxy_allowlist_dict_form_allows(monkeypatch):
-    from tldw_Server_API.app.core.http_client import create_client
+     from tldw_Server_API.app.core.http_client import create_client
     import tldw_Server_API.app.core.http_client as hc
 
     # Allow a specific proxy host via allowlist and verify dict-form proxies pass

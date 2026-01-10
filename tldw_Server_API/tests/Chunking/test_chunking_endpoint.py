@@ -29,7 +29,7 @@ from tldw_Server_API.app.core.Chunking import (
 
 # --- Mock versions of external dependencies for the endpoint ---
 def mock_load_server_configs_for_test():
-    # This mock function will be used with @patch
+     # This mock function will be used with @patch
     return {
         "llm_api_settings": {"default_api_for_tasks": "mock_llm", "default_api": "mock_llm"},
         "mock_llm_api": {
@@ -70,7 +70,7 @@ def mock_general_llm_analyzer_for_test(payload: Dict[str, Any]) -> Union[str, Ge
     )
     if streaming:
         def stream_gen():
-            yield response_text
+                     yield response_text
 
         return stream_gen()
     return response_text
@@ -136,7 +136,7 @@ app_for_testing_with_real_router.include_router(actual_chunking_endpoint_router,
 # --- Test Client Fixture using the app with the real router ---
 @pytest.fixture
 def client():
-    global mock_general_llm_analyzer_call_history_for_test
+     global mock_general_llm_analyzer_call_history_for_test
     mock_general_llm_analyzer_call_history_for_test = []  # Reset for each test
     settings = get_settings()
     default_headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}

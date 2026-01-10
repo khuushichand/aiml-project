@@ -16,18 +16,21 @@ class FakeCollection:
         self.support_update = support_update
 
     def upsert(self, ids, embeddings, documents=None, metadatas=None):
-        if not self.support_upsert:
+
+             if not self.support_upsert:
             raise AttributeError("no upsert")
         for i, e in zip(ids, embeddings):
             self.vectors[str(i)] = list(e)
 
     def add(self, ids, embeddings, documents=None, metadatas=None):
-        # Simulate add semantics that overwrite by id as well (Chroma upsert would be preferred)
+
+             # Simulate add semantics that overwrite by id as well (Chroma upsert would be preferred)
         for i, e in zip(ids, embeddings):
             self.vectors[str(i)] = list(e)
 
     def update(self, ids, embeddings, documents=None, metadatas=None):
-        if not self.support_update:
+
+             if not self.support_update:
             raise AttributeError("no update")
         for i, e in zip(ids, embeddings):
             self.vectors[str(i)] = list(e)
@@ -49,7 +52,7 @@ def _store_batch(worker: StorageWorker, coll: FakeCollection, ids: List[str], em
     dim=st.integers(min_value=4, max_value=16),
 )
 def test_upsert_idempotent_under_permutation(ids, dim):
-    """Upsert/update should converge to same final state regardless of order."""
+     """Upsert/update should converge to same final state regardless of order."""
     w = StorageWorker(
         WorkerConfig(
             worker_id="sw",

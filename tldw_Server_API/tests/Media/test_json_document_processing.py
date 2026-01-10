@@ -8,7 +8,9 @@ pytestmark = pytest.mark.unit
 
 
 def test_process_documents_accepts_json(client_with_single_user):
-    client, _ = client_with_single_user
+
+
+     client, _ = client_with_single_user
 
     payload = {"a": 1, "b": {"c": 2}}
     data = json.dumps(payload).encode("utf-8")

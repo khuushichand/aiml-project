@@ -20,16 +20,18 @@ from tldw_Server_API.app.core.LLM_Calls.sse import sse_done
 
 class _FakeResp:
     def __init__(self, status_code=200, json_obj=None, text="", lines=None):
-        self.status_code = status_code
+             self.status_code = status_code
         self._json_obj = json_obj if json_obj is not None else {}
         self.text = text
         self._lines = list(lines or [])
 
     def json(self):
-        return self._json_obj
+
+             return self._json_obj
 
     def raise_for_status(self):
-        import requests
+
+             import requests
 
         if self.status_code and int(self.status_code) >= 400:
             err = requests.exceptions.HTTPError("HTTP error")
@@ -39,13 +41,15 @@ class _FakeResp:
 
     # streaming context manager shape
     def __enter__(self):
-        return self
+             return self
 
     def __exit__(self, exc_type, exc, tb):
-        return False
+
+             return False
 
     def iter_lines(self):
-        for line in self._lines:
+
+             for line in self._lines:
             yield line
 
 
@@ -56,17 +60,21 @@ class _FakeClient:
         self.last_json = None
 
     def __enter__(self):
-        return self
+
+             return self
 
     def __exit__(self, exc_type, exc, tb):
-        return False
+
+             return False
 
     def post(self, url, *, headers=None, json=None):
-        self.last_json = json
+
+             self.last_json = json
         return self._post_resp or _FakeResp(status_code=200, json_obj={"ok": True})
 
     def stream(self, method, url, *, headers=None, json=None):
-        self.last_json = json
+
+             self.last_json = json
         return _FakeResp(status_code=200, lines=self._stream_lines)
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatBadRequestError, ChatProviderError
 
@@ -85,10 +93,12 @@ class _DummyStream:
         return False
 
     def raise_for_status(self):
-        return None
+
+             return None
 
     def aiter_lines(self):
-        async def _gen():
+
+             async def _gen():
             for line in self._lines:
                 yield line
 
@@ -108,14 +118,17 @@ class _DummyAsyncClient:
         return False
 
     def stream(self, *args, **kwargs):
-        return self._stream
+
+             return self._stream
 
     async def post(self, *args, **kwargs):
         raise AssertionError("Non-streaming POST should not be invoked in these tests.")
 
 
 def _mock_session_with_response(vector):
-    session = Mock()
+
+
+     session = Mock()
     response = Mock()
     response.status_code = 200
     response.json.return_value = {"data": vector}
@@ -126,7 +139,9 @@ def _mock_session_with_response(vector):
 
 
 def test_get_openai_embeddings_uses_timeout_and_closes(monkeypatch):
-    session = _mock_session_with_response([{"embedding": [0.1, 0.2]}])
+
+
+     session = _mock_session_with_response([{"embedding": [0.1, 0.2]}])
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.LLM_Calls.chat_calls.create_session_with_retries",
@@ -153,7 +168,9 @@ def test_get_openai_embeddings_uses_timeout_and_closes(monkeypatch):
 
 
 def test_get_openai_embeddings_includes_dimensions(monkeypatch):
-    session = _mock_session_with_response([{"embedding": [0.1, 0.2]}])
+
+
+     session = _mock_session_with_response([{"embedding": [0.1, 0.2]}])
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.LLM_Calls.chat_calls.create_session_with_retries",
@@ -175,7 +192,9 @@ def test_get_openai_embeddings_includes_dimensions(monkeypatch):
 
 
 def test_get_openai_embeddings_batch_uses_timeout_and_closes(monkeypatch):
-    session = _mock_session_with_response(
+
+
+     session = _mock_session_with_response(
         [
             {"embedding": [0.1, 0.2]},
             {"embedding": [0.3, 0.4]},
@@ -207,7 +226,9 @@ def test_get_openai_embeddings_batch_uses_timeout_and_closes(monkeypatch):
 
 
 def test_get_openai_embeddings_batch_includes_dimensions(monkeypatch):
-    session = _mock_session_with_response(
+
+
+     session = _mock_session_with_response(
         [
             {"embedding": [0.1, 0.2]},
             {"embedding": [0.3, 0.4]},
@@ -234,7 +255,9 @@ def test_get_openai_embeddings_batch_includes_dimensions(monkeypatch):
 
 
 def test_get_openai_embeddings_respects_api_base(monkeypatch):
-    session = _mock_session_with_response([{"embedding": [0.5, 0.6]}])
+
+
+     session = _mock_session_with_response([{"embedding": [0.5, 0.6]}])
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.LLM_Calls.chat_calls.create_session_with_retries",
@@ -258,7 +281,9 @@ def test_get_openai_embeddings_respects_api_base(monkeypatch):
 
 
 def test_get_openai_embeddings_batch_respects_api_base(monkeypatch):
-    session = _mock_session_with_response(
+
+
+     session = _mock_session_with_response(
         [
             {"embedding": [0.1]},
             {"embedding": [0.2]},
@@ -287,7 +312,9 @@ def test_get_openai_embeddings_batch_respects_api_base(monkeypatch):
 
 
 def test_chat_with_openai_logs_payload_metadata(monkeypatch):
-    # Patch OpenAI adapter's HTTP client to capture payload and return 400
+
+
+     # Patch OpenAI adapter's HTTP client to capture payload and return 400
     fake_client = _FakeClient(
         post_resp=_FakeResp(status_code=400, json_obj={}, text="bad request")
     )
@@ -309,7 +336,9 @@ def test_chat_with_openai_logs_payload_metadata(monkeypatch):
 
 
 def _patch_async_client(monkeypatch, lines):
-    stream = _DummyStream(lines)
+
+
+     stream = _DummyStream(lines)
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.LLM_Calls.chat_calls.httpx.AsyncClient",
@@ -389,16 +418,19 @@ async def test_chat_with_openai_async_retries_request_error(monkeypatch):
     # With adapter path, retries are handled in http layer; simulate a fatal error and assert mapping
     class _ErrClient:
         def __enter__(self):
-            return self
+                     return self
 
         def __exit__(self, exc_type, exc, tb):
-            return False
+
+                     return False
 
         def stream(self, *args, **kwargs):
-            raise httpx.RequestError("boom", request=httpx.Request("POST", "https://retry.test"))
+
+                     raise httpx.RequestError("boom", request=httpx.Request("POST", "https://retry.test"))
 
         def post(self, *args, **kwargs):
-            raise AssertionError("Non-streaming POST should not be invoked in this test.")
+
+                     raise AssertionError("Non-streaming POST should not be invoked in this test.")
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.http_client_factory",
@@ -419,16 +451,19 @@ async def test_chat_with_openai_async_retries_request_error(monkeypatch):
 async def test_chat_with_openai_async_non_streaming_exhausts_retries(monkeypatch):
     class _FailPostClient:
         def __enter__(self):
-            return self
+                     return self
 
         def __exit__(self, exc_type, exc, tb):
-            return False
+
+                     return False
 
         def post(self, *args, **kwargs):
-            raise httpx.RequestError("boom-1", request=httpx.Request("POST", "https://retry.test"))
+
+                     raise httpx.RequestError("boom-1", request=httpx.Request("POST", "https://retry.test"))
 
         def stream(self, *args, **kwargs):
-            raise AssertionError("Stream should not be used in this test.")
+
+                     raise AssertionError("Stream should not be used in this test.")
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.http_client_factory",

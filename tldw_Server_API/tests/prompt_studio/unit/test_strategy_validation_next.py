@@ -6,7 +6,9 @@ from tldw_Server_API.app.api.v1.endpoints import prompt_studio_optimization as p
 
 
 def test_beam_search_length_penalty_and_reranker_ok():
-    cfg = {
+
+
+     cfg = {
         "strategy_params": {
             "beam_width": 4,
             "max_candidates": 8,
@@ -27,12 +29,14 @@ def test_beam_search_length_penalty_and_reranker_ok():
     ],
 )
 def test_beam_search_length_penalty_and_reranker_invalid(cfg):
-    with pytest.raises(HTTPException):
+     with pytest.raises(HTTPException):
         pso._validate_strategy_config("beam_search", cfg)
 
 
 def test_anneal_step_schedule_consistency_ok():
-    cfg = {
+
+
+     cfg = {
         "strategy_params": {
             "schedule": "linear",
             "initial_temp": 10.0,
@@ -46,7 +50,9 @@ def test_anneal_step_schedule_consistency_ok():
 
 
 def test_anneal_step_schedule_consistency_invalid():
-    cfg = {
+
+
+     cfg = {
         "strategy_params": {
             "schedule": "linear",
             "initial_temp": 2.0,
@@ -61,19 +67,23 @@ def test_anneal_step_schedule_consistency_invalid():
 
 
 def test_genetic_crossover_operator_ok():
-    cfg = {"strategy_params": {"crossover_operator": "two_point"}}
+
+
+     cfg = {"strategy_params": {"crossover_operator": "two_point"}}
     pso._validate_strategy_config("genetic", cfg)
 
 
 def test_genetic_crossover_operator_invalid():
-    cfg = {"strategy_params": {"crossover_operator": "bad"}}
+
+
+     cfg = {"strategy_params": {"crossover_operator": "bad"}}
     with pytest.raises(HTTPException):
         pso._validate_strategy_config("genetic", cfg)
 
 
 @pytest.mark.parametrize("backend", ["hyperparameter", "random_search"])
 def test_hp_and_random_max_tokens_range_ok(backend):
-    cfg = {"strategy_params": {"max_tokens_range": [64, 512]}}
+     cfg = {"strategy_params": {"max_tokens_range": [64, 512]}}
     pso._validate_strategy_config(backend, cfg)
 
 
@@ -88,5 +98,5 @@ def test_hp_and_random_max_tokens_range_ok(backend):
     ],
 )
 def test_hp_and_random_max_tokens_range_invalid(backend, cfg):
-    with pytest.raises(HTTPException):
+     with pytest.raises(HTTPException):
         pso._validate_strategy_config(backend, cfg)

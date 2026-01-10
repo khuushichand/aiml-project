@@ -8,7 +8,9 @@ from tldw_Server_API.app.core.Chat import command_router as command_router_modul
 
 
 def test_system_injection_for_time(monkeypatch):
-    # Enable commands and system injection
+
+
+     # Enable commands and system injection
     monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "1")
     monkeypatch.setenv("CHAT_COMMAND_INJECTION_MODE", "system")
 
@@ -56,7 +58,9 @@ def test_system_injection_for_time(monkeypatch):
 
 
 def test_streaming_path_uses_async_dispatcher(monkeypatch):
-    """Streaming chat with a slash command should call async_dispatch_command, not dispatch_command."""
+
+
+     """Streaming chat with a slash command should call async_dispatch_command, not dispatch_command."""
 
     monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "1")
     monkeypatch.setenv("CHAT_COMMAND_INJECTION_MODE", "system")
@@ -74,7 +78,8 @@ def test_streaming_path_uses_async_dispatcher(monkeypatch):
         return R()
 
     def fake_sync_dispatch(ctx, name, args):
-        called["sync_calls"] += 1
+
+             called["sync_calls"] += 1
 
         class R:
             ok = True
@@ -115,7 +120,9 @@ def test_streaming_path_uses_async_dispatcher(monkeypatch):
 
 
 def test_weather_injection_with_args(monkeypatch):
-    monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "1")
+
+
+     monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "1")
     monkeypatch.setenv("CHAT_COMMAND_INJECTION_MODE", "system")
 
     # Stub weather client to return a deterministic summary
@@ -123,7 +130,7 @@ def test_weather_injection_with_args(monkeypatch):
 
     class OkClient:
         def get_current(self, location=None, lat=None, lon=None):
-            class R:
+                     class R:
                 ok = True
                 summary = f"Sunny at {location}"
                 metadata = {"provider": "test"}

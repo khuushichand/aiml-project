@@ -5,11 +5,15 @@ import tldw_Server_API.app.api.v1.endpoints.setup as setup_endpoint
 
 
 def _make_client():
-    return TestClient(app)
+
+
+     return TestClient(app)
 
 
 def test_update_config_rejects_unknown_section(mocker):
-    mocker.patch.object(
+
+
+     mocker.patch.object(
         setup_endpoint.setup_manager,
         'get_status_snapshot',
         return_value={'enabled': True, 'needs_setup': True},
@@ -22,7 +26,9 @@ def test_update_config_rejects_unknown_section(mocker):
 
 
 def test_update_config_rejects_unknown_key(mocker):
-    mocker.patch.object(
+
+
+     mocker.patch.object(
         setup_endpoint.setup_manager,
         'get_status_snapshot',
         return_value={'enabled': True, 'needs_setup': True},
@@ -36,7 +42,9 @@ def test_update_config_rejects_unknown_key(mocker):
 
 
 def test_update_config_type_validation_boolean(mocker):
-    mocker.patch.object(
+
+
+     mocker.patch.object(
         setup_endpoint.setup_manager,
         'get_status_snapshot',
         return_value={'enabled': True, 'needs_setup': True},

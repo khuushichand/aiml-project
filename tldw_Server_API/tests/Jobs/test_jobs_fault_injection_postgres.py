@@ -14,7 +14,9 @@ pytestmark = [
 
 
 def test_acquire_serialization_conflict_then_retry_postgres(monkeypatch, jobs_pg_dsn):
-    monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
+
+
+     monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     jm.create_job(domain="ps", queue="default", job_type="t", payload={}, owner_user_id="u")
 
@@ -23,42 +25,47 @@ def test_acquire_serialization_conflict_then_retry_postgres(monkeypatch, jobs_pg
 
     class FlakyCursor:
         def __init__(self, cur):
-            self._cur = cur
+                     self._cur = cur
             self._calls = 0
 
         def execute(self, *a, **k):
-            if self._calls == 0:
+
+                     if self._calls == 0:
                 self._calls += 1
                 raise pg_errors.SerializationFailure("serialization_failure")
             return self._cur.execute(*a, **k)
 
         def fetchone(self):
-            return self._cur.fetchone()
+
+                     return self._cur.fetchone()
 
         def fetchall(self):
-            return self._cur.fetchall()
+
+                     return self._cur.fetchall()
 
         def __enter__(self):
-            self._cur.__enter__()
+
+                     self._cur.__enter__()
             return self
         def __exit__(self, exc_type, exc, tb):
-            return self._cur.__exit__(exc_type, exc, tb)
+                     return self._cur.__exit__(exc_type, exc, tb)
 
     class FlakyConn:
         def __init__(self, *a, **k):
-            self._conn = real_connect(*a, **k)
+                     self._conn = real_connect(*a, **k)
         def cursor(self, *a, **k):
-            return FlakyCursor(self._conn.cursor(*a, **k))
+                     return FlakyCursor(self._conn.cursor(*a, **k))
         def __enter__(self):
-            self._conn.__enter__()
+                     self._conn.__enter__()
             return self
         def __exit__(self, exc_type, exc, tb):
-            return self._conn.__exit__(exc_type, exc, tb)
+                     return self._conn.__exit__(exc_type, exc, tb)
         def close(self):
-            return self._conn.close()
+                     return self._conn.close()
 
     def fake_connect(*a, **k):
-        return FlakyConn(*a, **k)
+
+             return FlakyConn(*a, **k)
 
     monkeypatch.setattr("psycopg.connect", fake_connect)
     with pytest.raises(pg_errors.SerializationFailure):

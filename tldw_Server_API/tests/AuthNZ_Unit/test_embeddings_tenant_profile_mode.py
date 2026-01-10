@@ -11,7 +11,9 @@ from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
 
 def _make_app():
-    from fastapi import FastAPI
+
+
+     from fastapi import FastAPI
 
     app = FastAPI()
     app.include_router(emb_mod.router, prefix="/api/v1")

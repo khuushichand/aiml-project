@@ -24,7 +24,7 @@ class _StubPostgresPool:
 
 class _StubNonPostgresPool:
     def __init__(self):
-        self.pool = None
+             self.pool = None
 
 
 @pytest.mark.asyncio

@@ -11,7 +11,7 @@ TEST_USER_ID = 456
 
 @pytest.fixture()
 def reading_env(monkeypatch):
-    base_dir = Path.cwd() / "Databases" / "test_reading_service"
+     base_dir = Path.cwd() / "Databases" / "test_reading_service"
     shutil.rmtree(base_dir, ignore_errors=True)
     base_dir.mkdir(parents=True, exist_ok=True)
     prev_base_dir = settings.get("USER_DB_BASE_DIR")

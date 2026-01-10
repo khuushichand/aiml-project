@@ -4,7 +4,7 @@ import pytest
 
 class _StubDet2:
     def __init__(self, label="table", score=0.8, bbox=None, page=1):
-        self.label = label
+             self.label = label
         self.score = score
         self.bbox = bbox or [1.0, 1.0, 2.0, 2.0]
         self.page = page
@@ -12,7 +12,7 @@ class _StubDet2:
 
 class _StubRes2:
     def __init__(self):
-        self.detections = []
+             self.detections = []
         self.texts = None
         self.extra = {
             "by_page": [
@@ -26,7 +26,7 @@ class _StubDoclingBackend:
 
     @classmethod
     def available(cls) -> bool:
-        return True
+             return True
 
     def process_pdf(self, pdf_path: str, *, max_pages=None):
         return _StubRes2()

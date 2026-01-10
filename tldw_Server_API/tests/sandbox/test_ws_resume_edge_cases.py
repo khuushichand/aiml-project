@@ -15,7 +15,9 @@ pytestmark = pytest.mark.timeout(10)
 
 
 def _client(monkeypatch) -> TestClient:
-    monkeypatch.setenv("TEST_MODE", "1")
+
+
+     monkeypatch.setenv("TEST_MODE", "1")
     # Ensure sandbox routes enabled
     existing = os.environ.get("ROUTES_ENABLE", "")
     parts = [p.strip().lower() for p in existing.split(",") if p.strip()]
@@ -30,7 +32,9 @@ def _client(monkeypatch) -> TestClient:
 
 
 def test_ws_resume_gap_starts_from_buffer(ws_flush, monkeypatch) -> None:
-    run_id = "resume_gap_run"
+
+
+     run_id = "resume_gap_run"
     hub = get_hub()
     # Publish more than buffer size frames prior to WS connect
     for i in range(150):
@@ -58,7 +62,9 @@ def test_ws_resume_gap_starts_from_buffer(ws_flush, monkeypatch) -> None:
 
 
 def test_ws_resume_tail_includes_requested_seq(ws_flush, monkeypatch) -> None:
-    run_id = "resume_tail_run"
+
+
+     run_id = "resume_tail_run"
     hub = get_hub()
     # Seed a handful of frames
     for i in range(10):

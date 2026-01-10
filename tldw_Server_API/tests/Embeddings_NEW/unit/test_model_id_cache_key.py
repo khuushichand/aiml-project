@@ -4,15 +4,19 @@ from tldw_Server_API.app.core.Embeddings.Embeddings_Server import Embeddings_Cre
 
 
 def test_model_id_normalization_shares_cache(monkeypatch, tmp_path):
-    class StubEmbedder:
+
+
+     class StubEmbedder:
         def __init__(self, model_identifier, config, hf_cache_dir):
-            self.model_identifier = model_identifier
+                     self.model_identifier = model_identifier
 
         def create_embeddings(self, texts):
-            return np.zeros((len(texts), 3), dtype=np.float32)
+
+                     return np.zeros((len(texts), 3), dtype=np.float32)
 
         def unload_model(self):
-            return None
+
+                     return None
 
     monkeypatch.setattr(EC, "HuggingFaceEmbedder", StubEmbedder)
 

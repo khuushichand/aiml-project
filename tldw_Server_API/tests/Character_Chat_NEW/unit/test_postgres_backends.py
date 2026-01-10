@@ -26,7 +26,8 @@ class _RecordingCursor:
         self._fetched = False
 
     def fetchall(self):
-        if self._row is None:
+
+             if self._row is None:
             return []
         if not self._fetched:
             self._fetched = True
@@ -34,7 +35,8 @@ class _RecordingCursor:
         return []
 
     def fetchone(self):
-        if self._fetched:
+
+             if self._fetched:
             return None
         self._fetched = True
         return self._row
@@ -44,12 +46,14 @@ class RecordingConnection:
     """Connection stub that records executed SQL."""
 
     def __init__(self):
-        self.executed_sql = []
+
+             self.executed_sql = []
         self.committed = False
         self._next_id = 1
 
     def execute(self, sql, params=None):
-        self.executed_sql.append(sql)
+
+             self.executed_sql.append(sql)
         row = None
         if "returning id" in sql.lower():
             row = {"id": self._next_id}
@@ -57,20 +61,24 @@ class RecordingConnection:
         return _RecordingCursor(sql, row=row)
 
     def commit(self):
-        self.committed = True
+
+             self.committed = True
 
     def __enter__(self):
-        return self
+
+             return self
 
     def __exit__(self, exc_type, exc, tb):
-        return False
+
+             return False
 
 
 class UniqueViolationConnection(RecordingConnection):
     """Connection stub that simulates a unique constraint violation."""
 
     def execute(self, sql, params=None):
-        self.executed_sql.append(sql)
+
+             self.executed_sql.append(sql)
         if "INSERT INTO CHAT_DICTIONARIES" in sql.upper():
             raise CharactersRAGDBError("duplicate key value violates unique constraint")
         return _RecordingCursor(sql)
@@ -80,11 +88,13 @@ class StubDB:
     """Minimal DB stub that hands out predetermined connection objects."""
 
     def __init__(self, connections):
-        self.backend_type = BackendType.POSTGRESQL
+
+             self.backend_type = BackendType.POSTGRESQL
         self._connections = list(connections)
 
     def get_connection(self):
-        if not self._connections:
+
+             if not self._connections:
             raise AssertionError("No stub connections remaining for test")
         return self._connections.pop(0)
 
@@ -95,7 +105,7 @@ def _gather_sql(connection: RecordingConnection) -> str:
 
 @pytest.mark.unit
 def test_chat_dictionary_init_uses_postgres_friendly_schema():
-    init_conn = RecordingConnection()
+     init_conn = RecordingConnection()
     db = StubDB([init_conn])
 
     ChatDictionaryService(db)
@@ -107,7 +117,7 @@ def test_chat_dictionary_init_uses_postgres_friendly_schema():
 
 @pytest.mark.unit
 def test_world_book_init_uses_postgres_friendly_schema():
-    init_conn = RecordingConnection()
+     init_conn = RecordingConnection()
     db = StubDB([init_conn])
 
     WorldBookService(db)
@@ -119,7 +129,7 @@ def test_world_book_init_uses_postgres_friendly_schema():
 
 @pytest.mark.unit
 def test_chat_dictionary_unique_violation_raises_conflict():
-    init_conn = RecordingConnection()
+     init_conn = RecordingConnection()
     failing_conn = UniqueViolationConnection()
     db = StubDB([init_conn, failing_conn])
 
@@ -133,7 +143,7 @@ def test_chat_dictionary_unique_violation_raises_conflict():
 
 @pytest.mark.unit
 def test_integer_probability_treated_as_percentage():
-    entry = ChatDictionaryEntry("trigger", "value", probability=1)
+     entry = ChatDictionaryEntry("trigger", "value", probability=1)
     assert entry.probability == pytest.approx(0.01)
 
     entry_high = ChatDictionaryEntry("trigger", "value", probability=75)
@@ -142,7 +152,7 @@ def test_integer_probability_treated_as_percentage():
 
 @pytest.mark.unit
 def test_create_dictionary_uses_returning_and_row_id():
-    init_conn = RecordingConnection()
+     init_conn = RecordingConnection()
     insert_conn = RecordingConnection()
     db = StubDB([init_conn, insert_conn])
 
@@ -157,7 +167,7 @@ def test_create_dictionary_uses_returning_and_row_id():
 
 @pytest.mark.unit
 def test_create_world_book_uses_returning_and_row_id():
-    init_conn = RecordingConnection()
+     init_conn = RecordingConnection()
     insert_conn = RecordingConnection()
     db = StubDB([init_conn, insert_conn])
 
@@ -172,7 +182,7 @@ def test_create_world_book_uses_returning_and_row_id():
 
 @pytest.mark.unit
 def test_dictionary_entry_insert_uses_returning_clause():
-    init_conn = RecordingConnection()
+     init_conn = RecordingConnection()
     dict_insert_conn = RecordingConnection()
     entry_conn = RecordingConnection()
     db = StubDB([init_conn, dict_insert_conn, entry_conn])
@@ -189,7 +199,7 @@ def test_dictionary_entry_insert_uses_returning_clause():
 
 @pytest.mark.unit
 def test_world_book_entry_insert_uses_returning_clause():
-    init_conn = RecordingConnection()
+     init_conn = RecordingConnection()
     book_insert_conn = RecordingConnection()
     entry_conn = RecordingConnection()
     db = StubDB([init_conn, book_insert_conn, entry_conn])

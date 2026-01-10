@@ -46,7 +46,7 @@ def get_entity_version(db: MediaDatabase, entity_table: str, uuid: str) -> int |
 
 class TestDatabaseInitialization:
     def test_memory_db_creation(self, memory_db_factory):
-        """Test creating an in-memory database."""
+             """Test creating an in-memory database."""
         db = memory_db_factory("client_mem")
         assert db.is_memory_db
         assert db.client_id == "client_mem"
@@ -56,7 +56,8 @@ class TestDatabaseInitialization:
         db.close_connection()
 
     def test_file_db_creation(self, file_db, temp_db_path):
-        """Test creating a file-based database."""
+
+             """Test creating a file-based database."""
         assert not file_db.is_memory_db
         assert file_db.client_id == "file_client"
         assert os.path.exists(temp_db_path)
@@ -65,7 +66,8 @@ class TestDatabaseInitialization:
         # file_db fixture handles closure
 
     def test_missing_client_id(self):
-        """Test that ValueError is raised if client_id is missing."""
+
+             """Test that ValueError is raised if client_id is missing."""
         with pytest.raises(ValueError, match="Client ID cannot be empty"):
             MediaDatabase(db_path=":memory:", client_id="")
         with pytest.raises(ValueError, match="Client ID cannot be empty"):
@@ -80,7 +82,7 @@ def test_schema_versioning_new_file_db(file_db): # Use the file_db fixture
 
 class TestDatabaseTransactions:
     def test_transaction_commit(self, memory_db_factory):
-        db = memory_db_factory()
+             db = memory_db_factory()
         keyword = "commit_test"
         with db.transaction():
             # Use internal method _add_keyword_internal or simplified version for test
@@ -90,7 +92,8 @@ class TestDatabaseTransactions:
         assert cursor.fetchone()['keyword'] == keyword
 
     def test_transaction_rollback(self, memory_db_factory):
-        db = memory_db_factory()
+
+             db = memory_db_factory()
         keyword = "rollback_test"
         initial_count_cursor = db.execute_query("SELECT COUNT(*) FROM Keywords")
         initial_count = initial_count_cursor.fetchone()[0]
@@ -121,11 +124,12 @@ class TestDatabaseCRUDAndSync:
 
     @pytest.fixture
     def db_instance(self, memory_db_factory):
-        """Provides a fresh in-memory DB for each test in this class."""
+             """Provides a fresh in-memory DB for each test in this class."""
         return memory_db_factory("crud_client")
 
     def test_add_keyword(self, db_instance):
-        keyword = " test keyword "
+
+             keyword = " test keyword "
         expected_keyword = "test keyword"
         kw_id, kw_uuid = db_instance.add_keyword(keyword)
 
@@ -152,7 +156,8 @@ class TestDatabaseCRUDAndSync:
         assert payload['uuid'] == kw_uuid
 
     def test_add_existing_keyword(self, db_instance):
-        keyword = "existing"
+
+             keyword = "existing"
         kw_id1, kw_uuid1 = db_instance.add_keyword(keyword)
         log_count1 = get_log_count(db_instance, kw_uuid1)
 
@@ -164,7 +169,8 @@ class TestDatabaseCRUDAndSync:
         assert log_count1 == log_count2 # No new log entry
 
     def test_soft_delete_keyword(self, db_instance):
-        keyword = "to_delete"
+
+             keyword = "to_delete"
         kw_id, kw_uuid = db_instance.add_keyword(keyword)
         initial_version = get_entity_version(db_instance, "Keywords", kw_uuid)
 
@@ -186,7 +192,8 @@ class TestDatabaseCRUDAndSync:
         assert payload['uuid'] == kw_uuid # Delete payload is minimal
 
     def test_undelete_keyword(self, db_instance):
-        keyword = "to_undelete"
+
+             keyword = "to_undelete"
         kw_id, kw_uuid = db_instance.add_keyword(keyword)
         db_instance.soft_delete_keyword(keyword) # Delete it first
         deleted_version = get_entity_version(db_instance, "Keywords", kw_uuid)
@@ -214,7 +221,8 @@ class TestDatabaseCRUDAndSync:
         assert payload['deleted'] == 0 # Payload shows undeleted state
 
     def test_add_media_with_keywords_create(self, db_instance):
-        title = "Test Media Create"
+
+             title = "Test Media Create"
         content = "Some unique content for create."
         keywords = ["create_kw1", "create_kw2"]
 
@@ -268,7 +276,8 @@ class TestDatabaseCRUDAndSync:
         assert payload['title'] == title
 
     def test_add_media_with_source_hash(self, db_instance):
-        title = "Test Media Source Hash"
+
+             title = "Test Media Source Hash"
         content = "Content for source hash test."
         source_hash = "source-hash-one"
 
@@ -312,7 +321,9 @@ class TestDatabaseCRUDAndSync:
 
 
     def test_add_media_with_keywords_update(self, db_instance):
-        title = "Test Media Update"
+
+
+             title = "Test Media Update"
         content1 = "Initial content."
         content2 = "Updated content."
         keywords1 = ["update_kw1"]
@@ -375,7 +386,8 @@ class TestDatabaseCRUDAndSync:
         assert payload['title'] == title + " Updated Via URL"  # From first update
 
     def test_soft_delete_media_cascade(self, db_instance):
-        # 1. Setup complex item
+
+             # 1. Setup complex item
         media_id, media_uuid, _ = db_instance.add_media_with_keywords(
             title="Cascade Test", content="Cascade content", media_type="article",
             keywords=["cascade1", "cascade2"], author="Cascade Author"
@@ -437,7 +449,8 @@ class TestDatabaseCRUDAndSync:
         assert cursor.fetchone()[0] == 2 # Should be 2 unlink events
 
     def test_optimistic_locking_prevents_update_with_stale_version(self, db_instance):
-        """Test that an UPDATE with a stale version number fails (rowcount 0)."""
+
+             """Test that an UPDATE with a stale version number fails (rowcount 0)."""
         keyword = "conflict_test"
         kw_id, kw_uuid = db_instance.add_keyword(keyword)
         original_version = get_entity_version(db_instance, "Keywords", kw_uuid)  # Should be 1
@@ -476,7 +489,8 @@ class TestDatabaseCRUDAndSync:
         assert row['client_id'] == "external_client", "Client ID should remain from the external update"
 
     def test_version_validation_trigger(self, db_instance):
-        """Test trigger preventing non-sequential version updates."""
+
+             """Test trigger preventing non-sequential version updates."""
         kw_id, kw_uuid = db_instance.add_keyword("validation_test")
         current_version = get_entity_version(db_instance, "Keywords", kw_uuid)
 
@@ -501,7 +515,8 @@ class TestDatabaseCRUDAndSync:
             )
 
     def test_client_id_validation_trigger(self, db_instance):
-        """Test trigger preventing null/empty client_id on update."""
+
+             """Test trigger preventing null/empty client_id on update."""
         kw_id, kw_uuid = db_instance.add_keyword("clientid_test")
         current_version = get_entity_version(db_instance, "Keywords", kw_uuid)
 
@@ -528,7 +543,7 @@ class TestSyncLogManagement:
 
      @pytest.fixture
      def db_instance(self, memory_db_factory):
-         db = memory_db_factory("log_client")
+               db = memory_db_factory("log_client")
          # Add some initial data to generate logs
          db.add_keyword("log_kw_1")
          time.sleep(0.01) # Ensure timestamp difference
@@ -539,32 +554,37 @@ class TestSyncLogManagement:
          return db
 
      def test_get_sync_log_entries_all(self, db_instance):
-         logs = db_instance.get_sync_log_entries()
+
+               logs = db_instance.get_sync_log_entries()
          # Expect 3 creates + 1 delete = 4 entries
          assert len(logs) == 4
          assert logs[0]['change_id'] == 1
          assert logs[-1]['change_id'] == 4
 
      def test_get_sync_log_entries_since(self, db_instance):
-         logs = db_instance.get_sync_log_entries(since_change_id=2) # Get 3 and 4
+
+               logs = db_instance.get_sync_log_entries(since_change_id=2) # Get 3 and 4
          assert len(logs) == 2
          assert logs[0]['change_id'] == 3
          assert logs[1]['change_id'] == 4
 
      def test_get_sync_log_entries_limit(self, db_instance):
-         logs = db_instance.get_sync_log_entries(limit=2) # Get 1 and 2
+
+               logs = db_instance.get_sync_log_entries(limit=2) # Get 1 and 2
          assert len(logs) == 2
          assert logs[0]['change_id'] == 1
          assert logs[1]['change_id'] == 2
 
      def test_get_sync_log_entries_since_and_limit(self, db_instance):
-         logs = db_instance.get_sync_log_entries(since_change_id=1, limit=2) # Get 2 and 3
+
+               logs = db_instance.get_sync_log_entries(since_change_id=1, limit=2) # Get 2 and 3
          assert len(logs) == 2
          assert logs[0]['change_id'] == 2
          assert logs[1]['change_id'] == 3
 
      def test_delete_sync_log_entries_specific(self, db_instance):
-         initial_logs = db_instance.get_sync_log_entries()
+
+               initial_logs = db_instance.get_sync_log_entries()
          initial_count = len(initial_logs) # Should be 4
          ids_to_delete = [initial_logs[1]['change_id'], initial_logs[2]['change_id']] # Delete 2 and 3
 
@@ -577,7 +597,8 @@ class TestSyncLogManagement:
          assert remaining_ids == {initial_logs[0]['change_id'], initial_logs[3]['change_id']} # 1 and 4 should remain
 
      def test_delete_sync_log_entries_before(self, db_instance):
-         initial_logs = db_instance.get_sync_log_entries()
+
+               initial_logs = db_instance.get_sync_log_entries()
          initial_count = len(initial_logs) # Should be 4
          threshold_id = initial_logs[2]['change_id'] # Delete up to and including ID 3
 
@@ -589,11 +610,13 @@ class TestSyncLogManagement:
          assert remaining_logs[0]['change_id'] == initial_logs[3]['change_id'] # Only 4 remains
 
      def test_delete_sync_log_entries_empty(self, db_instance):
-         deleted_count = db_instance.delete_sync_log_entries([])
+
+               deleted_count = db_instance.delete_sync_log_entries([])
          assert deleted_count == 0
 
      def test_delete_sync_log_entries_invalid_id(self, db_instance):
-         with pytest.raises(ValueError):
+
+               with pytest.raises(ValueError):
              db_instance.delete_sync_log_entries([1, "two", 3])
 
 
@@ -601,7 +624,7 @@ class TestSyncLogManagement:
 class TestDatabaseFTS:
     @pytest.fixture
     def db_instance(self, memory_db_factory):
-        # Use file DB for FTS tests if memory DB proves unstable
+             # Use file DB for FTS tests if memory DB proves unstable
         # return memory_db_factory("fts_client")
         temp_dir = tempfile.mkdtemp()
         db_file = Path(temp_dir) / "fts_test_db.sqlite"
@@ -611,7 +634,8 @@ class TestDatabaseFTS:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
     def test_fts_media_create_search(self, db_instance):
-        """Test searching media via FTS after creation."""
+
+             """Test searching media via FTS after creation."""
         title = "FTS Test Alpha"
         content = "Unique content string omega gamma beta."
         media_id, media_uuid, _ = db_instance.add_media_with_keywords(title=title, content=content, media_type="fts_test")
@@ -637,7 +661,8 @@ class TestDatabaseFTS:
         assert total == 0
 
     def test_fts_media_update_search(self, db_instance):
-        """Test searching media via FTS after update."""
+
+             """Test searching media via FTS after update."""
         title1 = "FTS Update Initial"
         content1 = "Original text epsilon."
         title2 = "FTS Update Final Zeta"
@@ -670,7 +695,8 @@ class TestDatabaseFTS:
         assert results[0]['id'] == media_id
 
     def test_fts_media_delete_search(self, db_instance):
-        """Test searching media via FTS after soft deletion."""
+
+             """Test searching media via FTS after soft deletion."""
         title = "FTS To Delete"
         content = "Content will vanish theta."
         media_id, media_uuid, _ = db_instance.add_media_with_keywords(title=title, content=content, media_type="fts_delete")
@@ -688,7 +714,8 @@ class TestDatabaseFTS:
         assert total == 0
 
     def test_fts_keyword_search(self, db_instance):
-        """Test searching keywords via FTS."""
+
+             """Test searching keywords via FTS."""
         kw1_id, kw1_uuid = db_instance.add_keyword("fts_keyword_apple")
         kw2_id, kw2_uuid = db_instance.add_keyword("fts_keyword_banana")
 
@@ -711,7 +738,8 @@ class TestDatabaseFTS:
         assert cursor.fetchone()['rowid'] == kw2_id
 
     def test_search_media_db_filters_by_uuid(self, db_instance):
-        title = "UUID filter entry"
+
+             title = "UUID filter entry"
         content = "This entry is retrieved via UUID"
         media_id, media_uuid, _ = db_instance.add_media_with_keywords(title=title, content=content, media_type="uuid_test")
 
@@ -728,7 +756,8 @@ class TestDatabaseFTS:
         assert results[0]['uuid'] == media_uuid
 
     def test_search_media_db_fts_fallback_preserves_filters(self, db_instance):
-        # Seed two records that share the search term so the UUID filter is the differentiator.
+
+             # Seed two records that share the search term so the UUID filter is the differentiator.
         db_instance.add_media_with_keywords(
             title="Fallback Candidate A",
             content="Shared fallback term",
@@ -744,7 +773,8 @@ class TestDatabaseFTS:
         raised = {"value": False}
 
         def flaky_execute(self, sql, params=None, *, commit=False):
-            if (
+
+                     if (
                 not raised["value"]
                 and "MATCH" in sql
                 and "COUNT" in sql.upper()

@@ -16,26 +16,30 @@ async def _collect(ait, limit=100):
 
 class _FakeResp:
     def __init__(self, lines):
-        self._lines = list(lines)
+             self._lines = list(lines)
         self.status_code = 200
 
     def raise_for_status(self):
-        return None
+
+             return None
 
     def iter_lines(self):
-        for l in self._lines:
+
+             for l in self._lines:
             yield l
 
 
 class _FakeStreamCtx:
     def __init__(self, resp):
-        self._r = resp
+             self._r = resp
 
     def __enter__(self):
-        return self._r
+
+             return self._r
 
     def __exit__(self, exc_type, exc, tb):
-        return False
+
+             return False
 
 
 class _FakeClient:
@@ -45,16 +49,19 @@ class _FakeClient:
         self._raise_after_first = raise_after_first
 
     def __enter__(self):
-        return self
+
+             return self
 
     def __exit__(self, exc_type, exc, tb):
-        return False
+
+             return False
 
     def post(self, *args, **kwargs):  # pragma: no cover - not used in these tests
         return _FakeResp([])
 
     def stream(self, *args, **kwargs):
-        if self._calls is not None:
+
+             if self._calls is not None:
             self._calls["n"] = self._calls.get("n", 0) + 1
 
         if self._raise_after_first is None:
@@ -64,10 +71,12 @@ class _FakeClient:
             status_code = 200
 
             def raise_for_status(self):
-                return None
+
+                             return None
 
             def iter_lines(_self):
-                it = iter(self._lines)
+
+                             it = iter(self._lines)
                 first = next(it, None)
                 if first is not None:
                     yield first

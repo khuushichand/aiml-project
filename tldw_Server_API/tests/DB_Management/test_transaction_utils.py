@@ -23,27 +23,32 @@ class MockDatabase:
     """Mock database class for testing."""
 
     def __init__(self):
-        self.in_transaction = False
+
+             self.in_transaction = False
         self.transaction_count = 0
         self.rollback_count = 0
         self.client_id = "test_client"
         self.conversation_counter = 0
 
     def transaction(self):
-        """Mock transaction context manager."""
+
+             """Mock transaction context manager."""
         return MockTransactionContext(self)
 
     def add_conversation(self, data):
-        """Mock add conversation."""
+
+             """Mock add conversation."""
         self.conversation_counter += 1
         return f"conv_{self.conversation_counter}"
 
     def add_message(self, data):
-        """Mock add message."""
+
+             """Mock add message."""
         return f"msg_{data.get('conversation_id', 'unknown')}"
 
     def update_conversation(self, conv_id, updates):
-        """Mock update conversation."""
+
+             """Mock update conversation."""
         return True
 
 
@@ -51,15 +56,18 @@ class MockTransactionContext:
     """Mock transaction context manager."""
 
     def __init__(self, db):
-        self.db = db
+
+             self.db = db
 
     def __enter__(self):
-        self.db.in_transaction = True
+
+             self.db.in_transaction = True
         self.db.transaction_count += 1
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.db.in_transaction = False
+
+             self.db.in_transaction = False
         if exc_type:
             self.db.rollback_count += 1
         return False
@@ -108,15 +116,16 @@ class TestDbTransaction:
         original_transaction = db.transaction
 
         def failing_transaction():
-            nonlocal attempt_count
+
+                     nonlocal attempt_count
             attempt_count += 1
             if attempt_count < 3:
                 # Create a context that will raise ConflictError
                 class FailingContext:
                     def __enter__(self):
-                        raise ConflictError("Concurrent modification")
+                                             raise ConflictError("Concurrent modification")
                     def __exit__(self, *args):
-                        return False
+                                             return False
                 return FailingContext()
             return original_transaction()
 
@@ -134,13 +143,14 @@ class TestDbTransaction:
         attempt_count = 0
 
         def always_failing_transaction():
-            nonlocal attempt_count
+
+                     nonlocal attempt_count
             attempt_count += 1
             class FailingContext:
                 def __enter__(self):
-                    raise ConflictError("Always fails")
+                                     raise ConflictError("Always fails")
                 def __exit__(self, *args):
-                    return False
+                                     return False
             return FailingContext()
 
         with patch.object(db, 'transaction', side_effect=always_failing_transaction):
@@ -189,14 +199,15 @@ class TestDbTransaction:
         attempt_count = 0
 
         def failing_then_success_transaction():
-            nonlocal attempt_count
+
+                     nonlocal attempt_count
             attempt_count += 1
             if attempt_count < 3:
                 class FailingContext:
                     def __enter__(self):
-                        raise ConflictError("Retry needed")
+                                             raise ConflictError("Retry needed")
                     def __exit__(self, *args):
-                        return False
+                                             return False
                 return FailingContext()
             return MockTransactionContext(db)
 
@@ -263,14 +274,14 @@ class TestTransactionalDecorator:
 
         # The failing_transaction should be called by db_transaction
         def failing_transaction():
-            nonlocal attempt_count
+                     nonlocal attempt_count
             attempt_count += 1
             if attempt_count < 2:
                 class FailingContext:
                     def __enter__(self):
-                        raise ConflictError("Retry needed")
+                                             raise ConflictError("Retry needed")
                     def __exit__(self, *args):
-                        return False
+                                             return False
                 return FailingContext()
             return MockTransactionContext(db)
 
@@ -357,14 +368,15 @@ class TestSaveConversationWithMessages:
         attempt_count = 0
 
         def failing_then_success_transaction():
-            nonlocal attempt_count
+
+                     nonlocal attempt_count
             attempt_count += 1
             if attempt_count < 2:
                 class FailingContext:
                     def __enter__(self):
-                        raise ConflictError("Concurrent modification")
+                                             raise ConflictError("Concurrent modification")
                     def __exit__(self, *args):
-                        return False
+                                             return False
                 return FailingContext()
             return MockTransactionContext(db)
 

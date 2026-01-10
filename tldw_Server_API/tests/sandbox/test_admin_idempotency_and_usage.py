@@ -9,7 +9,9 @@ from fastapi.testclient import TestClient
 
 
 def _client(monkeypatch) -> TestClient:
-    # Speed up and stabilize sandbox WS behavior in tests
+
+
+     # Speed up and stabilize sandbox WS behavior in tests
     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "true")
@@ -29,13 +31,15 @@ def _client(monkeypatch) -> TestClient:
 
 
 def _admin_user_dep():
-    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+
+
+     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
     return User(id=1, username="admin", roles=["admin"], is_admin=True)
 
 
 @pytest.mark.unit
 def test_admin_idempotency_list_filters_and_pagination(monkeypatch) -> None:
-    with _client(monkeypatch) as client:
+     with _client(monkeypatch) as client:
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
         client.app.dependency_overrides[get_request_user] = _admin_user_dep
         # Create a session with idempotency key, then post the same again to trigger 409
@@ -73,7 +77,7 @@ def test_admin_idempotency_list_filters_and_pagination(monkeypatch) -> None:
 
 @pytest.mark.unit
 def test_admin_usage_aggregates_schema_and_filters(monkeypatch) -> None:
-    with _client(monkeypatch) as client:
+     with _client(monkeypatch) as client:
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
         client.app.dependency_overrides[get_request_user] = _admin_user_dep
         # Create two runs for default user
@@ -111,7 +115,7 @@ def test_admin_usage_aggregates_schema_and_filters(monkeypatch) -> None:
 
 @pytest.mark.unit
 def test_admin_idempotency_sort_asc_desc(monkeypatch) -> None:
-    with _client(monkeypatch) as client:
+     with _client(monkeypatch) as client:
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
         client.app.dependency_overrides[get_request_user] = _admin_user_dep
         # Create two idempotent sessions with different times by patching time.time

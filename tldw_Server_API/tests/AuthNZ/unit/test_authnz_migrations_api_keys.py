@@ -12,7 +12,9 @@ def _sqlite_columns(conn: sqlite3.Connection, table: str) -> set[str]:
 
 
 def test_migration_017_extend_api_keys_virtual_adds_columns() -> None:
-    from tldw_Server_API.app.core.AuthNZ.migrations import (
+
+
+     from tldw_Server_API.app.core.AuthNZ.migrations import (
         migration_001_create_users_table,
         migration_003_create_api_keys_table,
         migration_004_create_api_key_audit_log,

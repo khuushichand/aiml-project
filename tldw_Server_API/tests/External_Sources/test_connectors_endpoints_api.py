@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture()
 def connectors_client() -> Tuple[TestClient, dict]:
-    """Provide a TestClient with connectors routes enabled and X-API-KEY headers.
+     """Provide a TestClient with connectors routes enabled and X-API-KEY headers.
 
     We enable the experimental 'connectors' route via ROUTES_ENABLE before importing the app.
     """
@@ -38,7 +38,7 @@ def connectors_client() -> Tuple[TestClient, dict]:
 
 @pytest.mark.integration
 def test_add_source_success(connectors_client, monkeypatch):
-    client, headers = connectors_client
+     client, headers = connectors_client
 
     # Patch the service call used by the endpoint to avoid DB work
     async def _fake_create_source(db, *, account_id, provider, remote_id, type_, path, options, enabled=True):
@@ -78,7 +78,7 @@ def test_add_source_success(connectors_client, monkeypatch):
 
 @pytest.mark.integration
 def test_add_source_rejects_missing_account(connectors_client, monkeypatch):
-    client, headers = connectors_client
+     client, headers = connectors_client
 
     async def _fake_get_account_for_user(db, user_id, account_id):
         return None
@@ -98,7 +98,7 @@ def test_add_source_rejects_missing_account(connectors_client, monkeypatch):
 
 @pytest.mark.integration
 def test_add_source_rejects_provider_mismatch(connectors_client, monkeypatch):
-    client, headers = connectors_client
+     client, headers = connectors_client
 
     async def _fake_get_account_for_user(db, user_id, account_id):
         return {"id": account_id, "user_id": user_id, "provider": "notion"}
@@ -118,7 +118,7 @@ def test_add_source_rejects_provider_mismatch(connectors_client, monkeypatch):
 
 @pytest.mark.integration
 def test_add_source_forbid_extra_fields(connectors_client, monkeypatch):
-    client, headers = connectors_client
+     client, headers = connectors_client
 
     # No patch needed; we expect validation to fail before hitting service
     payload = {
@@ -134,7 +134,7 @@ def test_add_source_forbid_extra_fields(connectors_client, monkeypatch):
 
 @pytest.mark.integration
 def test_patch_source_success(connectors_client, monkeypatch):
-    client, headers = connectors_client
+     client, headers = connectors_client
 
     async def _fake_update_source(db, user_id, source_id, *, enabled=None, options=None):
         return {
@@ -166,7 +166,7 @@ def test_patch_source_success(connectors_client, monkeypatch):
 
 @pytest.mark.integration
 def test_patch_source_404(connectors_client, monkeypatch):
-    client, headers = connectors_client
+     client, headers = connectors_client
 
     async def _fake_update_source_none(db, user_id, source_id, *, enabled=None, options=None):
         return None
@@ -184,7 +184,7 @@ def test_patch_source_404(connectors_client, monkeypatch):
 
 @pytest.mark.integration
 def test_patch_source_forbid_extra_fields(connectors_client):
-    client, headers = connectors_client
+     client, headers = connectors_client
     r = client.patch(
         "/api/v1/connectors/sources/55",
         json={"enabled": True, "extra": "bad"},
@@ -195,7 +195,7 @@ def test_patch_source_forbid_extra_fields(connectors_client):
 
 @pytest.mark.integration
 def test_oauth_callback_rejects_invalid_state(connectors_client, monkeypatch):
-    client, headers = connectors_client
+     client, headers = connectors_client
 
     import tldw_Server_API.app.api.v1.endpoints.connectors as ep
 
@@ -205,7 +205,7 @@ def test_oauth_callback_rejects_invalid_state(connectors_client, monkeypatch):
     class _FakeConn:
         name = "notion"
         def authorize_url(self, *a, **kw):
-            return ""
+                     return ""
         async def exchange_code(self, *a, **kw):
             raise AssertionError("exchange_code should not be called on invalid state")
 
@@ -222,7 +222,7 @@ def test_oauth_callback_rejects_invalid_state(connectors_client, monkeypatch):
 
 @pytest.mark.integration
 def test_oauth_callback_accepts_valid_state(connectors_client, monkeypatch):
-    client, headers = connectors_client
+     client, headers = connectors_client
 
     import tldw_Server_API.app.api.v1.endpoints.connectors as ep
 
@@ -232,7 +232,7 @@ def test_oauth_callback_accepts_valid_state(connectors_client, monkeypatch):
     class _FakeConn:
         name = "notion"
         def authorize_url(self, *a, **kw):
-            return ""
+                     return ""
         async def exchange_code(self, code, redirect_uri):
             return {
                 "access_token": "tok",

@@ -30,7 +30,7 @@ from tldw_Server_API.app.core.TTS.tts_exceptions import (
 
 @st.composite
 def valid_tts_text(draw):
-    """Generate valid TTS text."""
+     """Generate valid TTS text."""
     # Generate reasonable text lengths
     length = draw(st.integers(min_value=1, max_value=1000))
     # Use printable ASCII and common unicode
@@ -41,7 +41,7 @@ def valid_tts_text(draw):
 
 @st.composite
 def valid_voice_name(draw):
-    """Generate valid voice names."""
+     """Generate valid voice names."""
     providers = {
         "openai": ["alloy", "echo", "fable", "onyx", "nova", "shimmer"],
         "elevenlabs": ["rachel", "domi", "bella", "antoni", "clyde"],
@@ -53,13 +53,13 @@ def valid_voice_name(draw):
 
 @st.composite
 def valid_speed(draw):
-    """Generate valid speed values."""
+     """Generate valid speed values."""
     # Most TTS services support 0.25-4.0
     return draw(st.floats(min_value=0.25, max_value=4.0))
 
 @st.composite
 def valid_voice_settings(draw):
-    """Generate valid voice settings."""
+     """Generate valid voice settings."""
     return VoiceSettings(
         stability=draw(st.floats(min_value=0.0, max_value=1.0)),
         similarity_boost=draw(st.floats(min_value=0.0, max_value=1.0)),
@@ -69,7 +69,7 @@ def valid_voice_settings(draw):
 
 @st.composite
 def valid_tts_request(draw):
-    """Generate valid TTS request."""
+     """Generate valid TTS request."""
     voice, provider = draw(valid_voice_name())
     return TTSRequest(
         text=draw(valid_tts_text()),
@@ -91,7 +91,7 @@ class TestRequestValidationProperties:
     @pytest.mark.property
     @given(text=valid_tts_text())
     def test_valid_text_always_accepted(self, text):
-        """Property: Valid text should always be accepted."""
+             """Property: Valid text should always be accepted."""
         request = TTSRequest(
             text=text,
             voice="alloy",
@@ -103,7 +103,7 @@ class TestRequestValidationProperties:
     @pytest.mark.property
     @given(length=st.integers(min_value=5001, max_value=6000))
     def test_long_text_handling(self, length):
-        """Property: Text exceeding limits should be handled consistently."""
+             """Property: Text exceeding limits should be handled consistently."""
         request = TTSRequest(
             text="a" * length,
             voice="alloy",
@@ -116,7 +116,7 @@ class TestRequestValidationProperties:
     @pytest.mark.property
     @given(speed=st.floats(allow_nan=False, allow_infinity=False))
     def test_speed_validation_bounds(self, speed):
-        """Property: Speed values outside bounds should be handled."""
+             """Property: Speed values outside bounds should be handled."""
         if 0.25 <= speed <= 4.0:
             # Valid speed should work
             request = TTSRequest(
@@ -142,7 +142,7 @@ class TestRequestValidationProperties:
     @pytest.mark.property
     @given(request=valid_tts_request())
     def test_request_serialization_roundtrip(self, request):
-        """Property: Requests should survive serialization roundtrip."""
+             """Property: Requests should survive serialization roundtrip."""
         # Serialize to dict
         data = request.dict()
 
@@ -165,7 +165,7 @@ class TestAudioOutputProperties:
     @pytest.mark.property
     @given(audio_bytes=st.binary(min_size=100, max_size=10000))
     def test_audio_bytes_are_valid(self, audio_bytes):
-        """Property: Generated audio bytes should be valid."""
+             """Property: Generated audio bytes should be valid."""
         response = TTSResponse(
             audio_content=audio_bytes,
             format=AudioFormat.MP3,
@@ -183,7 +183,7 @@ class TestAudioOutputProperties:
         duration=st.floats(min_value=0.1, max_value=10.0)
     )
     def test_audio_metadata_consistency(self, sample_rate, duration):
-        """Property: Audio metadata should be consistent."""
+             """Property: Audio metadata should be consistent."""
         response = TTSResponse(
             audio_content=b"fake_audio",
             format=AudioFormat.WAV,
@@ -208,7 +208,7 @@ class TestAudioOutputProperties:
     @pytest.mark.property
     @given(format=st.sampled_from(list(AudioFormat)))
     def test_format_preservation(self, format):
-        """Property: Audio format should be preserved."""
+             """Property: Audio format should be preserved."""
         response = TTSResponse(
             audio_content=b"audio",
             format=format,
@@ -236,7 +236,7 @@ class TestProviderBehaviorProperties:
         )
     )
     def test_provider_switching_deterministic(self, providers):
-        """Property: Provider switching should be deterministic."""
+             """Property: Provider switching should be deterministic."""
         # When switching providers, behavior should be predictable
         previous = None
         for provider in providers:
@@ -260,7 +260,7 @@ class TestProviderBehaviorProperties:
         provider=st.sampled_from(["openai", "elevenlabs"])
     )
     def test_same_text_deterministic_output(self, text, provider):
-        """Property: Same text with same settings should give consistent results."""
+             """Property: Same text with same settings should give consistent results."""
         voice = "alloy" if provider == "openai" else "rachel"
 
         request1 = TTSRequest(text=text, voice=voice, provider=provider)
@@ -284,7 +284,7 @@ class TestChunkingProperties:
         chunk_size=st.integers(min_value=50, max_value=500)
     )
     def test_chunking_preserves_text(self, text, chunk_size):
-        """Property: Chunking should preserve all text."""
+             """Property: Chunking should preserve all text."""
         assume(text.strip())
 
         # Simple chunking simulation
@@ -307,7 +307,7 @@ class TestChunkingProperties:
         )
     )
     def test_sentence_chunking_preserves_boundaries(self, sentences):
-        """Property: Sentence-based chunking should preserve boundaries."""
+             """Property: Sentence-based chunking should preserve boundaries."""
         # Join with proper punctuation
         text = ". ".join(sentences) + "."
 
@@ -325,7 +325,8 @@ class TTSStateMachine(RuleBasedStateMachine):
     """Stateful testing for TTS service lifecycle."""
 
     def __init__(self):
-        super().__init__()
+
+             super().__init__()
         self.service = None
         self.active_providers = set()
         self.generated_audio = []
@@ -333,7 +334,7 @@ class TTSStateMachine(RuleBasedStateMachine):
 
     @initialize()
     def setup(self):
-        """Initialize the TTS service."""
+             """Initialize the TTS service."""
         self.service = TTSServiceV2()
         self.active_providers = {"openai"}  # Start with default
         self.generated_audio = []
@@ -344,7 +345,7 @@ class TTSStateMachine(RuleBasedStateMachine):
         voice=st.sampled_from(["alloy", "echo", "nova"])
     )
     def generate_audio(self, text, voice):
-        """Rule: Generate audio with current provider."""
+             """Rule: Generate audio with current provider."""
         request = TTSRequest(
             text=text,
             voice=voice,
@@ -362,30 +363,30 @@ class TTSStateMachine(RuleBasedStateMachine):
 
     @rule(provider=st.sampled_from(["openai", "elevenlabs", "kokoro"]))
     def switch_provider(self, provider):
-        """Rule: Switch to a different provider."""
+             """Rule: Switch to a different provider."""
         self.current_provider = provider
         self.active_providers.add(provider)
 
     @rule()
     def clear_cache(self):
-        """Rule: Clear any caches."""
+             """Rule: Clear any caches."""
         # This would clear provider caches in real implementation
         pass
 
     @invariant()
     def audio_count_increases(self):
-        """Invariant: Audio count never decreases."""
+             """Invariant: Audio count never decreases."""
         # Count should only increase or stay same
         assert len(self.generated_audio) >= 0
 
     @invariant()
     def provider_always_valid(self):
-        """Invariant: Current provider is always valid."""
+             """Invariant: Current provider is always valid."""
         assert self.current_provider in ["openai", "elevenlabs", "kokoro"]
 
     @invariant()
     def active_providers_tracked(self):
-        """Invariant: Active providers are tracked correctly."""
+             """Invariant: Active providers are tracked correctly."""
         assert len(self.active_providers) >= 1
         assert self.current_provider in self.active_providers or not self.active_providers
 
@@ -405,7 +406,7 @@ class TestErrorInjectionProperties:
         num_requests=st.integers(min_value=1, max_value=100)
     )
     def test_error_rate_bounds(self, error_rate, num_requests):
-        """Property: Error rate should match configuration."""
+             """Property: Error rate should match configuration."""
         errors = 0
         successes = 0
 
@@ -428,7 +429,7 @@ class TestErrorInjectionProperties:
         success_on_retry=st.integers(min_value=0, max_value=5)
     )
     def test_retry_logic(self, retry_count, success_on_retry):
-        """Property: Retry logic should be bounded."""
+             """Property: Retry logic should be bounded."""
         attempts = 0
         max_retries = retry_count
 
@@ -459,7 +460,7 @@ class TestPerformanceProperties:
     )
     @settings(max_examples=10, deadline=5000)  # 5 second deadline
     def test_concurrent_request_handling(self, num_concurrent, text_length):
-        """Property: System should handle concurrent requests."""
+             """Property: System should handle concurrent requests."""
         requests = []
         for i in range(num_concurrent):
             text = f"Request {i}: " + "a" * text_length
@@ -480,7 +481,7 @@ class TestPerformanceProperties:
         num_requests=st.integers(min_value=0, max_value=200)
     )
     def test_cache_behavior(self, cache_size, num_requests):
-        """Property: Cache should respect size limits."""
+             """Property: Cache should respect size limits."""
         cache = {}
 
         for i in range(num_requests):

@@ -11,7 +11,7 @@ from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import ServerEr
 
 class DummyProc:
     def __init__(self, pid=777):
-        self.pid = pid
+             self.pid = pid
         self.returncode = None
         self.stdout = None
         self.stderr = None
@@ -109,7 +109,7 @@ async def test_port_autoselect(monkeypatch, tmp_path: Path):
 
     seq = {"i": 0}
     def fake_is_free(host, port):
-        seq["i"] += 1
+             seq["i"] += 1
         return seq["i"] >= 2  # first port busy, second free
     monkeypatch.setattr(handler, "_is_port_free", fake_is_free)
     async def fake_cpe(*a, **k): return DummyProc()
@@ -139,7 +139,7 @@ async def test_streaming_inference_yields_sse(monkeypatch, tmp_path: Path):
         async def __aexit__(self, exc_type, exc, tb):
             return False
         def raise_for_status(self):
-            return None
+                     return None
         async def aiter_lines(self):
             yield "data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}"
             yield "data: [DONE]"
@@ -149,7 +149,7 @@ async def test_streaming_inference_yields_sse(monkeypatch, tmp_path: Path):
         async def __aenter__(self): return self
         async def __aexit__(self, exc_type, exc, tb): return False
         def stream(self, method, url, json=None, headers=None):
-            return FakeStream()
+                     return FakeStream()
 
     import tldw_Server_API.app.core.Local_LLM.http_utils as http_utils
     monkeypatch.setattr(http_utils, "create_async_client", lambda *a, **k: FakeClient())

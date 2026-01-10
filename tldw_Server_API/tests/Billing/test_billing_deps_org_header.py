@@ -12,7 +12,7 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
 class _FakeRepoIgnoreHeader:
     def __init__(self, *args, **kwargs) -> None:
-        pass
+             pass
 
     async def get_org_member(self, org_id: int, user_id: int):
         return None
@@ -23,7 +23,7 @@ class _FakeRepoIgnoreHeader:
 
 class _FakeRepoAdminHeader:
     def __init__(self, *args, **kwargs) -> None:
-        pass
+             pass
 
     async def get_org_member(self, org_id: int, user_id: int):
         return None
@@ -34,7 +34,7 @@ class _FakeRepoAdminHeader:
 
 class _FakeRepoMemberHeader:
     def __init__(self, *args, **kwargs) -> None:
-        pass
+             pass
 
     async def get_org_member(self, org_id: int, user_id: int):
         if org_id == 999:

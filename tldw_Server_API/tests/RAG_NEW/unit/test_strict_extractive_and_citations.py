@@ -159,7 +159,7 @@ class TestNLIGatingBehavior:
 
     class _FakeVerifier:
         def __init__(self, *_, **__):
-            pass
+                     pass
 
         async def verify_and_maybe_fix(self, *_, **__):
             return TestNLIGatingBehavior._FakeOutcome()

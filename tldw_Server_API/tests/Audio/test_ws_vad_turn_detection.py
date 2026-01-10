@@ -11,7 +11,7 @@ import pytest
 
 class _DummyWebSocket:
     def __init__(self, frames, delays=None):
-        self._frames = list(frames)
+             self._frames = list(frames)
         self.sent = []
         self.closed = False
         self.close_args = None
@@ -38,33 +38,37 @@ async def test_vad_auto_commit_triggers_full_transcript(monkeypatch):
     """Auto-commit should emit a full_transcript frame when VAD signals EOS."""
     class _StubTranscriber:
         def __init__(self, config):
-            self.config = config
+                     self.config = config
 
         def initialize(self):
-            return None
+
+                     return None
 
         async def process_audio_chunk(self, _audio_bytes: bytes):
             return {"type": "partial", "text": "hi", "timestamp": time.time(), "is_final": False}
 
         def get_full_transcript(self):
-            return "hello world"
+
+                     return "hello world"
 
         def reset(self):
-            return None
+
+                     return None
 
         def cleanup(self):
-            return None
+
+                     return None
 
     class _StubTurnDetector:
         def __init__(self, *args, **kwargs):
-            self.available = True
+                     self.available = True
             self.unavailable_reason = None
             self._count = 0
             self._last_trigger_at = None
 
         @property
         def last_trigger_at(self):
-            return self._last_trigger_at
+                     return self._last_trigger_at
 
         def observe(self, _audio_bytes: bytes) -> bool:
             self._count += 1
@@ -96,26 +100,30 @@ async def test_vad_fail_open_disables_auto_commit(monkeypatch):
     """When VAD is unavailable, the stream should continue without auto-commit."""
     class _StubTranscriber:
         def __init__(self, config):
-            self.config = config
+                     self.config = config
 
         def initialize(self):
-            return None
+
+                     return None
 
         async def process_audio_chunk(self, _audio_bytes: bytes):
             return None
 
         def get_full_transcript(self):
-            return "should_not_emit"
+
+                     return "should_not_emit"
 
         def reset(self):
-            return None
+
+                     return None
 
         def cleanup(self):
-            return None
+
+                     return None
 
     class _UnavailableVAD:
         def __init__(self, *args, **kwargs):
-            self.available = False
+                     self.available = False
             self.unavailable_reason = "no_silero"
 
         def observe(self, _audio_bytes: bytes):
@@ -141,33 +149,37 @@ async def test_vad_auto_commit_records_latency_metric(monkeypatch):
     """Auto-commit should record stt_final_latency_seconds with endpoint label."""
     class _StubTranscriber:
         def __init__(self, config):
-            self.config = config
+                     self.config = config
 
         def initialize(self):
-            return None
+
+                     return None
 
         async def process_audio_chunk(self, _audio_bytes: bytes):
             return {"type": "partial", "text": "hi", "timestamp": time.time(), "is_final": False}
 
         def get_full_transcript(self):
-            return "hello world"
+
+                     return "hello world"
 
         def reset(self):
-            return None
+
+                     return None
 
         def cleanup(self):
-            return None
+
+                     return None
 
     class _StubTurnDetector:
         def __init__(self, *args, **kwargs):
-            self.available = True
+                     self.available = True
             self.unavailable_reason = None
             self._count = 0
             self._last_trigger_at = None
 
         @property
         def last_trigger_at(self):
-            return self._last_trigger_at
+                     return self._last_trigger_at
 
         def observe(self, _audio_bytes: bytes) -> bool:
             self._count += 1
@@ -203,16 +215,20 @@ async def test_vad_auto_commit_records_latency_metric(monkeypatch):
 
 
 def test_silero_turn_detector_triggers_after_silence(monkeypatch):
-    """SileroTurnDetector should fire once speech is followed by configured silence."""
+
+
+     """SileroTurnDetector should fire once speech is followed by configured silence."""
     class _FakeVADIterator:
         def __init__(self, *args, **kwargs):
-            self.calls = 0
+                     self.calls = 0
 
         def reset_states(self):
-            self.calls = 0
+
+                     self.calls = 0
 
         def __call__(self, _audio_in, return_seconds=False, **_kwargs):
-            self.calls += 1
+
+                     self.calls += 1
             if self.calls == 1:
                 return {"speech_timestamps": [{"start": 0, "end": 100}]}
             return {}
@@ -240,16 +256,20 @@ def test_silero_turn_detector_triggers_after_silence(monkeypatch):
 
 
 def test_silero_turn_detector_honors_min_utterance(monkeypatch):
-    """Auto-commit should not fire when speech duration is below min_utterance_secs."""
+
+
+     """Auto-commit should not fire when speech duration is below min_utterance_secs."""
     class _FakeVADIterator:
         def __init__(self, *args, **kwargs):
-            self.calls = 0
+                     self.calls = 0
 
         def reset_states(self):
-            self.calls = 0
+
+                     self.calls = 0
 
         def __call__(self, _audio_in, return_seconds=False, **_kwargs):
-            self.calls += 1
+
+                     self.calls += 1
             if self.calls == 1:
                 return {"speech_timestamps": [{"start": 0, "end": 20}]}
             return {}
@@ -277,7 +297,9 @@ def test_silero_turn_detector_honors_min_utterance(monkeypatch):
 
 
 def test_silero_turn_detector_real_vad_end_to_end():
-    """
+
+
+     """
     Exercise SileroTurnDetector with real Silero VAD (no stubs) on a sample WAV plus trailing silence.
 
     Skips when Silero VAD is not available locally.
@@ -327,20 +349,24 @@ def test_silero_turn_detector_real_vad_end_to_end():
 
 
 def test_silero_turn_detector_logs_fail_open(monkeypatch):
-    """
+
+
+     """
     When Silero VAD cannot be initialized, we should log a warning and continue without auto-commit.
     """
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.VAD_Lib as vlib
     import tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified as unified
 
     def _raise_import_error():
-        raise ImportError("silero missing")
+
+             raise ImportError("silero missing")
 
     monkeypatch.setattr(vlib, "_lazy_import_silero_vad", _raise_import_error)
     captured_warnings = []
 
     def _fake_warning(msg, *_args, **_kwargs):
-        try:
+
+             try:
             captured_warnings.append(msg.format(*_args))
         except (IndexError, KeyError, ValueError):
             captured_warnings.append(str(msg))
@@ -369,33 +395,37 @@ async def test_ws_streaming_pauses_emit_single_final(monkeypatch):
 
     class _StubTranscriber:
         def __init__(self, config):
-            self.config = config
+                     self.config = config
 
         def initialize(self):
-            return None
+
+                     return None
 
         async def process_audio_chunk(self, _audio_bytes: bytes):
             return {"type": "partial", "text": "hi", "timestamp": time.time(), "is_final": False}
 
         def get_full_transcript(self):
-            return "pause-final"
+
+                     return "pause-final"
 
         def reset(self):
-            return None
+
+                     return None
 
         def cleanup(self):
-            return None
+
+                     return None
 
     class _StubTurnDetector:
         def __init__(self, *args, **kwargs):
-            self.available = True
+                     self.available = True
             self.unavailable_reason = None
             self._last_trigger_at = None
             self._seen = 0
 
         @property
         def last_trigger_at(self):
-            return self._last_trigger_at
+                     return self._last_trigger_at
 
         def observe(self, _audio_bytes: bytes) -> bool:
             # Trigger on the second audio chunk (after pause)

@@ -8,33 +8,43 @@ from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, Qu
 
 
 def test_add_media_with_keywords_requires_db_instance():
-    with pytest.raises(ValueError) as excinfo:
+
+
+     with pytest.raises(ValueError) as excinfo:
         # Intentionally omit db_instance to ensure the wrapper enforces it
         DB_Manager.add_media_with_keywords(url="https://example.com", title="T", media_type="text")
     assert "requires 'db_instance'" in str(excinfo.value)
 
 
 def test_get_paginated_files_requires_db_instance():
-    with pytest.raises(ValueError) as excinfo:
+
+
+     with pytest.raises(ValueError) as excinfo:
         # Intentionally omit db_instance to ensure the wrapper enforces it
         DB_Manager.get_paginated_files(page=1, results_per_page=10)
     assert "requires 'db_instance'" in str(excinfo.value)
 
 
 def test_update_keywords_for_media_requires_db_instance():
-    with pytest.raises(ValueError) as excinfo:
+
+
+     with pytest.raises(ValueError) as excinfo:
         DB_Manager.update_keywords_for_media(media_id=1, keywords=["x", "y"])  # no db_instance
     assert "requires 'db_instance'" in str(excinfo.value)
 
 
 def test_rollback_to_version_requires_db_instance():
-    with pytest.raises(ValueError) as excinfo:
+
+
+     with pytest.raises(ValueError) as excinfo:
         DB_Manager.rollback_to_version(media_id=1, target_version_number=2)  # no db_instance
     assert "requires 'db_instance'" in str(excinfo.value)
 
 
 def test_delete_document_version_requires_db_instance():
-    with pytest.raises(ValueError) as excinfo:
+
+
+     with pytest.raises(ValueError) as excinfo:
         DB_Manager.delete_document_version(version_uuid="deadbeef")  # no db_instance
     assert "requires 'db_instance'" in str(excinfo.value)
 
@@ -45,12 +55,14 @@ def _make_memory_db(client_id: str = "unit-db-manager") -> MediaDatabase:
 
 @pytest.fixture
 def force_postgres(monkeypatch):
-    monkeypatch.setattr(DB_Manager, "db_type", "postgres", raising=False)
+     monkeypatch.setattr(DB_Manager, "db_type", "postgres", raising=False)
     yield
 
 
 def test_add_media_and_paginated_files_success():
-    db = _make_memory_db()
+
+
+     db = _make_memory_db()
     mid, muuid, msg = DB_Manager.add_media_with_keywords(
         db_instance=db,
         title="Doc A",
@@ -70,7 +82,9 @@ def test_add_media_and_paginated_files_success():
 
 
 def test_update_keywords_for_media_success():
-    db = _make_memory_db()
+
+
+     db = _make_memory_db()
     mid, _, _ = DB_Manager.add_media_with_keywords(
         db_instance=db,
         title="Doc B",
@@ -86,7 +100,9 @@ def test_update_keywords_for_media_success():
 
 
 def test_rollback_to_version_success_and_delete_version_success():
-    db = _make_memory_db()
+
+
+     db = _make_memory_db()
     mid, _, _ = DB_Manager.add_media_with_keywords(
         db_instance=db,
         title="Doc C",
@@ -125,7 +141,9 @@ def test_rollback_to_version_success_and_delete_version_success():
 
 
 def test_fetch_keywords_for_media_postgres_mode(force_postgres):
-    db = _make_memory_db()
+
+
+     db = _make_memory_db()
     mid, _, _ = DB_Manager.add_media_with_keywords(
         db_instance=db,
         title="Doc PG",
@@ -143,7 +161,9 @@ def test_fetch_keywords_for_media_postgres_mode(force_postgres):
 
 
 def test_empty_trash_postgres_mode(force_postgres):
-    db = _make_memory_db()
+
+
+     db = _make_memory_db()
     mid, _, _ = DB_Manager.add_media_with_keywords(
         db_instance=db,
         title="Trash Me",
@@ -157,7 +177,9 @@ def test_empty_trash_postgres_mode(force_postgres):
 
 
 def test_document_version_wrappers_postgres_mode(force_postgres):
-    db = _make_memory_db()
+
+
+     db = _make_memory_db()
     mid, _, _ = DB_Manager.add_media_with_keywords(
         db_instance=db,
         title="Doc Versions",
@@ -182,20 +204,24 @@ def test_document_version_wrappers_postgres_mode(force_postgres):
 
 
 def test_validate_postgres_content_backend_uses_queryresult_first(monkeypatch):
-    expected_version = MediaDatabase._CURRENT_SCHEMA_VERSION
+
+
+     expected_version = MediaDatabase._CURRENT_SCHEMA_VERSION
 
     class StubBackend:
         backend_type = BackendType.POSTGRESQL
 
         def __init__(self):
-            self.queries = []
+
+                     self.queries = []
 
         @contextmanager
         def transaction(self):
-            yield object()
+                     yield object()
 
         def execute(self, query, params=None, connection=None):
-            self.queries.append(query)
+
+                     self.queries.append(query)
             if "schema_version" in query:
                 return QueryResult(rows=[{"version": expected_version}], rowcount=1)
             return QueryResult(rows=[{"ok": 1}], rowcount=1)
@@ -205,16 +231,19 @@ def test_validate_postgres_content_backend_uses_queryresult_first(monkeypatch):
         instances = []
 
         def __init__(self, *args, **kwargs):
-            self.backend = kwargs.get("backend")
+
+                     self.backend = kwargs.get("backend")
             self.checked_policies = []
             self.__class__.instances.append(self)
 
         def _postgres_policy_exists(self, conn, table, policy):
-            self.checked_policies.append((table, policy))
+
+                     self.checked_policies.append((table, policy))
             return True
 
         def close_connection(self):
-            pass
+
+                     pass
 
     stub_backend = StubBackend()
     monkeypatch.setattr(DB_Manager, "_CONTENT_DB_BACKEND", stub_backend, raising=False)

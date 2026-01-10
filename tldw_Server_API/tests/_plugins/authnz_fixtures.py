@@ -60,7 +60,9 @@ async def authnz_schema_ready():
 
 
 def _run_async(coro):
-    import asyncio as _asyncio
+
+
+     import asyncio as _asyncio
     try:
         loop = _asyncio.get_event_loop()
         if loop.is_running():
@@ -75,7 +77,7 @@ import pytest
 
 @pytest.fixture
 def authnz_schema_ready_sync():
-    """Sync-friendly variant to ensure AuthNZ schema for SQLite tests.
+     """Sync-friendly variant to ensure AuthNZ schema for SQLite tests.
 
     Use in synchronous tests that set DATABASE_URL and need AuthNZ tables.
     """

@@ -11,7 +11,7 @@ from tldw_Server_API.app.core.Embeddings.queue_schemas import EmbeddingMessage, 
 
 class _FakeRedis:
     def __init__(self):
-        self.kv = {}
+             self.kv = {}
         self.hashes = {}
 
     async def get(self, key):
@@ -44,7 +44,7 @@ class _HYDEEmbeddingWorker(EmbeddingWorker):
 
 @pytest.mark.unit
 def test_hyde_option_a_inlines_generation(monkeypatch):
-    # Patch settings inside the module under test
+     # Patch settings inside the module under test
     import tldw_Server_API.app.core.Embeddings.workers.embedding_worker as emb_mod
     registry = get_metrics_registry()
     registry.values.pop("hyde_questions_generated_total", None)
@@ -61,7 +61,7 @@ def test_hyde_option_a_inlines_generation(monkeypatch):
 
     # Patch hyde.generate_questions to return two questions
     def _fake_generate_questions(text, n, provider=None, model=None, **kwargs):
-        return [
+             return [
             "What is the main idea of this chunk?",
             "How does this section support the thesis?",
         ][:n]

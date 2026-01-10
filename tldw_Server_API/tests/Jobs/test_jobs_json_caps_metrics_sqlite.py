@@ -7,7 +7,9 @@ from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registr
 
 
 def _prep(monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
+
+
+     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("JOBS_DB_PATH", os.path.join(os.getcwd(), "Databases", "jobs.db"))
@@ -18,7 +20,9 @@ def _prep(monkeypatch, tmp_path):
 
 
 def test_json_truncation_emits_metrics_sqlite(monkeypatch, tmp_path):
-    reg = _prep(monkeypatch, tmp_path)
+
+
+     reg = _prep(monkeypatch, tmp_path)
     monkeypatch.setenv("JOBS_MAX_JSON_BYTES", "64")
     monkeypatch.setenv("JOBS_JSON_TRUNCATE", "true")
 
@@ -49,7 +53,9 @@ def test_json_truncation_emits_metrics_sqlite(monkeypatch, tmp_path):
 
 
 def test_json_caps_reject_does_not_emit_truncation_sqlite(monkeypatch, tmp_path):
-    reg = _prep(monkeypatch, tmp_path)
+
+
+     reg = _prep(monkeypatch, tmp_path)
     monkeypatch.setenv("JOBS_MAX_JSON_BYTES", "64")
     monkeypatch.delenv("JOBS_JSON_TRUNCATE", raising=False)
 

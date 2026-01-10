@@ -53,10 +53,11 @@ async def test_kokoro_pytorch_requires_pkg(monkeypatch):
 
     class DummyTorchModule:
         def eval(self):
-            return self
+                     return self
 
         def to(self, *args, **kwargs):
-            return self
+
+                     return self
 
     import torch
     monkeypatch.setattr("torch.jit.load", lambda *args, **kwargs: DummyTorchModule())
@@ -67,7 +68,8 @@ async def test_kokoro_pytorch_requires_pkg(monkeypatch):
     real_import = builtins.__import__
 
     def fake_import(name, *args, **kwargs):
-        if name == "kokoro":
+
+             if name == "kokoro":
             raise ImportError("kokoro package not installed")
         return real_import(name, *args, **kwargs)
 

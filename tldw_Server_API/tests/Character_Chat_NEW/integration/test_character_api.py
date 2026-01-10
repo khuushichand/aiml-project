@@ -20,7 +20,7 @@ class TestCharacterCardEndpoints:
 
     @pytest.mark.integration
     def test_create_character_endpoint(self, test_client, auth_headers, sample_character_card):
-        """Test creating a character via API."""
+             """Test creating a character via API."""
         response = test_client.post(
             "/api/v1/characters/",
             json=sample_character_card,
@@ -34,7 +34,7 @@ class TestCharacterCardEndpoints:
 
     @pytest.mark.integration
     def test_get_character_endpoint(self, test_client, auth_headers):
-        """Test getting a character via API."""
+             """Test getting a character via API."""
         # Create character
         create_response = test_client.post(
             "/api/v1/characters/",
@@ -61,7 +61,7 @@ class TestCharacterCardEndpoints:
 
     @pytest.mark.integration
     def test_list_characters_endpoint(self, test_client, auth_headers):
-        """Test listing characters via API."""
+             """Test listing characters via API."""
         # Create multiple characters
         for i in range(3):
             test_client.post(
@@ -89,7 +89,7 @@ class TestCharacterCardEndpoints:
 
     @pytest.mark.integration
     def test_update_character_endpoint(self, test_client, auth_headers):
-        """Test updating a character via API."""
+             """Test updating a character via API."""
         # Create character
         create_response = test_client.post(
             "/api/v1/characters/",
@@ -127,7 +127,7 @@ class TestCharacterCardEndpoints:
 
     @pytest.mark.integration
     def test_delete_character_endpoint(self, test_client, auth_headers):
-        """Test deleting a character via API."""
+             """Test deleting a character via API."""
         # Create character
         create_response = test_client.post(
             "/api/v1/characters/",
@@ -161,7 +161,7 @@ class TestCharacterCardEndpoints:
 
     @pytest.mark.integration
     def test_update_character_version_conflict(self, test_client, auth_headers):
-        """Updating with wrong expected_version returns 409."""
+             """Updating with wrong expected_version returns 409."""
         # Create character
         create_response = test_client.post(
             "/api/v1/characters/",
@@ -182,7 +182,7 @@ class TestCharacterCardEndpoints:
 
     @pytest.mark.integration
     def test_delete_character_version_conflict(self, test_client, auth_headers):
-        """Deleting with wrong expected_version returns 409."""
+             """Deleting with wrong expected_version returns 409."""
         create_response = test_client.post(
             "/api/v1/characters/",
             json={'name': 'Del Version', 'description': 'v1', 'personality': 'p', 'first_message': 'hi'},
@@ -207,7 +207,7 @@ class TestChatSessionEndpoints:
 
     @pytest.mark.integration
     def test_create_chat_endpoint(self, test_client, auth_headers):
-        """Test creating a chat session via API."""
+             """Test creating a chat session via API."""
         # Create character first
         char_response = test_client.post(
             "/api/v1/characters/",
@@ -237,7 +237,7 @@ class TestChatSessionEndpoints:
 
     @pytest.mark.integration
     def test_get_chat_endpoint(self, test_client, auth_headers):
-        """Test getting a chat session via API."""
+             """Test getting a chat session via API."""
         # Create character and chat
         char_response = test_client.post(
             "/api/v1/characters/",
@@ -271,7 +271,7 @@ class TestChatSessionEndpoints:
 
     @pytest.mark.integration
     def test_list_user_chats_endpoint(self, test_client, auth_headers):
-        """Test listing user's chats via API."""
+             """Test listing user's chats via API."""
         # Create character
         char_response = test_client.post(
             "/api/v1/characters/",
@@ -309,7 +309,7 @@ class TestChatSessionEndpoints:
 
     @pytest.mark.integration
     def test_delete_chat_endpoint(self, test_client, auth_headers):
-        """Test deleting a chat session via API."""
+             """Test deleting a chat session via API."""
         # Create character and chat
         char_response = test_client.post(
             "/api/v1/characters/",
@@ -345,7 +345,7 @@ class TestWorldBookEndpoints:
 
     @pytest.mark.integration
     def test_world_book_crud_and_attach(self, test_client, auth_headers):
-        """Create a world book, list, attach to character, list attached, then delete."""
+             """Create a world book, list, attach to character, list attached, then delete."""
         # Create world book
         wb_resp = test_client.post(
             "/api/v1/characters/world-books",
@@ -408,7 +408,7 @@ class TestMessageEndpoints:
 
     @pytest.mark.integration
     def test_send_message_endpoint(self, test_client, auth_headers):
-        """Test sending a message via API."""
+             """Test sending a message via API."""
         # Setup character and chat
         char_response = test_client.post(
             "/api/v1/characters/",
@@ -445,7 +445,7 @@ class TestMessageEndpoints:
 
     @pytest.mark.integration
     def test_get_messages_endpoint(self, test_client, auth_headers):
-        """Test getting chat messages via API."""
+             """Test getting chat messages via API."""
         # Setup character, chat, and messages
         char_response = test_client.post(
             "/api/v1/characters/",
@@ -490,7 +490,7 @@ class TestMessageEndpoints:
 
     @pytest.mark.integration
     def test_edit_message_endpoint(self, test_client, auth_headers):
-        """Test editing a message via API."""
+             """Test editing a message via API."""
         # Setup
         char_response = test_client.post(
             "/api/v1/characters/",
@@ -534,7 +534,7 @@ class TestMessageEndpoints:
 
     @pytest.mark.integration
     def test_delete_message_endpoint(self, test_client, auth_headers):
-        """Test deleting a message via API."""
+             """Test deleting a message via API."""
         # Setup
         char_response = test_client.post(
             "/api/v1/characters/",
@@ -581,7 +581,7 @@ class TestCharacterChatCompletion:
 
     @pytest.mark.integration
     def test_character_chat_completion(self, test_client, auth_headers):
-        """Test getting AI response for character chat."""
+             """Test getting AI response for character chat."""
         # Setup character with specific personality
         char_response = test_client.post(
             "/api/v1/characters/",
@@ -635,7 +635,7 @@ class TestCharacterChatCompletion:
     @pytest.mark.integration
     @pytest.mark.skip(reason="Streaming completion endpoint removed - use /api/v1/chat/completions with stream=true")
     def test_streaming_completion(self, test_client, auth_headers):
-        """Test streaming chat completion - DEPRECATED.
+             """Test streaming chat completion - DEPRECATED.
 
         This test is kept for reference but skipped.
         Use the main /api/v1/chat/completions endpoint with stream=true instead.
@@ -651,7 +651,7 @@ class TestSearchEndpoints:
 
     @pytest.mark.integration
     def test_search_characters_endpoint(self, test_client, auth_headers):
-        """Test searching characters via API."""
+             """Test searching characters via API."""
         # Create characters with different tags
         test_client.post(
             "/api/v1/characters/",
@@ -693,7 +693,7 @@ class TestSearchEndpoints:
 
     @pytest.mark.integration
     def test_filter_by_tags_endpoint(self, test_client, auth_headers):
-        """Test filtering characters by tags via API."""
+             """Test filtering characters by tags via API."""
         # Create tagged characters
         for i in range(3):
             test_client.post(
@@ -729,7 +729,7 @@ class TestImportExportEndpoints:
 
     @pytest.mark.integration
     def test_export_character_endpoint(self, test_client, auth_headers):
-        """Test exporting a character via API."""
+             """Test exporting a character via API."""
         # Create character
         char_response = test_client.post(
             "/api/v1/characters/",
@@ -759,14 +759,14 @@ class TestImportExportEndpoints:
     @pytest.mark.integration
     @pytest.mark.skip(reason="V3 format parsing needs adjustment - endpoint works with JSON files")
     def test_import_character_v3_endpoint(self, test_client, auth_headers, character_card_v3_format):
-        """Test importing V3 format character via API."""
+             """Test importing V3 format character via API."""
         # The unified import endpoint now handles JSON files along with other formats
         # Actual implementation tested with manual JSON file uploads
         pass
 
     @pytest.mark.integration
     def test_export_chat_history_endpoint(self, test_client, auth_headers):
-        """Test exporting chat history via API."""
+             """Test exporting chat history via API."""
         # Setup character and chat with messages
         char_response = test_client.post(
             "/api/v1/characters/",
@@ -820,7 +820,7 @@ class TestRateLimiting:
     @pytest.mark.integration
     @pytest.mark.rate_limit
     def test_rate_limit_per_character(self, test_client, auth_headers):
-        """Test rate limiting per character."""
+             """Test rate limiting per character."""
         if os.getenv("RG_ENABLED", "").lower() not in {"1", "true", "yes", "on"}:
             pytest.skip("Character chat rate limits are enforced by Resource Governor when enabled.")
         # Create character
@@ -867,7 +867,7 @@ class TestErrorHandling:
 
     @pytest.mark.integration
     def test_character_not_found(self, test_client, auth_headers):
-        """Test 404 for non-existent character."""
+             """Test 404 for non-existent character."""
         response = test_client.get(
             "/api/v1/characters/99999",
             headers=auth_headers
@@ -879,7 +879,7 @@ class TestErrorHandling:
 
     @pytest.mark.integration
     def test_invalid_character_data(self, test_client, auth_headers):
-        """Test 422 for invalid character data."""
+             """Test 422 for invalid character data."""
         response = test_client.post(
             "/api/v1/characters/",
             json={
@@ -895,7 +895,7 @@ class TestErrorHandling:
 
     @pytest.mark.integration
     def test_unauthorized_access(self, test_client):
-        """Test 401 for missing authentication."""
+             """Test 401 for missing authentication."""
         response = test_client.get("/api/v1/characters/")
 
         assert response.status_code == 200  # Auth is overridden in test setup

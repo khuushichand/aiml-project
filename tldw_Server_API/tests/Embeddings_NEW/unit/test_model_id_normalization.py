@@ -29,7 +29,7 @@ def _stub_openai_batch(
 
 @pytest.mark.unit
 def test_create_embeddings_batch_accepts_provider_prefixed_model_id(monkeypatch):
-    # Ensure limiting is bypassed in tests
+     # Ensure limiting is bypassed in tests
     monkeypatch.setenv("TESTING", "true")
 
     # Patch the OpenAI batch function used inside Embeddings_Create

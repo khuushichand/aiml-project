@@ -17,7 +17,8 @@ class TestJWTServiceUnit:
     """Unit tests for JWT service."""
 
     def test_create_access_token(self, jwt_service):
-        """Test creating an access token."""
+
+             """Test creating an access token."""
         token = jwt_service.create_access_token(
             user_id=1,
             username="testuser",
@@ -43,7 +44,8 @@ class TestJWTServiceUnit:
         assert "jti" in payload
 
     def test_create_refresh_token(self, jwt_service):
-        """Test creating a refresh token."""
+
+             """Test creating a refresh token."""
         token = jwt_service.create_refresh_token(user_id=1, username="testuser")
 
         assert token is not None
@@ -63,7 +65,8 @@ class TestJWTServiceUnit:
         assert "jti" in payload
 
     def test_decode_access_token_valid(self, jwt_service):
-        """Test decoding a valid access token."""
+
+             """Test decoding a valid access token."""
         token = jwt_service.create_access_token(
             user_id=1,
             username="testuser",
@@ -78,7 +81,8 @@ class TestJWTServiceUnit:
         assert payload["type"] == "access"
 
     def test_decode_access_token_expired(self, jwt_service):
-        """Test decoding an expired access token."""
+
+             """Test decoding an expired access token."""
         # Create expired token
         original_expire = jwt_service.settings.ACCESS_TOKEN_EXPIRE_MINUTES
         jwt_service.settings.ACCESS_TOKEN_EXPIRE_MINUTES = -1
@@ -95,19 +99,22 @@ class TestJWTServiceUnit:
             jwt_service.decode_access_token(token)
 
     def test_decode_access_token_invalid(self, jwt_service):
-        """Test decoding an invalid access token."""
+
+             """Test decoding an invalid access token."""
         with pytest.raises(InvalidTokenError):
             jwt_service.decode_access_token("invalid.token.here")
 
     def test_decode_refresh_token_as_access(self, jwt_service):
-        """Test that refresh tokens cannot be used as access tokens."""
+
+             """Test that refresh tokens cannot be used as access tokens."""
         refresh_token = jwt_service.create_refresh_token(user_id=1, username="testuser")
 
         with pytest.raises(InvalidTokenError, match="Invalid token type"):
             jwt_service.decode_access_token(refresh_token)
 
     def test_decode_refresh_token_valid(self, jwt_service):
-        """Test decoding a valid refresh token."""
+
+             """Test decoding a valid refresh token."""
         token = jwt_service.create_refresh_token(user_id=1, username="testuser")
 
         payload = jwt_service.decode_refresh_token(token)
@@ -116,7 +123,8 @@ class TestJWTServiceUnit:
         assert payload["type"] == "refresh"
 
     def test_token_with_additional_claims(self, jwt_service):
-        """Test creating tokens with additional claims."""
+
+             """Test creating tokens with additional claims."""
         token = jwt_service.create_access_token(
             user_id=1,
             username="testuser",
@@ -133,7 +141,8 @@ class TestJWTServiceUnit:
         assert payload["custom_claim"] == "custom_value"
 
     def test_issuer_audience_enforced(self):
-        """Ensure tokens with wrong/missing iss/aud fail and correct ones pass (HS)."""
+
+             """Ensure tokens with wrong/missing iss/aud fail and correct ones pass (HS)."""
         settings = Settings(
             AUTH_MODE="multi_user",
             JWT_SECRET_KEY="test-key-that-is-at-least-32-characters-long",

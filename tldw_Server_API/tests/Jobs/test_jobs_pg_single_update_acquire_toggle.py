@@ -14,7 +14,9 @@ pytestmark = [
 
 
 def test_pg_single_update_acquire_toggle(monkeypatch, jobs_pg_dsn):
-    # Enable single-update SKIP LOCKED acquire path
+
+
+     # Enable single-update SKIP LOCKED acquire path
     monkeypatch.setenv("JOBS_PG_SINGLE_UPDATE_ACQUIRE", "true")
     monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
 

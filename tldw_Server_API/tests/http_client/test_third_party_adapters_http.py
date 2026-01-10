@@ -17,11 +17,15 @@ from tldw_Server_API.app.core.Third_Party import Figshare as figshare
 
 
 def _mock_transport(handler):
-    return httpx.MockTransport(handler)
+
+
+     return httpx.MockTransport(handler)
 
 
 def test_hal_raw_media_types(monkeypatch):
-    # Allow HAL host in egress policy
+
+
+     # Allow HAL host in egress policy
     monkeypatch.setenv("EGRESS_ALLOWLIST", "api.archives-ouvertes.fr")
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -56,7 +60,9 @@ def test_hal_raw_media_types(monkeypatch):
 
 
 def test_crossref_get_by_doi_404_and_success(monkeypatch):
-    monkeypatch.setenv("EGRESS_ALLOWLIST", "api.crossref.org")
+
+
+     monkeypatch.setenv("EGRESS_ALLOWLIST", "api.crossref.org")
     def handler(request: httpx.Request) -> httpx.Response:
         # Works lookup path
         if request.url.path.startswith("/works/"):
@@ -92,7 +98,9 @@ def test_crossref_get_by_doi_404_and_success(monkeypatch):
 
 
 def test_openalex_get_by_doi_404_and_success(monkeypatch):
-    monkeypatch.setenv("EGRESS_ALLOWLIST", "api.openalex.org")
+
+
+     monkeypatch.setenv("EGRESS_ALLOWLIST", "api.openalex.org")
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.startswith("/works/doi:"):
@@ -124,7 +132,9 @@ def test_openalex_get_by_doi_404_and_success(monkeypatch):
 
 
 def test_scopus_get_by_doi_404_and_success(monkeypatch):
-    monkeypatch.setenv("EGRESS_ALLOWLIST", "api.elsevier.com")
+
+
+     monkeypatch.setenv("EGRESS_ALLOWLIST", "api.elsevier.com")
     os.environ["ELSEVIER_API_KEY"] = "test_key"
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -164,7 +174,9 @@ def test_scopus_get_by_doi_404_and_success(monkeypatch):
 
 
 def test_eartharxiv_get_by_doi_404_and_success(monkeypatch):
-    monkeypatch.setenv("EGRESS_ALLOWLIST", "api.osf.io")
+
+
+     monkeypatch.setenv("EGRESS_ALLOWLIST", "api.osf.io")
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.host == "api.osf.io"
@@ -206,7 +218,9 @@ def test_eartharxiv_get_by_doi_404_and_success(monkeypatch):
 
 
 def test_ieee_get_by_doi_404_and_success(monkeypatch):
-    monkeypatch.setenv("EGRESS_ALLOWLIST", "ieeexploreapi.ieee.org")
+
+
+     monkeypatch.setenv("EGRESS_ALLOWLIST", "ieeexploreapi.ieee.org")
     os.environ["IEEE_API_KEY"] = "abc"
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -233,7 +247,9 @@ def test_ieee_get_by_doi_404_and_success(monkeypatch):
 
 
 def test_osf_get_by_doi_404_and_success(monkeypatch):
-    monkeypatch.setenv("EGRESS_ALLOWLIST", "api.osf.io")
+
+
+     monkeypatch.setenv("EGRESS_ALLOWLIST", "api.osf.io")
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.host == "api.osf.io"
@@ -267,7 +283,9 @@ def test_osf_get_by_doi_404_and_success(monkeypatch):
 
 
 def test_biorxiv_get_by_doi_404_and_success(monkeypatch):
-    monkeypatch.setenv("EGRESS_ALLOWLIST", "api.biorxiv.org")
+
+
+     monkeypatch.setenv("EGRESS_ALLOWLIST", "api.biorxiv.org")
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.host == "api.biorxiv.org"
@@ -292,7 +310,9 @@ def test_biorxiv_get_by_doi_404_and_success(monkeypatch):
 
 
 def test_iacr_fetch_conference_and_raw(monkeypatch):
-    monkeypatch.setenv("EGRESS_ALLOWLIST", "www.iacr.org")
+
+
+     monkeypatch.setenv("EGRESS_ALLOWLIST", "www.iacr.org")
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.host == "www.iacr.org"
@@ -316,7 +336,9 @@ def test_iacr_fetch_conference_and_raw(monkeypatch):
 
 
 def test_figshare_search_and_oai_raw(monkeypatch):
-    monkeypatch.setenv("EGRESS_ALLOWLIST", "api.figshare.com")
+
+
+     monkeypatch.setenv("EGRESS_ALLOWLIST", "api.figshare.com")
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.host == "api.figshare.com"

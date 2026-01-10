@@ -15,7 +15,9 @@ os.environ["TEST_MODE"] = "true"
 
 
 def _mini_app_with_user():
-    from tldw_Server_API.app.api.v1.endpoints import research as research_module
+
+
+     from tldw_Server_API.app.api.v1.endpoints import research as research_module
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 
     app = FastAPI()
@@ -29,12 +31,15 @@ def _mini_app_with_user():
 
 
 def test_generate_and_search_runs_in_thread(monkeypatch):
-    from tldw_Server_API.app.api.v1.endpoints import research as research_module
+
+
+     from tldw_Server_API.app.api.v1.endpoints import research as research_module
 
     observations = {}
 
     def fake_generate_and_search(question, params):
-        import asyncio
+
+             import asyncio
         # Record whether a running loop exists in this context (thread pool should have none)
         has_loop = True
         try:

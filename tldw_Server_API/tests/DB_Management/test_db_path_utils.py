@@ -4,7 +4,9 @@ from tldw_Server_API.app.core.config import settings
 
 
 def test_get_user_base_directory_expands_user(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
+
+
+     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setitem(settings, "USER_DB_BASE_DIR", "~/custom_db_root")
 
     user_dir = DatabasePaths.get_user_base_directory(42)
@@ -15,7 +17,9 @@ def test_get_user_base_directory_expands_user(monkeypatch, tmp_path):
 
 
 def test_get_user_base_directory_resolves_relative(monkeypatch, tmp_path):
-    monkeypatch.setitem(settings, "USER_DB_BASE_DIR", "relative_root")
+
+
+     monkeypatch.setitem(settings, "USER_DB_BASE_DIR", "relative_root")
     monkeypatch.setattr(db_path_utils, "get_project_root", lambda: str(tmp_path))
 
     user_dir = DatabasePaths.get_user_base_directory(7)

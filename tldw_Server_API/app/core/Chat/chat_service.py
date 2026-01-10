@@ -587,9 +587,25 @@ def _build_adapter_request_from_chat_args(chat_args: Dict[str, Any]) -> Tuple[st
     if not provider:
         raise ChatConfigurationError(provider=str(chat_args.get("api_endpoint")), message="LLM provider is required.")
 
-    app_config = ensure_app_config(chat_args.get("app_config"))
-    model = chat_args.get("model") or resolve_provider_model(provider, app_config)
-    if not model:
+    local_like = {
+        "local-llm",
+        "llama.cpp",
+        "kobold",
+        "ooba",
+        "tabbyapi",
+        "vllm",
+        "ollama",
+        "aphrodite",
+        "mlx",
+    }
+    explicit_app_config = chat_args.get("app_config")
+    app_config = explicit_app_config if explicit_app_config is not None else (
+        None if provider in local_like else ensure_app_config(None)
+    )
+    model = chat_args.get("model")
+    if model is None and app_config is not None:
+        model = resolve_provider_model(provider, app_config)
+    if not model and provider not in local_like:
         raise ChatConfigurationError(provider=provider, message="Model is required for provider.")
 
     api_key = chat_args.get("api_key") or resolve_provider_api_key_from_config(provider, app_config)

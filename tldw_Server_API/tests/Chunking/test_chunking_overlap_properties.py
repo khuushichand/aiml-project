@@ -8,13 +8,15 @@ from tldw_Server_API.app.core.Chunking.base import ChunkerConfig, ChunkingMethod
 
 @pytest.fixture(autouse=True)
 def testing_env():
-    os.environ['TESTING'] = 'true'
+     os.environ['TESTING'] = 'true'
     yield
     os.environ.pop('TESTING', None)
 
 
 def words_to_text(words):
-    return ' '.join(words)
+
+
+     return ' '.join(words)
 
 
 @hyp_settings(deadline=None)
@@ -24,7 +26,7 @@ def words_to_text(words):
     overlap=st.integers(min_value=0, max_value=10)
 )
 def test_words_overlap_property(total_words, max_size, overlap):
-    # Constrain overlap < max_size
+     # Constrain overlap < max_size
     if overlap >= max_size:
         overlap = max_size - 1
         if overlap < 0:

@@ -16,35 +16,42 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 class _FakeStreamingResponse:
     def __init__(self, lines):
-        self._lines = list(lines)
+             self._lines = list(lines)
         self.status_code = 200
 
     def raise_for_status(self):
-        return None
+
+             return None
 
     def iter_lines(self, decode_unicode=True):
-        for line in self._lines:
+
+             for line in self._lines:
             yield line
 
     def close(self):
-        return None
+
+             return None
 
 
 class _FakeSession:
     def __init__(self, *args, **kwargs):
-        pass
+             pass
 
     def __enter__(self):
-        return self
+
+             return self
 
     def __exit__(self, exc_type, exc, tb):
-        return False
+
+             return False
 
     def mount(self, *args, **kwargs):
-        return None
+
+             return None
 
     def post(self, url, headers=None, json=None, stream=False, timeout=30):
-        # Provide a deterministic multi-chunk SSE response
+
+             # Provide a deterministic multi-chunk SSE response
         # 2 delta chunks and then [DONE]
         chunks = [
             'data: ' + _json.dumps({
@@ -99,7 +106,8 @@ async def test_complete_v2_streaming_e2e_monkeypatched(monkeypatch):
     import tldw_Server_API.app.api.v1.endpoints.character_chat_sessions as chat_sessions_mod
 
     def _fake_perform_chat_api_call(*args, **kwargs):
-        def _generator():
+
+             def _generator():
             for chunk in stream_chunks:
                 yield chunk
         return _generator()

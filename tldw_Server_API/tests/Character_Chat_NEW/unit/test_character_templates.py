@@ -6,7 +6,9 @@ from tldw_Server_API.app.core.Character_Chat.modules.character_templates import 
 
 
 def test_get_character_template_returns_deep_copy():
-    """Mutating one template instance must not affect subsequent calls."""
+
+
+     """Mutating one template instance must not affect subsequent calls."""
     original = get_character_template("assistant")
     assert original is not None
     assert "tags" in original

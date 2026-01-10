@@ -140,7 +140,8 @@ async def test_character_chat_flow_sessions_messages_worldbooks():
 # --- Unit Tests for Helper Functions (Regression Tests) ---
 
 def test_extract_text_with_none():
-    """
+
+     """
     Regression test for Issue #1: Malformed _extract_text function.
 
     The _extract_text function should handle None input and return empty string.
@@ -156,7 +157,7 @@ def test_extract_text_with_none():
 
     # We test the logic directly since _extract_text is a local function
     def _extract_text(resp):
-        if resp is None:
+             if resp is None:
             return ""
         if isinstance(resp, str):
             return resp

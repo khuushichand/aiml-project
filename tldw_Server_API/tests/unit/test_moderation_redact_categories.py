@@ -8,7 +8,7 @@ from tldw_Server_API.app.core.Moderation.moderation_service import ModerationSer
 
 @pytest.mark.unit
 def test_redact_text_respects_categories_enabled():
-    svc = ModerationService()
+     svc = ModerationService()
     lines = [
         "secret -> redact:[MASK] #pii",
         "confidential -> redact:[CENSORED] #confidential",

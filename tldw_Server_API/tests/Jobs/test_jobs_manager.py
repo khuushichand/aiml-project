@@ -12,13 +12,15 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 @pytest.fixture()
 def jobs_db(tmp_path):
-    db_path = tmp_path / "jobs.db"
+     db_path = tmp_path / "jobs.db"
     ensure_jobs_tables(db_path)
     yield db_path
 
 
 def test_create_and_acquire_and_complete(jobs_db):
-    jm = JobManager(jobs_db)
+
+
+     jm = JobManager(jobs_db)
     job = jm.create_job(
         domain="chatbooks",
         queue="default",
@@ -40,7 +42,9 @@ def test_create_and_acquire_and_complete(jobs_db):
 
 
 def test_acquire_decrypts_payload(jobs_db, monkeypatch):
-    from tldw_Server_API.app.core.Security.crypto import encrypt_json_blob
+
+
+     from tldw_Server_API.app.core.Security.crypto import encrypt_json_blob
 
     monkeypatch.setenv("JOBS_ENCRYPT_SECURE", "true")
     key = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo0NTY3ODkwMTIzNDU2Nzg5MDEy"[:44]
@@ -66,7 +70,9 @@ def test_acquire_decrypts_payload(jobs_db, monkeypatch):
 
 
 def test_rotate_encryption_keys_respects_filters_sqlite(jobs_db, monkeypatch):
-    from tldw_Server_API.app.core.Security.crypto import encrypt_json_blob
+
+
+     from tldw_Server_API.app.core.Security.crypto import encrypt_json_blob
 
     monkeypatch.setenv("JOBS_ENCRYPT", "true")
     old_key = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo0NTY3ODkwMTIzNDU2Nzg5MDEy"[:44]
@@ -90,7 +96,9 @@ def test_rotate_encryption_keys_respects_filters_sqlite(jobs_db, monkeypatch):
 
 
 def test_retryable_fail_and_backoff(jobs_db):
-    jm = JobManager(jobs_db)
+
+
+     jm = JobManager(jobs_db)
     job = jm.create_job(
         domain="chatbooks",
         queue="default",
@@ -111,7 +119,9 @@ def test_retryable_fail_and_backoff(jobs_db):
 
 
 def test_cancel_paths(jobs_db):
-    jm = JobManager(jobs_db)
+
+
+     jm = JobManager(jobs_db)
     j1 = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1")
     # cancel queued
     ok = jm.cancel_job(int(j1["id"]))
@@ -133,7 +143,9 @@ def test_cancel_paths(jobs_db):
 
 
 def test_idempotency_key_returns_existing(jobs_db):
-    jm = JobManager(jobs_db)
+
+
+     jm = JobManager(jobs_db)
     idem_key = "cb-export-uniq-key"
     j1 = jm.create_job(
         domain="chatbooks",
@@ -158,7 +170,9 @@ def test_idempotency_key_returns_existing(jobs_db):
 
 
 def test_available_at_scheduling_delays_acquire(jobs_db):
-    jm = JobManager(jobs_db)
+
+
+     jm = JobManager(jobs_db)
     future = datetime.utcnow() + timedelta(seconds=1)
     jm.create_job(
         domain="chatbooks",

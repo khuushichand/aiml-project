@@ -5,7 +5,8 @@ import pytest
 pytestmark = pytest.mark.integration
 
 def _has_postgres_dependencies() -> bool:
-    """Return True only if both asyncpg and psycopg (v3) are importable.
+
+     """Return True only if both asyncpg and psycopg (v3) are importable.
 
     The AuthNZ backend uses psycopg (v3) for the PostgreSQL backend; the test
     fixtures rely on asyncpg for setup/teardown. Require both to avoid
@@ -25,7 +26,7 @@ def _has_postgres_dependencies() -> bool:
 @pytest.mark.integration
 @pytest.mark.parametrize("backend", ["sqlite"])  # Always run sqlite
 def test_authnz_backend_smoke(backend):
-    from tldw_Server_API.tests.test_authnz_backends import AuthNZBackendTests
+     from tldw_Server_API.tests.test_authnz_backends import AuthNZBackendTests
     tester = AuthNZBackendTests(backend, verbose=False)
     tester.setup()
     try:

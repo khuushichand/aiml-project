@@ -11,7 +11,8 @@ class FakeTime:
         self.t = t0
 
     def __call__(self) -> float:
-        return self.t
+
+             return self.t
 
     def advance(self, s: float) -> None:
         self.t += s
@@ -21,7 +22,7 @@ class FakeTime:
 async def test_concurrency_race_renew_and_ttl_expiry_behavior():
     class _Loader:
         def get_policy(self, pid):
-            # Short TTL to exercise expiry without release
+                     # Short TTL to exercise expiry without release
             return {"streams": {"max_concurrent": 1, "ttl_sec": 3}, "scopes": ["global", "user"]}
 
     ft = FakeTime(0.0)

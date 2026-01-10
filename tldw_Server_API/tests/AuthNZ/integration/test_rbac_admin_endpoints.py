@@ -82,7 +82,8 @@ def _admin_headers(client, db_name: str):
         result: dict = {}
 
         def _runner():
-            result["creds"] = asyncio.run(_ensure_admin(db_name))
+
+                     result["creds"] = asyncio.run(_ensure_admin(db_name))
 
         t = threading.Thread(target=_runner, daemon=True)
         t.start()
@@ -120,7 +121,9 @@ def _user_headers(client, suffix: str = ""):
 
 
 def test_list_roles_contains_seeded_roles(isolated_test_environment):
-    client, db_name = isolated_test_environment
+
+
+     client, db_name = isolated_test_environment
     headers = _admin_headers(client, db_name)
 
     r = client.get("/api/v1/admin/roles", headers=headers)
@@ -132,7 +135,9 @@ def test_list_roles_contains_seeded_roles(isolated_test_environment):
 
 
 def test_create_permission_and_assign_to_role(isolated_test_environment):
-    client, db_name = isolated_test_environment
+
+
+     client, db_name = isolated_test_environment
     headers = _admin_headers(client, db_name)
 
     # Create a new permission
@@ -166,7 +171,9 @@ def test_create_permission_and_assign_to_role(isolated_test_environment):
 
 
 def test_admin_roles_require_auth_and_admin(isolated_test_environment):
-    client, db_name = isolated_test_environment
+
+
+     client, db_name = isolated_test_environment
     anon = client.get("/api/v1/admin/roles")
     assert anon.status_code == 401
 

@@ -14,7 +14,9 @@ IS_APPLE = platform.system() == "Darwin"
 
 
 def _require_mlx_model_path() -> str:
-    if not IS_APPLE:
+
+
+     if not IS_APPLE:
         pytest.skip("MLX integration tests run only on Apple hosts", allow_module_level=False)
     try:
         import mlx_lm  # type: ignore[import]
@@ -33,7 +35,7 @@ def _require_mlx_model_path() -> str:
 @pytest.mark.integration
 @pytest.mark.local_llm_service
 def test_mlx_chat_and_stream_with_real_model():
-    model_path = _require_mlx_model_path()
+     model_path = _require_mlx_model_path()
     reg = mp.get_mlx_registry()
     try:
         status = reg.load(model_path=model_path, overrides={"max_concurrent": 1, "warmup": False})

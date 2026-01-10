@@ -10,16 +10,18 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture(autouse=True)
 def _enable_test_mode(monkeypatch):
-    monkeypatch.setenv("TEST_MODE", "1")
+     monkeypatch.setenv("TEST_MODE", "1")
 
 
 def test_unified_endpoint_strict_extractive_with_nli_gate(monkeypatch):
-    # Patch retriever to return one document with the keyword and short sentences
+
+
+     # Patch retriever to return one document with the keyword and short sentences
     from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
 
     class FakeRetriever:
         def __init__(self, *args, **kwargs):
-            pass
+                     pass
         async def retrieve(self, *args, **kwargs):
             return [
                 Document(id="m1", content="RAG answers are grounded. It aims to be factual.", metadata={"source": "media_db"}, source=DataSource.MEDIA_DB, score=0.9)
@@ -45,7 +47,7 @@ def test_unified_endpoint_strict_extractive_with_nli_gate(monkeypatch):
 
     class _FakeVerifier:
         def __init__(self, *_, **__):
-            pass
+                     pass
         async def verify_and_maybe_fix(self, *_, **__):
             return _FakeOutcome()
 

@@ -20,7 +20,8 @@ class TestChatIntegrationIsolated:
     """Integration tests that use the mock OpenAI server."""
 
     def test_chat_completion_with_mock_server(self, integration_test_client):
-        """Test actual chat completion using mock server."""
+
+             """Test actual chat completion using mock server."""
         request_data = {
             "model": "gpt-4",
             "api_provider": "openai",
@@ -40,7 +41,8 @@ class TestChatIntegrationIsolated:
         assert "mock" in data["choices"][0]["message"]["content"].lower()
 
     def test_streaming_with_mock_server(self, integration_test_client):
-        """Test streaming response with mock server."""
+
+             """Test streaming response with mock server."""
         request_data = {
             "model": "gpt-4",
             "api_provider": "openai",
@@ -59,7 +61,8 @@ class TestChatIntegrationIsolated:
         assert 'text/event-stream' in response.headers.get('content-type', '').lower()
 
     def test_character_with_mock_server(self, integration_test_client, isolated_db):
-        """Test character-based chat with mock server."""
+
+             """Test character-based chat with mock server."""
         # Add a character
         char_id = isolated_db.add_character_card({
             "name": "Pirate",
@@ -88,7 +91,8 @@ class TestChatIntegrationIsolated:
         assert "choices" in data
 
     def test_conversation_with_mock_server(self, integration_test_client, isolated_db):
-        """Test conversation persistence with mock server."""
+
+             """Test conversation persistence with mock server."""
         # Create conversation
         conv_id = isolated_db.create_conversation(
             user_id="test_user",
@@ -128,7 +132,8 @@ class TestChatIntegrationIsolated:
         assert len(messages) >= 2
 
     def test_system_message_with_mock_server(self, integration_test_client):
-        """Test system message handling with mock server."""
+
+             """Test system message handling with mock server."""
         request_data = {
             "model": "gpt-4",
             "api_provider": "openai",
@@ -148,7 +153,8 @@ class TestChatIntegrationIsolated:
         assert "choices" in data
 
     def test_multimodal_with_mock_server(self, integration_test_client):
-        """Test multimodal content with mock server."""
+
+             """Test multimodal content with mock server."""
         request_data = {
             "model": "gpt-4-vision",
             "api_provider": "openai",
@@ -172,7 +178,8 @@ class TestChatIntegrationIsolated:
         assert "choices" in data
 
     def test_temperature_with_mock_server(self, integration_test_client):
-        """Test temperature parameter with mock server."""
+
+             """Test temperature parameter with mock server."""
         request_data = {
             "model": "gpt-4",
             "api_provider": "openai",
@@ -188,7 +195,8 @@ class TestChatIntegrationIsolated:
         assert response.status_code == status.HTTP_200_OK
 
     def test_max_tokens_with_mock_server(self, integration_test_client):
-        """Test max_tokens parameter with mock server."""
+
+             """Test max_tokens parameter with mock server."""
         request_data = {
             "model": "gpt-4",
             "api_provider": "openai",
@@ -204,7 +212,8 @@ class TestChatIntegrationIsolated:
         assert response.status_code == status.HTTP_200_OK
 
     def test_tools_with_mock_server(self, integration_test_client):
-        """Test function calling/tools with mock server."""
+
+             """Test function calling/tools with mock server."""
         request_data = {
             "model": "gpt-4",
             "api_provider": "openai",

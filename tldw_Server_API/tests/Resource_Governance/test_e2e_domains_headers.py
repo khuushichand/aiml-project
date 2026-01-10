@@ -24,7 +24,9 @@ def _write_policy(*, tmp_path, policy_name: str, path_glob: str) -> str:
 
 
 def _assert_deny_headers(resp) -> None:
-    assert resp.headers.get("Retry-After") is not None
+
+
+     assert resp.headers.get("Retry-After") is not None
     assert resp.headers.get("X-RateLimit-Limit") == "1"
     assert resp.headers.get("X-RateLimit-Remaining") == "0"
     reset = resp.headers.get("X-RateLimit-Reset")
@@ -32,7 +34,9 @@ def _assert_deny_headers(resp) -> None:
 
 
 def test_e2e_rag_deny_headers_retry_after(monkeypatch, tmp_path):
-    monkeypatch.setenv("RG_BACKEND", "memory")
+
+
+     monkeypatch.setenv("RG_BACKEND", "memory")
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
     monkeypatch.setenv("RG_POLICY_PATH", _write_policy(tmp_path=tmp_path, policy_name="rag", path_glob="/api/v1/rag/*"))
 
@@ -52,7 +56,9 @@ def test_e2e_rag_deny_headers_retry_after(monkeypatch, tmp_path):
 
 
 def test_e2e_media_deny_headers_retry_after(monkeypatch, tmp_path):
-    monkeypatch.setenv("RG_BACKEND", "memory")
+
+
+     monkeypatch.setenv("RG_BACKEND", "memory")
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
     monkeypatch.setenv(
         "RG_POLICY_PATH",
@@ -77,7 +83,9 @@ def test_e2e_media_deny_headers_retry_after(monkeypatch, tmp_path):
 
 
 def test_e2e_research_deny_headers_retry_after(monkeypatch, tmp_path):
-    monkeypatch.setenv("RG_BACKEND", "memory")
+
+
+     monkeypatch.setenv("RG_BACKEND", "memory")
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
     monkeypatch.setenv(
         "RG_POLICY_PATH",
@@ -87,7 +95,8 @@ def test_e2e_research_deny_headers_retry_after(monkeypatch, tmp_path):
     import tldw_Server_API.app.api.v1.endpoints.research as research_ep
 
     def _stub_generate_and_search(query, search_params):
-        _ = search_params
+
+             _ = search_params
         return {"web_search_results_dict": {"results": [], "query": query}, "sub_query_dict": {}}
 
     monkeypatch.setattr(research_ep, "generate_and_search", _stub_generate_and_search, raising=False)
@@ -117,7 +126,9 @@ def test_e2e_research_deny_headers_retry_after(monkeypatch, tmp_path):
 
 
 def test_e2e_prompt_studio_deny_headers_retry_after(monkeypatch, tmp_path):
-    monkeypatch.setenv("RG_BACKEND", "memory")
+
+
+     monkeypatch.setenv("RG_BACKEND", "memory")
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
     monkeypatch.setenv(
         "RG_POLICY_PATH",
@@ -129,7 +140,7 @@ def test_e2e_prompt_studio_deny_headers_retry_after(monkeypatch, tmp_path):
 
     class _StubPromptStudioDB:
         def get_job_stats(self):
-            return {"queue_depth": 0, "processing": 0, "by_status": {"queued": 0, "processing": 0}, "by_type": {}}
+                     return {"queue_depth": 0, "processing": 0, "by_status": {"queued": 0, "processing": 0}, "by_type": {}}
 
         def get_lease_stats(self, warn_seconds: int):  # noqa: ARG002
             return {"active": 0, "expiring_soon": 0, "stale_processing": 0}

@@ -30,7 +30,7 @@ TEST_INTEROP_CLIENT_ID = "test_interop_client"
 
 @pytest.fixture(scope="function") # function scope to ensure clean init/shutdown for each test
 def interop_manager(tmp_path):
-    """Manages initialization and shutdown of the interop layer for tests."""
+     """Manages initialization and shutdown of the interop layer for tests."""
     db_file = tmp_path / "interop_test_prompts.db"
     try:
         initialize_interop(db_path=db_file, client_id=TEST_INTEROP_CLIENT_ID)
@@ -41,7 +41,8 @@ def interop_manager(tmp_path):
             os.remove(db_file)
 
 def test_interop_initialization_and_shutdown(interop_manager):
-    assert is_initialized() is True
+
+     assert is_initialized() is True
     db_instance = get_db_instance()
     assert db_instance is not None
     assert isinstance(db_instance, PromptsDatabase)
@@ -56,7 +57,9 @@ def test_interop_initialization_and_shutdown(interop_manager):
 
 
 def test_interop_add_prompt_via_global_instance(interop_manager):
-    assert is_initialized() is True # Ensure interop_manager fixture worked
+
+
+     assert is_initialized() is True # Ensure interop_manager fixture worked
     p_id, p_uuid, msg = interop_add_prompt(
         name="Interop Prompt", author="Interop", details="Via global instance"
     )
@@ -74,7 +77,8 @@ def test_interop_add_prompt_via_global_instance(interop_manager):
 # The functions like `add_or_update_prompt_interop` DO use `get_db_instance()`.
 
 def test_interop_standalone_add_or_update_prompt(interop_manager):
-    p_id, _, msg = add_or_update_prompt_interop(
+
+     p_id, _, msg = add_or_update_prompt_interop(
         name="Interop SU Prompt", author="SU", details="Details"
     )
     assert p_id is not None
@@ -86,7 +90,8 @@ def test_interop_standalone_add_or_update_prompt(interop_manager):
     assert fetched['author'] == "SU"
 
 def test_interop_standalone_export_formatted(interop_manager):
-    add_or_update_prompt_interop(name="Export Me Interop", author="Exporter", details="...")
+
+     add_or_update_prompt_interop(name="Export Me Interop", author="Exporter", details="...")
     status_msg, file_path_str = export_prompts_formatted_interop(export_format='csv')
 
     assert "Successfully exported" in status_msg
@@ -101,13 +106,14 @@ def test_interop_standalone_export_formatted(interop_manager):
         pytest.fail(f"Exported file {file_path_str} not found.")
 
 def test_interop_error_propagation(interop_manager):
-    # Try to add a prompt with an empty name, should raise InputError from DB layer
+
+     # Try to add a prompt with an empty name, should raise InputError from DB layer
     with pytest.raises(InputError):
         interop_add_prompt(name="", author="Test", details="...")
 
 # Test calling get_db_instance when not initialized (outside fixture)
 def test_get_db_instance_not_initialized():
-    # Ensure it's shutdown if a previous test didn't clean up fully in some error case
+     # Ensure it's shutdown if a previous test didn't clean up fully in some error case
     if is_initialized():
         shutdown_interop()
     with pytest.raises(RuntimeError, match="Prompts Interop Library not initialized"):

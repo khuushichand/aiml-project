@@ -18,7 +18,9 @@ from tldw_Server_API.app.main import app as fastapi_app
 
 
 def _build_test_catalog() -> PrivilegeCatalog:
-    """Construct a minimal privilege catalog for introspection unit tests."""
+
+
+     """Construct a minimal privilege catalog for introspection unit tests."""
     payload: Dict[str, object] = {
         "version": "test-1.0",
         "updated_at": datetime(2025, 1, 1, tzinfo=timezone.utc).isoformat(),
@@ -71,7 +73,9 @@ def _make_async_dependency(
 
 
 def test_collect_privilege_route_registry_captures_metadata():
-    catalog = _build_test_catalog()
+
+
+     catalog = _build_test_catalog()
     app = FastAPI()
     router = APIRouter()
 
@@ -127,7 +131,9 @@ def test_collect_privilege_route_registry_captures_metadata():
 
 
 def test_collect_privilege_route_registry_strict_unknown_scope():
-    catalog = _build_test_catalog()
+
+
+     catalog = _build_test_catalog()
     app = FastAPI()
     router = APIRouter()
 
@@ -155,7 +161,8 @@ def test_validate_privilege_metadata_on_startup_invokes_strict_mode(monkeypatch:
     calls: Dict[str, object] = {}
 
     def fake_load_catalog() -> PrivilegeCatalog:
-        calls["load_catalog"] = True
+
+             calls["load_catalog"] = True
         return catalog
 
     def fake_collect_registry(
@@ -180,7 +187,9 @@ def test_validate_privilege_metadata_on_startup_invokes_strict_mode(monkeypatch:
 
 
 def test_serialize_route_registry_outputs_deterministic_structure():
-    catalog = _build_test_catalog()
+
+
+     catalog = _build_test_catalog()
     app = FastAPI()
     router = APIRouter()
 
@@ -231,7 +240,9 @@ def test_serialize_route_registry_outputs_deterministic_structure():
 
 
 def test_privilege_registry_snapshot_matches_live_app():
-    catalog = load_catalog()
+
+
+     catalog = load_catalog()
     registry = collect_privilege_route_registry(fastapi_app, catalog, strict=True)
     serialized = serialize_route_registry(registry)
 

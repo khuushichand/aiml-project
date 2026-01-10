@@ -31,7 +31,7 @@ class InputError(CharactersRAGDBErrorBase):
 
 class ConflictError(CharactersRAGDBErrorBase):
     def __init__(self, message, entity=None, entity_id=None):
-        super().__init__(message)
+             super().__init__(message)
         self.entity = entity
         self.entity_id = entity_id
 
@@ -42,7 +42,7 @@ class ConflictError(CharactersRAGDBErrorBase):
 
 @pytest.fixture(scope="function")
 def temp_db_dir():
-    """Creates a temporary directory for database files."""
+     """Creates a temporary directory for database files."""
     dir_path = tempfile.mkdtemp(prefix="chachadb_test_")
     yield Path(dir_path)
     shutil.rmtree(dir_path)

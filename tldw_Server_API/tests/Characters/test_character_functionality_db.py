@@ -39,7 +39,7 @@ TEST_CLIENT_ID_ALT = "test-client-pytest-alt"
 # --- Helper function for DB instance ---
 @pytest.fixture
 def db() -> Generator[CharactersRAGDB, Any, None]:
-    """Provides a fresh in-memory CharactersRAGDB instance for each test."""
+     """Provides a fresh in-memory CharactersRAGDB instance for each test."""
     database = CharactersRAGDB(":memory:", client_id=TEST_CLIENT_ID)
     yield database
     database.close_connection()  # Ensure connection is closed after test
@@ -57,7 +57,7 @@ def file_db(tmp_path: Path) -> Generator[CharactersRAGDB, Any, None]:
 
 # --- Helper for sample character card data ---
 def sample_card_data(name="Test Character", **kwargs) -> dict:
-    """Generates sample character card data with defaults."""
+     """Generates sample character card data with defaults."""
     data = {
         "name": name,
         "description": "A character for testing purposes.",
@@ -106,7 +106,7 @@ def sample_message_data(conversation_id: str, sender: str = "user", **kwargs) ->
 
 # --- Helper for sample note data ---
 def sample_note_data(title="Test Note", **kwargs) -> dict:
-    data = {
+     data = {
         "title": title,
         "content": "This is the content of the test note."
     }
@@ -205,7 +205,9 @@ st_json_dict_or_str = st.one_of(
 
 
 def st_character_card_payload():
-    return st.fixed_dictionaries({
+
+
+     return st.fixed_dictionaries({
         "description": st_optional_text,
         "personality": st_optional_text,
         "scenario": st_optional_text,
@@ -247,7 +249,8 @@ class TestDBInitializationAndTransactions:
         assert version_row['version'] == file_db._CURRENT_SCHEMA_VERSION
 
     def test_empty_client_id_raises_value_error(self):
-        with pytest.raises(ValueError, match="Client ID cannot be empty or None."):
+
+             with pytest.raises(ValueError, match="Client ID cannot be empty or None."):
             CharactersRAGDB(":memory:", client_id="")
         with pytest.raises(ValueError, match="Client ID cannot be empty or None."):
             CharactersRAGDB(":memory:", client_id=None)  # type: ignore

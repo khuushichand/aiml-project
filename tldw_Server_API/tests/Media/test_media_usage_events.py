@@ -17,20 +17,23 @@ class _StubQuotaService:
 
 @pytest.fixture()
 def quota_service_stub(monkeypatch):
-    # Patch quota service globally to avoid DB access in tests
+     # Patch quota service globally to avoid DB access in tests
     import tldw_Server_API.app.services.storage_quota_service as quota_mod
     monkeypatch.setattr(quota_mod, "get_storage_quota_service", lambda: _StubQuotaService())
     yield
 
 
 def test_ebooks_process_usage_event_logged(client_with_single_user, quota_service_stub, monkeypatch):
-    client, usage_logger = client_with_single_user
+
+
+     client, usage_logger = client_with_single_user
 
     # Stub heavy processing to return immediately
     import tldw_Server_API.app.api.v1.endpoints.media as media_mod
 
     def _stub_process_epub(**kwargs):
-        return {
+
+             return {
             "status": "Success",
             "content": "",
             "metadata": {"title": "stub-ebook"},
@@ -48,12 +51,15 @@ def test_ebooks_process_usage_event_logged(client_with_single_user, quota_servic
 
 
 def test_documents_process_usage_event_logged(client_with_single_user, quota_service_stub, monkeypatch):
-    client, usage_logger = client_with_single_user
+
+
+     client, usage_logger = client_with_single_user
 
     import tldw_Server_API.app.api.v1.endpoints.media as media_mod
 
     def _stub_process_document_content(**kwargs):
-        return {
+
+             return {
             "status": "Success",
             "content": "Hello",
             "metadata": {"title": "stub-doc"},
@@ -71,7 +77,9 @@ def test_documents_process_usage_event_logged(client_with_single_user, quota_ser
 
 
 def test_pdfs_process_usage_event_logged(client_with_single_user, quota_service_stub, monkeypatch):
-    client, usage_logger = client_with_single_user
+
+
+     client, usage_logger = client_with_single_user
 
     import tldw_Server_API.app.api.v1.endpoints.media as media_mod
 

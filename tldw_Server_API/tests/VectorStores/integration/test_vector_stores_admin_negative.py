@@ -15,7 +15,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture()
 def client_with_user():
-    async def override_user():
+     async def override_user():
         return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True)
     app.dependency_overrides[get_request_user] = override_user
     with TestClient(app) as client:

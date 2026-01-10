@@ -19,7 +19,7 @@ class TestWorldBookManagement:
 
     @pytest.mark.unit
     def test_create_world_book(self, world_book_service, sample_world_book):
-        """Test creating a world book."""
+             """Test creating a world book."""
         service = world_book_service
 
         wb_id = service.create_world_book(
@@ -32,7 +32,7 @@ class TestWorldBookManagement:
 
     @pytest.mark.unit
     def test_get_world_book(self, world_book_service, sample_world_book):
-        """Test getting a world book."""
+             """Test getting a world book."""
         service = world_book_service
 
         wb_id = service.create_world_book(
@@ -48,7 +48,7 @@ class TestWorldBookManagement:
 
     @pytest.mark.unit
     def test_list_world_books(self, world_book_service):
-        """Test listing all world books."""
+             """Test listing all world books."""
         service = world_book_service
 
         # Create multiple world books
@@ -65,7 +65,7 @@ class TestWorldBookManagement:
 
     @pytest.mark.unit
     def test_update_world_book(self, world_book_service):
-        """Test updating a world book."""
+             """Test updating a world book."""
         service = world_book_service
 
         wb_id = service.create_world_book(
@@ -85,7 +85,7 @@ class TestWorldBookManagement:
 
     @pytest.mark.unit
     def test_delete_world_book(self, world_book_service):
-        """Test deleting a world book."""
+             """Test deleting a world book."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="To Delete")
@@ -98,7 +98,7 @@ class TestWorldBookManagement:
 
     @pytest.mark.unit
     def test_delete_cascade(self, world_book_service, sample_world_book):
-        """Test cascade deletion of entries."""
+             """Test cascade deletion of entries."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="Cascade Test")
@@ -123,7 +123,7 @@ class TestEntryManagement:
 
     @pytest.mark.unit
     def test_add_entry(self, world_book_service):
-        """Test adding an entry."""
+             """Test adding an entry."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="Entry Test")
@@ -142,7 +142,7 @@ class TestEntryManagement:
 
     @pytest.mark.unit
     def test_add_recursive_entry(self, world_book_service):
-        """Test adding recursive scanning entry."""
+             """Test adding recursive scanning entry."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="Recursive Test")
@@ -160,7 +160,7 @@ class TestEntryManagement:
 
     @pytest.mark.unit
     def test_update_entry(self, world_book_service):
-        """Test updating an entry."""
+             """Test updating an entry."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="Update Test")
@@ -184,7 +184,7 @@ class TestEntryManagement:
 
     @pytest.mark.unit
     def test_delete_entry(self, world_book_service):
-        """Test deleting an entry."""
+             """Test deleting an entry."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="Delete Test")
@@ -201,7 +201,7 @@ class TestEntryManagement:
 
     @pytest.mark.unit
     def test_toggle_entry_enabled(self, world_book_service):
-        """Test toggling entry enabled status."""
+             """Test toggling entry enabled status."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="Toggle Test")
@@ -224,7 +224,7 @@ class TestEntryManagement:
 
     @pytest.mark.unit
     def test_bulk_operations(self, world_book_service, sample_world_book):
-        """Test bulk entry operations."""
+             """Test bulk entry operations."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="Bulk Test")
@@ -249,7 +249,7 @@ class TestCharacterAssociation:
 
     @pytest.mark.unit
     def test_attach_to_character(self, world_book_service):
-        """Test attaching world book to character."""
+             """Test attaching world book to character."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="Character World")
@@ -265,7 +265,7 @@ class TestCharacterAssociation:
 
     @pytest.mark.unit
     def test_detach_from_character(self, world_book_service):
-        """Test detaching world book from character."""
+             """Test detaching world book from character."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="Detach Test")
@@ -285,7 +285,7 @@ class TestCharacterAssociation:
 
     @pytest.mark.unit
     def test_get_character_world_books(self, world_book_service):
-        """Test getting all world books for a character."""
+             """Test getting all world books for a character."""
         service = world_book_service
 
         character_id = 1
@@ -312,7 +312,7 @@ class TestContextProcessing:
 
     @pytest.mark.unit
     def test_process_context_keyword_matching(self, world_book_service, sample_world_book):
-        """Test keyword matching in context."""
+             """Test keyword matching in context."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="Context Test")
@@ -331,7 +331,7 @@ class TestContextProcessing:
 
     @pytest.mark.unit
     def test_process_context_priority_ordering(self, world_book_service):
-        """Test entries ordered by priority."""
+             """Test entries ordered by priority."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="Priority Test")
@@ -351,7 +351,7 @@ class TestContextProcessing:
 
     @pytest.mark.unit
     def test_process_context_disabled_entries(self, world_book_service):
-        """Test disabled entries are not activated."""
+             """Test disabled entries are not activated."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="Disabled Test")
@@ -371,7 +371,7 @@ class TestContextProcessing:
 
     @pytest.mark.unit
     def test_recursive_scanning(self, world_book_service, complex_world_book):
-        """Test recursive scanning of entries."""
+             """Test recursive scanning of entries."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="Recursive Test")
@@ -395,7 +395,7 @@ class TestContextProcessing:
 
     @pytest.mark.unit
     def test_token_budget_limit(self, world_book_service, mock_tokenizer):
-        """Test respecting token budget."""
+             """Test respecting token budget."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="Budget Test")
@@ -431,7 +431,7 @@ class TestSearchAndFilter:
 
     @pytest.mark.unit
     def test_search_entries(self, world_book_service):
-        """Test searching world book entries."""
+             """Test searching world book entries."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="Search Test")
@@ -446,7 +446,7 @@ class TestSearchAndFilter:
 
     @pytest.mark.unit
     def test_filter_by_priority(self, world_book_service):
-        """Test filtering entries by priority."""
+             """Test filtering entries by priority."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="Priority Filter")
@@ -461,7 +461,7 @@ class TestSearchAndFilter:
 
     @pytest.mark.unit
     def test_filter_recursive_entries(self, world_book_service):
-        """Test filtering recursive scanning entries."""
+             """Test filtering recursive scanning entries."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="Recursive Filter")
@@ -482,7 +482,7 @@ class TestImportExport:
 
     @pytest.mark.unit
     def test_export_world_book(self, world_book_service, sample_world_book):
-        """Test exporting world book."""
+             """Test exporting world book."""
         service = world_book_service
 
         wb_id = service.create_world_book(
@@ -500,7 +500,7 @@ class TestImportExport:
 
     @pytest.mark.unit
     def test_import_world_book(self, world_book_service, sample_world_book):
-        """Test importing world book."""
+             """Test importing world book."""
         service = world_book_service
 
         wb_id = service.import_world_book(sample_world_book)
@@ -515,7 +515,7 @@ class TestImportExport:
 
     @pytest.mark.unit
     def test_export_to_lorebook_format(self, world_book_service, sample_world_book):
-        """Test exporting to lorebook format."""
+             """Test exporting to lorebook format."""
         service = world_book_service
 
         wb_id = service.create_world_book(name=sample_world_book['name'])
@@ -537,7 +537,7 @@ class TestStatistics:
 
     @pytest.mark.unit
     def test_get_statistics(self, world_book_service, sample_world_book):
-        """Test getting world book statistics."""
+             """Test getting world book statistics."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="Stats Test")
@@ -553,7 +553,7 @@ class TestStatistics:
 
     @pytest.mark.unit
     def test_get_activation_statistics(self, world_book_service):
-        """Test getting activation statistics."""
+             """Test getting activation statistics."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="Activation Stats")
@@ -569,7 +569,7 @@ class TestStatistics:
 
     @pytest.mark.unit
     def test_activation_statistics_counts_per_book(self, world_book_service):
-        """Ensure activations are counted per world book."""
+             """Ensure activations are counted per world book."""
         service = world_book_service
 
         wb1 = service.create_world_book(name="WB One")
@@ -586,7 +586,7 @@ class TestStatistics:
 
     @pytest.mark.unit
     def test_process_context_skips_large_entries_when_over_budget(self, world_book_service):
-        """Large entries over the token budget should not block smaller matches."""
+             """Large entries over the token budget should not block smaller matches."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="Budget Book")
@@ -614,7 +614,7 @@ class TestStatistics:
 
     @pytest.mark.unit
     def test_process_context_deduplicates_world_books(self, world_book_service):
-        """Duplicate world book IDs should not duplicate matched entries."""
+             """Duplicate world book IDs should not duplicate matched entries."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="Dedup Book")
@@ -628,7 +628,7 @@ class TestStatistics:
 
     @pytest.mark.unit
     def test_process_context_respects_scan_depth_limits(self, world_book_service):
-        """Respect both book and request scan depth caps."""
+             """Respect both book and request scan depth caps."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="Depth Book", scan_depth=2)
@@ -653,7 +653,7 @@ class TestCloning:
 
     @pytest.mark.unit
     def test_clone_world_book(self, world_book_service, sample_world_book):
-        """Test cloning a world book."""
+             """Test cloning a world book."""
         service = world_book_service
 
         # Create original
@@ -687,7 +687,7 @@ class TestKeywordProcessing:
 
     @pytest.mark.unit
     def test_keyword_normalization(self, world_book_service):
-        """Test keyword normalization."""
+             """Test keyword normalization."""
         service = world_book_service
 
         # Test various normalizations
@@ -698,7 +698,7 @@ class TestKeywordProcessing:
 
     @pytest.mark.unit
     def test_keyword_matching_case_insensitive(self, world_book_service):
-        """Test case-insensitive keyword matching."""
+             """Test case-insensitive keyword matching."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="Case Test")
@@ -723,7 +723,7 @@ class TestErrorHandling:
 
     @pytest.mark.unit
     def test_world_book_not_found(self, world_book_service):
-        """Test handling world book not found."""
+             """Test handling world book not found."""
         service = world_book_service
 
         result = service.get_world_book(999999)
@@ -731,7 +731,7 @@ class TestErrorHandling:
 
     @pytest.mark.unit
     def test_entry_validation(self, world_book_service):
-        """Test entry validation."""
+             """Test entry validation."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="Validation Test")
@@ -746,7 +746,7 @@ class TestErrorHandling:
 
     @pytest.mark.unit
     def test_invalid_priority(self, world_book_service):
-        """Test invalid priority handling."""
+             """Test invalid priority handling."""
         service = world_book_service
 
         wb_id = service.create_world_book(name="Priority Test")

@@ -28,7 +28,9 @@ def _set_pg_times(dsn: str, job_id: int, *, created_epoch: int | None = None, st
 
 
 def test_jobs_ttl_with_clock_pg(monkeypatch, jobs_pg_dsn):
-    # Deterministic clock value
+
+
+     # Deterministic clock value
     test_now = 1700000000  # arbitrary fixed epoch
     monkeypatch.setenv("JOBS_TEST_NOW_EPOCH", str(test_now))
     monkeypatch.setenv("TEST_MODE", "true")

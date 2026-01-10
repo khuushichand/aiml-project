@@ -938,9 +938,8 @@ def _require_byok_enabled() -> None:
 def _normalize_credential_fields(
     provider_norm: str,
     fields: Optional[Dict[str, Any]],
-) -> Optional[Dict[str, Any]]:
-    if fields is None:
-        return None
+) -> Dict[str, Any]:
+    """Normalize credential fields; base_url is allowlisted per provider and egress-validated."""
     credential_fields = validate_credential_fields(
         provider_norm,
         fields,
@@ -1828,9 +1827,9 @@ async def admin_list_team_members(
         items: list[TeamMemberResponse] = []
         for row in rows:
             payload = dict(row)
-            payload.setdefault("team_id", team_id)
+            payload["team_id"] = team_id
             if org_id is not None:
-                payload.setdefault("org_id", org_id)
+                payload["org_id"] = org_id
             items.append(TeamMemberResponse(**payload))
     except HTTPException:
         # Preserve existing HTTP semantics from scoped team/org helpers.

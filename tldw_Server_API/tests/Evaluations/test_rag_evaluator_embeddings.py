@@ -17,7 +17,7 @@ class TestRAGEvaluatorEmbeddings:
 
     @pytest.fixture
     def mock_create_embedding(self):
-        """Mock the create_embedding function."""
+             """Mock the create_embedding function."""
         with patch('tldw_Server_API.app.core.Evaluations.rag_evaluator.create_embedding') as mock_create:
             # Return a consistent embedding vector
             mock_create.return_value = np.random.rand(1536).tolist()
@@ -143,7 +143,8 @@ class TestRAGEvaluatorEmbeddings:
                 assert results["metrics"]["answer_similarity"]["method"] == "embeddings"
 
     def test_evaluator_cleanup(self):
-        """Test that evaluator properly cleans up resources."""
+
+             """Test that evaluator properly cleans up resources."""
         evaluator = RAGEvaluator()
         evaluator.close()  # Should not raise
 

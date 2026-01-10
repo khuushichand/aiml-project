@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from tldw_Server_API.app.core.LLM_Calls.local_chat_calls import (
     chat_with_custom_openai,
@@ -7,46 +7,38 @@ from tldw_Server_API.app.core.LLM_Calls.local_chat_calls import (
 )
 
 
-def _base_settings() -> dict:
-    """Minimal configuration structure for custom OpenAI providers."""
-    return {
-        "custom_openai_api": {
-            "api_ip": "http://localhost:9000",
-            "api_key": "cfg-key-1",
-            "model": "cfg-model-1",
-            "temperature": 0.5,
-            "streaming": False,
-            "max_tokens": 1024,
-            "api_timeout": 30,
-            "api_retries": 1,
-            "api_retry_delay": 1,
-        },
-        "custom_openai_api_2": {
-            "api_ip": "http://localhost:9100",
-            "api_key": "cfg-key-2",
-            "model": "cfg-model-2",
-            "temperature": 0.5,
-            "streaming": False,
-            "max_tokens": 1024,
-            "api_timeout": 30,
-            "api_retries": 1,
-            "api_retry_delay": 1,
-        },
-    }
-
-
 @pytest.mark.unit
 def test_custom_openai_handler_accepts_topp(monkeypatch):
-    monkeypatch.setenv("LLM_ADAPTERS_CUSTOM_OPENAI", "0")
-    settings = _base_settings()
-    with patch(
-        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls.load_settings",
-        return_value=settings,
-    ), patch(
-        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls._chat_with_openai_compatible_local_server"
-    ) as mock_chat:
-        mock_chat.return_value = {"choices": []}
+     captured = {}
 
+    class FakeResp:
+        status_code = 200
+
+        def raise_for_status(self):
+
+                     return None
+
+        def json(self):
+
+                     return {"choices": []}
+
+    class FakeClient:
+        def __enter__(self):
+                     return self
+
+        def __exit__(self, exc_type, exc, tb):
+
+                     return False
+
+        def post(self, url, headers=None, json=None):
+
+                     captured["json"] = json
+            return FakeResp()
+
+    with patch(
+        "tldw_Server_API.app.core.LLM_Calls.providers.custom_openai_adapter.http_client_factory",
+        lambda *a, **k: FakeClient(),
+    ):
         chat_with_custom_openai(
             input_data=[{"role": "user", "content": "ping"}],
             api_key="test-key",
@@ -54,23 +46,41 @@ def test_custom_openai_handler_accepts_topp(monkeypatch):
             topp=0.33,
         )
 
-    assert mock_chat.call_count == 1
-    kwargs = mock_chat.call_args.kwargs
-    assert kwargs["top_p"] == 0.33
+    assert captured["json"]["top_p"] == 0.33
 
 
 @pytest.mark.unit
 def test_custom_openai_handler_prefers_maxp_when_both_provided(monkeypatch):
-    monkeypatch.setenv("LLM_ADAPTERS_CUSTOM_OPENAI", "0")
-    settings = _base_settings()
-    with patch(
-        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls.load_settings",
-        return_value=settings,
-    ), patch(
-        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls._chat_with_openai_compatible_local_server"
-    ) as mock_chat:
-        mock_chat.return_value = {"choices": []}
+     captured = {}
 
+    class FakeResp:
+        status_code = 200
+
+        def raise_for_status(self):
+
+                     return None
+
+        def json(self):
+
+                     return {"choices": []}
+
+    class FakeClient:
+        def __enter__(self):
+                     return self
+
+        def __exit__(self, exc_type, exc, tb):
+
+                     return False
+
+        def post(self, url, headers=None, json=None):
+
+                     captured["json"] = json
+            return FakeResp()
+
+    with patch(
+        "tldw_Server_API.app.core.LLM_Calls.providers.custom_openai_adapter.http_client_factory",
+        lambda *a, **k: FakeClient(),
+    ):
         chat_with_custom_openai(
             input_data=[{"role": "user", "content": "ping"}],
             api_key="test-key",
@@ -79,22 +89,41 @@ def test_custom_openai_handler_prefers_maxp_when_both_provided(monkeypatch):
             maxp=0.45,
         )
 
-    kwargs = mock_chat.call_args.kwargs
-    assert kwargs["top_p"] == 0.45
+    assert captured["json"]["top_p"] == 0.45
 
 
 @pytest.mark.unit
 def test_custom_openai_2_handler_accepts_topp(monkeypatch):
-    monkeypatch.setenv("LLM_ADAPTERS_CUSTOM_OPENAI", "0")
-    settings = _base_settings()
-    with patch(
-        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls.load_settings",
-        return_value=settings,
-    ), patch(
-        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls._chat_with_openai_compatible_local_server"
-    ) as mock_chat:
-        mock_chat.return_value = {"choices": []}
+     captured = {}
 
+    class FakeResp:
+        status_code = 200
+
+        def raise_for_status(self):
+
+                     return None
+
+        def json(self):
+
+                     return {"choices": []}
+
+    class FakeClient:
+        def __enter__(self):
+                     return self
+
+        def __exit__(self, exc_type, exc, tb):
+
+                     return False
+
+        def post(self, url, headers=None, json=None):
+
+                     captured["json"] = json
+            return FakeResp()
+
+    with patch(
+        "tldw_Server_API.app.core.LLM_Calls.providers.custom_openai_adapter.http_client_factory",
+        lambda *a, **k: FakeClient(),
+    ):
         chat_with_custom_openai_2(
             input_data=[{"role": "user", "content": "ping"}],
             api_key="key-2",
@@ -102,5 +131,4 @@ def test_custom_openai_2_handler_accepts_topp(monkeypatch):
             topp=0.27,
         )
 
-    kwargs = mock_chat.call_args.kwargs
-    assert kwargs["top_p"] == 0.27
+    assert captured["json"]["top_p"] == 0.27

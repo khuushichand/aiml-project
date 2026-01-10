@@ -24,7 +24,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture(autouse=True)
 def _isolate_app_state_per_test(monkeypatch, request):
-    """Ensure clean app state per test and disable CSRF/rate limiter.
+     """Ensure clean app state per test and disable CSRF/rate limiter.
 
     - Sets TEST_MODE/TESTING env vars so main.py skips global rate limiter.
     - Disables CSRF via the shared settings dict used by CSRF middleware logic.

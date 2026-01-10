@@ -14,7 +14,7 @@ pytestmark = pytest.mark.unit
 
 class _StubRateLimiter:
     def __init__(self) -> None:
-        self.enabled = True
+             self.enabled = True
         self.calls = []
 
     async def check_user_rate_limit(self, user_id, endpoint, limit, window_minutes):
@@ -33,7 +33,7 @@ class _StubSettings:
 
 class _StubUsageLogger:
     def log_event(self, *args, **kwargs):
-        return None
+             return None
 
 
 class _StubTTSService:
@@ -51,7 +51,9 @@ async def _fake_get_tts_service() -> _StubTTSService:
 
 
 def _fake_get_usage_event_logger() -> _StubUsageLogger:
-    return _StubUsageLogger()
+
+
+     return _StubUsageLogger()
 
 
 async def _fake_get_db_pool():
@@ -70,7 +72,9 @@ async def _fake_get_jwt_service():
 
 
 def test_audio_speech_uses_legacy_rate_limit_when_rg_disabled(monkeypatch):
-    monkeypatch.setenv("RG_ENABLED", "0")
+
+
+     monkeypatch.setenv("RG_ENABLED", "0")
 
     limiter = _StubRateLimiter()
     monkeypatch.setattr(auth_deps, "get_rate_limiter", lambda: limiter)

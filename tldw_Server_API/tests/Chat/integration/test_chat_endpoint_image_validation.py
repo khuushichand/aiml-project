@@ -22,7 +22,7 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_
 
 @pytest.mark.unit
 def test_chat_endpoint_large_data_image_accepted_by_size_and_flagged_by_image_validation():
-    # Configure strict request JSON size but allow endpoint to accept due to redaction
+     # Configure strict request JSON size but allow endpoint to accept due to redaction
     os.environ['CHAT_REQUEST_MAX_SIZE'] = '1000'  # tight cap
     os.environ['CHAT_IMAGE_MAX_MB'] = '1'        # small image limit to trigger validation failure
 
@@ -139,7 +139,7 @@ def test_chat_endpoint_large_data_image_accepted_by_size_and_flagged_by_image_va
 
 @pytest.mark.unit
 def test_chat_endpoint_streaming_large_data_image_placeholder_in_db():
-    # Configure strict request JSON size but allow endpoint to accept due to redaction
+     # Configure strict request JSON size but allow endpoint to accept due to redaction
     os.environ['CHAT_REQUEST_MAX_SIZE'] = '1000'  # tight cap
     os.environ['CHAT_IMAGE_MAX_MB'] = '1'        # small image limit to trigger validation failure
 
@@ -206,7 +206,8 @@ def test_chat_endpoint_streaming_large_data_image_placeholder_in_db():
             chunk2 = {"choices": [{"delta": {"content": " world"}}]}
 
             def upstream_stream():
-                yield f"data: {json.dumps(chunk1)}\n\n"
+
+                             yield f"data: {json.dumps(chunk1)}\n\n"
                 yield f"data: {json.dumps(chunk2)}\n\n"
                 yield "data: [DONE]\n\n"
 

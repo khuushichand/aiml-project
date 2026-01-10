@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.LLM_Calls.Local_Summarization_Lib import (
 
 @pytest.mark.unit
 def test_resolve_local_llm_url_handles_various_inputs():
-    assert _resolve_local_llm_url(None) == "http://127.0.0.1:8080/v1/chat/completions"
+     assert _resolve_local_llm_url(None) == "http://127.0.0.1:8080/v1/chat/completions"
     assert _resolve_local_llm_url("http://host:9000") == "http://host:9000/v1/chat/completions"
     assert _resolve_local_llm_url("http://host:9000/v1") == "http://host:9000/v1/chat/completions"
     assert _resolve_local_llm_url("http://host:9000/v1/chat/completions") == "http://host:9000/v1/chat/completions"
@@ -18,7 +18,7 @@ def test_resolve_local_llm_url_handles_various_inputs():
 
 @pytest.mark.unit
 def test_summarize_with_local_llm_uses_configured_endpoint():
-    fake_response = MagicMock()
+     fake_response = MagicMock()
     fake_response.raise_for_status.return_value = None
     fake_response.json.return_value = {
         "choices": [

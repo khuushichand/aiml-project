@@ -4,7 +4,9 @@ import types
 
 
 def _extract_prompt_content(kwargs):
-    messages = kwargs.get("messages_payload") or []
+
+
+     messages = kwargs.get("messages_payload") or []
     if isinstance(messages, list):
         user_message = next((m for m in messages if m.get("role") == "user"), None)
         if user_message:
@@ -15,7 +17,9 @@ def _extract_prompt_content(kwargs):
 
 
 def test_extract_prompt_no_instructions_tag():
-    # Provide a fake chat_orchestrator before importing the module to avoid heavy deps
+
+
+     # Provide a fake chat_orchestrator before importing the module to avoid heavy deps
     mod = types.ModuleType("chat_orchestrator_stub")
     setattr(mod, "chat_api_call", lambda **kwargs: _extract_prompt_content(kwargs))
     sys.modules['tldw_Server_API.app.core.Chat.chat_orchestrator'] = mod
@@ -29,10 +33,13 @@ def test_extract_prompt_no_instructions_tag():
 
 
 def test_variable_replacement_double_brace(monkeypatch):
-    captured = {}
+
+
+     captured = {}
 
     def fake_chat_api_call(**kwargs):
-        # Capture the prompt that reaches the chat layer
+
+             # Capture the prompt that reaches the chat layer
         captured['prompt'] = _extract_prompt_content(kwargs)
         # Return the prompt back to the caller for easy assertions
         return captured['prompt']
@@ -62,10 +69,13 @@ def test_variable_replacement_double_brace(monkeypatch):
 
 
 def test_variable_replacement_repeated_placeholders(monkeypatch):
-    captured = {}
+
+
+     captured = {}
 
     def fake_chat_api_call(**kwargs):
-        captured['prompt'] = _extract_prompt_content(kwargs)
+
+             captured['prompt'] = _extract_prompt_content(kwargs)
         return captured['prompt']
 
     # Ensure module is importable and patch chat function on the module
@@ -91,10 +101,13 @@ def test_variable_replacement_repeated_placeholders(monkeypatch):
 
 
 def test_variable_replacement_extra_values_ignored(monkeypatch):
-    captured = {}
+
+
+     captured = {}
 
     def fake_chat_api_call(**kwargs):
-        captured['prompt'] = _extract_prompt_content(kwargs)
+
+             captured['prompt'] = _extract_prompt_content(kwargs)
         return captured['prompt']
 
     mod = types.ModuleType("chat_orchestrator_stub")
@@ -119,10 +132,13 @@ def test_variable_replacement_extra_values_ignored(monkeypatch):
 
 
 def test_variable_replacement_missing_values_left_intact(monkeypatch):
-    captured = {}
+
+
+     captured = {}
 
     def fake_chat_api_call(**kwargs):
-        captured['prompt'] = _extract_prompt_content(kwargs)
+
+             captured['prompt'] = _extract_prompt_content(kwargs)
         return captured['prompt']
 
     mod = types.ModuleType("chat_orchestrator_stub")
@@ -147,10 +163,13 @@ def test_variable_replacement_missing_values_left_intact(monkeypatch):
 
 
 def test_invalid_placeholder_formats_unchanged(monkeypatch):
-    captured = {}
+
+
+     captured = {}
 
     def fake_chat_api_call(**kwargs):
-        captured['prompt'] = _extract_prompt_content(kwargs)
+
+             captured['prompt'] = _extract_prompt_content(kwargs)
         return captured['prompt']
 
     # Use a real module object to avoid inserting an unhashable

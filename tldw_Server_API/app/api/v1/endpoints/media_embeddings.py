@@ -31,15 +31,9 @@ from tldw_Server_API.app.core.config import settings, load_comprehensive_config
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.Chunking.base import ChunkerConfig
 import asyncio
-import uuid
 
-from tldw_Server_API.app.core.Embeddings.media_embedding_jobs_db import (
-    init_db as jobs_init_db,
-    create_job as jobs_create,
-    update_job as jobs_update,
-    get_job as jobs_get,
-    list_jobs as jobs_list,
-)
+from tldw_Server_API.app.core.Embeddings.jobs_adapter import EmbeddingsJobsAdapter
+from tldw_Server_API.app.api.v1.utils.rag_cache import invalidate_rag_caches
 
 router = APIRouter(prefix="/media", tags=["media-embeddings"])
 
@@ -449,7 +443,7 @@ async def generate_embeddings_for_media(
                 metadatas.append(metadata)
 
             # Store embeddings
-            ids = [f"chunk_{i}" for i in range(len(chunks))]
+            ids = [f"media_{media_id}_chunk_{i}" for i in range(len(chunks))]
 
             # Convert embeddings to list format if they're numpy arrays
             logger.info(f"Embeddings type: {type(embeddings)}, first item type: {type(embeddings[0]) if embeddings else 'None'}")
@@ -513,7 +507,7 @@ async def generate_embeddings_for_media(
                     }
                     metadatas.append(metadata)
 
-                ids = [f"chunk_{i}" for i in range(len(chunks))]
+                ids = [f"media_{media_id}_chunk_{i}" for i in range(len(chunks))]
 
                 # Convert embeddings to list format if they're numpy arrays
                 if embeddings and hasattr(embeddings[0], 'tolist'):
@@ -647,10 +641,16 @@ async def generate_embeddings(
         media_content = await get_media_content(media_id, db)
 
         # Persist a job record and run generation in the background
-        jobs_init_db(user_id)
-        job_id = f"mej_{uuid.uuid4().hex[:20]}"
+        adapter = EmbeddingsJobsAdapter()
+        job_id = None
         try:
-            jobs_create(job_id=job_id, media_id=media_id, user_id=user_id, embedding_model=embedding_model)
+            job_row = adapter.create_job(
+                user_id=user_id,
+                media_id=media_id,
+                embedding_model=embedding_model,
+                embedding_provider=embedding_provider,
+            )
+            job_id = str(job_row.get("uuid") or job_row.get("id"))
         except Exception as e:
             logger.warning(f"Failed to persist media embedding job: {e}")
 
@@ -665,15 +665,18 @@ async def generate_embeddings(
                     chunk_overlap=request.chunk_overlap,
                     user_id=user_id
                 )
+                invalidate_rag_caches(current_user, media_id=media_id)
                 try:
                     update_payload = _job_update_from_result(result)
-                    jobs_update(job_id=job_id, user_id=user_id, **update_payload)
+                    if job_id:
+                        adapter.update_job(job_id=job_id, user_id=user_id, **update_payload)
                 except Exception as e:
                     logger.debug(f"media_embeddings: failed to update job status for {job_id}: {e}")
             except Exception as e:
                 logger.error(f"Background embeddings generation failed for media {media_id}: {e}")
                 try:
-                    jobs_update(job_id=job_id, user_id=user_id, status='failed', error=str(e))
+                    if job_id:
+                        adapter.update_job(job_id=job_id, user_id=user_id, status='failed', error=str(e))
                 except Exception as e:
                     logger.debug(f"media_embeddings: failed to update job status for {job_id}: {e}")
 
@@ -732,15 +735,21 @@ async def generate_embeddings_batch(
         current_user,
         error_status=http_status.HTTP_400_BAD_REQUEST,
     )
-    jobs_init_db(user_id)
+    adapter = EmbeddingsJobsAdapter()
 
     job_ids: List[str] = []
 
     for media_id in media_ids:
-        job_id = f"meb_{uuid.uuid4().hex[:20]}"
-        job_ids.append(job_id)
+        job_id: Optional[str] = None
         try:
-            jobs_create(job_id=job_id, media_id=media_id, user_id=user_id, embedding_model=embedding_model)
+            job_row = adapter.create_job(
+                user_id=user_id,
+                media_id=media_id,
+                embedding_model=embedding_model,
+                embedding_provider=embedding_provider,
+            )
+            job_id = str(job_row.get("uuid") or job_row.get("id"))
+            job_ids.append(job_id)
         except Exception as exc:
             logger.warning(f"Failed to persist batch job {job_id} for media {media_id}: {exc}")
 
@@ -759,17 +768,19 @@ async def generate_embeddings_batch(
                 )
                 try:
                     update_payload = _job_update_from_result(result)
-                    jobs_update(job_id=job_ref, user_id=user_id, **update_payload)
+                    if job_ref:
+                        adapter.update_job(job_id=job_ref, user_id=user_id, **update_payload)
                 except Exception as e:
                     logger.debug(f"media_embeddings: index op failed: {e}")
             except Exception as exc:
                 logger.error(f"Batch embeddings job failed for media {mid}: {exc}")
                 try:
-                    jobs_update(job_id=job_ref, user_id=user_id, status='failed', error=str(exc))
+                    if job_ref:
+                        adapter.update_job(job_id=job_ref, user_id=user_id, status='failed', error=str(exc))
                 except Exception as e:
                     logger.debug(f"media_embeddings: cleanup failed: {e}")
 
-        asyncio.create_task(_run_batch_job())
+        asyncio.create_task(_run_batch_job(job_ref=job_id))
 
     return BatchMediaEmbeddingsResponse(status="accepted", job_ids=job_ids, submitted=len(job_ids))
 
@@ -907,6 +918,15 @@ async def delete_embeddings(
             ids = (data or {}).get("ids") or []
             if ids:
                 collection.delete(ids=ids)
+        try:
+            remaining = collection.get(where={"media_id": str(media_id)}, include=["metadatas"], limit=1)
+            remaining_ids = (remaining or {}).get("ids") or []
+            if remaining_ids:
+                collection.delete(ids=remaining_ids)
+        except Exception as e:
+            logger.warning(f"Failed to verify embeddings delete for media {media_id}: {e}")
+
+        invalidate_rag_caches(current_user, media_id=media_id)
 
         return {
             "status": "success",
@@ -934,9 +954,8 @@ async def get_media_embedding_job(
         current_user,
         error_status=http_status.HTTP_400_BAD_REQUEST,
     )
-    # Ensure the jobs table exists for this user before querying.
-    jobs_init_db(user_id)
-    rec = jobs_get(job_id, user_id)
+    adapter = EmbeddingsJobsAdapter()
+    rec = adapter.get_job(job_id, user_id)
     if not rec:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Job not found")
     return rec
@@ -956,7 +975,6 @@ async def list_media_embedding_jobs(
         current_user,
         error_status=http_status.HTTP_400_BAD_REQUEST,
     )
-    # Ensure the jobs table exists for this user before listing.
-    jobs_init_db(user_id)
-    rows = jobs_list(user_id=user_id, status=status, limit=limit, offset=offset)
+    adapter = EmbeddingsJobsAdapter()
+    rows = adapter.list_jobs(user_id=user_id, status=status, limit=limit, offset=offset)
     return {"data": rows, "pagination": {"limit": limit, "offset": offset, "count": len(rows)}}

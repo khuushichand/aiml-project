@@ -16,7 +16,9 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 
 def _fake_provider_stream() -> Iterator[str]:
-    # OpenAI-like chunks + [DONE]
+
+
+     # OpenAI-like chunks + [DONE]
     yield "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n"
     yield "data: {\"choices\":[{\"delta\":{\"content\":\"Hello unified SSE\"}}]}\n\n"
     yield "data: [DONE]\n\n"
@@ -174,7 +176,9 @@ async def test_character_chat_streaming_unified_sse_slow_async_heartbeat(monkeyp
 
 
 def _fake_provider_stream_with_duplicate_done_sync() -> Iterator[str]:
-    yield "data: {\"choices\":[{\"delta\":{\"content\":\"A\"}}]}\n\n"
+
+
+     yield "data: {\"choices\":[{\"delta\":{\"content\":\"A\"}}]}\n\n"
     yield "data: [DONE]\n\n"
     yield "data: [DONE]\n\n"
 
@@ -192,7 +196,8 @@ async def test_character_chat_streaming_unified_sse_provider_duplicate_done(monk
         import tldw_Server_API.app.api.v1.endpoints.character_chat_sessions as mod
 
         def _stub_chat_api_call(*args, **kwargs):
-            return _fake_provider_stream_with_duplicate_done_sync()
+
+                     return _fake_provider_stream_with_duplicate_done_sync()
 
         mod.perform_chat_api_call = _stub_chat_api_call  # type: ignore
 

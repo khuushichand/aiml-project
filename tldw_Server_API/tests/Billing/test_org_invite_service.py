@@ -47,7 +47,8 @@ class TestInviteValidationResult:
     """Tests for InviteValidationResult dataclass."""
 
     def test_is_valid_true_when_valid(self):
-        """is_valid should be True when status is VALID."""
+
+             """is_valid should be True when status is VALID."""
         result = InviteValidationResult(
             status=InviteStatus.VALID,
             invite={"id": 1},
@@ -55,7 +56,8 @@ class TestInviteValidationResult:
         assert result.is_valid is True
 
     def test_is_valid_false_when_expired(self):
-        """is_valid should be False when status is EXPIRED."""
+
+             """is_valid should be False when status is EXPIRED."""
         result = InviteValidationResult(
             status=InviteStatus.EXPIRED,
             invite={"id": 1},
@@ -64,7 +66,8 @@ class TestInviteValidationResult:
         assert result.is_valid is False
 
     def test_is_valid_false_when_exhausted(self):
-        """is_valid should be False when status is EXHAUSTED."""
+
+             """is_valid should be False when status is EXHAUSTED."""
         result = InviteValidationResult(
             status=InviteStatus.EXHAUSTED,
             invite={"id": 1},
@@ -72,7 +75,8 @@ class TestInviteValidationResult:
         assert result.is_valid is False
 
     def test_is_valid_false_when_revoked(self):
-        """is_valid should be False when status is REVOKED."""
+
+             """is_valid should be False when status is REVOKED."""
         result = InviteValidationResult(
             status=InviteStatus.REVOKED,
             invite={"id": 1},
@@ -80,7 +84,8 @@ class TestInviteValidationResult:
         assert result.is_valid is False
 
     def test_is_valid_false_when_not_found(self):
-        """is_valid should be False when status is NOT_FOUND."""
+
+             """is_valid should be False when status is NOT_FOUND."""
         result = InviteValidationResult(
             status=InviteStatus.NOT_FOUND,
         )
@@ -91,7 +96,8 @@ class TestRedemptionResult:
     """Tests for RedemptionResult dataclass."""
 
     def test_successful_redemption(self):
-        """Successful redemption should have success=True."""
+
+             """Successful redemption should have success=True."""
         result = RedemptionResult(
             success=True,
             org_id=1,
@@ -102,7 +108,8 @@ class TestRedemptionResult:
         assert result.was_already_member is False
 
     def test_already_member_redemption(self):
-        """Already member redemption should be marked."""
+
+             """Already member redemption should be marked."""
         result = RedemptionResult(
             success=True,
             org_id=1,
@@ -112,7 +119,8 @@ class TestRedemptionResult:
         assert result.was_already_member is True
 
     def test_failed_redemption(self):
-        """Failed redemption should have success=False."""
+
+             """Failed redemption should have success=False."""
         result = RedemptionResult(
             success=False,
             message="Invite expired",
@@ -125,17 +133,17 @@ class TestOrgInviteService:
 
     @pytest.fixture
     def mock_invites_repo(self):
-        """Create a mock invites repository."""
+             """Create a mock invites repository."""
         return AsyncMock()
 
     @pytest.fixture
     def mock_orgs_repo(self):
-        """Create a mock orgs/teams repository."""
+             """Create a mock orgs/teams repository."""
         return AsyncMock()
 
     @pytest.fixture
     def service(self, mock_invites_repo, mock_orgs_repo):
-        """Create a service with mocked dependencies."""
+             """Create a service with mocked dependencies."""
         return OrgInviteService(
             db_pool=MagicMock(),
             invites_repo=mock_invites_repo,

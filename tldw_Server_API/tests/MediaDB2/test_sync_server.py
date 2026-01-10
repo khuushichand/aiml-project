@@ -37,7 +37,7 @@ def get_entity_state(db: MediaDatabase, entity: str, uuid: str) -> dict | None:
 
 @pytest.fixture(scope="function")
 def server_user_db(memory_db_factory):
-    """Provides a fresh DB instance representing a user's DB on the server."""
+     """Provides a fresh DB instance representing a user's DB on the server."""
     db = memory_db_factory("SERVER") # Use server's client ID when acting
     yield db # Use yield to allow for potential cleanup if needed
     # Optional cleanup: ensure connection is closed after test
@@ -48,7 +48,7 @@ def server_user_db(memory_db_factory):
 
 @pytest.fixture(scope="function")
 def server_processor(server_user_db):
-    """Provides an initialized ServerSyncProcessor instance."""
+     """Provides an initialized ServerSyncProcessor instance."""
     # Ensure the server_user_db passed here is the fresh, function-scoped one
     return ServerSyncProcessor(db=server_user_db, user_id="test_user_1", requesting_client_id="client_sender_1")
 
@@ -57,7 +57,7 @@ class TestServerSyncProcessorApply:
 
     # Remove @pytest.mark.asyncio and async/await
     def test_apply_client_create_success(self, server_processor, server_user_db):
-        """Test server applying a 'create' change from a client."""
+             """Test server applying a 'create' change from a client."""
         kw_uuid = "client-create-uuid"
         client_change = create_mock_log_entry(
             change_id=5, entity="Keywords", uuid=kw_uuid, op="create",
@@ -82,7 +82,7 @@ class TestServerSyncProcessorApply:
 
     # Remove @pytest.mark.asyncio and async/await
     def test_apply_client_update_success(self, server_processor, server_user_db):
-         """Test server applying an 'update' change from a client."""
+              """Test server applying an 'update' change from a client."""
          kw_uuid = "client-update-uuid"
          server_processor.db.execute_query(
               "INSERT INTO Keywords (uuid, keyword, version, client_id, last_modified, deleted) VALUES (?, ?, 1, ?, ?, 0)",
@@ -111,7 +111,7 @@ class TestServerSyncProcessorApply:
 
     # Remove @pytest.mark.asyncio and async/await
     def test_apply_idempotency_on_server(self, server_processor, server_user_db):
-         """Test server correctly handles receiving the same change twice."""
+              """Test server correctly handles receiving the same change twice."""
          kw_uuid = "server-idem-uuid"
          client_change = create_mock_log_entry(5, "Keywords", kw_uuid, "create", "c1", 1, {"keyword":"idem1"}, "ts1")
 
@@ -128,7 +128,7 @@ class TestServerSyncProcessorApply:
 
     # Remove @pytest.mark.asyncio and async/await
     def test_apply_old_change_on_server(self, server_processor, server_user_db):
-         """Test server correctly skips a change older than its state."""
+              """Test server correctly skips a change older than its state."""
          kw_uuid = "server-old-uuid"
          server_processor.db.execute_query(
               "INSERT INTO Keywords (uuid, keyword, version, client_id, last_modified, deleted) VALUES (?, ?, 2, ?, ?, 0)",
@@ -156,7 +156,8 @@ class TestServerSyncProcessorApply:
 class TestServerSyncProcessorConflict:
 
     def test_server_conflict_client_wins_lww(self, server_processor, server_user_db):
-        """Server detects conflict, incoming client change wins LWW."""
+
+             """Server detects conflict, incoming client change wins LWW."""
         kw_uuid = "server-conflict-client-wins"
         ts_v1 = "2023-11-01T12:00:00.000Z"
         server_processor.db.execute_query(
@@ -209,7 +210,8 @@ class TestServerSyncProcessorConflict:
         assert state['last_modified'] == server_authoritative_time_str
 
     def test_server_conflict_server_wins_lww(self, server_processor, server_user_db):
-         """Server detects conflict, existing server state wins LWW."""
+
+              """Server detects conflict, existing server state wins LWW."""
          kw_uuid = "server-conflict-server-wins"
          # USE CONSISTENT ISO FORMAT
          ts_v1 = "2023-11-01T13:00:00.000Z"

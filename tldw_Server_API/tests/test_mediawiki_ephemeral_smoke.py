@@ -18,7 +18,9 @@ from tldw_Server_API.app.api.v1.endpoints.media import router as media_router
 
 
 def _mini_mediawiki_xml() -> str:
-    return (
+
+
+     return (
         """
 <mediawiki xmlns="http://www.mediawiki.org/xml/export-0.10/" version="0.10" xml:lang="en">
   <siteinfo>

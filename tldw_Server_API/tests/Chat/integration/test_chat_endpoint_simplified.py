@@ -16,7 +16,9 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHA
 
 
 def test_chat_completion_basic(authenticated_client, mock_chacha_db, setup_dependencies):
-    """Test basic chat completion with authenticated user."""
+
+
+     """Test basic chat completion with authenticated user."""
 
     # Prepare request data - must include api_provider
     request_data = ChatCompletionRequest(
@@ -55,7 +57,7 @@ def test_chat_completion_basic(authenticated_client, mock_chacha_db, setup_depen
 
 @pytest.mark.skip(reason="Streaming tests hang with TestClient")
 def test_chat_completion_streaming(authenticated_client, mock_chacha_db):
-    """Test streaming chat completion."""
+     """Test streaming chat completion."""
 
     request_data = ChatCompletionRequest(
         model="test-model",
@@ -68,7 +70,7 @@ def test_chat_completion_streaming(authenticated_client, mock_chacha_db):
 
     # Mock streaming response
     def mock_stream():
-        yield "data: {\"choices\": [{\"delta\": {\"content\": \"Once \"}}]}\n\n"
+             yield "data: {\"choices\": [{\"delta\": {\"content\": \"Once \"}}]}\n\n"
         yield "data: {\"choices\": [{\"delta\": {\"content\": \"upon \"}}]}\n\n"
         yield "data: {\"choices\": [{\"delta\": {\"content\": \"a \"}}]}\n\n"
         yield "data: {\"choices\": [{\"delta\": {\"content\": \"time...\"}}]}\n\n"
@@ -89,7 +91,9 @@ def test_chat_completion_streaming(authenticated_client, mock_chacha_db):
 
 
 def test_chat_completion_with_character(authenticated_client, mock_chacha_db, setup_dependencies):
-    """Test chat completion with a specific character."""
+
+
+     """Test chat completion with a specific character."""
 
     # Add a character to the mock database
     character_id = mock_chacha_db.add_character_card({
@@ -131,7 +135,9 @@ def test_chat_completion_with_character(authenticated_client, mock_chacha_db, se
 
 
 def test_chat_completion_unauthorized(mock_chacha_db):
-    """Test that unauthenticated requests are rejected."""
+
+
+     """Test that unauthenticated requests are rejected."""
     from fastapi.testclient import TestClient
     from tldw_Server_API.app.main import app
 
@@ -157,7 +163,9 @@ def test_chat_completion_unauthorized(mock_chacha_db):
 
 
 def test_chat_completion_invalid_model(authenticated_client, mock_chacha_db, setup_dependencies):
-    """Test handling of invalid model requests."""
+
+
+     """Test handling of invalid model requests."""
 
     # Use a valid provider but configure it to fail
     request_data = ChatCompletionRequest(
@@ -183,7 +191,9 @@ def test_chat_completion_invalid_model(authenticated_client, mock_chacha_db, set
 
 
 def test_chat_completion_with_conversation_history(authenticated_client, mock_chacha_db, setup_dependencies):
-    """Test chat with conversation history."""
+
+
+     """Test chat with conversation history."""
 
     # Get the actual default character ID (it's usually 2 based on our tests)
     # First check what character exists
@@ -252,7 +262,9 @@ def test_chat_completion_with_conversation_history(authenticated_client, mock_ch
 
 
 def test_chat_completion_rate_limiting(authenticated_client, mock_chacha_db, setup_dependencies):
-    """Test rate limiting functionality."""
+
+
+     """Test rate limiting functionality."""
 
     request_data = ChatCompletionRequest(
         model="test-model",
@@ -292,7 +304,9 @@ def test_chat_completion_rg_primary_deny(
     setup_dependencies,
     monkeypatch,
 ):
-    """
+
+
+     """
     When ResourceGovernor is enabled and the RG gate denies,
     the chat endpoint should surface a 429 with a policy-aware message.
     """
@@ -315,7 +329,7 @@ def test_chat_completion_rg_primary_deny(
     if getattr(app.state, "rg_policy_loader", None) is None:
         class _Loader:
             def get_policy(self, _policy_id):
-                return {}
+                             return {}
 
         app.state.rg_policy_loader = _Loader()
 
@@ -363,7 +377,9 @@ def test_chat_completion_rg_shadow_vs_primary_behaviour(
     setup_dependencies,
     monkeypatch,
 ):
-    """
+
+
+     """
     Exercise /api/v1/chat/completions under RG allow/deny decisions to
     validate 200/429 behavior.
     """
@@ -387,7 +403,7 @@ def test_chat_completion_rg_shadow_vs_primary_behaviour(
     if getattr(app.state, "rg_policy_loader", None) is None:
         class _Loader:
             def get_policy(self, _policy_id):
-                return {}
+                             return {}
 
         app.state.rg_policy_loader = _Loader()
 

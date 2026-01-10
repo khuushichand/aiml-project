@@ -18,7 +18,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture()
 def test_app(monkeypatch) -> FastAPI:
-    # Configure JWT for tests (multi-user style virtual key)
+     # Configure JWT for tests (multi-user style virtual key)
     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     monkeypatch.setenv("JWT_ALGORITHM", "HS256")

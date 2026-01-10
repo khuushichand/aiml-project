@@ -13,7 +13,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture()
 def client_with_user(monkeypatch):
-    async def override_user():
+     async def override_user():
         return User(id=778, username="wluser", email=None, is_active=True)
 
     base_dir = Path.cwd() / "Databases" / "test_user_dbs_opml"
@@ -29,7 +29,9 @@ def client_with_user(monkeypatch):
 
 
 def _opml_sample() -> str:
-    return (
+
+
+     return (
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
         "<opml version=\"2.0\">\n"
         "  <head><title>Test</title></head>\n"
@@ -42,7 +44,9 @@ def _opml_sample() -> str:
 
 
 def test_opml_import_export_endpoints(client_with_user):
-    c = client_with_user
+
+
+     c = client_with_user
 
     # Import OPML
     xml = _opml_sample()

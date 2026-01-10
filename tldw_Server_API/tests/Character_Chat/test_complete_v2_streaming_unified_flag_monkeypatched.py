@@ -47,7 +47,8 @@ async def test_complete_v2_streaming_unified_flag_two_providers(monkeypatch):
     import tldw_Server_API.app.api.v1.endpoints.character_chat_sessions as chat_sessions_mod
 
     def _fake_perform_chat_api_call(*args, **kwargs):
-        def _generator():
+
+             def _generator():
             for chunk in stream_chunks:
                 yield chunk
         return _generator()

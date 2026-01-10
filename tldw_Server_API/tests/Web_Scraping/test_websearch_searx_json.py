@@ -4,7 +4,9 @@ from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
 
 
 def test_search_web_searx_handles_json_payload(monkeypatch):
-    json_payload = {
+
+
+     json_payload = {
         "results": [
             {
                 "title": "Example Result",
@@ -20,7 +22,8 @@ def test_search_web_searx_handles_json_payload(monkeypatch):
         text = ""
 
         def json(self):
-            return json_payload
+
+                     return json_payload
 
     from tldw_Server_API.app.core.Security import egress as egress_module
     monkeypatch.setattr(

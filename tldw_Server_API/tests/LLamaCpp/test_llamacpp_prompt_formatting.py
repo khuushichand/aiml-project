@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_setting
 
 @pytest.fixture(scope="module")
 def client():
-    # Ensure a consistent single-user auth configuration for this module,
+     # Ensure a consistent single-user auth configuration for this module,
     # regardless of prior AuthNZ tests that may have switched modes.
     prev_auth_mode = os.environ.get("AUTH_MODE")
     prev_single_key = os.environ.get("SINGLE_USER_API_KEY")
@@ -40,7 +40,7 @@ def client():
 
 class _FakeProc:
     def __init__(self, captured):
-        self._captured = captured
+             self._captured = captured
         self.returncode = 0
     async def communicate(self):
         # Build minimal embeddings array: 1 query + N docs, each 8-dim

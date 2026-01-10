@@ -9,7 +9,9 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 
 
 def _make_app() -> FastAPI:
-    app = FastAPI()
+
+
+     app = FastAPI()
 
     @app.get("/ps/me")
     async def whoami(user_ctx: Dict[str, Any] = Depends(deps.get_prompt_studio_user)):
@@ -20,13 +22,15 @@ def _make_app() -> FastAPI:
 
 @pytest.fixture(autouse=True)
 def _ensure_not_test_mode(monkeypatch):
-    # Ensure get_prompt_studio_user exercises header-forwarding path
+     # Ensure get_prompt_studio_user exercises header-forwarding path
     monkeypatch.setenv("TEST_MODE", "false")
     yield
 
 
 def test_prompt_studio_user_claims_admin_from_user_object(monkeypatch):
-    calls: Dict[str, Any] = {}
+
+
+     calls: Dict[str, Any] = {}
 
     async def fake_get_request_user(request, api_key=None, token=None, legacy_token_header=None):
         calls["api_key"] = api_key
@@ -57,7 +61,9 @@ def test_prompt_studio_user_claims_admin_from_user_object(monkeypatch):
 
 
 def test_prompt_studio_user_claims_non_admin(monkeypatch):
-    async def fake_get_request_user(request, api_key=None, token=None, legacy_token_header=None):
+
+
+     async def fake_get_request_user(request, api_key=None, token=None, legacy_token_header=None):
         return User(
             id=2,
             username="regular-user",

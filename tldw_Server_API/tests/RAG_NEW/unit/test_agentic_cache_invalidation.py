@@ -2,7 +2,9 @@ from tldw_Server_API.app.core.RAG.rag_service import agentic_chunker as ac
 
 
 def test_invalidate_intra_doc_vectors():
-    # Seed cache with two keys for media_id 'm1' and one for 'm2'
+
+
+     # Seed cache with two keys for media_id 'm1' and one for 'm2'
     ac._INTRA_DOC_VEC_CACHE.clear()
     ac._INTRA_DOC_VEC_CACHE['m1|100|123|model|prov'] = [1, 2, 3]
     ac._INTRA_DOC_VEC_CACHE['m1|101|124|model|prov'] = [4, 5, 6]

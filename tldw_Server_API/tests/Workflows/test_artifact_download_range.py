@@ -12,14 +12,15 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 
 @pytest.fixture()
 def client_and_db(tmp_path, auth_headers):
-    db = WorkflowsDatabase(str(tmp_path / "wf.db"))
+     db = WorkflowsDatabase(str(tmp_path / "wf.db"))
 
     async def override_user():
         # Match the run's owner and tenant for strict owner checks
         return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True, tenant_id="default")
 
     def override_db():
-        return db
+
+             return db
 
     app.dependency_overrides[get_request_user] = override_user
     app.dependency_overrides[wf_mod._get_db] = override_db
@@ -56,7 +57,9 @@ def _bootstrap_run_with_artifact(db: WorkflowsDatabase, tmpdir: Path):
 
 
 def test_artifact_download_with_range(monkeypatch, tmp_path, client_and_db):
-    # Enable permissive MIME
+
+
+     # Enable permissive MIME
     monkeypatch.setenv("WORKFLOWS_ARTIFACT_ALLOWED_MIME", "application/octet-stream")
     client, db = client_and_db
     run_id = _bootstrap_run_with_artifact(db, tmp_path)

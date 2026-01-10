@@ -11,7 +11,9 @@ from tldw_Server_API.app.main import app
 
 
 def _client(monkeypatch) -> TestClient:
-    monkeypatch.setenv("TEST_MODE", "1")
+
+
+     monkeypatch.setenv("TEST_MODE", "1")
     # Disable real execution to keep run queued/non-terminal for cancel
     monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "false")
     monkeypatch.setenv("SANDBOX_BACKGROUND_EXECUTION", "true")
@@ -21,7 +23,7 @@ def _client(monkeypatch) -> TestClient:
 
 @pytest.mark.unit
 def test_cancel_endpoint_sends_single_end_and_sets_killed(monkeypatch) -> None:
-    with _client(monkeypatch) as client:
+     with _client(monkeypatch) as client:
         # Start a run (will be queued due to execution disabled)
         body: Dict[str, Any] = {
             "spec_version": "1.0",

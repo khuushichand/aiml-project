@@ -8,7 +8,7 @@ from tldw_Server_API.app.api.v1.API_Deps.setup_deps import require_local_setup_a
 
 @pytest.fixture(autouse=True)
 def _reset_remote_cache():
-    setup_deps.reset_remote_access_cache(None)
+     setup_deps.reset_remote_access_cache(None)
     yield
     setup_deps.reset_remote_access_cache(None)
 

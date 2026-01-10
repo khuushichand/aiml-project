@@ -34,7 +34,7 @@ class TestElevenLabsAdapterInitialization:
 
     @pytest.mark.unit
     def test_adapter_initialization_with_config(self):
-        """Test adapter initialization with configuration."""
+             """Test adapter initialization with configuration."""
         config = {
             "api_key": "test-elevenlabs-key",
             "base_url": "https://api.elevenlabs.io/v1",
@@ -49,7 +49,7 @@ class TestElevenLabsAdapterInitialization:
 
     @pytest.mark.unit
     def test_adapter_initialization_without_api_key(self, monkeypatch):
-        """Test adapter initialization without API key."""
+             """Test adapter initialization without API key."""
         config = {
             "base_url": "https://api.elevenlabs.io/v1"
         }
@@ -61,7 +61,7 @@ class TestElevenLabsAdapterInitialization:
 
     @pytest.mark.unit
     def test_adapter_supported_models(self):
-        """Test adapter reports supported models."""
+             """Test adapter reports supported models."""
         config = {"api_key": "test-key"}
         adapter = ElevenLabsTTSAdapter(config)
 

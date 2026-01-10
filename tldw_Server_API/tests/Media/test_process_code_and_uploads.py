@@ -9,7 +9,9 @@ pytestmark = pytest.mark.unit
 
 
 def test_process_code_js_lines(client_with_single_user):
-    client, _ = client_with_single_user
+
+
+     client, _ = client_with_single_user
     code = b"console.log('hi');\nconsole.log('bye');\n"
     files = [("files", ("script.js", code, "application/javascript"))]
     data = {
@@ -30,7 +32,9 @@ def test_process_code_js_lines(client_with_single_user):
 
 
 def test_process_code_js_codechunk(client_with_single_user):
-    client, _ = client_with_single_user
+
+
+     client, _ = client_with_single_user
     code = b"function add(a,b){return a+b;}\nexport default add;\n"
     files = [("files", ("lib.js", code, "application/javascript"))]
     data = {
@@ -69,7 +73,9 @@ async def test_save_uploaded_files_extension_candidates_tar_gz(tmp_path, monkeyp
 
 
 def test_process_docs_streaming_respects_validator_limits(client_with_single_user, monkeypatch, tmp_path):
-    # Monkeypatch the file_validator_instance to enforce a tiny max size for documents
+
+
+     # Monkeypatch the file_validator_instance to enforce a tiny max size for documents
     from tldw_Server_API.app.api.v1.endpoints import media as media_mod
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import FileValidator
 

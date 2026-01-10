@@ -19,7 +19,7 @@ from tldw_Server_API.app.core.AuthNZ.repos.billing_repo import AuthnzBillingRepo
 
 class _FakeBillingRepo:
     def __init__(self) -> None:
-        self.last_create_args: Optional[Dict[str, Any]] = None
+             self.last_create_args: Optional[Dict[str, Any]] = None
         self.last_log_action: Optional[Dict[str, Any]] = None
         self.last_updated_subscription: Optional[Dict[str, Any]] = None
         self.last_payment: Optional[Dict[str, Any]] = None
@@ -146,7 +146,8 @@ class _FakeStripeClient:
     """Minimal Stripe client stub for checkout tests."""
 
     def __init__(self) -> None:
-        self.is_available = True
+
+             self.is_available = True
 
     async def create_customer(self, *, email: str, name: Optional[str] = None, metadata: Optional[Dict[str, str]] = None) -> str:
         return "cus_test_123"

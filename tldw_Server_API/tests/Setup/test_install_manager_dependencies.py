@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.Setup import install_manager
 
 @pytest.fixture(autouse=True)
 def reset_dependency_cache():
-    install_manager._INSTALLED_DEPENDENCIES.clear()  # noqa: SLF001
+     install_manager._INSTALLED_DEPENDENCIES.clear()  # noqa: SLF001
     yield
     install_manager._INSTALLED_DEPENDENCIES.clear()  # noqa: SLF001
 
@@ -21,7 +21,9 @@ def _read_status(path: str):
 
 
 def test_dependencies_skipped_when_pip_disabled(monkeypatch):
-    plan = {
+
+
+     plan = {
         'stt': [{'engine': 'faster_whisper', 'models': ['small']}],
         'tts': [],
         'embeddings': {'huggingface': [], 'custom': [], 'onnx': []},
@@ -51,7 +53,9 @@ def test_dependencies_skipped_when_pip_disabled(monkeypatch):
 
 
 def test_dependencies_trigger_pip_install(monkeypatch):
-    plan = {
+
+
+     plan = {
         'stt': [{'engine': 'faster_whisper', 'models': ['small']}],
         'tts': [],
         'embeddings': {'huggingface': [], 'custom': [], 'onnx': []},
@@ -67,7 +71,8 @@ def test_dependencies_trigger_pip_install(monkeypatch):
         original_find_spec = importlib.util.find_spec
 
         def fake_find_spec(name):
-            if name == 'faster_whisper':
+
+                     if name == 'faster_whisper':
                 return None
             return original_find_spec(name)
 

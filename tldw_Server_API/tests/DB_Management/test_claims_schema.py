@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 @pytest.fixture
 def temp_media_db_path():
-    d = tempfile.mkdtemp(prefix="test_claims_db_")
+     d = tempfile.mkdtemp(prefix="test_claims_db_")
     try:
         yield os.path.join(d, "media.db")
     finally:
@@ -28,7 +28,9 @@ def _mk_db(path: str) -> MediaDatabase:
 
 
 def test_claims_table_exists(temp_media_db_path):
-    db = _mk_db(temp_media_db_path)
+
+
+     db = _mk_db(temp_media_db_path)
     conn = db.get_connection()
     cur = conn.execute("PRAGMA table_info(Claims)")
     cols = [r[1] for r in cur.fetchall()]
@@ -39,7 +41,9 @@ def test_claims_table_exists(temp_media_db_path):
 
 
 def test_insert_and_fetch_claims(temp_media_db_path):
-    db = _mk_db(temp_media_db_path)
+
+
+     db = _mk_db(temp_media_db_path)
 
     # Create a minimal media record via helper
     content = "Hello world content for claims"

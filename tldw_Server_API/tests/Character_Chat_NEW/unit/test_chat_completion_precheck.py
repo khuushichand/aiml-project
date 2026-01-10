@@ -8,7 +8,7 @@ from typing import List, Dict, Any
 
 @pytest.mark.unit
 def test_completion_precheck_uses_count_not_bulk_get(test_client, auth_headers, character_db):
-    # Create a character and a chat with a few messages
+     # Create a character and a chat with a few messages
     char_resp = test_client.post(
         "/api/v1/characters/",
         json={

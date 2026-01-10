@@ -13,7 +13,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture()
 def client_user(monkeypatch):
-    async def override_user():
+     async def override_user():
         return User(id=777, username="wluser", email=None, is_active=True)
 
     base_dir = Path.cwd() / "Databases" / "test_user_dbs"
@@ -32,7 +32,7 @@ def client_user(monkeypatch):
 
 @pytest.fixture()
 def client_admin(monkeypatch):
-    async def override_user():
+     async def override_user():
         u = User(id=1, username="admin", email=None, is_active=True)
         setattr(u, "is_admin", True)
         return u
@@ -51,7 +51,9 @@ def client_admin(monkeypatch):
 
 
 def test_create_job_sets_next_and_schedule_id(client_admin):
-    c = client_admin
+
+
+     c = client_admin
     # Create job with cron/timezone
     body = {
         "name": "Daily 8am",
@@ -74,7 +76,9 @@ def test_create_job_sets_next_and_schedule_id(client_admin):
 
 
 def test_update_job_recomputes_next_and_updates_enabled(client_user):
-    c = client_user
+
+
+     c = client_user
     # Create a simple job
     body = {"name": "Quarter Hour", "scope": {}, "schedule_expr": "*/30 * * * *", "timezone": "UTC", "active": True}
     r = c.post("/api/v1/watchlists/jobs", json=body)
@@ -90,7 +94,9 @@ def test_update_job_recomputes_next_and_updates_enabled(client_user):
 
 
 def test_run_now_updates_last_and_next(client_user):
-    c = client_user
+
+
+     c = client_user
     body = {"name": "Every Minute", "scope": {}, "schedule_expr": "* * * * *", "timezone": "UTC", "active": True}
     r = c.post("/api/v1/watchlists/jobs", json=body)
     assert r.status_code == 200

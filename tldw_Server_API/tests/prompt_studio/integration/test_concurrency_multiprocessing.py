@@ -79,7 +79,7 @@ def _worker_acquire_loop(spec: Dict[str, Any], out_ids):
 
 @pytest.mark.integration
 def test_parallel_acquire_distinct_jobs_multiprocessing(prompt_studio_dual_backend_db):
-    label, db = prompt_studio_dual_backend_db
+     label, db = prompt_studio_dual_backend_db
     # Prepare a moderate number of jobs
     total = 18
     for i in range(total):

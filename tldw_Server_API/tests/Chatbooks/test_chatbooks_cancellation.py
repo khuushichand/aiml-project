@@ -17,7 +17,7 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
 
 @pytest.fixture()
 def client(tmp_path_factory):
-    """Provide a TestClient with isolated ChaChaNotes DB + auth overrides per module."""
+     """Provide a TestClient with isolated ChaChaNotes DB + auth overrides per module."""
     tmp_dir = tmp_path_factory.mktemp("chatbooks_cancel")
     db_path = tmp_dir / "ChaChaNotes.db"
     db_instance = CharactersRAGDB(db_path=str(db_path), client_id="chatbooks-cancel-test")
@@ -29,7 +29,8 @@ def client(tmp_path_factory):
         return User(id=1, username="tester", is_active=True)
 
     def override_db():
-        return db_instance
+
+             return db_instance
 
     app.dependency_overrides[get_request_user] = override_user
     app.dependency_overrides[get_chacha_db_for_user] = override_db
@@ -57,7 +58,9 @@ def _make_export_payload(async_mode: bool = True):
 
 
 def _make_chatbook_bytes() -> bytes:
-    buf = io.BytesIO()
+
+
+     buf = io.BytesIO()
     with zipfile.ZipFile(buf, mode="w") as zf:
         manifest = {
             "version": "1.0.0",
@@ -76,7 +79,9 @@ def _make_chatbook_bytes() -> bytes:
 
 
 def test_cancel_export_job_flow(client):
-    # Start async export job
+
+
+     # Start async export job
     resp = client.post("/api/v1/chatbooks/export", json=_make_export_payload(async_mode=True))
     assert resp.status_code in (200, 401, 403, 422), f"unexpected export status {resp.status_code}: {resp.text}"
     if resp.status_code != 200:
@@ -97,7 +102,9 @@ def test_cancel_export_job_flow(client):
 
 
 def test_cancel_import_job_flow(client):
-    # Prepare small chatbook upload
+
+
+     # Prepare small chatbook upload
     data = _make_chatbook_bytes()
     files = {"file": ("test.chatbook", data, "application/zip")}
 

@@ -10,6 +10,9 @@ from tldw_Server_API.app.core.http_client import (
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 
 
+http_client_factory = _hc_create_client
+
+
 class CustomOpenAIAdapter(ChatProvider):
     name = "custom-openai-api"
 
@@ -142,7 +145,7 @@ class CustomOpenAIAdapter(ChatProvider):
             payload = self._build_payload(request)
             payload["stream"] = False
             try:
-                with _hc_create_client(timeout=timeout or 120.0) as client:
+                with http_client_factory(timeout=timeout or 120.0) as client:
                     resp = client.post(url, headers=headers, json=payload)
                     resp.raise_for_status()
                     return self._normalize_response(resp.json())
@@ -166,7 +169,7 @@ class CustomOpenAIAdapter(ChatProvider):
             payload = self._build_payload(request)
             payload["stream"] = True
             try:
-                with _hc_create_client(timeout=timeout or 120.0) as client:
+                with http_client_factory(timeout=timeout or 120.0) as client:
                     with client.stream("POST", url, headers=headers, json=payload) as resp:
                         resp.raise_for_status()
                         for line in resp.iter_lines():
@@ -191,6 +194,7 @@ class CustomOpenAIAdapter(ChatProvider):
             get_http_status_from_exception,
             get_http_error_text,
             is_http_status_error,
+            log_http_400_body,
         )
         if is_http_status_error(exc):
             from tldw_Server_API.app.core.Chat.Chat_Deps import (
@@ -207,6 +211,7 @@ class CustomOpenAIAdapter(ChatProvider):
                 body = resp.json() if resp is not None else None
             except Exception:
                 body = None
+            log_http_400_body(self.name, exc, body)
             if isinstance(body, dict):
                 err = body.get("error")
                 if isinstance(err, dict):
@@ -246,7 +251,7 @@ class CustomOpenAIAdapter2(CustomOpenAIAdapter):
             payload = self._build_payload(request)
             payload["stream"] = False
             try:
-                with _hc_create_client(timeout=timeout or 120.0) as client:
+                with http_client_factory(timeout=timeout or 120.0) as client:
                     resp = client.post(url, headers=headers, json=payload)
                     resp.raise_for_status()
                     return self._normalize_response(resp.json())
@@ -270,7 +275,7 @@ class CustomOpenAIAdapter2(CustomOpenAIAdapter):
             payload = self._build_payload(request)
             payload["stream"] = True
             try:
-                with _hc_create_client(timeout=timeout or 120.0) as client:
+                with http_client_factory(timeout=timeout or 120.0) as client:
                     with client.stream("POST", url, headers=headers, json=payload) as resp:
                         resp.raise_for_status()
                         for line in resp.iter_lines():

@@ -14,10 +14,30 @@ from typing import Any, Dict, List, Optional, Union
 
 from loguru import logger
 
-from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+from tldw_Server_API.app.core.LLM_Calls import adapter_registry as _adapter_registry
 from tldw_Server_API.app.core.LLM_Calls.sse import sse_data, sse_done
 # Import compatibility call sites under explicit names to avoid recursion when
 # top-level names become adapter-backed wrappers.
+
+
+def get_registry():
+    """Resolve the adapter registry at call time to honor test monkeypatching."""
+    return _adapter_registry.get_registry()
+
+
+def _ensure_app_config(app_config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if app_config is not None:
+        return app_config
+    try:
+        from tldw_Server_API.app.core.LLM_Calls import chat_calls as _chat_calls
+        cfg = _chat_calls.load_and_log_configs()
+        return cfg or {}
+    except Exception:
+        try:
+            from tldw_Server_API.app.core.config import load_and_log_configs
+            return load_and_log_configs() or {}
+        except Exception:
+            return {}
 
 
 def openai_chat_handler(
@@ -96,6 +116,8 @@ def openai_chat_handler(
                 )
     except Exception:
         pass
+
+    app_config = _ensure_app_config(app_config)
 
     # Route via adapter
     registry = get_registry()
@@ -1293,6 +1315,8 @@ async def openai_chat_handler_async(
     app_config: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ):
+    app_config = _ensure_app_config(app_config)
+
     # Honor explicit test monkeypatching of legacy chat_with_openai (only when actually patched to a test helper),
     # otherwise prefer the adapter path. Avoid triggering just because we're under pytest.
     try:
@@ -1422,6 +1446,8 @@ async def anthropic_chat_handler_async(
     app_config: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ):
+    app_config = _ensure_app_config(app_config)
+
     registry = get_registry()
     adapter = registry.get_adapter("anthropic")
     if adapter is None:
@@ -2171,6 +2197,8 @@ async def groq_chat_handler_async(
     app_config: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ):
+    app_config = _ensure_app_config(app_config)
+
     registry = get_registry()
     adapter = registry.get_adapter("groq")
     if adapter is None:
@@ -2715,6 +2743,8 @@ def qwen_chat_handler(
     app_config: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ):
+    app_config = _ensure_app_config(app_config)
+
     registry = get_registry()
     adapter = registry.get_adapter("qwen")
     if adapter is None:

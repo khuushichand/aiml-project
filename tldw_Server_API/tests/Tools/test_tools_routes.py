@@ -6,7 +6,7 @@ import pytest
 
 @pytest.mark.unit
 def test_tools_list(client_user_only):
-    # Ensure tools route is enabled (config.txt sets enable = tools; env can override)
+     # Ensure tools route is enabled (config.txt sets enable = tools; env can override)
     os.environ.setdefault("ROUTES_ENABLE", "tools")
 
     r = client_user_only.get("/api/v1/tools")
@@ -18,7 +18,7 @@ def test_tools_list(client_user_only):
 
 @pytest.mark.unit
 def test_tools_execute_dry_run_when_available(client_user_only):
-    os.environ.setdefault("ROUTES_ENABLE", "tools")
+     os.environ.setdefault("ROUTES_ENABLE", "tools")
     # Promote deterministic module autoload in startup (Media module)
     os.environ.setdefault("TEST_MODE", "1")
 

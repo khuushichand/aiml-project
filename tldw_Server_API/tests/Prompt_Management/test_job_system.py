@@ -24,11 +24,12 @@ class TestJobManager:
 
     @pytest.fixture
     def job_manager(self, prompt_studio_db):
-        """Create JobManager instance."""
+             """Create JobManager instance."""
         return JobManager(prompt_studio_db)
 
     def test_create_job(self, job_manager):
-        """Test creating a job."""
+
+             """Test creating a job."""
         job = job_manager.create_job(
             job_type=JobType.GENERATION,
             entity_id=1,
@@ -44,7 +45,8 @@ class TestJobManager:
         assert json.loads(job["payload"]) == {"test": "data"}
 
     def test_get_job(self, job_manager):
-        """Test getting a job by ID."""
+
+             """Test getting a job by ID."""
         # Create job
         created = job_manager.create_job(
             job_type=JobType.EVALUATION,
@@ -59,7 +61,8 @@ class TestJobManager:
         assert job["job_type"] == JobType.EVALUATION.value
 
     def test_get_job_by_uuid(self, job_manager):
-        """Test getting a job by UUID."""
+
+             """Test getting a job by UUID."""
         # Create job
         created = job_manager.create_job(
             job_type=JobType.OPTIMIZATION,
@@ -73,7 +76,8 @@ class TestJobManager:
         assert job["uuid"] == created["uuid"]
 
     def test_list_jobs(self, job_manager):
-        """Test listing jobs with filters."""
+
+             """Test listing jobs with filters."""
         # Create multiple jobs
         job_manager.create_job(JobType.GENERATION, 1, {}, priority=1)
         job_manager.create_job(JobType.EVALUATION, 2, {}, priority=5)
@@ -92,7 +96,8 @@ class TestJobManager:
         assert all(j["status"] == JobStatus.QUEUED.value for j in queued_jobs)
 
     def test_update_job_status(self, job_manager):
-        """Test updating job status."""
+
+             """Test updating job status."""
         # Create job
         job = job_manager.create_job(JobType.GENERATION, 1, {})
 
@@ -124,7 +129,8 @@ class TestJobManager:
         assert json.loads(completed["result"]) == result
 
     def test_cancel_job(self, job_manager):
-        """Test cancelling a job."""
+
+             """Test cancelling a job."""
         # Create job
         job = job_manager.create_job(JobType.EVALUATION, 1, {})
 
@@ -143,7 +149,8 @@ class TestJobManager:
         assert not success
 
     def test_get_next_job(self, job_manager):
-        """Test getting next job from queue."""
+
+             """Test getting next job from queue."""
         # Create jobs with different priorities
         low = job_manager.create_job(JobType.GENERATION, 1, {}, priority=1)
         high = job_manager.create_job(JobType.GENERATION, 2, {}, priority=10)
@@ -159,7 +166,8 @@ class TestJobManager:
         assert next_job["id"] == med["id"]
 
     def test_retry_job(self, job_manager):
-        """Test retrying a failed job."""
+
+             """Test retrying a failed job."""
         # Create job with max_retries=3
         job = job_manager.create_job(
             JobType.OPTIMIZATION,
@@ -197,7 +205,8 @@ class TestJobManager:
                 assert not success
 
     def test_job_stats(self, job_manager):
-        """Test getting job statistics."""
+
+             """Test getting job statistics."""
         # Create various jobs
         job_manager.create_job(JobType.GENERATION, 1, {})
         job_manager.create_job(JobType.EVALUATION, 2, {})
@@ -216,7 +225,8 @@ class TestJobManager:
         assert "success_rate" in stats
 
     def test_cleanup_old_jobs(self, job_manager):
-        """Test cleaning up old jobs."""
+
+             """Test cleaning up old jobs."""
         # Create old job (simulate by updating timestamp directly)
         job = job_manager.create_job(JobType.GENERATION, 1, {})
         job_manager.update_job_status(job["id"], JobStatus.COMPLETED)
@@ -246,7 +256,7 @@ class TestJobProcessor:
 
     @pytest.fixture
     def job_processor(self, prompt_studio_db):
-        """Create JobProcessor instance."""
+             """Create JobProcessor instance."""
         job_manager = JobManager(prompt_studio_db)
         return JobProcessor(prompt_studio_db, job_manager)
 
@@ -398,7 +408,8 @@ class TestJobProcessor:
             client_id = "test-client"
 
             def __init__(self) -> None:
-                self.ensure_prompt_stub = MagicMock()
+
+                             self.ensure_prompt_stub = MagicMock()
                 self.get_optimization = MagicMock(
                     return_value={
                         "id": 42,
@@ -458,7 +469,7 @@ class TestEventBroadcaster:
 
     @pytest.fixture
     def mock_connection_manager(self):
-        """Create mock connection manager."""
+             """Create mock connection manager."""
         manager = MagicMock()
         manager.broadcast_to_client = AsyncMock()
         manager.broadcast_to_all = AsyncMock()
@@ -466,7 +477,7 @@ class TestEventBroadcaster:
 
     @pytest.fixture
     def event_broadcaster(self, prompt_studio_db, mock_connection_manager):
-        """Create EventBroadcaster instance."""
+             """Create EventBroadcaster instance."""
         return EventBroadcaster(mock_connection_manager, prompt_studio_db)
 
     @pytest.mark.asyncio
@@ -503,7 +514,8 @@ class TestEventBroadcaster:
         assert mock_connection_manager.broadcast_to_client.call_count == 2
 
     def test_subscription_management(self, event_broadcaster):
-        """Test subscription management."""
+
+             """Test subscription management."""
         # Subscribe
         event_broadcaster.subscribe("client1", "job", 1)
         event_broadcaster.subscribe("client2", "job", 1)

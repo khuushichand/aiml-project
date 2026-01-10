@@ -29,9 +29,7 @@ import time
 from typing import List, Any, Optional, Tuple, Dict, Union, Iterable
 #
 # Import 3rd-Party Libraries
-import requests
-import httpx
-from tldw_Server_API.app.core.http_client import fetch, afetch_json, RetryPolicy, create_async_client
+from tldw_Server_API.app.core.http_client import fetch, afetch_json, RetryPolicy
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 #
@@ -52,8 +50,13 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
 from tldw_Server_API.app.core.LLM_Calls.http_helpers import create_session_with_retries as _legacy_create_session_with_retries
 from tldw_Server_API.app.core.LLM_Calls.streaming import (
     iter_sse_lines_requests,
-    aiter_sse_lines_httpx,
-    aiter_normalized_sse,
+)
+from tldw_Server_API.app.core.LLM_Calls.error_utils import (
+    get_http_error_text,
+    get_http_status_from_exception,
+    is_chunked_encoding_error,
+    is_http_status_error,
+    is_network_error,
 )
 from tldw_Server_API.app.core.LLM_Calls.providers.base import apply_tool_choice as _apply_tool_choice_base
 
@@ -65,53 +68,6 @@ from tldw_Server_API.app.core.LLM_Calls.providers.base import apply_tool_choice 
 #   returned by http_helpers.create_session_with_retries to preserve
 #   iter_lines() semantics used in streaming paths still on requests.
 # -----------------------------------------------------------------------------
-
-class _RequestsLikeResponse:
-    """Wrap an httpx.Response with requests-like attributes for error paths."""
-
-    def __init__(self, resp: httpx.Response):
-        self._resp = resp
-
-    @property
-    def status_code(self) -> int:
-        return self._resp.status_code
-
-    @property
-    def headers(self):  # minimal mapping
-        return self._resp.headers
-
-    @property
-    def text(self) -> str:
-        return self._resp.text
-
-    def json(self):
-        return self._resp.json()
-
-
-class _ResponseShim:
-    """Response shim that proxies to httpx.Response for success paths
-    and raises requests.exceptions.HTTPError on raise_for_status.
-    """
-
-    def __init__(self, resp: httpx.Response):
-        self._resp = resp
-        # Expose commonly used attributes directly
-        self.status_code = resp.status_code
-        self.headers = resp.headers
-        self.text = resp.text
-
-    def json(self):
-        return self._resp.json()
-
-    def raise_for_status(self):
-        if 400 <= self._resp.status_code:
-            # Raise a requests-like HTTPError carrying a response with json()/text
-            err = requests.exceptions.HTTPError(
-                f"HTTP {self._resp.status_code}", response=_RequestsLikeResponse(self._resp)
-            )
-            raise err
-        return None
-
 
 class _SessionShim:
     def __init__(
@@ -149,7 +105,7 @@ class _SessionShim:
             timeout=timeout,
             retry=self._retry,
         )
-        return _ResponseShim(resp)
+        return resp
 
     def close(self):
         try:
@@ -1100,27 +1056,33 @@ def _parse_data_url_for_multimodal(data_url: str) -> Optional[Tuple[str, str]]:
     logging.debug(f"Data URL did not match expected format: {data_url[:60]}...")
     return None
 
-def _raise_chat_error_from_http(provider: str, error: requests.exceptions.HTTPError) -> None:
-    """Normalize requests HTTPError into project ChatAPIError subclasses."""
-    status_code: Optional[int] = None
+def _raise_chat_error_from_http(provider: str, error: Exception) -> None:
+    """Normalize HTTP status errors into project ChatAPIError subclasses."""
+    status_code = get_http_status_from_exception(error)
     message: str = ""
     response = getattr(error, "response", None)
 
     if response is not None:
-        status_code = getattr(response, "status_code", None)
         try:
-            response_text = repr(response.text)
+            response_text = repr(get_http_error_text(error))
         except Exception:
             response_text = "<unable to read response text>"
         logging.error(f"{provider.capitalize()} HTTP error response (status {status_code}): {response_text}")
         try:
             err_json = response.json()
-            message = err_json.get("error", {}).get("message") or err_json.get("message") or response.text or str(error)
+            if isinstance(err_json, dict):
+                message = (
+                    err_json.get("error", {}).get("message")
+                    or err_json.get("message")
+                    or get_http_error_text(error)
+                )
+            else:
+                message = get_http_error_text(error)
         except Exception:
-            message = response.text or str(error)
+            message = get_http_error_text(error)
     else:
-        logging.error(f"{provider.capitalize()} HTTPError with no response payload: {error}")
-        message = str(error)
+        logging.error(f"{provider.capitalize()} HTTP error with no response payload: {error}")
+        message = get_http_error_text(error)
 
     if not message:
         message = f"{provider} API error"
@@ -1135,27 +1097,6 @@ def _raise_chat_error_from_http(provider: str, error: requests.exceptions.HTTPEr
         raise ChatProviderError(provider=provider, message=message, status_code=status_code)
 
     raise ChatAPIError(provider=provider, message=message, status_code=status_code or 500)
-
-
-def _raise_httpx_chat_error(provider: str, error: httpx.HTTPStatusError) -> None:
-    """Normalize httpx HTTPStatusError into project ChatAPIError subclasses."""
-    response = getattr(error, "response", None)
-    status_code = getattr(response, "status_code", None)
-    text = None
-    try:
-        text = response.text if response is not None else str(error)
-    except Exception:
-        text = str(error)
-
-    if status_code in (400, 404, 422):
-        raise ChatBadRequestError(provider=provider, message=text)
-    if status_code in (401, 403):
-        raise ChatAuthenticationError(provider=provider, message=text)
-    if status_code == 429:
-        raise ChatRateLimitError(provider=provider, message=text)
-    if status_code and 500 <= status_code < 600:
-        raise ChatProviderError(provider=provider, message=text, status_code=status_code)
-    raise ChatAPIError(provider=provider, message=text, status_code=status_code or 500)
 
 
 def get_openai_embeddings(
@@ -1252,16 +1193,20 @@ def get_openai_embeddings(
                 raise ValueError("OpenAI Embeddings (single): Embedding data not available or malformed in the response")
         finally:
             session.close()
-    except requests.exceptions.HTTPError as e:
-        logging.error(
-            f"OpenAI Embeddings (single): HTTP request failed with status {e.response.status_code}, Response: {e.response.text}",
-            exc_info=True)
-        raise  # Re-raise the HTTPError to be potentially caught by retry logic
-    except requests.exceptions.RequestException as e:
-        logging.error(f"OpenAI Embeddings (single): Error making API request: {str(e)}", exc_info=True)
-        raise ValueError(
-            f"OpenAI Embeddings (single): Error making API request: {str(e)}")  # Wrap for consistent error type if preferred
     except Exception as e:
+        if is_http_status_error(e):
+            logging.error(
+                "OpenAI Embeddings (single): HTTP request failed with status %s, Response: %s",
+                get_http_status_from_exception(e),
+                get_http_error_text(e),
+                exc_info=True,
+            )
+            raise
+        if is_network_error(e):
+            logging.error(f"OpenAI Embeddings (single): Error making API request: {str(e)}", exc_info=True)
+            raise ValueError(
+                f"OpenAI Embeddings (single): Error making API request: {str(e)}"
+            )
         logging.error(f"OpenAI Embeddings (single): Unexpected error: {str(e)}", exc_info=True)
         raise ValueError(f"OpenAI Embeddings (single): Unexpected error occurred: {str(e)}")
 
@@ -1365,21 +1310,27 @@ def get_openai_embeddings_batch(
         finally:
             session.close()
 
-    except requests.exceptions.HTTPError as e:
-        # Log the detailed error including the response text for better debugging
-        error_message = f"OpenAI Embeddings (batch): HTTP request failed with status {e.response.status_code}."
-        try:
-            error_body = e.response.json()  # Try to parse JSON error from OpenAI
-            error_message += f" Error details: {error_body.get('error', {}).get('message', e.response.text)}"
-        except ValueError:  # If response is not JSON
-            error_message += f" Response: {e.response.text}"
-        logging.error(error_message, exc_info=True)
-        raise  # Re-raise the HTTPError
-    except requests.exceptions.RequestException as e:
-        # Propagate request exceptions so upstream retry logic can handle transient failures
-        logging.error(f"OpenAI Embeddings (batch): RequestException: {str(e)}", exc_info=True)
-        raise
     except Exception as e:
+        if is_http_status_error(e):
+            # Log the detailed error including the response text for better debugging
+            error_message = (
+                f"OpenAI Embeddings (batch): HTTP request failed with status {get_http_status_from_exception(e)}."
+            )
+            try:
+                resp = getattr(e, "response", None)
+                error_body = resp.json() if resp is not None else None
+                if isinstance(error_body, dict):
+                    error_message += f" Error details: {error_body.get('error', {}).get('message', get_http_error_text(e))}"
+                else:
+                    error_message += f" Response: {get_http_error_text(e)}"
+            except Exception:
+                error_message += f" Response: {get_http_error_text(e)}"
+            logging.error(error_message, exc_info=True)
+            raise
+        if is_network_error(e):
+            # Propagate request exceptions so upstream retry logic can handle transient failures
+            logging.error(f"OpenAI Embeddings (batch): RequestException: {str(e)}", exc_info=True)
+            raise
         logging.error(f"OpenAI Embeddings (batch): Unexpected error: {str(e)}", exc_info=True)
         raise ValueError(f"OpenAI Embeddings (batch): Unexpected error occurred: {str(e)}")
 
@@ -1792,12 +1743,13 @@ def legacy_chat_with_bedrock(
                     if not done_sent:
                         done_sent = True
                         yield sse_done()
-                except requests.exceptions.ChunkedEncodingError as e_chunk:
-                    logging.error(f"Bedrock(legacy) stream chunked encoding error: {e_chunk}")
-                    yield sse_data({"error": {"message": f"Stream connection error: {str(e_chunk)}", "type": "bedrock_stream_error"}})
                 except Exception as e_stream:
-                    logging.error(f"Bedrock(legacy) stream iteration error: {e_stream}", exc_info=True)
-                    yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "bedrock_stream_error"}})
+                    if is_chunked_encoding_error(e_stream):
+                        logging.error(f"Bedrock(legacy) stream chunked encoding error: {e_stream}")
+                        yield sse_data({"error": {"message": f"Stream connection error: {str(e_stream)}", "type": "bedrock_stream_error"}})
+                    else:
+                        logging.error(f"Bedrock(legacy) stream iteration error: {e_stream}", exc_info=True)
+                        yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "bedrock_stream_error"}})
                 finally:
                     for tail in finalize_stream(response_handle, done_already=done_sent):
                         yield tail
@@ -1819,24 +1771,23 @@ def legacy_chat_with_bedrock(
                     response.close()
                 except Exception:
                     pass
-    except requests.exceptions.HTTPError as e:
-        status_code = getattr(e.response, 'status_code', None)
-        error_text = getattr(e.response, 'text', str(e))
-        logging.error(f"Bedrock(legacy) HTTPError {status_code}: {repr(error_text[:500])}")
-        if status_code in (400, 404, 422):
-            raise ChatBadRequestError(provider="bedrock", message=error_text)
-        elif status_code in (401, 403):
-            raise ChatAuthenticationError(provider="bedrock", message=error_text)
-        elif status_code == 429:
-            raise ChatRateLimitError(provider="bedrock", message=error_text)
-        elif status_code in (500, 502, 503, 504):
-            raise ChatProviderError(provider="bedrock", message=error_text, status_code=status_code)
-        else:
-            raise ChatAPIError(provider="bedrock", message=error_text, status_code=(status_code or 500))
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Bedrock(legacy) RequestException: {e}", exc_info=True)
-        raise ChatProviderError(provider="bedrock", message=f"Network error: {e}", status_code=504)
     except Exception as e:
+        if is_http_status_error(e):
+            status_code = get_http_status_from_exception(e)
+            error_text = get_http_error_text(e)
+            logging.error(f"Bedrock(legacy) HTTPError {status_code}: {repr(error_text[:500])}")
+            if status_code in (400, 404, 422):
+                raise ChatBadRequestError(provider="bedrock", message=error_text)
+            if status_code in (401, 403):
+                raise ChatAuthenticationError(provider="bedrock", message=error_text)
+            if status_code == 429:
+                raise ChatRateLimitError(provider="bedrock", message=error_text)
+            if status_code in (500, 502, 503, 504):
+                raise ChatProviderError(provider="bedrock", message=error_text, status_code=status_code)
+            raise ChatAPIError(provider="bedrock", message=error_text, status_code=(status_code or 500))
+        if is_network_error(e):
+            logging.error(f"Bedrock(legacy) RequestException: {e}", exc_info=True)
+            raise ChatProviderError(provider="bedrock", message=f"Network error: {e}", status_code=504)
         logging.error(f"Bedrock(legacy) unexpected error: {e}", exc_info=True)
         raise ChatProviderError(provider="bedrock", message=f"Unexpected error: {e}")
     finally:
@@ -2250,12 +2201,13 @@ def legacy_chat_with_cohere(
                             # Plain text fallback - wrap as OpenAI-style delta
                             yield openai_delta_chunk(decoded_line)
 
-                except requests.exceptions.ChunkedEncodingError as e:
-                    logging.warning(f"Cohere stream: ChunkedEncodingError: {e}")
-                    yield sse_data({"error": {"message": f"Stream connection error: {str(e)}", "type": "cohere_stream_error"}})
                 except Exception as e_stream:
-                    logging.error(f"Cohere stream: Error during streaming: {e_stream}", exc_info=True)
-                    yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "cohere_stream_error"}})
+                    if is_chunked_encoding_error(e_stream):
+                        logging.warning(f"Cohere stream: ChunkedEncodingError: {e_stream}")
+                        yield sse_data({"error": {"message": f"Stream connection error: {str(e_stream)}", "type": "cohere_stream_error"}})
+                    else:
+                        logging.error(f"Cohere stream: Error during streaming: {e_stream}", exc_info=True)
+                        yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "cohere_stream_error"}})
                 finally:
                     for tail in finalize_stream(response_handle, done_already=stream_properly_closed):
                         yield tail
@@ -2334,22 +2286,31 @@ def legacy_chat_with_cohere(
             if usage_data: openai_compatible_response["usage"] = usage_data
             return openai_compatible_response
 
-    except requests.exceptions.HTTPError as e:
-        status_code = getattr(e.response, 'status_code', 500)
-        error_text = getattr(e.response, 'text', str(e))
-        logging.error(f"Cohere API call HTTPError to {COHERE_CHAT_URL} status {status_code}. Details: {repr(error_text[:500])}", exc_info=False)
-        if status_code == 401:
-            raise ChatAuthenticationError(provider="cohere", message=f"Authentication failed. Detail: {error_text[:200]}")
-        elif status_code == 429:
-            raise ChatRateLimitError(provider="cohere", message=f"Rate limit exceeded. Detail: {error_text[:200]}")
-        elif 400 <= status_code < 500:
-            raise ChatBadRequestError(provider="cohere", message=f"Bad request (Status {status_code}). Detail: {error_text[:200]}")
-        else: # 5xx
-            raise ChatProviderError(provider="cohere", message=f"Server error (Status {status_code}). Detail: {error_text[:200]}", status_code=status_code)
-    except requests.exceptions.RequestException as e: # Includes ReadTimeout, ConnectionError etc.
-        logging.error(f"Cohere API request failed (network error) for {COHERE_CHAT_URL}: {e}", exc_info=True)
-        # This will catch the ReadTimeout after retries are exhausted
-        raise ChatProviderError(provider="cohere", message=f"Network error after retries: {e}", status_code=504) # 504 for gateway timeout like
+    except Exception as e:
+        if is_http_status_error(e):
+            status_code = get_http_status_from_exception(e) or 500
+            error_text = get_http_error_text(e)
+            logging.error(
+                f"Cohere API call HTTPError to {COHERE_CHAT_URL} status {status_code}. Details: {repr(error_text[:500])}",
+                exc_info=False,
+            )
+            if status_code == 401:
+                raise ChatAuthenticationError(provider="cohere", message=f"Authentication failed. Detail: {error_text[:200]}")
+            if status_code == 429:
+                raise ChatRateLimitError(provider="cohere", message=f"Rate limit exceeded. Detail: {error_text[:200]}")
+            if 400 <= status_code < 500:
+                raise ChatBadRequestError(provider="cohere", message=f"Bad request (Status {status_code}). Detail: {error_text[:200]}")
+            # 5xx
+            raise ChatProviderError(
+                provider="cohere",
+                message=f"Server error (Status {status_code}). Detail: {error_text[:200]}",
+                status_code=status_code,
+            )
+        if is_network_error(e):
+            logging.error(f"Cohere API request failed (network error) for {COHERE_CHAT_URL}: {e}", exc_info=True)
+            # This will catch the ReadTimeout after retries are exhausted
+            raise ChatProviderError(provider="cohere", message=f"Network error after retries: {e}", status_code=504)
+        raise
     except KeyError as e:
         # Surface clearer configuration error if payload/response shape assumptions break
         raise ChatBadRequestError(provider="cohere", message=f"Key error while preparing or parsing Cohere payload/response: {e}")

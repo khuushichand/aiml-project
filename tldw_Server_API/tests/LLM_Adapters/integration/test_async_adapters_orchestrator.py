@@ -12,8 +12,6 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _enable_async_adapters(monkeypatch):
-    monkeypatch.setenv("LLM_ADAPTERS_ENABLED", "1")
-    monkeypatch.setenv("LLM_ADAPTERS_OPENAI", "1")
     # Ensure native HTTP path stays off for these tests
     monkeypatch.delenv("LLM_ADAPTERS_NATIVE_HTTP_OPENAI", raising=False)
     yield

@@ -7,13 +7,11 @@ import json
 import os
 from typing import Any, Generator, Union, Dict, Optional, List, Callable
 
-import httpx
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
     fetch as _hc_fetch,
     RetryPolicy as _HC_RetryPolicy,
 )
-import requests
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError, ChatBadRequestError, ChatConfigurationError
 from tldw_Server_API.app.core.Utils.Utils import logging
@@ -23,6 +21,13 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     is_done_line,
     normalize_provider_line,
     sse_data,
+)
+from tldw_Server_API.app.core.LLM_Calls.error_utils import (
+    get_http_error_text,
+    get_http_status_from_exception,
+    is_http_status_error,
+    is_network_error,
+    log_http_400_body,
 )
 from tldw_Server_API.app.core.LLM_Calls.chat_calls import _sanitize_payload_for_logging, _apply_tool_choice
 
@@ -67,8 +72,8 @@ def _extract_text_from_message_content(content: Union[str, List[Dict[str, Any]]]
     return "\n".join(text_parts).strip()
 
 
-def _raise_chat_error_from_httpx(provider_name: str, error: httpx.HTTPStatusError) -> None:
-    """Map httpx HTTPStatusError to Chat*Error without assuming body shape.
+def _raise_chat_error_from_http(provider_name: str, error: Exception) -> None:
+    """Map HTTP status errors to Chat*Error without assuming body shape.
 
     - Extract a human-friendly message from JSON bodies like {"error": {"message": "..."}}
       or {"error": "..."} or {"message": "..."}. Fallback to raw text.
@@ -76,9 +81,10 @@ def _raise_chat_error_from_httpx(provider_name: str, error: httpx.HTTPStatusErro
     - Never raise during parsing; always fall back safely.
     """
     response = getattr(error, "response", None)
-    status_code = getattr(response, "status_code", None)
+    status_code = get_http_status_from_exception(error)
 
     detail: str = ""
+    body = None
     if response is not None:
         # Try JSON first for structured error messages
         try:
@@ -94,15 +100,13 @@ def _raise_chat_error_from_httpx(provider_name: str, error: httpx.HTTPStatusErro
                     detail = body.get("message")  # type: ignore[assignment]
         except Exception:
             # Ignore JSON parsing errors and fall back to text
-            pass
+            body = None
+        log_http_400_body(provider_name, error, body)
         # Fallback to plain text if no structured message extracted
         if not detail:
-            try:
-                detail = response.text or str(error)
-            except Exception:
-                detail = str(error)
+            detail = get_http_error_text(error)
     else:
-        detail = str(error)
+        detail = get_http_error_text(error)
 
     if status_code is not None and 400 <= status_code < 500:
         # Do not pass status_code kwarg; ChatBadRequestError fixes status to 400 internally
@@ -247,12 +251,9 @@ def _chat_with_openai_compatible_local_server(
 
 
     is_test = bool(os.getenv("PYTEST_CURRENT_TEST"))
-    # Use centralized client (egress/TLS enforcement) in production; keep raw httpx in tests
-    session = None
-    if http_client_factory:
-        session = http_client_factory(timeout)
-    else:
-        session = httpx.Client(timeout=timeout) if is_test else _hc_create_client(timeout=timeout)
+    # Use centralized client (egress/TLS enforcement); allow test overrides via factory.
+    session_factory = http_client_factory or _hc_create_client
+    session = session_factory(timeout=timeout)
     try:
         if streaming:
             logging.debug(f"{provider_name}: Opening streaming connection to {full_api_url}")
@@ -278,32 +279,52 @@ def _chat_with_openai_compatible_local_server(
                                     if normalized is None:
                                         continue
                                     yield normalized
-                            except httpx.HTTPError as e_stream:
-                                logging.error(f"{provider_name}: HTTP error during stream iteration: {e_stream}", exc_info=True)
-                                yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "stream_error", "code": "iteration_error"}})
                             except Exception as e_stream:
-                                logging.error(f"{provider_name}: Unexpected error during stream iteration: {e_stream}", exc_info=True)
+                                logging.error(f"{provider_name}: Error during stream iteration: {e_stream}", exc_info=True)
                                 yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "stream_error", "code": "iteration_error"}})
                             finally:
                                 for tail in finalize_stream(response, done_already=done_sent):
                                     yield tail
-                    except httpx.HTTPStatusError as e_http:
-                        logging.error(
-                            "{}: HTTP Error during stream setup: {} - {}",
-                            provider_name,
-                            getattr(e_http.response, 'status_code', 'N/A'),
-                            getattr(e_http.response, 'text', str(e_http))[:500],
-                            exc_info=False,
-                        )
-                        _raise_chat_error_from_httpx(provider_name, e_http)
-                    except httpx.RequestError as e_req:
-                        logging.error(f"{provider_name}: Request error during stream setup: {e_req}", exc_info=True)
-                        yield sse_data({"error": {"message": f"Stream connection error: {str(e_req)}", "type": "stream_error", "code": "connection_error"}})
-                        for tail in finalize_stream(response_obj, done_already=done_sent):
-                            yield tail
                     except Exception as e_stream_outer:
-                        logging.error(f"{provider_name}: Unexpected error during streaming: {e_stream_outer}", exc_info=True)
-                        yield sse_data({"error": {"message": f"Unexpected stream error: {str(e_stream_outer)}", "type": "stream_error", "code": "unexpected_error"}})
+                        if is_http_status_error(e_stream_outer):
+                            logging.error(
+                                "{}: HTTP Error during stream setup: {} - {}",
+                                provider_name,
+                                get_http_status_from_exception(e_stream_outer) or "N/A",
+                                get_http_error_text(e_stream_outer)[:500],
+                                exc_info=False,
+                            )
+                            _raise_chat_error_from_http(provider_name, e_stream_outer)
+                        if is_network_error(e_stream_outer):
+                            logging.error(
+                                f"{provider_name}: Request error during stream setup: {e_stream_outer}",
+                                exc_info=True,
+                            )
+                            yield sse_data(
+                                {
+                                    "error": {
+                                        "message": f"Stream connection error: {str(e_stream_outer)}",
+                                        "type": "stream_error",
+                                        "code": "connection_error",
+                                    }
+                                }
+                            )
+                            for tail in finalize_stream(response_obj, done_already=done_sent):
+                                yield tail
+                            return
+                        logging.error(
+                            f"{provider_name}: Unexpected error during streaming: {e_stream_outer}",
+                            exc_info=True,
+                        )
+                        yield sse_data(
+                            {
+                                "error": {
+                                    "message": f"Unexpected stream error: {str(e_stream_outer)}",
+                                    "type": "stream_error",
+                                    "code": "unexpected_error",
+                                }
+                            }
+                        )
                         for tail in finalize_stream(response_obj, done_already=done_sent):
                             yield tail
                 finally:
@@ -342,19 +363,21 @@ def _chat_with_openai_compatible_local_server(
                         response.close()
                     except Exception:
                         pass
-    except httpx.HTTPStatusError as e_http:
-        logging.error(
-            "{}: HTTP Error: {} - {}",
-            provider_name,
-            getattr(e_http.response, 'status_code', 'N/A'),
-            getattr(e_http.response, 'text', str(e_http))[:500],
-            exc_info=False,
-        )
-        _raise_chat_error_from_httpx(provider_name, e_http)
-    except httpx.RequestError as e_req:
-        # Network/connectivity, DNS, timeouts prior to receiving a response
-        logging.error(f"{provider_name}: Request error: {e_req}", exc_info=False)
-        raise ChatProviderError(provider=provider_name, message=str(e_req), status_code=504)
+    except Exception as e_http:
+        if is_http_status_error(e_http):
+            logging.error(
+                "{}: HTTP Error: {} - {}",
+                provider_name,
+                get_http_status_from_exception(e_http) or "N/A",
+                get_http_error_text(e_http)[:500],
+                exc_info=False,
+            )
+            _raise_chat_error_from_http(provider_name, e_http)
+        if is_network_error(e_http):
+            # Network/connectivity, DNS, timeouts prior to receiving a response
+            logging.error(f"{provider_name}: Request error: {e_http}", exc_info=False)
+            raise ChatProviderError(provider=provider_name, message=str(e_http), status_code=504)
+        raise
     except (ValueError, KeyError, TypeError) as e_data:
         logging.error(f"{provider_name}: Data processing or configuration error: {e_data}", exc_info=True)
         raise ChatBadRequestError(provider=provider_name, message=f"{provider_name} data or configuration error: {e_data}")
@@ -816,17 +839,24 @@ def legacy_chat_with_kobold(
             )
             raise ChatProviderError(provider="kobold", message=f"Unexpected response structure from KoboldAI (Native): {str(response_data)[:200]}")
 
-    except httpx.HTTPStatusError as e_http:
-        logging.error(
-            "KoboldAI (Native): HTTP Error: {} - {}",
-            getattr(e_http.response, 'status_code', 'N/A'),
-            getattr(e_http.response, 'text', str(e_http))[:500],
-            exc_info=False,
-        )
+    except Exception as e_http:
+        if is_http_status_error(e_http):
+            log_http_400_body("kobold", e_http)
+            logging.error(
+                "KoboldAI (Native): HTTP Error: {} - {}",
+                get_http_status_from_exception(e_http) or "N/A",
+                get_http_error_text(e_http)[:500],
+                exc_info=False,
+            )
+            raise
+        if is_network_error(e_http):
+            logging.error(f"KoboldAI (Native): Request Exception: {e_http}", exc_info=True)
+            raise ChatProviderError(
+                provider="kobold",
+                message=f"Network error calling KoboldAI (Native): {e_http}",
+                status_code=503,
+            )
         raise
-    except httpx.RequestError as e_req:
-        logging.error(f"KoboldAI (Native): Request Exception: {e_req}", exc_info=True)
-        raise ChatProviderError(provider="kobold", message=f"Network error calling KoboldAI (Native): {e_req}", status_code=503)
     except (ValueError, KeyError, TypeError) as e_data:
         logging.error(f"KoboldAI (Native): Data or configuration error: {e_data}", exc_info=True)
         raise ChatBadRequestError(provider="kobold", message=f"KoboldAI (Native) config/data error: {e_data}")

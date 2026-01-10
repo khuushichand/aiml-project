@@ -14,7 +14,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture(autouse=True)
 def testing_env(monkeypatch, tmp_path):
-    os.environ['TESTING'] = 'true'
+     os.environ['TESTING'] = 'true'
     from tldw_Server_API.app.core import config as cfg
     monkeypatch.setitem(cfg.settings, 'USER_DB_BASE_DIR', pathlib.Path(tmp_path))
     yield
@@ -24,7 +24,7 @@ def testing_env(monkeypatch, tmp_path):
 
 @pytest.fixture()
 def client():
-    async def override_user():
+     async def override_user():
         return User(id=1, username='tester', email='t@e.com', is_active=True, is_admin=True)
     app.dependency_overrides[get_request_user] = override_user
     settings = get_settings()

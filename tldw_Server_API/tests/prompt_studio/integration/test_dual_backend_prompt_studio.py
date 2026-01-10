@@ -21,7 +21,7 @@ def test_project_and_prompt_flow_across_backends(
     prompt_studio_dual_backend_client,
     project_payload,
 ):
-    backend_label, client, _db = prompt_studio_dual_backend_client
+     backend_label, client, _db = prompt_studio_dual_backend_client
 
     # Create a project
     project_response = client.post("/api/v1/prompt-studio/projects/", json=project_payload)

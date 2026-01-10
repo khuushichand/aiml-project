@@ -9,7 +9,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture()
 def client_with_user(monkeypatch):
-    async def override_user():
+     async def override_user():
         return User(id=321, username="reader", email=None, is_active=True)
 
     # Use full app profile for reading/Collections endpoints
@@ -24,7 +24,9 @@ def client_with_user(monkeypatch):
 
 
 def test_highlights_crud(client_with_user):
-    client = client_with_user
+
+
+     client = client_with_user
     item_id = 99999
 
     # Create

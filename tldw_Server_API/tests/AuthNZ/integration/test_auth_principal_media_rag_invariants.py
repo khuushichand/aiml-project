@@ -67,7 +67,9 @@ def _restore_auth_capture(app: FastAPI, original_get_auth_principal: Any) -> Non
 
 
 def _run_async(coro):
-    """Run an async coroutine from sync tests, tolerating an active loop."""
+
+
+     """Run an async coroutine from sync tests, tolerating an active loop."""
     import asyncio
     import threading
 
@@ -79,7 +81,8 @@ def _run_async(coro):
     result: Dict[str, Any] = {}
 
     def _runner():
-        try:
+
+             try:
             result["value"] = asyncio.run(coro)
         except BaseException as exc:  # pragma: no cover - propagated below
             result["error"] = exc
@@ -242,7 +245,9 @@ class _StubRagResult:
 
 
 def test_rag_search_jwt_principal_and_state_alignment(isolated_test_environment, monkeypatch):
-    """
+
+
+     """
     Multi-user JWT happy path for a representative RAG route:
 
     - Register and log in a user.
@@ -330,7 +335,9 @@ def test_rag_search_jwt_principal_and_state_alignment(isolated_test_environment,
 
 
 def test_media_process_videos_api_key_principal_and_state_alignment(isolated_test_environment):
-    """
+
+
+     """
     Multi-user API-key happy path for a representative media route:
 
     - Register a user and create a real API key.

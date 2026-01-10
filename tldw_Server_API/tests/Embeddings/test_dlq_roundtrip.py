@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.Embeddings.queue_schemas import EmbeddingMessage, 
 
 class InMemoryRedis:
     def __init__(self):
-        self.streams = {}
+             self.streams = {}
         self.hashes = {}
 
     async def xadd(self, name, fields):
@@ -31,7 +31,7 @@ class InMemoryRedis:
 
 class DummyEmbeddingWorker(BaseWorker):
     def _parse_message(self, data):
-        return EmbeddingMessage(**data) if isinstance(data, dict) else data
+             return EmbeddingMessage(**data) if isinstance(data, dict) else data
 
     async def process_message(self, message):
         raise RuntimeError("forced failure")
@@ -42,7 +42,7 @@ class DummyEmbeddingWorker(BaseWorker):
 
 @pytest.mark.unit
 def test_dlq_on_max_retries(monkeypatch):
-    cfg = WorkerConfig(
+     cfg = WorkerConfig(
         worker_id="w1",
         worker_type="embedding",
         redis_url="redis://localhost:6379",

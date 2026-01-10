@@ -12,7 +12,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture()
 def client_with_user(monkeypatch):
-    async def override_user():
+     async def override_user():
         return User(id=908, username="wluser", email=None, is_active=True)
 
     base_dir = Path.cwd() / "Databases" / "test_user_dbs_site_include_only"
@@ -32,7 +32,9 @@ def client_with_user(monkeypatch):
 
 
 def test_site_include_only_gating(client_with_user):
-    c = client_with_user
+
+
+     c = client_with_user
 
     # Create a site source with basic scrape_rules; TEST_MODE produces synthetic items
     s = c.post(

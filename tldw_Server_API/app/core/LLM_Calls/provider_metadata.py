@@ -36,7 +36,7 @@ PROVIDER_CAPABILITIES: Dict[str, Dict[str, Any]] = {
     "openai": {
         "supports_streaming": True,
         "supports_tools": True,
-        "default_timeout_seconds": 60,
+        "default_timeout_seconds": 90,
         "max_output_tokens_default": 4096,
     },
     "anthropic": {
@@ -66,7 +66,7 @@ PROVIDER_CAPABILITIES: Dict[str, Dict[str, Any]] = {
     "groq": {
         "supports_streaming": True,
         "supports_tools": True,
-        "default_timeout_seconds": 60,
+        "default_timeout_seconds": 90,
         "max_output_tokens_default": 4096,
     },
     "openrouter": {

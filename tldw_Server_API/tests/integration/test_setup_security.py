@@ -6,11 +6,15 @@ import tldw_Server_API.app.api.v1.endpoints.setup as setup_endpoint
 
 
 def _make_client():
-    return TestClient(app)
+
+
+     return TestClient(app)
 
 
 def test_update_config_blocked_for_remote_via_forwarded_header(mocker, monkeypatch):
-    # Ensure remote access is not allowed
+
+
+     # Ensure remote access is not allowed
     monkeypatch.delenv('TLDW_SETUP_ALLOW_REMOTE', raising=False)
     monkeypatch.setenv('TLDW_SETUP_TRUST_PROXY', '1')
 
@@ -37,7 +41,9 @@ def test_update_config_blocked_for_remote_via_forwarded_header(mocker, monkeypat
 
 
 def test_complete_blocked_for_remote_via_forwarded_header(mocker, monkeypatch):
-    # Ensure remote access is not allowed
+
+
+     # Ensure remote access is not allowed
     monkeypatch.delenv('TLDW_SETUP_ALLOW_REMOTE', raising=False)
     monkeypatch.setenv('TLDW_SETUP_TRUST_PROXY', '1')
 
@@ -63,7 +69,7 @@ def test_complete_blocked_for_remote_via_forwarded_header(mocker, monkeypatch):
     body = response.json()
     assert 'restricted to local requests' in (body.get('detail') or '').lower()
 def test_get_config_blocked_for_remote_when_trust_proxy_enabled(mocker, monkeypatch):
-    # Setup enabled
+     # Setup enabled
     mocker.patch.object(
         setup_endpoint.setup_manager,
         'get_status_snapshot',

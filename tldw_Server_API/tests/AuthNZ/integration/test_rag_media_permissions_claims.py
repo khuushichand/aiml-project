@@ -17,7 +17,9 @@ pytestmark = pytest.mark.integration
 
 
 def _run_async(coro):
-    """Run an async coroutine from sync tests, tolerating an active loop."""
+
+
+     """Run an async coroutine from sync tests, tolerating an active loop."""
     try:
         asyncio.get_running_loop()
     except RuntimeError:
@@ -26,7 +28,8 @@ def _run_async(coro):
     result: Dict[str, Any] = {}
 
     def _runner():
-        result["value"] = asyncio.run(coro)
+
+             result["value"] = asyncio.run(coro)
 
     t = threading.Thread(target=_runner, daemon=True)
     t.start()
@@ -121,7 +124,9 @@ class _StubRagResult:
 
 
 def test_rag_search_requires_media_read_permissions(isolated_test_environment, monkeypatch):
-    client, db_name = isolated_test_environment
+
+
+     client, db_name = isolated_test_environment
 
     from tldw_Server_API.app.main import app as fastapi_app
     from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import (
@@ -165,7 +170,9 @@ def test_rag_search_requires_media_read_permissions(isolated_test_environment, m
 
 
 def test_media_process_videos_requires_create_permission(isolated_test_environment):
-    client, db_name = isolated_test_environment
+
+
+     client, db_name = isolated_test_environment
 
     username = "media_user"
     password = "Str0ng_Pw!A"

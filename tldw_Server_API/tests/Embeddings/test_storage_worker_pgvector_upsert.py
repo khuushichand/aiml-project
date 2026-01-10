@@ -12,7 +12,7 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.base import VectorSt
 
 class _FakeAdapter:
     def __init__(self):
-        class _Cfg:
+             class _Cfg:
             store_type = VectorStoreType.PGVECTOR
             connection_params = {}
         self.config = _Cfg()
@@ -38,7 +38,7 @@ class _FakeAdapter:
 
 class _FakeRedis:
     def __init__(self):
-        self.kv: Dict[str, Any] = {}
+             self.kv: Dict[str, Any] = {}
 
     async def get(self, key: str):
         return self.kv.get(key)
@@ -54,7 +54,9 @@ class _FakeRedis:
 
 
 def test_storage_worker_uses_pgvector_adapter(monkeypatch):
-    # Force settings path that selects pgvector via factory probe
+
+
+     # Force settings path that selects pgvector via factory probe
     fake_base = type("_Base", (), {"config": type("_Cfg", (), {"store_type": VectorStoreType.PGVECTOR, "connection_params": {}})})()
 
     from tldw_Server_API.app.core.RAG.rag_service import vector_stores as _vs

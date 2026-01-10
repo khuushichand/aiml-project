@@ -551,7 +551,8 @@ class TestBatchProcessing:
         call = {"n": 0}
 
         def side_effect(*args, **kwargs):
-            async def _gen():
+
+                     async def _gen():
                 call["n"] += 1
                 if call["n"] == 2:
                     raise TTSGenerationError("Failed")

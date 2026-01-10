@@ -11,19 +11,23 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 @pytest.fixture(autouse=True)
 def _setup(jobs_pg_dsn):
-    # Temp database + schema ensured by jobs_pg_dsn fixture
+     # Temp database + schema ensured by jobs_pg_dsn fixture
     return
 
 
 def _map_by_key(rows):
-    out: Dict[Tuple[str, str, str], Dict] = {}
+
+
+     out: Dict[Tuple[str, str, str], Dict] = {}
     for r in rows:
         out[(r["domain"], r["queue"], r["job_type"])] = r
     return out
 
 
 def test_jobs_stats_shape_and_filters_postgres(monkeypatch, jobs_pg_dsn):
-    # Configure env for single-user and Postgres backend
+
+
+     # Configure env for single-user and Postgres backend
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)

@@ -7,13 +7,15 @@ pytestmark = pytest.mark.unit
 
 
 def _build_app_with_middleware():
-    from tldw_Server_API.app.core.AuthNZ.llm_budget_middleware import LLMBudgetMiddleware
+
+
+     from tldw_Server_API.app.core.AuthNZ.llm_budget_middleware import LLMBudgetMiddleware
 
     app = FastAPI()
 
     @app.post("/api/v1/chat/completions")
     def chat_stub():
-        return {"ok": True}
+             return {"ok": True}
 
     app.add_middleware(LLMBudgetMiddleware)
     return app
@@ -22,7 +24,7 @@ def _build_app_with_middleware():
 # Shared fixture for common middleware dependencies
 @pytest.fixture
 def mock_middleware_dependencies(monkeypatch):
-    import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
+     import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
 
     class StubSettings:
         VIRTUAL_KEYS_ENABLED = True
@@ -72,7 +74,9 @@ def mock_middleware_dependencies(monkeypatch):
 
 
 def test_middleware_virtual_over_budget(mock_middleware_dependencies):
-    # Over budget scenario
+
+
+     # Over budget scenario
     set_budget = mock_middleware_dependencies
     set_budget(True, 20000, 10.0)
 
@@ -94,7 +98,9 @@ def test_middleware_virtual_over_budget(mock_middleware_dependencies):
 
 
 def test_middleware_virtual_under_budget_allows(mock_middleware_dependencies):
-    # Under budget scenario
+
+
+     # Under budget scenario
     set_budget = mock_middleware_dependencies
     set_budget(False, 100, 0.1)
 
@@ -112,7 +118,9 @@ def test_middleware_virtual_under_budget_allows(mock_middleware_dependencies):
 
 
 def test_middleware_endpoint_allowlist_forbidden(monkeypatch, mock_middleware_dependencies):
-    import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
+
+
+     import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
     # Ensure budgets allow
     mock_middleware_dependencies(False, 100, 0.1)
 
@@ -148,7 +156,9 @@ def test_middleware_endpoint_allowlist_forbidden(monkeypatch, mock_middleware_de
 
 
 def test_middleware_provider_allowlist_forbidden(monkeypatch, mock_middleware_dependencies):
-    import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
+
+
+     import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
     # Ensure budgets allow
     mock_middleware_dependencies(False, 100, 0.1)
 
@@ -183,7 +193,9 @@ def test_middleware_provider_allowlist_forbidden(monkeypatch, mock_middleware_de
 
 
 def test_middleware_model_allowlist_forbidden(monkeypatch, mock_middleware_dependencies):
-    import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
+
+
+     import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
     # Ensure budgets allow
     mock_middleware_dependencies(False, 100, 0.1)
 
@@ -218,7 +230,9 @@ def test_middleware_model_allowlist_forbidden(monkeypatch, mock_middleware_depen
 
 
 def test_middleware_endpoint_allowlist_allowed(monkeypatch, mock_middleware_dependencies):
-    import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
+
+
+     import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
     # Ensure budgets allow
     mock_middleware_dependencies(False, 100, 0.1)
 
@@ -252,7 +266,9 @@ def test_middleware_endpoint_allowlist_allowed(monkeypatch, mock_middleware_depe
 
 
 def test_middleware_provider_allowlist_allowed(monkeypatch, mock_middleware_dependencies):
-    import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
+
+
+     import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
     # Ensure budgets allow
     mock_middleware_dependencies(False, 100, 0.1)
 
@@ -285,7 +301,9 @@ def test_middleware_provider_allowlist_allowed(monkeypatch, mock_middleware_depe
 
 
 def test_middleware_model_allowlist_allowed(monkeypatch, mock_middleware_dependencies):
-    import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
+
+
+     import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
     # Ensure budgets allow
     mock_middleware_dependencies(False, 100, 0.1)
 
@@ -318,7 +336,9 @@ def test_middleware_model_allowlist_allowed(monkeypatch, mock_middleware_depende
 
 
 def test_settings_cache_invalidation(monkeypatch):
-    # Verify middleware caches settings per generation and refreshes on change
+
+
+     # Verify middleware caches settings per generation and refreshes on change
     import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
     from fastapi import FastAPI
 
@@ -330,7 +350,8 @@ def test_settings_cache_invalidation(monkeypatch):
     b = object()
 
     def fake_get_settings():
-        state["calls"] += 1
+
+             state["calls"] += 1
         return a if state["gen"] == 0 else b
 
     monkeypatch.setattr(mw, "get_settings", fake_get_settings)
@@ -354,7 +375,9 @@ def test_settings_cache_invalidation(monkeypatch):
 
 
 def test_middleware_budget_check_failure_fails_closed(monkeypatch, mock_middleware_dependencies):
-    import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
+
+
+     import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
     # Ensure middleware path and settings are active and key resolves
     mock_middleware_dependencies(False, 100, 0.1)
 
@@ -389,7 +412,9 @@ def test_middleware_budget_check_failure_fails_closed(monkeypatch, mock_middlewa
 
 
 def test_middleware_key_limits_exception_fails_closed(monkeypatch, mock_middleware_dependencies):
-    import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
+
+
+     import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
     # Ensure middleware path and settings are active and key resolves
     mock_middleware_dependencies(False, 100, 0.1)
 
@@ -414,7 +439,9 @@ def test_middleware_key_limits_exception_fails_closed(monkeypatch, mock_middlewa
 
 
 def test_middleware_key_limits_missing_fails_closed(monkeypatch, mock_middleware_dependencies):
-    import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
+
+
+     import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as mw
     # Ensure middleware path and settings are active and key resolves
     mock_middleware_dependencies(False, 100, 0.1)
 

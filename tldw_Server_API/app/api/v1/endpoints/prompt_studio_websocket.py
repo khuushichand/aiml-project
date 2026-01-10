@@ -30,8 +30,8 @@ from tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps import (
     get_prompt_studio_db, get_prompt_studio_user,
     PromptStudioDatabase
 )
-from tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_manager import (
-    JobManager, JobStatus
+from tldw_Server_API.app.core.Prompt_Management.prompt_studio.jobs_adapter import (
+    PromptStudioJobsAdapter,
 )
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.event_broadcaster import (
     EventBroadcaster, EventType
@@ -217,7 +217,8 @@ import asyncio
 async def sse_endpoint(
     client_id: str = Query(..., description="Client ID"),
     project_id: Optional[int] = Query(None, description="Project ID to subscribe to"),
-    db: PromptStudioDatabase = Depends(get_prompt_studio_db)
+    db: PromptStudioDatabase = Depends(get_prompt_studio_db),
+    user_context: Optional[Dict] = Depends(get_prompt_studio_user),
 ):
     """
     Server-Sent Events endpoint as fallback for WebSocket.
@@ -246,8 +247,12 @@ async def sse_endpoint(
                 await stream.send_json({"type": "connection", "status": "connected", "client_id": client_id})
                 # Optional initial state
                 if project_id:
-                    job_manager = JobManager(db)
-                    jobs = job_manager.list_jobs(limit=10)
+                    adapter = PromptStudioJobsAdapter()
+                    jobs = adapter.list_jobs(
+                        db=db,
+                        user_id=(user_context or {}).get("user_id"),
+                        limit=10,
+                    )
                     await stream.send_json({"type": "initial_state", "project_id": project_id, "jobs": jobs})
                 # Periodic heartbeats are handled by SSEStream; also emit a data heartbeat for clients that expect it
                 # (SSEStream will emit comment/data heartbeats per configuration.)
@@ -294,8 +299,12 @@ async def sse_endpoint(
 
         # If project specified, send current state
         if project_id:
-            job_manager = JobManager(db)
-            jobs = job_manager.list_jobs(limit=10)
+            adapter = PromptStudioJobsAdapter()
+            jobs = adapter.list_jobs(
+                db=db,
+                user_id=(user_context or {}).get("user_id"),
+                limit=10,
+            )
 
             yield f"data: {json.dumps({'type': 'initial_state', 'project_id': project_id, 'jobs': jobs})}\n\n"
 
@@ -345,9 +354,15 @@ async def sse_endpoint(
 async def sse_endpoint_route(
     client_id: str = Query(..., description="Client ID"),
     project_id: Optional[int] = Query(None, description="Project ID to subscribe to"),
-    db: PromptStudioDatabase = Depends(get_prompt_studio_db)
+    db: PromptStudioDatabase = Depends(get_prompt_studio_db),
+    user_context: Optional[Dict] = Depends(get_prompt_studio_user),
 ):
-    return await sse_endpoint(client_id=client_id, project_id=project_id, db=db)
+    return await sse_endpoint(
+        client_id=client_id,
+        project_id=project_id,
+        db=db,
+        user_context=user_context,
+    )
 
 ########################################################################################################################
 # WebSocket Endpoint
