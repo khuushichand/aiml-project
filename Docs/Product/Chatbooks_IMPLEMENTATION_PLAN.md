@@ -14,7 +14,7 @@ This plan tracks staged implementation for Chatbooks export/import as specified 
 - Jobs are persisted per user in ChaChaNotes with states `pending → in_progress → completed|failed|cancelled|expired|deleted`, and `GET /api/v1/chatbooks/*/jobs` returns consistent job metadata and scopes.
 
 **Tests**:
-- Unit: manifest builder (per-type mappers and statistics), JSON Schema validation against `Docs/Schemas/chatbooks_manifest_v1.json`, job model/state transitions, per-user storage path construction (`USER_DB_BASE_DIR`).
+- Unit: manifest builder (per-type mappers and statistics), JSON Schema validation against `Docs/Schemas/chatbooks_manifest_v1.json`, job model/state transitions, per-user storage path construction (`USER_DB_BASE_DIR`, defined in `tldw_Server_API.app.core.config`; override via environment variable or `Config_Files/config.txt`).
 - Integration: end-to-end export for a user with mixed content types; verification of manifest counts and identities; retry/export of large-but-metadata-only archives; download completed exports; listing jobs by user and (for admins) by team/org.
 
 **Status**: Completed (per “What’s working now” in the PRD)

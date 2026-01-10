@@ -55,24 +55,12 @@ def _get_storage_base_path() -> Optional[Path]:
     return project_root / "Databases" / "media_storage"
 
 
-def _get_user_db_base_dir() -> Path:
-    """Get the base directory for user databases."""
-    try:
-        from tldw_Server_API.app.core.config import settings
-        val = settings.get("USER_DB_BASE_DIR")
-        if val:
-            return Path(val)
-    except Exception as e:
-        logger.debug(f"media_files_cleanup: failed to read USER_DB_BASE_DIR: {e}")
-
-    project_root = Path(__file__).resolve().parents[3]
-    return project_root / "Databases" / "user_databases"
-
-
 def _enumerate_user_ids() -> list[int]:
     """Get list of user IDs from user database directories."""
-    base = _get_user_db_base_dir()
-    if not base.exists():
+    try:
+        base = DatabasePaths.get_user_db_base_dir()
+    except Exception as exc:
+        logger.debug(f"media_files_cleanup: failed to resolve user db base dir: {exc}")
         return []
 
     uids: list[int] = []

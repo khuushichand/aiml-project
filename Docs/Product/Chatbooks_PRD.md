@@ -155,7 +155,7 @@ Team Facilitator and Compliance Officer / Admin personas operate within this per
 - Media/storage subsystems for referenced artifacts.
 - Authentication & authorization (user id, tier) for scoping quotas and access.
 - Unified audit service for compliance logging.
-- Environment configuration: `CHATBOOKS_*`, `USER_DB_BASE_DIR`, job tuning variables.
+- Environment configuration: `CHATBOOKS_*`, `USER_DB_BASE_DIR` (defined in `tldw_Server_API.app.core.config`, defaults to `Databases/user_databases/` under the project root; override via environment variable or `Config_Files/config.txt`), job tuning variables.
 
 ## 10. Success Metrics
 

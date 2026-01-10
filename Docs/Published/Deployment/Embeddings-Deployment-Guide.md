@@ -92,6 +92,8 @@ export USER_DB_BASE_DIR="$(pwd)/Databases/user_databases"  # USER_DB_BASE is dep
 export EMBEDDINGS_RATE_LIMIT=on   # Uses built-in limit in the API endpoint
 ```
 
+`USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root). Override via environment variable or `Config_Files/config.txt` as needed.
+
 ### Dockerfile (API)
 ```dockerfile
 FROM python:3.11-slim
@@ -240,8 +242,9 @@ Most runtime behavior is configured via code defaults or YAML, not environment v
 - `SINGLE_USER_API_KEY` (single-user mode)
 - `JWT_SECRET_KEY` (multi-user mode)
 - Provider keys: `OPENAI_API_KEY`, `COHERE_API_KEY`, `GOOGLE_API_KEY`, `MISTRAL_API_KEY`, `VOYAGE_API_KEY`
-- `USER_DB_BASE_DIR` (optional; default `Databases/user_databases`)
+- `USER_DB_BASE_DIR` (optional; defined in `tldw_Server_API.app.core.config`, default `Databases/user_databases/` under the project root; override via environment variable or `Config_Files/config.txt`)
 - `EMBEDDINGS_RATE_LIMIT=on` enables the built-in rate limiter for the embeddings endpoint
+- Embeddings compactor: `COMPACTOR_USER_ID` (required in multi-user mode; defaults to `SINGLE_USER_FIXED_ID` in single-user), `EMBEDDINGS_COMPACTOR_INTERVAL_SECONDS` (default: 1800), optional `MEDIA_DB_PATH` override.
 
 Advanced constants like batch size, cache TTL, and connection pool are code-level defaults in `embeddings_v5_production_enhanced.py`.
 

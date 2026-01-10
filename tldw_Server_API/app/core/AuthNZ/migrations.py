@@ -2043,6 +2043,19 @@ def rollback_044_drop_api_keys_key_id(conn: sqlite3.Connection) -> None:
     logger.info("Rollback 044: Dropped idx_api_keys_key_id index")
 
 
+def migration_045_add_users_created_by(conn: sqlite3.Connection) -> None:
+    """Add created_by column to users table for admin-created accounts."""
+    try:
+        cur = conn.execute("PRAGMA table_info(users)")
+        cols = {row[1] for row in cur.fetchall()}
+        if "created_by" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN created_by INTEGER")
+            logger.info("Migration 045: Added users.created_by column")
+        conn.commit()
+    except sqlite3.OperationalError as error:
+        logger.warning(f"Migration 045 skipped or failed: {error}")
+
+
 #######################################################################################################################
 #
 # Migration Registry
@@ -2180,6 +2193,11 @@ def get_authnz_migrations() -> List[Migration]:
             "Add api_keys.key_id column",
             migration_044_add_api_keys_key_id,
             rollback_044_drop_api_keys_key_id,
+        ),
+        Migration(
+            45,
+            "Add users.created_by column",
+            migration_045_add_users_created_by,
         ),
     ]
 

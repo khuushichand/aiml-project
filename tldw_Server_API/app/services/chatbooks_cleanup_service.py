@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-from pathlib import Path
 from typing import Optional
 
 from loguru import logger
@@ -12,24 +11,12 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGD
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
-def _get_user_db_base_dir() -> Path:
-    """Get the base directory for user databases."""
-    try:
-        from tldw_Server_API.app.core.config import settings
-        val = settings.get("USER_DB_BASE_DIR")
-        if val:
-            return Path(val)
-    except Exception as e:
-        logger.debug(f"chatbooks_cleanup: failed to read USER_DB_BASE_DIR: {e}")
-
-    project_root = Path(__file__).resolve().parents[3]
-    return project_root / "Databases" / "user_databases"
-
-
 def _enumerate_user_ids() -> list[int]:
     """Get list of user IDs from user database directories."""
-    base = _get_user_db_base_dir()
-    if not base.exists():
+    try:
+        base = DatabasePaths.get_user_db_base_dir()
+    except Exception as exc:
+        logger.debug(f"chatbooks_cleanup: failed to resolve user db base dir: {exc}")
         return []
 
     uids: list[int] = []
@@ -51,15 +38,8 @@ def _enumerate_user_ids() -> list[int]:
 
 def _build_chacha_db_for_user(user_id: int) -> CharactersRAGDB:
     """Build a per-user ChaChaNotes DB handle for cleanup tasks."""
-    try:
-        db_path = DatabasePaths.get_chacha_db_path(user_id)
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        return CharactersRAGDB(db_path=str(db_path), client_id=str(user_id))
-    except Exception as e:
-        logger.warning(f"chatbooks_cleanup: fallback path for user {user_id} due to: {e}")
-        base = Path(__file__).resolve().parents[3] / "Databases" / "user_databases" / str(user_id)
-        base.mkdir(parents=True, exist_ok=True)
-        return CharactersRAGDB(db_path=str(base / "ChaChaNotes.db"), client_id=str(user_id))
+    db_path = DatabasePaths.get_chacha_db_path(user_id)
+    return CharactersRAGDB(db_path=str(db_path), client_id=str(user_id))
 
 
 async def run_chatbooks_cleanup_loop(stop_event: Optional[asyncio.Event] = None) -> None:

@@ -84,7 +84,7 @@ Helper contract:
   - get_user_rag_personalization_path: <base>/rag_personalization.json
 
 ### 6.2 Config Awareness
-- Precedence: USER_DB_BASE_DIR env var overrides config.txt.
+- Precedence: USER_DB_BASE_DIR env var overrides config.txt (defined in `tldw_Server_API.app.core.config`).
 - Relative USER_DB_BASE_DIR is allowed and resolved against repo root (get_project_root); expand "~" and normalize via Path.resolve for Windows compatibility.
 - Default to <repo_root>/Databases/user_databases/<user_id>/ when unset.
 - USER_DB_BASE is deprecated; treat as alias to USER_DB_BASE_DIR for rewrite cache and log a deprecation warning.
@@ -124,22 +124,22 @@ Helper contract:
 **Goal**: Inventory all per-user path usages and finalize db_path_utils helper APIs.
 **Success Criteria**: Call-site list is complete; helper signatures, validation rules, and path normalization are documented.
 **Tests**: Unit test outline created for env/config precedence, single-user resolution, and user_id validation.
-**Status**: Not Started
+**Status**: Complete
 
 ### Stage 2: Helper Expansion & Unit Tests
 **Goal**: Implement/extend db_path_utils helpers and add unit tests for path resolution behavior.
 **Success Criteria**: All required helpers exist; unit tests cover env/config precedence, relative path resolution, and user_id validation.
 **Tests**: `tldw_Server_API/tests/core/db_path_utils/test_paths.py` (or existing test location) with unit cases.
-**Status**: Not Started
+**Status**: Complete
 
 ### Stage 3: Call-Site Migration
 **Goal**: Replace manual path logic in listed modules with db_path_utils.
 **Success Criteria**: No runtime code contains direct Databases/user_databases joins; modules rely on db_path_utils only.
 **Tests**: Integration tests for affected modules; verify no regressions in media/chat/tts flows.
-**Status**: Not Started
+**Status**: Complete
 
 ### Stage 4: Cleanup & Documentation
 **Goal**: Remove legacy path fallbacks and update docs for breaking change.
 **Success Criteria**: Deprecated fallback logic removed; PRD and README/Docs updated to emphasize USER_DB_BASE_DIR usage.
 **Tests**: Run unit + integration test suites; validate config override behavior.
-**Status**: Not Started
+**Status**: Complete

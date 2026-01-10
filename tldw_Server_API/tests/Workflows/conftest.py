@@ -22,7 +22,7 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 @pytest.fixture()
 def auth_headers():
-     settings = get_settings()
+    settings = get_settings()
     return {"X-API-KEY": settings.SINGLE_USER_API_KEY}
 
 

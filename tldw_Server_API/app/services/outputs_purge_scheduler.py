@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-from pathlib import Path
 from typing import Optional
 
 from loguru import logger
@@ -30,12 +29,9 @@ from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.services.outputs_service import normalize_output_storage_path
 
 
-def _get_user_db_base_dir() -> Path:
+def _enumerate_user_ids() -> list[int]:
     try:
-        from tldw_Server_API.app.core.config import settings
-        val = settings.get("USER_DB_BASE_DIR")
-        if val:
-            return Path(val)
+        base = DatabasePaths.get_user_db_base_dir()
     except Exception as e:
         try:
             get_metrics_registry().increment(
@@ -44,15 +40,7 @@ def _get_user_db_base_dir() -> Path:
             )
         except Exception:
             logger.debug("metrics increment failed for outputs_purge settings read failure")
-        logger.debug(f"outputs_purge: failed to read USER_DB_BASE_DIR from settings: {e}")
-    # Fallback to repo default
-    project_root = Path(__file__).resolve().parents[3]
-    return project_root / "Databases" / "user_databases"
-
-
-def _enumerate_user_ids() -> list[int]:
-    base = _get_user_db_base_dir()
-    if not base.exists():
+        logger.debug(f"outputs_purge: failed to resolve user db base dir: {e}")
         return []
     uids: list[int] = []
     for p in base.iterdir():
@@ -133,8 +121,8 @@ async def _purge_for_user(user_id: int, delete_files: bool, grace_days: int) -> 
         for rid, pth in list(paths.items()):
             try:
                 relative_name = normalize_output_storage_path(user_id, pth)
-                base_dir = DatabasePaths.get_user_base_directory(user_id) / "outputs"
-                p = base_dir / relative_name
+                outputs_dir = DatabasePaths.get_user_outputs_dir(user_id)
+                p = outputs_dir / relative_name
                 if p.exists():
                     p.unlink()
                     files_deleted += 1

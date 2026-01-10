@@ -1040,7 +1040,7 @@ CHATBOOK_COMPRESSION_LEVEL=6
 ```
 
 `DATABASE_URL` points to the central auth/users database (SQLite or Postgres). `USER_DB_BASE_DIR` is the per-user
-storage root used by `tldw_Server_API/app/core/config.py` and
+storage root defined in `tldw_Server_API.app.core.config`, used by `tldw_Server_API/app/core/config.py` and
 `tldw_Server_API/app/core/DB_Management/db_path_utils.py` to locate user-specific SQLite DBs and storage
 directories (for example, `Media_DB_v2.db`, `ChaChaNotes.db`, and chatbook exports/imports). The defaults can vary
 by environment: `Dockerfiles/docker-compose.yml` sets `DATABASE_URL=sqlite:///./Databases/users.db`, while

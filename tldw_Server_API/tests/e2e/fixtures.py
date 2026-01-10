@@ -118,8 +118,10 @@ def _build_inprocess_httpx_client() -> httpx.Client:
     try:
         transport = httpx.ASGITransport(app=app, lifespan="on")
     except TypeError:
-        # Older httpx releases do not accept the lifespan kwarg.
-        transport = httpx.ASGITransport(app=app)
+        # Older httpx releases do not accept the lifespan kwarg; prefer TestClient to
+        # ensure startup/shutdown hooks run (migrations, auth setup, etc.).
+        from starlette.testclient import TestClient
+        return TestClient(app, base_url="http://testserver", follow_redirects=True)
     if not hasattr(transport, "handle_request"):
         # Older httpx ASGITransport is async-only; fall back to TestClient.
         from starlette.testclient import TestClient

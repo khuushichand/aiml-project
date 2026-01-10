@@ -1348,6 +1348,12 @@ class ChatbookService:
                 detail = err or "Invalid or potentially malicious archive file"
                 if isinstance(detail, str) and detail.lower().startswith("file does not exist"):
                     detail = "Invalid or potentially malicious archive file"
+                if (
+                    isinstance(detail, str)
+                    and detail != "Invalid or potentially malicious archive file"
+                    and "error" not in detail.lower()
+                ):
+                    detail = f"Error: {detail}"
                 return False, detail, None
 
             # Extract chatbook to secure temp location

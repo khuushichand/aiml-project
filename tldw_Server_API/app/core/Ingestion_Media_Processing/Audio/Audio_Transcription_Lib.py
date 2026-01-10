@@ -62,6 +62,7 @@ from tldw_Server_API.app.core.config import (
     settings,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
 #
@@ -270,16 +271,14 @@ def _get_allowed_media_base_dirs() -> List[Path]:
             return list(_ALLOWED_MEDIA_BASE_DIRS)
 
         roots: List[Path] = []
-        try:
-            roots.append(Path(tempfile.gettempdir()).resolve(strict=False))
-        except (OSError, PermissionError, ValueError) as exc:
-            logging.debug(f"Could not resolve temp directory for allowed base dirs: {exc}")
-        try:
-            user_base = settings.get("USER_DB_BASE_DIR")
-            if user_base:
-                roots.append(Path(user_base).resolve(strict=False))
-        except (OSError, PermissionError, ValueError, AttributeError) as exc:
-            logging.debug(f"Could not resolve USER_DB_BASE_DIR for allowed base dirs: {exc}")
+    try:
+        roots.append(Path(tempfile.gettempdir()).resolve(strict=False))
+    except (OSError, PermissionError, ValueError) as exc:
+        logging.debug(f"Could not resolve temp directory for allowed base dirs: {exc}")
+    try:
+        roots.append(DatabasePaths.get_user_db_base_dir())
+    except (OSError, PermissionError, ValueError, AttributeError) as exc:
+        logging.debug(f"Could not resolve USER_DB_BASE_DIR for allowed base dirs: {exc}")
 
         _ALLOWED_MEDIA_BASE_DIRS = roots
         return list(roots)

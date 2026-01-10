@@ -423,6 +423,33 @@ def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - diagnostics
     """Log and relax any remaining non-daemon threads to avoid interpreter shutdown hangs."""
     try:
         import sys, traceback
+        def _run_cleanup(coro):
+            try:
+                loop = asyncio.get_event_loop_policy().get_event_loop()
+            except Exception:
+                loop = None
+            if loop is not None and not loop.is_closed():
+                try:
+                    if loop.is_running():
+                        return None
+                    return loop.run_until_complete(coro)
+                except Exception:
+                    return None
+            try:
+                return asyncio.run(coro)
+            except Exception:
+                return None
+
+        try:
+            from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import shutdown_all_audit_services
+            _run_cleanup(shutdown_all_audit_services())
+        except Exception:
+            pass
+        try:
+            from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool as _reset_db_pool
+            _run_cleanup(_reset_db_pool())
+        except Exception:
+            pass
         try:
             loop = asyncio.get_event_loop_policy().get_event_loop()
         except Exception:
@@ -440,13 +467,7 @@ def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - diagnostics
         current = threading.current_thread()
         threads = [t for t in threading.enumerate() if t is not current and not t.daemon]
         if threads:
-            summary = [(t.name, getattr(t, "_target", None)) for t in threads]
-            print(f"[pytest_sessionfinish] Non-daemon threads before exit: {summary}", file=sys.stderr)
             for t in threads:
-                stack = sys._current_frames().get(t.ident)
-                if stack:
-                    formatted_stack = "".join(traceback.format_stack(stack))
-                    print(f"[pytest_sessionfinish] Thread {t.name} target={getattr(t, '_target', None)} stack:\n{formatted_stack}", file=sys.stderr)
                 # Stop common offenders (e.g., aiosqlite worker threads) to avoid hangs
                 try:
                     import aiosqlite  # type: ignore
@@ -456,15 +477,28 @@ def pytest_sessionfinish(session, exitstatus):  # pragma: no cover - diagnostics
                         except Exception:
                             pass
                         try:
-                            t.join(timeout=1.0)
+                            t.join(timeout=2.0)
                         except Exception:
                             pass
                 except Exception:
                     pass
-                try:
-                    t.daemon = True
-                except Exception:
-                    pass
+            # Re-check after stopping attempts; only log remaining threads
+            threads = [t for t in threading.enumerate() if t is not current and not t.daemon]
+            if threads:
+                summary = [(t.name, getattr(t, "_target", None)) for t in threads]
+                print(f"[pytest_sessionfinish] Non-daemon threads before exit: {summary}", file=sys.stderr)
+                for t in threads:
+                    stack = sys._current_frames().get(t.ident)
+                    if stack:
+                        formatted_stack = "".join(traceback.format_stack(stack))
+                        print(
+                            f"[pytest_sessionfinish] Thread {t.name} target={getattr(t, '_target', None)} stack:\n{formatted_stack}",
+                            file=sys.stderr,
+                        )
+                    try:
+                        t.daemon = True
+                    except Exception:
+                        pass
     except Exception:
         # Do not interfere with pytest shutdown on logging failures
         pass
