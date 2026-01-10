@@ -39,7 +39,7 @@ class _FakePool:
 
     def transaction(self):
 
-             return _FakeTx(self._conn)
+        return _FakeTx(self._conn)
 
 
 @pytest.mark.asyncio

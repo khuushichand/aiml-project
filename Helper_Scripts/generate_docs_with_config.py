@@ -109,8 +109,8 @@ def generate_quick_start_examples() -> str:
 
     # Python example
     python_example = f'''```python
-import requests
 import json
+from urllib.request import Request, urlopen
 
 # Configuration (auto-populated from your config.txt)
 API_KEY = "{api_key}"
@@ -129,16 +129,24 @@ eval_data = {{
     ]
 }}
 
-response = requests.post(
+req = Request(
     f"{{BASE_URL}}/api/v1/evals",
-    json=eval_data,
-    headers={{"Authorization": f"Bearer {{API_KEY}}"}}
+    data=json.dumps(eval_data).encode("utf-8"),
+    headers={{
+        "Authorization": f"Bearer {{API_KEY}}",
+        "Content-Type": "application/json",
+    }},
+    method="POST",
 )
 
-if response.status_code == 201:
-    print(f"✅ Created evaluation: {{response.json()['id']}}")
+with urlopen(req, timeout=30) as resp:
+    payload = json.loads(resp.read().decode("utf-8"))
+    status = resp.status
+
+if status == 201:
+    print(f"✅ Created evaluation: {{payload['id']}}")
 else:
-    print(f"❌ Error: {{response.status_code}} - {{response.json()}}")
+    print(f"❌ Error: {{status}} - {{payload}}")
 ```'''
 
     # cURL example

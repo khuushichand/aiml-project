@@ -14,12 +14,12 @@ async def test_async_local_provider_loads_once(monkeypatch):
 
     class DummySentenceTransformer:
         def __init__(self, model_name):
-                     _ = model_name
+            _ = model_name
             load_count["count"] += 1
 
         def encode(self, text, convert_to_tensor=False):
 
-                     _ = (text, convert_to_tensor)
+            _ = (text, convert_to_tensor)
             return np.array([0.1, 0.2], dtype=np.float32)
 
     monkeypatch.setitem(

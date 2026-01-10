@@ -9,7 +9,7 @@ async def test_pubmed_ingest_requires_pmcid(monkeypatch, paper_search_app):
 
     def _fake_pubmed_by_id(pmid):
 
-             return {
+        return {
             "pmid": pmid,
             "pmcid": None,  # No OA PMCID available
             "title": "Test",

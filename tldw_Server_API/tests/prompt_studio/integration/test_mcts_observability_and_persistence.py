@@ -11,9 +11,7 @@ pytestmark = pytest.mark.integration
 
 
 def _seed_minimal_prompt_and_case(db):
-
-
-     project = db.create_project(name="MCTSProj", description="", user_id="tester")
+    project = db.create_project(name="MCTSProj", description="", user_id="tester")
     prompt = db.create_prompt(
         project_id=project["id"],
         name="MCTSPrompt",
@@ -30,9 +28,7 @@ def _seed_minimal_prompt_and_case(db):
 
 
 def test_mcts_ws_throttling_behavior(prompt_studio_dual_backend_db, monkeypatch):
-
-
-     # Enable MCTS via env flag (default is off)
+    # Enable MCTS via env flag (default is off)
     monkeypatch.setenv("PROMPT_STUDIO_ENABLE_MCTS", "true")
 
     label, db = prompt_studio_dual_backend_db
@@ -145,9 +141,7 @@ async def test_mcts_cancellation_mid_run(prompt_studio_dual_backend_db, monkeypa
 
 
 def test_mcts_final_trace_persisted(prompt_studio_dual_backend_db, monkeypatch):
-
-
-     monkeypatch.setenv("PROMPT_STUDIO_ENABLE_MCTS", "true")
+    monkeypatch.setenv("PROMPT_STUDIO_ENABLE_MCTS", "true")
     monkeypatch.setenv("PROMPT_STUDIO_MCTS_DEBUG_DECISIONS", "true")
 
     label, db = prompt_studio_dual_backend_db

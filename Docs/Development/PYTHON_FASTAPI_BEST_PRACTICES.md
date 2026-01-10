@@ -33,7 +33,7 @@ Python FastAPI Best Practices for Web Apps (mid-2025 Edition by Jeffrey Emanuel)
 
 * For key functionality in the app and key dependencies (e.g., postgres database, redis, elastic search, openai API, etc) we want to "fail fast" so we can address core bugs and problems, not hide issues and try to recover gracefully from everything.
 
-* Async for absolutely everything: all network activity (use httpx); all file access (use aiofiles); all database operations (sqlmodel/sqlalchemy/psycopg2); etc.
+* Async for absolutely everything: all network activity (use http_client); all file access (use aiofiles); all database operations (sqlmodel/sqlalchemy/psycopg2); etc.
 
 * No unit tests or mocks; no fake/generated data; always REAL data, REAL API calls, and REAL, REALISTIC, ACTUAL END TO END INTEGRATION TESTS. All integration tests should feature super detailed and informative logging using the rich library.
 
@@ -993,9 +993,14 @@ async def readiness(
 
     # Check external API
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.get("https://api.openai.com/v1/models")
-            checks["external_api"] = "healthy" if resp.status_code == 200 else "degraded"
+        from tldw_Server_API.app.core import http_client
+        resp = await http_client.afetch(
+            method="GET",
+            url="https://api.openai.com/v1/models",
+            timeout=5,
+        )
+        checks["external_api"] = "healthy" if resp.status_code == 200 else "degraded"
+        await resp.aclose()
     except Exception:
         checks["external_api"] = "unhealthy"
 
@@ -1452,8 +1457,12 @@ api_semaphore = asyncio.Semaphore(10)
 
 async def call_external_api(endpoint: str):
     async with api_semaphore:  # Automatically queues if limit reached
-        async with httpx.AsyncClient() as client:
-            return await client.get(f"https://api.example.com/{endpoint}")
+        from tldw_Server_API.app.core import http_client
+        resp = await http_client.afetch(
+            method="GET",
+            url=f"https://api.example.com/{endpoint}",
+        )
+        return resp
 
 # Process many requests without overwhelming the API
 results = await asyncio.gather(*[

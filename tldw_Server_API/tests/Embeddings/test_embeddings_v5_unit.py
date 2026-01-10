@@ -23,7 +23,7 @@ from starlette.requests import Request
 # Cleanup fixture to remove TESTING env var after tests
 @pytest.fixture(autouse=True, scope="module")
 def cleanup_testing_env():
-     """Cleanup TESTING environment variable after module tests"""
+    """Cleanup TESTING environment variable after module tests"""
     yield
     # Clean up after all tests in module
     if "TESTING" in os.environ:
@@ -32,7 +32,7 @@ def cleanup_testing_env():
 # Mock metrics for tests to avoid registry conflicts
 @pytest.fixture(autouse=True)
 def mock_metrics():
-     """Mock Prometheus metrics to avoid registry conflicts"""
+    """Mock Prometheus metrics to avoid registry conflicts"""
     mock_counter = MagicMock()
     mock_counter_instance = MagicMock()
     mock_counter_instance.inc = MagicMock()
@@ -55,12 +55,12 @@ def mock_metrics():
          patch('tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.embedding_request_duration', mock_histogram), \
          patch('tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.embedding_cache_hits', mock_counter), \
          patch('tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced.active_embedding_requests', mock_gauge):
-        yield
+             yield
 
 
 @pytest.fixture
 def setup():
-     """Setup test environment fixture with proper TestClient lifecycle"""
+    """Setup test environment fixture with proper TestClient lifecycle"""
     class SetupData:
         pass
 
@@ -102,7 +102,7 @@ class TestCriticalSecurity:
 
     @pytest.mark.unit
     def test_no_placeholder_embeddings(self):
-             """Verify system fails properly when dependencies missing"""
+        """Verify system fails properly when dependencies missing"""
         # Note: This test verifies that the module properly checks for dependencies
         # In v5, if EMBEDDINGS_AVAILABLE is False, the module raises RuntimeError at import
         # Since the module is already imported, we can only verify the flag exists
@@ -111,10 +111,10 @@ class TestCriticalSecurity:
 
     @pytest.mark.unit
     def test_admin_authorization_required(self, setup):
-             """Test admin endpoints require proper authorization"""
+        """Test admin endpoints require proper authorization"""
         # Non-admin principal (no admin role / system.configure) should be forbidden
         def override_regular_user():
-                     return setup.regular_user
+            return setup.regular_user
 
         async def override_regular_principal(request: Request) -> AuthPrincipal:  # type: ignore[override]
             principal = AuthPrincipal(
@@ -154,7 +154,7 @@ class TestCriticalSecurity:
 
         # Admin principal with admin role and system.configure permission should succeed
         def override_admin_user():
-                     return setup.admin_user
+            return setup.admin_user
 
         async def override_admin_principal(request: Request) -> AuthPrincipal:  # type: ignore[override]
             principal = AuthPrincipal(
@@ -342,7 +342,7 @@ class TestRetryLogic:
 
         def mock_embeddings(texts, config, model_id_override, metadata=None, **_):
 
-                     nonlocal attempt_count
+            nonlocal attempt_count
             attempt_count += 1
 
             # First 2 attempts fail, third succeeds
@@ -358,7 +358,7 @@ class TestRetryLogic:
             retry=retry_if_exception_type(ConnectionError),
         )
         def retry_wrapper_sync(*, texts, config, model_id_override, metadata=None):
-                     return mock_embeddings(
+            return mock_embeddings(
                 texts=texts,
                 config=config,
                 model_id_override=model_id_override,
@@ -406,7 +406,7 @@ class TestRetryLogic:
 
         def mock_embeddings(texts, config, model_id_override, metadata=None, **_):
 
-                     nonlocal attempt_count
+            nonlocal attempt_count
             attempt_count += 1
             raise ValueError("Invalid input")
 
@@ -432,9 +432,9 @@ class TestErrorHandling:
 
     @pytest.mark.unit
     def test_empty_input_error(self, setup):
-             """Test error on empty input"""
+        """Test error on empty input"""
         def override_user():
-                     return setup.regular_user
+            return setup.regular_user
 
         app.dependency_overrides[get_request_user] = override_user
 
@@ -452,9 +452,9 @@ class TestErrorHandling:
 
     @pytest.mark.unit
     def test_invalid_provider_error(self, setup):
-             """Test error on invalid provider"""
+        """Test error on invalid provider"""
         def override_user():
-                     return setup.regular_user
+            return setup.regular_user
 
         app.dependency_overrides[get_request_user] = override_user
 
@@ -478,9 +478,9 @@ class TestErrorHandling:
 
     @pytest.mark.unit
     def test_missing_provider_credentials_returns_503(self, setup, monkeypatch):
-             """Missing provider credentials should return 503 with error code."""
+        """Missing provider credentials should return 503 with error code."""
         def override_user():
-                     return setup.regular_user
+            return setup.regular_user
 
         app.dependency_overrides[get_request_user] = override_user
 
@@ -518,9 +518,9 @@ class TestMockedFlow:
 
     @pytest.mark.unit
     def test_end_to_end_flow_mocked(self, setup):
-             """Test complete flow with mocked embeddings"""
+        """Test complete flow with mocked embeddings"""
         def override_user():
-                     return setup.regular_user
+            return setup.regular_user
 
         app.dependency_overrides[get_request_user] = override_user
 
@@ -551,9 +551,9 @@ class TestMockedFlow:
 
     @pytest.mark.unit
     def test_caching_behavior_mocked(self, setup):
-             """Test caching behavior with mocked API calls"""
+        """Test caching behavior with mocked API calls"""
         def override_user():
-                     return setup.regular_user
+            return setup.regular_user
 
         app.dependency_overrides[get_request_user] = override_user
 
@@ -617,7 +617,7 @@ class TestLLMBudgetGuardrails:
 
     @pytest.mark.unit
     def test_embeddings_budget_exceeded_returns_402(self, monkeypatch, test_client):
-             """Simulate an over-budget virtual key and assert 402 from budget middleware."""
+        """Simulate an over-budget virtual key and assert 402 from budget middleware."""
         import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as budget_mod
 
         # Force budget middleware to apply to this path regardless of settings
@@ -670,7 +670,7 @@ class TestLLMBudgetGuardrails:
 
     @pytest.mark.unit
     def test_chat_budget_exceeded_returns_402(self, monkeypatch, test_client):
-             """Simulate an over-budget virtual key and assert 402 for chat completions."""
+        """Simulate an over-budget virtual key and assert 402 for chat completions."""
         import tldw_Server_API.app.core.AuthNZ.llm_budget_middleware as budget_mod
 
         # Force budget middleware to apply to chat completions

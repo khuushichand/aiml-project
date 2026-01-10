@@ -36,9 +36,11 @@ def get_default_db_path() -> str:
     # Default to per-user Media DB v2 path using centralized utils
     try:
         return str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
-    except Exception:
-        # Fallback to legacy path if settings unavailable
-        return str(Path(__file__).parent.parent.parent.parent.parent / "Databases" / "Media_DB_v2.db")
+    except Exception as exc:
+        raise RuntimeError(
+            "Failed to resolve default Media DB path via DatabasePaths. "
+            "Set TLDW_DB_PATH or configure USER_DB_BASE_DIR."
+        ) from exc
 
 
 def show_status(db_path: str):

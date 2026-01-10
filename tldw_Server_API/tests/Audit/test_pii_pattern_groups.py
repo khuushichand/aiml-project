@@ -17,7 +17,7 @@ def _sample_iban():
 
 class TestPIIPatternGroups:
     def test_api_key_detection_returns_full_match(self):
-             from tldw_Server_API.app.core.Audit.unified_audit_service import PIIDetector
+        from tldw_Server_API.app.core.Audit.unified_audit_service import PIIDetector
 
         key = _sample_api_key()
         text = f"my key: {key} in payload"
@@ -33,7 +33,7 @@ class TestPIIPatternGroups:
 
     def test_iban_detection_returns_full_match(self):
 
-             from tldw_Server_API.app.core.Audit.unified_audit_service import PIIDetector
+        from tldw_Server_API.app.core.Audit.unified_audit_service import PIIDetector
 
         iban = _sample_iban()
         text = f"iban={iban}"
@@ -49,7 +49,7 @@ class TestPIIPatternGroups:
 
     def test_email_regex_tightened(self):
 
-             from tldw_Server_API.app.core.Audit.unified_audit_service import PIIDetector
+        from tldw_Server_API.app.core.Audit.unified_audit_service import PIIDetector
 
         det = PIIDetector()
         valid = "user.name+tag@example-DOMAIN.com"
@@ -64,7 +64,7 @@ class TestPIIPatternGroups:
 
 class TestRiskTuning:
     def test_action_bonus_for_sla_breached(self):
-             from tldw_Server_API.app.core.Audit.unified_audit_service import RiskScorer, AuditEvent, AuditEventType
+        from tldw_Server_API.app.core.Audit.unified_audit_service import RiskScorer, AuditEvent, AuditEventType
 
         event = AuditEvent(
             event_type=AuditEventType.SECURITY_VIOLATION,

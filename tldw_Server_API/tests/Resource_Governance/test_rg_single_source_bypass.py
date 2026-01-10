@@ -9,16 +9,16 @@ from tldw_Server_API.app.core.Resource_Governance.governor import RGDecision
 
 class _Snap:
     def __init__(self, route_map):
-             self.route_map = route_map
+        self.route_map = route_map
 
 
 class _Loader:
     def __init__(self, route_map):
-             self._snap = _Snap(route_map)
+        self._snap = _Snap(route_map)
 
     def get_snapshot(self):
 
-             return self._snap
+        return self._snap
 
     def get_policy(self, _pid):  # pragma: no cover - not needed for these tests
         return {}

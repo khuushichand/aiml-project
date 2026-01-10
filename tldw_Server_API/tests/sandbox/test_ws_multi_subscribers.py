@@ -44,7 +44,7 @@ def _create_run(client: TestClient) -> str:
 def test_ws_multi_subscribers_receive_same_order(monkeypatch) -> None:
 
 
-     with _client(monkeypatch) as client:
+    with _client(monkeypatch) as client:
         run_id = _create_run(client)
         hub = get_hub()
         # Publish a small sequence of frames before any subscriber connects
@@ -74,7 +74,7 @@ def test_ws_multi_subscribers_receive_same_order(monkeypatch) -> None:
 def test_ws_reconnect_drain_buffer(monkeypatch) -> None:
 
 
-     with _client(monkeypatch) as client:
+    with _client(monkeypatch) as client:
         run_id = _create_run(client)
         hub = get_hub()
         # Publish two frames, then connect first subscriber
@@ -103,7 +103,7 @@ def test_ws_reconnect_drain_buffer(monkeypatch) -> None:
 def test_ws_multi_subs_live_stream(monkeypatch) -> None:
 
 
-     """Two subscribers connected while frames are being published should observe identical ordering.
+    """Two subscribers connected while frames are being published should observe identical ordering.
 
     This test simulates a small live stream by publishing frames from a background thread
     while two clients are connected. Both should receive the same seq-ordered frames.
@@ -113,13 +113,15 @@ def test_ws_multi_subs_live_stream(monkeypatch) -> None:
         hub = get_hub()
 
         # Connect two subscribers first
-        with client.websocket_connect(f"/api/v1/sandbox/runs/{run_id}/stream") as ws1, \
-             client.websocket_connect(f"/api/v1/sandbox/runs/{run_id}/stream") as ws2:
+        with (
+            client.websocket_connect(f"/api/v1/sandbox/runs/{run_id}/stream") as ws1,
+            client.websocket_connect(f"/api/v1/sandbox/runs/{run_id}/stream") as ws2,
+        ):
             import threading, time
 
             def _publisher():
 
-                             try:
+                try:
                     hub.publish_event(run_id, "start", {"source": "live"})
                     time.sleep(0.02)
                     hub.publish_stdout(run_id, b"L1\n")

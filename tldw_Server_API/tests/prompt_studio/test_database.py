@@ -18,7 +18,7 @@ from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
 
 @pytest.fixture
 def temp_db_path():
-     """Create a temporary database path."""
+    """Create a temporary database path."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         path = Path(tmp.name)
     yield path
@@ -28,7 +28,7 @@ def temp_db_path():
 
 @pytest.fixture
 def test_db(temp_db_path):
-     """Create a test database instance."""
+    """Create a test database instance."""
     db = PromptStudioDatabase(str(temp_db_path), "test_client")
     yield db
     # Close connection if needed
@@ -37,7 +37,7 @@ def test_db(temp_db_path):
 
 @pytest.fixture
 def populated_db(test_db):
-     """Create a database with sample data."""
+    """Create a database with sample data."""
     # Add sample project
     project_data = test_db.create_project(
         name="Test Project",
@@ -73,7 +73,7 @@ def _is_sqlite_backend(db: PromptStudioDatabase) -> bool:
 
 @pytest.fixture
 def multi_user_prompt_dbs():
-     """Create multiple PromptStudioDatabase instances to simulate per-user SQLite DBs."""
+    """Create multiple PromptStudioDatabase instances to simulate per-user SQLite DBs."""
     temp_paths = []
     dbs = []
     try:
@@ -990,8 +990,7 @@ class TestConcurrentAccess:
         errors = []
 
         def create_project(idx):
-
-                     try:
+            try:
                 project = test_db.create_project(
                     name=f"Concurrent Project {idx}",
                     description=f"Created by thread {idx}"
@@ -1044,8 +1043,7 @@ class TestConcurrentAccess:
         errors = []
 
         def update_project(thread_id):
-
-                     conn = populated_db.get_connection()
+            conn = populated_db.get_connection()
             cursor = conn.cursor()
 
             for i in range(10):
@@ -1082,8 +1080,7 @@ class TestConcurrentAccess:
         assert update_count[0] == 30  # 3 threads * 10 updates each
 
     def test_concurrent_project_creation_multi_user_sqlite(self, multi_user_prompt_dbs):
-
-             """Ensure concurrent project creation succeeds when users have isolated SQLite DBs."""
+        """Ensure concurrent project creation succeeds when users have isolated SQLite DBs."""
         import threading
 
         results = []
@@ -1118,8 +1115,7 @@ class TestConcurrentAccess:
             assert listing["projects"][0]["name"] == f"Concurrent User Project {idx}"
 
     def test_concurrent_updates_multi_user_sqlite(self, multi_user_prompt_dbs):
-
-             """Ensure concurrent updates across isolated user DBs complete without contention."""
+        """Ensure concurrent updates across isolated user DBs complete without contention."""
         import threading
 
         errors = []

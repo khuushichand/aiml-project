@@ -14,7 +14,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture()
 def client_with_user(monkeypatch):
-     async def override_user():
+    async def override_user():
         return User(id=910, username="wluser", email=None, is_active=True)
 
     base_dir = Path.cwd() / "Databases" / "test_user_dbs_runs_csv_has_more"

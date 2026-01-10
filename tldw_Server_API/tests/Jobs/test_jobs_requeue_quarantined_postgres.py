@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 def test_endpoint_requeue_quarantined_postgres(monkeypatch, jobs_pg_dsn):
 
 
-     monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
+    monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
     monkeypatch.setenv("JOBS_QUARANTINE_THRESHOLD", "1")
     from tldw_Server_API.app.core.Jobs.pg_migrations import ensure_jobs_tables_pg
     ensure_jobs_tables_pg(jobs_pg_dsn)
@@ -49,7 +49,7 @@ def test_endpoint_requeue_quarantined_postgres(monkeypatch, jobs_pg_dsn):
 def test_requeue_quarantined_updates_counters_postgres(monkeypatch, jobs_pg_dsn):
 
 
-     monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
+    monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
     monkeypatch.setenv("JOBS_QUARANTINE_THRESHOLD", "1")
     monkeypatch.setenv("JOBS_COUNTERS_ENABLED", "true")
     from tldw_Server_API.app.core.Jobs.pg_migrations import ensure_jobs_tables_pg

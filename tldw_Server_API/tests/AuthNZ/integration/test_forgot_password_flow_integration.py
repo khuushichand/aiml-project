@@ -30,7 +30,7 @@ async def test_forgot_password_email_and_reset_flow(tmp_path, monkeypatch):
             return True
     import tldw_Server_API.app.core.AuthNZ.email_service as email_service_mod
     def _get_email_service():
-             return _StubEmailSvc()
+        return _StubEmailSvc()
     email_service_mod.get_email_service = _get_email_service  # type: ignore
 
     # Provide a lightweight stub for mfa_service to avoid optional deps (qrcode)

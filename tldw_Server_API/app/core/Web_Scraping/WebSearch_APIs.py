@@ -190,6 +190,30 @@ def _call_adapter_text(
     request.update(extra_kwargs)
     response = get_adapter_or_raise(provider).chat(request, timeout=timeout)
     return extract_response_content(response) or str(response)
+
+
+def chat_api_call(
+    *,
+    api_endpoint: str,
+    messages_payload: List[Dict[str, Any]],
+    temperature: Optional[float] = None,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+    timeout: Optional[float] = None,
+    **extra_kwargs: Any,
+) -> str:
+    """Compatibility wrapper for tests and legacy call sites."""
+    return _call_adapter_text(
+        api_endpoint=api_endpoint,
+        messages_payload=messages_payload,
+        temperature=temperature,
+        api_key=api_key,
+        model=model,
+        app_config=app_config,
+        timeout=timeout,
+        **extra_kwargs,
+    )
 #
 #######################################################################################################################
 #
@@ -573,7 +597,7 @@ async def search_result_relevance(
 
             async def _llm_call():
                 return await asyncio.to_thread(
-                    lambda: _call_adapter_text(
+                    lambda: chat_api_call(
                         api_endpoint=api_endpoint,
                         messages_payload=messages_payload,
                         temperature=0.7,
@@ -1012,7 +1036,7 @@ def aggregate_results(
 
     try:
         logging.info("Generating the report")
-        returned_response = _call_adapter_text(
+        returned_response = chat_api_call(
             api_endpoint=api_endpoint,
             messages_payload=messages_payload,
             temperature=0.7,

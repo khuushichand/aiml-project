@@ -12,7 +12,7 @@ import pytest
 def _ffmpeg_available() -> bool:
 
 
-     return shutil.which("ffmpeg") is not None
+    return shutil.which("ffmpeg") is not None
 
 
 def _make_tiny_wav(path: str, seconds: float = 0.3, freq: float = 440.0, rate: int = 16000):
@@ -29,7 +29,7 @@ def _make_tiny_wav(path: str, seconds: float = 0.3, freq: float = 440.0, rate: i
 
 @pytest.mark.e2e
 def test_process_audios_upload_optional(page, server_url):
-     if not os.environ.get('RUN_AUDIO_E2E'):
+    if not os.environ.get('RUN_AUDIO_E2E'):
         pytest.skip("Audio E2E disabled; set RUN_AUDIO_E2E=1 to enable.")
     if not _ffmpeg_available():
         pytest.skip("ffmpeg not available; skipping audio E2E.")

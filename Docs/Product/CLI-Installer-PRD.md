@@ -80,6 +80,7 @@
           - Notes/Chats (per-user): `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`
           - Evaluations (shared): `Databases/evaluations.db`
           - AuthNZ users (shared when SQLite): `Databases/users.db` (PostgreSQL recommended for multi-user)
+          - `USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root); override via environment variable or `Config_Files/config.txt` as needed.
       - PostgreSQL: validate connection and permissions; print migration helper instructions (no implicit destructive ops). For tests, reuse the AuthNZ Postgres fixture rather than rolling your own.
   - Providers
       - Prompt for LLM/STT/TTS keys (OpenAI, Anthropic, local); prefer `.env` as the source of truth. Generate/update `Config_Files/config.txt` only when missing or explicitly requested.

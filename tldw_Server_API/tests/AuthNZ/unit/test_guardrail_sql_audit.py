@@ -14,7 +14,7 @@ import pytest
 
 @pytest.mark.unit
 def test_guardrail_tables_used_only_in_core_authnz_modules():
-     project_root = Path(__file__).resolve().parents[3]
+    project_root = Path(__file__).resolve().parents[3]
     authnz_core = project_root / "app" / "core" / "AuthNZ"
     assert authnz_core.exists(), f"Expected AuthNZ core path not found: {authnz_core}"
 

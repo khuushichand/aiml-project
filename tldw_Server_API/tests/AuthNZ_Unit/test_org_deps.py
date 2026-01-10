@@ -86,4 +86,4 @@ async def test_get_active_org_id_returns_none_when_no_orgs(monkeypatch):
     ],
 )
 def test_is_membership_active_requires_explicit_status(membership, expected):
-     assert org_deps._is_membership_active(membership) is expected
+    assert org_deps._is_membership_active(membership) is expected

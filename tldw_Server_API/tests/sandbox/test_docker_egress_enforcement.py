@@ -55,7 +55,7 @@ def test_docker_runner_uses_network_none_when_allowlist_enforced_non_granular(mo
 
 @pytest.mark.unit
 def test_docker_runner_creates_dedicated_network_when_granular_enabled(monkeypatch):
-     monkeypatch.setenv("TLDW_SANDBOX_DOCKER_AVAILABLE", "1")
+    monkeypatch.setenv("TLDW_SANDBOX_DOCKER_AVAILABLE", "1")
     spec = RunSpec(
         session_id=None,
         runtime=RuntimeType.docker,
@@ -78,7 +78,7 @@ def test_docker_runner_creates_dedicated_network_when_granular_enabled(monkeypat
 
     def fake_check_output(cmd, text=False, timeout=None):
 
-             recorded_cmds.append(list(cmd))
+        recorded_cmds.append(list(cmd))
         raise _Called()
 
     monkeypatch.setattr("subprocess.run", fake_run)

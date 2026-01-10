@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registr
 async def test_redis_backend_metrics_allow_deny_refund_paths():
     class _Loader:
         def get_policy(self, pid):
-                     return {"requests": {"rpm": 1}, "tokens": {"per_min": 2}, "scopes": ["global", "user"]}
+            return {"requests": {"rpm": 1}, "tokens": {"per_min": 2}, "scopes": ["global", "user"]}
 
     # Use in-memory Redis stub via default factory fallback
     rg = RedisResourceGovernor(policy_loader=_Loader(), ns="rg_m_redis")

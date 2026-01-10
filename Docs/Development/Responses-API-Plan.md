@@ -217,7 +217,6 @@ class ResponseObject(OpenAIBaseModel):
 ```python
 import asyncio
 import time
-import httpx
 import hmac
 import hashlib
 from typing import Dict, List, Any, Optional
@@ -390,7 +389,7 @@ class ResponseRunner:
 ##### Tool Orchestrator (Complete Implementation)
 ```python
 from abc import ABC, abstractmethod
-import httpx
+import os
 from typing import Dict, Any, List, Optional
 from tldw_Server_API.app.core.RAG.RAG_Search.simplified.enhanced_rag_service_v2 import EnhancedRAGServiceV2
 
@@ -448,7 +447,7 @@ class WebSearchTool(BaseTool):
 
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or os.getenv("SEARCH_API_KEY")
-        self.client = httpx.AsyncClient(timeout=30.0)
+        self.timeout = 30.0
 
     def validate_parameters(self, parameters: Dict) -> bool:
         return "query" in parameters
@@ -764,7 +763,7 @@ app.include_router(responses_router, prefix=f"{API_V1_PREFIX}", tags=["responses
 ```python
 async def web_search(query: str, num_results: int = 5) -> Dict:
     # Reuse existing web search from research endpoints if available
-    # Or implement simple web search using httpx
+    # Or implement simple web search using http_client helpers
     # Return structured search results
 ```
 

@@ -16,7 +16,7 @@
 **Goal**: Move direct HTTP call sites to http_client and update tests accordingly.
 **Success Criteria**: Modules listed in the PRD use http_client or adapter hooks only; tests patch http_client adapters/factories instead of raw requests/httpx/aiohttp.
 **Tests**: Integration coverage for streaming provider endpoints and web scraping flows; unit coverage for migrated modules.
-**Status**: In Progress
+**Status**: Complete
 **Progress**:
 - Migrated external sources, embeddings, sync client, web scraping, webhook services, ingestion helpers, RAG helpers, and watchlists to http_client.
 - Removed direct requests/httpx usage in Local LLM handlers, chat orchestrator, LLM_Calls streaming helpers, local_chat_calls, and chat_calls; updated adapter error handling to use shared utilities.
@@ -25,6 +25,11 @@
 - Migrated OpenAI and ElevenLabs TTS adapters to http_client helpers for async fetch/streaming paths (afetch/astream_bytes) and removed direct client.stream usage.
 - Updated TTS unit/integration tests to patch http_client helpers (apost/afetch/astream_bytes) instead of httpx.AsyncClient methods.
 - Updated HuggingFaceAPI tests to patch the http_client async client factory instead of httpx.AsyncClient methods.
+- Adjusted ChatCompletionRequest tool_choice default to avoid validation errors when tools are absent (unblocks SSE smoke tests).
+- Routed web scraping link-extraction fetches through http_client (removed direct aiohttp session fetch).
+- Removed unused aiohttp session cache from web scraping CookieManager; updated related tests to assert cookie maps instead of sessions.
+- Updated Google/HuggingFace embeddings adapter tests to patch http_client create_client instead of httpx.Client.post.
+- Stage 3 complete; remaining cleanup and documentation tracked in Stage 4.
 
 ## Stage 4: Cleanup + Docs
 **Goal**: Remove remaining legacy HTTP usage and finalize documentation.
@@ -35,3 +40,6 @@
 - Updated core docs to replace httpx/requests examples with stdlib or curl usage.
 - Removed direct requests/httpx usage from Local_Summarization_Lib and http_helpers, consolidating retries and streaming through http_client helpers.
 - Pending final doc sweep and verification of any remaining legacy HTTP usage in business logic.
+- Migrated Helper_Scripts HTTP clients to http_client helpers (streaming, load, benchmarks, and eval harnesses) to avoid direct requests/httpx usage.
+- Updated API-facing examples to use stdlib urllib in config and notes graph docs.
+- Updated developer/product docs to replace httpx/requests examples with http_client or stdlib (LLM adapter guide, Responses API plan, best practices, subscriptions PRDs).

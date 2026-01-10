@@ -26,7 +26,7 @@ async def test_golden_sentence_level_citations_offsets(monkeypatch):
 
     class FakeRetriever:
         def __init__(self, *args, **kwargs):
-                     pass
+            pass
 
         async def retrieve(self, *args, **kwargs):
             return [doc]
@@ -36,7 +36,7 @@ async def test_golden_sentence_level_citations_offsets(monkeypatch):
     # Patch generator to echo exact sentence from the source so offsets should be exact
     class FakeAnswerGenerator:
         def __init__(self, *args, **kwargs):
-                     pass
+            pass
 
         async def generate(self, *, query: str, context: str, prompt_template=None, max_tokens=None, temperature=None):  # noqa: ARG002
             # Return two sentences, first repeats exact first sentence of ctx
@@ -93,7 +93,7 @@ async def test_golden_multihop_merge_and_citations(monkeypatch):
 
     class FakeRetriever:
         def __init__(self, *args, **kwargs):
-                     pass
+            pass
 
         async def retrieve(self, *args, **kwargs):
             return docs
@@ -103,7 +103,7 @@ async def test_golden_multihop_merge_and_citations(monkeypatch):
     # Generation returns sentence from first context and a short claim
     class FakeAnswerGenerator:
         def __init__(self, *args, **kwargs):
-                     pass
+            pass
 
         async def generate(self, *, query: str, context: str, prompt_template=None, max_tokens=None, temperature=None):  # noqa: ARG002
             return {"answer": "Residual connections help gradient flow. They enable deeper networks."}

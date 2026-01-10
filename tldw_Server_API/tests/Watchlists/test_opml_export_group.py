@@ -13,7 +13,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture()
 def client_with_user(monkeypatch):
-     async def override_user():
+    async def override_user():
         return User(id=906, username="wluser", email=None, is_active=True)
 
     base_dir = Path.cwd() / "Databases" / "test_user_dbs_opml_export_group"
@@ -51,7 +51,7 @@ def _extract_opml_urls(xml_text: str) -> list[str]:
 def test_opml_export_filters_by_group(client_with_user):
 
 
-     c = client_with_user
+    c = client_with_user
 
     # Create two groups
     g1 = c.post("/api/v1/watchlists/groups", json={"name": "GroupA"}).json()

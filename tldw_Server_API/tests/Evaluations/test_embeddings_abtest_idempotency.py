@@ -52,7 +52,7 @@ def test_abtest_export_idempotency(monkeypatch, auth_headers):
 
 @pytest.mark.integration
 def test_abtest_delete_idempotency(monkeypatch, auth_headers):
-     monkeypatch.setenv('EVALS_HEAVY_ADMIN_ONLY', 'false')
+    monkeypatch.setenv('EVALS_HEAVY_ADMIN_ONLY', 'false')
     monkeypatch.setenv('TESTING', 'true')
     client = TestClient(app)
 

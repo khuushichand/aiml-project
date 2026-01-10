@@ -7,7 +7,7 @@ from tldw_Server_API.app.core.Prompt_Management.prompt_studio.program_evaluator 
 def test_forbidden_imports_detected():
 
 
-     pe = ProgramEvaluator()
+    pe = ProgramEvaluator()
     code = """
     ```python
     import requests
@@ -24,7 +24,7 @@ def test_forbidden_imports_detected():
 def test_runner_python_path_enabled_vs_disabled(tmp_path):
 
 
-     # When enabled, reward should reflect metric_var from globals; when disabled, use heuristic
+    # When enabled, reward should reflect metric_var from globals; when disabled, use heuristic
     pe = ProgramEvaluator()
     code = """
     ```python
@@ -49,7 +49,7 @@ def test_runner_python_path_enabled_vs_disabled(tmp_path):
 def test_program_evaluator_timeout(monkeypatch):
 
 
-     pe = ProgramEvaluator()
+    pe = ProgramEvaluator()
     os.environ["PROMPT_STUDIO_ENABLE_CODE_EVAL"] = "true"
     # Shorten wall time for test
     monkeypatch.setattr(ProgramEvaluator, "WALL_TIME_SEC", 0.1, raising=False)

@@ -28,7 +28,7 @@ class SampleDataGenerator:
 
     @staticmethod
     def generate_evaluation_spec() -> Dict[str, Any]:
-             """Generate a random evaluation specification."""
+        """Generate a random evaluation specification."""
         eval_types = ["model_graded", "g_eval", "rag", "response_quality", "custom"]
         metrics = ["accuracy", "relevance", "coherence", "fluency", "factuality",
                   "completeness", "consistency", "helpfulness"]
@@ -69,7 +69,7 @@ class SampleDataGenerator:
 
     @staticmethod
     def generate_rag_evaluation_data() -> Dict[str, Any]:
-             """Generate RAG evaluation test data."""
+        """Generate RAG evaluation test data."""
         return {
             "query": SampleDataGenerator.generate_text(5, 15),
             "retrieved_contexts": [
@@ -84,7 +84,7 @@ class SampleDataGenerator:
 
     @staticmethod
     def generate_geval_data() -> Dict[str, Any]:
-             """Generate G-Eval test data."""
+        """Generate G-Eval test data."""
         source_text = SampleDataGenerator.generate_text(100, 200)
 
         return {
@@ -101,7 +101,7 @@ class SampleDataGenerator:
 
     @staticmethod
     def generate_response_quality_data() -> Dict[str, Any]:
-             """Generate response quality evaluation data."""
+        """Generate response quality evaluation data."""
         return {
             "prompt": SampleDataGenerator.generate_text(10, 30),
             "response": SampleDataGenerator.generate_text(50, 100),
@@ -152,7 +152,7 @@ class SampleDataGenerator:
 
     @staticmethod
     def generate_webhook_payload() -> Dict[str, Any]:
-             """Generate webhook payload."""
+        """Generate webhook payload."""
         event_types = [
             "evaluation.created", "evaluation.completed", "evaluation.failed",
             "run.started", "run.completed", "run.failed",
@@ -182,7 +182,7 @@ class SampleDataGenerator:
 
     @staticmethod
     def generate_error_scenarios() -> List[Dict[str, Any]]:
-             """Generate various error scenarios for testing."""
+        """Generate various error scenarios for testing."""
         return [
             {
                 "type": "invalid_input",
@@ -229,7 +229,7 @@ class SampleDataGenerator:
 
 # Convenience functions for quick data generation
 def generate_evaluation_request() -> Dict[str, Any]:
-     """Generate a complete evaluation request."""
+    """Generate a complete evaluation request."""
     generator = SampleDataGenerator()
 
     return {

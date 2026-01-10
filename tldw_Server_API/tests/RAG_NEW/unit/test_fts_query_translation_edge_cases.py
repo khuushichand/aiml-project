@@ -4,7 +4,7 @@ import pytest
 def test_sqlite_to_postgres_handles_hyphens_and_near():
 
 
-     from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQueryTranslator
+    from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQueryTranslator
 
     # hyphenated word with wildcard
     q1 = "state-of-the-art*"
@@ -23,7 +23,7 @@ def test_sqlite_to_postgres_handles_hyphens_and_near():
 def test_sqlite_to_postgres_handles_quotes_and_parentheses():
 
 
-     from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQueryTranslator
+    from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQueryTranslator
 
     q = '"exact phrase" (bonus)'
     out = FTSQueryTranslator.sqlite_to_postgres(q)
@@ -35,7 +35,7 @@ def test_sqlite_to_postgres_handles_quotes_and_parentheses():
 def test_fts_query_builder_hyphen_and_unicode():
 
 
-     from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import MediaDBRetriever
+    from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import MediaDBRetriever
     r = MediaDBRetriever(db_path="/tmp/test.db")  # path used for constructing object only
 
     q1 = "state-of-the-art models"
@@ -51,7 +51,7 @@ def test_fts_query_builder_hyphen_and_unicode():
 def test_fts_query_translation_truncates_long_input():
 
 
-     from tldw_Server_API.app.core.DB_Management.backends.fts_translator import (
+    from tldw_Server_API.app.core.DB_Management.backends.fts_translator import (
         FTSQueryTranslator,
         MAX_FTS_QUERY_LENGTH,
     )

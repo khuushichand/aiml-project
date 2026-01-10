@@ -47,7 +47,7 @@ def test_save_chat_knowledge_creates_note_and_flashcard(
 
     def override_get_db():
 
-             return chacha_db
+        return chacha_db
 
     test_client.app.dependency_overrides[get_chacha_db_for_user] = override_get_db
 
@@ -117,13 +117,13 @@ def test_save_chat_knowledge_rolls_back_on_flashcard_error(
 
     def override_get_db():
 
-             return chacha_db
+        return chacha_db
 
     test_client.app.dependency_overrides[get_chacha_db_for_user] = override_get_db
 
     # Force flashcard creation to fail after the note insert.
     def _failing_add_flashcard(card_data):
-             raise RuntimeError("flashcard failure")
+        raise RuntimeError("flashcard failure")
 
     original_add_flashcard = chacha_db.add_flashcard
     chacha_db.add_flashcard = _failing_add_flashcard  # type: ignore[assignment]

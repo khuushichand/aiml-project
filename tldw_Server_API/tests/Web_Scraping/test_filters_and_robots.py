@@ -13,7 +13,7 @@ from tldw_Server_API.app.core.Web_Scraping.filters import (
 
 @pytest.mark.unit
 def test_domain_and_content_filters():
-     df = DomainFilter(allowed={"example.com"}, blocked={"blocked.com"})
+    df = DomainFilter(allowed={"example.com"}, blocked={"blocked.com"})
     cf = ContentTypeFilter()
     pf = URLPatternFilter(include_patterns=["/docs/"], exclude_patterns=["/admin/"])
 
@@ -45,7 +45,7 @@ async def test_robots_filter_mocked(monkeypatch):
 
     # Provide a deterministic robots.txt that disallows everything
     def fake_http_fetch(url, method="GET", backend="httpx", timeout=5.0, allow_redirects=True):
-             return {
+        return {
             "status": 200,
             "text": "User-agent: *\nDisallow: /\n",
         }

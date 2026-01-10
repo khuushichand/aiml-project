@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.Evaluations.eval_runner import EvaluationRunner
 def test_rag_pipeline_schema_normalization():
 
 
-     spec = EvaluationSpec(
+    spec = EvaluationSpec(
         sub_type="rag_pipeline",
         rag_pipeline=RAGPipelineEvalSpec(
             dataset=[{"input": {"question": "Q?"}, "expected": {"answer": "A"}}],
@@ -35,11 +35,11 @@ async def test_rag_pipeline_runner_basic(monkeypatch):
     # Stub DB methods to avoid sqlite writes
     class _StubDB:
         def update_run_progress(self, *args, **kwargs):
-                     return True
+            return True
 
         def store_run_results(self, *args, **kwargs):
 
-                     self.last = (args, kwargs)
+            self.last = (args, kwargs)
             return True
 
     runner.db = _StubDB()  # type: ignore

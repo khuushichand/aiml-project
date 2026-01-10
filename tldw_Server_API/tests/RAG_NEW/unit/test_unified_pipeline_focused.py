@@ -222,12 +222,12 @@ class TestUnifiedPipelineFeatures:
 
         def _fake_shared_cache(cache_cls, **_kwargs):
 
-                     seen["cache_cls"] = cache_cls
+            seen["cache_cls"] = cache_cls
             return mock_cache
 
         with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.get_shared_cache', side_effect=_fake_shared_cache), \
-            patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.AdaptiveCache') as mock_adaptive, \
-            patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
+                patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.AdaptiveCache') as mock_adaptive, \
+                patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
             result = await unified_rag_pipeline(
                 query="cached query",
                 enable_cache=True,
@@ -254,7 +254,7 @@ class TestUnifiedPipelineFeatures:
         mock_semantic_cache.find_similar.return_value = None
 
         with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.SemanticCache', return_value=mock_semantic_cache), \
-             patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
+                patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
             result = await unified_rag_pipeline(
                 query="legacy cache hit",
                 enable_cache=True,
@@ -273,19 +273,19 @@ class TestUnifiedPipelineFeatures:
 
         class RecordingCache:
             def __init__(self, *_, **__):
-                             self.set_calls = []
+                self.set_calls = []
 
             def get(self, _query):
 
-                             return None
+                return None
 
             def find_similar(self, _query):
 
-                             return None
+                return None
 
             def set(self, query, value, ttl=None):
 
-                             self.set_calls.append((query, value, ttl))
+                self.set_calls.append((query, value, ttl))
 
         recording_cache = RecordingCache()
         retrieved_doc = Document(
@@ -324,19 +324,19 @@ class TestUnifiedPipelineFeatures:
 
         class NullCache:
             def __init__(self, *_, **__):
-                             pass
+                pass
 
             def get(self, _query):
 
-                             return None
+                return None
 
             def find_similar(self, _query):
 
-                             return None
+                return None
 
             def set(self, _query, _value, _ttl=None):
 
-                             return None
+                return None
 
         base_doc = Document(
             id="media-claim",
@@ -349,7 +349,7 @@ class TestUnifiedPipelineFeatures:
 
         class StubMediaRetriever:
             def __init__(self):
-                             self.retrieve_calls = []
+                self.retrieve_calls = []
                 self.hybrid_calls = []
 
             async def retrieve(self, query, **kwargs):
@@ -365,7 +365,7 @@ class TestUnifiedPipelineFeatures:
 
             def __init__(self, db_paths, user_id="0", *, media_db=None, chacha_db=None):
 
-                             self.db_paths = db_paths
+                self.db_paths = db_paths
                 self.user_id = user_id
                 self.media_db = media_db
                 self.chacha_db = chacha_db
@@ -382,11 +382,11 @@ class TestUnifiedPipelineFeatures:
 
             def close(self):
 
-                             return None
+                return None
 
         class StubClaimsEngine:
             def __init__(self, _analyze):
-                             self.run_calls: List[Dict[str, Any]] = []
+                self.run_calls: List[Dict[str, Any]] = []
 
             async def run(self, **kwargs):
                 self.run_calls.append(kwargs)
@@ -398,14 +398,17 @@ class TestUnifiedPipelineFeatures:
         StubMultiDatabaseRetriever.instances = []
         dummy_sgl = types.SimpleNamespace(analyze=lambda *_, **__: {})
 
-        with patch.dict('sys.modules', {
-            'tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib': dummy_sgl,
-        }), \
-            patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.SemanticCache', return_value=NullCache()), \
-            patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever', StubMultiDatabaseRetriever), \
-            patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.ClaimsEngine', StubClaimsEngine), \
-            patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.AnswerGenerator') as mock_answer_gen:
-
+        with (
+            patch.dict('sys.modules', {
+                'tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib': dummy_sgl,
+            }),
+            patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.SemanticCache',
+                  return_value=NullCache()),
+            patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever',
+                  StubMultiDatabaseRetriever),
+            patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.ClaimsEngine', StubClaimsEngine),
+            patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.AnswerGenerator') as mock_answer_gen,
+        ):
             answer_gen_instance = MagicMock()
             answer_gen_instance.generate = AsyncMock(return_value={"answer": "Generated answer"})
             mock_answer_gen.return_value = answer_gen_instance

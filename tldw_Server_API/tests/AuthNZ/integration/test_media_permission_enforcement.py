@@ -23,7 +23,7 @@ def _hash_api_key(api_key: str) -> str:
 def test_media_add_requires_media_create(isolated_test_environment):
 
 
-     client, _db_name = isolated_test_environment
+    client, _db_name = isolated_test_environment
     # Prepare: create a user without roles and an active API key for that user
     dsn = get_settings().DATABASE_URL
     assert dsn and dsn.startswith("postgresql"), "AuthNZ Postgres test fixture not configured"

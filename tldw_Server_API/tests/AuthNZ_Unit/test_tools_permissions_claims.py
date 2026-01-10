@@ -96,7 +96,7 @@ async def test_execute_tool_allowed_with_permission(monkeypatch):
 
     class _FakeExecutor:
         def __init__(self) -> None:
-                     self.calls: Dict[str, Any] = {}
+            self.calls: Dict[str, Any] = {}
 
         async def execute(self, **kwargs):
             self.calls["execute"] = kwargs

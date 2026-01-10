@@ -10,12 +10,12 @@ from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 class _DummySettings(dict):
     def get(self, key, default=None):
-             return super().get(key, default)
+        return super().get(key, default)
 
 
 class _FakeAdapter:
     def __init__(self):
-             self.config = SimpleNamespace(embedding_dim=3, store_type="chromadb")
+        self.config = SimpleNamespace(embedding_dim=3, store_type="chromadb")
         self.upserts = []
         self._pages_returned = 0
 
@@ -48,7 +48,7 @@ class _FakeAdapter:
 
 @pytest.mark.unit
 def test_hyde_backfill_embeds_real_vectors(monkeypatch):
-     adapter = _FakeAdapter()
+    adapter = _FakeAdapter()
     registry = get_metrics_registry()
     registry.values.pop("hyde_questions_generated_total", None)
     registry.values.pop("hyde_generation_failures_total", None)
@@ -80,7 +80,7 @@ def test_hyde_backfill_embeds_real_vectors(monkeypatch):
 
     # Patch HYDE question generation and embedding creation
     def _fake_questions(text, n, **kwargs):
-             return [f"Question {i}" for i in range(1, n + 1)]
+        return [f"Question {i}" for i in range(1, n + 1)]
 
     monkeypatch.setattr("tldw_Server_API.app.core.Embeddings.hyde.generate_questions", _fake_questions)
 

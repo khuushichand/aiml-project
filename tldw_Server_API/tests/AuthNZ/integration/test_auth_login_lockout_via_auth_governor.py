@@ -63,7 +63,7 @@ class _StubLimiter:
 
     def clear_all_locks(self) -> None:
 
-             """Reset lockout state to simulate expiry."""
+        """Reset lockout state to simulate expiry."""
         self._attempts.clear()
         self._locked_ids.clear()
 
@@ -134,7 +134,7 @@ class TestAuthLoginLockoutViaAuthGovernor:
 
         # Ensure settings see rate limiting as enabled if consulted elsewhere
         def _fake_settings():
-                     from tldw_Server_API.app.core.AuthNZ.settings import Settings
+            from tldw_Server_API.app.core.AuthNZ.settings import Settings
 
             return Settings(RATE_LIMIT_ENABLED=True)
 

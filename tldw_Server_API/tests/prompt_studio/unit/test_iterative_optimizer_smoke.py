@@ -19,7 +19,7 @@ from tldw_Server_API.app.core.Prompt_Management.prompt_studio.optimization_engin
 
 @pytest.fixture
 def temp_ps_db(tmp_path) -> PromptStudioDatabase:
-     os.environ.setdefault("TEST_MODE", "true")
+    os.environ.setdefault("TEST_MODE", "true")
     db_path = tmp_path / "ps_iter_smoke.db"
     return PromptStudioDatabase(str(db_path), client_id="iter-smoke")
 

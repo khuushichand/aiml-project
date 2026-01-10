@@ -19,7 +19,11 @@ from tldw_Server_API.app.core.LLM_Calls.error_utils import (
     log_http_400_body,
     raise_chat_error_from_http,
 )
-from tldw_Server_API.app.core.LLM_Calls.payload_utils import _sanitize_payload_for_logging
+from tldw_Server_API.app.core.LLM_Calls.payload_utils import (
+    _sanitize_payload_for_logging,
+    merge_extra_body,
+    merge_extra_headers,
+)
 from tldw_Server_API.app.core.LLM_Calls.sse import (
     finalize_stream,
     is_done_line,
@@ -90,12 +94,15 @@ def _chat_with_openai_compatible_local_server(
         http_fetcher: Optional[
             Callable[..., Any]
         ] = None,  # Mirrors signature of _hc_fetch(method=..., url=..., ...)
+        extra_headers: Optional[Dict[str, str]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
 ):
     logging.debug(f"{provider_name}: Chat request starting. API Base: {api_base_url}, Model: {model_name}")
 
     headers = {'Content-Type': 'application/json'}
     if api_key: # Some local servers might use a key
         headers['Authorization'] = f'Bearer {api_key}'
+    headers = merge_extra_headers(headers, {"extra_headers": extra_headers})
 
     api_messages = []
     if system_message:
@@ -141,6 +148,11 @@ def _chat_with_openai_compatible_local_server(
         else:
             logging.warning(f"{provider_name}: top_logprobs provided without logprobs=True. Ignoring top_logprobs.")
     if user_identifier is not None: payload["user"] = user_identifier
+
+    if tool_choice is not None and not tools:
+        raise ChatBadRequestError(provider=provider_name, message="tool_choice requires tools")
+
+    payload = merge_extra_body(payload, {"extra_body": extra_body})
 
     # Optionally filter unknown/non-standard keys for strict OpenAI-compatible servers
     if filter_unknown_params:
@@ -371,6 +383,8 @@ def _local_llm_request(
         app_config: Optional[Dict[str, Any]] = None,
         http_client_factory: Optional[Callable[[int], Any]] = None,
         http_fetcher: Optional[Callable[..., Any]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
 ):
     if temperature is not None:
         if temp is not None and temp != temperature:
@@ -492,6 +506,8 @@ def _local_llm_request(
         filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
         http_client_factory=http_client_factory,
         http_fetcher=http_fetcher,
+        extra_headers=extra_headers,
+        extra_body=extra_body,
     )
 
 
@@ -524,6 +540,8 @@ def _llama_request(
         app_config: Optional[Dict[str, Any]] = None,
         http_client_factory: Optional[Callable[[int], Any]] = None,
         http_fetcher: Optional[Callable[..., Any]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
 ):
     if temperature is not None:
         if temp is not None and temp != temperature:
@@ -633,6 +651,8 @@ def _llama_request(
         filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
         http_client_factory=http_client_factory,
         http_fetcher=http_fetcher,
+        extra_headers=extra_headers,
+        extra_body=extra_body,
     )
 
 
@@ -654,6 +674,8 @@ def _kobold_request(
         num_responses: Optional[int] = None, # Mapped from 'n'
         seed: Optional[int] = None, # Mapped from 'seed'
         app_config: Optional[Dict[str, Any]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
 ):
     if model and (model.lower() == "none" or model.strip() == ""): model = None
     logging.debug("KoboldAI (Native): Chat request starting...")
@@ -738,6 +760,7 @@ def _kobold_request(
 
     headers = {'Content-Type': 'application/json'}
     if current_api_key: headers['X-Api-Key'] = current_api_key # Some Kobold forks might use this
+    headers = merge_extra_headers(headers, {"extra_headers": extra_headers})
 
     payload: Dict[str, Any] = {
         "prompt": final_prompt_string,
@@ -753,6 +776,7 @@ def _kobold_request(
     if current_stop_sequence is not None: payload['stop_sequence'] = current_stop_sequence # List of strings
     if current_num_responses is not None: payload['n'] = current_num_responses # Number of responses
     if current_seed is not None: payload['seed'] = current_seed
+    payload = merge_extra_body(payload, {"extra_body": extra_body})
 
     # Kobold specific params (can be added from cfg if needed and supported)
     if cfg.get('rep_pen') is not None: payload['rep_pen'] = float(cfg['rep_pen'])
@@ -840,6 +864,8 @@ def _ooba_request(
     app_config: Optional[Dict[str, Any]] = None,
     http_client_factory: Optional[Callable[[int], Any]] = None,
     http_fetcher: Optional[Callable[..., Any]] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
 ):
     if temperature is not None:
         if temp is not None and temp != temperature:
@@ -945,6 +971,8 @@ def _ooba_request(
         filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
         http_client_factory=http_client_factory,
         http_fetcher=http_fetcher,
+        extra_headers=extra_headers,
+        extra_body=extra_body,
     )
 
 
@@ -977,8 +1005,11 @@ def _tabbyapi_request(
     top_logprobs: Optional[int] = None,
     tools: Optional[List[Dict[str, Any]]] = None,
     tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    api_url: Optional[str] = None,
     http_client_factory: Optional[Callable[[int], Any]] = None,
     http_fetcher: Optional[Callable[..., Any]] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
 ):
     if temperature is not None:
         if temp is not None and temp != temperature:
@@ -993,7 +1024,7 @@ def _tabbyapi_request(
     loaded_config_data = app_config or load_settings()
     cfg = loaded_config_data.get('tabby_api', {})
 
-    api_base_url = cfg.get('api_ip')
+    api_base_url = api_url or cfg.get('api_ip')
     if not api_base_url:
         raise ChatConfigurationError(provider="tabbyapi", message="TabbyAPI URL (api_ip) is required.")
 
@@ -1101,6 +1132,8 @@ def _tabbyapi_request(
         filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
         http_client_factory=http_client_factory,
         http_fetcher=http_fetcher,
+        extra_headers=extra_headers,
+        extra_body=extra_body,
         # Add other OpenAI params here if TabbyAPI supports them
     )
 
@@ -1138,6 +1171,8 @@ def _vllm_request(
     app_config: Optional[Dict[str, Any]] = None,
     http_client_factory: Optional[Callable[[int], Any]] = None,
     http_fetcher: Optional[Callable[..., Any]] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
                                        # Could be loaded from cfg or passed if chat_api_call handles it
 ):
     if temp is not None:
@@ -1263,6 +1298,8 @@ def _vllm_request(
         filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
         http_client_factory=http_client_factory,
         http_fetcher=http_fetcher,
+        extra_headers=extra_headers,
+        extra_body=extra_body,
         # tools, tool_choice for vLLM? If supported, add to map and pass.
     )
 
@@ -1295,9 +1332,12 @@ def _aphrodite_request(
     tools: Optional[List[Dict[str, Any]]] = None,
     tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
     top_logprobs: Optional[int] = None,
+    api_url: Optional[str] = None,
     app_config: Optional[Dict[str, Any]] = None,
     http_client_factory: Optional[Callable[[int], Any]] = None,
     http_fetcher: Optional[Callable[..., Any]] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
     # top_logprobs, tools, tool_choice not in Aphrodite's map currently
 ):
     if temp is not None:
@@ -1312,7 +1352,7 @@ def _aphrodite_request(
     loaded_config_data = app_config or load_settings()
     cfg = loaded_config_data.get('aphrodite_api', {})
 
-    api_base_url = cfg.get('api_ip')
+    api_base_url = api_url or cfg.get('api_ip')
     if not api_base_url:
         raise ChatConfigurationError(provider="aphrodite", message="Aphrodite API URL (api_ip) is required.")
 
@@ -1414,6 +1454,8 @@ def _aphrodite_request(
         filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
         http_client_factory=http_client_factory,
         http_fetcher=http_fetcher,
+        extra_headers=extra_headers,
+        extra_body=extra_body,
     )
 
 
@@ -1455,6 +1497,8 @@ def _ollama_request(
     app_config: Optional[Dict[str, Any]] = None,
     http_client_factory: Optional[Callable[[int], Any]] = None,
     http_fetcher: Optional[Callable[..., Any]] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
     # _chat_with_openai_compatible_local_server supports extra OpenAI fields (logit_bias, n, tools, etc.).
     # Add to this signature if Ollama supports them.
 ):
@@ -1594,6 +1638,8 @@ def _ollama_request(
         filter_unknown_params=bool(cfg.get('strict_openai_compat', False)),
         http_client_factory=http_client_factory,
         http_fetcher=http_fetcher,
+        extra_headers=extra_headers,
+        extra_body=extra_body,
     )
 
 
@@ -1694,6 +1740,8 @@ class LocalLLMAdapter(_LocalAdapterBase):
             "tools": request.get("tools"),
             "tool_choice": request.get("tool_choice"),
             "app_config": request.get("app_config"),
+            "extra_headers": request.get("extra_headers"),
+            "extra_body": request.get("extra_body"),
         }
 
 
@@ -1725,7 +1773,10 @@ class LlamaCppAdapter(_LocalAdapterBase):
             "n": request.get("n"),
             "presence_penalty": request.get("presence_penalty"),
             "frequency_penalty": request.get("frequency_penalty"),
+            "api_url": request.get("api_url"),
             "app_config": request.get("app_config"),
+            "extra_headers": request.get("extra_headers"),
+            "extra_body": request.get("extra_body"),
         }
 
 
@@ -1754,6 +1805,8 @@ class KoboldAdapter(_LocalAdapterBase):
             "num_responses": request.get("n"),
             "seed": request.get("seed"),
             "app_config": request.get("app_config"),
+            "extra_headers": request.get("extra_headers"),
+            "extra_body": request.get("extra_body"),
         }
 
 
@@ -1786,7 +1839,10 @@ class OobaAdapter(_LocalAdapterBase):
             "logit_bias": request.get("logit_bias"),
             "presence_penalty": request.get("presence_penalty"),
             "frequency_penalty": request.get("frequency_penalty"),
+            "vllm_api_url": request.get("api_url"),
             "app_config": request.get("app_config"),
+            "extra_headers": request.get("extra_headers"),
+            "extra_body": request.get("extra_body"),
         }
 
 
@@ -1823,7 +1879,10 @@ class TabbyAPIAdapter(_LocalAdapterBase):
             "top_logprobs": request.get("top_logprobs"),
             "tools": request.get("tools"),
             "tool_choice": request.get("tool_choice"),
+            "api_url": request.get("api_url"),
             "app_config": request.get("app_config"),
+            "extra_headers": request.get("extra_headers"),
+            "extra_body": request.get("extra_body"),
         }
 
 
@@ -1860,7 +1919,10 @@ class VLLMAdapter(_LocalAdapterBase):
             "user_identifier": request.get("user"),
             "tools": request.get("tools"),
             "tool_choice": request.get("tool_choice"),
+            "api_url": request.get("api_url"),
             "app_config": request.get("app_config"),
+            "extra_headers": request.get("extra_headers"),
+            "extra_body": request.get("extra_body"),
         }
 
 
@@ -1894,7 +1956,10 @@ class OllamaAdapter(_LocalAdapterBase):
             "top_logprobs": request.get("top_logprobs"),
             "tools": request.get("tools"),
             "tool_choice": request.get("tool_choice"),
+            "api_url": request.get("api_url"),
             "app_config": request.get("app_config"),
+            "extra_headers": request.get("extra_headers"),
+            "extra_body": request.get("extra_body"),
         }
 
 
@@ -1931,5 +1996,8 @@ class AphroditeAdapter(_LocalAdapterBase):
             "user_identifier": request.get("user"),
             "tools": request.get("tools"),
             "tool_choice": request.get("tool_choice"),
+            "api_url": request.get("api_url"),
             "app_config": request.get("app_config"),
+            "extra_headers": request.get("extra_headers"),
+            "extra_body": request.get("extra_body"),
         }

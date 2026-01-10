@@ -14,9 +14,7 @@ os.environ["TEST_MODE"] = "true"
 
 
 def _mini_app_with_user():
-
-
-     from tldw_Server_API.app.api.v1.endpoints import research as research_module
+    from tldw_Server_API.app.api.v1.endpoints import research as research_module
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 
     app = FastAPI()
@@ -30,13 +28,10 @@ def _mini_app_with_user():
 
 
 def test_websearch_searx_engine(monkeypatch):
-
-
-     from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
+    from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
 
     def fake_perform_websearch(search_engine, search_query, *args, **kwargs):
-
-             assert search_engine == "searx"
+        assert search_engine == "searx"
         return {
             "results": [
                 {
@@ -65,13 +60,10 @@ def test_websearch_searx_engine(monkeypatch):
 
 
 def test_websearch_tavily_engine(monkeypatch):
-
-
-     from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
+    from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
 
     def fake_perform_websearch(search_engine, search_query, *args, **kwargs):
-
-             assert search_engine == "tavily"
+        assert search_engine == "tavily"
         return {
             "results": [
                 {
@@ -100,13 +92,10 @@ def test_websearch_tavily_engine(monkeypatch):
 
 
 def test_websearch_kagi_engine(monkeypatch):
-
-
-     from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
+    from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
 
     def fake_perform_websearch(search_engine, search_query, *args, **kwargs):
-
-             assert search_engine == "kagi"
+        assert search_engine == "kagi"
         return {
             "results": [
                 {

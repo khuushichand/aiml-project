@@ -14,7 +14,7 @@ pytestmark = pytest.mark.timeout(10)
 def _client(monkeypatch) -> TestClient:
 
 
-     monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "true")
     monkeypatch.setenv("SANDBOX_BACKGROUND_EXECUTION", "true")
     monkeypatch.setenv("TLDW_SANDBOX_DOCKER_FAKE_EXEC", "1")
@@ -31,7 +31,7 @@ def _client(monkeypatch) -> TestClient:
 def test_ws_accepts_stdin_and_enforces_caps(ws_flush, monkeypatch) -> None:
 
 
-     with _client(monkeypatch) as client:
+    with _client(monkeypatch) as client:
         # Start a run with interactive caps
         body: Dict[str, Any] = {
             "spec_version": "1.0",

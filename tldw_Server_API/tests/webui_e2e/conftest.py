@@ -64,7 +64,7 @@ except ModuleNotFoundError:  # pragma: no cover - environment specific
 def _find_free_port() -> int:
 
 
-     with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+    with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
         sock.bind(("", 0))
         return sock.getsockname()[1]
 
@@ -96,7 +96,7 @@ def _print_server_log(label: str) -> None:
 
 @pytest.fixture(scope="session")
 def server_url() -> str:
-     port = _find_free_port()
+    port = _find_free_port()
     base_url = f"http://127.0.0.1:{port}"
     label = os.environ.get("SERVER_LABEL", "webui")
 
@@ -106,6 +106,7 @@ def server_url() -> str:
         "E2E_TEST_BASE_URL": base_url,
         "AUTH_MODE": "single_user",
         "SINGLE_USER_API_KEY": os.getenv("SINGLE_USER_API_KEY", "sk-test-1234567890-VALID"),
+        "CSRF_ENABLED": "true",
         "TEST_MODE": "true",
         "EPHEMERAL_CLEANUP_ENABLED": "false",
         "CLAIMS_REBUILD_ENABLED": "false",
@@ -132,7 +133,7 @@ def server_url() -> str:
 
 @pytest.fixture(scope="session")
 def browser():
-     from playwright.sync_api import sync_playwright
+    from playwright.sync_api import sync_playwright
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)

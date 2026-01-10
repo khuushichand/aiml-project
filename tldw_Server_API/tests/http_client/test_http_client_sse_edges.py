@@ -5,9 +5,7 @@ pytestmark = pytest.mark.unit
 
 
 def _has_httpx():
-
-
-     try:
+    try:
         import httpx  # noqa: F401
         return True
     except Exception:

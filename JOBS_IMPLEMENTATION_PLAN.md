@@ -86,4 +86,46 @@
 **Goal**: Validate chatbooks async job execution with the worker running.
 **Success Criteria**: Chatbooks async E2E or integration jobs pass (or failures documented).
 **Tests**: `python -m pytest tldw_Server_API/tests/e2e/test_chatbooks_roundtrip.py -v`
+**Status**: Complete
+
+## Stage 16: Prompt Studio Jobs Worker Design (Phase 2)
+**Goal**: Define Jobs worker execution plan for Prompt Studio jobs.
+**Success Criteria**: Design doc added with job types, payload fields, and run command.
+**Tests**: N/A (design-only stage)
+**Status**: Complete
+
+## Stage 17: Prompt Studio Jobs Worker Implementation
+**Goal**: Implement Jobs worker service for Prompt Studio using core Jobs worker SDK.
+**Success Criteria**: Worker processes prompt studio jobs and updates core Jobs status/results.
+**Tests**: `python -m pytest tldw_Server_API/tests/e2e/test_prompt_studio_e2e.py -v`
+**Status**: Complete
+
+## Stage 18: Prompt Studio Jobs Worker Validation
+**Goal**: Validate prompt studio job execution with the core jobs worker running.
+**Success Criteria**: Prompt Studio async E2E or integration tests pass (or failures documented).
+**Tests**: `python -m pytest tldw_Server_API/tests/prompt_studio/integration/test_concurrency_jobs.py -v`
+**Status**: Complete
+
+## Stage 19: Phase 3 Embeddings Legacy Removal
+**Goal**: Remove legacy embeddings job systems (Redis job manager, media_embedding_jobs_db) and update call sites.
+**Success Criteria**: No runtime code references legacy embeddings job manager/DB; embeddings jobs flow relies on core Jobs only.
+**Tests**: `python -m pytest tldw_Server_API/tests/e2e/test_embeddings_e2e.py -v`
+**Status**: Complete
+
+## Stage 20: Phase 3 Chatbooks Legacy Removal
+**Goal**: Remove chatbooks job queue shim and ensure chatbooks endpoints rely on core Jobs only.
+**Success Criteria**: No chatbooks shim usage; chatbooks job flows run via core Jobs.
+**Tests**: `python -m pytest tldw_Server_API/tests/e2e/test_chatbooks_roundtrip.py -v`
+**Status**: Complete
+
+## Stage 21: Phase 3 Prompt Studio Legacy Removal
+**Goal**: Remove Prompt Studio legacy job manager/queue usage; keep jobs adapter + core Jobs only.
+**Success Criteria**: No runtime references to prompt_studio/job_manager in endpoints or workers.
+**Tests**: `python -m pytest tldw_Server_API/tests/e2e/test_prompt_studio_e2e.py -v`
+**Status**: Complete
+
+## Stage 22: Phase 3 Cleanup + Docs
+**Goal**: Clean up adapters to disable legacy fallback defaults and update docs/flags.
+**Success Criteria**: Legacy read fallback defaults are off; docs updated to reflect core Jobs as the only backend.
+**Tests**: `python -m pytest tldw_Server_API/tests/Jobs -v`
 **Status**: Not Started

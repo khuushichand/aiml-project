@@ -46,6 +46,7 @@ from tldw_Server_API.app.api.v1.utils.rag_cache import invalidate_rag_caches
 
 _EMBEDDINGS_DOMAIN = "embeddings"
 _EMBEDDINGS_JOB_TYPE = "media_embeddings"
+_CONTENT_JOB_TYPE = "content_embeddings"
 
 
 class EmbeddingsJobError(RuntimeError):
@@ -108,7 +109,7 @@ def _load_media_content(media_id: int, user_id: str) -> Dict[str, Any]:
 
 async def _handle_job(job: Dict[str, Any]) -> Dict[str, Any]:
     job_type = job.get("job_type")
-    if job_type != _EMBEDDINGS_JOB_TYPE:
+    if job_type not in {_EMBEDDINGS_JOB_TYPE, _CONTENT_JOB_TYPE}:
         raise EmbeddingsJobError(
             f"Unsupported embeddings job type: {job_type}",
             retryable=False,
@@ -119,6 +120,8 @@ async def _handle_job(job: Dict[str, Any]) -> Dict[str, Any]:
         payload = {}
 
     media_id = payload.get("media_id")
+    if media_id is None and job_type == _CONTENT_JOB_TYPE:
+        media_id = payload.get("item_id") or payload.get("content_id")
     if media_id is None:
         raise EmbeddingsJobError("Missing media_id in job payload", retryable=False)
 
@@ -131,7 +134,20 @@ async def _handle_job(job: Dict[str, Any]) -> Dict[str, Any]:
     chunk_size = _coerce_int(payload.get("chunk_size"), 1000)
     chunk_overlap = _coerce_int(payload.get("chunk_overlap"), 200)
 
-    media_content = _load_media_content(int(media_id), user_id)
+    if job_type == _CONTENT_JOB_TYPE:
+        raw_content = payload.get("content") or payload.get("text")
+        if not raw_content or not str(raw_content).strip():
+            raise EmbeddingsJobError("Missing content for content_embeddings job", retryable=False)
+        media_content = {
+            "media_item": {
+                "title": payload.get("title") or "",
+                "author": payload.get("author") or "",
+                "metadata": payload.get("metadata") or {},
+            },
+            "content": {"content": str(raw_content)},
+        }
+    else:
+        media_content = _load_media_content(int(media_id), user_id)
     result = await generate_embeddings_for_media(
         media_id=int(media_id),
         media_content=media_content,

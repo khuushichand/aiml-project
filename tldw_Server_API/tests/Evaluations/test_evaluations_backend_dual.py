@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBack
 def test_sqlite_evaluations_basic(tmp_path):
 
 
-     db_path = tmp_path / "evaluations.db"
+    db_path = tmp_path / "evaluations.db"
     db = EvaluationsDatabase(str(db_path))
 
     eval_id = db.create_evaluation(

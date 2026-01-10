@@ -62,7 +62,7 @@ def _build_app(
 
     class _StubModerationService:
         def list_user_overrides(self) -> dict:
-                     return {}
+            return {}
 
     moderation_mod.get_moderation_service = lambda: _StubModerationService()  # type: ignore[assignment]
 

@@ -26,7 +26,7 @@ def _setup_isolated_authnz(monkeypatch, db_path: Path):
 def _admin_app():
 
 
-     mod = import_module("tldw_Server_API.app.main")
+    mod = import_module("tldw_Server_API.app.main")
     app = getattr(mod, "app")
     from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
     from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
@@ -64,7 +64,7 @@ def _admin_app():
 def test_admin_create_team_conflict_returns_409(monkeypatch, tmp_path):
 
 
-     base_dir = tmp_path / "admin_conflict_team"
+    base_dir = tmp_path / "admin_conflict_team"
     base_dir.mkdir(parents=True, exist_ok=True)
     db_path = base_dir / "authnz_admin.db"
     _setup_isolated_authnz(monkeypatch, db_path)
@@ -89,7 +89,7 @@ def test_admin_create_team_conflict_returns_409(monkeypatch, tmp_path):
 def test_admin_create_role_conflict_returns_409(monkeypatch, tmp_path):
 
 
-     base_dir = tmp_path / "admin_conflict_role"
+    base_dir = tmp_path / "admin_conflict_role"
     base_dir.mkdir(parents=True, exist_ok=True)
     db_path = base_dir / "authnz_admin.db"
     _setup_isolated_authnz(monkeypatch, db_path)
@@ -108,7 +108,7 @@ def test_admin_create_role_conflict_returns_409(monkeypatch, tmp_path):
 def test_admin_create_permission_conflict_returns_409(monkeypatch, tmp_path):
 
 
-     base_dir = tmp_path / "admin_conflict_perm"
+    base_dir = tmp_path / "admin_conflict_perm"
     base_dir.mkdir(parents=True, exist_ok=True)
     db_path = base_dir / "authnz_admin.db"
     _setup_isolated_authnz(monkeypatch, db_path)

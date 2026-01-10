@@ -7,7 +7,7 @@ from tldw_Server_API.app.main import app
 
 @pytest.fixture
 def client():
-     with TestClient(app) as c:
+    with TestClient(app) as c:
         c.cookies.set("csrf_token", "x")
         c.headers["X-CSRF-Token"] = "x"
         c.headers["Authorization"] = "Bearer key"

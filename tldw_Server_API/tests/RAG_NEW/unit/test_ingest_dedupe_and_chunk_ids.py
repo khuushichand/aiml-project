@@ -6,7 +6,7 @@ from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 def test_chunk_for_embedding_assigns_stable_uid():
 
 
-     from tldw_Server_API.app.core.Chunking import chunk_for_embedding
+    from tldw_Server_API.app.core.Chunking import chunk_for_embedding
 
     text = "Hello world. Hello world!\nThis is a test."
     chunks = chunk_for_embedding(text, file_name="doc1.txt", method="sentences", max_size=1, overlap=0)

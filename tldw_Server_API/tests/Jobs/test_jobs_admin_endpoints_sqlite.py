@@ -12,7 +12,7 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 def _setup_env(monkeypatch, tmp_path):
 
 
-     monkeypatch.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
@@ -36,7 +36,7 @@ def _setup_env(monkeypatch, tmp_path):
 def _client(monkeypatch):
 
 
-     from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
+    from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
     reset_settings()
     from tldw_Server_API.app.main import app
     try:
@@ -50,7 +50,7 @@ def _client(monkeypatch):
 def test_queue_control_and_status_sqlite(monkeypatch, tmp_path):
 
 
-     _setup_env(monkeypatch, tmp_path)
+    _setup_env(monkeypatch, tmp_path)
     ensure_jobs_tables(Path(os.environ["JOBS_DB_PATH"]))
     app, headers = _client(monkeypatch)
 
@@ -72,7 +72,7 @@ def test_queue_control_and_status_sqlite(monkeypatch, tmp_path):
 def test_reschedule_and_retry_now_endpoints_sqlite(monkeypatch, tmp_path):
 
 
-     _setup_env(monkeypatch, tmp_path)
+    _setup_env(monkeypatch, tmp_path)
     ensure_jobs_tables(Path(os.environ["JOBS_DB_PATH"]))
     app, headers = _client(monkeypatch)
     jm = JobManager()
@@ -94,7 +94,7 @@ def test_reschedule_and_retry_now_endpoints_sqlite(monkeypatch, tmp_path):
 def test_job_detail_endpoint_sqlite(monkeypatch, tmp_path):
 
 
-     _setup_env(monkeypatch, tmp_path)
+    _setup_env(monkeypatch, tmp_path)
     ensure_jobs_tables(Path(os.environ["JOBS_DB_PATH"]))
     app, headers = _client(monkeypatch)
     jm = JobManager()
@@ -113,7 +113,7 @@ def test_job_detail_endpoint_sqlite(monkeypatch, tmp_path):
 def test_attachments_and_sla_endpoints_sqlite(monkeypatch, tmp_path):
 
 
-     _setup_env(monkeypatch, tmp_path)
+    _setup_env(monkeypatch, tmp_path)
     ensure_jobs_tables(Path(os.environ["JOBS_DB_PATH"]))
     app, headers = _client(monkeypatch)
     jm = JobManager()
@@ -137,7 +137,7 @@ def test_attachments_and_sla_endpoints_sqlite(monkeypatch, tmp_path):
 def test_crypto_rotate_endpoint_sqlite(monkeypatch, tmp_path):
 
 
-     _setup_env(monkeypatch, tmp_path)
+    _setup_env(monkeypatch, tmp_path)
     ensure_jobs_tables(Path(os.environ["JOBS_DB_PATH"]))
     app, headers = _client(monkeypatch)
     jm = JobManager()

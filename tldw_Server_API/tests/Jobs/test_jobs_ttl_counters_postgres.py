@@ -14,7 +14,7 @@ pytestmark = pytest.mark.pg_jobs
 def _require_pg(monkeypatch):
 
 
-     dsn = os.getenv("JOBS_DB_URL")
+    dsn = os.getenv("JOBS_DB_URL")
     if not dsn:
         pytest.skip("JOBS_DB_URL not configured")
     monkeypatch.setenv("JOBS_COUNTERS_ENABLED", "true")
@@ -26,7 +26,7 @@ def _require_pg(monkeypatch):
 def _stats(client, domain="chatbooks", queue="default", job_type="export"):
 
 
-     r = client.get("/api/v1/jobs/stats", params={"domain": domain, "queue": queue, "job_type": job_type})
+    r = client.get("/api/v1/jobs/stats", params={"domain": domain, "queue": queue, "job_type": job_type})
     assert r.status_code == 200
     rows = r.json(); assert len(rows) == 1
     return rows[0]
@@ -35,7 +35,7 @@ def _stats(client, domain="chatbooks", queue="default", job_type="export"):
 def test_pg_ttl_cancel_updates_counters(monkeypatch):
 
 
-     dsn = _require_pg(monkeypatch)
+    dsn = _require_pg(monkeypatch)
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
     reset_settings()
     from tldw_Server_API.app.main import app
@@ -85,7 +85,7 @@ def test_pg_ttl_cancel_updates_counters(monkeypatch):
 def test_pg_ttl_fail_updates_counters(monkeypatch):
 
 
-     dsn = _require_pg(monkeypatch)
+    dsn = _require_pg(monkeypatch)
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
     reset_settings()
     from tldw_Server_API.app.main import app

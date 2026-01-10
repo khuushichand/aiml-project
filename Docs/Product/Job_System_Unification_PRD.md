@@ -8,18 +8,18 @@ Target Release: 0.2.x
 Unify all background job orchestration on the core Jobs subsystem (`tldw_Server_API/app/core/Jobs`) so Embeddings, Chatbooks, and Prompt Studio share a single job lifecycle, status model, and admin surface. This replaces parallel queue managers and temporary shims with one durable, observable job engine.
 
 ## 2. Problem Statement
-Multiple job systems coexist with overlapping responsibilities:
+Multiple job systems historically coexisted with overlapping responsibilities:
 - Core Jobs manager (SQLite/Postgres, leasing, retries, admin controls): `tldw_Server_API/app/core/Jobs/manager.py`
-- Embeddings Redis job manager and queue schemas: `tldw_Server_API/app/core/Embeddings/job_manager.py`, `tldw_Server_API/app/core/Embeddings/queue_schemas.py`
-- Prompt Studio job manager and DB tables: `tldw_Server_API/app/core/Prompt_Management/prompt_studio/job_manager.py`
-- Chatbooks in-memory job queue shim: `tldw_Server_API/app/core/Chatbooks/job_queue_shim.py`
+- Embeddings Redis job manager and queue schemas (removed): `tldw_Server_API/app/core/Embeddings/job_manager.py`, `tldw_Server_API/app/core/Embeddings/queue_schemas.py`
+- Prompt Studio job manager (removed): `tldw_Server_API/app/core/Prompt_Management/prompt_studio/job_manager.py`
+- Chatbooks job queue shim (removed): `tldw_Server_API/app/core/Chatbooks/job_queue_shim.py`
 
 This duplication creates drift in status semantics, retry behavior, and admin tooling, and it forces each domain to maintain its own worker patterns.
 
 ## 3. Unifying Principle (Simplification Cascade)
 All background work is a job. A single job model with domain/queue/job_type fields eliminates the need for separate queue implementations, status enums, and ad-hoc admin endpoints.
 
-**Expected deletions**: Embeddings Redis job manager, Prompt Studio job manager, Chatbooks job queue shim, media_embedding_jobs_db, duplicate status enums, and redundant admin endpoints.
+**Expected deletions**: Embeddings Redis job manager, Prompt Studio job manager, Chatbooks job queue shim, media_embedding_jobs_db, duplicate status enums, and redundant admin endpoints (all removed in Phase 3).
 
 ## 4. Goals & Success Criteria
 - One canonical job lifecycle managed by the core Jobs module.
@@ -197,8 +197,8 @@ Example rows (current codebase):
 | chatbooks | /api/v1/chatbooks/export/jobs/{job_id} | expired | status | cancelled | status | map `expired` -> `cancelled` (reason=expired) | |
 | chatbooks | /api/v1/chatbooks/export/jobs/{job_id} | n/a | job_id | n/a | uuid | map job_id -> jobs.uuid | |
 | chatbooks | /api/v1/chatbooks/import/jobs/{job_id} | validating | status | processing | status | map `validating` -> `processing`; job_type=`validate_chatbook` | ImportStatus in chatbook_models.py |
-| prompt_studio | /api/v1/prompt-studio/optimizations/{job_id} | queued | status | queued | status | 1:1 mapping for queued/processing/completed/failed/cancelled | JobStatus in prompt_studio/job_manager.py |
-| prompt_studio | /api/v1/prompt-studio/optimizations/{job_id} | n/a | job_type | n/a | job_type | map evaluation/optimization/generation -> same job_type values | JobType in prompt_studio/job_manager.py |
+| prompt_studio | /api/v1/prompt-studio/optimizations/{job_id} | queued | status | queued | status | 1:1 mapping for queued/processing/completed/failed/cancelled | JobStatus in prompt_studio/job_types.py |
+| prompt_studio | /api/v1/prompt-studio/optimizations/{job_id} | n/a | job_type | n/a | job_type | map evaluation/optimization/generation -> same job_type values | JobType in prompt_studio/job_types.py |
 
 Expanded mapping matrix (draft, per domain):
 
@@ -290,7 +290,7 @@ Backpressure behavior:
 - Migrate prompt studio workers to Jobs worker SDK.
 
 ### Phase 3: Delete Legacy Systems
-- Remove Embeddings Redis job manager, Prompt Studio job manager, and Chatbooks job queue shim.
+- Removed Embeddings Redis job manager, Prompt Studio job manager, and Chatbooks job queue shim.
 - Remove media_embedding_jobs_db and related persistence helpers.
 - Remove duplicated status enums and admin paths.
 

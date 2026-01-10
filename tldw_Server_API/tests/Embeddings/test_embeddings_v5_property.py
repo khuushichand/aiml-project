@@ -15,17 +15,17 @@ from unittest.mock import AsyncMock, patch
 # Disable rate limiting for all tests
 @pytest.fixture(autouse=True)
 def disable_rate_limiting():
-     """Disable rate limiting for all tests in this module"""
+    """Disable rate limiting for all tests in this module"""
     yield
 
 
 # Use the shared fixtures from conftest.py
 @pytest.fixture
 def setup(test_client, regular_user, auth_headers):
-     """Setup fixture for property tests"""
+    """Setup fixture for property tests"""
     class SetupData:
         def __init__(self):
-                     self.client = test_client
+            self.client = test_client
             self.auth_headers = auth_headers
             self.test_user = regular_user
 
@@ -141,7 +141,7 @@ class TestInputValidationProperties:
     )
     @settings(max_examples=10, deadline=10000, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_non_empty_input_accepted(self, setup, input_text):
-             """Property: Non-empty strings are accepted, empty strings rejected"""
+        """Property: Non-empty strings are accepted, empty strings rejected"""
         response = setup.client.post(
             "/api/v1/embeddings",
             headers=setup.auth_headers,
@@ -166,7 +166,7 @@ class TestInputValidationProperties:
     )
     @settings(max_examples=5, deadline=10000, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_input_list_size_limit(self, setup, num_inputs):
-             """Property: Input lists > 2048 items are rejected"""
+        """Property: Input lists > 2048 items are rejected"""
         inputs = [f"text_{i}" for i in range(num_inputs)]
 
         response = setup.client.post(
@@ -193,7 +193,7 @@ class TestInputValidationProperties:
     )
     @settings(max_examples=5, deadline=10000, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_provider_validation(self, setup, provider):
-             """Property: Only valid providers are accepted"""
+        """Property: Only valid providers are accepted"""
         valid_providers = ["openai", "huggingface", "cohere", "voyage", "google", "mistral", "onnx", "local_api"]
 
         headers = setup.auth_headers.copy()
@@ -226,7 +226,7 @@ class TestEmbeddingOutputProperties:
     )
     @settings(max_examples=5, deadline=10000, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_output_count_matches_input(self, setup, num_texts):
-             """Property: Number of embeddings matches number of inputs"""
+        """Property: Number of embeddings matches number of inputs"""
         from unittest.mock import patch
 
         texts = [f"text_{i}" for i in range(num_texts)]
@@ -261,7 +261,7 @@ class TestEmbeddingOutputProperties:
     )
     @settings(max_examples=5, deadline=10000, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_encoding_format_property(self, setup, encoding_format):
-             """Property: Encoding format is respected"""
+        """Property: Encoding format is respected"""
         from unittest.mock import patch
         import base64
 
@@ -308,7 +308,7 @@ class EmbeddingStateMachine(RuleBasedStateMachine):
 
     def __init__(self):
 
-             super().__init__()
+        super().__init__()
         # Mock metrics to avoid issues
         from unittest.mock import MagicMock
         import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as emb_module
@@ -349,7 +349,7 @@ class EmbeddingStateMachine(RuleBasedStateMachine):
 
     def __del__(self):
 
-             try:
+        try:
             if hasattr(self, 'client') and self.client is not None:
                 self.client.close()
         except Exception:
@@ -363,12 +363,12 @@ class EmbeddingStateMachine(RuleBasedStateMachine):
 
     @rule(target=texts, text=st.text(min_size=1, max_size=100))
     def add_text(self, text):
-             """Add a text to be embedded"""
+        """Add a text to be embedded"""
         return text
 
     @rule(text=texts)
     def embed_text(self, text):
-             """Embed a text"""
+        """Embed a text"""
         from unittest.mock import patch
 
         async def mock_embeddings(*args, **kwargs):
@@ -406,7 +406,7 @@ class EmbeddingStateMachine(RuleBasedStateMachine):
 
     @rule()
     def check_health(self):
-             """Check health endpoint"""
+        """Check health endpoint"""
         response = self.client.get("/api/v1/embeddings/health")
         assert response.status_code in [200, 503]
         data = response.json()
@@ -415,13 +415,13 @@ class EmbeddingStateMachine(RuleBasedStateMachine):
 
     @invariant()
     def cache_size_reasonable(self):
-             """Cache size should be reasonable"""
+        """Cache size should be reasonable"""
         # This is a simple invariant - in production you'd check actual cache
         assert len(self.cached_texts) <= 10000
 
     @invariant()
     def request_count_reasonable(self):
-             """Request count should be reasonable"""
+        """Request count should be reasonable"""
         assert self.request_count <= 1000
 
 

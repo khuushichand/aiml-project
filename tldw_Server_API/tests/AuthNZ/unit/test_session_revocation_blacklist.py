@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.AuthNZ.settings import Settings
 
 class _FakeTransaction:
     def __init__(self, conn):
-             self._conn = conn
+        self._conn = conn
 
     async def __aenter__(self):
         return self._conn
@@ -20,12 +20,12 @@ class _FakeTransaction:
 
 class _FakePool:
     def __init__(self, conn):
-             self.pool = object()  # Marker so SessionManager treats as Postgres path
+        self.pool = object()  # Marker so SessionManager treats as Postgres path
         self._conn = conn
 
     def transaction(self):
 
-             return _FakeTransaction(self._conn)
+        return _FakeTransaction(self._conn)
 
 
 class _FakeConn:
@@ -45,7 +45,7 @@ class _FakeConn:
 
 class _StubBlacklist:
     def __init__(self):
-             self.calls = []
+        self.calls = []
 
     def hint_blacklisted(self, jti: str, expires_at: datetime):
         self.calls.append(("hint", jti, expires_at))

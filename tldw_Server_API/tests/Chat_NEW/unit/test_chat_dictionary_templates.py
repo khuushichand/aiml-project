@@ -13,7 +13,7 @@ from tldw_Server_API.app.core.Chat.chat_dictionary import (
 def _enable_templates():
 
 
-     os.environ["CHAT_DICT_TEMPLATES_ENABLED"] = "1"
+    os.environ["CHAT_DICT_TEMPLATES_ENABLED"] = "1"
     os.environ["TEMPLATE_DEFAULT_TZ"] = "UTC"
 
 
@@ -29,7 +29,7 @@ def test_literal_replacement_fast_path_when_disabled():
 def test_literal_templating_enabled_now_function():
 
 
-     _enable_templates()
+    _enable_templates()
     entry = ChatDictionary(key="today", content="Year={{ now('%Y', tz='UTC') }}")
     text = "today is a keyword"
     out = process_user_input(text, [entry])
@@ -40,7 +40,7 @@ def test_literal_templating_enabled_now_function():
 def test_regex_templating_with_group():
 
 
-     _enable_templates()
+    _enable_templates()
     entry = ChatDictionary(key=r"/price\s+(\w+)/", content="{{ match.group(1)|upper }} is priced")
     text = "The price widget should be evaluated."
     new_text, count = apply_replacement_once(text, entry)

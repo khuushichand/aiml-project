@@ -488,7 +488,7 @@ class TestOptimizationEndpoints:
 
         """Test starting an optimization job."""
         with patch('tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps.get_current_active_user', return_value=mock_user):
-            with patch('tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_manager.JobManager.create_job') as mock_create:
+            with patch('tldw_Server_API.app.core.Prompt_Management.prompt_studio.jobs_adapter.PromptStudioJobsAdapter.create_job') as mock_create:
                 mock_create.return_value = {
                     "id": "job-123",
                     "status": "pending",
@@ -521,7 +521,7 @@ class TestOptimizationEndpoints:
 
         """Test getting optimization job status."""
         with patch('tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps.get_current_active_user', return_value=mock_user):
-            with patch('tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_manager.JobManager.get_job') as mock_get:
+            with patch('tldw_Server_API.app.core.Prompt_Management.prompt_studio.jobs_adapter.PromptStudioJobsAdapter.get_job') as mock_get:
                 mock_get.return_value = {
                     "id": "job-123",
                     "status": "running",

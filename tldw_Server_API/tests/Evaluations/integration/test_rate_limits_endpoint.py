@@ -18,7 +18,7 @@ def _setup_env(monkeypatch):
 def test_get_rate_limits_shape():
 
 
-     client = TestClient(app)
+    client = TestClient(app)
     r = client.get("/api/v1/evaluations/rate-limits")
     assert r.status_code == 200
     j = r.json()

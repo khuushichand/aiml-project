@@ -97,7 +97,7 @@ def test_outbox_list_and_sse_postgres(monkeypatch, jobs_pg_dsn, route_debugger):
 
 @pytest.mark.integration
 def test_outbox_after_id_and_filters_postgres(monkeypatch, jobs_pg_dsn, route_debugger):
-     monkeypatch.setenv("JOBS_EVENTS_OUTBOX", "true")
+    monkeypatch.setenv("JOBS_EVENTS_OUTBOX", "true")
     monkeypatch.setenv("JOBS_EVENTS_POLL_INTERVAL", "0.05")
     os.environ["JOBS_DB_URL"] = jobs_pg_dsn
     pg_dsn_local = jobs_pg_dsn

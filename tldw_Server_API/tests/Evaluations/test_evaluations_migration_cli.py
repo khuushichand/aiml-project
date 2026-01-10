@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.DB_Management.migration_tools import main as migra
 
 @pytest.mark.integration
 def test_evaluations_migration_cli_row_counts(tmp_path, pg_eval_params):
-     host = pg_eval_params["host"]
+    host = pg_eval_params["host"]
     user = pg_eval_params["user"]
     password = pg_eval_params.get("password")
     database = pg_eval_params["database"]

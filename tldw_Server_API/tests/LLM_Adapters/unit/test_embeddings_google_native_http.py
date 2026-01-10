@@ -1,4 +1,3 @@
-import os
 from unittest.mock import patch
 
 import pytest
@@ -17,13 +16,32 @@ def test_google_embeddings_adapter_native_http_single(monkeypatch):
     class _Resp:
         status_code = 200
 
+        def raise_for_status(self):
+            return None
+
         def json(self):
             return {"embedding": {"values": [0.5, 0.6]}}
 
-    def _fake_post(self, url, params=None, json=None, headers=None, **kwargs):  # noqa: ANN001, ARG001
+    def _fake_post(url, params=None, json=None, headers=None, **kwargs):  # noqa: ANN001, ARG001
         return _Resp()
 
-    with patch("httpx.Client.post", _fake_post):
+    class _FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ANN001
+            return False
+
+        def post(self, url, params=None, json=None, headers=None, **kwargs):  # noqa: ANN001, ARG001
+            return _fake_post(url, params=params, json=json, headers=headers, **kwargs)
+
+    def _fake_create_client(*args, **kwargs):  # noqa: ANN001, ARG001
+        return _FakeClient()
+
+    with patch(
+        "tldw_Server_API.app.core.LLM_Calls.providers.google_embeddings_adapter.create_client",
+        _fake_create_client,
+    ):
         out = adapter.embed({"input": "hello", "model": "text-embedding-004", "api_key": "g"})
         assert isinstance(out, dict)
         assert out.get("data") and out["data"][0]["embedding"] == [0.5, 0.6]
@@ -48,15 +66,34 @@ def test_google_embeddings_adapter_native_http_multi(monkeypatch):
     class _Resp:
         status_code = 200
 
+        def raise_for_status(self):
+            return None
+
         def json(self):
             i = calls["i"]
             calls["i"] += 1
             return seq[i]
 
-    def _fake_post(self, url, params=None, json=None, headers=None, **kwargs):  # noqa: ANN001, ARG001
+    def _fake_post(url, params=None, json=None, headers=None, **kwargs):  # noqa: ANN001, ARG001
         return _Resp()
 
-    with patch("httpx.Client.post", _fake_post):
+    class _FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ANN001
+            return False
+
+        def post(self, url, params=None, json=None, headers=None, **kwargs):  # noqa: ANN001, ARG001
+            return _fake_post(url, params=params, json=json, headers=headers, **kwargs)
+
+    def _fake_create_client(*args, **kwargs):  # noqa: ANN001, ARG001
+        return _FakeClient()
+
+    with patch(
+        "tldw_Server_API.app.core.LLM_Calls.providers.google_embeddings_adapter.create_client",
+        _fake_create_client,
+    ):
         out = adapter.embed({"input": ["a", "b"], "model": "text-embedding-004", "api_key": "g"})
         assert isinstance(out, dict)
         embs = [d["embedding"] for d in out.get("data", [])]

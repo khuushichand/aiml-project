@@ -66,7 +66,7 @@ class TestSimpleAuth:
 
     def test_login_success(self):
 
-             """Test successful login with valid credentials."""
+        """Test successful login with valid credentials."""
         response = self.client.post(
             "/api/v1/auth/login",
             data={
@@ -83,7 +83,7 @@ class TestSimpleAuth:
 
     def test_login_invalid_password(self):
 
-             """Test login with invalid password."""
+        """Test login with invalid password."""
         response = self.client.post(
             "/api/v1/auth/login",
             data={
@@ -97,7 +97,7 @@ class TestSimpleAuth:
 
     def test_login_invalid_username(self):
 
-             """Test login with non-existent username."""
+        """Test login with non-existent username."""
         response = self.client.post(
             "/api/v1/auth/login",
             data={
@@ -111,7 +111,7 @@ class TestSimpleAuth:
 
     def test_register_new_user(self):
 
-             """Test registering a new user."""
+        """Test registering a new user."""
         response = self.client.post(
             "/api/v1/auth/register",
             json={
@@ -129,7 +129,7 @@ class TestSimpleAuth:
 
     def test_register_duplicate_username(self):
 
-             """Test registering with existing username."""
+        """Test registering with existing username."""
         response = self.client.post(
             "/api/v1/auth/register",
             json={
@@ -144,7 +144,7 @@ class TestSimpleAuth:
 
     def test_get_current_user(self):
 
-             """Test getting current user info with valid token."""
+        """Test getting current user info with valid token."""
         # First login to get token
         login_response = self.client.post(
             "/api/v1/auth/login",
@@ -169,13 +169,13 @@ class TestSimpleAuth:
 
     def test_unauthorized_access(self):
 
-             """Test accessing protected endpoint without auth."""
+        """Test accessing protected endpoint without auth."""
         response = self.client.get("/api/v1/auth/me")
         assert response.status_code == 401
 
     def test_invalid_token(self):
 
-             """Test with invalid token."""
+        """Test with invalid token."""
         response = self.client.get(
             "/api/v1/auth/me",
             headers={"Authorization": "Bearer invalid-token"}

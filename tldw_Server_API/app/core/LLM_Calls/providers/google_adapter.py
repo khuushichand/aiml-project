@@ -19,6 +19,7 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     sse_data,
 )
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
+from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
 
 # Expose a patchable factory for tests; production uses the centralized client
 http_client_factory = _hc_create_client
@@ -411,6 +412,8 @@ class GoogleAdapter(ChatProvider):
         url = f"{self._base_url()}/models/{model}:generateContent"
         headers = self._headers(api_key)
         payload = self._build_payload(request)
+        payload = merge_extra_body(payload, request)
+        headers = merge_extra_headers(headers, request)
         try:
             with http_client_factory(timeout=timeout or 60.0) as client:
                 resp = client.post(url, headers=headers, json=payload)
@@ -431,6 +434,8 @@ class GoogleAdapter(ChatProvider):
         url = f"{self._base_url()}/models/{model}:streamGenerateContent?alt=sse"
         headers = self._headers(api_key)
         payload = self._build_payload(request)
+        payload = merge_extra_body(payload, request)
+        headers = merge_extra_headers(headers, request)
         try:
             with http_client_factory(timeout=timeout or 60.0) as client:
                 with client.stream("POST", url, headers=headers, json=payload) as resp:

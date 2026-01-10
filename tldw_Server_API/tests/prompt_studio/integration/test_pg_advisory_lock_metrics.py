@@ -3,25 +3,22 @@ import pytest
 
 class _StubMM:
     def __init__(self):
-             self.increments = []
+        self.increments = []
 
     def increment(self, name, value=1, labels=None):
-
-             self.increments.append((name, value, labels or {}))
+        self.increments.append((name, value, labels or {}))
 
 
 class _StubPSMetrics:
     def __init__(self):
-             self.metrics_manager = _StubMM()
+        self.metrics_manager = _StubMM()
 
 
 pytestmark = pytest.mark.integration
 
 
 def test_pg_advisory_lock_metrics_increment(prompt_studio_dual_backend_db, monkeypatch):
-
-
-     label, db = prompt_studio_dual_backend_db
+    label, db = prompt_studio_dual_backend_db
     if label != "postgres":
         pytest.skip("Postgres-specific test")
 

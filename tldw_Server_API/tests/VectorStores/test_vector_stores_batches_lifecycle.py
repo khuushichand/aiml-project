@@ -11,7 +11,7 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
 @pytest.fixture(autouse=True)
 def testing_env(monkeypatch, tmp_path):
-     os.environ['TESTING'] = 'true'
+    os.environ['TESTING'] = 'true'
     from tldw_Server_API.app.core import config as cfg
     monkeypatch.setitem(cfg.settings, 'USER_DB_BASE_DIR', tmp_path)
     yield
@@ -21,7 +21,7 @@ def testing_env(monkeypatch, tmp_path):
 
 @pytest.fixture()
 def client():
-     async def override_user():
+    async def override_user():
         return User(id=1, username='tester', email='e', is_active=True, is_admin=True)
     async def override_principal():
         return AuthPrincipal(
@@ -44,9 +44,7 @@ def client():
 
 
 def test_batch_lifecycle_success(client):
-
-
-     s = client.post('/api/v1/vector_stores', json={'name':'BStore','dimensions':8}).json()
+    s = client.post('/api/v1/vector_stores', json={'name':'BStore','dimensions':8}).json()
     # Start batch via endpoint
     payload = {'records': [{'id':'a','values':[0.0]*8,'content':'x','metadata':{'k':1}}]}
     rb = client.post(f"/api/v1/vector_stores/{s['id']}/vectors/batches", json=payload)
@@ -62,9 +60,7 @@ def test_batch_lifecycle_success(client):
 
 
 def test_batch_lifecycle_failure(client):
-
-
-     s = client.post('/api/v1/vector_stores', json={'name':'BStore2','dimensions':8}).json()
+    s = client.post('/api/v1/vector_stores', json={'name':'BStore2','dimensions':8}).json()
     # Seed correct to lock dimension, then wrong dimension to force error
     ok = {'records': [{'id':'seed','values':[0.0]*8,'content':'seed','metadata':{'k':1}}]}
     client.post(f"/api/v1/vector_stores/{s['id']}/vectors", json=ok)

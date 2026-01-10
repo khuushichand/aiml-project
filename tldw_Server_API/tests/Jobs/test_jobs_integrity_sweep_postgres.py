@@ -8,13 +8,13 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 @pytest.fixture(autouse=True)
 def _setup(jobs_pg_dsn):
-     return
+    return
 
 
 def test_integrity_sweep_clears_non_processing_lease_postgres(monkeypatch, jobs_pg_dsn):
 
 
-     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
+    jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     j = jm.create_job(domain="test", queue="default", job_type="t", payload={}, owner_user_id="u")
     # Manually inject bad lease fields on a queued job
     import psycopg

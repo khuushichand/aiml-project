@@ -12,7 +12,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture()
 def client_with_user(monkeypatch):
-     async def override_user():
+    async def override_user():
         return User(id=907, username="wluser", email=None, is_active=True)
 
     base_dir = Path.cwd() / "Databases" / "test_user_dbs_opml_export_group_more"
@@ -48,7 +48,7 @@ def _extract_opml_urls(xml_text: str) -> list[str]:
 def test_opml_export_multi_group_or_and_tag_and_unknown_group(client_with_user):
 
 
-     c = client_with_user
+    c = client_with_user
 
     # Create three groups
     g1 = c.post("/api/v1/watchlists/groups", json={"name": "Group1"}).json()
@@ -100,7 +100,7 @@ def test_opml_export_multi_group_or_and_tag_and_unknown_group(client_with_user):
 def test_opml_export_tag_case_insensitivity_and_large_set(client_with_user):
 
 
-     c = client_with_user
+    c = client_with_user
 
     # Create a tag in mixed case via sources
     keep_names = ["Keep", "keep", "KEEP"]

@@ -55,8 +55,8 @@ class TestServiceInitialization:
 
         def access_db():
 
-                prompts = service.list_prompts()
-                results.append(prompts)
+            prompts = service.list_prompts()
+            results.append(prompts)
 
         threads = []
         for _ in range(5):

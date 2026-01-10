@@ -17,14 +17,14 @@ def _setup_env(monkeypatch):
 
 @pytest.fixture(scope="function")
 def client():
-     with TestClient(app) as c:
+    with TestClient(app) as c:
         yield c
 
 
 def test_batch_propositions_basic(client):
 
 
-     body = {
+    body = {
         "evaluation_type": "propositions",
         "items": [
             {
@@ -52,7 +52,7 @@ def test_batch_propositions_basic(client):
 def test_batch_ocr_text_items(client):
 
 
-     body = {
+    body = {
         "evaluation_type": "ocr",
         "items": [
             {

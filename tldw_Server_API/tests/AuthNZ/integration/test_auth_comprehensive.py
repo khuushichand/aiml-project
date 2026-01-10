@@ -33,7 +33,7 @@ pytestmark = pytest.mark.integration
 
 # Test database configuration: resolve at call time to pick up env changes by fixtures
 def _db_params():
-     dsn = (os.getenv("TEST_DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip()
+    dsn = (os.getenv("TEST_DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip()
     if dsn:
         try:
             from urllib.parse import urlparse
@@ -241,7 +241,7 @@ class TestAuthentication:
 
     def test_login_invalid_username(self, isolated_test_environment):
 
-             """Test login with invalid username"""
+        """Test login with invalid username"""
         client, db_name = isolated_test_environment
         response = client.post(
             "/api/v1/auth/login",
@@ -328,7 +328,7 @@ class TestRegistration:
 
     def test_register_success(self, isolated_test_environment):
 
-             """Test successful registration"""
+        """Test successful registration"""
         client, db_name = isolated_test_environment
         response = client.post(
             "/api/v1/auth/register",
@@ -346,7 +346,7 @@ class TestRegistration:
 
     def test_register_duplicate_username(self, isolated_test_environment, test_user_data):
 
-             """Test registration with duplicate username"""
+        """Test registration with duplicate username"""
         client, db_name = isolated_test_environment
         response = client.post(
             "/api/v1/auth/register",
@@ -361,7 +361,7 @@ class TestRegistration:
 
     def test_register_duplicate_email(self, isolated_test_environment, test_user_data):
 
-             """Test registration with duplicate email"""
+        """Test registration with duplicate email"""
         client, db_name = isolated_test_environment
         response = client.post(
             "/api/v1/auth/register",
@@ -649,7 +649,7 @@ class TestHealthEndpoints:
 
     def test_health_check(self, isolated_test_environment):
 
-             """Test main health check"""
+        """Test main health check"""
         client, db_name = isolated_test_environment
         response = client.get("/api/v1/health")
         assert response.status_code in [200, 206, 503]
@@ -660,7 +660,7 @@ class TestHealthEndpoints:
 
     def test_liveness_probe(self, isolated_test_environment):
 
-             """Test liveness probe"""
+        """Test liveness probe"""
         client, db_name = isolated_test_environment
         response = client.get("/api/v1/health/live")
         assert response.status_code == 200
@@ -668,7 +668,7 @@ class TestHealthEndpoints:
 
     def test_readiness_probe(self, isolated_test_environment):
 
-             """Test readiness probe"""
+        """Test readiness probe"""
         client, db_name = isolated_test_environment
         response = client.get("/api/v1/health/ready")
         assert response.status_code in [200, 503]
@@ -677,7 +677,7 @@ class TestHealthEndpoints:
 
     def test_metrics_endpoint(self, isolated_test_environment):
 
-             """Test metrics endpoint"""
+        """Test metrics endpoint"""
         client, db_name = isolated_test_environment
         response = client.get("/api/v1/health/metrics")
         assert response.status_code == 200
@@ -696,14 +696,14 @@ class TestSecurity:
 
     def test_unauthorized_access(self, isolated_test_environment):
 
-             """Test accessing protected endpoint without auth"""
+        """Test accessing protected endpoint without auth"""
         client, db_name = isolated_test_environment
         response = client.get("/api/v1/users/me")
         assert response.status_code in [401, 403]  # Both unauthorized and forbidden are acceptable
 
     def test_invalid_token(self, isolated_test_environment):
 
-             """Test with invalid token"""
+        """Test with invalid token"""
         client, db_name = isolated_test_environment
         response = client.get(
             "/api/v1/users/me",
@@ -730,7 +730,7 @@ class TestSecurity:
         reason="Rate limiting disabled"
     )
     def test_rate_limiting(self, isolated_test_environment):
-             """Test rate limiting"""
+        """Test rate limiting"""
         client, db_name = isolated_test_environment
         # Make many requests quickly
         for i in range(10):
@@ -851,7 +851,7 @@ class TestIntegration:
 
     def test_full_user_lifecycle(self, isolated_test_environment):
 
-             """Test complete user lifecycle from registration to deletion"""
+        """Test complete user lifecycle from registration to deletion"""
         client, db_name = isolated_test_environment
         # 1. Register new user
         register_response = client.post(

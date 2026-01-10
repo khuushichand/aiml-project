@@ -9,21 +9,21 @@ from tldw_Server_API.app.core.Resource_Governance.governor import RGDecision
 
 class _Snap:
     def __init__(self, route_map):
-             self.route_map = route_map
+        self.route_map = route_map
 
 
 class _Loader:
     def __init__(self, route_map):
-             self._snap = _Snap(route_map)
+        self._snap = _Snap(route_map)
 
     def get_snapshot(self):
 
-             return self._snap
+        return self._snap
 
 
 class _Gov:
     def __init__(self):
-             pass
+        pass
 
     async def reserve(self, req, op_id=None):
         pid = (req.tags or {}).get("policy_id")
@@ -52,7 +52,7 @@ class _Gov:
 def _make_app(route_map):
 
 
-     app = FastAPI()
+    app = FastAPI()
     app.add_middleware(RGSimpleMiddleware)
 
     @app.get("/api/v1/chat/completions", tags=["chat"])

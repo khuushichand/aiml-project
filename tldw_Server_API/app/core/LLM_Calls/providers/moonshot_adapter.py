@@ -8,10 +8,13 @@ from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payl
 from tldw_Server_API.app.core.LLM_Calls.chat_calls import (
     _safe_cast,
     _parse_data_url_for_multimodal,
-    create_session_with_retries,
 )
 from tldw_Server_API.app.core.LLM_Calls.error_utils import raise_chat_error_from_http
-from tldw_Server_API.app.core.LLM_Calls.payload_utils import _sanitize_payload_for_logging
+from tldw_Server_API.app.core.LLM_Calls.payload_utils import (
+    _sanitize_payload_for_logging,
+    merge_extra_body,
+    merge_extra_headers,
+)
 from tldw_Server_API.app.core.LLM_Calls.streaming import iter_sse_lines_requests
 from tldw_Server_API.app.core.LLM_Calls.sse import finalize_stream
 from tldw_Server_API.app.core.LLM_Calls.error_utils import (
@@ -44,6 +47,8 @@ def _moonshot_request(
     user: Optional[str] = None,
     custom_prompt_arg: Optional[str] = None,
     app_config: Optional[Dict[str, Any]] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
 ):
     loaded_config_data = app_config or load_and_log_configs()
     moonshot_config = loaded_config_data.get("moonshot_api", {})
@@ -169,17 +174,20 @@ def _moonshot_request(
         "Authorization": f"Bearer {final_api_key}",
         "Content-Type": "application/json",
     }
+    headers = merge_extra_headers(headers, {"extra_headers": extra_headers})
 
     api_base_url = moonshot_config.get("api_base_url", "https://api.moonshot.cn/v1")
     api_url = api_base_url.rstrip("/") + "/chat/completions"
 
+    payload = merge_extra_body(payload, {"extra_body": extra_body})
     payload_metadata = _sanitize_payload_for_logging(payload)
     logging.debug(f"Moonshot request metadata: {payload_metadata}")
 
     try:
         if final_streaming:
             logging.debug("Moonshot: Posting request (streaming)")
-            session = create_session_with_retries(
+            from tldw_Server_API.app.core.LLM_Calls import chat_calls as _chat_calls
+            session = _chat_calls.create_session_with_retries(
                 total=_safe_cast(moonshot_config.get("api_retries"), int, 3),
                 backoff_factor=_safe_cast(moonshot_config.get("api_retry_delay"), float, 1.0),
                 status_forcelist=[429, 500, 502, 503, 504],
@@ -208,7 +216,8 @@ def _moonshot_request(
             return stream_generator()
 
         logging.debug("Moonshot: Posting request (non-streaming)")
-        session = create_session_with_retries(
+        from tldw_Server_API.app.core.LLM_Calls import chat_calls as _chat_calls
+        session = _chat_calls.create_session_with_retries(
             total=_safe_cast(moonshot_config.get("api_retries"), int, 3),
             backoff_factor=_safe_cast(moonshot_config.get("api_retry_delay"), float, 1.0),
             status_forcelist=[429, 500, 502, 503, 504],
@@ -283,6 +292,8 @@ class MoonshotAdapter(ChatProvider):
             "user": request.get("user"),
             "custom_prompt_arg": request.get("custom_prompt_arg"),
             "app_config": request.get("app_config"),
+            "extra_headers": request.get("extra_headers"),
+            "extra_body": request.get("extra_body"),
         }
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:

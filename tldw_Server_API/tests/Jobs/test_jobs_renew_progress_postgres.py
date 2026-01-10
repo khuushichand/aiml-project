@@ -8,13 +8,13 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 @pytest.fixture(autouse=True)
 def _setup(jobs_pg_dsn):
-     return
+    return
 
 
 def test_renew_progress_persists_without_enforcement_postgres(monkeypatch, jobs_pg_dsn):
 
 
-     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
+    jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
 
     j = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1")
     acq = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=30, worker_id="w1")
@@ -32,7 +32,7 @@ def test_renew_progress_persists_without_enforcement_postgres(monkeypatch, jobs_
 def test_renew_progress_persists_with_enforcement_postgres(monkeypatch, jobs_pg_dsn):
 
 
-     monkeypatch.setenv("JOBS_ENFORCE_LEASE_ACK", "true")
+    monkeypatch.setenv("JOBS_ENFORCE_LEASE_ACK", "true")
     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
 
     j = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1")

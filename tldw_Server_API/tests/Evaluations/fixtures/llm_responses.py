@@ -309,7 +309,7 @@ class MockLLMClient:
 
 # Helper functions for testing
 def create_mock_llm_client(**kwargs) -> MockLLMClient:
-     """Create a mock LLM client for testing."""
+    """Create a mock LLM client for testing."""
     return MockLLMClient(**kwargs)
 
 

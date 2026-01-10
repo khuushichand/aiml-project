@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 def test_queue_pause_resume_and_drain(monkeypatch, tmp_path):
 
 
-     db_path = tmp_path / "jobs_qc.db"
+    db_path = tmp_path / "jobs_qc.db"
     ensure_jobs_tables(db_path)
     jm = JobManager(db_path)
     # seed
@@ -35,7 +35,7 @@ def test_queue_pause_resume_and_drain(monkeypatch, tmp_path):
 def test_reschedule_and_retry_now_sqlite(tmp_path):
 
 
-     db_path = tmp_path / "jobs_sched.db"
+    db_path = tmp_path / "jobs_sched.db"
     ensure_jobs_tables(db_path)
     jm = JobManager(db_path)
     # Queued scheduled in the future
@@ -86,7 +86,7 @@ def test_reschedule_and_retry_now_sqlite(tmp_path):
 def test_attachments_and_sla_sqlite(tmp_path):
 
 
-     db_path = tmp_path / "jobs_sla.db"
+    db_path = tmp_path / "jobs_sla.db"
     ensure_jobs_tables(db_path)
     jm = JobManager(db_path)
     j = jm.create_job(domain="ps", queue="default", job_type="slow", payload={}, owner_user_id="u")

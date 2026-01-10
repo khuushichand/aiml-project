@@ -7,7 +7,7 @@ from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
 
 class _StubConn:
     def __init__(self):
-             self.queries = []
+        self.queries = []
 
     async def execute(self, sql, *params):
         self.queries.append(sql)
@@ -15,7 +15,7 @@ class _StubConn:
 
 class _StubTransaction:
     def __init__(self, conn):
-             self._conn = conn
+        self._conn = conn
 
     async def __aenter__(self):
         return self._conn
@@ -26,16 +26,16 @@ class _StubTransaction:
 
 class _StubPool:
     def __init__(self):
-             self.pool = object()  # Truthy sentinel signalling PostgreSQL backend
+        self.pool = object()  # Truthy sentinel signalling PostgreSQL backend
         self._conn = _StubConn()
 
     def transaction(self):
 
-             return _StubTransaction(self._conn)
+        return _StubTransaction(self._conn)
 
     @property
     def conn(self):
-             return self._conn
+        return self._conn
 
 
 @pytest.mark.asyncio

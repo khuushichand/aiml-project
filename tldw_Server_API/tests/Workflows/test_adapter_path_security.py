@@ -15,7 +15,7 @@ async def test_prompt_adapter_sanitizes_artifact_dir(monkeypatch, tmp_path):
 
     def _capture_artifact(**kwargs):
 
-             captured["uri"] = kwargs.get("uri")
+        captured["uri"] = kwargs.get("uri")
 
     context = {"step_run_id": "../escape", "add_artifact": _capture_artifact}
     result = await wf_adapters.run_prompt_adapter({"template": "hello", "save_artifact": True}, context)
@@ -91,7 +91,7 @@ async def test_stt_transcribe_accepts_inside_base(monkeypatch, tmp_path):
 
     def _fake_speech_to_text(*_args, **_kwargs):
 
-             return ([{"Text": "hello"}], "en")
+        return ([{"Text": "hello"}], "en")
 
     monkeypatch.setattr(stt_mod, "speech_to_text", _fake_speech_to_text, raising=True)
 

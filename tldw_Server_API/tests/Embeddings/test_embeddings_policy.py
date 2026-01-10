@@ -11,7 +11,7 @@ from contextlib import contextmanager
 
 @contextmanager
 def _client():
-     with TestClient(app) as c:
+    with TestClient(app) as c:
         c.cookies.set("csrf_token", "test-csrf")
         yield c
 
@@ -65,7 +65,7 @@ def test_embeddings_token_limit_rejected():
 def test_embeddings_allowlist_rejected():
 
 
-     os.environ["TESTING"] = "true"
+    os.environ["TESTING"] = "true"
     try:
         original_allowed_providers = settings.get("ALLOWED_EMBEDDING_PROVIDERS")
         original_allowed_models = settings.get("ALLOWED_EMBEDDING_MODELS")

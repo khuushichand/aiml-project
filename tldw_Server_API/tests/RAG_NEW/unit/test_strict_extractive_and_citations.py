@@ -122,9 +122,11 @@ class TestStrictExtractiveHardCitations:
             score=0.92,
         )
 
-        with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_ret, \
-             patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.build_hard_citations') as mock_hc, \
-             patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.AnswerGenerator') as mock_gen:
+        with (
+            patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_ret,
+            patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.build_hard_citations') as mock_hc,
+            patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.AnswerGenerator') as mock_gen,
+        ):
             m = MagicMock()
             m.retrieve = AsyncMock(return_value=[doc])
             mock_ret.return_value = m
@@ -159,7 +161,7 @@ class TestNLIGatingBehavior:
 
     class _FakeVerifier:
         def __init__(self, *_, **__):
-                     pass
+            pass
 
         async def verify_and_maybe_fix(self, *_, **__):
             return TestNLIGatingBehavior._FakeOutcome()

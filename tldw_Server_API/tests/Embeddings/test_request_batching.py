@@ -255,7 +255,7 @@ async def test_submit_request_enforces_rate_limits(monkeypatch):
 
     class StubLimiter:
         def __init__(self):
-                     self.rate_limiter = SimpleNamespace(user_tiers={"user-1": "free"})
+            self.rate_limiter = SimpleNamespace(user_tiers={"user-1": "free"})
 
         async def check_rate_limit_async(self, user_id, cost=1, ip_address=None, tokens_units=0):
             limiter_calls.append((user_id, cost))
@@ -315,7 +315,7 @@ async def test_submit_request_respects_rate_limit_when_batching_disabled(monkeyp
 
     class StubLimiter:
         def __init__(self):
-                     self.rate_limiter = SimpleNamespace(user_tiers={"user-1": "free"})
+            self.rate_limiter = SimpleNamespace(user_tiers={"user-1": "free"})
 
         async def check_rate_limit_async(self, user_id, cost=1, ip_address=None, tokens_units=0):
             calls.append(user_id)
@@ -493,7 +493,7 @@ async def test_config_override_creates_distinct_queues(monkeypatch):
 def test_identical_override_configs_share_queue(tmp_path):
 
 
-     config = EmbeddingsConfig(
+    config = EmbeddingsConfig(
         providers=[
             ProviderConfig(
                 name="huggingface",
@@ -515,7 +515,7 @@ def test_identical_override_configs_share_queue(tmp_path):
 
     def _make_override():
 
-             return {
+        return {
             "embedding_config": {
                 "default_model_id": "huggingface:sentence-transformers/all-MiniLM-L6-v2",
                 "model_storage_base_dir": str(tmp_path),
@@ -659,7 +659,7 @@ async def test_submit_request_restarts_cancelled_processing_task(monkeypatch):
 def test_build_user_app_config_normalizes_local_provider():
 
 
-     config = EmbeddingsConfig(
+    config = EmbeddingsConfig(
         providers=[
             ProviderConfig(
                 name="local",

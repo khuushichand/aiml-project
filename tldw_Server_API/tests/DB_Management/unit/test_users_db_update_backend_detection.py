@@ -6,7 +6,7 @@ from tldw_Server_API.app.core.DB_Management.Users_DB import UsersDB
 
 class _FakePgConn:
     def __init__(self):
-             self.calls = []
+        self.calls = []
 
     # Presence of fetchval indicates Postgres path for update_user
     async def fetchval(self, *args, **kwargs):  # pragma: no cover - not used here
@@ -19,7 +19,7 @@ class _FakePgConn:
 
 class _FakeSqliteConn:
     def __init__(self):
-             self.calls = []
+        self.calls = []
 
     async def execute(self, query: str, params):
         # SQLite shim path passes a single params sequence
@@ -32,7 +32,7 @@ class _FakeSqliteConn:
 
 class _FakeTx:
     def __init__(self, conn):
-             self._conn = conn
+        self._conn = conn
 
     async def __aenter__(self):
         return self._conn
@@ -43,11 +43,11 @@ class _FakeTx:
 
 class _FakePool:
     def __init__(self, conn):
-             self._conn = conn
+        self._conn = conn
 
     def transaction(self):
 
-             return _FakeTx(self._conn)
+        return _FakeTx(self._conn)
 
 
 @pytest.mark.asyncio

@@ -316,7 +316,7 @@ Rollout & Safety
 
 Compatibility & Parity Checks
 - [ ] Streaming: exactly one final `[DONE]` from the endpoint (no duplicates)
-- [ ] Tool calling: identical behavior for `tool_choice` and `tools` presence
+- [x] Tool calling: identical behavior for `tool_choice` and `tools` presence
 - [ ] Error taxonomy: same HTTP status mapping at FastAPI layer
 - [ ] Environment precedence for base URLs and keys matches legacy behavior
 

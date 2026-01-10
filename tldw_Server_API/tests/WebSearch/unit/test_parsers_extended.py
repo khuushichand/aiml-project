@@ -4,9 +4,7 @@ pytestmark = pytest.mark.unit
 
 
 def test_parse_searx_results_maps_fields():
-
-
-     from tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs import parse_searx_results
+    from tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs import parse_searx_results
     out = {}
     raw = {
         "results": [
@@ -25,9 +23,7 @@ def test_parse_searx_results_maps_fields():
 
 
 def test_parse_tavily_results_maps_fields():
-
-
-     from tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs import parse_tavily_results
+    from tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs import parse_tavily_results
     out = {}
     raw = {
         "results": [

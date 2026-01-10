@@ -11,15 +11,15 @@ class DummyResponse:
 
     def raise_for_status(self):
 
-            return None
+        return None
 
     def json(self):
 
-            return {}
+        return {}
 
     def close(self):
 
-            return None
+        return None
 
 
 @pytest.mark.unit
@@ -37,7 +37,7 @@ def test_llamacpp_strict_filter_drops_top_k_from_payload_non_streaming():
 
     class FakeClient:
         def __init__(self):
-                    self.closed = False
+            self.closed = False
 
         def post(self, url, headers=None, json=None, timeout=None):  # noqa: ANN001
             captured_payload.clear()
@@ -50,7 +50,7 @@ def test_llamacpp_strict_filter_drops_top_k_from_payload_non_streaming():
 
         def close(self):
 
-                    self.closed = True
+            self.closed = True
 
     with patch(
         "tldw_Server_API.app.core.LLM_Calls.providers.local_adapters.load_settings",

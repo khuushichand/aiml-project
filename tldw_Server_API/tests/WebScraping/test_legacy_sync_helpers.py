@@ -6,9 +6,7 @@ from tldw_Server_API.app.core.Web_Scraping import Article_Extractor_Lib as AEL
 
 
 def test_scrape_from_sitemap_uses_blocking(monkeypatch):
-
-
-     # Prepare fake sitemap XML
+    # Prepare fake sitemap XML
     xml = """
     <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
       <url><loc>https://example.com/a</loc></url>
@@ -19,18 +17,17 @@ def test_scrape_from_sitemap_uses_blocking(monkeypatch):
     class FakeResp:
         status_code = 200
         content = xml.encode("utf-8")
+
         def raise_for_status(self):
-                     return None
+            return None
 
     calls = []
 
     def fake_fetch(*args, **kwargs):
-
-             return FakeResp()
+        return FakeResp()
 
     def fake_blocking(url):
-
-             calls.append(url)
+        calls.append(url)
         return {"url": url, "title": "ok", "author": "", "date": "", "content": "", "extraction_successful": True}
 
     monkeypatch.setattr(AEL, "http_fetch", fake_fetch)
@@ -42,15 +39,14 @@ def test_scrape_from_sitemap_uses_blocking(monkeypatch):
 
 
 def test_scrape_by_url_level_uses_blocking(monkeypatch):
-
-
-     urls = {"https://example.com/one", "https://example.com/two/deep"}
+    urls = {"https://example.com/one", "https://example.com/two/deep"}
 
     monkeypatch.setattr(AEL, "collect_internal_links", lambda base: urls)
 
     calls = []
+
     def fake_blocking(url):
-             calls.append(url)
+        calls.append(url)
         return {"url": url, "title": "t", "author": "", "date": "", "content": "", "extraction_successful": True}
 
     monkeypatch.setattr(AEL, "scrape_article_blocking", fake_blocking)

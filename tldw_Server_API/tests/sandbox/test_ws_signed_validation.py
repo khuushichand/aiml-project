@@ -32,7 +32,7 @@ def _client_signed(secret: str) -> TestClient:
 
 @pytest.mark.unit
 def test_ws_signed_valid_token_connects() -> None:
-     secret = "test-secret"
+    secret = "test-secret"
     with _client_signed(secret) as client:
         # Sanity: verify settings reflect env
         import os as _os
@@ -76,7 +76,7 @@ def test_ws_signed_valid_token_connects() -> None:
 
 @pytest.mark.unit
 def test_ws_signed_expired_token_rejected() -> None:
-     secret = "test-secret"
+    secret = "test-secret"
     with _client_signed(secret) as client:
         body = {
             "spec_version": "1.0",
@@ -101,7 +101,7 @@ def test_ws_signed_expired_token_rejected() -> None:
 
 @pytest.mark.unit
 def test_ws_signed_tampered_token_rejected() -> None:
-     secret = "test-secret"
+    secret = "test-secret"
     with _client_signed(secret) as client:
         body = {
             "spec_version": "1.0",

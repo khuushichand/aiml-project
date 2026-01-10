@@ -14,7 +14,7 @@ Navigation:
 - Export a user-selected subset of content into a portable “chatbook” ZIP with a JSON manifest.
 - Import chatbooks back into a user’s workspace with conflict strategies.
 - Preview chatbooks safely without importing.
-- Support async jobs via either core Jobs backend or Prompt Studio adapter; enforce quotas and security.
+- Support async jobs via the core Jobs backend; enforce quotas and security.
 
 **Quick Map (Where Things Live)**
 - Core service and models
@@ -23,7 +23,6 @@ Navigation:
   - `tldw_Server_API/app/core/Chatbooks/chatbook_validators.py:1` — centralized filename/archive validation and sanitization.
   - `tldw_Server_API/app/core/Chatbooks/quota_manager.py:1` — per-user quotas for storage, file size, daily ops, concurrent jobs.
   - `tldw_Server_API/app/core/Chatbooks/exceptions.py:1` — domain exceptions.
-  - `tldw_Server_API/app/core/Chatbooks/ps_job_adapter.py:1` — optional Prompt Studio JobManager adapter.
 - API surface
   - Router: `tldw_Server_API/app/api/v1/endpoints/chatbooks.py:1`
   - Schemas: `tldw_Server_API/app/api/v1/schemas/chatbook_schemas.py:1`
@@ -54,7 +53,7 @@ Navigation:
 - Export (sync)
   - Validate metadata and quotas → collect selected content → write `manifest.json` + content tree → zip to `exports/` → persist completed ExportJob with `download_url` + `expires_at`.
 - Export (async)
-  - Create ExportJob `pending` → enqueue via core Jobs or create a PS job; worker completes and fills `output_path`, `download_url`, `expires_at`.
+  - Create ExportJob `pending` → enqueue via core Jobs; worker completes and fills `output_path`, `download_url`, `expires_at`.
 - Import (sync)
   - Save uploaded ZIP to per‑user temp → validate archive → extract securely → import selected content with conflict strategy → return warnings and counts.
 - Import (async)
@@ -67,12 +66,9 @@ Navigation:
   - The core Jobs backend is a separate, shared job queue (domain `chatbooks`) used to process async work across users.
 
 **Jobs Backend**
-- Core Jobs (default)
+- Core Jobs (only)
   - Enqueue via `tldw_Server_API.app.core.Jobs.manager.JobManager:1` with `domain="chatbooks"`, `queue="default"`.
   - Worker: `run_chatbooks_core_jobs_worker(...)` picks jobs across users and updates Chatbooks job rows.
-- Prompt Studio backend (optional)
-  - Enable with `CHATBOOKS_JOBS_BACKEND=prompt_studio` (deprecated: `TLDW_USE_PROMPT_STUDIO_QUEUE=true`).
-  - Adapter: `ChatbooksPSJobAdapter` mirrors status to PS; an external PS worker is expected to process jobs.
 
   Cancellation semantics: the core worker checks for cancellation before starting a job (pre-flight) and applies best-effort in-flight cancellation via job lease/cancel flags.
 
@@ -105,7 +101,7 @@ Navigation:
   - Call `await ChatbookService.create_chatbook(..., async_mode=False)` with `content_selections: Dict[ContentType, List[str]]`.
   - Returns `(success, message, file_path)`; endpoint persists a completed `ExportJob` and returns `download_url`.
 - Export (async)
-  - Call with `async_mode=True`; returns `(success, message, job_id)`. For core backend, a worker completes the job. For PS backend, PS handles execution.
+  - Call with `async_mode=True`; returns `(success, message, job_id)`. A core Jobs worker completes the job.
 - Import (sync/async)
   - `await ChatbookService.import_chatbook(file_path, content_selections?, conflict_resolution?, prefix_imported?, import_media?, import_embeddings?, async_mode?)`.
   - Conflict strategies: `skip`, `overwrite`, `rename`, `merge` (where supported).
@@ -121,10 +117,8 @@ Navigation:
 
 **Configuration (Selected)**
 - Jobs backend:
-  - `CHATBOOKS_JOBS_BACKEND`: `core` (default) or `prompt_studio`.
-  - `TLDW_JOBS_BACKEND`: legacy global setting; `CHATBOOKS_JOBS_BACKEND` takes precedence for the Chatbooks domain.
-  - Precedence: `CHATBOOKS_JOBS_BACKEND` > `TLDW_JOBS_BACKEND` > deprecated `TLDW_USE_PROMPT_STUDIO_QUEUE`.
-  - `CHATBOOKS_CORE_WORKER_ENABLED`: `true|false` controls starting the core worker when backend=`core` (default true).
+  - Core Jobs only; any `CHATBOOKS_JOBS_BACKEND`/`TLDW_JOBS_BACKEND` overrides are ignored for Chatbooks.
+  - `CHATBOOKS_CORE_WORKER_ENABLED`: `true|false` controls starting the core worker (default true).
 - Downloads:
   - `CHATBOOKS_SIGNED_URLS=true` and `CHATBOOKS_SIGNING_SECRET=<secret>` to require `token` + `exp` on `/download/{job_id}`.
   - `CHATBOOKS_URL_TTL_SECONDS` (default 86400) controls `expires_at` and URL token expiry.
@@ -156,7 +150,6 @@ Navigation:
 
 **Common Gotchas & Tips**
 - Always use `ContentType` enums for `content_selections`; endpoints coerce schema enums/strings to core enums.
-- PS backend does not start local processing; ensure an external PS worker processes jobs.
 - When adding new content types, update: `ContentType` enums, export collectors, import handlers, schemas, and tests.
 - Don’t expose internal `output_path` in APIs; use `download_url` built from job id.
 - For tests, set `USER_DB_BASE_DIR` (env or `Config_Files/config.txt`) to isolate chatbooks storage under a temp or test-specific directory.

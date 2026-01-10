@@ -7,7 +7,7 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 @pytest.mark.unit
 def test_poison_quarantine_on_retries(tmp_path, monkeypatch):
-     db_path = tmp_path / "jobs.db"
+    db_path = tmp_path / "jobs.db"
     monkeypatch.setenv("JOBS_DB_PATH", str(db_path))
     monkeypatch.setenv("JOBS_QUARANTINE_THRESHOLD", "2")
     jm = JobManager()

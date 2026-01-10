@@ -12,7 +12,7 @@ from tldw_Server_API.app.core.AuthNZ.settings import Settings
 def _gen_rsa_keypair_pem():
 
 
-     """Generate an RSA keypair and return (private_pem, public_pem) as UTF-8 strings."""
+    """Generate an RSA keypair and return (private_pem, public_pem) as UTF-8 strings."""
     from cryptography.hazmat.primitives.asymmetric import rsa
     from cryptography.hazmat.primitives import serialization
 
@@ -58,7 +58,7 @@ class TestJWTServiceRS256:
 
     def test_rs256_access_token_roundtrip(self):
 
-             priv, pub = _gen_rsa_keypair_pem()
+        priv, pub = _gen_rsa_keypair_pem()
         svc = JWTService(settings=self._rs_settings(priv, pub))
 
         token = svc.create_access_token(user_id=42, username="alice", role="user")
@@ -90,7 +90,7 @@ class TestJWTServiceRS256:
 
     def test_rs256_issuer_audience_enforced(self):
 
-             priv, pub = _gen_rsa_keypair_pem()
+        priv, pub = _gen_rsa_keypair_pem()
         svc = JWTService(settings=self._rs_settings(priv, pub, JWT_ISSUER="tldw.rs", JWT_AUDIENCE="tldw.clients"))
         token = svc.create_access_token(user_id=5, username="eve", role="user")
         assert svc.decode_access_token(token)["sub"] == "5"

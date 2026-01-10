@@ -46,7 +46,7 @@ def test_dlq_list_and_replay_simulated(monkeypatch, auth_headers):
             pass
         return principal
     def override_db():
-             return db_for_app
+        return db_for_app
     app.dependency_overrides[get_request_user] = override_user
     app.dependency_overrides[get_auth_principal] = override_principal
     app.dependency_overrides[wf_mod._get_db] = override_db

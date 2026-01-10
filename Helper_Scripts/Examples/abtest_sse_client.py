@@ -5,20 +5,50 @@ Usage:
   python Helper_Scripts/Examples/abtest_sse_client.py --base http://localhost:8000 --test-id abtest_123 --api-key YOUR_KEY
 """
 import argparse
-import requests
+import asyncio
+import os
+import sys
+from pathlib import Path
+from urllib.parse import urlparse
 
 
-def stream_events(base_url: str, test_id: str, api_key: str):
+def _ensure_repo_root() -> None:
+    here = Path(__file__).resolve()
+    for parent in [here] + list(here.parents):
+        if (parent / "tldw_Server_API").is_dir():
+            sys.path.insert(0, str(parent))
+            return
+
+
+def _configure_local_egress(url: str) -> None:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return
+    host = (parsed.hostname or "").lower()
+    if host in {"localhost", "0.0.0.0"} or host.startswith("127.") or host == "::1":
+        os.environ.setdefault("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "false")
+        if "WORKFLOWS_EGRESS_ALLOWED_PORTS" not in os.environ:
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            os.environ["WORKFLOWS_EGRESS_ALLOWED_PORTS"] = f"{port},80,443"
+
+
+_ensure_repo_root()
+
+try:
+    from tldw_Server_API.app.core import http_client
+except Exception:
+    print("tldw_Server_API not available; run from the repo root or set PYTHONPATH.", file=sys.stderr)
+    raise SystemExit(1)
+
+
+async def stream_events(base_url: str, test_id: str, api_key: str):
     url = f"{base_url.rstrip('/')}/api/v1/evaluations/embeddings/abtest/{test_id}/events"
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    with requests.get(url, headers=headers, stream=True) as resp:
-        resp.raise_for_status()
-        for line in resp.iter_lines(decode_unicode=True):
-            if not line:
-                continue
-            if line.startswith('data: '):
-                payload = line[len('data: '):]
-                print(payload)
+    async for event in http_client.astream_sse(url=url, headers=headers):
+        data = (event.data or "").strip()
+        if data:
+            print(data)
 
 
 if __name__ == "__main__":
@@ -27,4 +57,11 @@ if __name__ == "__main__":
     ap.add_argument('--test-id', required=True, help='AB test ID')
     ap.add_argument('--api-key', default='', help='API key or JWT token')
     args = ap.parse_args()
-    stream_events(args.base, args.test_id, args.api_key)
+    _configure_local_egress(args.base)
+    try:
+        asyncio.run(stream_events(args.base, args.test_id, args.api_key))
+    finally:
+        try:
+            asyncio.run(http_client.shutdown_http_client())
+        except Exception:
+            pass

@@ -13,15 +13,15 @@ class DummyResponse:
 
     def raise_for_status(self):
 
-            return None
+        return None
 
     def json(self):
 
-            return {}
+        return {}
 
     def close(self):
 
-            return None
+        return None
 
 
 @pytest.mark.unit

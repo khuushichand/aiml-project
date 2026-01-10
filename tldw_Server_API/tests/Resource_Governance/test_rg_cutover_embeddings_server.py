@@ -12,7 +12,7 @@ class _SentinelError(Exception):
 def test_embeddings_server_rg_allows_and_skips_token_bucket(monkeypatch):
 
 
-     """
+    """
     When ResourceGovernor is enabled and the governor allows, the
     TokenBucketLimiter wrapper should:
       - Call the RG helper once.
@@ -26,20 +26,20 @@ def test_embeddings_server_rg_allows_and_skips_token_bucket(monkeypatch):
 
     def _dummy():
 
-             calls.append("called")
+        calls.append("called")
         return "ok"
 
     limiter = EC.TokenBucketLimiter(capacity=1, period=60)
 
     # If the legacy path is used when RG allows, this will fail the test.
     def _fail_acquire():
-             raise _SentinelError("TokenBucketLimiter._acquire should not be called when RG allows")
+        raise _SentinelError("TokenBucketLimiter._acquire should not be called when RG allows")
 
     monkeypatch.setattr(limiter, "_acquire", _fail_acquire)
 
     def _fake_rg_sync():
 
-             rg_calls.append(True)
+        rg_calls.append(True)
         return {
             "allowed": True,
             "retry_after": None,
@@ -59,7 +59,7 @@ def test_embeddings_server_rg_allows_and_skips_token_bucket(monkeypatch):
 def test_embeddings_server_rg_unavailable_falls_back_to_token_bucket(monkeypatch):
 
 
-     """
+    """
     When RG is enabled but the helper returns None (unavailable/misconfigured),
     the legacy token-bucket fallback is retired and the wrapper should fail
     closed to surface the misconfiguration.
@@ -70,20 +70,20 @@ def test_embeddings_server_rg_unavailable_falls_back_to_token_bucket(monkeypatch
 
     def _dummy():
 
-             calls.append("called")
+        calls.append("called")
         return "ok"
 
     limiter = EC.TokenBucketLimiter(capacity=1, period=60)
 
     def _fail_acquire():
 
-             raise _SentinelError("TokenBucketLimiter._acquire should not be called when legacy fallback is retired")
+        raise _SentinelError("TokenBucketLimiter._acquire should not be called when legacy fallback is retired")
 
     monkeypatch.setattr(limiter, "_acquire", _fail_acquire)
 
     def _fake_rg_sync_none():
 
-             return None
+        return None
 
     monkeypatch.setattr(EC, "_maybe_enforce_with_rg_embeddings_server_sync", _fake_rg_sync_none)
 

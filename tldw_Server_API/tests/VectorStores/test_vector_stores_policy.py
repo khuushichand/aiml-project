@@ -11,14 +11,14 @@ from contextlib import contextmanager
 
 @contextmanager
 def _client():
-     with TestClient(app) as c:
+    with TestClient(app) as c:
         c.cookies.set("csrf_token", "test-csrf")
         yield c
 
 
 @pytest.fixture(autouse=True)
 def override_user_dep():
-     """Override authentication to provide a test user without requiring X-API-KEY."""
+    """Override authentication to provide a test user without requiring X-API-KEY."""
     async def _override_user():
         return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True)
     app.dependency_overrides[get_request_user] = _override_user
@@ -27,9 +27,7 @@ def override_user_dep():
 
 
 def test_upsert_content_token_limit_and_allowlist():
-
-
-     os.environ["TESTING"] = "true"
+    os.environ["TESTING"] = "true"
     try:
         # Configure allowlist and token limits
         settings["ALLOWED_EMBEDDING_PROVIDERS"] = ["openai"]
@@ -62,9 +60,7 @@ def test_upsert_content_token_limit_and_allowlist():
 
 
 def test_query_token_limit_and_allowlist():
-
-
-     os.environ["TESTING"] = "true"
+    os.environ["TESTING"] = "true"
     try:
         settings["ALLOWED_EMBEDDING_PROVIDERS"] = ["openai"]
         settings["ALLOWED_EMBEDDING_MODELS"] = ["text-embedding-3-small"]

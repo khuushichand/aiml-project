@@ -71,7 +71,7 @@ class TestPIIDetection:
 
     def test_detect_various_pii(self):
 
-             """Test detection of various PII types"""
+        """Test detection of various PII types"""
         detector = PIIDetector()
 
         test_text = """
@@ -94,7 +94,7 @@ class TestPIIDetection:
 
     def test_redact_pii(self):
 
-             """Test PII redaction"""
+        """Test PII redaction"""
         detector = PIIDetector()
 
         text = "My SSN is 123-45-6789 and email is test@example.com"
@@ -107,7 +107,7 @@ class TestPIIDetection:
 
     def test_jwt_token_detection(self):
 
-             """Test JWT token detection"""
+        """Test JWT token detection"""
         detector = PIIDetector()
 
         jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
@@ -208,7 +208,7 @@ class TestRiskScoring:
 
     def test_high_risk_events(self):
 
-             """Test scoring of high-risk events"""
+        """Test scoring of high-risk events"""
         scorer = RiskScorer()
 
         event = AuditEvent(
@@ -222,7 +222,7 @@ class TestRiskScoring:
 
     def test_after_hours_activity(self):
 
-             """Test after-hours risk scoring"""
+        """Test after-hours risk scoring"""
         scorer = RiskScorer()
 
         # Create event at 3 AM
@@ -236,7 +236,7 @@ class TestRiskScoring:
 
     def test_high_risk_operations(self):
 
-             """Test detection of high-risk operations"""
+        """Test detection of high-risk operations"""
         scorer = RiskScorer()
 
         event = AuditEvent(
@@ -249,7 +249,7 @@ class TestRiskScoring:
 
     def test_weekend_activity(self):
 
-             """Test weekend risk scoring"""
+        """Test weekend risk scoring"""
         scorer = RiskScorer()
 
         # Create event on Saturday
@@ -264,7 +264,7 @@ class TestRiskScoring:
 
     def test_consecutive_failures(self):
 
-             """Test risk scoring with consecutive failures"""
+        """Test risk scoring with consecutive failures"""
         scorer = RiskScorer()
 
         event = AuditEvent(
@@ -278,7 +278,7 @@ class TestRiskScoring:
 
     def test_consecutive_failures_with_string_metadata(self):
 
-             """Risk scoring should tolerate string JSON metadata."""
+        """Risk scoring should tolerate string JSON metadata."""
         scorer = RiskScorer()
         metadata = json.dumps({"consecutive_failures": 4})
         event = AuditEvent(
@@ -292,7 +292,7 @@ class TestRiskScoring:
 
     def test_consecutive_failures_with_string_value(self):
 
-             """Risk scoring should handle string counts in metadata dicts."""
+        """Risk scoring should handle string counts in metadata dicts."""
         scorer = RiskScorer()
         event = AuditEvent(
             event_type=AuditEventType.AUTH_LOGIN_FAILURE,
@@ -305,7 +305,7 @@ class TestRiskScoring:
 
     def test_large_export_with_string_result_count(self):
 
-             """Risk scoring should handle string result_count values."""
+        """Risk scoring should handle string result_count values."""
         scorer = RiskScorer()
         event = AuditEvent(
             event_type=AuditEventType.DATA_EXPORT,
@@ -1504,7 +1504,7 @@ class TestFallbackQueueAtomicity:
 def test_stop_safe_when_owner_loop_closed(monkeypatch):
 
 
-     """stop() should not await tasks attached to a closed/different event loop."""
+    """stop() should not await tasks attached to a closed/different event loop."""
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     monkeypatch.delenv("TEST_MODE", raising=False)
     monkeypatch.delenv("TLDW_TEST_MODE", raising=False)

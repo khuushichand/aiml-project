@@ -27,7 +27,7 @@ def _setup_isolated_authnz(monkeypatch, db_path: Path):
 def _admin_app():
 
 
-     mod = import_module("tldw_Server_API.app.main")
+    mod = import_module("tldw_Server_API.app.main")
     app = getattr(mod, "app")
     from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
     from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
@@ -65,7 +65,7 @@ def _admin_app():
 def test_admin_org_slug_conflict_returns_409(monkeypatch, tmp_path):
 
 
-     base_dir = tmp_path / "admin_edge_org_slug_conflict"
+    base_dir = tmp_path / "admin_edge_org_slug_conflict"
     base_dir.mkdir(parents=True, exist_ok=True)
     db_path = base_dir / "authnz_admin.db"
     _setup_isolated_authnz(monkeypatch, db_path)
@@ -85,7 +85,7 @@ def test_admin_org_slug_conflict_returns_409(monkeypatch, tmp_path):
 def test_admin_team_slug_duplicate_allowed_same_org(monkeypatch, tmp_path):
 
 
-     base_dir = tmp_path / "admin_edge_team_slug_dup"
+    base_dir = tmp_path / "admin_edge_team_slug_dup"
     base_dir.mkdir(parents=True, exist_ok=True)
     db_path = base_dir / "authnz_admin.db"
     _setup_isolated_authnz(monkeypatch, db_path)
@@ -109,7 +109,7 @@ def test_admin_team_slug_duplicate_allowed_same_org(monkeypatch, tmp_path):
 def test_admin_team_name_unique_per_org(monkeypatch, tmp_path):
 
 
-     base_dir = tmp_path / "admin_edge_team_name_per_org"
+    base_dir = tmp_path / "admin_edge_team_name_per_org"
     base_dir.mkdir(parents=True, exist_ok=True)
     db_path = base_dir / "authnz_admin.db"
     _setup_isolated_authnz(monkeypatch, db_path)
@@ -134,7 +134,7 @@ def test_admin_team_name_unique_per_org(monkeypatch, tmp_path):
 def test_case_insensitive_permissions_names(monkeypatch, tmp_path):
 
 
-     base_dir = tmp_path / "admin_edge_perm_case"
+    base_dir = tmp_path / "admin_edge_perm_case"
     base_dir.mkdir(parents=True, exist_ok=True)
     db_path = base_dir / "authnz_admin.db"
     _setup_isolated_authnz(monkeypatch, db_path)
@@ -156,7 +156,7 @@ def test_case_insensitive_permissions_names(monkeypatch, tmp_path):
 def test_case_insensitive_org_and_team_names(monkeypatch, tmp_path):
 
 
-     base_dir = tmp_path / "admin_edge_org_team_case"
+    base_dir = tmp_path / "admin_edge_org_team_case"
     base_dir.mkdir(parents=True, exist_ok=True)
     db_path = base_dir / "authnz_admin.db"
     _setup_isolated_authnz(monkeypatch, db_path)
@@ -182,7 +182,7 @@ def test_case_insensitive_org_and_team_names(monkeypatch, tmp_path):
 def test_org_slug_case_insensitive(monkeypatch, tmp_path):
 
 
-     base_dir = tmp_path / "admin_edge_org_slug_case"
+    base_dir = tmp_path / "admin_edge_org_slug_case"
     base_dir.mkdir(parents=True, exist_ok=True)
     db_path = base_dir / "authnz_admin.db"
     _setup_isolated_authnz(monkeypatch, db_path)

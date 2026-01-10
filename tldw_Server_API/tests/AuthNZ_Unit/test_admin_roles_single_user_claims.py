@@ -45,7 +45,7 @@ def _build_app_with_overrides(
     # dependence on real sinks or configuration.
     class _FakeDispatcher:
         def __init__(self) -> None:
-                     self._status: Dict[str, Any] = {
+            self._status: Dict[str, Any] = {
                 "enabled": False,
                 "min_severity": "high",
                 "last_dispatch_time": None,
@@ -65,7 +65,7 @@ def _build_app_with_overrides(
 
         def get_status(self) -> Dict[str, Any]:
 
-                     return self._status
+            return self._status
 
     fake_dispatcher = _FakeDispatcher()
     app.dependency_overrides[admin_mod.get_security_alert_dispatcher] = lambda: fake_dispatcher

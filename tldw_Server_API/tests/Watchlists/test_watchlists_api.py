@@ -17,7 +17,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture()
 def client_with_user(monkeypatch, tmp_path):
-     async def override_user():
+    async def override_user():
         return User(id=555, username="wluser", email=None, is_active=True)
 
     # Route user DB base dir into project Databases to avoid permission issues
@@ -36,7 +36,7 @@ def client_with_user(monkeypatch, tmp_path):
 def test_sources_crud_and_tags(client_with_user):
 
 
-     c = client_with_user
+    c = client_with_user
 
     # Create groups for source membership updates
     r = c.post("/api/v1/watchlists/groups", json={"name": "Group A", "description": "A"})
@@ -104,7 +104,7 @@ def test_sources_crud_and_tags(client_with_user):
 def test_bulk_sources_and_groups_and_jobs(client_with_user):
 
 
-     c = client_with_user
+    c = client_with_user
 
     # Bulk create two sources
     payload = {
@@ -167,7 +167,7 @@ def test_bulk_sources_and_groups_and_jobs(client_with_user):
 def test_items_and_outputs_flow(client_with_user, monkeypatch):
 
 
-     c = client_with_user
+    c = client_with_user
     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("WATCHLIST_OUTPUT_DEFAULT_TTL_SECONDS", "0")
     monkeypatch.setenv("WATCHLIST_OUTPUT_TEMP_TTL_SECONDS", "90")
@@ -311,7 +311,7 @@ def test_items_and_outputs_flow(client_with_user, monkeypatch):
 def test_preview_site_sources_returns_items(client_with_user, monkeypatch):
 
 
-     c = client_with_user
+    c = client_with_user
     monkeypatch.delenv("TEST_MODE", raising=False)
 
     async def _fake_fetch(base_url, rules, *, tenant_id="default", timeout=10.0):
@@ -352,7 +352,7 @@ def test_preview_site_sources_returns_items(client_with_user, monkeypatch):
 def test_output_deliveries_email_and_chatbook(client_with_user, monkeypatch, tmp_path):
 
 
-     c = client_with_user
+    c = client_with_user
     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("EMAIL_PROVIDER", "mock")
 

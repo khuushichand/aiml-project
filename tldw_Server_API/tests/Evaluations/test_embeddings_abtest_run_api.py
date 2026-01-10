@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture()
 def evals_client() -> Tuple[TestClient, dict]:
-     """Provide a minimal FastAPI app mounting the evaluations router directly.
+    """Provide a minimal FastAPI app mounting the evaluations router directly.
 
     Avoid main.py route gating by including the router here.
     """
@@ -30,20 +30,20 @@ def evals_client() -> Tuple[TestClient, dict]:
 
 @pytest.mark.integration
 def test_run_embeddings_abtest_synchronous_success(evals_client, monkeypatch):
-     client, headers = evals_client
+    client, headers = evals_client
 
     # Patch evaluation service and runner to no-op
     class _DBStub:
         def lookup_idempotency(self, *a, **kw):
-                     return None
+            return None
         def record_idempotency(self, *a, **kw):
-                     return None
+            return None
         def set_abtest_status(self, *a, **kw):
-                     return None
+            return None
 
     class _SvcStub:
         def __init__(self):
-                     self.db = _DBStub()
+            self.db = _DBStub()
 
     import tldw_Server_API.app.api.v1.endpoints.evaluations_embeddings_abtest as ab
     monkeypatch.setattr(ab, "get_unified_evaluation_service_for_user", lambda uid: _SvcStub())

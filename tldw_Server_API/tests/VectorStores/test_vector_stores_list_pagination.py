@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 
 @pytest.fixture(autouse=True)
 def testing_env(monkeypatch, tmp_path):
-     os.environ['TESTING']='true'
+    os.environ['TESTING']='true'
     from tldw_Server_API.app.core import config as cfg
     monkeypatch.setitem(cfg.settings, 'USER_DB_BASE_DIR', tmp_path)
     yield
@@ -19,11 +19,11 @@ def testing_env(monkeypatch, tmp_path):
 
 @pytest.fixture()
 def client(monkeypatch):
-     class FakeCol:
+    class FakeCol:
         def __init__(self):
-                     self.ids=[]; self.emb=[]; self.docs=[]; self.metas=[]
+            self.ids=[]; self.emb=[]; self.docs=[]; self.metas=[]
         def get(self, limit=100, offset=0, include=None, where=None):
-                     end = min(offset+limit, len(self.ids))
+            end = min(offset+limit, len(self.ids))
             idxs = list(range(offset, end))
             out = {'ids': [self.ids[i] for i in idxs]}
             if include:
@@ -32,14 +32,16 @@ def client(monkeypatch):
                 if 'metadatas' in include:
                     out['metadatas'] = [self.metas[i] for i in idxs]
             return out
-        def count(self): return len(self.ids)
+        def count(self):
+            return len(self.ids)
     class FakeAdapter:
         def __init__(self):
-                     self._initialized=False
+            self._initialized=False
             self.config=types.SimpleNamespace(embedding_dim=8)
             self.col = FakeCol()
             self.manager = types.SimpleNamespace(get_or_create_collection=lambda name: self.col)
-        async def initialize(self): self._initialized=True
+        async def initialize(self):
+            self._initialized=True
         async def get_collection_stats(self, name):
             return {'dimension': 8, 'metadata': {}}
         async def upsert_vectors(self, name, ids, vectors, documents, metadatas):
@@ -57,7 +59,7 @@ def client(monkeypatch):
         return fake
     monkeypatch.setattr(vs, '_adapter_for_user', fake_adapter_for_user)
     def fake_create_embeddings_batch(texts, app_config, model_id):
-             return [[0.0]*fake.config.embedding_dim for _ in texts]
+        return [[0.0]*fake.config.embedding_dim for _ in texts]
     monkeypatch.setattr(vs, 'create_embeddings_batch', fake_create_embeddings_batch)
     async def override_user():
         return User(id=1, username='tester', email='e', is_active=True, is_admin=True)
@@ -67,9 +69,7 @@ def client(monkeypatch):
 
 
 def test_list_vectors_pagination(client):
-
-
-     # Create store
+    # Create store
     s = client.post('/api/v1/vector_stores', json={'name':'PStore','dimensions':8}).json()
     # Upsert 25 items
     records = [{'id':f'id{i}','values':[0.0]*8, 'content': f'doc{i}', 'metadata': {'i':i}} for i in range(25)]

@@ -18,7 +18,7 @@ except Exception:
 
     def _run_async(coro):
 
-             import asyncio as _asyncio
+        import asyncio as _asyncio
         try:
             loop = _asyncio.get_event_loop()
             if not loop.is_running():

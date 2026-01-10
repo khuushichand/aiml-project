@@ -1,5 +1,7 @@
 import pytest
 
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatBadRequestError
+
 
 def _dummy_response(payload):
     class R:
@@ -66,15 +68,13 @@ def test_openai_tool_choice_gating(monkeypatch):
 
     messages = [{"role": "user", "content": "hi"}]
 
-    # 1) No tools, function tool_choice should not be set
-    chat_with_openai(messages, tool_choice={"type": "function", "function": {"name": "f"}})
-    payload = captured["json"]
-    assert "tool_choice" not in payload
+    # 1) No tools, tool_choice should raise a deterministic 400
+    with pytest.raises(ChatBadRequestError):
+        chat_with_openai(messages, tool_choice={"type": "function", "function": {"name": "f"}})
 
-    # 2) No tools, tool_choice == "none" should be set
-    chat_with_openai(messages, tool_choice="none")
-    payload = captured["json"]
-    assert payload.get("tool_choice") == "none"
+    # 2) No tools, tool_choice == "none" should raise as well
+    with pytest.raises(ChatBadRequestError):
+        chat_with_openai(messages, tool_choice="none")
 
     # 3) Tools present, function tool_choice should be honored
     tools = [{"type": "function", "function": {"name": "f", "parameters": {}}}]
@@ -92,15 +92,13 @@ def test_groq_tool_choice_gating(monkeypatch):
 
     messages = [{"role": "user", "content": "hi"}]
 
-    # 1) No tools, function tool_choice should not be set
-    chat_with_groq(messages, tool_choice={"type": "function", "function": {"name": "f"}})
-    payload = captured["json"]
-    assert "tool_choice" not in payload
+    # 1) No tools, tool_choice should raise a deterministic 400
+    with pytest.raises(ChatBadRequestError):
+        chat_with_groq(messages, tool_choice={"type": "function", "function": {"name": "f"}})
 
-    # 2) No tools, tool_choice == "none" should be set
-    chat_with_groq(messages, tool_choice="none")
-    payload = captured["json"]
-    assert payload.get("tool_choice") == "none"
+    # 2) No tools, tool_choice == "none" should raise as well
+    with pytest.raises(ChatBadRequestError):
+        chat_with_groq(messages, tool_choice="none")
 
     # 3) Tools present, function tool_choice should be honored
     tools = [{"type": "function", "function": {"name": "f", "parameters": {}}}]

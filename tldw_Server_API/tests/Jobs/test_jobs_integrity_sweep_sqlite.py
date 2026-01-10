@@ -6,7 +6,7 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 @pytest.mark.unit
 def test_integrity_sweep_clears_non_processing_lease(tmp_path, monkeypatch):
-     db_path = tmp_path / "jobs.db"
+    db_path = tmp_path / "jobs.db"
     monkeypatch.setenv("JOBS_DB_PATH", str(db_path))
     jm = JobManager()
     j = jm.create_job(domain="test", queue="default", job_type="t", payload={}, owner_user_id="u")

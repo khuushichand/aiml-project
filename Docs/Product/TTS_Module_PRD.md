@@ -59,6 +59,7 @@
    - Defines provider priority, voice aliases, fallback rules, and performance logging.
 8. **Voice Manager** (`voice_manager.py`)
    - Stores user voices under `<USER_DB_BASE_DIR>/<uid>/voices`, performs format/duration validation, and exposes preview integration.
+   - `USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root). Override via environment variable or `Config_Files/config.txt` as needed.
 
 ## 6. Functional Requirements
 ### 6.1 API Surface

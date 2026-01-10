@@ -15,7 +15,7 @@ from tldw_Server_API.app.core.Templating.template_renderer import (
 def test_basic_now_renders_year():
 
 
-     ctx = TemplateContext(env=TemplateEnv(timezone="UTC"))
+    ctx = TemplateContext(env=TemplateEnv(timezone="UTC"))
     out = render("Today is {{ now('%Y', tz='UTC') }}", ctx)
     assert str(datetime.now(timezone.utc).year) in out
 
@@ -44,7 +44,7 @@ def test_random_gated_off_fallbacks():
 def test_random_allowed_is_deterministic_with_seed():
 
 
-     ctx = TemplateContext()
+    ctx = TemplateContext()
     tpl = "Roll: {{ randint(1, 6) }}"
     opts = TemplateOptions(allow_random=True, random_seed=123)
     out1 = render(tpl, ctx, opts)
@@ -56,7 +56,7 @@ def test_random_allowed_is_deterministic_with_seed():
 def test_max_output_cap_truncates():
 
 
-     big = "x" * 3000
+    big = "x" * 3000
     ctx = TemplateContext(extra={"big": big})
     opts = TemplateOptions(max_output_chars=2000)
     out = render("{{ big }}", ctx, opts)

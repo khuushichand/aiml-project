@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBack
 
 @pytest.mark.integration
 def test_postgres_evaluations_crud_unified_if_available(tmp_path, pg_eval_params):
-     try:
+    try:
         cfg = DatabaseConfig(
             backend_type=BackendType.POSTGRESQL,
             pg_host=pg_eval_params["host"],

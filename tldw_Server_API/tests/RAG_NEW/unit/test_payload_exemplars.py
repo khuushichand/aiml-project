@@ -11,7 +11,7 @@ from tldw_Server_API.app.core.RAG.rag_service.payload_exemplars import (
 def test_redact_basic():
 
 
-     s = "Contact me at test@example.com, visit https://example.com and number 12345678"
+    s = "Contact me at test@example.com, visit https://example.com and number 12345678"
     out = _redact(s)
     assert "[EMAIL]" in out
     assert "[URL]" in out
@@ -21,7 +21,7 @@ def test_redact_basic():
 def test_exemplar_writes(tmp_path, monkeypatch):
 
 
-     base_dir = tmp_path / "observability"
+    base_dir = tmp_path / "observability"
     sink = base_dir / "ex.jsonl"
     monkeypatch.setattr(payload_exemplars, "BASE_DIR", base_dir)
     monkeypatch.setattr(payload_exemplars, "SINK", base_dir / "rag_payload_exemplars.jsonl")
@@ -30,7 +30,7 @@ def test_exemplar_writes(tmp_path, monkeypatch):
 
     class D:
         def __init__(self, id, score, content):
-                     self.id = id
+            self.id = id
             self.score = score
             self.content = content
 
@@ -47,7 +47,7 @@ def test_exemplar_writes(tmp_path, monkeypatch):
 def test_safe_sink_enforces_base_dir(tmp_path, monkeypatch):
 
 
-     base_dir = tmp_path / "observability"
+    base_dir = tmp_path / "observability"
     sink = base_dir / "rag_payload_exemplars.jsonl"
     monkeypatch.setattr(payload_exemplars, "BASE_DIR", base_dir)
     monkeypatch.setattr(payload_exemplars, "SINK", sink)
@@ -65,7 +65,7 @@ def test_safe_sink_enforces_base_dir(tmp_path, monkeypatch):
 def test_safe_sink_namespace_and_user_fallback(tmp_path, monkeypatch):
 
 
-     base_dir = tmp_path / "observability"
+    base_dir = tmp_path / "observability"
     sink = base_dir / "rag_payload_exemplars.jsonl"
     monkeypatch.setattr(payload_exemplars, "BASE_DIR", base_dir)
     monkeypatch.setattr(payload_exemplars, "SINK", sink)

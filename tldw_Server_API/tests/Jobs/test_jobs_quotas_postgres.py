@@ -14,7 +14,7 @@ pytestmark = [
 def test_pg_max_queued_quota(monkeypatch, jobs_pg_dsn):
 
 
-     monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
+    monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
     jm = JobManager(backend="postgres", db_url=jobs_pg_dsn)
 
     # Global max queued per user/domain
@@ -30,7 +30,7 @@ def test_pg_max_queued_quota(monkeypatch, jobs_pg_dsn):
 def test_pg_submits_per_minute_quota_precedence(monkeypatch, jobs_pg_dsn):
 
 
-     monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
+    monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
     jm = JobManager(backend="postgres", db_url=jobs_pg_dsn)
 
     # Global limit 1/min; domain+user override to 2/min
@@ -51,7 +51,7 @@ def test_pg_submits_per_minute_quota_precedence(monkeypatch, jobs_pg_dsn):
 def test_pg_max_inflight_quota(monkeypatch, jobs_pg_dsn):
 
 
-     monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
+    monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
     jm = JobManager(backend="postgres", db_url=jobs_pg_dsn)
 
     monkeypatch.setenv("JOBS_QUOTA_MAX_INFLIGHT", "1")
@@ -74,7 +74,7 @@ def test_pg_max_inflight_quota(monkeypatch, jobs_pg_dsn):
 def test_pg_max_inflight_ignores_expired_leases(monkeypatch, jobs_pg_dsn):
 
 
-     monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
+    monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
     jm = JobManager(backend="postgres", db_url=jobs_pg_dsn)
 
     monkeypatch.setenv("JOBS_QUOTA_MAX_INFLIGHT", "1")

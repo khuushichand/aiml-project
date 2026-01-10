@@ -1553,8 +1553,16 @@ def test_process_audio_with_analysis_mocked(mock_analyze, test_api_client, db_se
 
     file_tuple = create_upload_file(SAMPLE_AUDIO_PATH)
     # Avoid real conversion/transcription during tests
-    with patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.convert_to_wav", side_effect=lambda p, **kw: p), \
-    patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.speech_to_text", return_value=[{"Text": "hello", "start_seconds": 0, "end_seconds": 1}]):
+    with (
+        patch(
+            "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.convert_to_wav",
+            side_effect=lambda p, **kw: p,
+        ),
+        patch(
+            "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.speech_to_text",
+            return_value=[{"Text": "hello", "start_seconds": 0, "end_seconds": 1}],
+        ),
+    ):
         response = test_api_client.post(
             PROCESS_AUDIO_ENDPOINT,
             data=form_data_dict,

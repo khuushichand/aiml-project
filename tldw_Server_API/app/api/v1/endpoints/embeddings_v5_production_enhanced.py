@@ -3909,27 +3909,25 @@ async def schedule_reembed(
     current_user: User = Depends(get_request_user),
     request: Request = None,
 ):
-    """Create a Jobs row for the re-embed expansion worker to process.
+    """Create a media embeddings Jobs row to re-embed content.
 
-    Domain: embeddings, Queue: reembed (configurable via REEMBED_JOB_QUEUE), Job Type: expand_reembed.
+    Domain: embeddings, Queue: EMBEDDINGS_JOBS_QUEUE (default), Job Type: media_embeddings.
     """
     # Build payload
     uid = str(req.user_id or current_user.id)
     payload = {
         "user_id": uid,
         "media_id": int(req.media_id),
-        "idempotency_key": req.idempotency_key,
-        "dedupe_key": req.dedupe_key,
+        "embedding_model": req.embedder_name,
+        "embedding_provider": None,
+        "request_source": "reembed",
         "operation_id": req.operation_id,
         "user_tier": req.user_tier or "free",
-        "embedder_name": req.embedder_name,
         "embedder_version": req.embedder_version,
     }
     # Construct default idempotency/dedupe if not provided
-    if not req.idempotency_key:
-        payload["idempotency_key"] = f"reembed:{uid}:{int(req.media_id)}:{req.embedder_name or ''}:{req.embedder_version or ''}"
-    if not req.dedupe_key:
-        payload["dedupe_key"] = payload["idempotency_key"]
+    idempotency_key = req.idempotency_key or f"reembed:{uid}:{int(req.media_id)}:{req.embedder_name or ''}:{req.embedder_version or ''}"
+    dedupe_key = req.dedupe_key or idempotency_key
 
     # Create job via JobManager
     try:
@@ -3937,17 +3935,18 @@ async def schedule_reembed(
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
         jm = JobManager(backend=backend, db_url=db_url)
-        queue = os.getenv("REEMBED_JOB_QUEUE", "reembed")
+        queue = os.getenv("EMBEDDINGS_JOBS_QUEUE", "default")
         rid = ensure_request_id(request) if request is not None else None
         tp = ensure_traceparent(request) if request is not None else ""
+        priority = max(1, min(10, int((req.priority or 50) / 10)))
         row = jm.create_job(
             domain="embeddings",
             queue=queue,
-            job_type="expand_reembed",
+            job_type="media_embeddings",
             payload=payload,
             owner_user_id=uid,
-            priority=int(req.priority or 50),
-            idempotency_key=payload.get("idempotency_key"),
+            priority=priority,
+            idempotency_key=idempotency_key,
             request_id=rid,
         )
         get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="reembed", traceparent=tp).info(

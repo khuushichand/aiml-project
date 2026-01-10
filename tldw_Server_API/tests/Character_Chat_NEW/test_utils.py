@@ -25,7 +25,7 @@ class CharacterChatManager:
 
     def create_character_card(self, **kwargs) -> Optional[int]:
 
-             """Create a new character card.
+        """Create a new character card.
 
         For compatibility with tests, invoke both the keyword-based API
         (create_character_card) and the dict-based API (add_character_card)
@@ -178,13 +178,13 @@ class CharacterChatManager:
 
     def cleanup(self):
 
-             """Cleanup resources."""
+        """Cleanup resources."""
         # Close database connection if needed
         pass
 
     def close(self):
 
-             """Close the manager (alias for cleanup)."""
+        """Close the manager (alias for cleanup)."""
         self.cleanup()
 
     # Additional methods needed for tests

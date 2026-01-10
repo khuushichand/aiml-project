@@ -86,19 +86,12 @@ app/core/Embeddings/
 ├── (uses unified audit service)       # Security audit logging via DI
 ├── rate_limiter.py                    # Per-user rate limiting
 ├── embeddings_config.yaml             # Configuration file
-├── job_manager.py                     # Job lifecycle management
-├── queue_schemas.py                   # Message schemas
-├── worker_config.py                   # Worker configuration
-├── worker_orchestrator.py             # Worker pool management
-├── Embeddings_Server/
-│   ├── __init__.py
-│   └── Embeddings_Create.py          # Core embedding logic
-└── workers/
+├── jobs_adapter.py                    # Core Jobs adapter for embeddings jobs
+├── services/
+│   └── jobs_worker.py                 # Core Jobs worker for embeddings
+└── Embeddings_Server/
     ├── __init__.py
-    ├── base_worker.py                 # Abstract base class
-    ├── chunking_worker.py             # Text chunking
-    ├── embedding_worker.py            # Embedding generation
-    └── storage_worker.py              # Storage operations
+    └── Embeddings_Create.py          # Core embedding logic
 ```
 
 ---

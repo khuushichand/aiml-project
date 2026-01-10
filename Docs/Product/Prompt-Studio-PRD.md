@@ -48,13 +48,13 @@ Prior iterations of Prompt Studio suffered from duplicate submissions, job loss 
 └─────────────┘     └────────────────────┘     └────────────┬─────────────┘     └─────────┬──────────┘
                                       ▲                     │                           │
                                       │                     ▼                           ▼
-                             Idempotency layer       Job manager / leasing        Metrics & status
+                             Idempotency layer       Core Jobs leasing            Metrics & status
                                       │                     │                           │
                                       └──────── Worker heartbeats & advisory locks ─────┘
 ```
 - **API Layer:** `tldw_Server_API/app/api/v1/endpoints/prompt_studio_*` handles CRUD, optimization submissions, and status queries. Rate-limiting deps now await properly.
 - **Database Layer:** `PromptStudioDatabase` abstracts SQLite/Postgres differences, providing CRUD, queue leasing, idempotency helpers, and metrics-friendly status methods.
-- **Job Manager:** `prompt_studio/job_manager.py` fetches queued jobs, renews leases, and respects heartbeat overrides.
+- **Jobs Orchestration:** Core Jobs (`app/core/Jobs/manager.py`) handles leasing/retries; `prompt_studio/jobs_adapter.py` bridges job status to Prompt Studio.
 - **Monitoring:** `prompt_studio/monitoring.py` registers counters/gauges. Metrics emitted on idempotency reuse, advisory lock attempts/acquisitions, queue depth, and lease expirations.
 
 ## 7. Data Model (simplified)
@@ -62,7 +62,7 @@ Prior iterations of Prompt Studio suffered from duplicate submissions, job loss 
 - `prompt_studio_prompts`: prompt entries linked to projects; includes versioning data.
 - `prompt_studio_prompt_versions`: stored prompt variants and metadata snapshots.
 - `prompt_studio_optimizations`: optimization runs referencing prompts/projects, capturing strategy config and status.
-- `prompt_studio_job_queue`: background job entries with fields `status`, `leased_until`, `lease_owner`, metrics for reclaims.
+- Core Jobs tables (`jobs`, `job_attempts`, `job_leases`) store background job entries and leasing metadata.
 - `prompt_studio_idempotency`: `(entity_type, idempotency_key, user_id) → entity_id` mapping for duplicate detection.
 - Additional support tables: evaluation/test case records, metrics history, audit snapshots.
 
@@ -72,7 +72,7 @@ Prior iterations of Prompt Studio suffered from duplicate submissions, job loss 
 - `POST /api/v1/prompt-studio/optimizations`
 - `GET /api/v1/prompt-studio/status?warn_seconds=30`
 - `PATCH/DELETE` counterparts for project/prompt lifecycle
-- Background worker interface (internal) consumes job queue entries.
+- Background worker interface (internal) consumes core Jobs entries via the Jobs worker SDK.
 
 ## 9. Observability & Metrics
 - `prompt_studio.queue.length` gauge per backend/user.
@@ -128,7 +128,7 @@ Prior iterations of Prompt Studio suffered from duplicate submissions, job loss 
 ## 14. References
 - API doc: `Docs/API-related/Prompt_Studio_API.md`
 - Database implementation: `tldw_Server_API/app/core/DB_Management/PromptStudioDatabase.py`
-- Job manager: `tldw_Server_API/app/core/Prompt_Management/prompt_studio/job_manager.py`
+- Jobs adapter: `tldw_Server_API/app/core/Prompt_Management/prompt_studio/jobs_adapter.py`
 - Monitoring: `tldw_Server_API/app/core/Prompt_Management/prompt_studio/monitoring.py`
 - Metrics registry: `tldw_Server_API/app/core/Metrics/metrics_manager.py`
 - Tests: `tldw_Server_API/tests/prompt_studio/`

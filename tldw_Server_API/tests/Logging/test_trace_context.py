@@ -79,7 +79,6 @@ def test_reembed_schedule_propagates_request_id(monkeypatch):
     def fake_create_job(self, *, domain, queue, job_type, payload, owner_user_id, project_id=None,
                         priority=5, max_retries=3, available_at=None, idempotency_key=None,
                         request_id=None, trace_id=None):
-
         captured.update({
             "domain": domain,
             "queue": queue,

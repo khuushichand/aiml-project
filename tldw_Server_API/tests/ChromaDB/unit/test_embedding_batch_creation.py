@@ -13,12 +13,12 @@ from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create imp
 def test_embedding_batch_creation_with_patched_provider():
 
 
-     """Verify create_embeddings_batch respects max_batch_size via patched provider call."""
+    """Verify create_embeddings_batch respects max_batch_size via patched provider call."""
     texts = ["text1", "text2", "text3", "text4", "text5"]
 
     with patch('tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create.create_embeddings') as mock_create:
         def create_small_batch(batch_texts, *args, **kwargs):
-                     return [[0.1] * 384 for _ in batch_texts]
+            return [[0.1] * 384 for _ in batch_texts]
 
         mock_create.side_effect = create_small_batch
 

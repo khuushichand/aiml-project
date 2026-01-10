@@ -18,7 +18,7 @@ def _setup_env(monkeypatch):
 def test_admin_idempotency_cleanup_basic():
 
 
-     client = TestClient(app)
+    client = TestClient(app)
 
     # Trigger cleanup with a short TTL (still safe; DB may be empty)
     r = client.post("/api/v1/evaluations/admin/idempotency/cleanup", params={"ttl_hours": 1})

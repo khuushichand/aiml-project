@@ -24,7 +24,7 @@ class _BrokenClient:
 async def test_fail_open_tokens_allows_on_error(monkeypatch):
     class _Loader:
         def get_policy(self, pid):
-                     return {"tokens": {"per_min": 1, "fail_mode": "fail_open"}, "scopes": ["global", "user"]}
+            return {"tokens": {"per_min": 1, "fail_mode": "fail_open"}, "scopes": ["global", "user"]}
 
     rg = RedisResourceGovernor(policy_loader=_Loader(), ns="rg_fail_open")
 
@@ -40,7 +40,7 @@ async def test_fail_open_tokens_allows_on_error(monkeypatch):
 async def test_fail_closed_requests_denies_on_error(monkeypatch):
     class _Loader:
         def get_policy(self, pid):
-                     return {"requests": {"rpm": 1, "fail_mode": "fail_closed"}, "scopes": ["global", "user"]}
+            return {"requests": {"rpm": 1, "fail_mode": "fail_closed"}, "scopes": ["global", "user"]}
 
     rg = RedisResourceGovernor(policy_loader=_Loader(), ns="rg_fail_closed")
 
@@ -56,7 +56,7 @@ async def test_fail_closed_requests_denies_on_error(monkeypatch):
 async def test_fallback_memory_requests_allows_when_redis_broken(monkeypatch):
     class _Loader:
         def get_policy(self, pid):
-                     return {"requests": {"rpm": 1, "fail_mode": "fallback_memory"}, "scopes": ["global", "user"]}
+            return {"requests": {"rpm": 1, "fail_mode": "fallback_memory"}, "scopes": ["global", "user"]}
 
     rg = RedisResourceGovernor(policy_loader=_Loader(), ns="rg_fallback_mem")
 

@@ -72,8 +72,8 @@ This document provides detailed technical specifications for integrating RSS fee
 # Location: /app/core/Subscriptions/parsers/rss_parser.py
 
 import feedparser
-import httpx
 from typing import List, Optional, Dict, Any
+from tldw_Server_API.app.core.http_client import afetch
 from datetime import datetime
 import hashlib
 from urllib.parse import urljoin
@@ -91,9 +91,14 @@ class RSSParser(BaseParser):
     async def validate_url(self, url: str) -> bool:
         """Check if URL points to a valid feed"""
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                # Use HEAD request first to check content type
-                head_response = await client.head(url, follow_redirects=True)
+            # Use HEAD request first to check content type
+            head_response = await afetch(
+                method="HEAD",
+                url=url,
+                allow_redirects=True,
+                timeout=self.timeout,
+            )
+            try:
                 content_type = head_response.headers.get('content-type', '').lower()
 
                 # Check for feed content types
@@ -105,9 +110,19 @@ class RSSParser(BaseParser):
                 # If content type is HTML, it might still be a feed
                 # Do a GET request and check content
                 if 'text/html' in content_type:
-                    response = await client.get(url, follow_redirects=True)
-                    content = response.text[:1000]  # Check first 1KB
-                    return self._looks_like_feed(content)
+                    response = await afetch(
+                        method="GET",
+                        url=url,
+                        allow_redirects=True,
+                        timeout=self.timeout,
+                    )
+                    try:
+                        content = response.text[:1000]  # Check first 1KB
+                        return self._looks_like_feed(content)
+                    finally:
+                        await response.aclose()
+            finally:
+                await head_response.aclose()
 
             return False
         except Exception:
@@ -150,8 +165,14 @@ class RSSParser(BaseParser):
             'Accept': 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*'
         }
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.get(url, headers=headers, follow_redirects=True)
+        response = await afetch(
+            method="GET",
+            url=url,
+            headers=headers,
+            allow_redirects=True,
+            timeout=self.timeout,
+        )
+        try:
             response.raise_for_status()
 
             # Handle different encodings
@@ -161,6 +182,8 @@ class RSSParser(BaseParser):
                 return response.content.decode(encoding)
             else:
                 return response.text
+        finally:
+            await response.aclose()
 
     def _parse_entry(self, entry: Dict, feed_metadata: Dict, feed_url: str) -> Optional[ContentItem]:
         """Parse a single feed entry into ContentItem"""
@@ -328,11 +351,14 @@ class FeedDiscovery:
     async def discover_feeds(self, url: str) -> List[Dict[str, str]]:
         """Find RSS feeds linked from a web page"""
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(url)
+            response = await afetch(method="GET", url=url)
+            try:
                 response.raise_for_status()
+                html = response.text
+            finally:
+                await response.aclose()
 
-            soup = BeautifulSoup(response.text, 'html.parser')
+            soup = BeautifulSoup(html, 'html.parser')
             feeds = []
 
             # Look for <link> tags with RSS/Atom types
@@ -817,27 +843,31 @@ class FeedErrorHandler:
         error_type = type(error).__name__
         error_msg = str(error)
 
-        if isinstance(error, httpx.HTTPStatusError):
-            if error.response.status_code == 404:
+        status = getattr(getattr(error, "response", None), "status_code", None)
+        if status is None:
+            status = getattr(error, "status_code", None)
+
+        if isinstance(status, int):
+            if status == 404:
                 return {
                     'error': 'FEED_NOT_FOUND',
                     'message': 'Feed URL returns 404',
                     'recoverable': False
                 }
-            elif error.response.status_code == 403:
+            elif status == 403:
                 return {
                     'error': 'ACCESS_DENIED',
                     'message': 'Access to feed denied',
                     'recoverable': False
                 }
-            elif error.response.status_code >= 500:
+            elif status >= 500:
                 return {
                     'error': 'SERVER_ERROR',
                     'message': 'Feed server error',
                     'recoverable': True
                 }
 
-        elif isinstance(error, httpx.TimeoutException):
+        if 'timeout' in error_msg.lower():
             return {
                 'error': 'TIMEOUT',
                 'message': 'Feed request timed out',
@@ -881,11 +911,19 @@ class FeedValidator:
 
         try:
             # Check URL accessibility
-            async with httpx.AsyncClient(timeout=10) as client:
-                response = await client.head(url, follow_redirects=True)
+            response = await afetch(
+                method="HEAD",
+                url=url,
+                allow_redirects=True,
+                timeout=10,
+            )
+            try:
+                status = response.status_code
+            finally:
+                await response.aclose()
 
-            if response.status_code != 200:
-                results['issues'].append(f"HTTP {response.status_code}")
+            if status != 200:
+                results['issues'].append(f"HTTP {status}")
                 return results
 
             # Detect feed type

@@ -28,10 +28,10 @@
   - API uses Collections DB via DI; legacy fallback to Media DB search to maintain compatibility (deprecated)
 - Key Classes/Functions:
   - `ReadingService.save_url`, `.list_items`, `.update_item`
-  - `embedding_queue.enqueue_embeddings_job_for_item` (Redis-backed Embeddings JobManager)
+  - `embedding_queue.enqueue_embeddings_job_for_item` (core Jobs-backed enqueue)
   - Templating: `Chat/prompt_template_manager.safe_render` for outputs
 - Dependencies:
-  - Internal: `DB_Management/Collections_DB`, `Embeddings/job_manager`, `Web_Scraping.Article_Extractor_Lib`
+  - Internal: `DB_Management/Collections_DB`, core Jobs, `Web_Scraping.Article_Extractor_Lib`
   - External (optional): Redis for embeddings queue; provider TTS for mp3 outputs
 - Data Models & DB:
   - `Collections_DB.py`: tables `output_templates`, `outputs`, `reading_highlights`, `content_items` (+ indices/uniques)

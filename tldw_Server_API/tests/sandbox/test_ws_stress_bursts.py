@@ -44,14 +44,14 @@ def _new_run_id() -> str:
 def test_ws_burst_stdout_stderr_order_and_types(monkeypatch) -> None:
 
 
-     with _client(monkeypatch) as client:
+    with _client(monkeypatch) as client:
         run_id = _new_run_id()
         hub = get_hub()
 
         # Publish a large burst of mixed stdout/stderr while a client is connected
         with client.websocket_connect(f"/api/v1/sandbox/runs/{run_id}/stream") as ws:
             def _publisher() -> None:
-                             hub.publish_event(run_id, "start", {"source": "stress"})
+                hub.publish_event(run_id, "start", {"source": "stress"})
                 # Alternate stdout/stderr bursts
                 for i in range(100):
                     hub.publish_stdout(run_id, f"out-{i}\n".encode("utf-8"))

@@ -58,7 +58,7 @@ def test_claims_engine_nli_only_without_model_returns_nei():
     def _analyze_noop(api_name: str, input_data: Any, custom_prompt_arg: Optional[str] = None,
                       api_key: Optional[str] = None, system_message: Optional[str] = None,
                       temp: Optional[float] = None, **kwargs):
-        return '{"claims": []}'
+                          return '{"claims": []}'
 
     engine = ClaimsEngine(_analyze_noop)
     answer = "Acme was founded in 2000."

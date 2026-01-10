@@ -8,7 +8,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
 @pytest.fixture(autouse=True)
 def _testing_env():
-     os.environ["TESTING"] = "true"
+    os.environ["TESTING"] = "true"
     os.environ["USE_REAL_OPENAI_IN_TESTS"] = "true"  # force async path
     # Allow fallback even when x-provider header is present for this mapping test suite
     os.environ["EMBEDDINGS_ALLOW_FALLBACK_WITH_HEADER"] = "true"
@@ -20,7 +20,7 @@ def _testing_env():
 
 @pytest.fixture
 def client():
-     with TestClient(app) as c:
+    with TestClient(app) as c:
         c.cookies.set("csrf_token", "x")
         c.headers["X-CSRF-Token"] = "x"
         c.headers["Authorization"] = "Bearer key"
@@ -30,7 +30,7 @@ def client():
 def _override_user():
 
 
-     async def _f():
+    async def _f():
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
         return User(id=1, username="u", email="u@x", is_active=True, is_admin=False)
     return _f

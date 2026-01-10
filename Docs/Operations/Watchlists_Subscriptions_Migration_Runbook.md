@@ -27,7 +27,7 @@ Note: The current API fully supports sources, groups/tags, jobs, runs, items, ou
 
 - Version: tldw_server v0.2.x with Watchlists endpoints enabled.
 - AuthNZ: single-user API key or multi-user JWT configured.
-- Backups: snapshot per-user DBs (`<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`) and app state.
+- Backups: snapshot per-user DBs (`<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`) and app state. `USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root); override via environment variable or `Config_Files/config.txt` as needed.
 - Test env: perform migration in staging before production.
 - Dependencies: ffmpeg installed; outbound HTTP allowed for feeds/sites.
 

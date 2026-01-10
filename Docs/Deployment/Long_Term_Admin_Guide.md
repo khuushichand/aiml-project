@@ -55,6 +55,8 @@ What to back up
 - Config: `.env`, `tldw_Server_API/Config_Files/config.txt`.
 - Optional: `logs/`, `server.log`, `Samples/` if you modified.
 
+`USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root). Override via environment variable or `Config_Files/config.txt` as needed.
+
 PostgreSQL (example)
 ```bash
 # Backup

@@ -3,7 +3,7 @@ import pytest
 
 @pytest.mark.e2e
 def test_general_settings_offline_online_toggle(page, server_url):
-     page.goto(f"{server_url}/webui/")
+    page.goto(f"{server_url}/webui/")
 
     # Confirm initial Connected
     page.wait_for_selector(".api-status-text")

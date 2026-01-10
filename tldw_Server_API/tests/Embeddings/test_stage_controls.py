@@ -6,7 +6,7 @@ from tldw_Server_API.app.main import app
 
 class FakeAsyncRedisCtl:
     def __init__(self):
-             self.kv = {}
+        self.kv = {}
         self.closed = False
 
     async def get(self, key):
@@ -28,7 +28,7 @@ class FakeAsyncRedisCtl:
 
 @pytest.mark.unit
 def test_stage_pause_resume_drain(monkeypatch, admin_user):
-     client = TestClient(app)
+    client = TestClient(app)
     client.cookies.set("csrf_token", "x")
     client.headers["X-CSRF-Token"] = "x"
     client.headers["Authorization"] = "Bearer key"

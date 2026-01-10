@@ -47,6 +47,9 @@ class MyProviderAdapter(ChatProvider):
 ## Request Shaping
 - Adapters receive an OpenAI-like request dict. Common keys: `model`, `messages`, `stream`, `tools`, `tool_choice`, `temperature`, `top_p`, `max_tokens`, `stop`, `response_format`.
 - Use `apply_tool_choice(payload, tools, tool_choice)` to set `tool_choice` safely only when supported.
+- Validation enforces that `tool_choice` requires `tools`; do not rely on adapters to silently ignore missing tools.
+- `extra_headers`/`extra_body` are additive overrides; explicit headers/body keys in the request win on conflicts.
+- Local providers must not accept request-level `api_url` overrides; base URLs are config-only.
 - Do not log raw prompts—log sanitized metadata only.
 
 ## Streaming
@@ -84,12 +87,12 @@ get_registry().register_adapter("myprovider", "tldw_Server_API.app.core.LLM_Call
 ```python
 class MyProviderAdapter(ChatProvider):
     async def achat(self, request: dict, *, timeout: float | None = None) -> dict:
-        # Async JSON request via httpx.AsyncClient
+        # Async JSON request via http_client (egress + retries + metrics)
         # Return OpenAI-compatible response
         ...
 
     async def astream(self, request: dict, *, timeout: float | None = None):
-        # Async SSE stream via httpx.AsyncClient.stream
+        # Async SSE stream via http_client.astream_sse
         # Yield normalized SSE lines; do not yield [DONE]
         ...
 ```

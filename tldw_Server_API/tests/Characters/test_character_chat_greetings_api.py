@@ -10,7 +10,7 @@ from unittest.mock import patch
 def _create_character_with_alts(db):
 
 
-     return db.add_character_card({
+    return db.add_character_card({
         "name": "GreeterAPI",
         "description": "A character with alternate greetings",
         "first_message": "Hello, {{user}}.",

@@ -82,6 +82,12 @@ def _coerce_int(value: Optional[str], default: int) -> int:
         return default
 
 
+def _coerce_bool(value: Optional[str], default: bool) -> bool:
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 _MAX_HISTORY_MESSAGES = max(1, _coerce_int(_chat_config.get("max_history_messages"), 200))
 
 _default_history_limit = 20
@@ -107,6 +113,12 @@ if _env_history_order:
     if _env_history_order_val in {"asc", "desc"}:
         _default_history_order = _env_history_order_val
 DEFAULT_HISTORY_MESSAGE_ORDER = _default_history_order
+
+_inject_assistant_name = _coerce_bool(_chat_config.get("inject_assistant_name"), False)
+_env_inject_assistant_name = os.getenv("CHAT_INJECT_ASSISTANT_NAME")
+if _env_inject_assistant_name is not None:
+    _inject_assistant_name = _coerce_bool(_env_inject_assistant_name, _inject_assistant_name)
+INJECT_ASSISTANT_NAME = _inject_assistant_name
 
 
 # --- Cached helpers (module scope) -------------------------------------------
@@ -2420,6 +2432,20 @@ async def execute_non_stream_call(
             use_transaction=True,
         )
 
+    if INJECT_ASSISTANT_NAME and isinstance(llm_response, dict):
+        try:
+            choices = llm_response.get("choices")
+            if choices and isinstance(choices, list):
+                message_block = choices[0].get("message") or {}
+                if isinstance(message_block, dict) and not message_block.get("name"):
+                    asst_name = sanitize_sender_name(
+                        character_card_for_context.get("name") if character_card_for_context else None
+                    )
+                    if asst_name:
+                        message_block["name"] = asst_name
+        except Exception:
+            pass
+
     # Encode payload (large responses via CPU-bound handler)
     if llm_response and isinstance(llm_response, dict) and len(str(llm_response)) > 10000:
         encoded_json = await process_large_json_async(llm_response)
@@ -2428,6 +2454,19 @@ async def execute_non_stream_call(
         encoded_payload = await current_loop.run_in_executor(None, jsonable_encoder, llm_response)
 
     if isinstance(encoded_payload, dict):
+        if INJECT_ASSISTANT_NAME:
+            try:
+                choices = encoded_payload.get("choices")
+                if choices and isinstance(choices, list):
+                    message_block = choices[0].get("message") or {}
+                    if isinstance(message_block, dict) and not message_block.get("name"):
+                        asst_name = sanitize_sender_name(
+                            character_card_for_context.get("name") if character_card_for_context else None
+                        )
+                        if asst_name:
+                            message_block["name"] = asst_name
+            except Exception:
+                pass
         encoded_payload["tldw_conversation_id"] = final_conversation_id
         if assistant_message_id:
             encoded_payload["tldw_message_id"] = assistant_message_id

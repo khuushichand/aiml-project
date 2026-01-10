@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.Moderation.moderation_service import ModerationSer
 
 @pytest.mark.unit
 def test_parse_line_with_categories_suffix_after_action():
-     svc = ModerationService()
+    svc = ModerationService()
     # Format: pattern -> action #cats
     expr, action, repl, cats = svc._parse_rule_line("/leak\\d+/ -> block #pii,confidential")
     assert expr == "/leak\\d+/"
@@ -26,7 +26,7 @@ def test_parse_line_with_categories_suffix_after_action():
 
 @pytest.mark.unit
 def test_load_block_patterns_and_evaluate_actions():
-     svc = ModerationService()
+    svc = ModerationService()
     # Create a temporary blocklist with categories after action
     lines = [
         "/forbidden/ -> block #confidential",
@@ -74,7 +74,7 @@ def test_load_block_patterns_and_evaluate_actions():
 
 @pytest.mark.unit
 def test_warn_with_categories_and_category_label():
-     svc = ModerationService()
+    svc = ModerationService()
     # Warning rule with category
     lines = [
         "/minor issue/ -> warn #confidential",
@@ -108,7 +108,7 @@ def test_warn_with_categories_and_category_label():
 
 @pytest.mark.unit
 def test_invalid_and_dangerous_regex_lines_are_skipped():
-     svc = ModerationService()
+    svc = ModerationService()
     lines = [
         "validliteral",
         "/(unclosed/ -> block #pii",  # invalid regex
@@ -134,7 +134,7 @@ def test_invalid_and_dangerous_regex_lines_are_skipped():
 
 @pytest.mark.unit
 def test_replacement_limits_are_enforced():
-     svc = ModerationService()
+    svc = ModerationService()
     # Create a simple redact rule
     lines = [
         "secret -> redact:[MASK]",
@@ -170,7 +170,7 @@ def test_replacement_limits_are_enforced():
 
 @pytest.mark.unit
 def test_user_override_empty_categories_clears_gating():
-     svc = ModerationService()
+    svc = ModerationService()
     lines = [
         "secret -> block #confidential",
     ]
@@ -205,7 +205,7 @@ def test_user_override_empty_categories_clears_gating():
 
 @pytest.mark.unit
 def test_evaluate_action_redacts_all_matching_rules():
-     svc = ModerationService()
+    svc = ModerationService()
     lines = [
         "secret -> redact:[MASK]",
         "token -> redact:[TOK]",
@@ -241,7 +241,7 @@ def test_evaluate_action_redacts_all_matching_rules():
 
 @pytest.mark.unit
 def test_evaluate_action_block_precedence_over_warn():
-     svc = ModerationService()
+    svc = ModerationService()
     lines = [
         "secret -> warn #pii",
         "secret -> block #confidential",
@@ -273,7 +273,7 @@ def test_evaluate_action_block_precedence_over_warn():
 
 @pytest.mark.unit
 def test_chunk_scanning_detects_matches_past_max_chars():
-     svc = ModerationService()
+    svc = ModerationService()
     lines = [
         "secret -> block",
     ]
@@ -308,7 +308,7 @@ def test_chunk_scanning_detects_matches_past_max_chars():
 
 @pytest.mark.unit
 def test_set_blocklist_lines_empty_writes_empty_file():
-     svc = ModerationService()
+    svc = ModerationService()
     with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp:
         tmp_path = tmp.name
     try:

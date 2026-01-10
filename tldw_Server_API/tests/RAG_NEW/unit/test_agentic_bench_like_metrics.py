@@ -7,7 +7,7 @@ from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
 def _make_doc() -> Document:
 
 
-     return Document(
+    return Document(
         id="bm_doc",
         content=(
             "# Residuals\nResidual connections help gradient flow in deep networks.\n\n"
@@ -23,7 +23,7 @@ def _make_doc() -> Document:
 async def test_agentic_tool_steps_and_bytes_logged(monkeypatch):
     class FakeRetriever:
         def __init__(self, *args, **kwargs):
-                     pass
+            pass
         async def retrieve(self, *args, **kwargs):
             return [_make_doc()]
 

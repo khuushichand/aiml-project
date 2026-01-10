@@ -21,7 +21,7 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 - `MAGIC_FILE_PATH`: Path to `magic.mgc` for `python-magic` if needed.
 
 ## Storage
-- `USER_DB_BASE_DIR`: Base directory for per-user DBs and assets. Defaults to `Databases/user_databases` under the repo root; relative paths resolve from repo root and `~` expands.
+- `USER_DB_BASE_DIR`: Base directory for per-user DBs and assets (defined in `tldw_Server_API.app.core.config`). Defaults to `Databases/user_databases` under the repo root; relative paths resolve from repo root and `~` expands. Override via environment variable or `Config_Files/config.txt` as needed.
 - `USER_DB_BASE`: Deprecated alias for `USER_DB_BASE_DIR` (used only by rewrite cache resolution).
 
 ## Testing & CI Controls
@@ -47,7 +47,7 @@ Note: Secrets should be set via environment or `.env`. `config.txt` is supported
 - `RAG_LLM_RERANK_TOTAL_BUDGET_SEC`: Total time budget for LLM reranking per query (seconds). Default `20`.
 - `RAG_LLM_RERANK_MAX_DOCS`: Cap on number of documents scored by LLM reranker per query. Default `20`.
  - `RAG_TRANSFORMERS_RERANKER_MODEL`: Cross-encoder model id for fast reranking (stage 1). Default `BAAI/bge-reranker-v2-m3`.
- - `RAG_REWRITE_CACHE_PATH`: Optional path for legacy/global query→rewrite cache JSONL (default `Databases/Rewrite_Cache/rewrite_cache.jsonl`); per-user cache uses `USER_DB_BASE_DIR`/`USER_DB_BASE`.
+ - `RAG_REWRITE_CACHE_PATH`: Optional override for query→rewrite cache JSONL. When unset, cache is per-user under `<USER_DB_BASE_DIR>/<user_id>/Rewrite_Cache/rewrite_cache.jsonl` (deprecated alias: `USER_DB_BASE`).
 
 ### RAG Guardrails (Production Defaults)
 - `RAG_GUARDRAILS_STRICT`: When `true`, enable strict guardrails in the unified pipeline (enables numeric fidelity and hard citations by default). Useful for non-prod environments where you still want strict behavior.
@@ -237,7 +237,7 @@ Runtime overrides (non-persistent) are available via API:
 - `EMB_BACKPRESSURE_MAX_AGE_SECONDS`: Maximum age (seconds) of the oldest message across core embeddings queues before HTTP 429. Default: `300`.
 - `EMBEDDINGS_TENANT_RPS`: Per-tenant requests per second limit for embeddings endpoints (multi-tenant mode only). `0` disables. Default: `0`.
 - `INGEST_TENANT_RPS`: Per-tenant requests per second limit for ingestion endpoints (multi-tenant mode). Falls back to `EMBEDDINGS_TENANT_RPS` if unset. `0` disables. Default: `0`.
-- `EMBEDDINGS_REDIS_URL`: Redis connection string for embeddings job manager queues (`embeddings:*`). Falls back to `REDIS_URL` and defaults to `redis://localhost:6379`.
+- `EMBEDDINGS_REDIS_URL`: Deprecated. Legacy Redis embeddings queues are removed; embeddings jobs use core Jobs storage.
 
 ### Priority Queues
 - `EMBEDDINGS_PRIORITY_ENABLED`: Enable per-stage priority sub-queues with weighted fair consumption (`true|false`). Default: `false`.

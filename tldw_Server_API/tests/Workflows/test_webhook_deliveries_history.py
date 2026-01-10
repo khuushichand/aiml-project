@@ -10,14 +10,14 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 
 @pytest.fixture()
 def client_with_wf_db(tmp_path, auth_headers):
-     db = WorkflowsDatabase(str(tmp_path / "wf.db"))
+    db = WorkflowsDatabase(str(tmp_path / "wf.db"))
 
     async def override_user():
         return User(id=1, username="tester", email="t@e.com", is_active=True, is_admin=True)
 
     def override_db():
 
-             return db
+        return db
 
     app.dependency_overrides[get_request_user] = override_user
     app.dependency_overrides[wf_mod._get_db] = override_db
@@ -31,7 +31,7 @@ def client_with_wf_db(tmp_path, auth_headers):
 def test_get_webhook_deliveries_history(client_with_wf_db):
 
 
-     client, db = client_with_wf_db
+    client, db = client_with_wf_db
     # Create and run a trivial workflow, then append synthetic webhook events
     definition = {"name": "x", "version": 1, "steps": [{"id": "l1", "type": "log", "config": {"message": "hi"}}]}
     wid = client.post("/api/v1/workflows", json=definition).json()["id"]

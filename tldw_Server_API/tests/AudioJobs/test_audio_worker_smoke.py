@@ -13,13 +13,13 @@ pytestmark = pytest.mark.smoke
 def _has_ffmpeg() -> bool:
 
 
-     return bool(shutil.which("ffmpeg"))
+    return bool(shutil.which("ffmpeg"))
 
 
 def _allow_heavy() -> bool:
 
 
-     return os.getenv("ALLOW_HEAVY_AUDIO_SMOKE", "").lower() in ("1", "true", "yes")
+    return os.getenv("ALLOW_HEAVY_AUDIO_SMOKE", "").lower() in ("1", "true", "yes")
 
 
 @pytest.mark.asyncio
@@ -116,7 +116,7 @@ async def test_audio_worker_transcribe_normalizes_segments_and_text_tuple(monkey
 
     def _fake_run_stt_job_via_registry(wav_path, model, language, base_dir=None):
 
-             segs = [{"Text": "hello worker", "start_seconds": 0.0, "end_seconds": 1.0}]
+        segs = [{"Text": "hello worker", "start_seconds": 0.0, "end_seconds": 1.0}]
         return {
             "text": "hello worker",
             "language": "en",
@@ -201,7 +201,7 @@ async def test_audio_gpu_worker_normalizes_segments_and_text(monkeypatch, tmp_pa
 
     def _fake_run_stt_job_via_registry_gpu(wav_path, model, language, base_dir=None):
 
-             segs = [{"Text": "hello gpu", "start_seconds": 0.0, "end_seconds": 1.0}]
+        segs = [{"Text": "hello gpu", "start_seconds": 0.0, "end_seconds": 1.0}]
         return {
             "text": "hello gpu",
             "language": "en",

@@ -8,9 +8,7 @@ pytestmark = pytest.mark.integration
 
 
 def _create_jobs(db, n=8):
-
-
-     jobs = []
+    jobs = []
     for i in range(n):
         jobs.append(
             db.create_job(
@@ -24,9 +22,7 @@ def _create_jobs(db, n=8):
 
 
 def test_parallel_acquire_distinct_jobs_dual_backend(prompt_studio_dual_backend_db):
-
-
-     label, db = prompt_studio_dual_backend_db
+    label, db = prompt_studio_dual_backend_db
 
     _create_jobs(db, n=6)
 
@@ -34,8 +30,7 @@ def test_parallel_acquire_distinct_jobs_dual_backend(prompt_studio_dual_backend_
     lock = threading.Lock()
 
     def worker():
-
-             job = db.acquire_next_job()
+        job = db.acquire_next_job()
         with lock:
             results.append(job)
 
@@ -54,9 +49,7 @@ def test_parallel_acquire_distinct_jobs_dual_backend(prompt_studio_dual_backend_
 
 
 def test_parallel_acquire_single_job_only_one_gets_it(prompt_studio_dual_backend_db):
-
-
-     label, db = prompt_studio_dual_backend_db
+    label, db = prompt_studio_dual_backend_db
 
     _create_jobs(db, n=1)
 
@@ -64,8 +57,7 @@ def test_parallel_acquire_single_job_only_one_gets_it(prompt_studio_dual_backend
     lock = threading.Lock()
 
     def worker():
-
-             job = db.acquire_next_job()
+        job = db.acquire_next_job()
         with lock:
             results.append(job)
 
@@ -81,9 +73,7 @@ def test_parallel_acquire_single_job_only_one_gets_it(prompt_studio_dual_backend
 
 
 def test_concurrent_renew_extends_lease_dual_backend(prompt_studio_dual_backend_db):
-
-
-     label, db = prompt_studio_dual_backend_db
+    label, db = prompt_studio_dual_backend_db
 
     _create_jobs(db, n=1)
     job = db.acquire_next_job()
@@ -94,7 +84,7 @@ def test_concurrent_renew_extends_lease_dual_backend(prompt_studio_dual_backend_
 
     # Concurrent renew calls with different seconds
     def renew(seconds):
-             try:
+        try:
             db.renew_job_lease(job["id"], seconds=seconds)
         except Exception:
             pass
@@ -114,9 +104,7 @@ def test_concurrent_renew_extends_lease_dual_backend(prompt_studio_dual_backend_
 
 
 def test_reclaim_expired_processing_job_dual_backend(prompt_studio_dual_backend_db):
-
-
-     label, db = prompt_studio_dual_backend_db
+    label, db = prompt_studio_dual_backend_db
 
     _create_jobs(db, n=1)
     job = db.acquire_next_job()

@@ -22,7 +22,7 @@ class TestDictionaryManagement:
 
     @pytest.mark.unit
     def test_create_dictionary(self, chat_dictionary_service, sample_dictionary):
-             """Test creating a new dictionary."""
+        """Test creating a new dictionary."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(
@@ -35,7 +35,7 @@ class TestDictionaryManagement:
 
     @pytest.mark.unit
     def test_get_dictionary(self, chat_dictionary_service, sample_dictionary):
-             """Test getting a dictionary."""
+        """Test getting a dictionary."""
         service = chat_dictionary_service
 
         # Create dictionary
@@ -53,7 +53,7 @@ class TestDictionaryManagement:
 
     @pytest.mark.unit
     def test_list_dictionaries(self, chat_dictionary_service):
-             """Test listing all dictionaries."""
+        """Test listing all dictionaries."""
         service = chat_dictionary_service
 
         # Create multiple dictionaries
@@ -70,7 +70,7 @@ class TestDictionaryManagement:
 
     @pytest.mark.unit
     def test_update_dictionary(self, chat_dictionary_service):
-             """Test updating a dictionary."""
+        """Test updating a dictionary."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(
@@ -90,7 +90,7 @@ class TestDictionaryManagement:
 
     @pytest.mark.unit
     def test_delete_dictionary(self, chat_dictionary_service):
-             """Test deleting a dictionary."""
+        """Test deleting a dictionary."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name="To Delete")
@@ -103,7 +103,7 @@ class TestDictionaryManagement:
 
     @pytest.mark.unit
     def test_toggle_dictionary_active(self, chat_dictionary_service):
-             """Test toggling dictionary active status."""
+        """Test toggling dictionary active status."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name="Toggle Test")
@@ -128,7 +128,7 @@ class TestEntryManagement:
 
     @pytest.mark.unit
     def test_add_literal_entry(self, chat_dictionary_service):
-             """Test adding a literal replacement entry."""
+        """Test adding a literal replacement entry."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name="Test Dict")
@@ -147,7 +147,7 @@ class TestEntryManagement:
 
     @pytest.mark.unit
     def test_add_regex_entry(self, chat_dictionary_service):
-             """Test adding a regex replacement entry."""
+        """Test adding a regex replacement entry."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name="Regex Dict")
@@ -165,7 +165,7 @@ class TestEntryManagement:
 
     @pytest.mark.unit
     def test_add_entry_with_probability(self, chat_dictionary_service):
-             """Test adding entry with probability."""
+        """Test adding entry with probability."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name="Prob Dict")
@@ -183,7 +183,7 @@ class TestEntryManagement:
 
     @pytest.mark.unit
     def test_update_entry(self, chat_dictionary_service):
-             """Test updating an entry."""
+        """Test updating an entry."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name="Update Test")
@@ -205,7 +205,7 @@ class TestEntryManagement:
 
     @pytest.mark.unit
     def test_delete_entry(self, chat_dictionary_service):
-             """Test deleting an entry."""
+        """Test deleting an entry."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name="Delete Test")
@@ -222,7 +222,7 @@ class TestEntryManagement:
 
     @pytest.mark.unit
     def test_bulk_add_entries(self, chat_dictionary_service, sample_dictionary):
-             """Test bulk adding entries."""
+        """Test bulk adding entries."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name="Bulk Test")
@@ -245,7 +245,7 @@ class TestTextProcessing:
 
     @pytest.mark.unit
     def test_literal_replacement(self, chat_dictionary_service):
-             """Test literal text replacement."""
+        """Test literal text replacement."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name="Literal Test")
@@ -264,7 +264,7 @@ class TestTextProcessing:
 
     @pytest.mark.unit
     def test_regex_replacement(self, chat_dictionary_service):
-             """Test regex text replacement."""
+        """Test regex text replacement."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name="Regex Test")
@@ -284,7 +284,7 @@ class TestTextProcessing:
 
     @pytest.mark.unit
     def test_process_text_rejects_oversized_input(self, chat_dictionary_service, monkeypatch):
-             """Ensure oversized input is rejected before regex processing."""
+        """Ensure oversized input is rejected before regex processing."""
         from tldw_Server_API.app.core.Character_Chat import chat_dictionary as cd
 
         monkeypatch.setattr(cd, "MAX_CHAT_DICTIONARY_TEXT_LENGTH", 10)
@@ -303,7 +303,7 @@ class TestTextProcessing:
 
     @pytest.mark.unit
     def test_case_sensitive_replacement(self, chat_dictionary_service):
-             """Test case-sensitive replacement."""
+        """Test case-sensitive replacement."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name="Case Test")
@@ -324,7 +324,7 @@ class TestTextProcessing:
 
     @pytest.mark.unit
     def test_probability_replacement(self, chat_dictionary_service):
-             """Test probabilistic replacement."""
+        """Test probabilistic replacement."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name="Prob Test")
@@ -353,7 +353,7 @@ class TestTextProcessing:
 
     @pytest.mark.unit
     def test_delay_prevents_initial_trigger(self, chat_dictionary_service, monkeypatch):
-             """Ensure configured delay blocks the first replacement until the window has elapsed."""
+        """Ensure configured delay blocks the first replacement until the window has elapsed."""
         from tldw_Server_API.app.core.Character_Chat import chat_dictionary as cd
 
         original_datetime = cd.datetime
@@ -371,7 +371,7 @@ class TestTextProcessing:
 
             @classmethod
             def utcnow(cls):
-                             return anchor_time + cls._delta
+                return anchor_time + cls._delta
 
         monkeypatch.setattr(cd, "datetime", _FakeDatetime)
 
@@ -398,7 +398,7 @@ class TestTextProcessing:
 
     @pytest.mark.unit
     def test_multiple_replacements(self, chat_dictionary_service):
-             """Test multiple replacements in same text."""
+        """Test multiple replacements in same text."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name="Multi Test")
@@ -415,7 +415,7 @@ class TestTextProcessing:
 
     @pytest.mark.unit
     def test_token_budget_limit(self, chat_dictionary_service, mock_tokenizer):
-             """Test respecting token budget during replacement."""
+        """Test respecting token budget during replacement."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name="Budget Test")
@@ -443,7 +443,7 @@ class TestSearchAndFilter:
 
     @pytest.mark.unit
     def test_search_entries(self, chat_dictionary_service):
-             """Test searching dictionary entries."""
+        """Test searching dictionary entries."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name="Search Test")
@@ -458,7 +458,7 @@ class TestSearchAndFilter:
 
     @pytest.mark.unit
     def test_filter_by_type(self, chat_dictionary_service):
-             """Test filtering entries by type."""
+        """Test filtering entries by type."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name="Filter Test")
@@ -474,7 +474,7 @@ class TestSearchAndFilter:
 
     @pytest.mark.unit
     def test_filter_active_entries(self, chat_dictionary_service):
-             """Test filtering active/inactive entries."""
+        """Test filtering active/inactive entries."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name="Active Test")
@@ -498,7 +498,7 @@ class TestImportExport:
 
     @pytest.mark.unit
     def test_export_to_markdown(self, chat_dictionary_service, sample_dictionary):
-             """Test exporting dictionary to markdown."""
+        """Test exporting dictionary to markdown."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name=sample_dictionary['name'])
@@ -514,7 +514,7 @@ class TestImportExport:
 
     @pytest.mark.unit
     def test_import_from_markdown(self, chat_dictionary_service, markdown_dictionary):
-             """Test importing dictionary from markdown."""
+        """Test importing dictionary from markdown."""
         service = chat_dictionary_service
 
         dict_id = service.import_from_markdown(markdown_dictionary)
@@ -532,13 +532,13 @@ class TestImportExport:
 
     @pytest.mark.unit
     def test_import_from_markdown_string_does_not_open_file(self, chat_dictionary_service, monkeypatch):
-             """Ensure string inputs are treated as content, not file paths."""
+        """Ensure string inputs are treated as content, not file paths."""
         from tldw_Server_API.app.core.Character_Chat import chat_dictionary as cd
         import builtins
 
         def _fail_open(*_args, **_kwargs):
 
-                     raise AssertionError("open should not be called for string content")
+            raise AssertionError("open should not be called for string content")
 
         monkeypatch.setattr(builtins, "open", _fail_open)
 
@@ -548,7 +548,7 @@ class TestImportExport:
 
     @pytest.mark.unit
     def test_export_to_json(self, chat_dictionary_service, sample_dictionary):
-             """Test exporting dictionary to JSON."""
+        """Test exporting dictionary to JSON."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name=sample_dictionary['name'])
@@ -563,7 +563,7 @@ class TestImportExport:
 
     @pytest.mark.unit
     def test_import_from_json(self, chat_dictionary_service, sample_dictionary):
-             """Test importing dictionary from JSON."""
+        """Test importing dictionary from JSON."""
         service = chat_dictionary_service
 
         dict_id = service.import_from_json(sample_dictionary)
@@ -585,7 +585,7 @@ class TestStatistics:
 
     @pytest.mark.unit
     def test_get_statistics(self, chat_dictionary_service):
-             """Test getting dictionary statistics."""
+        """Test getting dictionary statistics."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name="Stats Test")
@@ -602,7 +602,7 @@ class TestStatistics:
 
     @pytest.mark.unit
     def test_get_usage_statistics(self, chat_dictionary_service):
-             """Test getting usage statistics."""
+        """Test getting usage statistics."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name="Usage Test")
@@ -625,7 +625,7 @@ class TestCloning:
 
     @pytest.mark.unit
     def test_clone_dictionary(self, chat_dictionary_service, sample_dictionary):
-             """Test cloning a dictionary."""
+        """Test cloning a dictionary."""
         service = chat_dictionary_service
 
         # Create original
@@ -658,7 +658,7 @@ class TestErrorHandling:
 
     @pytest.mark.unit
     def test_invalid_regex_pattern(self, chat_dictionary_service):
-             """Test handling invalid regex pattern."""
+        """Test handling invalid regex pattern."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name="Invalid Regex")
@@ -673,7 +673,7 @@ class TestErrorHandling:
 
     @pytest.mark.unit
     def test_dictionary_not_found(self, chat_dictionary_service):
-             """Test handling dictionary not found."""
+        """Test handling dictionary not found."""
         service = chat_dictionary_service
 
         result = service.get_dictionary(999999)
@@ -681,7 +681,7 @@ class TestErrorHandling:
 
     @pytest.mark.unit
     def test_entry_validation(self, chat_dictionary_service):
-             """Test entry validation."""
+        """Test entry validation."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name="Validation Test")
@@ -703,7 +703,7 @@ class TestCacheManagement:
 
     @pytest.mark.unit
     def test_clear_cache(self, chat_dictionary_service):
-             """Test clearing dictionary cache."""
+        """Test clearing dictionary cache."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name="Cache Test")
@@ -721,7 +721,7 @@ class TestCacheManagement:
 
     @pytest.mark.unit
     def test_toggle_entry_invalidates_cache(self, chat_dictionary_service):
-             """Disabling an entry should stop replacements even with cached entries."""
+        """Disabling an entry should stop replacements even with cached entries."""
         service = chat_dictionary_service
 
         dict_id = service.create_dictionary(name="Toggle Cache Test")

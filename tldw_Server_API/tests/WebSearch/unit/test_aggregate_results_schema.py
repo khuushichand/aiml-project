@@ -5,13 +5,11 @@ pytestmark = pytest.mark.unit
 
 
 def test_aggregate_results_schema(monkeypatch):
-
-
-     from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
+    from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
 
     # Arrange: fake LLM call returns a simple string
     def fake_chat_api_call(**kwargs):
-             return "This is a synthesized final answer."
+        return "This is a synthesized final answer."
 
     monkeypatch.setattr(ws, "chat_api_call", lambda *args, **kwargs: fake_chat_api_call(**kwargs))
 

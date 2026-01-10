@@ -15,7 +15,7 @@ from tldw_Server_API.app.core.AuthNZ.alerting import SecurityAlertDispatcher
 
 @pytest.fixture
 def mock_settings():
-     """Create mock settings for alert dispatcher."""
+    """Create mock settings for alert dispatcher."""
     settings = MagicMock()
     settings.SECURITY_ALERTS_ENABLED = True
     settings.SECURITY_ALERT_MIN_SEVERITY = "medium"
@@ -40,7 +40,7 @@ def mock_settings():
 
 @pytest.fixture
 def dispatcher(mock_settings):
-     """Create alert dispatcher with mock settings."""
+    """Create alert dispatcher with mock settings."""
     return SecurityAlertDispatcher(settings=mock_settings)
 
 
@@ -49,7 +49,7 @@ class TestDispatcherInitialization:
 
     def test_dispatcher_disabled_by_default(self):
 
-             """Dispatcher should respect SECURITY_ALERTS_ENABLED setting."""
+        """Dispatcher should respect SECURITY_ALERTS_ENABLED setting."""
         settings = MagicMock()
         settings.SECURITY_ALERTS_ENABLED = False
         settings.SECURITY_ALERT_MIN_SEVERITY = "high"
@@ -75,14 +75,14 @@ class TestDispatcherInitialization:
 
     def test_severity_threshold_configuration(self, mock_settings):
 
-             """Severity thresholds should be configurable."""
+        """Severity thresholds should be configurable."""
         mock_settings.SECURITY_ALERT_MIN_SEVERITY = "critical"
         dispatcher = SecurityAlertDispatcher(settings=mock_settings)
         assert dispatcher.min_severity == "critical"
 
     def test_backoff_configuration(self, mock_settings):
 
-             """Backoff seconds should be configurable."""
+        """Backoff seconds should be configurable."""
         mock_settings.SECURITY_ALERT_BACKOFF_SECONDS = 60
         dispatcher = SecurityAlertDispatcher(settings=mock_settings)
         assert dispatcher.backoff_seconds == 60
@@ -93,7 +93,7 @@ class TestSeverityFiltering:
 
     def test_low_severity_filtered_when_threshold_high(self, mock_settings):
 
-             """Low severity alerts should be filtered when threshold is high."""
+        """Low severity alerts should be filtered when threshold is high."""
         mock_settings.SECURITY_ALERT_MIN_SEVERITY = "high"
         dispatcher = SecurityAlertDispatcher(settings=mock_settings)
         # The dispatcher should filter based on severity using _meets_threshold
@@ -104,7 +104,7 @@ class TestSeverityFiltering:
 
     def test_all_severities_pass_when_threshold_low(self, mock_settings):
 
-             """All severity levels should pass when threshold is low."""
+        """All severity levels should pass when threshold is low."""
         mock_settings.SECURITY_ALERT_MIN_SEVERITY = "low"
         dispatcher = SecurityAlertDispatcher(settings=mock_settings)
         assert dispatcher._meets_threshold("low") is True
@@ -118,7 +118,7 @@ class TestBackoffMechanism:
 
     def test_backoff_prevents_dispatch(self, mock_settings):
 
-             """Backoff should prevent dispatches when active."""
+        """Backoff should prevent dispatches when active."""
         mock_settings.SECURITY_ALERT_BACKOFF_SECONDS = 60
         dispatcher = SecurityAlertDispatcher(settings=mock_settings)
 
@@ -132,7 +132,7 @@ class TestBackoffMechanism:
 
     def test_backoff_expires(self, mock_settings):
 
-             """Backoff should expire after configured duration."""
+        """Backoff should expire after configured duration."""
         mock_settings.SECURITY_ALERT_BACKOFF_SECONDS = 1
         dispatcher = SecurityAlertDispatcher(settings=mock_settings)
 
@@ -146,7 +146,7 @@ class TestBackoffMechanism:
 
     def test_set_and_clear_backoff(self, mock_settings):
 
-             """Backoff should be settable and clearable."""
+        """Backoff should be settable and clearable."""
         mock_settings.SECURITY_ALERT_BACKOFF_SECONDS = 60
         dispatcher = SecurityAlertDispatcher(settings=mock_settings)
 
@@ -169,14 +169,14 @@ class TestDispatcherStatus:
 
     def test_status_reports_enabled(self, dispatcher):
 
-             """Status should report enabled state."""
+        """Status should report enabled state."""
         # The dispatcher object should have enabled attribute
         assert hasattr(dispatcher, "enabled")
         assert dispatcher.enabled is True
 
     def test_dispatcher_has_dispatch_count(self, dispatcher):
 
-             """Dispatcher should track dispatch count."""
+        """Dispatcher should track dispatch count."""
         assert hasattr(dispatcher, "_dispatch_count")
         assert dispatcher._dispatch_count == 0
 

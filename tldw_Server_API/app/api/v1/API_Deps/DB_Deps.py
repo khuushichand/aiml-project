@@ -24,6 +24,7 @@ from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 # Import the specific Database class
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, DatabaseError, SchemaError # Adjust import path
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
 from tldw_Server_API.app.core.DB_Management.DB_Manager import get_content_backend_instance
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
@@ -56,9 +57,6 @@ def _get_db_path_for_user(user_id: int) -> Path:
     Ensures the user's specific directory exists.
     Uses USER_DB_BASE_DIR assigned from settings.
     """
-    # user_id will be settings["SINGLE_USER_FIXED_ID"] in single-user mode
-    user_dir_name = str(user_id)
-    # Resolve base dir dynamically: prefer env override, then settings
     base_dir_env = os.environ.get("USER_DB_BASE_DIR")
     # Test-mode safety: isolate user DBs to a per-process temp dir unless explicitly overridden
     if not base_dir_env and str(os.getenv("TESTING", "")).lower() in {"1", "true", "yes", "on"}:
@@ -87,18 +85,11 @@ def _get_db_path_for_user(user_id: int) -> Path:
             os.environ.setdefault("USER_DB_BASE_DIR", base_dir_env)
         except Exception:
             pass
-    base_dir = Path(base_dir_env) if base_dir_env else Path(settings["USER_DB_BASE_DIR"])  # type: ignore[index]
-    user_dir = base_dir / user_dir_name
-    db_file = user_dir / "Media_DB_v2.db" # Using standard Media_DB_v2.db naming
-
     try:
-        user_dir.mkdir(parents=True, exist_ok=True)
-        # Optional: logging.debug(f"Ensured directory exists for user {user_id}: {user_dir}")
-    except OSError as e:
-        logger.error(f"Could not create database directory for user_id {user_id} at {user_dir}: {e}", exc_info=True)
-        # Raise a standard exception to be caught by the main dependency
+        return DatabasePaths.get_media_db_path(user_id)
+    except Exception as e:
+        logger.error(f"Could not resolve database directory for user_id {user_id}: {e}", exc_info=True)
         raise IOError(f"Could not initialize storage directory for user {user_id}.") from e
-    return db_file
 
 # --- Main Dependency Function ---
 

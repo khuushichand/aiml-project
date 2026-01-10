@@ -15,7 +15,7 @@ os.environ.setdefault('MPLCONFIGDIR', _cache_dir)
 # Stub heavy config module before importing the compactor
 class _StubSettings:
     def get(self, k, default=None):
-             return default
+        return default
 
 _stub_config_mod = types.ModuleType("config_stub")
 setattr(_stub_config_mod, "settings", _StubSettings())
@@ -26,12 +26,12 @@ from tldw_Server_API.app.core.Embeddings.services import vector_compactor as vc
 
 class _FakeCollection:
     def __init__(self, name):
-             self.name = name
+        self.name = name
         self.deleted = []
 
     def delete(self, where=None, ids=None):
 
-             if where:
+        if where:
             self.deleted.append(where)
 
 
@@ -51,7 +51,7 @@ class _FakeMgr:
 
     def close(self):
 
-             return None
+        return None
 
 
 @pytest.mark.unit

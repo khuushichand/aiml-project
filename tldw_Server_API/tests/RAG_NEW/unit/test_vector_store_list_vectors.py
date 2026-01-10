@@ -7,7 +7,7 @@ from tldw_Server_API.app.main import app
 
 class _FakeCollection:
     def __init__(self):
-             self._count = 3
+        self._count = 3
 
     def count(self):  # noqa: D401
         return self._count
@@ -35,7 +35,7 @@ class _FakeManager:
 
 class _FakeAdapter:
     def __init__(self):
-             self._initialized = True
+        self._initialized = True
         self.manager = _FakeManager()
 
     async def initialize(self):  # pragma: no cover
@@ -72,7 +72,7 @@ def test_list_vectors_parses_filter_and_sorts(monkeypatch, disable_heavy_startup
 
 @pytest.mark.unit
 def test_list_vectors_invalid_filter_returns_400(monkeypatch, disable_heavy_startup, admin_user):
-     from tldw_Server_API.app.api.v1.endpoints import vector_stores_openai as vs_mod
+    from tldw_Server_API.app.api.v1.endpoints import vector_stores_openai as vs_mod
 
     async def _fake_get_adapter_for_user(user, dim):  # noqa: ANN001
         return _FakeAdapter()
@@ -331,7 +331,7 @@ def test_list_vectors_order_by_id_adapter_path(monkeypatch, disable_heavy_startu
 def _assert_envelope(resp_json):
 
 
-     assert isinstance(resp_json, dict)
+    assert isinstance(resp_json, dict)
     assert "data" in resp_json and isinstance(resp_json["data"], list)
     assert "pagination" in resp_json and isinstance(resp_json["pagination"], dict)
     p = resp_json["pagination"]

@@ -13,7 +13,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture()
 def client_with_user(monkeypatch):
-     async def override_user():
+    async def override_user():
         return User(id=777, username="ytuser", email=None, is_active=True)
 
     base_dir = Path.cwd() / "Databases" / "test_user_dbs"
@@ -31,7 +31,7 @@ def client_with_user(monkeypatch):
 def test_youtube_url_helpers_import_and_behavior():
 
 
-     mod = import_module("tldw_Server_API.app.api.v1.endpoints.watchlists")
+    mod = import_module("tldw_Server_API.app.api.v1.endpoints.watchlists")
     is_yt = getattr(mod, "_is_youtube_url")
     is_feed = getattr(mod, "_is_youtube_feed_url")
 
@@ -81,7 +81,7 @@ def test_youtube_url_helpers_import_and_behavior():
 def test_create_source_rejects_non_feed_youtube(client_with_user):
 
 
-     c = client_with_user
+    c = client_with_user
     body = {
         "name": "YT Bad",
         "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -95,7 +95,7 @@ def test_create_source_rejects_non_feed_youtube(client_with_user):
 def test_update_source_rejects_non_feed_youtube(client_with_user):
 
 
-     c = client_with_user
+    c = client_with_user
     # Start with a valid non-YouTube RSS source
     create = {
         "name": "Valid Feed",
@@ -118,7 +118,7 @@ def test_update_source_rejects_non_feed_youtube(client_with_user):
 def test_bulk_mixed_valid_and_invalid_reports_errors(client_with_user):
 
 
-     c = client_with_user
+    c = client_with_user
     payload = {
         "sources": [
             {  # invalid: YouTube non-feed
@@ -153,7 +153,7 @@ def test_bulk_mixed_valid_and_invalid_reports_errors(client_with_user):
 def test_bulk_group_validation_errors(client_with_user):
 
 
-     c = client_with_user
+    c = client_with_user
     # Use an obviously invalid group id
     invalid_gid = 987654321
     payload = {
@@ -179,7 +179,7 @@ def test_bulk_group_validation_errors(client_with_user):
 def test_bulk_tag_name_validation_errors(client_with_user):
 
 
-     c = client_with_user
+    c = client_with_user
     payload = {
         "sources": [
             {

@@ -13,7 +13,7 @@ except Exception:  # Fallback if requests not available
 
 @pytest.mark.e2e
 def test_mcp_tools_list_shows_permission_hint(page, server_url):
-     page.goto(f"{server_url}/webui/")
+    page.goto(f"{server_url}/webui/")
     # Navigate to MCP → Tools tab
     page.get_by_role("tab", name="MCP").click()
     # Open the Tools sub-tab in the MCP section
@@ -68,7 +68,7 @@ def test_mcp_tools_list_shows_permission_hint(page, server_url):
 
 @pytest.mark.e2e
 def test_mcp_tools_python_rest_flow():
-     """Python-only fallback E2E: validate MCP Tools 403 unauth and 200 with API key.
+    """Python-only fallback E2E: validate MCP Tools 403 unauth and 200 with API key.
 
     This bypasses the WebUI and drives the HTTP API directly using requests.
     """
@@ -171,7 +171,7 @@ def test_mcp_tools_python_rest_flow():
 def _ensure_single_user_row():
 
 
-     """Ensure users table has an entry for SINGLE_USER_FIXED_ID (default 1)."""
+    """Ensure users table has an entry for SINGLE_USER_FIXED_ID (default 1)."""
     try:
         db_path = Path("Databases/users.db")
         db_path.parent.mkdir(parents=True, exist_ok=True)

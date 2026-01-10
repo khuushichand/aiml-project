@@ -5,32 +5,27 @@ import pytest
 
 class _StubMM:
     def __init__(self):
-             self.increments = []
+        self.increments = []
 
     def increment(self, name, value=1, labels=None):
-
-             self.increments.append((name, value, labels or {}))
+        self.increments.append((name, value, labels or {}))
 
 
 class _StubPSMetrics:
     def __init__(self):
-             self.metrics_manager = _StubMM()
+        self.metrics_manager = _StubMM()
 
 
 pytestmark = pytest.mark.integration
 
 
 def _make_jobs(db, count=40):
-
-
-     for i in range(count):
+    for i in range(count):
         db.create_job(job_type="evaluation", entity_id=1000 + i, payload={"i": i})
 
 
 def test_pg_advisory_lock_stress_threaded(prompt_studio_dual_backend_db, monkeypatch):
-
-
-     label, db = prompt_studio_dual_backend_db
+    label, db = prompt_studio_dual_backend_db
     if label != "postgres":
         pytest.skip("Postgres-specific stress test")
 
@@ -46,8 +41,7 @@ def test_pg_advisory_lock_stress_threaded(prompt_studio_dual_backend_db, monkeyp
     acquired_lock = threading.Lock()
 
     def worker():
-
-             while True:
+        while True:
             job = db.acquire_next_job()
             if not job:
                 break

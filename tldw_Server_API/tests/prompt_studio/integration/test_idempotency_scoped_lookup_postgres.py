@@ -6,9 +6,7 @@ pytestmark = pytest.mark.integration
 
 
 def test_idempotency_lookup_scoped_by_user_postgres(prompt_studio_dual_backend_db):
-
-
-     label, db = prompt_studio_dual_backend_db
+    label, db = prompt_studio_dual_backend_db
     if label != "postgres":
         pytest.skip("Postgres-specific idempotency test")
 

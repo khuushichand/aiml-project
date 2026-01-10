@@ -11,7 +11,7 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 class FakeAdapter:
     def __init__(self, embedding_dim=8):
-             self.config = type('cfg', (), {'embedding_dim': embedding_dim})()
+        self.config = type('cfg', (), {'embedding_dim': embedding_dim})()
         self.created = []
         self.upserts = []
 
@@ -45,7 +45,7 @@ class FakeAdapter:
 
 @pytest.fixture(autouse=True)
 def testing_env(monkeypatch, tmp_path):
-     # Wire USER_DB_BASE_DIR for meta dbs used by endpoints
+    # Wire USER_DB_BASE_DIR for meta dbs used by endpoints
     from tldw_Server_API.app.core import config as cfg
     monkeypatch.setitem(cfg.settings, 'USER_DB_BASE_DIR', pathlib.Path(tmp_path))
     yield
@@ -53,7 +53,7 @@ def testing_env(monkeypatch, tmp_path):
 
 @pytest.fixture()
 def client(monkeypatch):
-     async def override_user():
+    async def override_user():
         return User(id=1, username='tester', email='t@e.com', is_active=True, is_admin=True)
     app.dependency_overrides[get_request_user] = override_user
 
@@ -74,7 +74,7 @@ def client(monkeypatch):
 
 @pytest.mark.unit
 def test_duplicate_pg_adapter_flow(client):
-     # Duplicate into a new store name
+    # Duplicate into a new store name
     r = client.post('/api/v1/vector_stores/vs_src/vectors', json={'records': []})
     # Create a destination via duplicate
     payload = {"new_name": "DupDest", "dimensions": 8}

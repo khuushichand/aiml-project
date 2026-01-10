@@ -17,7 +17,7 @@ def _env(monkeypatch):
 def test_batch_renew_complete_fail_postgres(monkeypatch):
 
 
-     if not os.getenv("JOBS_DB_URL", "").startswith("postgres"):
+    if not os.getenv("JOBS_DB_URL", "").startswith("postgres"):
         pytest.skip("JOBS_DB_URL not set to Postgres")
     _env(monkeypatch)
     from tldw_Server_API.app.core.Jobs.pg_migrations import ensure_jobs_tables_pg

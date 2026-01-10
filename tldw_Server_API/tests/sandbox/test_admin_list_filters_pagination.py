@@ -13,7 +13,7 @@ from tldw_Server_API.app.core.Sandbox.models import RunStatus, RunPhase, Runtime
 def _client(monkeypatch) -> TestClient:
 
 
-     monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("TEST_MODE", "1")
     # Use in-memory store by default (already defaulted in config)
     return TestClient(app)
 
@@ -120,7 +120,7 @@ def test_admin_list_filter_by_user_and_phase(monkeypatch):
 def test_admin_list_sort_asc_desc(monkeypatch):
 
 
-     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
     app.dependency_overrides[get_request_user] = _admin_user_dep
 
     with _client(monkeypatch) as client:

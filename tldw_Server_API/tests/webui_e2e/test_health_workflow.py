@@ -3,7 +3,7 @@ import pytest
 
 @pytest.mark.e2e
 def test_health_dashboard_and_checks(page, server_url):
-     page.goto(f"{server_url}/webui/")
+    page.goto(f"{server_url}/webui/")
     # Open Health tab and Health Dashboard subtab
     page.get_by_role("tab", name="Health").click()
     # Updated sub-tab label is simply 'Dashboard'

@@ -25,7 +25,7 @@ from tldw_Server_API.tests.AuthNZ.conftest import (  # noqa: F401
 
 @pytest.fixture(autouse=True)
 def rg_test_purge_env(monkeypatch):
-     """Enable pre-reserve lease purge for all RG tests via env."""
+    """Enable pre-reserve lease purge for all RG tests via env."""
     monkeypatch.setenv("RG_TEST_PURGE_LEASES_BEFORE_RESERVE", "1")
     if not os.getenv("REDIS_URL"):
         monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:6379")

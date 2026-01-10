@@ -184,7 +184,7 @@ def test_overlapping_alias_resolves_with_additional_char_aliases():
 def test_interrupted_by_system_message_produces_non_character_turn():
 
 
-     char_name = "Assistant"
+    char_name = "Assistant"
     user_name = "User"
 
     db_messages = [

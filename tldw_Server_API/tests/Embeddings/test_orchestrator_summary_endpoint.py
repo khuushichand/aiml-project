@@ -13,7 +13,7 @@ from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced impo
 
 @pytest.mark.unit
 def test_orchestrator_summary_endpoint(disable_heavy_startup, admin_user, redis_client):
-     async def _seed():
+    async def _seed():
         queues = {
             "embeddings:chunking": 1,
             "embeddings:embedding": 2,

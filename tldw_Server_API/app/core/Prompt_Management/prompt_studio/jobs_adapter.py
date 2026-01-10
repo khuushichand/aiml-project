@@ -13,18 +13,11 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 _PROMPT_STUDIO_DOMAIN = "prompt_studio"
 
 
-def _env_bool(key: str, default: bool = False) -> bool:
-    raw = os.getenv(key)
-    if raw is None:
-        return default
-    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
 def _jobs_backend() -> str:
     backend = (os.getenv("PROMPT_STUDIO_JOBS_BACKEND") or os.getenv("TLDW_JOBS_BACKEND") or "").strip().lower()
-    if backend not in {"core", "legacy"}:
-        backend = "legacy"
-    return backend
+    if backend and backend != "core":
+        logger.warning("Prompt Studio jobs backend override ignored; only core Jobs is supported now.")
+    return "core"
 
 
 def _jobs_queue() -> str:
@@ -88,10 +81,10 @@ class PromptStudioJobsAdapter:
         self,
         *,
         backend: Optional[str] = None,
-        read_legacy: Optional[bool] = None,
     ) -> None:
-        self._backend = backend or _jobs_backend()
-        self._read_legacy = _env_bool("JOBS_ADAPTER_READ_LEGACY_PROMPT_STUDIO", True) if read_legacy is None else bool(read_legacy)
+        if backend and backend != "core":
+            logger.warning("Prompt Studio jobs adapter forced to core backend; legacy backend removed.")
+        self._backend = "core"
         self._jm = _jobs_manager()
 
     @property
@@ -110,8 +103,6 @@ class PromptStudioJobsAdapter:
             job = self._lookup_core_job(job_id, user_id=user_id, job_type=job_type)
             if job is not None:
                 return self._format_job(job)
-        if self._read_legacy:
-            return self._legacy_get_job(db, job_id)
         return None
 
     def list_jobs(
@@ -132,8 +123,6 @@ class PromptStudioJobsAdapter:
                 limit=max(1, int(limit)),
             )
             return [self._format_job(job) for job in jobs]
-        if self._read_legacy:
-            return self._legacy_list_jobs(db, job_type=job_type, limit=limit)
         return []
 
     def get_latest_job_for_entity(
@@ -180,15 +169,55 @@ class PromptStudioJobsAdapter:
                     matched.append(job)
             matched.sort(key=lambda row: _format_datetime(row.get("created_at")) or "", reverse=not ascending)
             return [self._format_job(job) for job in matched[: int(limit)]]
-        if self._read_legacy:
-            return self._legacy_list_jobs_for_entity(
-                db,
-                job_type=job_type,
-                entity_id=entity_id,
-                limit=limit,
-                ascending=ascending,
-            )
         return []
+
+    def create_job(
+        self,
+        *,
+        user_id: Optional[str],
+        job_type: str,
+        entity_id: Optional[int],
+        payload: Optional[Dict[str, Any]],
+        project_id: Optional[int] = None,
+        priority: int = 5,
+        max_retries: int = 3,
+        request_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        payload_dict: Dict[str, Any] = dict(payload or {})
+        if entity_id is not None:
+            try:
+                payload_dict.setdefault("entity_id", int(entity_id))
+            except (TypeError, ValueError):
+                payload_dict.setdefault("entity_id", entity_id)
+        return self._jm.create_job(
+            domain=_PROMPT_STUDIO_DOMAIN,
+            queue=_jobs_queue(),
+            job_type=str(job_type),
+            payload=payload_dict,
+            owner_user_id=str(user_id) if user_id is not None else None,
+            project_id=project_id,
+            priority=priority,
+            max_retries=max_retries,
+            request_id=request_id,
+            trace_id=trace_id,
+        )
+
+    def cancel_job(
+        self,
+        job_id: str,
+        *,
+        user_id: Optional[str],
+        reason: Optional[str] = None,
+        job_type: Optional[str] = None,
+    ) -> bool:
+        job = self._lookup_core_job(job_id, user_id=user_id, job_type=job_type)
+        if not job:
+            return False
+        try:
+            return bool(self._jm.cancel_job(int(job["id"]), reason=reason))
+        except Exception:
+            return False
 
     def _lookup_core_job(
         self,
@@ -269,44 +298,5 @@ class PromptStudioJobsAdapter:
             except (TypeError, ValueError):
                 pass
         return formatted
-
-    def _legacy_get_job(self, db, job_id: str) -> Optional[Dict[str, Any]]:
-        from tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_manager import JobManager as LegacyJobManager
-
-        legacy = LegacyJobManager(db)
-        try:
-            if str(job_id).isdigit():
-                job = legacy.get_job(int(job_id))
-            else:
-                job = legacy.get_job(job_id)
-        except Exception:
-            job = None
-        if job is not None:
-            return job
-        return legacy.get_job_by_uuid(str(job_id))
-
-    def _legacy_list_jobs(
-        self,
-        db,
-        *,
-        job_type: Optional[str],
-        limit: int,
-    ) -> List[Dict[str, Any]]:
-        from tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_manager import JobManager as LegacyJobManager
-
-        legacy = LegacyJobManager(db)
-        return legacy.list_jobs(job_type=job_type, limit=limit)
-
-    def _legacy_list_jobs_for_entity(
-        self,
-        db,
-        *,
-        job_type: str,
-        entity_id: int,
-        limit: int,
-        ascending: bool,
-    ) -> List[Dict[str, Any]]:
-        return db.list_jobs_for_entity(job_type, entity_id, limit=limit, ascending=ascending)
-
 
 __all__ = ["PromptStudioJobsAdapter"]

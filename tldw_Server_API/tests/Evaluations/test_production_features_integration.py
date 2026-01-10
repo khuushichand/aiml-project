@@ -49,7 +49,7 @@ class TestDatabaseMigration:
 
     @pytest.fixture
     def temp_db(self):
-             """Create a temporary database for testing."""
+        """Create a temporary database for testing."""
         temp_dir = tempfile.mkdtemp()
         db_path = Path(temp_dir) / "test_evaluations.db"
 
@@ -116,7 +116,7 @@ class TestDatabaseMigration:
 
     def test_migration_success(self, temp_db):
 
-             """Test successful migration to unified schema."""
+        """Test successful migration to unified schema."""
         # Run migration
         result = migrate_to_unified_evaluations(temp_db)
         assert result is True
@@ -153,7 +153,7 @@ class TestDatabaseMigration:
 
     def test_migration_idempotent(self, temp_db):
 
-             """Test migration can be run multiple times safely."""
+        """Test migration can be run multiple times safely."""
         # Run migration twice
         result1 = migrate_to_unified_evaluations(temp_db)
         result2 = migrate_to_unified_evaluations(temp_db)
@@ -163,7 +163,7 @@ class TestDatabaseMigration:
 
     def test_rollback(self, temp_db):
 
-             """Test migration rollback."""
+        """Test migration rollback."""
         # Run migration
         migrate_to_unified_evaluations(temp_db)
 
@@ -599,14 +599,14 @@ class TestAdvancedMetrics:
 
     @pytest.fixture
     def metrics(self):
-             """Create metrics instance."""
+        """Create metrics instance."""
         from prometheus_client import CollectorRegistry
         registry = CollectorRegistry()
         return AdvancedEvaluationMetrics(registry)
 
     def test_business_metrics_tracking(self, metrics):
 
-             """Test business metrics collection."""
+        """Test business metrics collection."""
         if not metrics.enabled:
             pytest.skip("Prometheus not installed")
 
@@ -642,7 +642,7 @@ class TestAdvancedMetrics:
 
     def test_slo_tracking(self, metrics):
 
-             """Test SLI/SLO tracking."""
+        """Test SLI/SLO tracking."""
         if not metrics.enabled:
             pytest.skip("Prometheus not installed")
 
@@ -671,7 +671,7 @@ class TestAdvancedMetrics:
 
     def test_rate_limit_metrics(self, metrics):
 
-             """Test rate limit metrics."""
+        """Test rate limit metrics."""
         if not metrics.enabled:
             pytest.skip("Prometheus not installed")
 
@@ -694,7 +694,7 @@ class TestAdvancedMetrics:
 
     def test_webhook_metrics(self, metrics):
 
-             """Test webhook metrics."""
+        """Test webhook metrics."""
         if not metrics.enabled:
             pytest.skip("Prometheus not installed")
 
@@ -721,7 +721,7 @@ class TestAdvancedMetrics:
 
     def test_model_performance_metrics(self, metrics):
 
-             """Test model performance tracking."""
+        """Test model performance tracking."""
         if not metrics.enabled:
             pytest.skip("Prometheus not installed")
 

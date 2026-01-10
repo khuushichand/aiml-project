@@ -26,9 +26,12 @@ import json
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Iterable, Sequence
+import os
+import sys
+from pathlib import Path
+from urllib.parse import urlparse
 
 import numpy as np
-import requests
 from loguru import logger
 
 
@@ -47,6 +50,36 @@ _SOUNDFILE_MISSING_MSG = (
 _PROMETHEUS_CLIENT_MISSING_MSG = (
     "Prometheus text parsing requires prometheus_client; install to enable fallback."
 )
+
+
+def _ensure_repo_root() -> None:
+    here = Path(__file__).resolve()
+    for parent in [here] + list(here.parents):
+        if (parent / "tldw_Server_API").is_dir():
+            sys.path.insert(0, str(parent))
+            return
+
+
+def _configure_local_egress(url: str) -> None:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return
+    host = (parsed.hostname or "").lower()
+    if host in {"localhost", "0.0.0.0"} or host.startswith("127.") or host == "::1":
+        os.environ.setdefault("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "false")
+        if "WORKFLOWS_EGRESS_ALLOWED_PORTS" not in os.environ:
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            os.environ["WORKFLOWS_EGRESS_ALLOWED_PORTS"] = f"{port},80,443"
+
+
+_ensure_repo_root()
+
+try:
+    from tldw_Server_API.app.core import http_client
+except Exception:
+    print("tldw_Server_API not available; run from the repo root or set PYTHONPATH.", file=sys.stderr)
+    raise SystemExit(1)
 
 
 def _make_silence(duration_sec: float = 0.2, sr: int = 16000) -> bytes:
@@ -124,13 +157,13 @@ def _fetch_metrics(base_url: str, api_key: Optional[str]) -> Dict[str, Any]:
         For Prometheus text format, parses histogram metrics into structured dicts.
 
     Raises:
-        requests.HTTPError: If the request fails.
+        Exception: If the request fails.
         RuntimeError: If Prometheus parsing is needed but prometheus_client is not installed.
     """
     headers = {}
     if api_key:
         headers["X-API-KEY"] = api_key
-    r = requests.get(f"{base_url}/metrics", headers=headers, timeout=5)
+    r = http_client.fetch(method="GET", url=f"{base_url}/metrics", headers=headers, timeout=5)
     r.raise_for_status()
     try:
         data = r.json()
@@ -369,7 +402,7 @@ def run_full_turn(
         # Default harness target; override via server/env config as needed.
     }
     start = time.time()
-    r = requests.post(f"{base_url}/api/v1/audio/chat", headers=headers, json=payload, timeout=30)
+    r = http_client.fetch(method="POST", url=f"{base_url}/api/v1/audio/chat", headers=headers, json=payload, timeout=30)
     latency = time.time() - start
     r.raise_for_status()
 
@@ -409,6 +442,7 @@ def main():
     args = parser.parse_args()
 
     try:
+        _configure_local_egress(args.base_url)
         if args.short:
             result = run_short_mode(args.base_url, args.api_key)
         else:

@@ -236,9 +236,6 @@ def validate_payload(provider: str, payload: Mapping[str, Any]) -> Dict[str, Any
             message=f"Blocked fields for provider '{provider_key}': {', '.join(blocked_present)}",
             provider=provider_key or None,
         )
-    # Treat default tool_choice="auto" as a no-op unless tools are explicitly provided.
-    if normalized.get("tool_choice") == "auto" and not normalized.get("tools"):
-        normalized["tool_choice"] = None
     allowed = get_allowed_fields(provider_key)
     unsupported = sorted(set(filtered.keys()) - allowed)
     if unsupported:
@@ -247,6 +244,11 @@ def validate_payload(provider: str, payload: Mapping[str, Any]) -> Dict[str, Any
             provider=provider_key or None,
         )
     _validate_nested_fields(provider_key, filtered)
+    if normalized.get("tool_choice") is not None and not (isinstance(normalized.get("tools"), list) and normalized.get("tools")):
+        raise ChatBadRequestError(
+            message="tool_choice requires tools",
+            provider=provider_key or None,
+        )
     return normalized
 
 

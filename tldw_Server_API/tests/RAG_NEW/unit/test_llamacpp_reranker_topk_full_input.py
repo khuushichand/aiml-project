@@ -27,7 +27,7 @@ async def test_llamacpp_reranker_scores_all_docs_and_returns_topk(monkeypatch):
 
     class _FakeProc:
         def __init__(self, out):
-                     self._out = out
+            self._out = out
             self.returncode = 0
 
         async def communicate(self):

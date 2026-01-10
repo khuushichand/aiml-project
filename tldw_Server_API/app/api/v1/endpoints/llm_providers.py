@@ -16,6 +16,7 @@ from tldw_Server_API.app.core.LLM_Calls.provider_metadata import (
     PROVIDER_REQUIRES_KEY,
     PROVIDER_CAPABILITIES,
 )
+from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import get_api_keys
 from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
 from tldw_Server_API.app.core.Usage.pricing_catalog import list_provider_models
 import tldw_Server_API.app.core.LLM_Calls.adapter_registry as llm_adapter_registry
@@ -733,6 +734,21 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
                 'message': 'No API configuration sections found in config.txt'
             }
 
+        try:
+            api_keys_by_provider = get_api_keys()
+        except Exception:
+            api_keys_by_provider = {}
+
+        def _valid_api_key(value: Optional[str]) -> Optional[str]:
+            if not isinstance(value, str):
+                return None
+            trimmed = value.strip()
+            if not trimmed:
+                return None
+            if trimmed.startswith("<") and trimmed.endswith(">"):
+                return None
+            return trimmed
+
         # Define provider mappings with their config keys
         provider_mappings = {
             # Commercial APIs (from API section)
@@ -932,12 +948,13 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
             if provider_info['type'] == 'commercial':
                 # Check for API key
                 api_key_field = provider_info.get('api_key_field')
+                api_key = None
                 if api_key_field and config_section_exists and config_parser.has_option(section_name, api_key_field):
                     api_key = config_parser.get(section_name, api_key_field, fallback='')
-                    # Check if API key is valid (not empty and not placeholder)
-                    if api_key and not api_key.startswith('<') and not api_key.endswith('>'):
-                        is_configured = True
-                        api_key_value = api_key
+                api_key = _valid_api_key(api_key) or _valid_api_key(api_keys_by_provider.get(provider_name))
+                if api_key:
+                    is_configured = True
+                    api_key_value = api_key
             else:
                 # Check for endpoint URL for local providers
                 endpoint_field = provider_info.get('endpoint_field')

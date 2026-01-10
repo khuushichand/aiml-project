@@ -18,7 +18,7 @@ class TestCircuitBreakerInit:
 
     def test_init_with_defaults(self):
 
-             """Test initialization with default values."""
+        """Test initialization with default values."""
         cb = CircuitBreaker("test")
 
         assert cb.config.failure_threshold == 5
@@ -30,7 +30,7 @@ class TestCircuitBreakerInit:
 
     def test_init_with_custom_values(self):
 
-             """Test initialization with custom values."""
+        """Test initialization with custom values."""
         config = CircuitBreakerConfig(
             failure_threshold=3,
             recovery_timeout=30,
@@ -44,7 +44,7 @@ class TestCircuitBreakerInit:
 
     def test_init_with_multiple_exceptions(self):
 
-             """Test initialization with multiple exception types."""
+        """Test initialization with multiple exception types."""
         config = CircuitBreakerConfig(
             expected_exception=(ValueError, TypeError, KeyError)
         )
@@ -59,7 +59,7 @@ class TestCircuitBreakerStates:
 
     def test_initial_state_is_closed(self):
 
-             """Test that circuit starts in closed state."""
+        """Test that circuit starts in closed state."""
         config = CircuitBreakerConfig(failure_threshold=3)
         cb = CircuitBreaker("test", config)
         assert cb.state == CircuitState.CLOSED
@@ -67,7 +67,7 @@ class TestCircuitBreakerStates:
 
     def test_transition_to_open_on_threshold(self):
 
-             """Test transition to open state when failure threshold reached."""
+        """Test transition to open state when failure threshold reached."""
         config = CircuitBreakerConfig(failure_threshold=3)
         cb = CircuitBreaker("test", config)
 
@@ -82,7 +82,7 @@ class TestCircuitBreakerStates:
 
     def test_transition_to_half_open_after_timeout(self):
 
-             """Test transition to half-open state after recovery timeout."""
+        """Test transition to half-open state after recovery timeout."""
         config = CircuitBreakerConfig(failure_threshold=2, recovery_timeout=1)
         cb = CircuitBreaker("test", config)
 
@@ -103,7 +103,7 @@ class TestCircuitBreakerStates:
 
     def test_transition_from_half_open_to_closed_on_success(self):
 
-             """Test transition from half-open to closed on successful call."""
+        """Test transition from half-open to closed on successful call."""
         config = CircuitBreakerConfig(failure_threshold=2)
         cb = CircuitBreaker("test", config)
 
@@ -120,7 +120,7 @@ class TestCircuitBreakerStates:
 
     def test_transition_from_half_open_to_open_on_failure(self):
 
-             """Test transition from half-open back to open on failure."""
+        """Test transition from half-open back to open on failure."""
         config = CircuitBreakerConfig(failure_threshold=2)
         cb = CircuitBreaker("test", config)
 
@@ -147,7 +147,7 @@ class TestCircuitBreakerDecorator:
 
         def successful_function(x):
 
-                     return x * 2
+            return x * 2
 
         result = await cb.call(successful_function, 5)
         assert result == 10
@@ -162,7 +162,7 @@ class TestCircuitBreakerDecorator:
 
         def failing_function():
 
-                     raise ValueError("Test error")
+            raise ValueError("Test error")
 
         # First failures should be allowed
         for i in range(3):
@@ -225,7 +225,7 @@ class TestCircuitBreakerCallMethod:
 
         def test_func(a, b):
 
-                     return a + b
+            return a + b
 
         result = await cb.call(test_func, 3, 5)
         assert result == 8
@@ -242,7 +242,7 @@ class TestCircuitBreakerCallMethod:
 
         def test_func():
 
-                     raise ValueError("Expected error")
+            raise ValueError("Expected error")
 
         # Should count as failure
         with pytest.raises(ValueError):
@@ -261,7 +261,7 @@ class TestCircuitBreakerCallMethod:
 
         def test_func():
 
-                     raise TypeError("Unexpected error")
+            raise TypeError("Unexpected error")
 
         # Should not count as circuit breaker failure
         with pytest.raises(TypeError):
@@ -278,7 +278,7 @@ class TestCircuitBreakerCallMethod:
 
         def test_func():
 
-                     raise ValueError("Error")
+            raise ValueError("Error")
 
         # Open the circuit
         with pytest.raises(ValueError):
@@ -309,7 +309,7 @@ class TestCircuitBreakerRecovery:
 
         def failing_func():
 
-                     raise ValueError("Error")
+            raise ValueError("Error")
 
         # Open the circuit
         for _ in range(2):
@@ -323,7 +323,7 @@ class TestCircuitBreakerRecovery:
 
         # Successful call should trigger transition to half-open then closed
         def success_func():
-                     return "success"
+            return "success"
 
         result = await cb.call(success_func)
         assert result == "success"
@@ -335,7 +335,7 @@ class TestCircuitBreakerRecovery:
 
     def test_manual_reset(self):
 
-             """Test manual reset of circuit breaker."""
+        """Test manual reset of circuit breaker."""
         config = CircuitBreakerConfig(failure_threshold=2)
         cb = CircuitBreaker("test", config)
 
@@ -366,7 +366,7 @@ class TestCircuitBreakerRecovery:
 
         def test_func():
 
-                     nonlocal call_count
+            nonlocal call_count
             call_count += 1
             if call_count <= 2:  # Allow 2 calls for success threshold
                 return "success"
@@ -387,7 +387,7 @@ class TestCircuitBreakerMetrics:
 
     def test_failure_count_tracking(self):
 
-             """Test accurate failure count tracking."""
+        """Test accurate failure count tracking."""
         config = CircuitBreakerConfig(failure_threshold=5)
         cb = CircuitBreaker("test", config)
 
@@ -403,7 +403,7 @@ class TestCircuitBreakerMetrics:
 
     def test_last_failure_time_tracking(self):
 
-             """Test tracking of last failure timestamp."""
+        """Test tracking of last failure timestamp."""
         config = CircuitBreakerConfig(failure_threshold=5)
         cb = CircuitBreaker("test", config)
 
@@ -422,7 +422,7 @@ class TestCircuitBreakerMetrics:
 
     def test_success_rate_calculation(self):
 
-             """Test calculation of success rate."""
+        """Test calculation of success rate."""
         config = CircuitBreakerConfig(failure_threshold=10)
         cb = CircuitBreaker("test", config)
 
@@ -443,7 +443,7 @@ class TestCircuitBreakerMetrics:
 
     def test_circuit_breaker_statistics(self):
 
-             """Test comprehensive statistics gathering."""
+        """Test comprehensive statistics gathering."""
         config = CircuitBreakerConfig(failure_threshold=3, recovery_timeout=60)
         cb = CircuitBreaker("test", config)
 
@@ -542,7 +542,7 @@ class TestCircuitBreakerErrorHandling:
 
         def failing_func():
 
-                     raise ValueError("Original error message")
+            raise ValueError("Original error message")
 
         with pytest.raises(ValueError) as exc_info:
             await cb.call(failing_func)
@@ -560,7 +560,7 @@ class TestCircuitBreakerErrorHandling:
 
         def test_func():
 
-                     return "should not execute"
+            return "should not execute"
 
         with pytest.raises(CircuitOpenError):
             await cb.call(test_func)

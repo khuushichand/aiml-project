@@ -20,21 +20,18 @@ from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
-DEFAULT_PATH = Path("Databases/Rewrite_Cache/rewrite_cache.jsonl")
 
-
-def _safe_path() -> Path:
+def _safe_path(user_id: Optional[str]) -> Path:
     try:
         base = os.getenv("RAG_REWRITE_CACHE_PATH")
         if base:
             p = Path(base)
-        else:
-            p = DEFAULT_PATH
-        p.parent.mkdir(parents=True, exist_ok=True)
-        return p
+            p.parent.mkdir(parents=True, exist_ok=True)
+            return p
+        return DatabasePaths.get_user_rewrite_cache_path(user_id)
     except (OSError, RuntimeError, ValueError) as exc:
-        logger.error("Rewrite cache: failed to resolve cache path; using default: {}", exc)
-        return DEFAULT_PATH
+        logger.error("Rewrite cache: failed to resolve cache path: {}", exc)
+        raise
     except Exception as exc:
         logger.exception("Rewrite cache: unexpected error resolving cache path: {}", exc)
         raise
@@ -108,11 +105,7 @@ class RewriteCache:
     ) -> None:
         # Determine storage path (per-user if provided)
         if path is None:
-            if user_id is not None:
-                p = DatabasePaths.get_user_rewrite_cache_path(user_id)
-                self.path = str(p)
-            else:
-                self.path = str(_safe_path())
+            self.path = str(_safe_path(user_id))
         else:
             self.path = str(Path(path))
         # Decay settings

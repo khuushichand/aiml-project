@@ -14,13 +14,13 @@ pytestmark = pytest.mark.integration
 def _now_iso() -> str:
 
 
-     return datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
+    return datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
 
 
 def test_workflow_definition_and_run_roundtrip(workflows_dual_backend_db):
 
 
-     backend_label, db = workflows_dual_backend_db
+    backend_label, db = workflows_dual_backend_db
 
     definition_body: Dict[str, object] = {
         "name": "Sample Workflow",

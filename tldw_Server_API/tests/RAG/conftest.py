@@ -119,7 +119,7 @@ def _drop_postgres_database(config: DatabaseConfig) -> None:
 def _build_postgres_config() -> DatabaseConfig:
 
 
-     return DatabaseConfig(
+    return DatabaseConfig(
         backend_type=BackendType.POSTGRESQL,
         pg_host=os.environ["POSTGRES_TEST_HOST"],
         pg_port=int(os.environ["POSTGRES_TEST_PORT"]),

@@ -22,7 +22,7 @@ def test_base64_never_normalizes(monkeypatch):
 
 @pytest.mark.unit
 def test_numeric_default_normalizes_non_adapter(monkeypatch):
-     monkeypatch.delenv("LLM_EMBEDDINGS_L2_NORMALIZE", raising=False)
+    monkeypatch.delenv("LLM_EMBEDDINGS_L2_NORMALIZE", raising=False)
 
     emb = [3.0, 4.0]
     arr, did_l2 = decide_and_apply_l2(emb, encoding_format="float", embeddings_from_adapter=False)
@@ -35,7 +35,7 @@ def test_numeric_default_normalizes_non_adapter(monkeypatch):
 
 @pytest.mark.unit
 def test_adapter_vectors_preserved_by_default(monkeypatch):
-     monkeypatch.delenv("LLM_EMBEDDINGS_L2_NORMALIZE", raising=False)
+    monkeypatch.delenv("LLM_EMBEDDINGS_L2_NORMALIZE", raising=False)
 
     emb = [3.0, 4.0]
     arr, did_l2 = decide_and_apply_l2(emb, encoding_format="float", embeddings_from_adapter=True)
@@ -47,7 +47,7 @@ def test_adapter_vectors_preserved_by_default(monkeypatch):
 
 @pytest.mark.unit
 def test_adapter_vectors_normalize_when_env_truthy(monkeypatch):
-     monkeypatch.setenv("LLM_EMBEDDINGS_L2_NORMALIZE", "true")
+    monkeypatch.setenv("LLM_EMBEDDINGS_L2_NORMALIZE", "true")
 
     emb = [3.0, 4.0]
     arr, did_l2 = decide_and_apply_l2(emb, encoding_format="float", embeddings_from_adapter=True)
@@ -76,7 +76,7 @@ def test_error_during_norm_returns_original_and_logs(monkeypatch):
 
     def boom(_):
 
-             raise RuntimeError("norm failed")
+        raise RuntimeError("norm failed")
 
     monkeypatch.setattr(np.linalg, "norm", boom)
 
@@ -90,7 +90,7 @@ def test_error_during_norm_returns_original_and_logs(monkeypatch):
 
 @pytest.mark.unit
 def test_zero_vector_no_divide(monkeypatch):
-     monkeypatch.delenv("LLM_EMBEDDINGS_L2_NORMALIZE", raising=False)
+    monkeypatch.delenv("LLM_EMBEDDINGS_L2_NORMALIZE", raising=False)
     emb = [0.0, 0.0, 0.0]
     arr, did_l2 = decide_and_apply_l2(emb, encoding_format="float", embeddings_from_adapter=False)
 
@@ -102,7 +102,7 @@ def test_zero_vector_no_divide(monkeypatch):
 
 @pytest.mark.unit
 def test_unknown_encoding_treated_as_numeric(monkeypatch):
-     monkeypatch.delenv("LLM_EMBEDDINGS_L2_NORMALIZE", raising=False)
+    monkeypatch.delenv("LLM_EMBEDDINGS_L2_NORMALIZE", raising=False)
     emb = [3.0, 4.0]
     arr, did_l2 = decide_and_apply_l2(emb, encoding_format="xyz", embeddings_from_adapter=False)
 
@@ -157,7 +157,7 @@ def test_mixed_batch_env_truthy_normalizes_all(monkeypatch):
 
 @pytest.mark.unit
 def test_high_dim_non_adapter_normalizes_and_float32(monkeypatch):
-     monkeypatch.delenv("LLM_EMBEDDINGS_L2_NORMALIZE", raising=False)
+    monkeypatch.delenv("LLM_EMBEDDINGS_L2_NORMALIZE", raising=False)
     vec = np.arange(1, 4097, dtype=np.float64)  # 4096-dim
     arr, did_l2 = decide_and_apply_l2(vec, encoding_format="float", embeddings_from_adapter=False)
 
@@ -168,7 +168,7 @@ def test_high_dim_non_adapter_normalizes_and_float32(monkeypatch):
 
 @pytest.mark.unit
 def test_high_dim_adapter_preserved_by_default(monkeypatch):
-     monkeypatch.delenv("LLM_EMBEDDINGS_L2_NORMALIZE", raising=False)
+    monkeypatch.delenv("LLM_EMBEDDINGS_L2_NORMALIZE", raising=False)
     vec = np.arange(1, 4097, dtype=np.float64)
     original_norm = float(np.linalg.norm(vec.astype(np.float32)))
     arr, did_l2 = decide_and_apply_l2(vec, encoding_format="float", embeddings_from_adapter=True)

@@ -1102,7 +1102,7 @@ async def forgot_password(
         # Apply simple per-IP rate limit to mitigate abuse; on exceed, return generic success
         try:
             allowed, _ = await rate_limiter.check_rate_limit(
-                identifier=f"ip:{client_ip}", endpoint="auth:forgot_password", limit=10, burst=5, window_minutes=1
+                identifier=f"ip:{client_ip}", endpoint="auth:forgot_password", limit=10, window_minutes=1
             )
             if not allowed:
                 return {"message": "If the email exists, a reset link has been sent"}
@@ -1217,7 +1217,7 @@ async def reset_password(
         try:
             ip_addr = request.client.host if request and getattr(request, "client", None) else "unknown"
             await rate_limiter.check_rate_limit(
-                identifier=f"ip:{ip_addr}", endpoint="auth:reset_password", limit=20, burst=10, window_minutes=5
+                identifier=f"ip:{ip_addr}", endpoint="auth:reset_password", limit=20, window_minutes=5
             )
         except Exception:
             pass

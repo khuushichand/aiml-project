@@ -17,7 +17,7 @@ def test_get_corpus_synonyms_logs_selection_and_does_not_create(tmp_path, monkey
 
     def _sink(msg):
 
-             try:
+        try:
             messages.append(str(msg))
         except Exception:
             pass

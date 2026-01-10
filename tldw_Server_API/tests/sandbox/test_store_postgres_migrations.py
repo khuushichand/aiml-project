@@ -10,7 +10,7 @@ import pytest
 def _has_psycopg() -> bool:
 
 
-     try:
+    try:
         import psycopg  # noqa: F401
         return True
     except Exception:
@@ -19,7 +19,7 @@ def _has_psycopg() -> bool:
 
 @pytest.mark.integration
 def test_postgres_store_adds_missing_columns(monkeypatch):
-     dsn = os.getenv("SANDBOX_TEST_PG_DSN")
+    dsn = os.getenv("SANDBOX_TEST_PG_DSN")
     if not dsn or not _has_psycopg():
         pytest.skip("Postgres DSN not provided or psycopg not installed")
     import psycopg

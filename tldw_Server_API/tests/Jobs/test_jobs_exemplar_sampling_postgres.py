@@ -7,7 +7,7 @@ pytestmark = pytest.mark.pg_jobs
 def _env(monkeypatch):
 
 
-     monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("JOBS_METRICS_EXEMPLARS", "true")
     monkeypatch.setenv("JOBS_METRICS_EXEMPLAR_SAMPLING", "1.0")
@@ -16,7 +16,7 @@ def _env(monkeypatch):
 def test_exemplar_labels_propagate_postgres(monkeypatch):
 
 
-     if not os.getenv("JOBS_DB_URL", "").startswith("postgres"):
+    if not os.getenv("JOBS_DB_URL", "").startswith("postgres"):
         pytest.skip("JOBS_DB_URL not set to Postgres")
     _env(monkeypatch)
     # Force random sampling to always true

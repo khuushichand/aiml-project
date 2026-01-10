@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.Prompt_Management.prompt_studio.test_runner import
 
 @pytest.fixture
 def temp_ps_db(tmp_path) -> PromptStudioDatabase:
-     os.environ.setdefault("TEST_MODE", "true")
+    os.environ.setdefault("TEST_MODE", "true")
     return PromptStudioDatabase(str(tmp_path / "ps_mcts_unit.db"), client_id="mcts-unit")
 
 
@@ -40,7 +40,7 @@ def _seed_prompt_and_tests(db: PromptStudioDatabase, n_tests: int = 2):
 def test_uct_selection_behavior():
 
 
-     parent = MCTSOptimizer._Node.__new__(MCTSOptimizer._Node)  # bypass __init__ signature
+    parent = MCTSOptimizer._Node.__new__(MCTSOptimizer._Node)  # bypass __init__ signature
     parent.parent = None
     parent.segment_index = 0
     parent.system_text = ""
@@ -52,7 +52,7 @@ def test_uct_selection_behavior():
 
     # Two children with different q/n - ensure UCT favors higher exploitation when visits equal
     def _mk(q_sum, n_vis):
-             ch = MCTSOptimizer._Node.__new__(MCTSOptimizer._Node)
+        ch = MCTSOptimizer._Node.__new__(MCTSOptimizer._Node)
         ch.parent = parent
         ch.segment_index = 1
         ch.system_text = "x"

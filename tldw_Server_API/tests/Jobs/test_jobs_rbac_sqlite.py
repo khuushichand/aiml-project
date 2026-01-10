@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 def _set_env(monkeypatch):
 
 
-     monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     # Remove API key so settings provides deterministic test key
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
@@ -19,7 +19,7 @@ def _set_env(monkeypatch):
 def test_rbac_requires_domain_filter_and_allowlist(monkeypatch, tmp_path):
 
 
-     monkeypatch.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     _set_env(monkeypatch)
 
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings

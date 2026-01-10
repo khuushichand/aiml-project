@@ -9,14 +9,14 @@ from tldw_Server_API.app.main import app
 def _setup_env():
 
 
-     os.environ["AUTH_MODE"] = "single_user"
+    os.environ["AUTH_MODE"] = "single_user"
     os.environ["SINGLE_USER_API_KEY"] = "unit-test-api-key-pricing"
 
 
 def test_admin_reload_pricing_catalog_smoke():
 
 
-     _setup_env()
+    _setup_env()
 
     headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
     with TestClient(app, headers=headers) as client:

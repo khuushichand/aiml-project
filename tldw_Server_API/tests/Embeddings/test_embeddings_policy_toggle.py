@@ -8,7 +8,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
 @pytest.fixture
 def client():
-     with TestClient(app) as c:
+    with TestClient(app) as c:
         c.cookies.set("csrf_token", "test-csrf")
         c.headers["X-CSRF-Token"] = "test-csrf"
         c.headers["Authorization"] = "Bearer test-api-key"
@@ -18,7 +18,7 @@ def client():
 def _override_user(admin=False):
 
 
-     async def _f():
+    async def _f():
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
         return User(id=1, username="u", email="u@x", is_active=True, is_admin=admin)
     return _f

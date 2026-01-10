@@ -27,14 +27,13 @@ async def test_unified_pipeline_with_hyde_merges_results():
 
     class _FakeMultiRetriever:
         def __init__(self, *args, **kwargs):
-                     self.retrievers = {DataSource.MEDIA_DB: _FakeMediaRetriever()}
+            self.retrievers = {DataSource.MEDIA_DB: _FakeMediaRetriever()}
         async def retrieve(self, *args, **kwargs):
             return base_docs
 
     with patch("tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever", _FakeMultiRetriever), \
          patch("tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.generate_hypothetical_answer", return_value="Hypo answer"), \
          patch("tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.hyde_embed_text", new=AsyncMock(return_value=[0.1, 0.2, 0.3])):
-
         result = await unified_rag_pipeline(
             query="test hyde",
             sources=["media_db"],

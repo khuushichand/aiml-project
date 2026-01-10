@@ -437,6 +437,13 @@ async def generate_embeddings_for_media(
             collection_name = f"user_{user_id}_media_embeddings"
 
             # Prepare metadata for each chunk
+            extra_metadata = {}
+            try:
+                media_item_meta = media_content.get("media_item", {})
+                if isinstance(media_item_meta, dict):
+                    extra_metadata = media_item_meta.get("metadata") or {}
+            except Exception:
+                extra_metadata = {}
             metadatas = []
             for i, chunk in enumerate(chunks):
                 metadata = {
@@ -449,6 +456,8 @@ async def generate_embeddings_for_media(
                     "embedding_model": embedding_model,
                     "embedding_provider": embedding_provider
                 }
+                if isinstance(extra_metadata, dict) and extra_metadata:
+                    metadata["extra"] = dict(extra_metadata)
                 metadatas.append(metadata)
 
             # Store embeddings
@@ -503,6 +512,13 @@ async def generate_embeddings_for_media(
                 collection_name = f"user_{user_id}_media_embeddings"
 
                 metadatas = []
+                extra_metadata = {}
+                try:
+                    media_item_meta = media_content.get("media_item", {})
+                    if isinstance(media_item_meta, dict):
+                        extra_metadata = media_item_meta.get("metadata") or {}
+                except Exception:
+                    extra_metadata = {}
                 for i, chunk in enumerate(chunks):
                     metadata = {
                         "media_id": str(media_id),
@@ -514,6 +530,8 @@ async def generate_embeddings_for_media(
                         "embedding_model": FALLBACK_EMBEDDING_MODEL,
                         "embedding_provider": "huggingface"
                     }
+                    if isinstance(extra_metadata, dict) and extra_metadata:
+                        metadata["extra"] = dict(extra_metadata)
                     metadatas.append(metadata)
 
                 ids = [f"media_{media_id}_chunk_{i}" for i in range(len(chunks))]

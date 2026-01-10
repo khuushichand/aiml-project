@@ -5,20 +5,20 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 class FakeCursor:
     def __init__(self, responses=None):
-             self._responses = responses or {}
+        self._responses = responses or {}
         self._last_sql = None
 
     def __enter__(self):
 
-             return self
+        return self
 
     def __exit__(self, exc_type, exc, tb):
 
-             return False
+        return False
 
     def execute(self, sql, params=None):
 
-             self._last_sql = str(sql)
+        self._last_sql = str(sql)
 
     def fetchone(self):
 
@@ -27,16 +27,16 @@ class FakeCursor:
 
     def fetchall(self):
 
-             return []
+        return []
 
 
 class FakeConn:
     def __init__(self):
-             pass
+        pass
 
     def close(self):
 
-             pass
+        pass
 
 
 @pytest.mark.unit

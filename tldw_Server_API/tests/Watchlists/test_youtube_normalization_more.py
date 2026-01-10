@@ -13,7 +13,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture()
 def client_with_user(monkeypatch, tmp_path):
-     async def override_user():
+    async def override_user():
         return User(id=777, username="ytuser", email=None, is_active=True)
 
     # Route user DB base dir into project Databases to avoid permission issues

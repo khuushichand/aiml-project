@@ -11,14 +11,14 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
 @pytest.fixture(autouse=True)
 def _enable_testing_env():
-     os.environ["TESTING"] = "true"
+    os.environ["TESTING"] = "true"
     yield
     os.environ.pop("TESTING", None)
 
 
 @pytest.fixture
 def client():
-     with TestClient(app) as c:
+    with TestClient(app) as c:
         c.cookies.set("csrf_token", "test-csrf")
         c.headers["X-CSRF-Token"] = "test-csrf"
         c.headers["Authorization"] = "Bearer test-api-key"
@@ -27,7 +27,7 @@ def client():
 
 @pytest.mark.unit
 def test_provider_fallback_to_hf(client, monkeypatch):
-     async def override_user():
+    async def override_user():
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
         return User(id=1, username="u", email="u@x", is_active=True, is_admin=False)
 
@@ -53,9 +53,9 @@ def test_provider_fallback_to_hf(client, monkeypatch):
     # Patch metrics to avoid registry issues
     class _MC:
         def labels(self, **kwargs):
-                     return self
+            return self
         def inc(self, *args, **kwargs):
-                     return None
+            return None
 
     import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as mod
     monkeypatch.setattr(mod, "create_embeddings_batch_async", fake_batch_async, raising=True)
@@ -85,7 +85,7 @@ def test_provider_fallback_to_hf(client, monkeypatch):
 
 @pytest.mark.unit
 def test_no_fallback_when_header_specified(client, monkeypatch):
-     async def override_user():
+    async def override_user():
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
         return User(id=1, username="u", email="u@x", is_active=True, is_admin=False)
 

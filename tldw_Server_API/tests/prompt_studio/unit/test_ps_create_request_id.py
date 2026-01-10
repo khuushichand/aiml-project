@@ -6,19 +6,19 @@ from tldw_Server_API.app.main import app
 
 class _StubDB:
     def __init__(self):
-             self.client_id = "test-client"
+        self.client_id = "test-client"
 
     def get_prompt_with_project(self, prompt_id: int, include_deleted: bool = False):
         return {"id": prompt_id, "project_id": 321}
 
     def create_optimization(self, **kwargs):
 
-             return {"id": 555, **kwargs}
+        return {"id": 555, **kwargs}
 
 
 @pytest.fixture
 def override_db_dependency(monkeypatch):
-     from tldw_Server_API.app.api.v1.API_Deps import prompt_studio_deps as deps
+    from tldw_Server_API.app.api.v1.API_Deps import prompt_studio_deps as deps
 
     async def _override_db():
         return _StubDB()
@@ -38,18 +38,30 @@ def override_db_dependency(monkeypatch):
 def test_create_optimization_includes_request_id_in_job_payload(monkeypatch, override_db_dependency):
 
 
-     # Force TEST_MODE for deterministic behavior (skip background task spawn)
+    # Force TEST_MODE for deterministic behavior (skip background task spawn)
     monkeypatch.setenv("TEST_MODE", "true")
 
     captured = {}
 
-    from tldw_Server_API.app.core.Prompt_Management.prompt_studio import job_manager as ps_jm
+    from tldw_Server_API.app.core.Prompt_Management.prompt_studio import jobs_adapter as ps_jobs
 
-    def fake_create_job(self, job_type, entity_id, payload, project_id=None, priority=5, max_retries=3):  # noqa: D401
+    def fake_create_job(  # noqa: D401
+        self,
+        *,
+        user_id=None,
+        job_type=None,
+        entity_id=None,
+        payload=None,
+        project_id=None,
+        priority=5,
+        max_retries=3,
+        request_id=None,
+        trace_id=None,
+    ):
         captured["payload"] = payload
         return {"id": 999, "status": "queued"}
 
-    monkeypatch.setattr(ps_jm.JobManager, "create_job", fake_create_job, raising=True)
+    monkeypatch.setattr(ps_jobs.PromptStudioJobsAdapter, "create_job", fake_create_job, raising=True)
 
     client = TestClient(app)
     body = {

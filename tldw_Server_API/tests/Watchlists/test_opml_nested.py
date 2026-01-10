@@ -13,7 +13,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture()
 def client_with_user(monkeypatch):
-     async def override_user():
+    async def override_user():
         return User(id=779, username="wluser", email=None, is_active=True)
 
     base_dir = Path.cwd() / "Databases" / "test_user_dbs_opml_nested"
@@ -50,7 +50,7 @@ def _nested_opml() -> str:
 def test_opml_nested_and_case_variations(client_with_user):
 
 
-     c = client_with_user
+    c = client_with_user
     xml = _nested_opml()
     files = {"file": ("nested.opml", io.BytesIO(xml.encode("utf-8")), "application/xml")}
     r = c.post("/api/v1/watchlists/sources/import", files=files, data={"active": "1"})

@@ -460,6 +460,9 @@ PY
 
 3. Restart the server; it will automatically fall back to the per-user SQLite databases
    defined by `USER_DB_BASE_DIR`.
+   `USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to
+   `Databases/user_databases/` under the project root). Override via environment variable
+   or `Config_Files/config.txt` as needed.
 
 ---
 

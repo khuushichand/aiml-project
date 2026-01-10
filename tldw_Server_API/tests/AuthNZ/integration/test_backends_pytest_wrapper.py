@@ -5,7 +5,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.mark.integration
 def test_authnz_sqlite_backend_smoke():
-     """Smoke-run the AuthNZ backend tests against SQLite under pytest.
+    """Smoke-run the AuthNZ backend tests against SQLite under pytest.
 
     This wraps the existing test runner class so pytest can collect it,
     without relying on the CLI entry in test_authnz_backends.py.

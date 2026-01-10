@@ -7,7 +7,7 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 @pytest.fixture()
 def jobs_db(tmp_path):
-     db_path = tmp_path / "jobs.db"
+    db_path = tmp_path / "jobs.db"
     ensure_jobs_tables(db_path)
     yield db_path
 
@@ -15,7 +15,7 @@ def jobs_db(tmp_path):
 def test_idempotency_scoped_to_domain_queue_type_sqlite(jobs_db):
 
 
-     jm = JobManager(jobs_db)
+    jm = JobManager(jobs_db)
     key = "idem-key-123"
 
     # Same group (domain, queue, job_type) + same key -> same row

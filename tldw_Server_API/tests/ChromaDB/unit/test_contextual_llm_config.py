@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 
 @pytest.mark.unit
 def test_contextualization_respects_provider_and_model(chromadb_manager, mock_chroma_client):
-     """
+    """
     Ensure situate_context and outline generation call analyze() with the configured
     provider and model_override for contextual chunking.
     """
@@ -38,7 +38,7 @@ def test_contextualization_respects_provider_and_model(chromadb_manager, mock_ch
 
             def _fake_analyze(*args, **kwargs):
 
-                             calls.append((args, kwargs))
+                calls.append((args, kwargs))
                 return "HEADER"
 
             with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.analyze', side_effect=_fake_analyze):

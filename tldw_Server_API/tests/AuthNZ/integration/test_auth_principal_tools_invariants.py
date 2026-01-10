@@ -69,7 +69,7 @@ def _restore_auth_capture(app: FastAPI, original_get_auth_principal):
 def test_tools_execute_api_key_principal_and_state_alignment(isolated_test_environment, monkeypatch):
 
 
-     """
+    """
     Multi-user API-key happy path for a representative tools route:
 
     - Register a user and create a real API key.

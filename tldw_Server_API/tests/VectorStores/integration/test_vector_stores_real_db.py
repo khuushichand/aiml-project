@@ -12,7 +12,7 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 @pytest.fixture(autouse=True)
 def testing_env(monkeypatch, tmp_path):
-     os.environ['TESTING'] = 'true'
+    os.environ['TESTING'] = 'true'
     from tldw_Server_API.app.core import config as cfg
     # Ensure base dir is a Path for DB helpers
     monkeypatch.setitem(cfg.settings, 'USER_DB_BASE_DIR', pathlib.Path(tmp_path))
@@ -23,7 +23,7 @@ def testing_env(monkeypatch, tmp_path):
 
 @pytest.fixture()
 def client():
-     async def override_user():
+    async def override_user():
         return User(id=1, username='tester', email='t@e.com', is_active=True, is_admin=True)
 
     app.dependency_overrides[get_request_user] = override_user
@@ -40,7 +40,7 @@ def client():
 def test_vector_store_end_to_end_no_mocks(client):
 
 
-     # 1) Create a vector store (dim=8)
+    # 1) Create a vector store (dim=8)
     resp = client.post('/api/v1/vector_stores', json={'name': 'RealStore', 'dimensions': 8})
     assert resp.status_code == 200, resp.text
     store = resp.json(); sid = store['id']
@@ -85,7 +85,7 @@ def test_vector_store_end_to_end_no_mocks(client):
 def test_create_from_media_with_existing_embeddings_no_mocks(client):
 
 
-     # Prepare destination store
+    # Prepare destination store
     dest = client.post('/api/v1/vector_stores', json={'name':'MediaDest','dimensions':8}).json()
     dest_id = dest['id']
 
@@ -129,7 +129,7 @@ def test_create_from_media_with_existing_embeddings_no_mocks(client):
 def test_vector_store_pagination_and_delete_no_mocks(client):
 
 
-     # Create store
+    # Create store
     s = client.post('/api/v1/vector_stores', json={'name': 'PagDel', 'dimensions': 8}).json()
     sid = s['id']
 
@@ -166,7 +166,7 @@ def test_vector_store_pagination_and_delete_no_mocks(client):
 def test_query_by_text_with_embeddings_optional(client):
 
 
-     # Create store and upsert content-only records to trigger embeddings
+    # Create store and upsert content-only records to trigger embeddings
     s = client.post('/api/v1/vector_stores', json={'name': 'EmbQ', 'dimensions': 8}).json()
     sid = s['id']
     body = {'records': [{'content': 'alpha bravo charlie'}, {'content': 'bravo delta echo'}]}
@@ -186,7 +186,7 @@ def test_query_by_text_with_embeddings_optional(client):
 def test_store_get_and_rename_uniqueness_no_mocks(client):
 
 
-     # Create two stores
+    # Create two stores
     s1 = client.post('/api/v1/vector_stores', json={'name': 'UniqA', 'dimensions': 8}).json(); id1 = s1['id']
     s2 = client.post('/api/v1/vector_stores', json={'name': 'UniqB', 'dimensions': 8}).json(); id2 = s2['id']
 
@@ -208,7 +208,7 @@ def test_store_get_and_rename_uniqueness_no_mocks(client):
 def test_vector_batch_status_no_mocks(client):
 
 
-     # Create store and post a batch
+    # Create store and post a batch
     s = client.post('/api/v1/vector_stores', json={'name':'BatchR', 'dimensions': 8}).json(); sid = s['id']
     payload = {'records': [{'id': 'bx', 'values': [0.4]*8, 'metadata': {'k': 7}}]}
     rb = client.post(f"/api/v1/vector_stores/{sid}/vectors/batches", json=payload)
@@ -226,7 +226,7 @@ def test_vector_batch_status_no_mocks(client):
 def test_admin_users_list_no_mocks(client):
 
 
-     # Ensure at least one user dir exists by creating a store
+    # Ensure at least one user dir exists by creating a store
     _ = client.post('/api/v1/vector_stores', json={'name': 'AdminProbe', 'dimensions': 8})
     r = client.get('/api/v1/vector_stores/admin/users')
     assert r.status_code == 200
@@ -237,7 +237,7 @@ def test_admin_users_list_no_mocks(client):
 def test_name_uniqueness_on_create_no_mocks(client):
 
 
-     r1 = client.post('/api/v1/vector_stores', json={'name': 'SameName', 'dimensions': 8})
+    r1 = client.post('/api/v1/vector_stores', json={'name': 'SameName', 'dimensions': 8})
     assert r1.status_code == 200
     r2 = client.post('/api/v1/vector_stores', json={'name': 'SameName', 'dimensions': 8})
     assert r2.status_code == 409
@@ -246,7 +246,7 @@ def test_name_uniqueness_on_create_no_mocks(client):
 def test_list_vector_stores_contains_created_store(client):
 
 
-     s = client.post('/api/v1/vector_stores', json={'name': 'ListMe', 'dimensions': 8}).json()
+    s = client.post('/api/v1/vector_stores', json={'name': 'ListMe', 'dimensions': 8}).json()
     sid = s['id']
     lst = client.get('/api/v1/vector_stores')
     assert lst.status_code == 200
@@ -257,7 +257,7 @@ def test_list_vector_stores_contains_created_store(client):
 def test_query_with_filter_no_mocks(client):
 
 
-     # Create and insert two vectors with different metadata tags
+    # Create and insert two vectors with different metadata tags
     s = client.post('/api/v1/vector_stores', json={'name': 'FilterStore', 'dimensions': 8}).json(); sid = s['id']
     records = [
         {'id':'fa','values':[0.1]*8,'content':'A','metadata':{'genre':'a'}},
@@ -277,7 +277,7 @@ def test_query_with_filter_no_mocks(client):
 def test_duplicate_and_delete_store_no_mocks(client):
 
 
-     s = client.post('/api/v1/vector_stores', json={'name':'DupDel', 'dimensions':8}).json(); sid = s['id']
+    s = client.post('/api/v1/vector_stores', json={'name':'DupDel', 'dimensions':8}).json(); sid = s['id']
     recs = [{'id':f'd{i}','values':[0.1*i]*8,'content':f'doc{i}','metadata':{'i':i}} for i in range(3)]
     client.post(f"/api/v1/vector_stores/{sid}/vectors", json={'records': recs})
 
@@ -303,7 +303,7 @@ def test_duplicate_and_delete_store_no_mocks(client):
 def test_list_vectors_next_offset_no_mocks(client):
 
 
-     s = client.post('/api/v1/vector_stores', json={'name':'NextOff', 'dimensions':8}).json(); sid = s['id']
+    s = client.post('/api/v1/vector_stores', json={'name':'NextOff', 'dimensions':8}).json(); sid = s['id']
     recs = [{'id':f'n{i}','values':[0.1]*8,'content':f'd{i}','metadata':{'i':i}} for i in range(4)]
     client.post(f"/api/v1/vector_stores/{sid}/vectors", json={'records': recs})
     r = client.get(f"/api/v1/vector_stores/{sid}/vectors", params={'limit':2,'offset':0})
@@ -314,7 +314,7 @@ def test_list_vectors_next_offset_no_mocks(client):
 def test_delete_vector_no_mocks(client):
 
 
-     s = client.post('/api/v1/vector_stores', json={'name':'DelVec', 'dimensions':8}).json(); sid = s['id']
+    s = client.post('/api/v1/vector_stores', json={'name':'DelVec', 'dimensions':8}).json(); sid = s['id']
     rec = {'id':'gone','values':[0.0]*8,'content':'x','metadata':{'tag':'del'}}
     client.post(f"/api/v1/vector_stores/{sid}/vectors", json={'records':[rec]})
     delr = client.delete(f"/api/v1/vector_stores/{sid}/vectors/gone")
@@ -326,7 +326,7 @@ def test_delete_vector_no_mocks(client):
 
 def test_create_store_invalid_dimensions(client):
 
-     r = client.post('/api/v1/vector_stores', json={'name': 'BadDim', 'dimensions': 0})
+    r = client.post('/api/v1/vector_stores', json={'name': 'BadDim', 'dimensions': 0})
     # Pydantic may reject with 422 before handler returns 400
     assert r.status_code in (400, 422)
 
@@ -334,7 +334,7 @@ def test_create_store_invalid_dimensions(client):
 def test_upsert_wrong_dimension_rejected(client):
 
 
-     s = client.post('/api/v1/vector_stores', json={'name':'WrongDim', 'dimensions':8}).json(); sid = s['id']
+    s = client.post('/api/v1/vector_stores', json={'name':'WrongDim', 'dimensions':8}).json(); sid = s['id']
     # Seed with correct dimension to lock 8
     seed = {'id':'ok','values':[0.0]*8,'content':'seed','metadata':{'k':1}}
     client.post(f"/api/v1/vector_stores/{sid}/vectors", json={'records':[seed]})
@@ -347,7 +347,7 @@ def test_upsert_wrong_dimension_rejected(client):
 def test_upsert_missing_content_and_values(client):
 
 
-     s = client.post('/api/v1/vector_stores', json={'name':'MissingFields', 'dimensions':8}).json(); sid = s['id']
+    s = client.post('/api/v1/vector_stores', json={'name':'MissingFields', 'dimensions':8}).json(); sid = s['id']
     rec = {'id':'m1','metadata':{'k':1}}  # No values or content
     r = client.post(f"/api/v1/vector_stores/{sid}/vectors", json={'records':[rec]})
     assert r.status_code == 400
@@ -356,7 +356,7 @@ def test_upsert_missing_content_and_values(client):
 def test_query_requires_vector_or_text(client):
 
 
-     s = client.post('/api/v1/vector_stores', json={'name':'QueryNeg', 'dimensions':8}).json(); sid = s['id']
+    s = client.post('/api/v1/vector_stores', json={'name':'QueryNeg', 'dimensions':8}).json(); sid = s['id']
     q = client.post(f"/api/v1/vector_stores/{sid}/query", json={'top_k': 3})
     assert q.status_code == 400
 
@@ -364,7 +364,7 @@ def test_query_requires_vector_or_text(client):
 def test_get_nonexistent_store(client):
 
 
-     # Manager lazily creates collections; GET may return 200 with provided id metadata
+    # Manager lazily creates collections; GET may return 200 with provided id metadata
     r = client.get('/api/v1/vector_stores/vs_nonexistent_id')
     assert r.status_code in (200, 404, 422)
 
@@ -372,14 +372,14 @@ def test_get_nonexistent_store(client):
 def test_create_from_media_requires_ids_or_keywords(client):
 
 
-     r = client.post('/api/v1/vector_stores/create_from_media', json={'store_name':'X','dimensions':8})
+    r = client.post('/api/v1/vector_stores/create_from_media', json={'store_name':'X','dimensions':8})
     assert r.status_code == 400
 
 
 def test_create_from_media_invalid_chunk_method(client):
 
 
-     # Minimal valid request with invalid method
+    # Minimal valid request with invalid method
     r = client.post('/api/v1/vector_stores/create_from_media', json={
         'store_name':'BadMethod','dimensions':8,'media_ids':[1],'chunk_method':'not-a-method'
     })
@@ -389,7 +389,7 @@ def test_create_from_media_invalid_chunk_method(client):
 def test_duplicate_name_conflict(client):
 
 
-     a = client.post('/api/v1/vector_stores', json={'name':'DupConflictA','dimensions':8}).json(); aid = a['id']
+    a = client.post('/api/v1/vector_stores', json={'name':'DupConflictA','dimensions':8}).json(); aid = a['id']
     b = client.post('/api/v1/vector_stores', json={'name':'DupConflictB','dimensions':8}).json(); bid = b['id']
     # Try to duplicate A using name of B
     d = client.post(f"/api/v1/vector_stores/{aid}/duplicate", json={'new_name': 'DupConflictB'})

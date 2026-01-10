@@ -8,7 +8,7 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 def test_retryable_fail_sets_available_at_in_future(tmp_path):
 
 
-     db_path = tmp_path / "jobs.db"
+    db_path = tmp_path / "jobs.db"
     ensure_jobs_tables(db_path)
     jm = JobManager(db_path)
     j = jm.create_job(
@@ -39,7 +39,7 @@ def test_retryable_fail_sets_available_at_in_future(tmp_path):
 def test_reclaim_expired_processing(tmp_path):
 
 
-     db_path = tmp_path / "jobs.db"
+    db_path = tmp_path / "jobs.db"
     ensure_jobs_tables(db_path)
     jm = JobManager(db_path)
     j = jm.create_job(

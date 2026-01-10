@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 def _env(monkeypatch, tmp_path):
 
 
-     monkeypatch.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
@@ -21,7 +21,7 @@ def _env(monkeypatch, tmp_path):
 def _stats(client, domain="chatbooks", queue="default", job_type="export"):
 
 
-     r = client.get("/api/v1/jobs/stats", params={"domain": domain, "queue": queue, "job_type": job_type})
+    r = client.get("/api/v1/jobs/stats", params={"domain": domain, "queue": queue, "job_type": job_type})
     assert r.status_code == 200
     rows = r.json(); assert len(rows) == 1
     return rows[0]
@@ -30,7 +30,7 @@ def _stats(client, domain="chatbooks", queue="default", job_type="export"):
 def test_ttl_cancel_updates_counters(monkeypatch, tmp_path):
 
 
-     _env(monkeypatch, tmp_path)
+    _env(monkeypatch, tmp_path)
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
     reset_settings()
     from tldw_Server_API.app.main import app
@@ -80,7 +80,7 @@ def test_ttl_cancel_updates_counters(monkeypatch, tmp_path):
 def test_ttl_fail_updates_counters(monkeypatch, tmp_path):
 
 
-     _env(monkeypatch, tmp_path)
+    _env(monkeypatch, tmp_path)
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
     reset_settings()
     from tldw_Server_API.app.main import app

@@ -20,7 +20,7 @@ class TestPromptAnalysis:
 
     def test_analysis_creation(self):
 
-             """Test creating a PromptAnalysis."""
+        """Test creating a PromptAnalysis."""
         analysis = PromptAnalysis(
             clarity_score=0.85,
             specificity_score=0.75,
@@ -37,7 +37,7 @@ class TestPromptAnalysis:
 
     def test_analysis_overall_score(self):
 
-             """Test calculating overall score."""
+        """Test calculating overall score."""
         analysis = PromptAnalysis(
             clarity_score=0.80,
             specificity_score=0.70,
@@ -50,7 +50,7 @@ class TestPromptAnalysis:
 
     def test_analysis_to_dict(self):
 
-             """Test converting analysis to dictionary."""
+        """Test converting analysis to dictionary."""
         analysis = PromptAnalysis(
             clarity_score=0.85,
             specificity_score=0.75,
@@ -71,7 +71,7 @@ class TestImprovementResult:
 
     def test_result_creation(self):
 
-             """Test creating an ImprovementResult."""
+        """Test creating an ImprovementResult."""
         result = ImprovementResult(
             original_prompt="Original text",
             improved_prompt="Improved text",
@@ -88,7 +88,7 @@ class TestImprovementResult:
 
     def test_result_with_analysis(self):
 
-             """Test result with before/after analysis."""
+        """Test result with before/after analysis."""
         before = PromptAnalysis(
             clarity_score=0.60,
             specificity_score=0.60,
@@ -121,14 +121,14 @@ class TestPromptImprover:
 
     @pytest.fixture
     def improver(self):
-             """Create a PromptImprover instance."""
+        """Create a PromptImprover instance."""
         mock_db = Mock(spec=PromptStudioDatabase)
         mock_db.client_id = "test-client"
         return PromptImprover(db=mock_db)
 
     def test_improver_initialization(self):
 
-             """Test PromptImprover initialization."""
+        """Test PromptImprover initialization."""
         mock_db = Mock(spec=PromptStudioDatabase)
         mock_db.client_id = "test-client"
         improver = PromptImprover(db=mock_db)
@@ -137,7 +137,7 @@ class TestPromptImprover:
 
     def test_analyze_prompt(self, improver):
 
-             """Test analyzing a prompt."""
+        """Test analyzing a prompt."""
         prompt = "Please summarize the following text in a concise manner"
 
         analysis = improver.analyze(prompt)
@@ -150,7 +150,7 @@ class TestPromptImprover:
 
     def test_improve_clarity(self, improver):
 
-             """Test improving prompt clarity."""
+        """Test improving prompt clarity."""
         original = "You should maybe try to perhaps summarize this text if you can"
 
         result = improver.improve(
@@ -164,7 +164,7 @@ class TestPromptImprover:
 
     def test_improve_specificity(self, improver):
 
-             """Test improving prompt specificity."""
+        """Test improving prompt specificity."""
         original = "Do something with this data"
 
         result = improver.improve(
@@ -179,7 +179,7 @@ class TestPromptImprover:
 
     def test_improve_structure(self, improver):
 
-             """Test improving prompt structure."""
+        """Test improving prompt structure."""
         original = "Analyze this. Be thorough. Use examples. Format nicely."
 
         result = improver.improve(
@@ -194,7 +194,7 @@ class TestPromptImprover:
 
     def test_add_examples(self, improver):
 
-             """Test adding examples to prompt."""
+        """Test adding examples to prompt."""
         original = "Classify the sentiment of the text"
         examples = [
             {"input": "I love this!", "output": "positive"},
@@ -212,7 +212,7 @@ class TestPromptImprover:
 
     def test_add_constraints(self, improver):
 
-             """Test adding constraints to prompt."""
+        """Test adding constraints to prompt."""
         original = "Generate a summary"
         constraints = [
             "Maximum 100 words",
@@ -231,7 +231,7 @@ class TestPromptImprover:
 
     def test_chain_of_thought(self, improver):
 
-             """Test adding chain-of-thought reasoning."""
+        """Test adding chain-of-thought reasoning."""
         original = "Solve this math problem: 25 * 4 + 10"
 
         result = improver.improve(
@@ -244,7 +244,7 @@ class TestPromptImprover:
 
     def test_improve_multiple_strategies(self, improver):
 
-             """Test applying multiple improvement strategies."""
+        """Test applying multiple improvement strategies."""
         original = "Analyze data"
 
         result = improver.improve_multi(
@@ -262,7 +262,7 @@ class TestPromptImprover:
 
     def test_auto_improve(self, improver):
 
-             """Test automatic improvement selection."""
+        """Test automatic improvement selection."""
         original = "do stuff with things"
 
         result = improver.auto_improve(original)
@@ -275,7 +275,7 @@ class TestPromptImprover:
 
     def test_iterative_improvement(self, improver):
 
-             """Test iterative prompt improvement."""
+        """Test iterative prompt improvement."""
         original = "Summarize"
 
         results = improver.improve_iterative(
@@ -303,7 +303,7 @@ class TestPromptImprover:
 
     def test_batch_improvement(self, improver):
 
-             """Test batch prompt improvement."""
+        """Test batch prompt improvement."""
         prompts = [
             "Do analysis",
             "Make summary",
@@ -320,7 +320,7 @@ class TestPromptImprover:
 
     def test_compare_prompts(self, improver):
 
-             """Test comparing two prompts."""
+        """Test comparing two prompts."""
         prompt1 = "Summarize this text"
         prompt2 = "Please provide a comprehensive summary of the following text, including key points and conclusions"
 
@@ -333,7 +333,7 @@ class TestPromptImprover:
 
     def test_validate_improvement(self, improver):
 
-             """Test validating prompt improvement."""
+        """Test validating prompt improvement."""
         original = "Do task"
         improved = "Please complete the following task with attention to detail"
 
@@ -343,7 +343,7 @@ class TestPromptImprover:
 
     def test_improvement_with_llm(self, improver):
 
-             """Test improvement using LLM assistance."""
+        """Test improvement using LLM assistance."""
         with patch.object(improver, 'llm_client') as mock_llm:
             mock_llm.generate.return_value = "Improved prompt from LLM"
 
@@ -358,7 +358,7 @@ class TestPromptImprover:
 
     def test_improve_text_parses_openai_response(self, improver, monkeypatch):
 
-             """Ensure _improve_text handles OpenAI-format responses."""
+        """Ensure _improve_text handles OpenAI-format responses."""
         payload = {
             "id": "chatcmpl-test",
             "object": "chat.completion",
@@ -397,14 +397,14 @@ class TestImprovementStrategies:
 
     @pytest.fixture
     def improver(self):
-             """Create improver instance."""
+        """Create improver instance."""
         mock_db = Mock(spec=PromptStudioDatabase)
         mock_db.client_id = "test-client"
         return PromptImprover(db=mock_db)
 
     def test_simplify_strategy(self, improver):
 
-             """Test simplification strategy."""
+        """Test simplification strategy."""
         complex_prompt = """
         In order to facilitate the comprehensive analysis of the provided textual data,
         please endeavor to utilize your computational capabilities to generate a
@@ -424,7 +424,7 @@ class TestImprovementStrategies:
 
     def test_expand_strategy(self, improver):
 
-             """Test expansion strategy."""
+        """Test expansion strategy."""
         brief_prompt = "Summarize"
 
         result = improver.improve(
@@ -437,7 +437,7 @@ class TestImprovementStrategies:
 
     def test_formalize_strategy(self, improver):
 
-             """Test formalization strategy."""
+        """Test formalization strategy."""
         informal_prompt = "hey can u plz check this code and tell me if its ok?"
 
         result = improver.improve(
@@ -456,7 +456,7 @@ class TestImprovementStrategies:
 
     def test_technical_strategy(self, improver):
 
-             """Test technical enhancement strategy."""
+        """Test technical enhancement strategy."""
         general_prompt = "Check if the function works correctly"
 
         result = improver.improve(
@@ -477,14 +477,14 @@ class TestAnalysisFeatures:
 
     @pytest.fixture
     def improver(self):
-             """Create improver instance."""
+        """Create improver instance."""
         mock_db = Mock(spec=PromptStudioDatabase)
         mock_db.client_id = "test-client"
         return PromptImprover(db=mock_db)
 
     def test_readability_analysis(self, improver):
 
-             """Test readability analysis."""
+        """Test readability analysis."""
         simple = "Write a summary of this text."
         complex = "Endeavor to synthesize a comprehensive yet succinct representation."
 
@@ -495,7 +495,7 @@ class TestAnalysisFeatures:
 
     def test_ambiguity_detection(self, improver):
 
-             """Test detecting ambiguous language."""
+        """Test detecting ambiguous language."""
         ambiguous = "Do the thing with the stuff over there"
         clear = "Process the data file located in the input directory"
 
@@ -506,7 +506,7 @@ class TestAnalysisFeatures:
 
     def test_completeness_check(self, improver):
 
-             """Test checking prompt completeness."""
+        """Test checking prompt completeness."""
         incomplete = "Analyze"
         complete = "Analyze the provided sales data for Q4 2023, focusing on trends, anomalies, and year-over-year growth"
 
@@ -517,7 +517,7 @@ class TestAnalysisFeatures:
 
     def test_task_alignment(self, improver):
 
-             """Test checking task alignment."""
+        """Test checking task alignment."""
         prompt = "Summarize the key findings from the research paper"
         task = "summarization"
 
@@ -535,20 +535,20 @@ class TestErrorHandling:
 
     @pytest.fixture
     def improver(self):
-             """Create improver instance."""
+        """Create improver instance."""
         mock_db = Mock(spec=PromptStudioDatabase)
         mock_db.client_id = "test-client"
         return PromptImprover(db=mock_db)
 
     def test_empty_prompt_handling(self, improver):
 
-             """Test handling empty prompt."""
+        """Test handling empty prompt."""
         with pytest.raises(ValueError):
             improver.improve("", strategy=ImprovementStrategy.CLARITY)
 
     def test_invalid_strategy(self, improver):
 
-             """Test handling invalid strategy."""
+        """Test handling invalid strategy."""
         # Invalid strategy should either raise error or return unchanged
         try:
             result = improver.improve("Test prompt", strategy="invalid_strategy")
@@ -560,7 +560,7 @@ class TestErrorHandling:
 
     def test_malformed_examples(self, improver):
 
-             """Test handling malformed examples."""
+        """Test handling malformed examples."""
         # Test with malformed examples - should handle gracefully
         try:
             result = improver.improve(
@@ -576,7 +576,7 @@ class TestErrorHandling:
 
     def test_improvement_failure_recovery(self, improver):
 
-             """Test recovery from improvement failure."""
+        """Test recovery from improvement failure."""
         # Simulate a strategy that fails
         with patch.object(improver, '_apply_strategy') as mock_apply:
             mock_apply.side_effect = Exception("Strategy failed")
@@ -600,14 +600,14 @@ class TestCachingPerformance:
 
     @pytest.fixture
     def improver(self):
-             """Create improver with caching enabled."""
+        """Create improver with caching enabled."""
         mock_db = Mock(spec=PromptStudioDatabase)
         mock_db.client_id = "test-client"
         return PromptImprover(db=mock_db)
 
     def test_result_caching(self, improver):
 
-             """Test caching of improvement results."""
+        """Test caching of improvement results."""
         prompt = "Analyze this data"
 
         # First call
@@ -621,7 +621,7 @@ class TestCachingPerformance:
 
     def test_cache_invalidation(self, improver):
 
-             """Test cache invalidation."""
+        """Test cache invalidation."""
         prompt = "Test prompt"
 
         # Cache a result
@@ -639,7 +639,7 @@ class TestCachingPerformance:
 
     def test_batch_processing_performance(self, improver):
 
-             """Test batch processing is more efficient than individual."""
+        """Test batch processing is more efficient than individual."""
         import time
 
         prompts = ["Prompt " + str(i) for i in range(10)]
@@ -671,14 +671,14 @@ class TestIntegrationFeatures:
 
     @pytest.fixture
     def improver(self):
-             """Create improver instance."""
+        """Create improver instance."""
         mock_db = Mock(spec=PromptStudioDatabase)
         mock_db.client_id = "test-client"
         return PromptImprover(db=mock_db)
 
     def test_export_improvements(self, improver):
 
-             """Test exporting improvement history."""
+        """Test exporting improvement history."""
         prompts = ["Prompt 1", "Prompt 2", "Prompt 3"]
 
         results = []
@@ -696,7 +696,7 @@ class TestIntegrationFeatures:
 
     def test_import_strategies(self, improver):
 
-             """Test importing custom strategies."""
+        """Test importing custom strategies."""
         custom_strategies = {
             "custom_1": lambda p: p.upper(),
             "custom_2": lambda p: p + " [ENHANCED]"
@@ -711,7 +711,7 @@ class TestIntegrationFeatures:
 
     def test_improvement_pipeline(self, improver):
 
-             """Test creating improvement pipeline."""
+        """Test creating improvement pipeline."""
         pipeline = improver.create_pipeline([
             ImprovementStrategy.CLARITY,
             ImprovementStrategy.STRUCTURE,

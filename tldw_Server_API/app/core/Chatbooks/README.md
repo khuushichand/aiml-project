@@ -36,7 +36,7 @@ Developer Code Guide: `Docs/Code_Documentation/Guides/Chatbooks_Code_Guide.md:1`
 ## 2. Technical Details of Features
 
 - Architecture & Flow:
-  - API → Service (`chatbook_service.py`) → Validators/Quota → ZIP/manifest I/O → Jobs backend (core or Prompt Studio)
+  - API → Service (`chatbook_service.py`) → Validators/Quota → ZIP/manifest I/O → Core Jobs backend
   - Per-user directories under `USER_DB_BASE_DIR/<user_id>/chatbooks` with strict path sanitization and safe file handling
 
   Request/Job Flow (ASCII):
@@ -55,9 +55,9 @@ Developer Code Guide: `Docs/Code_Documentation/Guides/Chatbooks_Code_Guide.md:1`
   Client
     → POST /api/v1/chatbooks/export (async_mode=true)
       → Create ExportJob (pending)
-      → Enqueue core Jobs (domain=chatbooks) OR create Prompt Studio job
+      → Enqueue core Jobs (domain=chatbooks)
       ← 200 { job_id }
-      Worker (core or PS)
+      Worker (core)
         → process → write ZIP → update job (output_path, download_url, expires_at, status=completed)
 
   Import (sync/async)
@@ -70,11 +70,10 @@ Developer Code Guide: `Docs/Code_Documentation/Guides/Chatbooks_Code_Guide.md:1`
 - Key Components:
   - `chatbook_service.py` (export/import/preview, job state, signed URLs)
   - `chatbook_validators.py` (file/ZIP/manifest validation), `quota_manager.py` (tier limits)
-  - Optional `ps_job_adapter.py` for Prompt Studio JobManager integration
   - `chatbook_models.py` (content types, job models)
 - Configuration:
-  - `CHATBOOKS_JOBS_BACKEND` (`core` default). Precedence: `CHATBOOKS_JOBS_BACKEND` > `TLDW_JOBS_BACKEND` > deprecated `TLDW_USE_PROMPT_STUDIO_QUEUE`.
-  - `CHATBOOKS_CORE_WORKER_ENABLED`: `true|false` controls starting the core worker when backend=`core` (default true).
+  - Core Jobs only; `CHATBOOKS_JOBS_BACKEND`/`TLDW_JOBS_BACKEND` overrides are ignored for Chatbooks.
+  - `CHATBOOKS_CORE_WORKER_ENABLED`: `true|false` controls starting the core worker (default true).
   - `CHATBOOKS_SIGNED_URLS`, `CHATBOOKS_SIGNING_SECRET`, `CHATBOOKS_URL_TTL_SECONDS`, `CHATBOOKS_ENFORCE_EXPIRY`
   - Core jobs tuning: `JOBS_POLL_INTERVAL_SECONDS`, `JOBS_LEASE_SECONDS`, `JOBS_LEASE_RENEW_SECONDS`, `JOBS_LEASE_RENEW_JITTER_SECONDS`
 - Concurrency & Performance:
@@ -95,7 +94,7 @@ Developer Code Guide: `Docs/Code_Documentation/Guides/Chatbooks_Code_Guide.md:1`
 
 **Overview**
 - Produces ZIP archives containing a `manifest.json` plus referenced files (media, documents) based on user selections.
-- Supports export/import in both sync and async modes; async jobs can run via either the core Jobs backend or Prompt Studio’s JobManager adapter.
+- Supports export/import in both sync and async modes; async jobs run via the core Jobs backend.
 - Enforces strong validation and security: filename/path sanitization, ZIP checks, signed download URLs (optional), per-user storage dirs.
 
 **Key Files**
@@ -103,9 +102,7 @@ Developer Code Guide: `Docs/Code_Documentation/Guides/Chatbooks_Code_Guide.md:1`
 - `chatbook_models.py`: Data classes and enums for manifests, content items, relationships, and job records (export/import + statuses).
 - `chatbook_validators.py`: Centralized validation and sanitization (filenames, ZIP integrity, traversal checks, ID formats, metadata limits).
 - `quota_manager.py`: Per-user quotas (storage, per-day ops, concurrent jobs, file size). DB-backed when available with fallbacks.
-- `ps_job_adapter.py`: Optional adapter to route Chatbooks jobs through Prompt Studio’s JobManager when configured.
 - `exceptions.py`: Domain-specific exceptions and helpers.
-- `job_queue_shim.py`: Legacy shim preserved for reference; not used by the current service.
 
 **Content Types**
 - Enum in `chatbook_models.py`: `conversation`, `note`, `character`, `world_book`, `dictionary`, `generated_document`, `media`, `embedding`, `prompt`, `evaluation`.
@@ -116,11 +113,9 @@ Developer Code Guide: `Docs/Code_Documentation/Guides/Chatbooks_Code_Guide.md:1`
 - File and directory creation uses 0700 perms where possible. Names are sanitized to avoid traversal or unsafe characters.
 
 **Job Backends**
-- Core Jobs backend: default. A shared worker can process Chatbooks jobs across users.
+- Core Jobs backend: default and only supported. A shared worker can process Chatbooks jobs across users.
   - Worker entry: `tldw_Server_API/app/services/core_jobs_worker.py:run_chatbooks_core_jobs_worker`
   - App startup may launch the worker based on flags (see `app/main.py`).
-- Prompt Studio backend: enable via `CHATBOOKS_JOBS_BACKEND=prompt_studio` (or deprecated `TLDW_USE_PROMPT_STUDIO_QUEUE=true`).
-  - Adapter: `ps_job_adapter.py` bridges Chatbooks status to Prompt Studio JobManager.
 
 **API Endpoints**
 - File: `tldw_Server_API/app/api/v1/endpoints/chatbooks.py`
@@ -140,14 +135,12 @@ Developer Code Guide: `Docs/Code_Documentation/Guides/Chatbooks_Code_Guide.md:1`
 - Create a ZIP in the user’s `exports/` dir. Persist a completed `ExportJob` row to support download URL and expiry.
 
 **Export Flow (Async)**
-- Choose backend:
-  - Core: create `ExportJob` row (status `pending`), enqueue through core Jobs; worker updates job state and writes archive; job receives `download_url` and `expires_at`.
-  - Prompt Studio: create a PS job via adapter; mirror status updates back to PS.
+- Create `ExportJob` row (status `pending`), enqueue through core Jobs; worker updates job state and writes archive; job receives `download_url` and `expires_at`.
 - Download is served from job metadata once `completed`.
 
 **Import Flow**
 - Save uploaded ZIP to secure per-user temp; validate ZIP thoroughly.
-- If async, create `ImportJob` row and process in background (core or PS). Track `progress`, `conflicts`, `warnings`.
+- If async, create `ImportJob` row and process in background via core Jobs. Track `progress`, `conflicts`, `warnings`.
 - Apply conflict resolution: `skip`, `overwrite`, `rename`, `merge` (where supported).
 
 **Security & Validation**
@@ -168,11 +161,8 @@ Developer Code Guide: `Docs/Code_Documentation/Guides/Chatbooks_Code_Guide.md:1`
 - Interacts via `CharactersRAGDB.execute_query(...)`; no raw SQL outside DB abstractions elsewhere in the project.
 
 **Configuration**
-- `CHATBOOKS_JOBS_BACKEND`: `core` (default) or `prompt_studio`.
-- `TLDW_JOBS_BACKEND`: legacy module default override; prefer `CHATBOOKS_JOBS_BACKEND`.
-- `TLDW_USE_PROMPT_STUDIO_QUEUE`: legacy boolean; deprecated.
-- Precedence: `CHATBOOKS_JOBS_BACKEND` overrides `TLDW_JOBS_BACKEND`, which supersedes deprecated `TLDW_USE_PROMPT_STUDIO_QUEUE`.
-- `CHATBOOKS_CORE_WORKER_ENABLED`: `true|false` controls starting the core worker when backend=`core` (default true).
+- Core Jobs only; any `CHATBOOKS_JOBS_BACKEND`/`TLDW_JOBS_BACKEND` overrides are ignored for Chatbooks.
+- `CHATBOOKS_CORE_WORKER_ENABLED`: `true|false` controls starting the core worker (default true).
 - `USER_DB_BASE_DIR` (from `tldw_Server_API.app.core.config`): base path for per-user data (chatbooks live under `<USER_DB_BASE_DIR>/<user_id>/chatbooks`); defaults to `Databases/user_databases/` under the project root. Override via environment variable or `Config_Files/config.txt` as needed.
 - `CHATBOOKS_URL_TTL_SECONDS`: download URL expiry TTL (default 86400).
 - `CHATBOOKS_ENFORCE_EXPIRY`: `true|false` enforce expiry at download.
@@ -192,7 +182,7 @@ Developer Code Guide: `Docs/Code_Documentation/Guides/Chatbooks_Code_Guide.md:1`
 - When adding features, mirror existing test patterns and add:
   - Unit tests for validators and service behavior
   - Integration tests for endpoints (`export`, `import`, `download`, `preview`)
-  - Mock external dependencies (e.g., Prompt Studio JobManager) when applicable
+  - Mock external dependencies (for example, Jobs worker or storage IO) when applicable
 
 **Adding or Changing Features**
 - New content type:
@@ -200,9 +190,9 @@ Developer Code Guide: `Docs/Code_Documentation/Guides/Chatbooks_Code_Guide.md:1`
   - Implement selection/export/import handling in `chatbook_service.py`.
   - Extend validators and update manifest serialization if needed.
   - Add tests and update Docs references.
-- Job backend behavior:
-  - Keep status transitions consistent: `pending → in_progress → completed|failed|cancelled`.
-  - Reflect terminal state back to adapters (PS) and persist URLs/expiries for exports.
+**Job backend behavior**
+- Keep status transitions consistent: `pending → in_progress → completed|failed|cancelled`.
+- Persist URLs/expiries for exports on terminal states.
 - Security:
   - All file I/O goes through validators and sanitized paths.
   - Never trust client filenames or paths; never log secrets.

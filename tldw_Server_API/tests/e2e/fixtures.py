@@ -400,8 +400,13 @@ class APIClient:
             return {"username": "single_user", "id": 1}
 
     # Media endpoints
-    def upload_media(self, file_path: str, title: str, media_type: str = "document",
-                    generate_embeddings: bool = False) -> Dict[str, Any]:
+    def upload_media(
+        self,
+        file_path: str,
+        title: str,
+        media_type: str = "document",
+        generate_embeddings: bool = False,
+    ) -> Dict[str, Any]:
         """Upload a media file."""
         with open(file_path, "rb") as f:
             # The endpoint expects 'files' (plural) not 'file'
@@ -423,9 +428,15 @@ class APIClient:
         response.raise_for_status()
         return response.json()
 
-    def process_media(self, url: Optional[str] = None, file_path: Optional[str] = None,
-                    title: Optional[str] = None, custom_prompt: Optional[str] = None,
-                    persist: bool = True, media_type: Optional[str] = None) -> Dict[str, Any]:
+    def process_media(
+        self,
+        url: Optional[str] = None,
+        file_path: Optional[str] = None,
+        title: Optional[str] = None,
+        custom_prompt: Optional[str] = None,
+        persist: bool = True,
+        media_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Process media from URL or file.
 
         Args:
@@ -557,13 +568,16 @@ class APIClient:
         return response.json()
 
     # Chat endpoints
-    def chat_completion(self, messages: List[Dict[str, str]],
-                        model: Optional[str] = "gpt-3.5-turbo",
-                        temperature: float = 0.7,
-                        character_id: Optional[int] = None,
-                        conversation_id: Optional[str] = None,
-                        stream: bool = False,
-                        api_provider: Optional[str] = None) -> Dict[str, Any]:
+    def chat_completion(
+        self,
+        messages: List[Dict[str, str]],
+        model: Optional[str] = "gpt-3.5-turbo",
+        temperature: float = 0.7,
+        character_id: Optional[int] = None,
+        conversation_id: Optional[str] = None,
+        stream: bool = False,
+        api_provider: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Send chat completion request with optional character context."""
         resolved_model = model
         if resolved_model in (None, "", "gpt-3.5-turbo"):
@@ -623,8 +637,13 @@ class APIClient:
 
         return self._handle_rate_limit(_get)
 
-    def update_note(self, note_id: str, title: Optional[str] = None,
-                content: Optional[str] = None, version: int = 1) -> Dict[str, Any]:
+    def update_note(
+        self,
+        note_id: str,
+        title: Optional[str] = None,
+        content: Optional[str] = None,
+        version: int = 1,
+    ) -> Dict[str, Any]:
         """Update an existing note."""
         def _update():
             data = {}

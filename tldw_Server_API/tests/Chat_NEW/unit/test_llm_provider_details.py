@@ -7,7 +7,7 @@ from tldw_Server_API.app.main import app
 
 class _FakeProviderManager:
     def get_health_report(self):
-             return {
+        return {
             'openai': {
                 'status': 'healthy',
                 'success_count': 42,
@@ -23,7 +23,7 @@ class _FakeProviderManager:
 
 @pytest.mark.unit
 def test_provider_details_includes_capabilities_and_health(monkeypatch):
-     monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("TEST_MODE", "true")
     with TestClient(app) as client:
         with patch("tldw_Server_API.app.api.v1.endpoints.llm_providers.get_provider_manager", return_value=_FakeProviderManager()):
             # First call list to ensure providers exist and health is attached

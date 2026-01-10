@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 def _client(monkeypatch) -> TestClient:
 
 
-     monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     # Disable execution to isolate queue path
     monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "false")
@@ -28,7 +28,7 @@ def _client(monkeypatch) -> TestClient:
 def test_queue_full_returns_429_retry_after(monkeypatch) -> None:
 
 
-     with _client(monkeypatch) as client:
+    with _client(monkeypatch) as client:
         body: Dict[str, Any] = {
             "spec_version": "1.0",
             "runtime": "docker",

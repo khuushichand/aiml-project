@@ -39,7 +39,7 @@ def test_enforcement_blocks_stale_worker(monkeypatch, tmp_path):
 def test_enforcement_is_default(monkeypatch, tmp_path):
 
 
-     monkeypatch.delenv("JOBS_DISABLE_LEASE_ENFORCEMENT", raising=False)
+    monkeypatch.delenv("JOBS_DISABLE_LEASE_ENFORCEMENT", raising=False)
     monkeypatch.delenv("JOBS_ENFORCE_LEASE_ACK", raising=False)
     db_path = tmp_path / "jobs_default.db"
     ensure_jobs_tables(db_path)

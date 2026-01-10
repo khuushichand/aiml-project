@@ -682,7 +682,11 @@ class ChatCompletionRequest(BaseModel):
         None, max_length=128, description="Tools the model may call (provider support varies)."
     )
     tool_choice: Optional[Union[Literal["none", "auto", "required"], ToolChoiceOption]] = Field(
-        "auto", description="Controls tool usage (provider support varies)."
+        None,
+        description=(
+            "Controls tool usage (provider support varies). Only valid when `tools` are provided; "
+            "if omitted, providers default to their standard behavior (typically `auto`)."
+        ),
     )
     user: Optional[str] = Field(None, description="End-user identifier for monitoring.")
 

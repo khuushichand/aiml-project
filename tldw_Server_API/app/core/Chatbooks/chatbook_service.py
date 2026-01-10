@@ -241,41 +241,26 @@ class ChatbookService:
             except OSError:
                 logger.debug(f"Chatbooks: unable to set permissions on {directory}")
 
-        # Jobs backend selection (domain override > module default), legacy flag supported
+        # Jobs backend selection (core only)
         backend = (os.getenv("CHATBOOKS_JOBS_BACKEND") or os.getenv("TLDW_JOBS_BACKEND") or "").strip().lower()
-        legacy_ps_flag = str(os.getenv("TLDW_USE_PROMPT_STUDIO_QUEUE", "false")).lower() in {"1", "true", "yes"}
-        if not backend:
-            backend = "prompt_studio" if legacy_ps_flag else "core"
-            if legacy_ps_flag:
-                logger.warning("TLDW_USE_PROMPT_STUDIO_QUEUE is deprecated; use CHATBOOKS_JOBS_BACKEND=prompt_studio")
-        self._jobs_backend = backend if backend in {"prompt_studio", "core"} else "core"
+        if backend and backend != "core":
+            logger.warning("Chatbooks jobs backend override ignored; only core Jobs is supported now.")
+        self._jobs_backend = "core"
 
-        # Optional Prompt Studio JobManager adapter
+        # Legacy Prompt Studio adapter placeholder (no longer used; core Jobs only)
         self._ps_job_adapter = None
         self._jobs_adapter = None
         self._jobs_db_path: Optional[Path] = None
-        if self._jobs_backend == "prompt_studio":
-            try:
-                from .ps_job_adapter import ChatbooksPSJobAdapter
-                self._ps_job_adapter = ChatbooksPSJobAdapter()
-                logger.info("Chatbooks: Prompt Studio JobManager adapter enabled (backend=prompt_studio)")
-            except Exception as exc:
-                logger.warning(
-                    f"Chatbooks: Failed to initialize PS Job adapter, falling back to core backend: {exc}"
-                )
-                self._jobs_backend = "core"
-                self._ps_job_adapter = None
-        if self._jobs_backend == "core":
-            try:
-                from tldw_Server_API.app.core.Jobs.migrations import ensure_jobs_tables
-                self._jobs_db_path = ensure_jobs_tables()
-            except Exception as exc:
-                logger.debug(f"Jobs core backend migrations skipped: {exc}")
-            try:
-                from .jobs_adapter import ChatbooksJobsAdapter
-                self._jobs_adapter = ChatbooksJobsAdapter(owner_user_id=self.user_id)
-            except Exception as exc:
-                logger.debug(f"Chatbooks: core Jobs adapter unavailable: {exc}")
+        try:
+            from tldw_Server_API.app.core.Jobs.migrations import ensure_jobs_tables
+            self._jobs_db_path = ensure_jobs_tables()
+        except Exception as exc:
+            logger.debug(f"Jobs core backend migrations skipped: {exc}")
+        try:
+            from .jobs_adapter import ChatbooksJobsAdapter
+            self._jobs_adapter = ChatbooksJobsAdapter(owner_user_id=self.user_id)
+        except Exception as exc:
+            logger.debug(f"Chatbooks: core Jobs adapter unavailable: {exc}")
 
         # Initialize job tracking tables
         self._init_job_tables()

@@ -17,11 +17,12 @@ from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatRateLimitError,
 )
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
-from tldw_Server_API.app.core.LLM_Calls.chat_calls import (
-    _safe_cast,
-    create_session_with_retries,
+from tldw_Server_API.app.core.LLM_Calls.chat_calls import _safe_cast
+from tldw_Server_API.app.core.LLM_Calls.payload_utils import (
+    _sanitize_payload_for_logging,
+    merge_extra_body,
+    merge_extra_headers,
 )
-from tldw_Server_API.app.core.LLM_Calls.payload_utils import _sanitize_payload_for_logging
 from tldw_Server_API.app.core.LLM_Calls.error_utils import (
     get_http_error_text,
     get_http_status_from_exception,
@@ -57,6 +58,8 @@ def _cohere_request(
     tools: Optional[List[Dict[str, Any]]] = None,
     custom_prompt_arg: Optional[str] = None,
     app_config: Optional[Dict[str, Any]] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
 ):
     logging.debug(f"Cohere Chat: Request process starting for model '{model}' (Streaming: {streaming})")
     loaded_config_data = app_config or load_and_log_configs()
@@ -102,6 +105,7 @@ def _cohere_request(
         "Content-Type": "application/json",
         "Accept": "text/event-stream" if streaming else "application/json",
     }
+    headers = merge_extra_headers(headers, {"extra_headers": extra_headers})
 
     chat_history_for_cohere: list[dict[str, str]] = []
     current_user_message_str = ""
@@ -193,6 +197,7 @@ def _cohere_request(
                 payload["num_generations"] = current_num_generations
             else:
                 logging.warning("Cohere: 'num_generations' must be > 0. Ignoring.")
+    payload = merge_extra_body(payload, {"extra_body": extra_body})
 
     cohere_payload_metadata = _sanitize_payload_for_logging(
         payload,
@@ -202,7 +207,8 @@ def _cohere_request(
     logging.debug(f"Cohere request metadata: {cohere_payload_metadata}")
     logging.debug(f"Cohere Request URL: {COHERE_CHAT_URL}")
 
-    session = create_session_with_retries(
+    from tldw_Server_API.app.core.LLM_Calls import chat_calls as _chat_calls
+    session = _chat_calls.create_session_with_retries(
         total=_safe_cast(cohere_config.get("api_retries"), int, 3),
         backoff_factor=_safe_cast(cohere_config.get("api_retry_delay"), float, 1.0),
         status_forcelist=[429, 500, 502, 503, 504],
@@ -413,6 +419,8 @@ class CohereAdapter(ChatProvider):
             "tools": request.get("tools"),
             "custom_prompt_arg": request.get("custom_prompt_arg"),
             "app_config": request.get("app_config"),
+            "extra_headers": request.get("extra_headers"),
+            "extra_body": request.get("extra_body"),
         }
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:

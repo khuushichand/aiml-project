@@ -21,23 +21,50 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 from typing import Dict, Any
+from urllib.parse import urlparse
+
+
+def _ensure_repo_root() -> None:
+    here = Path(__file__).resolve()
+    for parent in [here] + list(here.parents):
+        if (parent / "tldw_Server_API").is_dir():
+            sys.path.insert(0, str(parent))
+            return
+
+
+def _configure_local_egress(url: str) -> None:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return
+    host = (parsed.hostname or "").lower()
+    if host in {"localhost", "0.0.0.0"} or host.startswith("127.") or host == "::1":
+        os.environ.setdefault("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "false")
+        if "WORKFLOWS_EGRESS_ALLOWED_PORTS" not in os.environ:
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            os.environ["WORKFLOWS_EGRESS_ALLOWED_PORTS"] = f"{port},80,443"
+
+
+_ensure_repo_root()
 
 try:
-    import requests
+    from tldw_Server_API.app.core import http_client
 except Exception:
-    print("Please 'pip install requests' to run this helper.")
+    print("tldw_Server_API not available; run from the repo root or set PYTHONPATH.")
     sys.exit(1)
 
 
 BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 ADMIN_BEARER = os.getenv("ADMIN_BEARER_TOKEN")
 API_KEY = os.getenv("X_API_KEY") or os.getenv("SINGLE_USER_API_KEY")
+_configure_local_egress(BASE_URL)
 
 
-def _post(path: str, headers: Dict[str, str], json_body: Dict[str, Any]) -> requests.Response:
+def _post(path: str, headers: Dict[str, str], json_body: Dict[str, Any]):
     url = f"{BASE_URL}{path}"
-    return requests.post(url, headers=headers, json=json_body, timeout=30)
+    return http_client.fetch(method="POST", url=url, headers=headers, json=json_body, timeout=30)
 
 
 def _chat_payload() -> Dict[str, Any]:
@@ -91,7 +118,7 @@ def exercise_virtual_api_key():
         "expires_in_days": 1,
     }
     url = f"{BASE_URL}/api/v1/users/api-keys/virtual"
-    r = requests.post(url, headers=headers, json=body, timeout=30)
+    r = http_client.fetch(method="POST", url=url, headers=headers, json=body, timeout=30)
     if r.status_code != 200:
         print(f"[warn] virtual api key mint failed: {r.status_code} {r.text}")
         return

@@ -65,6 +65,7 @@ Provide opt-in, explainable personalization that leverages a per-user topic prof
 ## Data Model (SQLite + Chroma)
 
 SQLite (per-user DB): `<USER_DB_BASE_DIR>/<user_id>/Personalization.db`
+`USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root). Override via environment variable or `Config_Files/config.txt` as needed.
 
 - `UserProfile`
   - `user_id: str` (PK)

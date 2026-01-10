@@ -26,6 +26,7 @@ from chromadb.api.types import QueryResult
 #
 # Local Imports:
 from tldw_Server_API.app.core.Chunking import chunk_for_embedding  # Using V2 through compatibility layer
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 # Import embeddings creation lazily/safely to avoid hard dependency at import time
 try:
     from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
@@ -172,28 +173,17 @@ class ChromaDBManager:
             logger.critical("USER_DB_BASE_DIR not found in user_embedding_config. ChromaDBManager cannot be initialized.")
             raise ValueError("USER_DB_BASE_DIR not configured in application settings.")
 
-        # Validate base directory path
-        user_db_base_path = Path(user_db_base_dir_str).resolve()
-        if not user_db_base_path.exists():
-            logger.error(f"USER_DB_BASE_DIR does not exist: {user_db_base_path}")
-            raise ValueError(f"USER_DB_BASE_DIR does not exist: {user_db_base_path}")
-
-        # Construct path safely with validated user_id
-        self.user_chroma_path: Path = (user_db_base_path / self.user_id / "chroma_storage").resolve()
-
-        # Ensure the resolved path is within the base directory (defense in depth)
         try:
-            self.user_chroma_path.relative_to(user_db_base_path)
-        except ValueError:
-            logger.critical(f"Security violation: Resolved path {self.user_chroma_path} is outside base directory {user_db_base_path}")
-            raise ValueError("Invalid path: security violation detected")
-        try:
-            self.user_chroma_path.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
+            self.user_chroma_path = DatabasePaths.get_user_chroma_dir(
+                self.user_id,
+                base_dir_override=user_db_base_dir_str,
+            )
+        except Exception as e:
             logger.critical(
-                f"Failed to create ChromaDB storage path {self.user_chroma_path} for user '{self.user_id}': {e}",
-                exc_info=True)
-            raise RuntimeError(f"Could not create ChromaDB storage directory: {e}") from e
+                f"Failed to resolve ChromaDB storage path for user '{self.user_id}': {e}",
+                exc_info=True,
+            )
+            raise
 
         logger.info(f"ChromaDBManager for user '{self.user_id}' initialized. Path: {self.user_chroma_path}")
 

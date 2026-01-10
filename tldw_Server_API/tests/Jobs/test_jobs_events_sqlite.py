@@ -6,11 +6,11 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 @pytest.fixture()
 def events(monkeypatch):
-     calls = []
+    calls = []
 
     def _emit(name, job=None, attrs=None):
 
-             calls.append((name, job or {}, attrs or {}))
+        calls.append((name, job or {}, attrs or {}))
 
     # Enable events and patch the emitter
     monkeypatch.setenv("JOBS_EVENTS_ENABLED", "true")

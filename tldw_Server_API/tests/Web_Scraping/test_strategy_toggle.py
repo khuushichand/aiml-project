@@ -6,9 +6,7 @@ from tldw_Server_API.app.core.Web_Scraping.enhanced_web_scraping import Enhanced
 
 
 def _allow_egress(monkeypatch):
-
-
-     import tldw_Server_API.app.core.Security.egress as egress
+    import tldw_Server_API.app.core.Security.egress as egress
     monkeypatch.setattr(egress, "evaluate_url_policy", lambda url: SimpleNamespace(allowed=True))
 
 

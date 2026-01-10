@@ -9,7 +9,7 @@ from tldw_Server_API.app.main import app
 def _client(monkeypatch) -> TestClient:
 
 
-     monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("TEST_MODE", "1")
     # Advertise a specific store backend
     monkeypatch.setenv("SANDBOX_STORE_BACKEND", "memory")
     clear_config_cache()
@@ -19,7 +19,7 @@ def _client(monkeypatch) -> TestClient:
 def test_runtimes_include_capability_flags_and_store_mode(monkeypatch) -> None:
 
 
-     with _client(monkeypatch) as client:
+    with _client(monkeypatch) as client:
         r = client.get("/api/v1/sandbox/runtimes")
         assert r.status_code == 200
         data = r.json()
@@ -60,7 +60,7 @@ def test_egress_allowlist_supported_when_enforced(monkeypatch) -> None:
 def test_runtimes_notes_reflect_granular_allowlist(monkeypatch) -> None:
 
 
-     monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("SANDBOX_STORE_BACKEND", "memory")
     monkeypatch.setenv("SANDBOX_EGRESS_ENFORCEMENT", "true")
     monkeypatch.setenv("SANDBOX_EGRESS_GRANULAR_ENFORCEMENT", "true")
@@ -77,7 +77,7 @@ def test_runtimes_notes_reflect_granular_allowlist(monkeypatch) -> None:
 def test_firecracker_egress_supported_only_when_enforced(monkeypatch) -> None:
 
 
-     monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("SANDBOX_STORE_BACKEND", "memory")
     # Ensure enforcement not set: expect False
     monkeypatch.delenv("SANDBOX_FIRECRACKER_EGRESS_ENFORCEMENT", raising=False)

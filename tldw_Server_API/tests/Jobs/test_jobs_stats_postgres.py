@@ -18,7 +18,7 @@ def _setup(jobs_pg_dsn):
 def _map_by_key(rows):
 
 
-     out: Dict[Tuple[str, str, str], Dict] = {}
+    out: Dict[Tuple[str, str, str], Dict] = {}
     for r in rows:
         out[(r["domain"], r["queue"], r["job_type"])] = r
     return out

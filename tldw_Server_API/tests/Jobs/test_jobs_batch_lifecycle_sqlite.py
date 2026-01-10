@@ -8,7 +8,7 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 def _env(monkeypatch, tmp_path):
 
 
-     monkeypatch.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("JOBS_DB_PATH", os.path.join(os.getcwd(), "Databases", "jobs.db"))
@@ -19,7 +19,7 @@ def _env(monkeypatch, tmp_path):
 def test_batch_renew_complete_fail_sqlite(monkeypatch, tmp_path):
 
 
-     _env(monkeypatch, tmp_path)
+    _env(monkeypatch, tmp_path)
     ensure_jobs_tables(tmp_path / "jobs.db")
     jm = JobManager()
 

@@ -9,11 +9,11 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 
 class FakeCollection:
     def __init__(self, name):
-             self.name = name
+        self.name = name
         self.data = {'ids':[], 'embeddings':[], 'documents':[], 'metadatas':[]}
         self.metadata = {}
     def get(self, limit=100, offset=0, include=None, where=None):
-             # simple where on media_id
+        # simple where on media_id
         idxs = list(range(len(self.data['ids'])))
         if where and 'media_id' in where:
             mid = where['media_id']
@@ -30,19 +30,19 @@ class FakeCollection:
                 out['metadatas'] = [self.data['metadatas'][i] for i in sel]
         return out
     def count(self):
-             return len(self.data['ids'])
+        return len(self.data['ids'])
 
 
 class FakeAdapter:
     def __init__(self):
-             self._initialized=False
+        self._initialized=False
         self.config = types.SimpleNamespace(embedding_dim=1536)
         self.collections={}
         self.manager = types.SimpleNamespace(get_or_create_collection=self.get_or_create_collection)
     async def initialize(self):
         self._initialized=True
     def get_or_create_collection(self, name):
-             if name not in self.collections:
+        if name not in self.collections:
             self.collections[name] = FakeCollection(name)
         return self.collections[name]
     async def upsert_vectors(self, collection_name, ids, vectors, documents, metadatas):
@@ -65,7 +65,7 @@ class FakeAdapter:
 
 @pytest.fixture(autouse=True)
 def testing_env(monkeypatch, tmp_path):
-     os.environ['TESTING']='true'
+    os.environ['TESTING']='true'
     from tldw_Server_API.app.core import config as cfg
     monkeypatch.setitem(cfg.settings, 'USER_DB_BASE_DIR', tmp_path)
     yield
@@ -75,7 +75,7 @@ def testing_env(monkeypatch, tmp_path):
 
 @pytest.fixture()
 def client(monkeypatch):
-     fake = FakeAdapter()
+    fake = FakeAdapter()
     import tldw_Server_API.app.api.v1.endpoints.vector_stores_openai as vs
     async def fake_adapter_for_user(user, embedding_dim):
         fake.config.embedding_dim = embedding_dim
@@ -83,7 +83,7 @@ def client(monkeypatch):
     monkeypatch.setattr(vs, '_adapter_for_user', fake_adapter_for_user)
     # mock embeddings batch to fixed vectors
     def fake_create_embeddings_batch(texts, app_config, model_id):
-             dim = 8
+        dim = 8
         return [[0.0]*dim for _ in texts]
     monkeypatch.setattr(vs, 'create_embeddings_batch', fake_create_embeddings_batch)
     # override user dep
@@ -95,9 +95,7 @@ def client(monkeypatch):
 
 
 def test_create_from_media_with_existing_embeddings(client):
-
-
-     # create source collection embedding for media id 123
+    # create source collection embedding for media id 123
     # create destination store first
     dest = client.post('/api/v1/vector_stores', json={'name':'Dest','dimensions':8}).json()
     # populate source per-user media embeddings

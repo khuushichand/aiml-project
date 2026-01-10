@@ -22,7 +22,7 @@ class _Bus:
 
 class FakePubSub:
     def __init__(self):
-             self._subs = set()
+        self._subs = set()
         self._q: Queue = Queue()
 
     def subscribe(self, channel: str) -> None:
@@ -44,7 +44,7 @@ class FakeRedis:
 
     def ping(self):
 
-             return True
+        return True
 
     def publish(self, channel: str, data: bytes):
         _Bus.publish(channel, data)

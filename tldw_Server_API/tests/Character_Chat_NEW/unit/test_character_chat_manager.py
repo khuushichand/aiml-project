@@ -21,7 +21,7 @@ class TestCharacterCardManagement:
 
     @pytest.mark.unit
     def test_create_character_card(self, mock_chat_manager, sample_character_card):
-             """Test creating a character card."""
+        """Test creating a character card."""
         manager = mock_chat_manager
 
         card_id = manager.create_character_card(**sample_character_card)
@@ -34,7 +34,7 @@ class TestCharacterCardManagement:
 
     @pytest.mark.unit
     def test_get_character_card(self, mock_chat_manager):
-             """Test getting a character card."""
+        """Test getting a character card."""
         manager = mock_chat_manager
 
         card = manager.get_character_card(card_id=1)
@@ -46,7 +46,7 @@ class TestCharacterCardManagement:
 
     @pytest.mark.unit
     def test_list_character_cards(self, mock_chat_manager, sample_character_cards):
-             """Test listing character cards."""
+        """Test listing character cards."""
         manager = mock_chat_manager
         # The wrapper calls get_character_list_for_ui which we need to mock
         manager.db.get_character_list_for_ui = Mock(return_value=sample_character_cards)
@@ -59,7 +59,7 @@ class TestCharacterCardManagement:
 
     @pytest.mark.unit
     def test_update_character_card(self, mock_chat_manager):
-             """Test updating a character card."""
+        """Test updating a character card."""
         manager = mock_chat_manager
 
         result = manager.update_character_card(
@@ -73,7 +73,7 @@ class TestCharacterCardManagement:
 
     @pytest.mark.unit
     def test_delete_character_card(self, mock_chat_manager):
-             """Test deleting a character card."""
+        """Test deleting a character card."""
         manager = mock_chat_manager
 
         result = manager.delete_character_card(card_id=1)
@@ -83,7 +83,7 @@ class TestCharacterCardManagement:
 
     @pytest.mark.unit
     def test_search_character_cards(self, mock_chat_manager):
-             """Test searching character cards."""
+        """Test searching character cards."""
         manager = mock_chat_manager
         manager.db.search_character_cards = Mock(return_value=[
             {'id': 1, 'name': 'Found Character'}
@@ -96,7 +96,7 @@ class TestCharacterCardManagement:
 
     @pytest.mark.unit
     def test_filter_by_tags(self, mock_chat_manager):
-             """Test filtering characters by tags."""
+        """Test filtering characters by tags."""
         manager = mock_chat_manager
         manager.db.filter_by_tags = Mock(return_value=[
             {'id': 1, 'name': 'Fantasy Character', 'tags': ['fantasy']}
@@ -116,7 +116,7 @@ class TestChatSessionManagement:
 
     @pytest.mark.unit
     def test_create_chat_session(self, mock_chat_manager):
-             """Test creating a new chat session."""
+        """Test creating a new chat session."""
         manager = mock_chat_manager
 
         chat_id = manager.create_chat_session(
@@ -134,7 +134,7 @@ class TestChatSessionManagement:
 
     @pytest.mark.unit
     def test_get_chat_session(self, mock_chat_manager):
-             """Test getting a chat session."""
+        """Test getting a chat session."""
         manager = mock_chat_manager
 
         chat = manager.get_chat_session(chat_id=1)
@@ -146,7 +146,7 @@ class TestChatSessionManagement:
 
     @pytest.mark.unit
     def test_list_user_chats(self, mock_chat_manager):
-             """Test listing user's chat sessions."""
+        """Test listing user's chat sessions."""
         manager = mock_chat_manager
         manager.db.list_user_chats = Mock(return_value=[
             {'id': 1, 'title': 'Chat 1'},
@@ -160,7 +160,7 @@ class TestChatSessionManagement:
 
     @pytest.mark.unit
     def test_delete_chat_session(self, mock_chat_manager):
-             """Test deleting a chat session."""
+        """Test deleting a chat session."""
         manager = mock_chat_manager
         manager.db.delete_chat = Mock(return_value={'success': True})
 
@@ -171,7 +171,7 @@ class TestChatSessionManagement:
 
     @pytest.mark.unit
     def test_clear_chat_history(self, mock_chat_manager):
-             """Test clearing chat history."""
+        """Test clearing chat history."""
         manager = mock_chat_manager
         manager.db.clear_chat_messages = Mock(return_value={'success': True})
 
@@ -189,7 +189,7 @@ class TestMessageHandling:
 
     @pytest.mark.unit
     def test_add_message(self, mock_chat_manager):
-             """Test adding a message to chat."""
+        """Test adding a message to chat."""
         manager = mock_chat_manager
 
         msg_id = manager.add_message(
@@ -205,7 +205,7 @@ class TestMessageHandling:
 
     @pytest.mark.unit
     def test_get_messages(self, mock_chat_manager, sample_messages):
-             """Test getting chat messages."""
+        """Test getting chat messages."""
         manager = mock_chat_manager
         manager.db.get_messages.return_value = sample_messages
 
@@ -217,7 +217,7 @@ class TestMessageHandling:
 
     @pytest.mark.unit
     def test_get_recent_messages(self, mock_chat_manager, long_chat_history):
-             """Test getting recent messages with limit."""
+        """Test getting recent messages with limit."""
         manager = mock_chat_manager
         manager.db.get_messages.return_value = long_chat_history[-20:]
 
@@ -228,7 +228,7 @@ class TestMessageHandling:
 
     @pytest.mark.unit
     def test_edit_message(self, mock_chat_manager):
-             """Test editing a message."""
+        """Test editing a message."""
         manager = mock_chat_manager
         manager.db.update_message = Mock(return_value={'success': True})
 
@@ -242,7 +242,7 @@ class TestMessageHandling:
 
     @pytest.mark.unit
     def test_delete_message(self, mock_chat_manager):
-             """Test deleting a message."""
+        """Test deleting a message."""
         manager = mock_chat_manager
         manager.db.delete_message = Mock(return_value={'success': True})
 
@@ -260,7 +260,7 @@ class TestContextManagement:
 
     @pytest.mark.unit
     def test_build_context_basic(self, mock_chat_manager):
-             """Test basic context building."""
+        """Test basic context building."""
         manager = mock_chat_manager
 
         # Mock character and messages
@@ -284,7 +284,7 @@ class TestContextManagement:
 
     @pytest.mark.unit
     def test_build_context_with_system_prompt(self, mock_chat_manager):
-             """Test context building with system prompt."""
+        """Test context building with system prompt."""
         manager = mock_chat_manager
 
         manager.db.get_character_card.return_value = {
@@ -302,7 +302,7 @@ class TestContextManagement:
 
     @pytest.mark.unit
     def test_truncate_context_by_tokens(self, mock_chat_manager, long_chat_history):
-             """Test context truncation by token limit."""
+        """Test context truncation by token limit."""
         manager = mock_chat_manager
         manager.db.get_messages.return_value = long_chat_history
 
@@ -317,7 +317,7 @@ class TestContextManagement:
 
     @pytest.mark.unit
     def test_inject_world_book_entries(self, mock_chat_manager):
-             """Test injecting world book entries into context."""
+        """Test injecting world book entries into context."""
         manager = mock_chat_manager
 
         context = {
@@ -345,7 +345,7 @@ class TestImportExport:
 
     @pytest.mark.unit
     def test_export_character_card(self, mock_chat_manager):
-             """Test exporting a character card."""
+        """Test exporting a character card."""
         manager = mock_chat_manager
 
         manager.db.get_character_card.return_value = {
@@ -364,7 +364,7 @@ class TestImportExport:
 
     @pytest.mark.unit
     def test_import_character_v3(self, mock_chat_manager, character_card_v3_format):
-             """Test importing a V3 format character card."""
+        """Test importing a V3 format character card."""
         manager = mock_chat_manager
 
         card_id = manager.import_character_card(character_card_v3_format)
@@ -379,7 +379,7 @@ class TestImportExport:
 
     @pytest.mark.unit
     def test_export_chat_history(self, mock_chat_manager, sample_messages):
-             """Test exporting chat history."""
+        """Test exporting chat history."""
         manager = mock_chat_manager
         manager.db.get_messages.return_value = sample_messages
         manager.db.get_chat.return_value = {
@@ -396,7 +396,7 @@ class TestImportExport:
 
     @pytest.mark.unit
     def test_import_chat_history(self, mock_chat_manager):
-             """Test importing chat history."""
+        """Test importing chat history."""
         manager = mock_chat_manager
 
         import_data = {
@@ -425,7 +425,7 @@ class TestCharacterValidation:
 
     @pytest.mark.unit
     def test_validate_character_name(self, mock_chat_manager):
-             """Test character name validation."""
+        """Test character name validation."""
         manager = mock_chat_manager
 
         # Valid name
@@ -438,7 +438,7 @@ class TestCharacterValidation:
 
     @pytest.mark.unit
     def test_validate_character_description(self, mock_chat_manager):
-             """Test character description validation."""
+        """Test character description validation."""
         manager = mock_chat_manager
 
         # Valid description
@@ -451,7 +451,7 @@ class TestCharacterValidation:
 
     @pytest.mark.unit
     def test_validate_tags(self, mock_chat_manager):
-             """Test tag validation."""
+        """Test tag validation."""
         manager = mock_chat_manager
 
         # Valid tags
@@ -472,7 +472,7 @@ class TestStatistics:
 
     @pytest.mark.unit
     def test_get_character_statistics(self, mock_chat_manager):
-             """Test getting character statistics."""
+        """Test getting character statistics."""
         manager = mock_chat_manager
         manager.db.get_character_statistics = Mock(return_value={
             'total_chats': 10,
@@ -489,7 +489,7 @@ class TestStatistics:
 
     @pytest.mark.unit
     def test_get_user_statistics(self, mock_chat_manager):
-             """Test getting user statistics."""
+        """Test getting user statistics."""
         manager = mock_chat_manager
         manager.db.get_user_statistics = Mock(return_value={
             'total_characters_used': 5,
@@ -511,7 +511,7 @@ class TestErrorHandling:
 
     @pytest.mark.unit
     def test_handle_database_error(self, mock_chat_manager):
-             """Test handling of database errors."""
+        """Test handling of database errors."""
         manager = mock_chat_manager
         manager.db.create_character_card.side_effect = Exception("Database error")
 
@@ -525,7 +525,7 @@ class TestErrorHandling:
 
     @pytest.mark.unit
     def test_handle_not_found(self, mock_chat_manager):
-             """Test handling of not found errors."""
+        """Test handling of not found errors."""
         manager = mock_chat_manager
         manager.db.get_character_card.return_value = None
 
@@ -535,7 +535,7 @@ class TestErrorHandling:
 
     @pytest.mark.unit
     def test_handle_invalid_import_format(self, mock_chat_manager):
-             """Test handling invalid import format."""
+        """Test handling invalid import format."""
         manager = mock_chat_manager
 
         invalid_data = {"invalid": "format"}
@@ -554,7 +554,7 @@ class TestPerformance:
 
     @pytest.mark.unit
     def test_batch_create_characters(self, mock_chat_manager, large_character_collection):
-             """Test batch creation of characters."""
+        """Test batch creation of characters."""
         manager = mock_chat_manager
         manager.db.create_character_card.side_effect = range(1, 101)
 
@@ -568,7 +568,7 @@ class TestPerformance:
 
     @pytest.mark.unit
     def test_cache_character_data(self, mock_chat_manager):
-             """Test character data caching."""
+        """Test character data caching."""
         manager = mock_chat_manager
 
         # First call

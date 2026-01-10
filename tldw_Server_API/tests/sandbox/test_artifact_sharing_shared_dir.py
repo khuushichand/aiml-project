@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 def _client(monkeypatch) -> TestClient:
 
 
-     monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "true")
     monkeypatch.setenv("SANDBOX_BACKGROUND_EXECUTION", "false")
     monkeypatch.setenv("TLDW_SANDBOX_DOCKER_FAKE_EXEC", "1")

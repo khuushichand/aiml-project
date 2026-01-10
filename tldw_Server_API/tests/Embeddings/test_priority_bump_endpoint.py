@@ -6,7 +6,7 @@ from tldw_Server_API.app.main import app
 
 class FakeRedisKV:
     def __init__(self):
-             self.kv = {}
+        self.kv = {}
 
     async def set(self, k, v):
         self.kv[k] = v
@@ -21,7 +21,7 @@ class FakeRedisKV:
 
 @pytest.mark.unit
 def test_bump_priority_sets_override(monkeypatch, admin_user):
-     client = TestClient(app)
+    client = TestClient(app)
     fake = FakeRedisKV()
     import redis.asyncio as aioredis
 

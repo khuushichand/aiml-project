@@ -22,7 +22,7 @@ class TestChatCompletionsEndpoint:
     @pytest.mark.integration
     @pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="Requires OPENAI_API_KEY for real integration test")
     def test_basic_completion_request(self, test_client, auth_headers):
-             """Test basic chat completion request - REAL API CALL."""
+        """Test basic chat completion request - REAL API CALL."""
 
         response = test_client.post(
             "/api/v1/chat/completions",
@@ -48,7 +48,7 @@ class TestChatCompletionsEndpoint:
     @pytest.mark.integration
     @pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="Requires OPENAI_API_KEY for real integration test")
     def test_multi_turn_conversation(self, test_client, auth_headers):
-             """Test multi-turn conversation handling - REAL API CALL."""
+        """Test multi-turn conversation handling - REAL API CALL."""
 
         response = test_client.post(
             "/api/v1/chat/completions",
@@ -70,7 +70,7 @@ class TestChatCompletionsEndpoint:
 
     @pytest.mark.integration
     def test_missing_auth_header(self, test_client):
-             """Test request without authentication header."""
+        """Test request without authentication header."""
         response = test_client.post(
             "/api/v1/chat/completions",
             json={
@@ -84,7 +84,7 @@ class TestChatCompletionsEndpoint:
 
     @pytest.mark.integration
     def test_invalid_request_body(self, test_client, auth_headers):
-             """Test request with invalid body."""
+        """Test request with invalid body."""
         response = test_client.post(
             "/api/v1/chat/completions",
             json={
@@ -97,7 +97,7 @@ class TestChatCompletionsEndpoint:
 
     @pytest.mark.integration
     def test_empty_messages_list(self, test_client, auth_headers):
-             """Test request with empty messages list."""
+        """Test request with empty messages list."""
         response = test_client.post(
             "/api/v1/chat/completions",
             json={
@@ -119,7 +119,7 @@ class TestProviderRouting:
     @pytest.mark.integration
     @pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="Requires OPENAI_API_KEY for real integration test")
     def test_openai_provider_routing(self, test_client, auth_headers):
-             """Test routing to OpenAI provider - REAL API CALL."""
+        """Test routing to OpenAI provider - REAL API CALL."""
 
         response = test_client.post(
             "/api/v1/chat/completions",
@@ -138,7 +138,7 @@ class TestProviderRouting:
     @pytest.mark.integration
     @pytest.mark.skipif(not os.getenv("ANTHROPIC_API_KEY"), reason="Requires ANTHROPIC_API_KEY for real integration test")
     def test_anthropic_provider_routing(self, test_client, auth_headers):
-             """Test routing to Anthropic provider - REAL API CALL."""
+        """Test routing to Anthropic provider - REAL API CALL."""
 
         response = test_client.post(
             "/api/v1/chat/completions",
@@ -157,7 +157,7 @@ class TestProviderRouting:
     @pytest.mark.integration
     @pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="Requires OPENAI_API_KEY for real integration test")
     def test_default_provider_fallback(self, test_client, auth_headers):
-             """Test fallback to default provider when not specified - REAL API CALL."""
+        """Test fallback to default provider when not specified - REAL API CALL."""
 
         response = test_client.post(
             "/api/v1/chat/completions",
@@ -182,14 +182,14 @@ class TestDatabaseIntegration:
     @pytest.mark.integration
     @pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="Requires OPENAI_API_KEY for real integration test")
     def test_conversation_saved_to_database(self, test_client, populated_chacha_db, auth_headers):
-             """Test that conversations are saved to database with real provider."""
+        """Test that conversations are saved to database with real provider."""
 
         # Override dependency to use our test database on the client app instance
         from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 
         def override_get_db():
 
-                     return populated_chacha_db
+            return populated_chacha_db
 
         test_client.app.dependency_overrides[get_chacha_db_for_user] = override_get_db
 
@@ -221,12 +221,12 @@ class TestDatabaseIntegration:
 
     @pytest.mark.integration
     def test_message_history_retrieval(self, test_client, populated_chacha_db, auth_headers):
-             """Test retrieving conversation history."""
+        """Test retrieving conversation history."""
         from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 
         def override_get_db():
 
-                     return populated_chacha_db
+            return populated_chacha_db
 
         test_client.app.dependency_overrides[get_chacha_db_for_user] = override_get_db
 
@@ -258,7 +258,7 @@ class TestErrorHandling:
 
     @pytest.mark.integration
     def test_rate_limit_error_handling(self, test_client, auth_headers, monkeypatch):
-             """Test rate limit with deterministic TEST_MODE chat limits (per-user RPM=2)."""
+        """Test rate limit with deterministic TEST_MODE chat limits (per-user RPM=2)."""
         monkeypatch.setenv("TEST_MODE", "true")
         monkeypatch.setenv("RG_ENABLED", "0")
         monkeypatch.setenv("TEST_CHAT_PER_USER_RPM", "2")
@@ -284,11 +284,11 @@ class TestErrorHandling:
 
     @pytest.mark.integration
     def test_auth_error_handling(self, test_client, auth_headers):
-             """Test handling of authentication errors by forcing provider to raise ChatAuthenticationError."""
+        """Test handling of authentication errors by forcing provider to raise ChatAuthenticationError."""
         from unittest.mock import patch
         from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAuthenticationError
         def raise_auth(*args, **kwargs):
-                     raise ChatAuthenticationError("Invalid API key", provider="openai")
+            raise ChatAuthenticationError("Invalid API key", provider="openai")
         with patch('tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call', new=raise_auth):
             response = test_client.post(
                 "/api/v1/chat/completions",
@@ -305,10 +305,10 @@ class TestErrorHandling:
 
     @pytest.mark.unit
     def test_general_error_handling(self, test_client, auth_headers):
-             """Test handling of general errors by forcing provider call to raise."""
+        """Test handling of general errors by forcing provider call to raise."""
         from unittest.mock import patch
         def boom(*args, **kwargs):
-                     raise Exception("Unexpected error")
+            raise Exception("Unexpected error")
         with patch('tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call', new=boom):
             response = test_client.post(
                 "/api/v1/chat/completions",
@@ -332,21 +332,21 @@ class _BaseQueueStub:
 
     def __init__(self):
 
-             self.enqueue_calls = 0
+        self.enqueue_calls = 0
 
     def is_running(self) -> bool:
 
-             return True
+        return True
 
 
 class _InactiveQueueStub(_BaseQueueStub):
     def __init__(self):
-             super().__init__()
+        super().__init__()
         self._running = False
 
     def is_running(self) -> bool:
 
-             return False
+        return False
 
     async def enqueue(self, *args, **kwargs):
         raise AssertionError("enqueue should not be called when queue is inactive")
@@ -365,7 +365,7 @@ class _ActiveQueueStub(_BaseQueueStub):
 
         def __await__(self):
 
-                     return iter(())
+            return iter(())
 
     async def enqueue(self, *args, **kwargs):
         self.enqueue_calls += 1
@@ -380,7 +380,7 @@ class TestRequestQueueAdmission:
 
     @pytest.mark.integration
     def test_inactive_queue_is_bypassed(self, test_client, auth_headers, monkeypatch):
-             """Requests skip enqueue when queue reports inactive state."""
+        """Requests skip enqueue when queue reports inactive state."""
         from tldw_Server_API.app.api.v1.endpoints import chat as chat_endpoint
 
         queue_stub = _InactiveQueueStub()
@@ -401,7 +401,7 @@ class TestRequestQueueAdmission:
 
     @pytest.mark.integration
     def test_active_queue_admission(self, test_client, auth_headers, monkeypatch):
-             """Active queue gates admission without delaying the response."""
+        """Active queue gates admission without delaying the response."""
         from tldw_Server_API.app.api.v1.endpoints import chat as chat_endpoint
 
         queue_stub = _ActiveQueueStub()
@@ -422,7 +422,7 @@ class TestRequestQueueAdmission:
 
     @pytest.mark.integration
     def test_queue_admission_failure_returns_503(self, test_client, auth_headers, monkeypatch):
-             """Unexpected queue failures surface as 503 to the client."""
+        """Unexpected queue failures surface as 503 to the client."""
         from tldw_Server_API.app.api.v1.endpoints import chat as chat_endpoint
 
         queue_stub = _ActiveQueueStub(fail_with=RuntimeError("boom"))
@@ -488,7 +488,7 @@ class TestParameterValidation:
     @pytest.mark.integration
     @pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="Requires OPENAI_API_KEY for real integration test")
     def test_temperature_bounds(self, test_client, auth_headers):
-             """Test temperature parameter bounds - REAL API CALL."""
+        """Test temperature parameter bounds - REAL API CALL."""
 
         # Valid temperature
         response = test_client.post(
@@ -517,7 +517,7 @@ class TestParameterValidation:
     @pytest.mark.integration
     @pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="Requires OPENAI_API_KEY for real integration test")
     def test_max_tokens_validation(self, test_client, auth_headers):
-             """Test max_tokens parameter validation - REAL API CALL."""
+        """Test max_tokens parameter validation - REAL API CALL."""
 
         # Valid max_tokens
         response = test_client.post(

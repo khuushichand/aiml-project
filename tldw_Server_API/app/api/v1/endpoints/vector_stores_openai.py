@@ -38,6 +38,7 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.factory import (
     create_from_settings_for_user,
 )
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 import pathlib
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
 import asyncio
@@ -456,14 +457,18 @@ async def list_vector_stores(
     ],
 )
 async def list_vector_store_users(current_user: User = Depends(get_request_user)):
-    base_dir: pathlib.Path = settings.get("USER_DB_BASE_DIR")
+    base_dir: pathlib.Path = DatabasePaths.get_user_db_base_dir()
     users = []
     try:
         for entry in base_dir.iterdir():
             if not entry.is_dir():
                 continue
             uid = entry.name
-            vec_dir = entry / 'vector_store'
+            try:
+                user_dir = DatabasePaths.get_user_base_directory(uid)
+            except Exception:
+                user_dir = entry
+            vec_dir = user_dir / DatabasePaths.VECTOR_STORE_SUBDIR
             has_vec_dir = vec_dir.exists()
             store_count = 0
             batch_count = 0

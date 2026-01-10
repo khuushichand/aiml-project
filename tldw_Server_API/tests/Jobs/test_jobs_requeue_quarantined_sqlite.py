@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 def _init_env(monkeypatch, tmp_path):
 
 
-     monkeypatch.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
@@ -19,7 +19,7 @@ def _init_env(monkeypatch, tmp_path):
 
 @pytest.mark.unit
 def test_endpoint_requeue_quarantined_sqlite(monkeypatch, tmp_path):
-     _init_env(monkeypatch, tmp_path)
+    _init_env(monkeypatch, tmp_path)
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
     reset_settings()
     from tldw_Server_API.app.main import app
@@ -57,7 +57,7 @@ def test_endpoint_requeue_quarantined_sqlite(monkeypatch, tmp_path):
 
 @pytest.mark.unit
 def test_requeue_quarantined_updates_counters_sqlite(monkeypatch, tmp_path):
-     _init_env(monkeypatch, tmp_path)
+    _init_env(monkeypatch, tmp_path)
     monkeypatch.setenv("JOBS_COUNTERS_ENABLED", "true")
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
     reset_settings()

@@ -2,9 +2,7 @@ from tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs import _websearch_brow
 
 
 def test_websearch_browser_headers_shape():
-
-
-     headers = _websearch_browser_headers(accept_lang="en-US,en;q=0.5")
+    headers = _websearch_browser_headers(accept_lang="en-US,en;q=0.5")
     # Core browser headers
     assert "User-Agent" in headers
     assert "Accept" in headers

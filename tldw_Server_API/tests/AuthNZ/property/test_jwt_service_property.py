@@ -22,7 +22,7 @@ class TestJWTServiceProperty:
     )
     @hypothesis_settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_access_token_roundtrip(self, jwt_service, user_id, username, role):
-             """Tokens created by the service should decode back to the original payload."""
+        """Tokens created by the service should decode back to the original payload."""
         token = jwt_service.create_access_token(
             user_id=user_id,
             username=username,
@@ -39,7 +39,7 @@ class TestJWTServiceProperty:
     @given(user_id=integers(min_value=1, max_value=2**31 - 1))
     @hypothesis_settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_refresh_token_roundtrip(self, jwt_service, user_id):
-             """Refresh tokens should decode correctly for arbitrary user IDs."""
+        """Refresh tokens should decode correctly for arbitrary user IDs."""
         token = jwt_service.create_refresh_token(user_id=user_id, username="testuser")
 
         payload = jwt_service.decode_refresh_token(token)
@@ -53,7 +53,7 @@ class TestJWTServiceProperty:
     )
     @hypothesis_settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_jwt_settings_configuration(self, secret_key, algorithm):
-             """Service should operate for a range of symmetric key lengths and algorithms."""
+        """Service should operate for a range of symmetric key lengths and algorithms."""
         settings = Settings(
             AUTH_MODE="multi_user",
             JWT_SECRET_KEY=secret_key,
@@ -99,7 +99,7 @@ class TestJWTServiceProperty:
     )
     @hypothesis_settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_token_expiry_settings(self, expire_minutes, expire_days):
-             """Token expirations should track configured lifetimes across varied inputs."""
+        """Token expirations should track configured lifetimes across varied inputs."""
         settings = Settings(
             AUTH_MODE="multi_user",
             JWT_SECRET_KEY="test-key-that-is-at-least-32-characters-long",

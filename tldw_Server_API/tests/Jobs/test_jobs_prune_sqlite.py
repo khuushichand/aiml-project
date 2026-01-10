@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 def _set_env(monkeypatch):
 
 
-     monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     # Do not set SINGLE_USER_API_KEY so tests use deterministic key from settings
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)

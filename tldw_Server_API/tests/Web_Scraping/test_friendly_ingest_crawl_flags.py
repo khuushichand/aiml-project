@@ -9,22 +9,22 @@ from tldw_Server_API.app.main import app as fastapi_app
 
 @pytest.fixture()
 def client_with_token(client_user_only):
-     """Provide a client with a minimal header expected by the endpoint."""
+    """Provide a client with a minimal header expected by the endpoint."""
     # The ingest endpoint declares a required header parameter named 'token'
     class _Client:
         def __init__(self, c):
-                     self._c = c
+            self._c = c
+
         def post(self, *a, **k):
-                     headers = k.pop('headers', {}) or {}
-            headers.setdefault('token', 'test-token')
+            headers = k.pop("headers", {}) or {}
+            headers.setdefault("token", "test-token")
             return self._c.post(*a, headers=headers, **k)
+
     return _Client(client_user_only)
 
 
 def test_friendly_ingest_recursive_flags_forwarding(client_with_token, monkeypatch):
-
-
-     # Patch the imported symbol used by the media router
+    # Patch the imported symbol used by the media router
     import tldw_Server_API.app.api.v1.endpoints.media as media_mod
 
     captured = {}
@@ -75,9 +75,7 @@ def test_friendly_ingest_recursive_flags_forwarding(client_with_token, monkeypat
 
 
 def test_friendly_ingest_url_level_flags_forwarding(client_with_token, monkeypatch):
-
-
-     import tldw_Server_API.app.api.v1.endpoints.media as media_mod
+    import tldw_Server_API.app.api.v1.endpoints.media as media_mod
 
     captured = {}
 
@@ -123,9 +121,7 @@ def test_friendly_ingest_url_level_flags_forwarding(client_with_token, monkeypat
 
 
 def test_ingest_web_content_invalid_cookie_json_returns_400(client_with_token):
-
-
-     payload = {
+    payload = {
         "urls": ["https://example.com/"],
         "scrape_method": "url_level",
         "url_level": 2,
@@ -140,9 +136,7 @@ def test_ingest_web_content_invalid_cookie_json_returns_400(client_with_token):
 
 
 def test_ingest_web_content_invalid_cookie_type_returns_400(client_with_token):
-
-
-     payload = {
+    payload = {
         "urls": ["https://example.com/"],
         "scrape_method": "url_level",
         "url_level": 2,
@@ -157,9 +151,7 @@ def test_ingest_web_content_invalid_cookie_type_returns_400(client_with_token):
 
 
 def test_ingest_web_content_invalid_cookie_list_element_returns_400(client_with_token):
-
-
-     payload = {
+    payload = {
         "urls": ["https://example.com/"],
         "scrape_method": "url_level",
         "url_level": 2,

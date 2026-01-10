@@ -105,14 +105,14 @@ async def whoami_current_user_and_request_user(
 def _make_app() -> FastAPI:
 
 
-     app = FastAPI()
+    app = FastAPI()
     app.include_router(router, prefix="/api/v1")
     return app
 
 
 @pytest.fixture
 def single_user_app(monkeypatch) -> TestClient:
-     monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key-12345")
     # Ensure tests see the single-user settings
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings

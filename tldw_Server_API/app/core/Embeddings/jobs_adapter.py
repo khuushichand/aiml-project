@@ -7,13 +7,6 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
-from tldw_Server_API.app.core.Embeddings.media_embedding_jobs_db import (
-    init_db as legacy_init_db,
-    get_job as legacy_get_job,
-    list_jobs as legacy_list_jobs,
-)
-
-
 _EMBEDDINGS_DOMAIN = "embeddings"
 _EMBEDDINGS_JOB_TYPE = "media_embeddings"
 
@@ -154,11 +147,6 @@ class EmbeddingsJobsAdapter:
         job = self._lookup_job(job_id, user_id)
         if job:
             return self._format_job(job)
-        if self._read_legacy:
-            legacy_init_db(user_id)
-            legacy = legacy_get_job(job_id, user_id)
-            if legacy:
-                return legacy
         return None
 
     def list_jobs(
@@ -190,9 +178,6 @@ class EmbeddingsJobsAdapter:
         if jobs:
             sliced = jobs[int(offset):int(offset) + int(limit)]
             return [self._format_job(job) for job in sliced]
-        if self._read_legacy:
-            legacy_init_db(user_id)
-            return legacy_list_jobs(user_id=user_id, status=status, limit=limit, offset=offset)
         return []
 
     def _format_job(self, job: Dict[str, Any]) -> Dict[str, Any]:

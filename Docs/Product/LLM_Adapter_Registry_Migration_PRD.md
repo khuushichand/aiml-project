@@ -33,7 +33,7 @@ Consolidate all LLM chat and summarization flows onto the adapter registry while
 - As an integrator, I can send supported OpenAI-compatible fields (e.g., `min_p`, `top_k`, `repetition_penalty`) and get a clear error if a field is unsupported.
 - As a maintainer, I can add a provider by writing one adapter and registering it.
 - As a service owner, I can request streaming or non-streaming behavior with identical semantics across providers.
-- As a tester, I can stub a provider adapter without having to patch `requests.Session`.
+- As a tester, I can stub a provider adapter without having to patch `http_client` factories or transport adapters directly.
 
 ## Problem Statement
 LLM calls are fragmented across compatibility modules (`chat_calls.py`, `local_chat_calls.py`), summarization helpers, adapter call handlers, and provider-specific dispatch tables. This duplicates config parsing, error handling, and transport behaviors, while increasing the risk of extension-field regressions. The adapter registry exists but is not the exclusive entry point.

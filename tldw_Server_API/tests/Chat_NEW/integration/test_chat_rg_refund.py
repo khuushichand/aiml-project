@@ -4,12 +4,12 @@ from types import SimpleNamespace
 
 class _FakeRGLoader:
     def get_policy(self, _policy_id):
-             return {}
+        return {}
 
 
 class _FakeGovernor:
     def __init__(self):
-             self.reserve_calls = []
+        self.reserve_calls = []
         self.commit_calls = []
 
     async def reserve(self, req, op_id=None):
@@ -23,7 +23,7 @@ class _FakeGovernor:
 
 @pytest.mark.integration
 def test_rg_refund_on_provider_error(monkeypatch, test_client, auth_headers):
-     from tldw_Server_API.app.api.v1.endpoints import chat as chat_endpoint
+    from tldw_Server_API.app.api.v1.endpoints import chat as chat_endpoint
 
     fake_gov = _FakeGovernor()
     fake_loader = _FakeRGLoader()
@@ -57,7 +57,7 @@ def test_rg_refund_on_provider_error(monkeypatch, test_client, auth_headers):
 
     def fail_call(**_kwargs):
 
-             raise RuntimeError("boom")
+        raise RuntimeError("boom")
 
     monkeypatch.setattr(chat_endpoint, "perform_chat_api_call", fail_call)
 

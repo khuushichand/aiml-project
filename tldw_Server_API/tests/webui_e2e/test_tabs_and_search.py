@@ -3,7 +3,7 @@ import pytest
 
 @pytest.mark.e2e
 def test_tab_navigation_and_search(page, server_url):
-     page.goto(f"{server_url}/webui/")
+    page.goto(f"{server_url}/webui/")
     page.get_by_role("tab", name="Media").click()
     page.get_by_role("tab", name="Media Management").click()
     page.wait_for_selector("#tabMediaManagement")
@@ -24,7 +24,7 @@ def test_tab_navigation_and_search(page, server_url):
 
 @pytest.mark.e2e
 def test_request_history_modal(page, server_url):
-     page.goto(f"{server_url}/webui/")
+    page.goto(f"{server_url}/webui/")
     # Click Test Connection (triggers GET /health)
     page.get_by_text("Test Connection").click()
     page.wait_for_timeout(800)
@@ -38,7 +38,7 @@ def test_request_history_modal(page, server_url):
 
 @pytest.mark.e2e
 def test_theme_persistence(page, server_url):
-     page.goto(f"{server_url}/webui/")
+    page.goto(f"{server_url}/webui/")
     page.click("#theme-toggle")
     page.wait_for_timeout(100)
     page.reload()

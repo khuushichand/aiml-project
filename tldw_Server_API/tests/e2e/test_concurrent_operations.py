@@ -777,7 +777,7 @@ class TestLoadPatterns:
 
         """Test handling of burst traffic (100 requests in 1 second)."""
         def make_request():
-                    return authenticated_client.health_check()
+            return authenticated_client.health_check()
 
         # Send 100 requests as fast as possible
         args_list = [()] * 100  # 100 empty arg tuples
@@ -1029,7 +1029,7 @@ class TestStateConsistency:
 
         # Two clients try to update with same version
         def update_with_version(content, version):
-                    return authenticated_client.update_note(
+            return authenticated_client.update_note(
                 note_id=note_id,
                 content=content,
                 version=version

@@ -347,7 +347,7 @@ class CookieManager:
         return self._cookies.get(domain)
 
     async def close_all(self):
-        """No-op: http_client manages shared sessions."""
+        """No-op retained for backward compatibility."""
         return None
 
 

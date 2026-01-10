@@ -22,7 +22,7 @@ def _detect_vllm_base_url():
 def _vllm_available():
 
 
-     try:
+    try:
         import httpx
 
         base = _detect_vllm_base_url()

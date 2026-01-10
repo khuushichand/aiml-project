@@ -38,7 +38,7 @@ from tldw_Server_API.app.core.DB_Management.migrations import create_evaluations
 
 def pytest_configure(config):
 
-     """Register custom markers."""
+    """Register custom markers."""
     # Ensure TEST_MODE is enabled for the Evaluations test suite to bypass
     # global API rate limiting paths that are unrelated to unit correctness.
     os.environ.setdefault("TEST_MODE", "true")
@@ -63,7 +63,7 @@ def pytest_configure(config):
 
 @pytest.fixture(scope="function")
 def temp_db_path() -> Generator[Path, None, None]:
-     """Create a temporary database file with full schema for testing."""
+    """Create a temporary database file with full schema for testing."""
     with tempfile.NamedTemporaryFile(suffix="_test_eval.db", delete=False) as f:
         db_path = Path(f.name)
 
@@ -99,7 +99,7 @@ def temp_db_path() -> Generator[Path, None, None]:
 
 @pytest.fixture(scope="function")
 def in_memory_db() -> Generator[sqlite3.Connection, None, None]:
-     """Create an in-memory SQLite database with full schema for fast testing."""
+    """Create an in-memory SQLite database with full schema for fast testing."""
     # For in-memory testing, we need to use a temp file approach
     # since EvaluationsDatabase expects a file path
     with tempfile.NamedTemporaryFile(suffix="_test_mem.db", delete=False) as f:
@@ -128,7 +128,7 @@ def in_memory_db() -> Generator[sqlite3.Connection, None, None]:
 
 @pytest.fixture(scope="session")
 def mock_openai_server():
-     """Start a mock OpenAI server for testing."""
+    """Start a mock OpenAI server for testing."""
     import subprocess
     import time
     import requests
@@ -178,7 +178,7 @@ def mock_openai_server():
 
 @pytest.fixture(scope="function")
 def mock_openai_config(mock_openai_server, monkeypatch):
-     """Configure tests to use mock OpenAI server."""
+    """Configure tests to use mock OpenAI server."""
     # Set environment variables to use mock server
     monkeypatch.setenv("OPENAI_API_BASE", mock_openai_server)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -199,7 +199,7 @@ def mock_openai_config(mock_openai_server, monkeypatch):
 
 @pytest.fixture(scope="function")
 def mock_rate_limiter(monkeypatch):
-     """Mock rate limiter to prevent 429 errors in tests.
+    """Mock rate limiter to prevent 429 errors in tests.
 
     Use this fixture explicitly in tests that need to bypass rate limiting.
     """
@@ -382,7 +382,7 @@ async def flaky_webhook_receiver_server():
 
 @pytest.fixture(scope="function")
 def mock_llm_analyze(monkeypatch):
-     """Mock the analyze function to avoid real OpenAI API calls in unit tests.
+    """Mock the analyze function to avoid real OpenAI API calls in unit tests.
 
     Use this fixture explicitly in unit tests that need to mock LLM calls.
     """
@@ -391,7 +391,7 @@ def mock_llm_analyze(monkeypatch):
     # Create a mock analyze function that returns realistic scores
     # The actual signature: analyze(api_name, input_data, custom_prompt_arg, api_key="", system_message="", temp=0.1)
     def mock_analyze(api_name, input_data, custom_prompt_arg="", api_key="", system_message="", temp=0.1, **kwargs):
-             """Mock analyze function that returns scores based on content."""
+        """Mock analyze function that returns scores based on content."""
         # Check both input_data and custom_prompt_arg for keywords
         combined_text = f"{input_data} {custom_prompt_arg}".lower()
 
@@ -429,7 +429,7 @@ def mock_llm_analyze(monkeypatch):
 
 @pytest.fixture(scope="function")
 def local_embeddings_config():
-     """Configure tests to use local embeddings model.
+    """Configure tests to use local embeddings model.
 
     Uses sentence-transformers with a small, fast model that doesn't require API keys.
     """
@@ -442,7 +442,7 @@ def local_embeddings_config():
 
 @pytest.fixture(scope="function")
 def mock_embeddings(monkeypatch):
-     """Mock embedding creation for unit tests that don't need real embeddings.
+    """Mock embedding creation for unit tests that don't need real embeddings.
 
     Use this fixture explicitly in unit tests. For integration tests,
     use local_embeddings_config instead.
@@ -451,7 +451,7 @@ def mock_embeddings(monkeypatch):
 
     def mock_create_embedding(text, provider="openai", model="text-embedding-3-small", api_key=None):
 
-             """Generate deterministic fake embeddings based on text hash."""
+        """Generate deterministic fake embeddings based on text hash."""
         # Generate a deterministic embedding based on the input text
         import hashlib
         text_hash = hashlib.md5(text.encode()).hexdigest()
@@ -474,7 +474,7 @@ def mock_embeddings(monkeypatch):
 
 @pytest.fixture(scope="function")
 def setup_auth_db(tmp_path):
-     """Setup auth database for tests that need authentication."""
+    """Setup auth database for tests that need authentication."""
     # Import here to avoid circular imports
     from tldw_Server_API.app.core.AuthNZ.migrations import migration_001_create_users_table
 
@@ -497,7 +497,7 @@ def setup_auth_db(tmp_path):
 
 @pytest.fixture(scope="function")
 def evaluation_manager(temp_db_path, monkeypatch) -> EvaluationManager:
-     """Create an EvaluationManager instance with test database."""
+    """Create an EvaluationManager instance with test database."""
     # Import here to avoid circular imports
     from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
 
@@ -508,7 +508,7 @@ def evaluation_manager(temp_db_path, monkeypatch) -> EvaluationManager:
     # Ensure the manager uses our temp database, not production
     # Mock the config to return our temp path
     def mock_get_db_path(self, explicit_path=None):
-             if explicit_path is not None:
+        if explicit_path is not None:
             try:
                 return Path(explicit_path)
             except Exception:
@@ -524,7 +524,7 @@ def evaluation_manager(temp_db_path, monkeypatch) -> EvaluationManager:
 
 @pytest.fixture(scope="function")
 def rag_evaluator() -> RAGEvaluator:
-     """Create a RAGEvaluator instance for testing."""
+    """Create a RAGEvaluator instance for testing."""
     # Use fallback mode (no embeddings) for unit tests
     evaluator = RAGEvaluator(
         embedding_provider=None,
@@ -535,7 +535,7 @@ def rag_evaluator() -> RAGEvaluator:
 
 @pytest.fixture(scope="function")
 def rag_evaluator_with_embeddings(local_embeddings_config) -> RAGEvaluator:
-     """Create a RAGEvaluator instance with local embeddings for integration testing."""
+    """Create a RAGEvaluator instance with local embeddings for integration testing."""
     # Use local embeddings that don't require API keys
     evaluator = RAGEvaluator(
         embedding_provider=local_embeddings_config["provider"],
@@ -546,7 +546,7 @@ def rag_evaluator_with_embeddings(local_embeddings_config) -> RAGEvaluator:
 
 @pytest.fixture(scope="function")
 def quality_evaluator() -> ResponseQualityEvaluator:
-     """Create a ResponseQualityEvaluator instance for testing."""
+    """Create a ResponseQualityEvaluator instance for testing."""
     return ResponseQualityEvaluator()
 
 
@@ -579,7 +579,7 @@ async def unified_service_with_webhooks(temp_db_path) -> AsyncGenerator[UnifiedE
 
 @pytest.fixture(scope="function")
 def override_unified_service(temp_db_path, monkeypatch):
-     """Force API endpoints to use an isolated evaluations database."""
+    """Force API endpoints to use an isolated evaluations database."""
     from tldw_Server_API.app.core.Evaluations import unified_evaluation_service as service_module
     from tldw_Server_API.app.api.v1.endpoints import evaluations_unified as router_module
 
@@ -657,7 +657,7 @@ def override_unified_service(temp_db_path, monkeypatch):
 
 @pytest.fixture(scope="function")
 def connection_pool(temp_db_path) -> ConnectionPool:
-     """Create a ConnectionPool instance for testing."""
+    """Create a ConnectionPool instance for testing."""
     pool = ConnectionPool(
         db_path=str(temp_db_path),
         min_connections=1,
@@ -670,7 +670,7 @@ def connection_pool(temp_db_path) -> ConnectionPool:
 
 @pytest.fixture(scope="function")
 def circuit_breaker() -> CircuitBreaker:
-     """Create a CircuitBreaker instance for testing."""
+    """Create a CircuitBreaker instance for testing."""
     return CircuitBreaker(
         failure_threshold=3,
         recovery_timeout=5,
@@ -684,7 +684,7 @@ def circuit_breaker() -> CircuitBreaker:
 
 @pytest.fixture
 def sample_evaluation_data() -> Dict[str, Any]:
-     """Provide sample evaluation data for testing."""
+    """Provide sample evaluation data for testing."""
     return {
         "name": "test_evaluation",
         "eval_type": "model_graded",
@@ -717,7 +717,7 @@ def sample_evaluation_data() -> Dict[str, Any]:
 
 @pytest.fixture
 def sample_rag_query() -> Dict[str, Any]:
-     """Provide sample RAG query data."""
+    """Provide sample RAG query data."""
     return {
         "query": "What are the key features of the evaluation system?",
         "context": [
@@ -736,7 +736,7 @@ def sample_rag_query() -> Dict[str, Any]:
 
 @pytest.fixture
 def sample_response_quality_data() -> Dict[str, Any]:
-     """Provide sample response quality evaluation data."""
+    """Provide sample response quality evaluation data."""
     return {
         "response": "The capital of France is Paris. Paris is known for the Eiffel Tower and is located on the Seine River.",
         "reference": "Paris is the capital and largest city of France.",
@@ -751,7 +751,7 @@ def sample_response_quality_data() -> Dict[str, Any]:
 
 @pytest.fixture
 def sample_webhook_config() -> Dict[str, Any]:
-     """Provide sample webhook configuration."""
+    """Provide sample webhook configuration."""
     return {
         "url": "https://example.com/webhook",
         "events": ["evaluation.completed", "evaluation.failed"],
@@ -769,7 +769,7 @@ def sample_webhook_config() -> Dict[str, Any]:
 
 @pytest.fixture
 def sample_batch_evaluation_data() -> Dict[str, Any]:
-     """Provide sample batch evaluation data."""
+    """Provide sample batch evaluation data."""
     return {
         "evaluations": [
             {
@@ -805,7 +805,7 @@ def sample_batch_evaluation_data() -> Dict[str, Any]:
 
 @pytest.fixture
 def api_client(override_unified_service):
-     """Create a test client for API testing."""
+    """Create a test client for API testing."""
     from fastapi.testclient import TestClient
     from tldw_Server_API.app.main import app
 
@@ -828,7 +828,7 @@ async def async_api_client(override_unified_service):
 
 @pytest.fixture
 def auth_headers() -> Dict[str, str]:
-     """Provide authentication headers for API testing."""
+    """Provide authentication headers for API testing."""
     # For single-user mode, use X-API-KEY header
     # Get the actual API key from settings
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
@@ -846,7 +846,7 @@ def auth_headers() -> Dict[str, str]:
 
 @pytest.fixture(scope="session")
 def event_loop():
-     """Create an event loop for async tests."""
+    """Create an event loop for async tests."""
     loop = asyncio.get_event_loop_policy().new_event_loop()
     yield loop
     loop.close()
@@ -858,26 +858,26 @@ def event_loop():
 
 @pytest.fixture
 def performance_timer():
-     """Provide a timer for performance testing."""
+    """Provide a timer for performance testing."""
     import time
 
     class Timer:
         def __init__(self):
-                     self.start_time = None
+            self.start_time = None
             self.end_time = None
 
         def start(self):
 
-                     self.start_time = time.perf_counter()
+            self.start_time = time.perf_counter()
 
         def stop(self):
 
-                     self.end_time = time.perf_counter()
+            self.end_time = time.perf_counter()
             return self.elapsed
 
         @property
         def elapsed(self):
-                     if self.start_time is None:
+            if self.start_time is None:
                 return 0
             if self.end_time is None:
                 return time.perf_counter() - self.start_time
@@ -892,7 +892,7 @@ def performance_timer():
 
 @pytest.fixture(autouse=True)
 def reset_singletons():
-     """Reset singleton instances between tests."""
+    """Reset singleton instances between tests."""
     # Note: The webhook_manager and user_rate_limiter classes store their state
     # in the database, not in memory attributes. They don't have _webhooks,
     # _delivery_stats, _user_requests, or _user_tiers attributes.
@@ -917,13 +917,13 @@ def reset_singletons():
 
 @pytest.fixture
 def evaluation_data_generator():
-     """Generate random evaluation data for property testing."""
+    """Generate random evaluation data for property testing."""
     import random
     import string
 
     def generate():
 
-             return {
+        return {
             "name": ''.join(random.choices(string.ascii_letters, k=10)),
             "eval_type": random.choice(["model_graded", "g_eval", "rag", "response_quality"]),
             "eval_spec": {
@@ -945,7 +945,7 @@ def evaluation_data_generator():
 
 @pytest.fixture
 def mock_rag_evaluator(monkeypatch):
-     """Mock RAGEvaluator for unit tests."""
+    """Mock RAGEvaluator for unit tests."""
     from unittest.mock import AsyncMock
 
     # Mock the LLM analyze function for RAG tests
@@ -975,7 +975,7 @@ def mock_rag_evaluator(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def auto_mock_llm_for_unit_tests(request, monkeypatch):
-     """Automatically mock LLM calls for unit tests in test_rag_evaluator."""
+    """Automatically mock LLM calls for unit tests in test_rag_evaluator."""
     if "test_rag_evaluator" in request.node.module.__name__:
         # Mock the LLM analyze function with correct signature
         def mock_analyze(api_name, input_data, custom_prompt_arg="", api_key="", system_message="", temp=0.1, **kwargs):
@@ -998,13 +998,13 @@ def auto_mock_llm_for_unit_tests(request, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def mock_llm_for_requires_llm(request, monkeypatch):
-     """Automatically mock LLM calls for tests marked with requires_llm."""
+    """Automatically mock LLM calls for tests marked with requires_llm."""
     if "requires_llm" in [m.name for m in request.node.iter_markers()]:
         from unittest.mock import MagicMock, AsyncMock
 
         # Mock the run_geval function to return proper structured data
         def mock_run_geval(*args, **kwargs):
-                     return {
+            return {
                 "metrics": {
                     "coherence": 4.5,
                     "consistency": 4.2,
@@ -1056,7 +1056,7 @@ def mock_llm_for_requires_llm(request, monkeypatch):
 
         # Mock the LLM calls in Summarization_General_Lib
         def mock_analyze(*args, **kwargs):
-                     return "4"  # Return a simple score string
+            return "4"  # Return a simple score string
 
         # Apply mocks
         monkeypatch.setattr(

@@ -113,14 +113,8 @@ tldw_Server_API/
 │   │
 │   └── core/
 │       └── Embeddings/
-│           ├── queue_schemas.py                 # Message schemas (WIP for workers)
-│           ├── job_manager.py                   # Job management (WIP)
-│           ├── worker_orchestrator.py           # Worker coordination (WIP)
-│           ├── workers/
-│           │   ├── base_worker.py               # Base worker class (WIP)
-│           │   ├── chunking_worker.py           # Text chunking (WIP)
-│           │   ├── embedding_worker.py          # Embedding generation (WIP)
-│           │   └── storage_worker.py            # Storage operations (WIP)
+│           ├── jobs_adapter.py                  # Core Jobs adapter for embeddings jobs
+│           ├── services/jobs_worker.py          # Core Jobs worker for embeddings processing
 │           └── Embeddings_Server/
 │               └── Embeddings_Create.py         # Core embedding logic (OpenAI/HF/ONNX/local)
 │

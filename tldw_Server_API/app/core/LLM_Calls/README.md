@@ -11,7 +11,7 @@
   - Strict OpenAI-compat mode for local gateways to drop non-standard fields.
   - Summarization helpers for media/chunking workflows.
 - Inputs/Outputs:
-  - Input: OpenAI-style `messages` list with optional `tools`, `tool_choice`, and provider options (temperature, top_p, max_tokens, …).
+- Input: OpenAI-style `messages` list with optional `tools`/`tool_choice` (tool_choice requires tools), provider options (temperature, top_p, max_tokens, …), plus additive `extra_headers`/`extra_body` (payload/headers win on conflicts).
   - Output: Non-streaming returns OpenAI-style object; streaming yields `data: …\n\n` lines (OpenAI delta chunks) with a final `[DONE]`.
   - Errors map to `ChatAPIError` subclasses for clean HTTP responses.
 - Related Endpoints:
@@ -44,6 +44,9 @@
   - Provider sections in config.txt (e.g., `openai_api`, `anthropic_api`, `openrouter_api`): `api_key`, `model`, `api_base_url`, `api_timeout`, `api_retries`, `api_retry_delay`.
   - Env overrides: `OPENAI_API_BASE_URL` and similar per provider; `TEST_MODE=true` adjusts defaults.
   - Strict OpenAI-compat (local gateways): set `strict_openai_compat=true` in the provider section or env `LOCAL_LLM_STRICT_OPENAI_COMPAT=1|true|yes|on`.
+- Request overrides:
+  - `extra_headers` and `extra_body` are merged additively; explicit request headers/payload keys win on conflicts.
+  - Local provider base URLs are config-only; request-level `api_url`/`*_api_url` overrides are rejected.
 - Concurrency & Performance:
   - Streaming via `requests` or `httpx.AsyncClient` depending on handler; SSE normalized and `[DONE]` appended once.
   - Retry/backoff on 429/5xx via `http_helpers` (sync) and light async retry helpers.
@@ -77,7 +80,7 @@
   - Use `TEST_MODE=true` to default provider to `local-llm` during tests.
 - Pitfalls & Gotchas:
   - Some local gateways reject unknown keys; enable strict filtering to drop non-standard fields.
-  - Provider tools/tool_choice semantics differ; ensure mapping and gating are correct per provider.
+  - Provider tools/tool_choice semantics differ; tool_choice requires tools and is rejected otherwise.
   - Long-running streams must handle transport errors by emitting SSE error frames and a single `[DONE]` sentinel.
 - Roadmap/TODOs:
   - Unify sync/async call paths and migrate providers to consistent async with timeouts.

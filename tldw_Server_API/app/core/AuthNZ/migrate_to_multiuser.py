@@ -23,8 +23,15 @@ sys.path.append(str(Path(__file__).parent.parent.parent.parent.parent))
 
 from tldw_Server_API.app.core.DB_Management.UserDatabase import UserDatabase
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.username_utils import normalize_admin_username
+
+
+def _default_users_db_path() -> Path:
+    try:
+        from tldw_Server_API.app.core.Utils.Utils import get_project_root
+        return Path(get_project_root()) / "Databases" / "users.db"
+    except Exception:
+        return Path("Databases") / "users.db"
 
 ########################################################################################################################
 # Migration Functions
@@ -149,6 +156,7 @@ def generate_registration_codes(user_db: UserDatabase, admin_id: int, count: int
 
     return codes
 
+
 def migrate_existing_data(user_db: UserDatabase) -> None:
     """
     Migrate existing single-user data to multi-user structure.
@@ -163,16 +171,13 @@ def migrate_existing_data(user_db: UserDatabase) -> None:
     # Check for existing Media database (per-user default)
     try:
         from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-        media_db_path = Path(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
-    except Exception:
-        # Anchor fallback to project root to avoid writing outside repo
-        try:
-            from tldw_Server_API.app.core.Utils.Utils import get_project_root
-            media_db_path = Path(get_project_root()) / "Databases" / "Media_DB_v2.db"
-        except Exception:
-            media_db_path = Path(__file__).resolve().parents[5] / "Databases" / "Media_DB_v2.db"
+        single_user_id = DatabasePaths.get_single_user_id()
+        media_db_path = Path(DatabasePaths.get_media_db_path(single_user_id))
+    except Exception as exc:
+        print(f"⚠️  Failed to resolve Media DB path via DatabasePaths: {exc}")
+        media_db_path = None
 
-    if media_db_path.exists():
+    if media_db_path and media_db_path.exists():
         print(f"\n📁 Found existing Media database at: {media_db_path}")
 
         # In single-user mode, all content belongs to admin
@@ -181,12 +186,39 @@ def migrate_existing_data(user_db: UserDatabase) -> None:
     else:
         print("ℹ️  No existing Media database found")
 
+    # Check for legacy single-user DBs outside USER_DB_BASE_DIR
+    try:
+        from tldw_Server_API.app.core.Utils.Utils import get_project_root
+        project_root = Path(get_project_root())
+    except Exception:
+        project_root = Path.cwd()
+
+    legacy_candidates = []
+    try:
+        from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+        single_user_id = DatabasePaths.get_single_user_id()
+        legacy_candidates = [
+            ("Media", project_root / "Databases" / "Media_DB_v2.db", DatabasePaths.get_media_db_path(single_user_id)),
+            ("ChaChaNotes", project_root / "Databases" / "ChaChaNotes.db", DatabasePaths.get_chacha_db_path(single_user_id)),
+        ]
+    except Exception:
+        legacy_candidates = []
+
+    legacy_found = [(label, legacy, target) for label, legacy, target in legacy_candidates if legacy.exists()]
+    if legacy_found:
+        print("\n⚠️  Found legacy single-user DB file(s) outside USER_DB_BASE_DIR:")
+        for label, legacy_path, target_path in legacy_found:
+            print(f"  - {label}: {legacy_path}")
+            print(f"    Move or copy to: {target_path}")
+        print("   Runtime no longer falls back to legacy paths; migrate these before enabling multi-user.")
+
     # Check for existing configuration
     config_path = Path("tldw_Server_API/Config_Files/config.txt")
 
     if config_path.exists():
         print(f"\n📋 Found existing configuration at: {config_path}")
         print("⚠️  Remember to update AUTH_MODE to 'multi_user' in config")
+
 
 def update_configuration() -> None:
     """
@@ -280,8 +312,8 @@ def main():
     )
     parser.add_argument(
         "--db-path",
-        default="../Databases/Users.db",
-        help="Path to users database (default: ../Databases/Users.db)"
+        default=str(_default_users_db_path()),
+        help="Path to users database (default: Databases/users.db under project root)"
     )
 
     args = parser.parse_args()

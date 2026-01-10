@@ -7,7 +7,7 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.pgvector_adapter imp
 
 @pytest.mark.unit
 def test_pg_list_vectors_paginated_builds_filter(monkeypatch):
-     cfg = VectorStoreConfig(
+    cfg = VectorStoreConfig(
         store_type=VectorStoreType.PGVECTOR,
         connection_params={'dsn': 'postgresql://u:p@localhost:5432/db'},
         embedding_dim=8,
@@ -39,7 +39,7 @@ def test_pg_list_vectors_paginated_builds_filter(monkeypatch):
 
 @pytest.mark.unit
 def test_pg_list_vectors_with_embeddings(monkeypatch):
-     cfg = VectorStoreConfig(
+    cfg = VectorStoreConfig(
         store_type=VectorStoreType.PGVECTOR,
         connection_params={'dsn': 'postgresql://u:p@localhost:5432/db'},
         embedding_dim=4,

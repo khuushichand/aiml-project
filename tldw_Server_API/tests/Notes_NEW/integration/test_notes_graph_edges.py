@@ -48,7 +48,7 @@ def client_with_graph_db(tmp_path, monkeypatch):
 
     def override_db_dep():
 
-             return db
+        return db
 
     # Reload app after env tweaks so router gating sees MINIMAL_TEST_APP=0
     importlib.reload(app_main)

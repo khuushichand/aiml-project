@@ -15,9 +15,7 @@ pytestmark = pytest.mark.pg_integration
 
 
 def test_search_empty_in_returns_zero(pgvector_dsn):
-
-
-     dim = 8
+    dim = 8
     coll = f"it_filter_in_{uuid.uuid4().hex[:6]}"
 
     async def _run():
@@ -59,9 +57,7 @@ def test_search_empty_in_returns_zero(pgvector_dsn):
 
 
 def test_search_nested_and_or_filters(pgvector_dsn):
-
-
-     dim = 8
+    dim = 8
     coll = f"it_filter_bool_{uuid.uuid4().hex[:6]}"
 
     async def _run():

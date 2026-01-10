@@ -20,7 +20,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture()
 def client_with_notes_db(tmp_path, monkeypatch):
-     db_path = tmp_path / "notes_integration.db"
+    db_path = tmp_path / "notes_integration.db"
     db = CharactersRAGDB(str(db_path), client_id="integration_user")
 
     async def override_user():
@@ -31,7 +31,7 @@ def client_with_notes_db(tmp_path, monkeypatch):
 
     def override_db_dep():
 
-             return db
+        return db
 
     # Use full app profile so Notes routes are included
     monkeypatch.setenv("MINIMAL_TEST_APP", "0")

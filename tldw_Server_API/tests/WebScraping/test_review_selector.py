@@ -2,9 +2,7 @@ from tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs import review_and_sele
 
 
 def test_review_and_select_results_selector():
-
-
-     data = {
+    data = {
         "results": [
             {"title": "keep", "url": "u1", "content": "a"},
             {"title": "drop", "url": "u2", "content": "b"},

@@ -7,7 +7,7 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.pgvector_adapter imp
 
 @pytest.mark.unit
 def test_fast_path_plain_equality_jsonb_containment():
-     cfg = VectorStoreConfig(
+    cfg = VectorStoreConfig(
         store_type=VectorStoreType.PGVECTOR,
         connection_params={"dsn": "postgresql://u:p@localhost:5432/db"},
         embedding_dim=8,
@@ -27,7 +27,7 @@ def test_fast_path_plain_equality_jsonb_containment():
 
 @pytest.mark.unit
 def test_operator_disables_fast_path_and_builds_predicates_or_numeric():
-     cfg = VectorStoreConfig(
+    cfg = VectorStoreConfig(
         store_type=VectorStoreType.PGVECTOR,
         connection_params={"dsn": "postgresql://u:p@localhost:5432/db"},
         embedding_dim=8,
@@ -48,7 +48,7 @@ def test_operator_disables_fast_path_and_builds_predicates_or_numeric():
 
 @pytest.mark.unit
 def test_in_operator_uses_any_and_empty_list_is_not_fastpathed():
-     cfg = VectorStoreConfig(
+    cfg = VectorStoreConfig(
         store_type=VectorStoreType.PGVECTOR,
         connection_params={"dsn": "postgresql://u:p@localhost:5432/db"},
         embedding_dim=8,
@@ -70,7 +70,7 @@ def test_in_operator_uses_any_and_empty_list_is_not_fastpathed():
 
 @pytest.mark.unit
 def test_nested_and_or_predicates_shape():
-     cfg = VectorStoreConfig(
+    cfg = VectorStoreConfig(
         store_type=VectorStoreType.PGVECTOR,
         connection_params={"dsn": "postgresql://u:p@localhost:5432/db"},
         embedding_dim=8,
@@ -95,7 +95,7 @@ def test_nested_and_or_predicates_shape():
 
 @pytest.mark.unit
 def test_not_equal_operator_compiles():
-     cfg = VectorStoreConfig(
+    cfg = VectorStoreConfig(
         store_type=VectorStoreType.PGVECTOR,
         connection_params={"dsn": "postgresql://u:p@localhost:5432/db"},
         embedding_dim=8,
@@ -110,7 +110,7 @@ def test_not_equal_operator_compiles():
 
 @pytest.mark.unit
 def test_numeric_compare_on_missing_key_generates_numeric_predicate():
-     cfg = VectorStoreConfig(
+    cfg = VectorStoreConfig(
         store_type=VectorStoreType.PGVECTOR,
         connection_params={"dsn": "postgresql://u:p@localhost:5432/db"},
         embedding_dim=8,

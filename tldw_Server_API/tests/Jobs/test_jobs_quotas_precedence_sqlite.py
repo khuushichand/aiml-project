@@ -16,7 +16,7 @@ def _assert_create_limit(jm: JobManager, *, domain: str, user: str, limit: int) 
 def test_max_queued_precedence_sqlite(monkeypatch, tmp_path):
 
 
-     db_path = tmp_path / "jobs_quota_prec.db"
+    db_path = tmp_path / "jobs_quota_prec.db"
     ensure_jobs_tables(db_path)
     jm = JobManager(db_path)
 
@@ -42,7 +42,7 @@ def test_max_queued_precedence_sqlite(monkeypatch, tmp_path):
 def test_inflight_precedence_sqlite(monkeypatch, tmp_path):
 
 
-     db_path = tmp_path / "jobs_quota_inflight_prec.db"
+    db_path = tmp_path / "jobs_quota_inflight_prec.db"
     ensure_jobs_tables(db_path)
     jm = JobManager(db_path)
 
@@ -83,7 +83,7 @@ def test_inflight_precedence_sqlite(monkeypatch, tmp_path):
 def test_submits_per_minute_precedence_sqlite(monkeypatch, tmp_path):
 
 
-     db_path = tmp_path / "jobs_quota_spm_prec.db"
+    db_path = tmp_path / "jobs_quota_spm_prec.db"
     ensure_jobs_tables(db_path)
     jm = JobManager(db_path)
 

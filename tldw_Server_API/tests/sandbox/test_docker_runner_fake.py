@@ -11,7 +11,7 @@ from tldw_Server_API.app.main import app
 def _client(monkeypatch) -> TestClient:
 
 
-     monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("TEST_MODE", "1")
     # Enable execution but fake docker to avoid host dependency
     monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "true")
     monkeypatch.setenv("TLDW_SANDBOX_DOCKER_FAKE_EXEC", "1")
@@ -21,7 +21,7 @@ def _client(monkeypatch) -> TestClient:
 def test_docker_fake_exec_path(monkeypatch) -> None:
 
 
-     with _client(monkeypatch) as client:
+    with _client(monkeypatch) as client:
         body: Dict[str, Any] = {
             "spec_version": "1.0",
             "runtime": "docker",
@@ -40,7 +40,7 @@ def test_docker_fake_exec_path(monkeypatch) -> None:
 def test_docker_fake_exec_resource_usage_shape(monkeypatch) -> None:
 
 
-     with _client(monkeypatch) as client:
+    with _client(monkeypatch) as client:
         body: Dict[str, Any] = {
             "spec_version": "1.0",
             "runtime": "docker",

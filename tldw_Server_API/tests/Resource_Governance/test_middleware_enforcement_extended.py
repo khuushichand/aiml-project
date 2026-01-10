@@ -11,17 +11,17 @@ pytestmark = pytest.mark.rate_limit
 
 class _Snap:
     def __init__(self, route_map):
-             self.route_map = route_map
+        self.route_map = route_map
 
 
 class _Loader:
     def __init__(self, route_map, policy):
-             self._snap = _Snap(route_map)
+        self._snap = _Snap(route_map)
         self._policy = policy
 
     def get_snapshot(self):
 
-             return self._snap
+        return self._snap
 
     def get_policy(self, _policy_id: str):
         return dict(self._policy or {})
@@ -29,7 +29,7 @@ class _Loader:
 
 class _CaptureGov:
     def __init__(self):
-             self.seen_categories = []
+        self.seen_categories = []
 
     async def reserve(self, req, op_id=None):
         _ = op_id

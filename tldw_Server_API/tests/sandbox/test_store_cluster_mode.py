@@ -7,7 +7,7 @@ import pytest
 def _has_psycopg() -> bool:
 
 
-     try:
+    try:
         import psycopg  # noqa: F401
         return True
     except Exception:

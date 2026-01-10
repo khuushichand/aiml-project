@@ -19,7 +19,7 @@ def _client(monkeypatch) -> TestClient:
 def test_runtimes_discovery_shape(monkeypatch) -> None:
 
 
-     with _client(monkeypatch) as client:
+    with _client(monkeypatch) as client:
         r = client.get("/api/v1/sandbox/runtimes")
         assert r.status_code == 200
         data = r.json()
@@ -44,7 +44,7 @@ def test_runtimes_discovery_shape(monkeypatch) -> None:
 def test_create_session_scaffold(monkeypatch) -> None:
 
 
-     with _client(monkeypatch) as client:
+    with _client(monkeypatch) as client:
         body: Dict[str, Any] = {
             "spec_version": "1.0",
             "runtime": "docker",
@@ -68,7 +68,7 @@ def test_create_session_scaffold(monkeypatch) -> None:
 def test_start_run_scaffold_returns_completed_with_metadata(monkeypatch) -> None:
 
 
-     with _client(monkeypatch) as client:
+    with _client(monkeypatch) as client:
         body: Dict[str, Any] = {
             "spec_version": "1.0",
             "runtime": "docker",

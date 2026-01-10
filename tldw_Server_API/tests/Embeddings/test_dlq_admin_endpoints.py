@@ -7,7 +7,7 @@ from tldw_Server_API.app.main import app
 
 class FakeAsyncRedis:
     def __init__(self):
-             self.streams = {}
+        self.streams = {}
         self.closed = False
 
     async def xrevrange(self, name, max, min, count=None):
@@ -43,7 +43,7 @@ class FakeAsyncRedis:
 
 @pytest.mark.unit
 def test_dlq_list_and_requeue(monkeypatch, admin_user):
-     client = TestClient(app)
+    client = TestClient(app)
     client.cookies.set("csrf_token", "x")
     client.headers["X-CSRF-Token"] = "x"
     client.headers["Authorization"] = "Bearer key"

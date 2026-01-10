@@ -35,7 +35,7 @@ class FakePool:
 
     def transaction(self):
 
-             return _DummyTransCtx()
+        return _DummyTransCtx()
 
     async def fetchone(self, query: str, *args):
         # Return consistent shape expected by service

@@ -1,38 +1,31 @@
 import json
 import pytest
 
-from tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_manager import JobType
-
 
 class _StubMM:
     def __init__(self):
-             self.increments = []  # (name, value, labels)
+        self.increments = []  # (name, value, labels)
 
     def increment(self, name, value=1, labels=None):
-
-             self.increments.append((name, value, labels or {}))
+        self.increments.append((name, value, labels or {}))
 
 
 class _StubPSMetrics:
     def __init__(self):
-             self.metrics_manager = _StubMM()
+        self.metrics_manager = _StubMM()
 
 
 pytestmark = pytest.mark.integration
 
 
 def _create_project_and_prompt(db):
-
-
-     proj = db.create_project("met-test-proj")
+    proj = db.create_project("met-test-proj")
     pr = db.create_prompt(project_id=proj["id"], name="met-test-prompt")
     return proj, pr
 
 
 def test_optimization_idempotency_metrics(prompt_studio_dual_backend_client, monkeypatch):
-
-
-     label, client, db = prompt_studio_dual_backend_client
+    label, client, db = prompt_studio_dual_backend_client
 
     # Prepare entities
     proj, pr = _create_project_and_prompt(db)

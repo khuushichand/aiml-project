@@ -7,9 +7,7 @@ pytestmark = pytest.mark.integration
 
 
 def test_websocket_disconnects_decrement_connection_count(prompt_studio_dual_backend_client):
-
-
-     backend_label, client, _db = prompt_studio_dual_backend_client
+    backend_label, client, _db = prompt_studio_dual_backend_client
 
     # Access the shared connection manager used by the WebSocket endpoints
     mgr = ws_mod.connection_manager

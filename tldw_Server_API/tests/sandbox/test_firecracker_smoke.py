@@ -14,7 +14,7 @@ pytestmark = pytest.mark.timeout(10)
 def _client(monkeypatch) -> TestClient:
 
 
-     monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("SANDBOX_ENABLE_EXECUTION", "true")
     monkeypatch.setenv("SANDBOX_BACKGROUND_EXECUTION", "false")
     # Make firecracker appear available and set a fake version
@@ -36,14 +36,14 @@ def _client(monkeypatch) -> TestClient:
 def _admin_user_dep():
 
 
-     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
     return User(id=1, username="admin", roles=["admin"], is_admin=True)
 
 
 def test_firecracker_run_succeeds_and_reports_runtime_version(monkeypatch) -> None:
 
 
-     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
     with _client(monkeypatch) as client:
         client.app.dependency_overrides[get_request_user] = _admin_user_dep
         body: Dict[str, Any] = {

@@ -306,7 +306,7 @@ Primary value: Visual task organization that integrates with tldw_server's knowl
 
 - Performance: Board load (with all lists/cards) < 500ms for typical boards
 - Reliability: Soft delete for all entities; optimistic locking via version field
-- Storage: Per-user SQLite database at `<USER_DB_BASE_DIR>/<user_id>/Kanban.db`
+- Storage: Per-user SQLite database at `<USER_DB_BASE_DIR>/<user_id>/Kanban.db`. `USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root); override via environment variable or `Config_Files/config.txt` as needed.
 - Concurrency: Thread-safe database access with proper connection management
 - Limits: Configurable via environment variables (KANBAN_MAX_BOARDS, etc.)
 
@@ -1327,6 +1327,7 @@ Storage configuration entry:
 - Default: ./data/users (example: /var/lib/myapp/users)
 - Required: No (set explicitly in production deployments)
 - Description: Base filesystem path for per-user databases; all user-specific DBs are stored under `<USER_DB_BASE_DIR>/<user_id>/`
+  - Implementation note: `USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` and defaults to `Databases/user_databases/` under the project root; override via environment variable or `Config_Files/config.txt` as needed.
 
 ---
 

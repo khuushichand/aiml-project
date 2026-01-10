@@ -66,7 +66,7 @@ def test_jobs_events_sse_initial_data_within_500ms(monkeypatch, tmp_path):
 
 @pytest.mark.integration
 def test_jobs_events_outbox_list_deterministic(monkeypatch, tmp_path):
-     _setup_env(monkeypatch, tmp_path)
+    _setup_env(monkeypatch, tmp_path)
 
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
     reset_settings()

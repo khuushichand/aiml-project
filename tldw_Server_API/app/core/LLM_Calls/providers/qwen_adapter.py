@@ -14,6 +14,7 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     finalize_stream,
 )
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
+from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
 
 # Expose a patchable factory for tests; production uses the centralized client
 http_client_factory = _hc_create_client
@@ -166,8 +167,8 @@ class QwenAdapter(ChatProvider):
         return payload
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+        request = self._apply_config_defaults(request or {})
         request = validate_payload(self.name, request or {})
-        request = self._apply_config_defaults(request)
         api_key = request.get("api_key")
         if not api_key:
             from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
@@ -177,6 +178,8 @@ class QwenAdapter(ChatProvider):
         headers = self._headers(api_key)
         payload = self._build_payload(request)
         payload["stream"] = False
+        payload = merge_extra_body(payload, request)
+        headers = merge_extra_headers(headers, request)
         try:
             resolved_timeout = self._resolve_timeout(request, timeout)
             with http_client_factory(timeout=resolved_timeout) as client:
@@ -187,8 +190,8 @@ class QwenAdapter(ChatProvider):
             raise self.normalize_error(e)
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+        request = self._apply_config_defaults(request or {})
         request = validate_payload(self.name, request or {})
-        request = self._apply_config_defaults(request)
         api_key = request.get("api_key")
         if not api_key:
             from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
@@ -198,6 +201,8 @@ class QwenAdapter(ChatProvider):
         headers = self._headers(api_key)
         payload = self._build_payload(request)
         payload["stream"] = True
+        payload = merge_extra_body(payload, request)
+        headers = merge_extra_headers(headers, request)
         try:
             resolved_timeout = self._resolve_timeout(request, timeout)
             with http_client_factory(timeout=resolved_timeout) as client:

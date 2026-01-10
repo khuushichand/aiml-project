@@ -43,43 +43,27 @@ from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
     create_embeddings_batch,
 )
-from tldw_Server_API.app.core.Embeddings.job_manager import EmbeddingJobManager
-from tldw_Server_API.app.core.Embeddings.worker_orchestrator import WorkerOrchestrator
-from tldw_Server_API.app.core.Embeddings import queue_schemas as _qs
-from tldw_Server_API.app.core.Embeddings.queue_schemas import (
-    ChunkingMessage as ChunkingTask,
-    EmbeddingMessage as EmbeddingTask,
-    StorageMessage as StorageTask,
-    JobStatus
-)
-setattr(_qs, 'ChunkingTask', ChunkingTask)
-setattr(_qs, 'EmbeddingTask', EmbeddingTask)
-setattr(_qs, 'StorageTask', StorageTask)
-from tldw_Server_API.app.core.Embeddings.workers.base_worker import BaseWorker
-from tldw_Server_API.app.core.Embeddings.workers.embedding_worker import EmbeddingWorker
-from tldw_Server_API.app.core.Embeddings.workers.chunking_worker import ChunkingWorker
-from tldw_Server_API.app.core.Embeddings.workers.storage_worker import StorageWorker
 from tldw_Server_API.app.core.Embeddings.connection_pool import ConnectionPool
 from tldw_Server_API.app.core.Embeddings.circuit_breaker import CircuitBreaker
 from tldw_Server_API.app.core.Embeddings.error_recovery import ErrorRecoveryManager
 # Legacy Embeddings audit logger was removed. Provide a minimal stub to satisfy tests
 class AuditLogger:  # type: ignore
     def __init__(self, *args, **kwargs):
-             pass
+        pass
     def log_event(self, *args, **kwargs):
-             return None
+        return None
     def log_security_event(self, *args, **kwargs):
-             return None
+        return None
     def log_resource_event(self, *args, **kwargs):
-             return None
+        return None
     def log_admin_operation(self, *args, **kwargs):
-             return None
+        return None
 
 # Ensure unit tests in this package use the patched PersistentClient path,
 # not the internal in-memory stub forced via env in other suites.
 @pytest.fixture(autouse=True)
 def _disable_chromadb_force_stub_for_chromadb_unit_tests(monkeypatch):
-     """Unset CHROMADB_FORCE_STUB so ChromaDBManager uses the patched client.
+    """Unset CHROMADB_FORCE_STUB so ChromaDBManager uses the patched client.
 
     Some other test packages enable CHROMADB_FORCE_STUB globally; that causes
     ChromaDBManager to bypass chromadb.PersistentClient, defeating our mocks.
@@ -94,7 +78,7 @@ def _disable_chromadb_force_stub_for_chromadb_unit_tests(monkeypatch):
 
 def pytest_configure(config):
 
-     """Register custom markers for test categorization."""
+    """Register custom markers for test categorization."""
     config.addinivalue_line("markers", "unit: Unit tests with mocking")
     config.addinivalue_line("markers", "integration: Integration tests with real ChromaDB")
     config.addinivalue_line("markers", "property: Property-based tests")
@@ -108,7 +92,7 @@ def pytest_configure(config):
 def pytest_addoption(parser):
 
 
-     """Add CLI option to run external model tests."""
+    """Add CLI option to run external model tests."""
     parser.addoption(
         "--run-model-tests",
         action="store_true",
@@ -118,7 +102,7 @@ def pytest_addoption(parser):
 
 def pytest_collection_modifyitems(config, items):
 
-     """Conditionally skip tests requiring external models based on flag/env."""
+    """Conditionally skip tests requiring external models based on flag/env."""
     run_models_flag = config.getoption("--run-model-tests") or os.getenv("RUN_MODEL_TESTS") == "1"
     for item in items:
         if item.get_closest_marker("requires_model") and not run_models_flag:
@@ -130,7 +114,7 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture
 def temp_media_db():
-     """Create a temporary MediaDatabase instance for testing."""
+    """Create a temporary MediaDatabase instance for testing."""
     # Create temporary directory for database
     db_dir = tempfile.mkdtemp()
     db_path = os.path.join(db_dir, "test_media.db")
@@ -155,7 +139,7 @@ def temp_media_db():
 
 @pytest.fixture
 def media_database(temp_media_db):
-     """Create a MediaDatabase instance for testing."""
+    """Create a MediaDatabase instance for testing."""
     db = MediaDatabase(
         db_path=temp_media_db,
         client_id="test_client"
@@ -169,14 +153,14 @@ def media_database(temp_media_db):
 
 @pytest.fixture
 def temp_chroma_path():
-     """Create a temporary directory for ChromaDB storage."""
+    """Create a temporary directory for ChromaDB storage."""
     temp_dir = tempfile.mkdtemp(prefix="chroma_test_")
     yield temp_dir
     shutil.rmtree(temp_dir, ignore_errors=True)
 
 @pytest.fixture
 def chroma_client(temp_chroma_path):
-     """Create a ChromaDB client for integration tests."""
+    """Create a ChromaDB client for integration tests."""
     settings = Settings(
         persist_directory=temp_chroma_path,
         anonymized_telemetry=False,
@@ -200,7 +184,7 @@ def chroma_client(temp_chroma_path):
 
 @pytest.fixture
 def mock_chroma_client():
-     """Create a mock ChromaDB client for unit tests."""
+    """Create a mock ChromaDB client for unit tests."""
     mock_client = MagicMock()
     mock_collection = MagicMock()
 
@@ -232,7 +216,7 @@ def mock_chroma_client():
 
 @pytest.fixture
 def chromadb_manager(mock_chroma_client, temp_media_db):
-     """Create a ChromaDBManager instance with mocked dependencies (constructor injection)."""
+    """Create a ChromaDBManager instance with mocked dependencies (constructor injection)."""
     base_dir = tempfile.mkdtemp(prefix="chroma_user_base_")
     manager = ChromaDBManager(
         user_id="test_user",
@@ -257,7 +241,7 @@ def chromadb_manager(mock_chroma_client, temp_media_db):
 
 @pytest.fixture
 def real_chromadb_manager(chroma_client, temp_media_db, temp_chroma_path):
-     """Create a ChromaDBManager instance with real ChromaDB for integration tests."""
+    """Create a ChromaDBManager instance with real ChromaDB for integration tests."""
     manager = ChromaDBManager(
         user_id="test_user",
         user_embedding_config={
@@ -283,7 +267,7 @@ def real_chromadb_manager(chroma_client, temp_media_db, temp_chroma_path):
 
 @pytest.fixture
 def mock_embeddings():
-     """Generate mock embeddings for testing."""
+    """Generate mock embeddings for testing."""
     def _create_embeddings(texts: List[str], dim: int = 384) -> List[List[float]]:
         """Create deterministic mock embeddings based on text content."""
         embeddings = []
@@ -302,7 +286,7 @@ def mock_embeddings():
 
 @pytest.fixture
 def mock_embedding_provider(mock_embeddings):
-     """Mock embedding provider for unit tests."""
+    """Mock embedding provider for unit tests."""
     mock_provider = MagicMock()
     mock_provider.create_embeddings = Mock(side_effect=lambda texts: mock_embeddings(texts))
     mock_provider.embedding_dimension = 384
@@ -311,7 +295,7 @@ def mock_embedding_provider(mock_embeddings):
 
 def _hf_connectivity_ok() -> bool:
 
-     """Best-effort online check to Hugging Face Hub."""
+    """Best-effort online check to Hugging Face Hub."""
     try:
         import requests  # Local import to avoid hard dependency if unused
         resp = requests.head(
@@ -326,7 +310,7 @@ def _hf_connectivity_ok() -> bool:
 
 @pytest.fixture(scope="session")
 def hf_or_deterministic_embeddings():
-     """
+    """
     Provide an embedding function that uses a lightweight HF model if internet
     is available; otherwise returns deterministic numeric embeddings.
     Returns a tuple (embed_func, is_real_model: bool, dim: int).
@@ -366,106 +350,12 @@ def hf_or_deterministic_embeddings():
     return (lambda texts: _det_embed(texts, 384)), False, 384
 
 # =====================================================================
-# Worker and Job Fixtures
-# =====================================================================
-
-@pytest.fixture
-def job_manager(temp_media_db):
-     """Create an EmbeddingJobManager for testing."""
-    manager = EmbeddingJobManager(db_path=temp_media_db)
-    yield manager
-    # Cleanup
-    manager.cleanup()
-
-@pytest.fixture
-def mock_job_manager():
-     """Create a mock job manager for unit tests."""
-    mock_manager = MagicMock(spec=EmbeddingJobManager)
-    mock_manager.create_job.return_value = "test_job_id"
-    mock_manager.get_job_status.return_value = JobStatus(
-        job_id="test_job_id",
-        status="pending",
-        progress=0,
-        created_at="2024-01-01T00:00:00"
-    )
-    mock_manager.cancel_job.return_value = True
-    mock_manager.get_user_jobs.return_value = []
-    mock_manager.get_queue_stats.return_value = {
-        "pending": 0,
-        "processing": 0,
-        "completed": 0,
-        "failed": 0
-    }
-    return mock_manager
-
-@pytest.fixture
-def worker_config():
-     """Worker configuration for testing."""
-    return {
-        "chunking_workers": 2,
-        "embedding_workers": 2,
-        "storage_workers": 1,
-        "max_queue_size": 100,
-        "batch_size": 10,
-        "auto_scale": False
-    }
-
-@pytest.fixture
-def mock_queue():
-     """Create a mock queue for worker testing."""
-    return Queue()
-
-@pytest.fixture
-def chunking_worker(mock_queue):
-     """Create a chunking worker for testing."""
-    output_queue = Queue()
-    worker = ChunkingWorker(
-        worker_id="chunking_test_1",
-        input_queue=mock_queue,
-        output_queue=output_queue
-    )
-    yield worker
-    worker.stop()
-
-@pytest.fixture
-def embedding_worker(mock_queue, mock_embedding_provider):
-     """Create an embedding worker for testing."""
-    output_queue = Queue()
-    with patch('tldw_Server_API.app.core.Embeddings.workers.embedding_worker.create_embeddings_batch') as mock_create:
-        mock_create.return_value = [[0.1] * 384]
-        worker = EmbeddingWorker(
-            worker_id="embedding_test_1",
-            input_queue=mock_queue,
-            output_queue=output_queue,
-            embedding_provider=mock_embedding_provider
-        )
-        yield worker
-        worker.stop()
-
-@pytest.fixture
-def storage_worker(mock_queue, mock_chroma_client, temp_media_db):
-     """Create a storage worker for testing."""
-    with patch('tldw_Server_API.app.core.Embeddings.workers.storage_worker.ChromaDBManager') as mock_manager_class:
-        mock_instance = MagicMock()
-        mock_instance.store_in_chroma.return_value = True
-        mock_manager_class.return_value = mock_instance
-
-        worker = StorageWorker(
-            worker_id="storage_test_1",
-            input_queue=mock_queue,
-            chroma_client=mock_chroma_client,
-            db_path=temp_media_db
-        )
-        yield worker
-        worker.stop()
-
-# =====================================================================
 # Error Recovery Fixtures
 # =====================================================================
 
 @pytest.fixture
 def circuit_breaker():
-     """Create a circuit breaker for testing."""
+    """Create a circuit breaker for testing."""
     return CircuitBreaker(
         failure_threshold=3,
         recovery_timeout=1.0,
@@ -474,7 +364,7 @@ def circuit_breaker():
 
 @pytest.fixture
 def error_recovery_manager():
-     """Create an error recovery manager for testing."""
+    """Create an error recovery manager for testing."""
     return ErrorRecoveryManager(
         max_retries=3,
         base_delay=0.1,
@@ -487,7 +377,7 @@ def error_recovery_manager():
 
 @pytest.fixture
 def sample_texts():
-     """Sample texts for testing."""
+    """Sample texts for testing."""
     return [
         "The quick brown fox jumps over the lazy dog.",
         "Machine learning is transforming how we process information.",
@@ -498,7 +388,7 @@ def sample_texts():
 
 @pytest.fixture
 def sample_documents():
-     """Sample documents with metadata for testing."""
+    """Sample documents with metadata for testing."""
     return [
         {
             "id": "doc_1",
@@ -519,7 +409,7 @@ def sample_documents():
 
 @pytest.fixture
 def sample_media_content():
-     """Sample media content for end-to-end testing."""
+    """Sample media content for end-to-end testing."""
     return {
         "media_id": str(uuid.uuid4()),
         "title": "Test Media Content",
@@ -542,48 +432,13 @@ def sample_media_content():
         }
     }
 
-@pytest.fixture
-def chunking_task():
-     """Sample chunking task for worker testing."""
-    return ChunkingTask(
-        job_id="test_job_1",
-        content="This is a test content that needs to be chunked into smaller pieces for processing.",
-        chunk_size=50,
-        overlap=10,
-        metadata={"source": "test"}
-    )
-
-@pytest.fixture
-def embedding_task(sample_texts):
-     """Sample embedding task for worker testing."""
-    return EmbeddingTask(
-        job_id="test_job_1",
-        chunks=sample_texts,
-        provider="openai",
-        model="text-embedding-ada-002",
-        metadata={"source": "test"}
-    )
-
-@pytest.fixture
-def storage_task(sample_texts, mock_embeddings):
-     """Sample storage task for worker testing."""
-    embeddings = mock_embeddings(sample_texts)
-    return StorageTask(
-        job_id="test_job_1",
-        collection_name="test_collection",
-        texts=sample_texts,
-        embeddings=embeddings,
-        ids=[f"chunk_{i}" for i in range(len(sample_texts))],
-        metadata=[{"chunk_index": i} for i in range(len(sample_texts))]
-    )
-
 # =====================================================================
 # Connection Pool Fixtures
 # =====================================================================
 
 @pytest.fixture
 def connection_pool(temp_media_db):
-     """Create a connection pool for testing."""
+    """Create a connection pool for testing."""
     pool = ConnectionPool(
         db_path=temp_media_db,
         min_connections=1,
@@ -599,12 +454,12 @@ def connection_pool(temp_media_db):
 
 @pytest.fixture
 def audit_logger(temp_media_db):
-     """Create an audit logger for testing (stubbed)."""
+    """Create an audit logger for testing (stubbed)."""
     return AuditLogger()
 
 @pytest.fixture
 def mock_metrics():
-     """Mock metrics collector for testing."""
+    """Mock metrics collector for testing."""
     mock_metrics = MagicMock()
     mock_metrics.record_embedding_generation.return_value = None
     mock_metrics.record_search_query.return_value = None
@@ -618,7 +473,7 @@ def mock_metrics():
 
 @pytest.fixture
 def test_config():
-     """Test configuration for ChromaDB module."""
+    """Test configuration for ChromaDB module."""
     return {
         "chroma_base_path": "/tmp/chroma_test",
         "embedding_providers": {
@@ -656,9 +511,9 @@ def test_config():
 
 @pytest.fixture
 def create_test_collection():
-     """Factory fixture for creating test collections."""
+    """Factory fixture for creating test collections."""
     def _create(client, name="test_collection", metadata=None):
-             """Create a test collection with optional metadata."""
+        """Create a test collection with optional metadata."""
         return client.get_or_create_collection(
             name=name,
             metadata=metadata or {"test": True}
@@ -667,9 +522,9 @@ def create_test_collection():
 
 @pytest.fixture
 def populate_collection():
-     """Factory fixture for populating collections with test data."""
+    """Factory fixture for populating collections with test data."""
     def _populate(collection, num_items=10, embedding_dim=384):
-             """Populate a collection with test data."""
+        """Populate a collection with test data."""
         ids = [f"item_{i}" for i in range(num_items)]
         texts = [f"Test document {i} with some content" for i in range(num_items)]
         embeddings = np.random.randn(num_items, embedding_dim).tolist()
@@ -686,7 +541,7 @@ def populate_collection():
 
 @pytest.fixture
 def assert_embeddings_similar():
-     """Utility to assert embeddings are similar within tolerance."""
+    """Utility to assert embeddings are similar within tolerance."""
     def _assert(emb1: List[float], emb2: List[float], tolerance: float = 0.01):
         """Assert two embeddings are similar."""
         assert len(emb1) == len(emb2), f"Embedding dimensions don't match: {len(emb1)} vs {len(emb2)}"
@@ -707,7 +562,7 @@ def assert_embeddings_similar():
 
 @pytest.fixture(autouse=True)
 def cleanup_environment():
-     """Automatically cleanup test environment after each test."""
+    """Automatically cleanup test environment after each test."""
     yield
     # Cleanup any temporary files or processes
     import gc
@@ -715,7 +570,7 @@ def cleanup_environment():
 
 @pytest.fixture(scope="session")
 def test_session_cleanup():
-     """Session-level cleanup for all ChromaDB tests."""
+    """Session-level cleanup for all ChromaDB tests."""
     yield
     # Final cleanup
     temp_dirs = Path("/tmp").glob("chroma_test_*")

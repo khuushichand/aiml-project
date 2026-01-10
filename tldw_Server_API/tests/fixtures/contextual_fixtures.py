@@ -71,7 +71,7 @@ class SimpleContext:
 
 @pytest.fixture
 def sample_config():
-     """Provide a sample configuration for testing."""
+    """Provide a sample configuration for testing."""
     return {
         "embedding_config": {
             "enable_contextual_chunking": False,
@@ -104,7 +104,7 @@ def sample_config():
 
 @pytest.fixture
 def mock_documents():
-     """Create a set of mock documents with parent-child relationships."""
+    """Create a set of mock documents with parent-child relationships."""
     documents = []
 
     # Create documents from ML content
@@ -134,7 +134,7 @@ def mock_documents():
 
 @pytest.fixture
 def mock_pipeline_context(mock_documents):
-     """Create a mock RAG pipeline context."""
+    """Create a mock RAG pipeline context."""
     context = SimpleContext(
         query="What is machine learning?",
         config={
@@ -151,7 +151,7 @@ def mock_pipeline_context(mock_documents):
 
 @pytest.fixture
 def mock_chromadb_manager(sample_config):
-     """Create a mock ChromaDBManager for testing."""
+    """Create a mock ChromaDBManager for testing."""
     manager = Mock()
     manager.user_id = "test_user"
     manager.embedding_config = sample_config["embedding_config"]
@@ -167,7 +167,7 @@ def mock_chromadb_manager(sample_config):
 
 @pytest.fixture
 def temp_config_file(sample_config):
-     """Create a temporary config file for testing."""
+    """Create a temporary config file for testing."""
     with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
         # Write config in INI format
         f.write("[Embeddings]\n")
@@ -221,7 +221,7 @@ class MockLLMAnalyzer:
 
 @pytest.fixture
 def mock_llm_analyzer():
-     """Provide a mock LLM analyzer."""
+    """Provide a mock LLM analyzer."""
     return MockLLMAnalyzer()
 
 
@@ -326,7 +326,7 @@ class ConfigContextManager:
 
     def __enter__(self):
 
-             """Apply temporary config updates."""
+        """Apply temporary config updates."""
         for key_path, value in self.updates.items():
             keys = key_path.split(".")
             current = self.config_dict
@@ -350,7 +350,7 @@ class ConfigContextManager:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
 
-             """Restore original config values."""
+        """Restore original config values."""
         for key_path, original_value in self.original_values.items():
             keys = key_path.split(".")
             current = self.config_dict
@@ -368,7 +368,7 @@ class ConfigContextManager:
 
 @pytest.fixture
 def config_context_manager(sample_config):
-     """Provide a context manager for config modifications."""
+    """Provide a context manager for config modifications."""
     def _create_manager(updates: Dict[str, Any]):
         return ConfigContextManager(sample_config, updates)
     return _create_manager

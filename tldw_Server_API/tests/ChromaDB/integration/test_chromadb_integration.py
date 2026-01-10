@@ -29,7 +29,7 @@ class TestChromaDBSetup:
 
     def test_chromadb_client_creation(self, temp_chroma_path):
 
-             """Test creating a ChromaDB client."""
+        """Test creating a ChromaDB client."""
         settings = Settings(
             persist_directory=temp_chroma_path,
             anonymized_telemetry=False,
@@ -60,7 +60,7 @@ class TestChromaDBSetup:
 
     def test_chromadb_persistence(self, temp_chroma_path):
 
-             """Test ChromaDB data persistence."""
+        """Test ChromaDB data persistence."""
         # Create client and add data
         settings = Settings(
             persist_directory=temp_chroma_path,
@@ -111,7 +111,7 @@ class TestChromaDBSetup:
 
     def test_multiple_collections(self, chroma_client):
 
-             """Test creating and managing multiple collections."""
+        """Test creating and managing multiple collections."""
         # Create multiple collections
         collections = []
         for i in range(5):
@@ -146,14 +146,14 @@ class TestChromaDBManagerIntegration:
 
     def test_manager_initialization_with_real_chromadb(self, real_chromadb_manager):
 
-             """Test ChromaDBManager basic initialization with real client."""
+        """Test ChromaDBManager basic initialization with real client."""
         assert real_chromadb_manager.client is not None
         collection = real_chromadb_manager.get_or_create_collection("test_collection")
         assert collection is not None
 
     def test_end_to_end_storage_and_retrieval(self, real_chromadb_manager, sample_texts):
 
-             """Test complete storage and retrieval pipeline."""
+        """Test complete storage and retrieval pipeline."""
         collection_name = "test_e2e"
 
         # Generate simple fixed-dimension embeddings (no external model)
@@ -190,7 +190,7 @@ class TestChromaDBManagerIntegration:
 
     def test_vector_search_with_real_embeddings(self, real_chromadb_manager, hf_or_deterministic_embeddings):
 
-             """Test vector search, preferring HF embeddings when online."""
+        """Test vector search, preferring HF embeddings when online."""
         collection_name = "search_test"
 
         # Add test documents
@@ -230,7 +230,7 @@ class TestChromaDBManagerIntegration:
 
     def test_metadata_filtering(self, real_chromadb_manager):
 
-             """Test metadata filtering in searches."""
+        """Test metadata filtering in searches."""
         collection_name = "metadata_test"
 
         # Create documents with different categories
@@ -282,7 +282,7 @@ class TestChromaDBManagerIntegration:
 
     def test_collection_deletion_and_recreation(self, real_chromadb_manager):
 
-             """Test deleting and recreating collections."""
+        """Test deleting and recreating collections."""
         collection_name = "delete_test"
 
         # Create and populate collection
@@ -311,7 +311,7 @@ class TestChromaDBManagerIntegration:
 
     def test_large_batch_processing(self, real_chromadb_manager):
 
-             """Test processing large batches of documents."""
+        """Test processing large batches of documents."""
         collection_name = "large_batch_test"
         num_documents = 100
 
@@ -357,7 +357,7 @@ class TestEmbeddingGeneration:
 
     def test_embeddings_via_fixture(self, hf_or_deterministic_embeddings):
 
-             embed, used_real_model, dim = hf_or_deterministic_embeddings
+        embed, used_real_model, dim = hf_or_deterministic_embeddings
         texts = ["Hello world", "Testing embeddings", "ChromaDB integration"]
         embeddings = embed(texts)
         assert len(embeddings) == 3
@@ -378,7 +378,7 @@ class TestEmbeddingGeneration:
 
     def test_embeddings_are_deterministic(self, hf_or_deterministic_embeddings):
 
-             embed, used_real_model, dim = hf_or_deterministic_embeddings
+        embed, used_real_model, dim = hf_or_deterministic_embeddings
         texts = ["Hello world"]
         emb1 = embed(texts)[0]
         emb2 = embed(texts)[0]
@@ -396,7 +396,7 @@ class TestDatabaseIntegration:
 
     def test_media_db_with_chromadb(self, media_database, real_chromadb_manager, monkeypatch):
 
-             """Test ChromaDB integration with MediaDatabase."""
+        """Test ChromaDB integration with MediaDatabase."""
         # Add media entry
         media_id = str(uuid.uuid4())
         content = "This is test content for ChromaDB integration"
@@ -430,7 +430,7 @@ class TestDatabaseIntegration:
 
     def test_chunk_storage_with_db_references(self, media_database, real_chromadb_manager):
 
-             """Test storing chunks with database references."""
+        """Test storing chunks with database references."""
         media_id = str(uuid.uuid4())
 
         # Add media
@@ -485,7 +485,7 @@ class TestConcurrentOperations:
 
     @pytest.mark.concurrent
     def test_concurrent_writes(self, real_chromadb_manager):
-             """Test concurrent write operations."""
+        """Test concurrent write operations."""
         import threading
         import concurrent.futures
 
@@ -495,7 +495,7 @@ class TestConcurrentOperations:
 
         def write_documents(thread_id):
 
-                     """Write documents from a thread."""
+            """Write documents from a thread."""
             texts = [f"Thread {thread_id} doc {i}" for i in range(docs_per_thread)]
             ids = [f"t{thread_id}_d{i}" for i in range(docs_per_thread)]
 
@@ -525,7 +525,7 @@ class TestConcurrentOperations:
 
     @pytest.mark.concurrent
     def test_concurrent_reads(self, real_chromadb_manager):
-             """Test concurrent read operations."""
+        """Test concurrent read operations."""
         import concurrent.futures
 
         collection_name = "read_test"
@@ -545,7 +545,7 @@ class TestConcurrentOperations:
 
         def search_documents(query_id):
 
-                     """Search documents from a thread."""
+            """Search documents from a thread."""
             query_embedding = [[float(query_id), 0.1, 0.2]]
             results = real_chromadb_manager.query_collection_with_precomputed_embeddings(
                 collection_name=collection_name,
@@ -569,7 +569,7 @@ class TestErrorRecovery:
 
     def test_recovery_from_corrupted_collection(self, real_chromadb_manager):
 
-             """Test recovery from corrupted collection."""
+        """Test recovery from corrupted collection."""
         collection_name = "recovery_test"
 
         # Create and populate collection
@@ -604,7 +604,7 @@ class TestErrorRecovery:
 
     def test_recovery_from_connection_loss(self, temp_chroma_path):
 
-             """Test recovery from temporary connection loss."""
+        """Test recovery from temporary connection loss."""
         manager = ChromaDBManager(
             user_id="test_user",
             user_embedding_config={

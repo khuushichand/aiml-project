@@ -9,7 +9,7 @@ from tldw_Server_API.app.main import app
 def _client(monkeypatch) -> TestClient:
 
 
-     monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("TEST_MODE", "1")
     # Ensure sandbox routes are enabled in case route gating is active
     monkeypatch.setenv("ROUTES_ENABLE", "sandbox")
     # Make firecracker appear unavailable regardless of host
@@ -20,7 +20,7 @@ def _client(monkeypatch) -> TestClient:
 def test_run_firecracker_unavailable_returns_503(monkeypatch) -> None:
 
 
-     with _client(monkeypatch) as client:
+    with _client(monkeypatch) as client:
         body = {
             "spec_version": "1.0",
             "runtime": "firecracker",
@@ -41,7 +41,7 @@ def test_run_firecracker_unavailable_returns_503(monkeypatch) -> None:
 def test_session_firecracker_unavailable_returns_503(monkeypatch) -> None:
 
 
-     with _client(monkeypatch) as client:
+    with _client(monkeypatch) as client:
         body = {
             "spec_version": "1.0",
             "runtime": "firecracker",

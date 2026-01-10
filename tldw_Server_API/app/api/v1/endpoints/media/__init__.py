@@ -12,6 +12,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 from tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils import (
     download_url_async as _download_url_async,
 )
+from tldw_Server_API.app.core.http_client import adownload as _m_adownload
 from tldw_Server_API.app.core.Utils.Utils import smart_download as _smart_download
 from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     TempDirManager as CoreTempDirManager,

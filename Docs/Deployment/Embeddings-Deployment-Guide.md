@@ -27,12 +27,12 @@ The embeddings service is implemented as part of the FastAPI application and sup
 - Best for: Personal use, small teams, development
 
 ### Enterprise Architecture (≥5 concurrent users)
-- Implementation: Orchestrated workers (`core/Embeddings/worker_orchestrator.py` + `core/Embeddings/workers/*`)
-- Processing: Queue-based, distributed workers (chunking → embedding → storage)
-- Infra: Redis streams, orchestrator process, multiple worker tasks
+- Implementation: Core Jobs worker (`core/Embeddings/services/jobs_worker.py`)
+- Processing: Queue-based Jobs pipeline (chunking → embedding → storage) via core Jobs
+- Infra: Jobs DB (SQLite/Postgres) and worker processes; no Redis required
 - Best for: Production, multi-tenant, high volume
 
-Note: The “mode” depends on which processes you run (API only vs API + orchestrator). There is no runtime flag that switches the API behavior; `EMBEDDINGS_MODE` is a deployment convention, not an API setting.
+Note: The “mode” depends on which processes you run (API only vs API + Jobs worker). There is no runtime flag that switches the API behavior; `EMBEDDINGS_MODE` is a deployment convention, not an API setting.
 
 ---
 
@@ -183,7 +183,7 @@ export PROMETHEUS_PORT=9090   # optional
 Use the orchestrator config at `tldw_Server_API/app/core/Embeddings/embeddings_config.yaml` to control worker pool sizes, GPU allocation, and queues. Start the orchestrator (it manages worker tasks in-process):
 
 ```bash
-python -m tldw_Server_API.app.core.Embeddings.worker_orchestrator
+python -m tldw_Server_API.app.core.Embeddings.services.jobs_worker
 ```
 
 ### Docker Compose (API + Orchestrator)
@@ -212,7 +212,7 @@ services:
 
   orchestrator:
     build: .
-    command: python -m tldw_Server_API.app.core.Embeddings.worker_orchestrator
+    command: python -m tldw_Server_API.app.core.Embeddings.services.jobs_worker
     environment:
       - REDIS_URL=redis://redis:6379
       - PROMETHEUS_PORT=9090

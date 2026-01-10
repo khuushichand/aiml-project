@@ -8,7 +8,7 @@ import tldw_Server_API.app.api.v1.endpoints.setup as setup_endpoint
 def _make_client():
 
 
-     return TestClient(app)
+    return TestClient(app)
 
 
 def test_update_config_blocked_for_remote_via_forwarded_header(mocker, monkeypatch):

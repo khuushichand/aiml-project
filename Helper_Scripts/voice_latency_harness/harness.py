@@ -11,11 +11,45 @@ Extend with WS STT commit/final timing once VAD/commit is in place to compute
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
+import os
 import sys
 import time
 import uuid
 from typing import Dict, Any, List
+from pathlib import Path
+from urllib.parse import urlparse
+
+
+def _ensure_repo_root() -> None:
+    here = Path(__file__).resolve()
+    for parent in [here] + list(here.parents):
+        if (parent / "tldw_Server_API").is_dir():
+            sys.path.insert(0, str(parent))
+            return
+
+
+def _configure_local_egress(url: str) -> None:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return
+    host = (parsed.hostname or "").lower()
+    if host in {"localhost", "0.0.0.0"} or host.startswith("127.") or host == "::1":
+        os.environ.setdefault("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "false")
+        if "WORKFLOWS_EGRESS_ALLOWED_PORTS" not in os.environ:
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            os.environ["WORKFLOWS_EGRESS_ALLOWED_PORTS"] = f"{port},80,443"
+
+
+_ensure_repo_root()
+
+try:
+    from tldw_Server_API.app.core import http_client
+except Exception:
+    print("tldw_Server_API not available; run from the repo root or set PYTHONPATH.", file=sys.stderr)
+    raise SystemExit(1)
 
 
 def _now() -> float:
@@ -41,13 +75,7 @@ def _p90(values: List[float]) -> float:
     return s[k]
 
 
-def measure_tts_ttfb(base: str, token: str | None, text: str, runs: int = 5) -> Dict[str, Any]:
-    try:
-        import httpx  # type: ignore
-    except Exception:
-        print("Please `pip install httpx` to run the harness.", file=sys.stderr)
-        sys.exit(2)
-
+async def measure_tts_ttfb(base: str, token: str | None, text: str, runs: int = 5) -> Dict[str, Any]:
     url = f"{base.rstrip('/')}/api/v1/audio/speech"
     headers = {"Accept": "application/octet-stream", "Content-Type": "application/json"}
     if token:
@@ -70,18 +98,22 @@ def measure_tts_ttfb(base: str, token: str | None, text: str, runs: int = 5) -> 
         first = None
         total_bytes = 0
         try:
-            with httpx.stream("POST", url, headers=headers, json=payload, timeout=60.0) as r:
-                r.raise_for_status()
-                for chunk in r.iter_bytes():
-                    if not chunk:
-                        continue
-                    total_bytes += len(chunk)
-                    if first is None:
-                        first = _now()
-                        ttfb = max(0.0, first - start)
-                        ttfb_runs.append(ttfb)
-                        # Continue consuming to validate stream is healthy
-        except (httpx.HTTPError, httpx.RequestError) as e:
+            async for chunk in http_client.astream_bytes(
+                method="POST",
+                url=url,
+                headers=headers,
+                json=payload,
+                timeout=60.0,
+            ):
+                if not chunk:
+                    continue
+                total_bytes += len(chunk)
+                if first is None:
+                    first = _now()
+                    ttfb = max(0.0, first - start)
+                    ttfb_runs.append(ttfb)
+                    # Continue consuming to validate stream is healthy
+        except Exception as e:
             per_run.append({"run": i + 1, "ok": False, "error": str(e)})
             continue
         per_run.append({"run": i + 1, "ok": True, "ttfb_s": ttfb_runs[-1] if ttfb_runs else None, "bytes": total_bytes, "request_id": req_id})
@@ -106,7 +138,14 @@ def main() -> None:
     args = ap.parse_args()
 
     if args.mode == "tts":
-        result = measure_tts_ttfb(args.base, args.token, args.text, args.runs)
+        _configure_local_egress(args.base)
+        try:
+            result = asyncio.run(measure_tts_ttfb(args.base, args.token, args.text, args.runs))
+        finally:
+            try:
+                asyncio.run(http_client.shutdown_http_client())
+            except Exception:
+                pass
         print(json.dumps(result, indent=2))
         return
 

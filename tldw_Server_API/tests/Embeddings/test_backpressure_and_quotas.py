@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
 class FakeRedisBP:
     def __init__(self, depth=0, age_first_ms=0):
-             self.depth = depth
+        self.depth = depth
         self.age_first_ms = age_first_ms
         self._kv = {}
         self._incr = {}
@@ -40,7 +40,7 @@ class FakeRedisBP:
 def _override_user(admin=False, uid="u1"):
 
 
-     async def _f():
+    async def _f():
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
         return User(id=uid, username="admin" if admin else uid, email=f"{uid}@x", is_active=True, is_admin=admin)
     return _f
@@ -48,7 +48,7 @@ def _override_user(admin=False, uid="u1"):
 
 @pytest.mark.unit
 def test_backpressure_by_age_returns_429(monkeypatch):
-     client = TestClient(app)
+    client = TestClient(app)
     app.dependency_overrides[get_request_user] = _override_user(admin=True)
     # Force age above threshold
     fake = FakeRedisBP(depth=0, age_first_ms=1000)  # 1 second epoch
@@ -68,7 +68,7 @@ def test_backpressure_by_age_returns_429(monkeypatch):
 
 @pytest.mark.unit
 def test_tenant_quota_429(monkeypatch):
-     client = TestClient(app)
+    client = TestClient(app)
     app.dependency_overrides[get_request_user] = _override_user(admin=False, uid="tenant1")
     fake = FakeRedisBP(depth=0, age_first_ms=0)
     import redis.asyncio as aioredis

@@ -176,18 +176,19 @@ class BaseParser(ABC):
 # Location: /app/core/Subscriptions/parsers/rss_parser.py
 
 import feedparser
-import httpx
 from typing import List
+from tldw_Server_API.app.core.http_client import afetch
 
 class RSSParser(BaseParser):
     """Parser for RSS and Atom feeds"""
 
     async def parse(self, url: str) -> List[ContentItem]:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url)
+        response = await afetch(method="GET", url=url)
+        try:
             response.raise_for_status()
-
-        feed = feedparser.parse(response.text)
+            feed = feedparser.parse(response.text)
+        finally:
+            await response.aclose()
         items = []
 
         for entry in feed.entries:

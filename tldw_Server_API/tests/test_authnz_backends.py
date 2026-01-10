@@ -50,7 +50,7 @@ class TestConfig:
 
     @staticmethod
     def get_postgresql_config() -> DatabaseConfig:
-             """Get PostgreSQL test configuration"""
+        """Get PostgreSQL test configuration"""
         # Use environment variables or defaults
         dsn = pg_dsn()
 
@@ -101,7 +101,7 @@ class AuthNZBackendTests:
 
     def setup(self):
 
-             """Set up test database"""
+        """Set up test database"""
         print(f"\n{'='*60}")
         print(f"Setting up {self.backend_type.upper()} backend tests")
         print(f"{'='*60}")
@@ -119,7 +119,7 @@ class AuthNZBackendTests:
 
     def teardown(self):
 
-             """Clean up test database"""
+        """Clean up test database"""
         if self.backend_type == "postgresql":
             # Clean up test data
             try:
@@ -148,12 +148,12 @@ class AuthNZBackendTests:
 
     def test_user_crud(self):
 
-             """Test user CRUD operations"""
+        """Test user CRUD operations"""
         print("\n🧪 Testing User CRUD Operations...")
 
         # Create user
         def test_create():
-                     username = f"test_user_{secrets.token_hex(4)}"
+            username = f"test_user_{secrets.token_hex(4)}"
             email = f"{username}@example.com"
             password_hash = self.password_service.hash_password("P@ssw0rd#2024$Secure")
 
@@ -173,7 +173,7 @@ class AuthNZBackendTests:
 
         # Read user
         def test_read():
-                     user = self.user_db.get_user(user_id=self.test_user_id)
+            user = self.user_db.get_user(user_id=self.test_user_id)
             assert user is not None
             assert user['username'] == self.test_username
             assert user['email'] == self.test_email
@@ -183,7 +183,7 @@ class AuthNZBackendTests:
 
         # Update user
         def test_update():
-                     success = self.user_db.update_user(
+            success = self.user_db.update_user(
                 self.test_user_id,
                 is_verified=True,
                 metadata={"test": "data"}
@@ -197,7 +197,7 @@ class AuthNZBackendTests:
 
         # Delete user (soft delete)
         def test_delete():
-                     success = self.user_db.delete_user(self.test_user_id)
+            success = self.user_db.delete_user(self.test_user_id)
             assert success is True
 
             user = self.user_db.get_user(user_id=self.test_user_id)
@@ -207,7 +207,7 @@ class AuthNZBackendTests:
 
         # Test duplicate prevention
         def test_duplicate():
-                     username = f"test_dup_{secrets.token_hex(4)}"
+            username = f"test_dup_{secrets.token_hex(4)}"
             email = f"{username}@example.com"
             password_hash = self.password_service.hash_password("P@ssw0rd#2024$Secure")
 
@@ -225,7 +225,7 @@ class AuthNZBackendTests:
 
     def test_roles_permissions(self):
 
-             """Test RBAC functionality"""
+        """Test RBAC functionality"""
         print("\n🧪 Testing Roles & Permissions...")
 
         # Create test user
@@ -236,7 +236,7 @@ class AuthNZBackendTests:
 
         # Test role assignment
         def test_assign_role():
-                     success = self.user_db.assign_role(user_id, "admin")
+            success = self.user_db.assign_role(user_id, "admin")
             assert success is True
 
             roles = self.user_db.get_user_roles(user_id)
@@ -247,7 +247,7 @@ class AuthNZBackendTests:
 
         # Test permission checking
         def test_permissions():
-                     permissions = self.user_db.get_user_permissions(user_id)
+            permissions = self.user_db.get_user_permissions(user_id)
 
             # Admin should have all permissions
             assert "media.create" in permissions
@@ -259,7 +259,7 @@ class AuthNZBackendTests:
 
         # Test role revocation
         def test_revoke_role():
-                     success = self.user_db.revoke_role(user_id, "admin")
+            success = self.user_db.revoke_role(user_id, "admin")
             assert success is True
 
             roles = self.user_db.get_user_roles(user_id)
@@ -275,7 +275,7 @@ class AuthNZBackendTests:
 
         # Test permission helpers
         def test_permission_helpers():
-                     assert self.user_db.has_role(user_id, "user") is True
+            assert self.user_db.has_role(user_id, "user") is True
             assert self.user_db.has_role(user_id, "admin") is False
             assert self.user_db.has_permission(user_id, "media.read") is True
             assert self.user_db.has_permission(user_id, "system.configure") is False
@@ -284,12 +284,12 @@ class AuthNZBackendTests:
 
     def test_registration_codes(self):
 
-             """Test registration code functionality"""
+        """Test registration code functionality"""
         print("\n🧪 Testing Registration Codes...")
 
         # Create registration code
         def test_create_code():
-                     code = self.user_db.create_registration_code(
+            code = self.user_db.create_registration_code(
                 created_by=None,
                 expires_in_days=7,
                 max_uses=3,
@@ -304,7 +304,7 @@ class AuthNZBackendTests:
 
         # Validate code
         def test_validate_code():
-                     code_info = self.user_db.validate_registration_code(self.test_code)
+            code_info = self.user_db.validate_registration_code(self.test_code)
             assert code_info is not None
             assert code_info['max_uses'] == 3
             assert code_info['times_used'] == 0
@@ -314,7 +314,7 @@ class AuthNZBackendTests:
 
         # Use registration code
         def test_use_code():
-                     # Create a user who uses the code
+            # Create a user who uses the code
             username = f"test_reg_{secrets.token_hex(4)}"
             email = f"{username}@example.com"
             password_hash = self.password_service.hash_password("P@ssw0rd#2024$Secure")
@@ -338,7 +338,7 @@ class AuthNZBackendTests:
 
     def test_authentication(self):
 
-             """Test authentication tracking"""
+        """Test authentication tracking"""
         print("\n🧪 Testing Authentication Features...")
 
         # Create test user
@@ -349,7 +349,7 @@ class AuthNZBackendTests:
 
         # Test login recording
         def test_record_login():
-                     success = self.user_db.record_login(
+            success = self.user_db.record_login(
                 user_id,
                 ip_address="192.168.1.1",
                 user_agent="Mozilla/5.0"
@@ -364,7 +364,7 @@ class AuthNZBackendTests:
 
         # Test failed login tracking
         def test_failed_login():
-                     attempts = self.user_db.record_failed_login(username, ip_address="192.168.1.1")
+            attempts = self.user_db.record_failed_login(username, ip_address="192.168.1.1")
             assert attempts == 1
 
             # Try multiple times
@@ -381,7 +381,7 @@ class AuthNZBackendTests:
 
     def run_all_tests(self):
 
-             """Run all tests"""
+        """Run all tests"""
         self.setup()
 
         try:
@@ -418,7 +418,7 @@ class AuthNZBackendTests:
 
 def main():
 
-     """Main test runner"""
+    """Main test runner"""
     parser = argparse.ArgumentParser(
         description="Test AuthNZ system with different database backends"
     )

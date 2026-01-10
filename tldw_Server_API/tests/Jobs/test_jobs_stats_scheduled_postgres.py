@@ -12,13 +12,13 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 @pytest.fixture(autouse=True)
 def _setup(jobs_pg_dsn):
-     return
+    return
 
 
 def test_jobs_stats_includes_scheduled_postgres(monkeypatch, jobs_pg_dsn):
 
 
-     monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)

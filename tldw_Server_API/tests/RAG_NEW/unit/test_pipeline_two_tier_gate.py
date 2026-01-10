@@ -15,7 +15,7 @@ from tldw_Server_API.app.core.RAG.rag_service.advanced_reranking import (
 
 class _FakeCross(BaseReranker):
     def __init__(self, config, scores_map):
-             super().__init__(config)
+        super().__init__(config)
         self._scores_map = scores_map
     async def rerank(self, query, documents, original_scores=None):
         out = []
@@ -28,7 +28,7 @@ class _FakeCross(BaseReranker):
 
 class _FakeLLM(BaseReranker):
     def __init__(self, config, scores_map):
-             super().__init__(config)
+        super().__init__(config)
         self._scores_map = scores_map
     async def rerank(self, query, documents, original_scores=None):
         out = []
@@ -59,7 +59,7 @@ async def test_unified_pipeline_two_tier_gates_generation(monkeypatch):
 
         def _fake_create(strategy, cfg, llm_client=None):
 
-                     if getattr(ar.RerankingStrategy, 'TWO_TIER') and strategy == ar.RerankingStrategy.TWO_TIER:
+            if getattr(ar.RerankingStrategy, 'TWO_TIER') and strategy == ar.RerankingStrategy.TWO_TIER:
                 ce_map = {"d1": 0.20, "d2": 0.10, "sentinel:irrelevant": 0.02}
                 llm_map = {"d1": 0.40, "d2": 0.30, "sentinel:irrelevant": 0.05}
                 return ar.TwoTierReranker(cfg, cross_reranker=_FakeCross(cfg, ce_map), llm_reranker=_FakeLLM(cfg, llm_map))
@@ -101,7 +101,7 @@ async def test_unified_pipeline_two_tier_request_overrides_gate(monkeypatch):
 
         def _fake_create(strategy, cfg, llm_client=None):
 
-                     if getattr(ar.RerankingStrategy, 'TWO_TIER') and strategy == ar.RerankingStrategy.TWO_TIER:
+            if getattr(ar.RerankingStrategy, 'TWO_TIER') and strategy == ar.RerankingStrategy.TWO_TIER:
                 ce_map = {"d1": 0.20, "d2": 0.10, "sentinel:irrelevant": 0.02}
                 llm_map = {"d1": 0.40, "d2": 0.30, "sentinel:irrelevant": 0.05}
                 return ar.TwoTierReranker(cfg, cross_reranker=_FakeCross(cfg, ce_map), llm_reranker=_FakeLLM(cfg, llm_map))
@@ -131,7 +131,7 @@ async def test_unified_pipeline_two_tier_request_overrides_gate(monkeypatch):
         def _fake_create(strategy, cfg, llm_client=None):
 
 
-                     if strategy == ar.RerankingStrategy.TWO_TIER:
+            if strategy == ar.RerankingStrategy.TWO_TIER:
                 ce_map = {"d1": 0.20, "d2": 0.10, "sentinel:irrelevant": 0.02}
                 llm_map = {"d1": 0.40, "d2": 0.30, "sentinel:irrelevant": 0.05}
                 return ar.TwoTierReranker(cfg, cross_reranker=_FakeCross(cfg, ce_map), llm_reranker=_FakeLLM(cfg, llm_map))

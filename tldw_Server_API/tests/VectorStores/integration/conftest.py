@@ -14,7 +14,7 @@ from pathlib import Path
 
 @pytest.fixture(autouse=True, scope="session")
 def vectorstores_isolated_env():
-     # Enable test mode signals for API code paths
+    # Enable test mode signals for API code paths
     prev_test_mode = os.getenv("TEST_MODE")
     os.environ["TEST_MODE"] = "true"
     # Force stubbed Chroma client for CI stability
@@ -61,7 +61,7 @@ def vectorstores_isolated_env():
 # Local admin_user fixture (avoid importing other conftests that override pgvector_dsn)
 @pytest.fixture
 def admin_user():
-     from tldw_Server_API.app.main import app
+    from tldw_Server_API.app.main import app
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
     from tldw_Server_API.app.api.v1.API_Deps import auth_deps
     from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal

@@ -29,13 +29,11 @@ async def test_download_url_async_pdf_success(tmp_path, monkeypatch):
     import tldw_Server_API.app.core.http_client as hc
 
     def _mk_client(**kwargs):
-
-             to = kwargs.get("timeout", 10.0)
+        to = kwargs.get("timeout", 10.0)
         return httpx.Client(timeout=to, transport=transport)
 
     def _mk_async_client(**kwargs):
-
-             to = kwargs.get("timeout", 10.0)
+        to = kwargs.get("timeout", 10.0)
         return httpx.AsyncClient(timeout=to, transport=transport)
 
     monkeypatch.setattr(hc, "create_client", _mk_client, raising=True)
@@ -84,13 +82,11 @@ async def test_download_url_async_reject_non_pdf(tmp_path, monkeypatch):
     import tldw_Server_API.app.core.http_client as hc
 
     def _mk_client(**kwargs):
-
-             to = kwargs.get("timeout", 10.0)
+        to = kwargs.get("timeout", 10.0)
         return httpx.Client(timeout=to, transport=transport)
 
     def _mk_async_client(**kwargs):
-
-             to = kwargs.get("timeout", 10.0)
+        to = kwargs.get("timeout", 10.0)
         return httpx.AsyncClient(timeout=to, transport=transport)
 
     monkeypatch.setattr(hc, "create_client", _mk_client, raising=True)

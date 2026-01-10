@@ -1145,25 +1145,10 @@ class MediaDatabase:
         if resolved is not None:
             return resolved
 
-        # 4) Fallback to a local SQLite backend anchored to project root
-        try:
-            from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
-            _default_sqlite_path = str((Path(_gpr()) / "Databases" / "Media_DB_v2.db").resolve())
-        except Exception:
-            _default_sqlite_path = str((Path(__file__).resolve().parents[5] / "Databases" / "Media_DB_v2.db").resolve())
-        # Emit a warning so callers can fix missing explicit paths
-        try:
-            logging.warning(
-                "MediaDatabase backend falling back to default SQLite path; pass an explicit db_path or configure content backend. path=%s",
-                _default_sqlite_path,
-            )
-        except Exception:
-            pass
-        default_config = DatabaseConfig(
-            backend_type=BackendType.SQLITE,
-            sqlite_path=_default_sqlite_path,
+        raise DatabaseError(
+            "MediaDatabase backend could not be resolved. "
+            "Pass an explicit db_path or configure the content backend."
         )
-        return DatabaseBackendFactory.create_backend(default_config)
 
     # --- Backend Statement Preparation Helpers ---
     def _prepare_backend_statement(

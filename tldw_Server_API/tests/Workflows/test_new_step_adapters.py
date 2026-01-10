@@ -33,7 +33,7 @@ def client_with_wf(tmp_path, monkeypatch, auth_headers):
 
     def override_db():
 
-             return db
+        return db
 
     app.dependency_overrides[get_request_user] = override_user
     app.dependency_overrides[wf_mod._get_db] = override_db

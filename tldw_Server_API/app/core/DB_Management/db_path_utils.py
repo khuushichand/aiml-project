@@ -262,17 +262,28 @@ class DatabasePaths:
         return base_path
 
     @staticmethod
-    def get_user_base_directory(user_id: Optional[UserId]) -> Path:
+    def get_user_base_directory(
+        user_id: Optional[UserId],
+        *,
+        base_dir_override: Optional[Union[str, Path]] = None,
+        allow_legacy_alias: bool = False,
+    ) -> Path:
         """
         Get the base directory for a specific user's databases.
 
         Args:
             user_id: The user's ID
+            base_dir_override: Optional base directory override
+            allow_legacy_alias: Whether to allow deprecated USER_DB_BASE
 
         Returns:
             Path to the user's database directory
         """
-        base_path = DatabasePaths.get_user_db_base_dir()
+        if base_dir_override is not None:
+            base_path = _normalize_user_db_base_dir(Path(base_dir_override))
+            _ensure_dir(base_path, label="user database base")
+        else:
+            base_path = DatabasePaths.get_user_db_base_dir(allow_legacy_alias=allow_legacy_alias)
         user_dir = _build_user_dir(base_path, user_id)
         logger.debug(f"Ensured user directory exists: {user_dir}")
         return user_dir
@@ -371,9 +382,13 @@ class DatabasePaths:
         return outputs_dir
 
     @staticmethod
-    def get_user_chroma_dir(user_id: Optional[UserId]) -> Path:
+    def get_user_chroma_dir(
+        user_id: Optional[UserId],
+        *,
+        base_dir_override: Optional[Union[str, Path]] = None,
+    ) -> Path:
         """Get the path to the user's ChromaDB storage directory."""
-        user_dir = DatabasePaths.get_user_base_directory(user_id)
+        user_dir = DatabasePaths.get_user_base_directory(user_id, base_dir_override=base_dir_override)
         chroma_dir = user_dir / DatabasePaths.CHROMA_SUBDIR
         _ensure_dir(chroma_dir, label="chroma storage")
         return chroma_dir

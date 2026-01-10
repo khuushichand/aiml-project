@@ -24,7 +24,38 @@ import os
 import random
 import sys
 import time
+from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
+
+
+def _ensure_repo_root() -> None:
+    here = Path(__file__).resolve()
+    for parent in [here] + list(here.parents):
+        if (parent / "tldw_Server_API").is_dir():
+            sys.path.insert(0, str(parent))
+            return
+
+
+def _configure_local_egress(url: str) -> None:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return
+    host = (parsed.hostname or "").lower()
+    if host in {"localhost", "0.0.0.0"} or host.startswith("127.") or host == "::1":
+        os.environ.setdefault("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "false")
+        if "WORKFLOWS_EGRESS_ALLOWED_PORTS" not in os.environ:
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            os.environ["WORKFLOWS_EGRESS_ALLOWED_PORTS"] = f"{port},80,443"
+
+
+_ensure_repo_root()
+
+try:
+    from tldw_Server_API.app.core import http_client
+except Exception:
+    http_client = None  # type: ignore[assignment]
 
 
 async def _xadd_loop(redis, queue: str, rps: float, stop_ts: float):
@@ -53,15 +84,12 @@ async def _xadd_loop(redis, queue: str, rps: float, stop_ts: float):
 
 
 async def _fetch_summary_http(url: str) -> Optional[dict]:
-    try:
-        import httpx  # type: ignore
-    except Exception:
+    if http_client is None:
         return None
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            r = await client.get(url)
-            if r.status_code == 200:
-                return r.json()
+        r = await http_client.afetch(method="GET", url=url, timeout=5)
+        if r.status_code == 200:
+            return r.json()
     except Exception:
         return None
     return None
@@ -69,6 +97,7 @@ async def _fetch_summary_http(url: str) -> Optional[dict]:
 
 async def _summarize(redis, summary_url: Optional[str]):
     if summary_url:
+        _configure_local_egress(summary_url)
         data = await _fetch_summary_http(summary_url)
         if data:
             return {
@@ -126,6 +155,8 @@ async def main_async(args):
     sent = await prod
     print(f"Sent {sent} messages to {args.queue}")
     await redis.close()
+    if http_client is not None:
+        await http_client.shutdown_http_client()
     return 0
 
 

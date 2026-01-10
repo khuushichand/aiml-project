@@ -8,7 +8,7 @@ from tldw_Server_API.app.core.Prompt_Management.prompt_studio.program_evaluator 
 def test_score_to_bin_edges():
 
 
-     # Bin size 0.5 => 0-0.49 -> 0, 0.5-0.99 -> 1, ..., 9.5-10 -> 19
+    # Bin size 0.5 => 0-0.49 -> 0, 0.5-0.99 -> 1, ..., 9.5-10 -> 19
     assert PromptQualityScorer.score_to_bin(0.0, 0.5) == 0
     assert PromptQualityScorer.score_to_bin(0.49, 0.5) == 0
     assert PromptQualityScorer.score_to_bin(0.5, 0.5) == 1
@@ -20,7 +20,7 @@ def test_score_to_bin_edges():
 def test_program_evaluator_heuristic_scoring_disabled_env(monkeypatch):
 
 
-     # Ensure global flag is disabled
+    # Ensure global flag is disabled
     monkeypatch.delenv("PROMPT_STUDIO_ENABLE_CODE_EVAL", raising=False)
     pe = ProgramEvaluator()
     # Heuristic should return positive for code-like text
@@ -36,7 +36,7 @@ if __name__ == '__main__':
 def test_safe_constraint_eval():
 
 
-     pe = ProgramEvaluator()
+    pe = ProgramEvaluator()
     names = {"x": 5, "y": 2}
     assert pe._safe_eval_constraint("x >= 0 and y < 10", names) is True
     assert pe._safe_eval_constraint("x + y == 7", names) is True

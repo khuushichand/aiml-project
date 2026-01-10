@@ -45,7 +45,7 @@ ownership_predicates: []
 
 def _assign_scope(scope_name: str) -> Callable[[], None]:
     def _dependency() -> None:
-             return None
+        return None
 
     setattr(_dependency, "_tldw_scope_name", scope_name)
     return _dependency
@@ -72,11 +72,11 @@ def test_collect_privilege_registry_strict_unknown_scope(tmp_path: Path) -> None
 
     @app.get("/known", dependencies=[Depends(_assign_scope("test.scope"))])
     def _known():
-             return {"ok": True}
+        return {"ok": True}
 
     @app.get("/unknown", dependencies=[Depends(_assign_scope("unknown.scope"))])
     def _unknown():
-             return {"ok": False}
+        return {"ok": False}
 
     # Non-strict mode should not raise, but strict mode must catch the unknown scope.
     collect_privilege_route_registry(app, catalog, strict=False)
@@ -96,7 +96,7 @@ def test_collect_privilege_registry_strict_success(tmp_path: Path) -> None:
 
     @app.get("/known", dependencies=[Depends(_assign_scope("test.scope"))])
     def _known():
-             return {"ok": True}
+        return {"ok": True}
 
     registry = collect_privilege_route_registry(app, catalog, strict=True)
     assert "test.scope" in registry
@@ -110,7 +110,7 @@ def test_serialize_route_registry_orders_entries(tmp_path: Path) -> None:
 
     @app.get("/alpha", dependencies=[Depends(_assign_scope("test.scope"))])
     def _alpha():
-             return {"ok": True}
+        return {"ok": True}
 
     registry = collect_privilege_route_registry(app, catalog, strict=True)
     serialized = serialize_route_registry(registry)

@@ -131,7 +131,7 @@ async def test_hub_redis_no_duplicate_local_origin(monkeypatch: pytest.MonkeyPat
 
     class _FakeRedis:
         def __init__(self):
-                     self.publishes: list[tuple[str, bytes]] = []
+            self.publishes: list[tuple[str, bytes]] = []
 
         @classmethod
         def from_url(cls, url: str):
@@ -139,7 +139,7 @@ async def test_hub_redis_no_duplicate_local_origin(monkeypatch: pytest.MonkeyPat
 
         def ping(self):
 
-                     return True
+            return True
 
         def publish(self, channel: str, data: bytes):
             self.publishes.append((channel, data))

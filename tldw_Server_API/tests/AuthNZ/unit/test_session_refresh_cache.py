@@ -14,7 +14,7 @@ from tldw_Server_API.app.core.AuthNZ.settings import Settings, reset_settings
 
 class FakeRedis:
     def __init__(self):
-             self.kv: dict[str, str] = {}
+        self.kv: dict[str, str] = {}
         self.sets: defaultdict[str, set[int]] = defaultdict(set)
 
     async def setex(self, key, ttl, value):
@@ -47,7 +47,7 @@ class FakeRedis:
 
 class StubTransaction:
     def __init__(self, conn):
-             self.conn = conn
+        self.conn = conn
 
     async def __aenter__(self):
         return self.conn
@@ -58,11 +58,11 @@ class StubTransaction:
 
 class StubPool:
     def __init__(self, conn):
-             self.conn = conn
+        self.conn = conn
 
     def transaction(self):
 
-             return StubTransaction(self.conn)
+        return StubTransaction(self.conn)
 
     def acquire(self):
 
@@ -72,7 +72,7 @@ class StubPool:
 
 class StubConn:
     def __init__(self, expected_hash, session_id, user_id):
-             self.expected_hash = expected_hash
+        self.expected_hash = expected_hash
         self.session_id = session_id
         self.user_id = user_id
         self.updated = False
@@ -103,7 +103,7 @@ async def test_refresh_session_replaces_cached_access_token(monkeypatch):
 
     def _extract_stub(self, token):
 
-             if not token:
+        if not token:
             return (None, None)
         return (f"jti:{token}", datetime.utcnow() + timedelta(minutes=30))
 
@@ -167,7 +167,7 @@ async def test_refresh_session_accepts_legacy_refresh_hash(monkeypatch):
 
     def _token_hash_candidates(self, token):
 
-             return [f"new-h:{token}", f"old-h:{token}"]
+        return [f"new-h:{token}", f"old-h:{token}"]
 
     manager._token_hash_candidates = types.MethodType(_token_hash_candidates, manager)
 
@@ -181,7 +181,7 @@ async def test_refresh_session_accepts_legacy_refresh_hash(monkeypatch):
 
     def _extract_stub(self, token):
 
-             if not token:
+        if not token:
             return (None, None)
         return (f"jti:{token}", datetime.utcnow() + timedelta(minutes=5))
 
@@ -192,7 +192,7 @@ async def test_refresh_session_accepts_legacy_refresh_hash(monkeypatch):
 
     class CandidateStubConn:
         def __init__(self, expected_hash):
-                     self.expected_hash = expected_hash
+            self.expected_hash = expected_hash
             self.updated = False
             self.fetch_calls: list[str] = []
 
@@ -239,7 +239,7 @@ async def test_validate_session_rewrites_legacy_hash(monkeypatch):
 
     def _token_hash_candidates(self, token):
 
-             return [f"new-h:{token}", f"old-h:{token}"]
+        return [f"new-h:{token}", f"old-h:{token}"]
 
     manager._token_hash_candidates = types.MethodType(_token_hash_candidates, manager)
 
@@ -251,7 +251,7 @@ async def test_validate_session_rewrites_legacy_hash(monkeypatch):
 
     class AcquireCtx:
         def __init__(self, conn):
-                     self.conn = conn
+            self.conn = conn
 
         async def __aenter__(self):
             return self.conn
@@ -261,7 +261,7 @@ async def test_validate_session_rewrites_legacy_hash(monkeypatch):
 
     class LegacyConn:
         def __init__(self, session_id, user_id, stored_hash):
-                     self.session_id = session_id
+            self.session_id = session_id
             self.user_id = user_id
             self.stored_hash = stored_hash
             self.fetch_calls: list[tuple[str, str | int]] = []
@@ -294,12 +294,12 @@ async def test_validate_session_rewrites_legacy_hash(monkeypatch):
 
     class PoolStub:
         def __init__(self, conn):
-                     self.pool = object()
+            self.pool = object()
             self._conn = conn
 
         def acquire(self):
 
-                     return AcquireCtx(self._conn)
+            return AcquireCtx(self._conn)
 
     stub_conn = LegacyConn(session_id=777, user_id=42, stored_hash=legacy_hash)
     stub_pool = PoolStub(stub_conn)
@@ -318,7 +318,7 @@ async def test_validate_session_rewrites_legacy_hash(monkeypatch):
 
     # After normalization, drop the legacy candidate and ensure validation still succeeds.
     def _token_hash_primary_only(self, token):
-             return [primary_hash]
+        return [primary_hash]
 
     manager._token_hash_candidates = types.MethodType(_token_hash_primary_only, manager)
 
@@ -368,7 +368,7 @@ async def test_is_token_blacklisted_checks_refresh_hash_fallback(monkeypatch):
 
     def _token_hash_candidates(self, token):
 
-             return ["hash:access-token", revoked_refresh_hash]
+        return ["hash:access-token", revoked_refresh_hash]
 
     manager._token_hash_candidates = types.MethodType(_token_hash_candidates, manager)
 

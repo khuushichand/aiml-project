@@ -24,7 +24,7 @@ from tldw_Server_API.app.core.RAG.rag_service.enhanced_chunking_integration impo
 # Strategies for generating test data
 @st.composite
 def document_strategy(draw):
-     """Generate a random Document for testing."""
+    """Generate a random Document for testing."""
     doc_id = draw(st.text(string.ascii_letters, min_size=1, max_size=20))
     content = draw(st.text(min_size=10, max_size=500))
     parent_id = draw(st.one_of(st.none(), st.text(string.ascii_letters, min_size=1, max_size=10)))
@@ -47,13 +47,13 @@ def document_strategy(draw):
 
 @st.composite
 def document_list_strategy(draw, min_size=0, max_size=20):
-     """Generate a list of Documents."""
+    """Generate a list of Documents."""
     return draw(st.lists(document_strategy(), min_size=min_size, max_size=max_size))
 
 
 @st.composite
 def context_strategy(draw):
-     """Generate a RAGPipelineContext."""
+    """Generate a RAGPipelineContext."""
     query = draw(st.text(min_size=1, max_size=100))
     documents = draw(document_list_strategy())
     config = draw(st.dictionaries(
@@ -207,7 +207,7 @@ class TestContextualRetrievalProperties:
     @given(documents=document_list_strategy(min_size=1, max_size=50))
     @settings(max_examples=100, deadline=1000)
     def test_parent_grouping_consistency(self, documents):
-             """Property: Documents with same parent_id should be grouped together."""
+        """Property: Documents with same parent_id should be grouped together."""
         # Group documents by parent_id
         parent_groups = {}
         for doc in documents:
@@ -227,7 +227,7 @@ class TestContextualRetrievalProperties:
         enable_contextual=st.booleans()
     )
     def test_contextualization_flag_behavior(self, text, chunk_size, enable_contextual):
-             """Property: Contextualization should only occur when enabled."""
+        """Property: Contextualization should only occur when enabled."""
         with patch('tldw_Server_API.app.core.Embeddings.ChromaDB_Library.analyze') as mock_analyze:
             mock_analyze.return_value = "context"
 
@@ -252,7 +252,7 @@ class ContextualRetrievalStateMachine(RuleBasedStateMachine):
 
     def __init__(self):
 
-             super().__init__()
+        super().__init__()
         self.context = None
         self.original_doc_count = 0
         self.filter_applied = False
@@ -261,7 +261,7 @@ class ContextualRetrievalStateMachine(RuleBasedStateMachine):
 
     @initialize()
     def setup(self):
-             """Initialize with a context containing documents."""
+        """Initialize with a context containing documents."""
         self.context = SimpleContext(query="test query", original_query="test query", config={})
         self.context.documents = [
             Document(
@@ -281,7 +281,7 @@ class ContextualRetrievalStateMachine(RuleBasedStateMachine):
 
     @rule()
     def apply_expansion(self):
-             """Rule: Apply parent context expansion (sync wrapper)."""
+        """Rule: Apply parent context expansion (sync wrapper)."""
         result = asyncio.run(expand_with_parent_context(self.context))
         self.context = result
         self.expansion_applied = True
@@ -290,7 +290,7 @@ class ContextualRetrievalStateMachine(RuleBasedStateMachine):
         include_types=st.lists(st.sampled_from(["text", "code", "table"]), min_size=1, max_size=2)
     )
     def apply_filter(self, include_types):
-             """Rule: Apply type filtering (sync wrapper)."""
+        """Rule: Apply type filtering (sync wrapper)."""
         result = asyncio.run(filter_chunks_by_type(self.context, include_types=include_types))
         self.context = result
         self.filter_applied = True
@@ -304,14 +304,14 @@ class ContextualRetrievalStateMachine(RuleBasedStateMachine):
         )
     )
     def apply_prioritization(self, priorities):
-             """Rule: Apply type prioritization (sync wrapper)."""
+        """Rule: Apply type prioritization (sync wrapper)."""
         result = asyncio.run(prioritize_by_chunk_type(self.context, type_priorities=priorities))
         self.context = result
         self.prioritization_applied = True
 
     @invariant()
     def documents_not_empty(self):
-             """Invariant: Context should always have documents if started with any."""
+        """Invariant: Context should always have documents if started with any."""
         if self.original_doc_count > 0:
             # Some operations might filter all docs, but that's valid
             assert self.context is not None
@@ -319,7 +319,7 @@ class ContextualRetrievalStateMachine(RuleBasedStateMachine):
 
     @invariant()
     def scores_valid(self):
-             """Invariant: All document scores should be valid numbers."""
+        """Invariant: All document scores should be valid numbers."""
         if self.context and self.context.documents:
             for doc in self.context.documents:
                 assert isinstance(doc.score, (int, float))
@@ -328,7 +328,7 @@ class ContextualRetrievalStateMachine(RuleBasedStateMachine):
 
     @invariant()
     def metadata_preserved(self):
-             """Invariant: Essential metadata should be preserved."""
+        """Invariant: Essential metadata should be preserved."""
         if self.context and self.context.documents:
             for doc in self.context.documents:
                 assert isinstance(doc.metadata, dict)
@@ -337,7 +337,7 @@ class ContextualRetrievalStateMachine(RuleBasedStateMachine):
 
     @invariant()
     def ids_unique(self):
-             """Invariant: Document IDs should remain unique."""
+        """Invariant: Document IDs should remain unique."""
         if self.context and self.context.documents:
             ids = [doc.id for doc in self.context.documents]
             assert len(ids) == len(set(ids))  # All IDs unique
@@ -354,7 +354,7 @@ TestContextualStateMachine.settings = settings(max_examples=10, stateful_step_co
     context_window=st.one_of(st.none(), st.integers(min_value=100, max_value=2000))
 )
 def test_configuration_combinations(enable_contextual, llm_model, context_window):
-     """Property: All valid configuration combinations should be accepted."""
+    """Property: All valid configuration combinations should be accepted."""
     config = {
         "enable_contextual_chunking": enable_contextual,
         "contextual_llm_model": llm_model,
@@ -371,6 +371,8 @@ def test_configuration_combinations(enable_contextual, llm_model, context_window
 
     if context_window is not None:
         assert 100 <= context_window <= 2000
+
+
 @dataclass
 class SimpleContext:
     query: str

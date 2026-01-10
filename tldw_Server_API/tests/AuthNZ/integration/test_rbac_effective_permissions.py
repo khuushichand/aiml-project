@@ -15,7 +15,7 @@ pytestmark = pytest.mark.integration
 def _fresh_client() -> TestClient:
 
 
-     """Create a TestClient against a fresh single-user SQLite auth DB.
+    """Create a TestClient against a fresh single-user SQLite auth DB.
 
     This avoids interacting with any existing local DB that may have partial migrations.
     """
@@ -52,7 +52,7 @@ def _fresh_client() -> TestClient:
 
 @pytest.mark.timeout(60)
 def test_user_overrides_affect_effective_permissions():
-     settings = get_settings()
+    settings = get_settings()
     user_id = settings.SINGLE_USER_FIXED_ID
 
     new_perm = "it.test_override"

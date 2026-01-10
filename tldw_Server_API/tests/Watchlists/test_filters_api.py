@@ -11,7 +11,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture()
 def client_with_user(monkeypatch):
-     async def override_user():
+    async def override_user():
         return User(id=777, username="wluser", email=None, is_active=True)
 
     base_dir = Path.cwd() / "Databases" / "test_user_dbs_filters"
@@ -29,7 +29,7 @@ def client_with_user(monkeypatch):
 def test_job_filters_crud(client_with_user):
 
 
-     c = client_with_user
+    c = client_with_user
 
     # Create job
     job_body = {

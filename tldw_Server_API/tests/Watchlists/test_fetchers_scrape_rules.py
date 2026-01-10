@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.Watchlists.fetchers import (
 def test_parse_scraped_items_xpath():
 
 
-     html_text = """
+    html_text = """
     <html>
       <body>
         <section class="entries">
@@ -48,7 +48,7 @@ def test_parse_scraped_items_xpath():
 def test_parse_scraped_items_alternates():
 
 
-     html_text = """
+    html_text = """
     <html>
       <body>
         <div class="main">

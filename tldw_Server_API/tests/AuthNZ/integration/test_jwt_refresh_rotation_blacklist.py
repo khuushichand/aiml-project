@@ -12,7 +12,7 @@ pytestmark = pytest.mark.integration
 def _jwt() -> JWTService:
 
 
-     return JWTService(
+    return JWTService(
         settings=Settings(
             AUTH_MODE="multi_user",
             JWT_SECRET_KEY="C" * 40,

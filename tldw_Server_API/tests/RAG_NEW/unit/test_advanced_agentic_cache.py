@@ -8,7 +8,7 @@ from tldw_Server_API.app.core.RAG.rag_service.advanced_cache import AdvancedAgen
 def test_advanced_agentic_cache_get_set_and_invalidate_prefix():
 
 
-     cache = AdvancedAgenticCache()
+    cache = AdvancedAgenticCache()
 
     ns = "ephemeral_chunk"
     key1 = "docA|qhash1"

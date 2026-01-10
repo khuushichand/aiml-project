@@ -9,9 +9,7 @@ pytestmark = pytest.mark.integration
 
 
 def test_import_test_cases_csv_string(prompt_studio_dual_backend_client):
-
-
-     backend_label, client, _db = prompt_studio_dual_backend_client
+    backend_label, client, _db = prompt_studio_dual_backend_client
 
     # Create project
     cp = client.post(
@@ -54,9 +52,7 @@ def test_import_test_cases_csv_string(prompt_studio_dual_backend_client):
 
 
 def test_async_evaluation_with_status_polling(prompt_studio_dual_backend_client):
-
-
-     backend_label, client, _db = prompt_studio_dual_backend_client
+    backend_label, client, _db = prompt_studio_dual_backend_client
 
     # Create project and prompt
     proj = client.post(

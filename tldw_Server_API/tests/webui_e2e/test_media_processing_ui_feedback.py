@@ -3,7 +3,7 @@ import pytest
 
 @pytest.mark.e2e
 def test_media_processing_long_running_indicator(page, server_url):
-     page.goto(f"{server_url}/webui/")
+    page.goto(f"{server_url}/webui/")
     page.get_by_role("tab", name="Media").click()
     page.get_by_role("tab", name="Processing (No DB)").click()
 

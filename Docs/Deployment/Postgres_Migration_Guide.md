@@ -17,6 +17,8 @@ workflow jobs.
   `TLDW_CONTENT_DB_BACKEND=postgresql` temporarily and start the API; it will create all tables and
   FTS artefacts, then shut the server down before migrating data.
 
+`USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root). Override via environment variable or `Config_Files/config.txt` as needed.
+
 ## Step 1 - Prepare connection details
 
 Collect the PostgreSQL host, port, database, username, and password. These map directly onto the

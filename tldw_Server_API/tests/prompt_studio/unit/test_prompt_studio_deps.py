@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 
 @pytest.fixture(autouse=True)
 def reset_cache():
-     """Ensure dependency cache is isolated per test."""
+    """Ensure dependency cache is isolated per test."""
     with deps._db_lock:
         deps._db_instances_cache.clear()
     try:
@@ -33,7 +33,7 @@ def _make_backend(connection_string: str):
 def test_get_or_create_prompt_studio_db_passes_backend(monkeypatch, tmp_path):
 
 
-     db_path = tmp_path / "u-123" / "prompt_studio.db"
+    db_path = tmp_path / "u-123" / "prompt_studio.db"
 
     def fake_path(user_id: str):
         db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -63,7 +63,7 @@ def test_get_or_create_prompt_studio_db_passes_backend(monkeypatch, tmp_path):
 def test_backend_signature_in_cache_includes_connection(monkeypatch, tmp_path):
 
 
-     db_path = tmp_path / "u-456" / "prompt_studio.db"
+    db_path = tmp_path / "u-456" / "prompt_studio.db"
 
     def fake_path(user_id: str):
         db_path.parent.mkdir(parents=True, exist_ok=True)

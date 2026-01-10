@@ -8,15 +8,11 @@ from tldw_Server_API.app.core.Third_Party import PMC_OAI as pmc_oai
 
 
 def _mock_transport(handler):
-
-
-     return httpx.MockTransport(handler)
+    return httpx.MockTransport(handler)
 
 
 def test_pmc_oai_identify(monkeypatch):
-
-
-     monkeypatch.setenv("EGRESS_ALLOWLIST", "pmc.ncbi.nlm.nih.gov")
+    monkeypatch.setenv("EGRESS_ALLOWLIST", "pmc.ncbi.nlm.nih.gov")
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.host == "pmc.ncbi.nlm.nih.gov"
@@ -52,9 +48,7 @@ def test_pmc_oai_identify(monkeypatch):
 
 
 def test_pmc_oai_listsets_with_resumption(monkeypatch):
-
-
-     monkeypatch.setenv("EGRESS_ALLOWLIST", "pmc.ncbi.nlm.nih.gov")
+    monkeypatch.setenv("EGRESS_ALLOWLIST", "pmc.ncbi.nlm.nih.gov")
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.host == "pmc.ncbi.nlm.nih.gov"

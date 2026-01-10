@@ -8,7 +8,7 @@ pytestmark = pytest.mark.unit
 def test_status_endpoint_sets_prometheus_gauges(prompt_studio_dual_backend_client):
 
 
-     backend_label, client, db = prompt_studio_dual_backend_client
+    backend_label, client, db = prompt_studio_dual_backend_client
 
     r = client.get("/api/v1/prompt-studio/status")
     assert r.status_code == 200

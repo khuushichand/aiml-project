@@ -15,15 +15,15 @@ class FakePGCursor:
 
     def __enter__(self):
 
-             return self
+        return self
 
     def __exit__(self, exc_type, exc, tb):
 
-             return False
+        return False
 
     def execute(self, sql, params=None):
 
-             s = str(sql)
+        s = str(sql)
         self.rowcount = 0
         self._fetch_buffer = None
         # Idempotent insert returning * (first insert returns a row, later returns None)
@@ -104,35 +104,35 @@ class FakePGCursor:
 
     def fetchone(self):
 
-             val = self._fetch_buffer
+        val = self._fetch_buffer
         self._fetch_buffer = None
         return val
 
     def fetchall(self):
 
-             return []
+        return []
 
 
 class FakePGConn:
     def __init__(self):
-             pass
+        pass
 
     def __enter__(self):
 
-             return self
+        return self
 
     def __exit__(self, exc_type, exc, tb):
 
-             return False
+        return False
 
     def close(self):
 
-             pass
+        pass
 
 
 @pytest.fixture(autouse=True)
 def _stub_pg_bootstrap(monkeypatch):
-     import tldw_Server_API.app.core.Jobs.manager as mgr
+    import tldw_Server_API.app.core.Jobs.manager as mgr
 
     monkeypatch.setattr(mgr, "ensure_jobs_tables_pg", lambda dsn: dsn)
     monkeypatch.setattr(mgr, "ensure_job_counters_pg", lambda dsn: dsn, raising=False)
@@ -145,7 +145,7 @@ def test_pg_create_job_idempotent_gates_created_metric(monkeypatch, tmp_path):
 
     def _inc(labels):
 
-             calls["n"] += 1
+        calls["n"] += 1
 
     monkeypatch.setenv("JOBS_DB_URL", "postgresql://fake")
     jm = JobManager(db_path=tmp_path / "dummy.db")

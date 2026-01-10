@@ -25,7 +25,7 @@ class TestRAGEvaluatorInit:
 
     def test_init_without_embeddings(self):
 
-             """Test initialization without embedding support."""
+        """Test initialization without embedding support."""
         evaluator = RAGEvaluator(
             embedding_provider=None,
             embedding_model=None
@@ -37,7 +37,7 @@ class TestRAGEvaluatorInit:
 
     def test_init_with_embeddings(self):
 
-             """Test initialization with embedding configuration."""
+        """Test initialization with embedding configuration."""
         evaluator = RAGEvaluator(
             embedding_provider="openai",
             embedding_model="text-embedding-3-small"
@@ -49,7 +49,7 @@ class TestRAGEvaluatorInit:
 
     @patch('tldw_Server_API.app.core.Evaluations.rag_evaluator.create_embedding')
     def test_embedding_availability_check(self, mock_create_embedding):
-             """Test checking embedding availability."""
+        """Test checking embedding availability."""
         # Test successful embedding check
         mock_create_embedding.return_value = [0.1] * 1536
         evaluator = RAGEvaluator(
@@ -358,7 +358,7 @@ class TestMetricCalculations:
 
     def test_normalize_score(self):
 
-             """Test score normalization from 1-5 to 0-1."""
+        """Test score normalization from 1-5 to 0-1."""
         evaluator = RAGEvaluator()
 
         # Test normalization
@@ -372,7 +372,7 @@ class TestMetricCalculations:
 
     def test_calculate_overall_score(self):
 
-             """Test overall score calculation."""
+        """Test overall score calculation."""
         evaluator = RAGEvaluator()
 
         metrics = {

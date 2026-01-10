@@ -11,7 +11,7 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 def test_parallel_acquire_no_double_sqlite(tmp_path):
 
 
-     db_path = tmp_path / "jobs_parallel.db"
+    db_path = tmp_path / "jobs_parallel.db"
     ensure_jobs_tables(db_path)
     jm = JobManager(db_path)
     total = 30

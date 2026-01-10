@@ -151,6 +151,8 @@ v1
 
 Persist in per-user `<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db` via DB abstractions.
 
+`USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root). Override via environment variable or `Config_Files/config.txt` as needed.
+
 Entities
 - content_items
   - id, user_id, origin[`reading`|`watchlist`|`import`|`manual`], url, canonical_url, domain, title,

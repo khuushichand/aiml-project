@@ -13,7 +13,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture()
 def client_user(monkeypatch):
-     async def override_user():
+    async def override_user():
         return User(id=888, username="wluser", email=None, is_active=True)
 
     base_dir = Path.cwd() / "Databases" / "test_user_dbs"
@@ -91,7 +91,7 @@ def test_history_atom_ingests_across_pages(monkeypatch, client_user):
 def test_history_on_304_true_wordpress(monkeypatch, client_user):
 
 
-     monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("TEST_MODE", "1")
     c = client_user
     r = c.post(
         "/api/v1/watchlists/sources",
@@ -127,7 +127,7 @@ def test_history_on_304_true_wordpress(monkeypatch, client_user):
 def test_prefer_feed_full_text_skips_fetch(monkeypatch, client_user):
 
 
-     monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("TEST_MODE", "1")
     c = client_user
     r = c.post(
         "/api/v1/watchlists/sources",

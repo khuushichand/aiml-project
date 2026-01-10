@@ -8,7 +8,7 @@ from tldw_Server_API.app.core.Embeddings import messages
 
 @pytest.mark.unit
 def test_emb_envelope_schema_drift_guard():
-     """Guard against drift between code constants and the schema bundle/registry."""
+    """Guard against drift between code constants and the schema bundle/registry."""
     schema_path = pathlib.Path("Docs/Development/schema/embeddings_v1.schema.json")
     reg_path = pathlib.Path("Docs/Development/schema/embeddings_registry.json")
     assert schema_path.exists(), "Missing embeddings_v1.schema.json"

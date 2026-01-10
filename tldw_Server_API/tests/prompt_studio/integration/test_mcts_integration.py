@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.Prompt_Management.prompt_studio.event_broadcaster 
 
 @pytest.fixture
 def temp_ps_db(tmp_path) -> PromptStudioDatabase:
-     os.environ.setdefault("TEST_MODE", "true")
+    os.environ.setdefault("TEST_MODE", "true")
     return PromptStudioDatabase(str(tmp_path / "ps_mcts_int.db"), client_id="mcts-int")
 
 
@@ -139,7 +139,7 @@ async def test_cancellation_responsive(monkeypatch, temp_ps_db):
     # Make db.get_optimization flip to cancelled after first check
     calls = {"n": 0}
     def fake_get_opt(oid):
-             calls["n"] += 1
+        calls["n"] += 1
         status = "cancelled" if calls["n"] >= 2 else "running"
         return {"id": oid, "status": status}
     monkeypatch.setattr(temp_ps_db, "get_optimization", fake_get_opt)

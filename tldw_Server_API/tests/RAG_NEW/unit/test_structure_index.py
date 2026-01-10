@@ -120,11 +120,11 @@ async def test_chunk_retrieval_enriches_section_metadata(monkeypatch):
 
     class _CursorStub:
         def __init__(self, rows):
-                     self._rows = rows
+            self._rows = rows
         def fetchall(self):
-                     return self._rows
+            return self._rows
         def fetchone(self):
-                     return self._rows[0] if self._rows else None
+            return self._rows[0] if self._rows else None
 
     def fake_execute_query(query: str, params=None, *, commit: bool = False):
         q = (query or "").lower()

@@ -15,7 +15,7 @@ class DummySleep:
     when tests monkeypatch asyncio.sleep to this stub.
     """
     def __init__(self, orig_sleep):
-             self.calls = []
+        self.calls = []
         self._orig_sleep = orig_sleep
 
     async def __call__(self, seconds: float):
@@ -40,7 +40,7 @@ async def test_auto_renew_jitter_and_progress(monkeypatch, tmp_path):
     # Capture renew calls and progress fields
     calls = []
     def fake_renew(**kwargs):
-             calls.append(kwargs)
+        calls.append(kwargs)
         return True
 
     # Capture original sleep; use it inside the stub and assign to sdk._sleep
@@ -51,7 +51,7 @@ async def test_auto_renew_jitter_and_progress(monkeypatch, tmp_path):
 
     # Provide a progress callback
     def progress_cb():
-             return {"progress_percent": 12.5, "progress_message": "tick"}
+        return {"progress_percent": 12.5, "progress_message": "tick"}
 
     task = asyncio.create_task(sdk._auto_renew(acq, progress_cb=progress_cb))
     # Let it loop twice then stop
@@ -87,7 +87,7 @@ async def test_run_retryable_exception_and_backoff(monkeypatch, tmp_path):
     # Acquire once then no more jobs
     acquires = {"count": 0}
     def fake_acquire(**kwargs):
-             if acquires["count"] == 0:
+        if acquires["count"] == 0:
             acquires["count"] += 1
             return acq
         return None
@@ -98,7 +98,7 @@ async def test_run_retryable_exception_and_backoff(monkeypatch, tmp_path):
 
     fail_calls = []
     def fake_fail(job_id, **kwargs):
-             fail_calls.append({"job_id": job_id, **kwargs})
+        fail_calls.append({"job_id": job_id, **kwargs})
 
     # Capture and use original sleep inside the stub
     _orig_sleep = asyncio.sleep
@@ -138,7 +138,7 @@ async def test_run_cancellation_check(monkeypatch, tmp_path):
 
     cancel_called = {"count": 0}
     def fake_cancel(job_id, **kwargs):
-             cancel_called["count"] += 1
+        cancel_called["count"] += 1
 
     monkeypatch.setattr(jm, "acquire_next_job", lambda **kwargs: acq)
     monkeypatch.setattr(jm, "cancel_job", lambda job_id, **kwargs: fake_cancel(job_id, **kwargs))
@@ -173,7 +173,7 @@ async def test_run_success_completes_job(monkeypatch, tmp_path):
 
     def spy_complete(job_id, **kwargs):
 
-             calls.append({"job_id": job_id, **kwargs})
+        calls.append({"job_id": job_id, **kwargs})
         return orig_complete(job_id, **kwargs)
 
     monkeypatch.setattr(jm, "complete_job", spy_complete)
@@ -210,7 +210,7 @@ async def test_run_non_retryable_failure_marks_failed(monkeypatch, tmp_path):
 
     def spy_fail(job_id, **kwargs):
 
-             calls.append({"job_id": job_id, **kwargs})
+        calls.append({"job_id": job_id, **kwargs})
         ok = orig_fail(job_id, **kwargs)
         done.set()
         return ok

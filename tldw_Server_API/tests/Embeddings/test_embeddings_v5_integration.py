@@ -25,7 +25,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 def _redis_available() -> bool:
 
 
-     """Detect whether a Redis instance is reachable for cache tests."""
+    """Detect whether a Redis instance is reachable for cache tests."""
     if redis is None:
         return False
 
@@ -58,7 +58,7 @@ REDIS_AVAILABLE = _redis_available()
 def _huggingface_deps_available() -> bool:
 
 
-     """Return True when optional HuggingFace dependencies are present."""
+    """Return True when optional HuggingFace dependencies are present."""
     try:
         import torch  # noqa: F401
         import transformers  # noqa: F401
@@ -73,7 +73,7 @@ HF_DEPS_AVAILABLE = _huggingface_deps_available()
 # Disable rate limiting for all tests
 @pytest.fixture(autouse=True)
 def disable_rate_limiting():
-     """Disable rate limiting for all tests in this module"""
+    """Disable rate limiting for all tests in this module"""
     os.environ["TESTING"] = "true"
     yield
     # Clean up after tests
@@ -83,7 +83,7 @@ def disable_rate_limiting():
 # Module-level setup fixture for integration tests
 @pytest.fixture
 def setup():
-     """Setup test environment fixture with proper TestClient lifecycle"""
+    """Setup test environment fixture with proper TestClient lifecycle"""
     class SetupData:
         pass
 

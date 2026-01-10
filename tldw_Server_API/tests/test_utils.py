@@ -38,9 +38,9 @@ def temp_db(client_id: str = None):
             # -------------------------------------------------------------
             yield db
         except (DatabaseError, sqlite3.Error) as e:
-             logging.error(f"Failed to create/initialize temp DB {db_path}: {e}", exc_info=True)
-             # Re-raise to fail the test setup clearly
-             raise RuntimeError(f"Failed temp_db setup for {db_path}: {e}") from e
+            logging.error(f"Failed to create/initialize temp DB {db_path}: {e}", exc_info=True)
+            # Re-raise to fail the test setup clearly
+            raise RuntimeError(f"Failed temp_db setup for {db_path}: {e}") from e
         finally:
             if db:
                 logging.debug(f"Closing temp DB connection for test: {db_path}")
@@ -54,7 +54,7 @@ def temp_db(client_id: str = None):
 
 def verify_media_db_schema(db):
 
-     """Ensure critical columns exist in Media table."""
+    """Ensure critical columns exist in Media table."""
     # Make sure this function uses the instance's connection method
     conn = None
     try:
@@ -73,8 +73,8 @@ def verify_media_db_schema(db):
         else:
             logging.debug("verify_media_db_schema passed.")
     except Exception as e:
-         logging.error(f"Error during schema verification: {e}", exc_info=True)
-         raise # Re-raise the exception
+        logging.error(f"Error during schema verification: {e}", exc_info=True)
+        raise # Re-raise the exception
     # No finally block needed to close conn, as get_connection manages thread-local connection
 
 

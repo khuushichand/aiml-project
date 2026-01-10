@@ -21,7 +21,7 @@ async def test_mfa_setup_and_verify_roundtrip_pg(monkeypatch, setup_test_databas
     # Stub MFA + Email services by preloading modules (behavioral unit-style)
     class _StubMFA:
         def generate_secret(self) -> str:
-                     return "SECRETPAD"
+            return "SECRETPAD"
 
         def generate_totp_uri(self, secret: str, username: str) -> str:
             return f"otpauth://totp/{username}?secret={secret}&issuer=TLDW"
@@ -31,7 +31,7 @@ async def test_mfa_setup_and_verify_roundtrip_pg(monkeypatch, setup_test_databas
 
         def generate_backup_codes(self):
 
-                     return ["code1", "code2", "code3"]
+            return ["code1", "code2", "code3"]
 
         def verify_totp(self, secret: str, token: str) -> bool:
             return token == "000000"

@@ -9,14 +9,14 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
 @pytest.fixture(autouse=True)
 def _enable_testing_env():
-     os.environ["TESTING"] = "true"
+    os.environ["TESTING"] = "true"
     yield
     os.environ.pop("TESTING", None)
 
 
 @pytest.fixture
 def client():
-     with TestClient(app) as c:
+    with TestClient(app) as c:
         c.cookies.set("csrf_token", "test-csrf")
         c.headers["X-CSRF-Token"] = "test-csrf"
         c.headers["Authorization"] = "Bearer test-api-key"
@@ -25,7 +25,7 @@ def client():
 
 @pytest.mark.unit
 def test_single_token_array_input(client):
-     async def override_user():
+    async def override_user():
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
         return User(id=1, username="u", email="u@x", is_active=True, is_admin=False)
 
@@ -45,7 +45,7 @@ def test_single_token_array_input(client):
 
 @pytest.mark.unit
 def test_batch_token_arrays_input_base64(client):
-     async def override_user():
+    async def override_user():
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
         return User(id=1, username="u", email="u@x", is_active=True, is_admin=False)
 

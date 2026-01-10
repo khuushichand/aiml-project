@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
 def test_build_quote_citations_basic():
 
 
-     docs = [
+    docs = [
         Document(
             id="d1",
             content="This is an example passage with a distinctive quoted span for testing.",

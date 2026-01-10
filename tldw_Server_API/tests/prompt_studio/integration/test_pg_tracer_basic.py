@@ -3,20 +3,22 @@ import pytest
 
 class _StubTracingManager:
     def __init__(self):
-             self.spans = []  # (name, attributes)
+        self.spans = []  # (name, attributes)
 
     # Context manager to mimic manager.span(...)
     def span(self, name, kind=None, attributes=None, links=None):
-             class _Ctx:
+        class _Ctx:
             def __init__(self, outer, n, attrs):
-                             self.outer = outer
+                self.outer = outer
                 self.n = n
                 self.attrs = attrs or {}
+
             def __enter__(self):
-                             self.outer.spans.append((self.n, dict(self.attrs)))
+                self.outer.spans.append((self.n, dict(self.attrs)))
                 return object()
+
             def __exit__(self, exc_type, exc, tb):
-                             return False
+                return False
         return _Ctx(self, name, attributes)
 
 
@@ -24,9 +26,7 @@ pytestmark = pytest.mark.integration
 
 
 def test_pg_tracer_basic(prompt_studio_dual_backend_db, monkeypatch):
-
-
-     label, db = prompt_studio_dual_backend_db
+    label, db = prompt_studio_dual_backend_db
     if label != "postgres":
         pytest.skip("Postgres-specific tracer test")
 
@@ -38,7 +38,7 @@ def test_pg_tracer_basic(prompt_studio_dual_backend_db, monkeypatch):
     # Use trace_operation on a small function and ensure a span is created
     @traces.trace_operation(name="ps.pg.tracer.test", record_args=True)
     def _do_work(x):
-             return x * 2
+        return x * 2
 
     out = _do_work(21)
     assert out == 42

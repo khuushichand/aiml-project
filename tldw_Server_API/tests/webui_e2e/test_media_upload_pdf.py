@@ -6,7 +6,7 @@ import pytest
 
 @pytest.mark.e2e
 def test_process_pdfs_upload_and_validate(page, server_url):
-     page.goto(f"{server_url}/webui/")
+    page.goto(f"{server_url}/webui/")
     page.get_by_role("tab", name="Media").click()
     page.get_by_role("tab", name="Processing (No DB)").click()
 

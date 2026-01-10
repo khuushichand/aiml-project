@@ -13,7 +13,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture()
 def client_with_user(monkeypatch):
-     async def override_user():
+    async def override_user():
         return User(id=780, username="wluser", email=None, is_active=True)
 
     base_dir = Path.cwd() / "Databases" / "test_user_dbs_opml_edges"
@@ -31,7 +31,7 @@ def client_with_user(monkeypatch):
 def test_opml_edge_cases(client_with_user):
 
 
-     c = client_with_user
+    c = client_with_user
 
     # Duplicate URLs and htmlUrl-only outlines should be handled
     xml = (

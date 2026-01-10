@@ -48,9 +48,56 @@ import statistics
 import sys
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
-import httpx
+
+def _ensure_repo_root() -> None:
+    here = Path(__file__).resolve()
+    for parent in [here] + list(here.parents):
+        if (parent / "tldw_Server_API").is_dir():
+            sys.path.insert(0, str(parent))
+            return
+
+
+def _configure_local_egress(url: str) -> None:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return
+    host = (parsed.hostname or "").lower()
+    if host in {"localhost", "0.0.0.0"} or host.startswith("127.") or host == "::1":
+        os.environ.setdefault("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "false")
+        if "WORKFLOWS_EGRESS_ALLOWED_PORTS" not in os.environ:
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            os.environ["WORKFLOWS_EGRESS_ALLOWED_PORTS"] = f"{port},80,443"
+
+
+def _status_from_exc(exc: Exception) -> int:
+    resp = getattr(exc, "response", None)
+    if resp is not None:
+        try:
+            return int(getattr(resp, "status_code", 0) or 0)
+        except Exception:
+            pass
+    msg = str(exc)
+    for token in msg.split():
+        if token.isdigit() and len(token) == 3:
+            try:
+                return int(token)
+            except Exception:
+                continue
+    return 0
+
+
+_ensure_repo_root()
+
+try:
+    from tldw_Server_API.app.core import http_client
+except Exception:
+    print("tldw_Server_API not available; run from the repo root or set PYTHONPATH.", file=sys.stderr)
+    raise SystemExit(1)
 
 
 def _now_ms() -> float:
@@ -122,7 +169,7 @@ def build_payload(
 
 
 async def send_nonstream_request(
-    client: httpx.AsyncClient,
+    client: Any,
     url: str,
     headers: Dict[str, str],
     payload: Dict[str, Any],
@@ -130,17 +177,24 @@ async def send_nonstream_request(
 ) -> RequestResult:
     t0 = _now_ms()
     try:
-        r = await client.post(url, headers=headers, json=payload, timeout=timeout_s)
+        r = await http_client.afetch(
+            method="POST",
+            url=url,
+            headers=headers,
+            json=payload,
+            timeout=timeout_s,
+            client=client,
+        )
         latency_ms = _now_ms() - t0
         ok = r.status_code < 500 and r.status_code != 429
         return RequestResult(ok=ok, status=r.status_code, latency_ms=latency_ms, error=None if ok else r.text[:200])
     except Exception as e:
         latency_ms = _now_ms() - t0
-        return RequestResult(ok=False, status=0, latency_ms=latency_ms, error=str(e))
+        return RequestResult(ok=False, status=_status_from_exc(e), latency_ms=latency_ms, error=str(e))
 
 
 async def send_stream_request(
-    client: httpx.AsyncClient,
+    client: Any,
     url: str,
     headers: Dict[str, str],
     payload: Dict[str, Any],
@@ -148,29 +202,33 @@ async def send_stream_request(
 ) -> RequestResult:
     t0 = _now_ms()
     ttft_ms: Optional[float] = None
+    status = 200
     try:
         # Ensure SSE accept header for consistency
         stream_headers = dict(headers)
         stream_headers.setdefault("Accept", "text/event-stream")
-        async with client.stream("POST", url, headers=stream_headers, json=payload, timeout=timeout_s) as r:
-            # HTTP status known at this point
-            status = r.status_code
-            # Iterate SSE lines; record time to first non-empty data line
-            async for line in r.aiter_lines():
-                if not line:
-                    continue
-                if ttft_ms is None:
-                    ttft_ms = _now_ms() - t0
-                # Detect provider done signal
-                stripped = line.strip().lower()
-                if stripped == "data: [done]" or stripped == "[done]":
-                    break
-            latency_ms = _now_ms() - t0
-            ok = status < 500 and status != 429
-            return RequestResult(ok=ok, status=status, latency_ms=latency_ms, ttft_ms=ttft_ms)
+        async for event in http_client.astream_sse(
+            method="POST",
+            url=url,
+            headers=stream_headers,
+            json=payload,
+            timeout=timeout_s,
+            client=client,
+        ):
+            data = (event.data or "").strip()
+            if not data:
+                continue
+            if ttft_ms is None:
+                ttft_ms = _now_ms() - t0
+            if data.lower() == "[done]":
+                break
+        latency_ms = _now_ms() - t0
+        ok = status < 500 and status != 429
+        return RequestResult(ok=ok, status=status, latency_ms=latency_ms, ttft_ms=ttft_ms)
     except Exception as e:
         latency_ms = _now_ms() - t0
-        return RequestResult(ok=False, status=0, latency_ms=latency_ms, ttft_ms=ttft_ms, error=str(e))
+        status = _status_from_exc(e)
+        return RequestResult(ok=False, status=status, latency_ms=latency_ms, ttft_ms=ttft_ms, error=str(e))
 
 
 def _parse_prometheus_text(text: str) -> Dict[Tuple[str, Tuple[Tuple[str, str], ...]], float]:
@@ -212,9 +270,9 @@ def _parse_prometheus_text(text: str) -> Dict[Tuple[str, Tuple[Tuple[str, str], 
     return series
 
 
-async def _scrape_metrics_once(client: httpx.AsyncClient, metrics_url: str) -> Dict[Tuple[str, Tuple[Tuple[str, str], ...]], float]:
+async def _scrape_metrics_once(client: Any, metrics_url: str) -> Dict[Tuple[str, Tuple[Tuple[str, str], ...]], float]:
     try:
-        r = await client.get(metrics_url, timeout=10.0)
+        r = await http_client.afetch(method="GET", url=metrics_url, timeout=10.0, client=client)
         if r.status_code != 200:
             return {}
         return _parse_prometheus_text(r.text)
@@ -239,7 +297,14 @@ async def run_step(
     metrics_interval_s: float = 2.0,
 ) -> Tuple[StepMetrics, List[RequestResult], Dict[str, Any]]:
     url = base_url.rstrip("/") + path
-    client = httpx.AsyncClient(base_url=None, limits=httpx.Limits(max_keepalive_connections=concurrency, max_connections=concurrency * 2))
+    limits = None
+    hx = getattr(http_client, "httpx", None)
+    if hx is not None:
+        try:
+            limits = hx.Limits(max_keepalive_connections=concurrency, max_connections=concurrency * 2)
+        except Exception:
+            limits = None
+    client = http_client.create_async_client(base_url=None, limits=limits)
     stop_at = time.monotonic() + duration_s
     results: List[RequestResult] = []
     results_lock = asyncio.Lock()
@@ -259,7 +324,7 @@ async def run_step(
                 results.append(res)
 
     # Optional metrics scraping loop
-    metrics_client = httpx.AsyncClient()
+    metrics_client = http_client.create_async_client()
     pre_metrics = {}
     post_metrics = {}
     series_deltas: Dict[Tuple[str, Tuple[Tuple[str, str], ...]], float] = {}
@@ -384,6 +449,9 @@ def build_auth_headers(api_key: Optional[str], bearer: Optional[str]) -> Dict[st
 
 async def main_async(args: argparse.Namespace) -> int:
     headers = build_auth_headers(args.api_key, args.bearer)
+    _configure_local_egress(args.base_url)
+    if args.metrics_url:
+        _configure_local_egress(args.metrics_url)
     all_results: List[Dict[str, Any]] = []
     print("Benchmarking", flush=True)
     print(f"  Base URL: {args.base_url}")

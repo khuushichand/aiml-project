@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 def test_acquire_ordering_priority_asc_postgres(monkeypatch, jobs_pg_dsn):
 
 
-     monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
+    monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     j1 = jm.create_job(domain="test", queue="default", job_type="t", payload={}, owner_user_id="u", priority=1)
     j2 = jm.create_job(domain="test", queue="default", job_type="t", payload={}, owner_user_id="u", priority=5)

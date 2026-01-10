@@ -26,7 +26,7 @@ def _demo_records(dim: int = 8):
 def test_retriever_multi_search_with_jsonb_filter(pgvector_dsn):
 
 
-     dim = 8
+    dim = 8
     user_id = "42"
     coll_a = f"user_{user_id}_media_embeddings_a"
     coll_b = f"user_{user_id}_media_embeddings_b"

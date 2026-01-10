@@ -5,6 +5,32 @@ import argparse
 import os
 import sys
 import json
+from pathlib import Path
+from urllib.parse import urlparse
+
+
+def _ensure_repo_root() -> None:
+    here = Path(__file__).resolve()
+    for parent in [here] + list(here.parents):
+        if (parent / "tldw_Server_API").is_dir():
+            sys.path.insert(0, str(parent))
+            return
+
+
+def _configure_local_egress(url: str) -> None:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return
+    host = (parsed.hostname or "").lower()
+    if host in {"localhost", "0.0.0.0"} or host.startswith("127.") or host == "::1":
+        os.environ.setdefault("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "false")
+        if "WORKFLOWS_EGRESS_ALLOWED_PORTS" not in os.environ:
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            os.environ["WORKFLOWS_EGRESS_ALLOWED_PORTS"] = f"{port},80,443"
+
+
+_ensure_repo_root()
 
 
 def _api_key_header() -> tuple[str, str]:
@@ -101,12 +127,13 @@ def cmd_archive_meta(args):
 
 def _run_http(path: str, method: str = "GET", data: dict | None = None, confirm: bool = False) -> None:
     try:
-        import httpx
+        from tldw_Server_API.app.core import http_client
     except Exception:
-        print("httpx not installed; printing cURL instead:")
+        print("http_client not available; printing cURL instead:")
         print(_curl(path, method=method, data=data))
         return
     base = os.getenv("TLDW_BASE_URL", "http://127.0.0.1:8000")
+    _configure_local_egress(base)
     url = f"{base}{path}"
     headers = {}
     k, v = _api_key_header()
@@ -116,13 +143,12 @@ def _run_http(path: str, method: str = "GET", data: dict | None = None, confirm:
         headers["X-Confirm"] = "true"
     if data is not None:
         headers["Content-Type"] = "application/json"
-    with httpx.Client(timeout=30.0) as client:
-        resp = client.request(method, url, headers=headers, json=data)
-        print(resp.status_code)
-        try:
-            print(json.dumps(resp.json(), indent=2))
-        except Exception:
-            print(resp.text)
+    resp = http_client.fetch(method=method, url=url, headers=headers, json=data, timeout=30.0)
+    print(resp.status_code)
+    try:
+        print(json.dumps(resp.json(), indent=2))
+    except Exception:
+        print(resp.text)
 
 def _verify_sig(args) -> None:
     import hmac, hashlib, sys

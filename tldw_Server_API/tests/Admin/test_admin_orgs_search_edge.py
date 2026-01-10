@@ -11,7 +11,7 @@ pytestmark = pytest.mark.integration
 def _override_admin_dep(app):
 
 
-     from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
     from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthContext
 
     async def _principal_override(request: Request) -> AuthPrincipal:  # type: ignore[override]
@@ -47,7 +47,7 @@ def _override_admin_dep(app):
 def test_admin_orgs_search_edge_cases(monkeypatch, tmp_path):
 
 
-     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'authnz_admin_search_edge.db'}")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'authnz_admin_search_edge.db'}")
     monkeypatch.setenv("TEST_MODE", "1")
 
     mod = import_module("tldw_Server_API.app.main")

@@ -36,9 +36,7 @@ async def get_prometheus_metrics() -> Response:
         registry = get_metrics_registry()
         # Ensure core embeddings histograms are registered in the default Prometheus REGISTRY
         try:
-            # Importing the module defines histograms at import time and pre-creates label children
-            from tldw_Server_API.app.core.Embeddings.workers import base_worker as _bw  # noqa: F401
-            # Also ensure embeddings endpoint module (with gauges) is imported so collectors exist
+            # Ensure embeddings endpoint module (with gauges) is imported so collectors exist
             import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as _emb  # noqa: F401
             # Best-effort: refresh stage flag gauges from Redis so they appear in metrics
             try:

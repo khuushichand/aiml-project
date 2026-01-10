@@ -127,7 +127,7 @@ Team Facilitator and Compliance Officer / Admin personas operate within this per
 4. **Job Processing**
    - Export/import jobs persisted in each user’s ChaChaNotes DB with states `pending → in_progress → completed|failed|cancelled|expired|deleted`.
    - `expired` indicates archives removed by retention/cleanup while metadata remains for audit; `deleted` indicates job metadata removed by privileged cleanup operations.
-   - Async processing via core Jobs worker by default; optional Prompt Studio JobManager adapter when `CHATBOOKS_JOBS_BACKEND=prompt_studio`. Cross-scope listings (for example, org-wide views) are backed by an index over per-user job records or by fan-out queries with batching; for large orgs, operators should expect eventual consistency and slightly higher latencies for these aggregated views.
+   - Async processing via the core Jobs worker. Cross-scope listings (for example, org-wide views) are backed by an index over per-user job records or by fan-out queries with batching; for large orgs, operators should expect eventual consistency and slightly higher latencies for these aggregated views.
    - Lease renewal and retry semantics align with core Jobs standards.
    - Retention cleanup runs automatically on a schedule via the Chatbooks worker (configurable interval) and can also be triggered manually via `POST /api/v1/chatbooks/cleanup`.
 
@@ -151,7 +151,7 @@ Team Facilitator and Compliance Officer / Admin personas operate within this per
 ## 9. Dependencies & Integrations
 
 - ChaChaNotes database for job tracking and content retrieval.
-- Core Jobs infrastructure and optional Prompt Studio JobManager adapter.
+- Core Jobs infrastructure.
 - Media/storage subsystems for referenced artifacts.
 - Authentication & authorization (user id, tier) for scoping quotas and access.
 - Unified audit service for compliance logging.
@@ -169,7 +169,7 @@ Team Facilitator and Compliance Officer / Admin personas operate within this per
 
 1. **Alpha (internal):** Enable sync export/import, collect feedback on manifest completeness, instrument audit logging, manual worker startup.
 2. **Beta (selected users):** Async jobs via core worker, enforce quotas, optional signed URLs, WebUI tab gating, docs in `/Docs`.
-3. **General Availability:** Prompt Studio job adapter, automated cleanup, policy toggles, default worker enabled, CLI documentation, CI integration tests.
+3. **General Availability:** Automated cleanup, policy toggles, default worker enabled, CLI documentation, CI integration tests.
 4. **Post-GA Enhancements:** Collaborative chatbooks, delta exports, scheduled backups, analytics dashboards, packaging for third-party ingestion.
 
 ## 12. Risks & Mitigations

@@ -10,7 +10,7 @@ pytestmark = pytest.mark.unit
 def test_persona_catalog_smoke():
 
 
-     with TestClient(fastapi_app) as c:
+    with TestClient(fastapi_app) as c:
         r = c.get("/api/v1/persona/catalog")
         assert r.status_code == 200
         # Returns empty list if disabled; else list of personas

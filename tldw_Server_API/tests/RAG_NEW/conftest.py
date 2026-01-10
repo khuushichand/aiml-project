@@ -26,7 +26,7 @@ from tldw_Server_API.app.core.RAG.rag_service.metrics_collector import QueryMetr
 
 def pytest_configure(config):
 
-     """Register custom markers for test categorization."""
+    """Register custom markers for test categorization."""
     config.addinivalue_line("markers", "unit: Unit tests with minimal mocking")
     config.addinivalue_line("markers", "integration: Integration tests with real components")
     # Optionally register pgvector fixtures if available in this environment
@@ -40,7 +40,7 @@ def pytest_configure(config):
 
 @pytest.fixture(autouse=True)
 def _isolate_semantic_cache(tmp_path, monkeypatch):
-     """Keep semantic cache state isolated between tests."""
+    """Keep semantic cache state isolated between tests."""
     cache_root = tmp_path / "semantic_cache"
     cache_root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("RAG_SEMANTIC_CACHE_DIR", str(cache_root))
@@ -70,13 +70,13 @@ def _isolate_semantic_cache(tmp_path, monkeypatch):
 
 @pytest.fixture
 def disable_heavy_startup():
-     """Deprecated no-op fixture retained for backward compatibility."""
+    """Deprecated no-op fixture retained for backward compatibility."""
     yield
 
 
 @pytest.fixture
 def admin_user():
-     """Provide an admin user override for routes that require it."""
+    """Provide an admin user override for routes that require it."""
     from tldw_Server_API.app.main import app  # lazy import to avoid startup costs
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
     from tldw_Server_API.app.api.v1.API_Deps import auth_deps
@@ -126,14 +126,14 @@ def admin_user():
 
 @pytest.fixture
 def temp_db_path() -> Generator[Path, None, None]:
-     """Create a temporary database path."""
+    """Create a temporary database path."""
     with tempfile.TemporaryDirectory() as temp_dir:
         db_path = Path(temp_dir) / "test_media.db"
         yield db_path
 
 @pytest.fixture
 def media_database(temp_db_path) -> Generator[MediaDatabase, None, None]:
-     """Create a real MediaDatabase instance for testing."""
+    """Create a real MediaDatabase instance for testing."""
     db = MediaDatabase(
         db_path=str(temp_db_path),
         client_id="test_client"
@@ -149,7 +149,7 @@ def media_database(temp_db_path) -> Generator[MediaDatabase, None, None]:
 
 @pytest.fixture
 def populated_media_db(media_database) -> MediaDatabase:
-     """Create a MediaDatabase with test data."""
+    """Create a MediaDatabase with test data."""
     # Add test media items
     from datetime import datetime
     from uuid import uuid4
@@ -190,7 +190,7 @@ def populated_media_db(media_database) -> MediaDatabase:
 
 @pytest.fixture
 def mock_llm():
-     """Mock LLM for unit tests."""
+    """Mock LLM for unit tests."""
     mock_llm = AsyncMock()
     mock_llm.generate.return_value = "This is a generated response based on the retrieved context."
     return mock_llm
@@ -198,12 +198,12 @@ def mock_llm():
 # Additional fixtures used by unified pipeline tests
 @pytest.fixture
 def mock_media_database(media_database) -> MediaDatabase:
-     """Alias fixture to match test naming expectations."""
+    """Alias fixture to match test naming expectations."""
     return media_database
 
 @pytest.fixture
 def mock_semantic_cache():
-     """Simple mock semantic cache with get/find_similar methods."""
+    """Simple mock semantic cache with get/find_similar methods."""
     from unittest.mock import MagicMock
     cache = MagicMock()
     cache.get = MagicMock()
@@ -216,7 +216,7 @@ def mock_semantic_cache():
 
 @pytest.fixture
 def sample_documents():
-     """Provide a small set of sample Document objects."""
+    """Provide a small set of sample Document objects."""
     return [
         Document(id="1", content="First doc", metadata={"initial_score": 0.8}, source=DataSource.MEDIA_DB, score=0.8),
         Document(id="2", content="Second doc", metadata={"initial_score": 0.6}, source=DataSource.MEDIA_DB, score=0.6),
@@ -225,24 +225,24 @@ def sample_documents():
 
 @pytest.fixture
 def query_metrics():
-     """Provide a QueryMetrics instance for timer/metrics tests."""
+    """Provide a QueryMetrics instance for timer/metrics tests."""
     import time as _time
     return QueryMetrics(query_id="q-test", query="test", timestamp=_time.time(), total_duration=0.0)
 
 @pytest.fixture
 def mock_multi_db_retriever(sample_documents):
-     """Mock MultiDatabaseRetriever with retrieve returning sample docs."""
+    """Mock MultiDatabaseRetriever with retrieve returning sample docs."""
     m = MagicMock()
     m.retrieve = AsyncMock(return_value=sample_documents)
     return m
 
 @pytest.fixture
 def mock_vector_store():
-     return MagicMock()
+    return MagicMock()
 
 @pytest.fixture
 def mock_embeddings():
-     return MagicMock()
+    return MagicMock()
 
 # =====================================================================
 # RAG Configuration Fixtures
@@ -250,7 +250,7 @@ def mock_embeddings():
 
 @pytest.fixture
 def minimal_rag_config() -> Dict[str, Any]:
-     """Minimal RAG configuration for testing."""
+    """Minimal RAG configuration for testing."""
     return {
         "query": "What is RAG?",
         "top_k": 5
@@ -258,7 +258,7 @@ def minimal_rag_config() -> Dict[str, Any]:
 
 @pytest.fixture
 def typical_rag_config() -> Dict[str, Any]:
-     """Typical production RAG configuration."""
+    """Typical production RAG configuration."""
     return {
         "query": "How does retrieval-augmented generation work?",
         "top_k": 10,

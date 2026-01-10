@@ -100,6 +100,8 @@ Deliverables
 - SQLite backend stored under per-user dir (e.g., `<USER_DB_BASE_DIR>/<user_id>/Agentic_Cache/`).
 - Invalidation hooks invoked from write paths and soft deletes.
 
+`USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root). Override via environment variable or `Config_Files/config.txt` as needed.
+
 Acceptance Criteria
 - Cache hit after restart with `sqlite` backend; no stale hits after a document update.
 - Load under contention passes basic concurrency tests (serialized while writing).

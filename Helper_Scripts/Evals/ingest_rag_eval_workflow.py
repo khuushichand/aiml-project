@@ -37,8 +37,37 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
-import requests
+
+def _ensure_repo_root() -> None:
+    here = Path(__file__).resolve()
+    for parent in [here] + list(here.parents):
+        if (parent / "tldw_Server_API").is_dir():
+            sys.path.insert(0, str(parent))
+            return
+
+
+def _configure_local_egress(url: str) -> None:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return
+    host = (parsed.hostname or "").lower()
+    if host in {"localhost", "0.0.0.0"} or host.startswith("127.") or host == "::1":
+        os.environ.setdefault("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "false")
+        if "WORKFLOWS_EGRESS_ALLOWED_PORTS" not in os.environ:
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            os.environ["WORKFLOWS_EGRESS_ALLOWED_PORTS"] = f"{port},80,443"
+
+
+_ensure_repo_root()
+
+try:
+    from tldw_Server_API.app.core import http_client
+except Exception:
+    print("tldw_Server_API not available; run from the repo root or set PYTHONPATH.", file=sys.stderr)
+    raise SystemExit(1)
 
 
 DEFAULT_GRID = {
@@ -76,14 +105,14 @@ class ApiClient:
     def url(self, path: str) -> str:
         return f"{self.base.rstrip('/')}{path}"
 
-    def get(self, path: str, **kw) -> requests.Response:
-        return requests.get(self.url(path), headers=self.headers, timeout=self.timeout, **kw)
+    def get(self, path: str, **kw):
+        return http_client.fetch(method="GET", url=self.url(path), headers=self.headers, timeout=self.timeout, **kw)
 
-    def post(self, path: str, **kw) -> requests.Response:
-        return requests.post(self.url(path), headers=self.headers, timeout=self.timeout, **kw)
+    def post(self, path: str, **kw):
+        return http_client.fetch(method="POST", url=self.url(path), headers=self.headers, timeout=self.timeout, **kw)
 
-    def delete(self, path: str, **kw) -> requests.Response:
-        return requests.delete(self.url(path), headers=self.headers, timeout=self.timeout, **kw)
+    def delete(self, path: str, **kw):
+        return http_client.fetch(method="DELETE", url=self.url(path), headers=self.headers, timeout=self.timeout, **kw)
 
 
 def ensure_health(client: ApiClient) -> None:
@@ -124,8 +153,9 @@ def ingest_files(client: ApiClient, media_type: str, paths: List[Path]) -> List[
             "hierarchical_chunking": "true",
         }
         try:
-            r = requests.post(
-                client.url("/api/v1/media/add"),
+            r = http_client.fetch(
+                method="POST",
+                url=client.url("/api/v1/media/add"),
                 headers={k: v for k, v in client.headers.items() if k.lower() != "content-type"},
                 files=files_param,
                 data=data,
@@ -327,6 +357,8 @@ def main() -> int:
     if not args.api_key and not args.jwt:
         print("Provide --api-key or --jwt", file=sys.stderr)
         return 2
+
+    _configure_local_egress(args.base)
 
     headers = {"Content-Type": "application/json"}
     if args.jwt:

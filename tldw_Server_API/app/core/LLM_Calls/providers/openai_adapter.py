@@ -15,6 +15,8 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     finalize_stream,
 )
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
+from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
+from tldw_Server_API.app.core.LLM_Calls.chat_calls import _safe_cast
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
     fetch as _hc_fetch,
@@ -44,6 +46,16 @@ class OpenAIAdapter(ChatProvider):
     def _apply_config_defaults(self, request: Dict[str, Any]) -> Dict[str, Any]:
         cfg = (request or {}).get("app_config") or {}
         oa = cfg.get("openai_api") or {}
+        numeric_casts = {
+            "temperature": float,
+            "top_p": float,
+            "max_tokens": int,
+            "max_completion_tokens": int,
+            "n": int,
+            "seed": int,
+            "presence_penalty": float,
+            "frequency_penalty": float,
+        }
         for key in (
             "temperature",
             "top_p",
@@ -58,7 +70,13 @@ class OpenAIAdapter(ChatProvider):
             "stop",
         ):
             if request.get(key) is None and oa.get(key) is not None:
-                request[key] = oa.get(key)
+                value = oa.get(key)
+                caster = numeric_casts.get(key)
+                if caster is not None:
+                    value = _safe_cast(value, caster, None)
+                    if value is None:
+                        continue
+                request[key] = value
         return request
 
     def _to_handler_args(self, request: Dict[str, Any]) -> Dict[str, Any]:
@@ -232,7 +250,8 @@ class OpenAIAdapter(ChatProvider):
             payload = self._build_openai_payload(request)
             payload["stream"] = False
             url = f"{self._resolve_base_url(request).rstrip('/')}/chat/completions"
-            headers = self._openai_headers(api_key)
+            payload = merge_extra_body(payload, request)
+            headers = merge_extra_headers(self._openai_headers(api_key), request)
             try:
                 resolved_timeout = self._resolve_timeout(request, timeout)
                 with http_client_factory(timeout=resolved_timeout) as client:
@@ -253,7 +272,8 @@ class OpenAIAdapter(ChatProvider):
             payload = self._build_openai_payload(request)
             payload["stream"] = True
             url = f"{self._resolve_base_url(request).rstrip('/')}/chat/completions"
-            headers = self._openai_headers(api_key)
+            payload = merge_extra_body(payload, request)
+            headers = merge_extra_headers(self._openai_headers(api_key), request)
             try:
                 resolved_timeout = self._resolve_timeout(request, timeout)
                 with http_client_factory(timeout=resolved_timeout) as client:

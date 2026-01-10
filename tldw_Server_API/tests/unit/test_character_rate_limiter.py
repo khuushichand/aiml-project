@@ -10,13 +10,13 @@ from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import Chara
 
 class _FakeGovernor:
     def __init__(self, payload):
-             self.payload = payload
+        self.payload = payload
         self.peek_calls = []
 
     async def reserve(self, *_args, **_kwargs):
         class _Decision:
             def __init__(self, allowed, retry_after):
-                             self.allowed = allowed
+                self.allowed = allowed
                 self.retry_after = retry_after
 
         return _Decision(self.payload["allowed"], self.payload.get("retry_after")), "handle"
@@ -31,7 +31,7 @@ class _FakeGovernor:
 
 @pytest.mark.unit
 def test_rate_limiter_allows_when_rg_disabled(monkeypatch):
-     monkeypatch.setattr(crl, "_rg_character_enabled", lambda: False)
+    monkeypatch.setattr(crl, "_rg_character_enabled", lambda: False)
     limiter = CharacterRateLimiter(enabled=True)
 
     allowed, remaining = asyncio.run(limiter.check_rate_limit(user_id=123, operation="test"))
@@ -42,7 +42,7 @@ def test_rate_limiter_allows_when_rg_disabled(monkeypatch):
 
 @pytest.mark.unit
 def test_rate_limiter_denies_when_rg_denies(monkeypatch):
-     monkeypatch.setattr(crl, "_rg_character_enabled", lambda: True)
+    monkeypatch.setattr(crl, "_rg_character_enabled", lambda: True)
     monkeypatch.setenv("RG_CHARACTER_CHAT_ENFORCE_REQUESTS", "1")
     async def _deny(**_kwargs):
         return {"allowed": False, "retry_after": 5, "policy_id": "character_chat.default"}
@@ -60,7 +60,7 @@ def test_rate_limiter_denies_when_rg_denies(monkeypatch):
 
 @pytest.mark.unit
 def test_rate_limiter_allows_when_rg_allows(monkeypatch):
-     monkeypatch.setattr(crl, "_rg_character_enabled", lambda: True)
+    monkeypatch.setattr(crl, "_rg_character_enabled", lambda: True)
     monkeypatch.setenv("RG_CHARACTER_CHAT_ENFORCE_REQUESTS", "1")
     async def _allow(**_kwargs):
         return {"allowed": True, "retry_after": None, "policy_id": "character_chat.default"}
@@ -77,7 +77,7 @@ def test_rate_limiter_allows_when_rg_allows(monkeypatch):
 
 @pytest.mark.unit
 def test_character_guardrails_raise():
-     limiter = CharacterRateLimiter(max_characters=2, max_import_size_mb=1, max_chats_per_user=1, max_messages_per_chat=1)
+    limiter = CharacterRateLimiter(max_characters=2, max_import_size_mb=1, max_chats_per_user=1, max_messages_per_chat=1)
 
     with pytest.raises(HTTPException):
         asyncio.run(limiter.check_character_limit(user_id=1, current_count=2))
@@ -94,7 +94,7 @@ def test_character_guardrails_raise():
 
 @pytest.mark.unit
 def test_get_usage_stats_peeks_rg(monkeypatch):
-     fake = _FakeGovernor({"allowed": True})
+    fake = _FakeGovernor({"allowed": True})
     monkeypatch.setattr(crl, "_rg_character_enabled", lambda: True)
     async def _get_fake():
         return fake

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Dict, Iterable, Optional, Tuple, Mapping
 
 
 def _summarize_message_content(content: Any) -> Tuple[int, bool]:
@@ -185,4 +185,30 @@ def _sanitize_payload_for_logging(
     return metadata
 
 
-__all__ = ["_sanitize_payload_for_logging"]
+def merge_extra_body(payload: Dict[str, Any], request: Mapping[str, Any]) -> Dict[str, Any]:
+    """Merge extra_body into payload without overriding existing payload keys."""
+    extra = request.get("extra_body")
+    if not isinstance(extra, Mapping) or not extra:
+        return payload
+    merged = dict(extra)
+    merged.update(payload)
+    return merged
+
+
+def merge_extra_headers(headers: Dict[str, str], request: Mapping[str, Any]) -> Dict[str, str]:
+    """Merge extra_headers into headers without overriding existing header keys."""
+    extra = request.get("extra_headers")
+    if not isinstance(extra, Mapping) or not extra:
+        return headers
+    merged = dict(headers or {})
+    existing_lower = {str(k).lower() for k in merged.keys()}
+    for key, value in extra.items():
+        if not isinstance(key, str):
+            continue
+        if key.lower() in existing_lower:
+            continue
+        merged[key] = str(value) if value is not None else ""
+    return merged
+
+
+__all__ = ["_sanitize_payload_for_logging", "merge_extra_body", "merge_extra_headers"]

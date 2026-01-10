@@ -59,6 +59,7 @@ streaming_max_response_size_mb = 10
 # to limit memory use and apply backpressure. Default: 100
 chat_stream_channel_maxsize = 100
 chat_save_default = False
+inject_assistant_name = true
 conversation_creation_max_retries = 3
 db_transaction_max_retries = 3
 rate_limit_per_minute = 60
@@ -601,7 +602,7 @@ bedrock_max_tokens = 4096
 bedrock_api_timeout = 90
 bedrock_api_retry = 3
 bedrock_api_retry_delay = 1
-openai_model = gpt-4.1-2025-04-14
+openai_model = gpt-4o
 openai_streaming = False
 openai_temperature = 0.7
 openai_top_p = 0.95

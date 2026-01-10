@@ -24,7 +24,7 @@ def make_doc(doc_id: str, content: str, title: str = "Doc") -> Document:
 def test_assemble_ephemeral_chunk_basic():
 
 
-     query = "dropout prevents overfitting"
+    query = "dropout prevents overfitting"
     content = (
         "Deep learning models often overfit. One method is dropout, which randomly removes units during training. "
         "Dropout helps prevent overfitting by reducing co-adaptation of neurons."
@@ -53,7 +53,7 @@ async def test_agentic_pipeline_cache_hit(monkeypatch):
 
     class FakeRetriever:
         def __init__(self, *args, **kwargs):
-                     pass
+            pass
 
         async def retrieve(self, *args, **kwargs):
             calls["count"] += 1
@@ -108,7 +108,7 @@ async def test_agentic_tool_loop_heuristic(monkeypatch):
 
     class FakeRetriever:
         def __init__(self, *args, **kwargs):
-                     pass
+            pass
         async def retrieve(self, *args, **kwargs):
             return docs
 
@@ -137,7 +137,7 @@ async def test_agentic_query_decomposition_merge(monkeypatch):
 
     class FakeRetriever:
         def __init__(self, *args, **kwargs):
-                     pass
+            pass
         async def retrieve(self, *args, **kwargs):
             return docs
 

@@ -454,6 +454,8 @@ class WorkflowEngine:
                         except Exception:
                             pass
                         keep_secrets = True
+                        _finalize(True)
+                        finalized = True
                         return
                     if status_flag == "cancelled":
                         try:

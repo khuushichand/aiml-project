@@ -11,7 +11,7 @@ class FakeTime:
 
     def __call__(self) -> float:
 
-             return self.t
+        return self.t
 
     def advance(self, s: float) -> None:
         self.t += s
@@ -56,7 +56,7 @@ async def test_atomic_multi_category_rollback_on_denial():
 async def test_retry_after_decreases_with_time_for_tokens():
     class _Loader:
         def get_policy(self, pid):
-                     return {"tokens": {"per_min": 1, "burst": 1.0}, "scopes": ["global", "user"]}
+            return {"tokens": {"per_min": 1, "burst": 1.0}, "scopes": ["global", "user"]}
 
     ft = FakeTime(0.0)
     ns = "rg_t_ra"
@@ -81,7 +81,7 @@ async def test_retry_after_decreases_with_time_for_tokens():
 async def test_token_refund_allows_subsequent_requests():
     class _Loader:
         def get_policy(self, pid):
-                     return {"tokens": {"per_min": 2, "burst": 1.0}, "scopes": ["global", "user"]}
+            return {"tokens": {"per_min": 2, "burst": 1.0}, "scopes": ["global", "user"]}
 
     ft = FakeTime(0.0)
     ns = "rg_t_refund"

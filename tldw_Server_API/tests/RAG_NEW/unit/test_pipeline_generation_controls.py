@@ -8,7 +8,7 @@ import tldw_Server_API.app.core.RAG.rag_service.unified_pipeline as up
 
 class FakeRetriever:
     def __init__(self, *args, **kwargs):
-             self.retrievers = {}
+        self.retrievers = {}
 
     async def retrieve(self, query: str, sources=None, config=None, index_namespace=None, **kwargs):
         return [
@@ -29,7 +29,7 @@ class FakeTwoTierReranker:
 
 class FakeAnswerGenerator:
     def __init__(self, *args, **kwargs):
-             pass
+        pass
 
     async def generate(self, *, query: str, context: str, prompt_template=None, max_tokens=None, temperature=None):
         # Distinguish calls by prompt content to simulate draft/refine

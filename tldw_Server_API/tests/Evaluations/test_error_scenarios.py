@@ -419,7 +419,7 @@ class TestEdgeCases:
 
     def test_migration_idempotency(self):
 
-             """Test that migrations can be run multiple times safely."""
+        """Test that migrations can be run multiple times safely."""
         from tldw_Server_API.app.core.DB_Management.migrations import migrate_evaluations_database
 
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:

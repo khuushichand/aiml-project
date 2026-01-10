@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 def _env(monkeypatch, tmp_path):
 
 
-     monkeypatch.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("JOBS_DB_PATH", os.path.join(os.getcwd(), "Databases", "jobs.db"))
@@ -87,7 +87,7 @@ async def test_jobs_webhooks_worker_emits_signed_event_sqlite(monkeypatch, tmp_p
     # Build args object
     class _Args:
         def __init__(self, timestamp, signature, secrets, body):
-                     self.timestamp = timestamp
+            self.timestamp = timestamp
             self.signature = signature
             self.secrets = secrets
             self.body = body

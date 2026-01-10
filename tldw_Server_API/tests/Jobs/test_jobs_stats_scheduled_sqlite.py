@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 def _set_env(monkeypatch):
 
 
-     monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
     import os as _os
@@ -19,7 +19,7 @@ def _set_env(monkeypatch):
 def test_jobs_stats_includes_scheduled_sqlite(monkeypatch, tmp_path):
 
 
-     monkeypatch.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     _set_env(monkeypatch)
 
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings

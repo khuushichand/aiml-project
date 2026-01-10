@@ -11,14 +11,14 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture(autouse=True)
 def _set_test_mode_env(monkeypatch):
-     monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("RAG_DEFAULT_LLM_PROVIDER", "test-provider")
     monkeypatch.setenv("RAG_DEFAULT_LLM_MODEL", "default-model")
 
 
 @pytest.fixture()
 def client_with_stream_overrides(monkeypatch, auth_headers):
-     async def override_user():
+    async def override_user():
         return User(id=1, username="tester", email=None, is_active=True)
 
     async def _noop():
@@ -55,14 +55,14 @@ def client_with_stream_overrides(monkeypatch, auth_headers):
 def test_rag_streaming_parity_generation_and_hybrid_sources(monkeypatch, client_with_stream_overrides):
 
 
-     from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
+    from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
     import tldw_Server_API.app.api.v1.endpoints.rag_unified as rag_ep
 
     captured = {"retrieve_kwargs": None, "generation_config": None}
 
     class StubRetriever:
         def __init__(self, *args, **kwargs):
-                     self.retrievers = {}
+            self.retrievers = {}
 
         async def retrieve(self, query, **kwargs):
             captured["retrieve_kwargs"] = {"query": query, **kwargs}

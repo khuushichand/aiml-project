@@ -39,7 +39,7 @@ def _build_app_with_overrides(
 
     class _DummyServer:
         def __init__(self) -> None:
-                     self.initialized = False
+            self.initialized = False
 
         async def initialize(self) -> None:
             self.initialized = True

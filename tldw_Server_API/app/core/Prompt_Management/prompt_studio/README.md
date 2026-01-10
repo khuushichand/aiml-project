@@ -48,7 +48,8 @@ prompt_studio/
 │   └── optimization_engine.py      # Optimization strategies
 ├── Management Systems
 │   ├── test_case_manager.py        # Test CRUD operations
-│   ├── job_manager.py              # Job queue management
+│   ├── jobs_adapter.py             # Core Jobs adapter (job lifecycle/status)
+│   ├── job_types.py                # Shared job type/status enums
 │   └── event_broadcaster.py        # Real-time events
 ├── API Layer
 │   ├── endpoints/                  # FastAPI endpoints

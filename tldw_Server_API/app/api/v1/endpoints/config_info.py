@@ -197,7 +197,8 @@ async def get_flashcards_import_limits():
 
 def generate_python_example(api_key: str, base_url: str) -> str:
     """Generate a Python code example with the provided configuration."""
-    return f"""import requests
+    return f"""import json
+from urllib.request import Request, urlopen
 
 API_KEY = "{api_key}"
 BASE_URL = "{base_url}"
@@ -212,13 +213,19 @@ eval_data = {{
     ]
 }}
 
-response = requests.post(
+req = Request(
     f"{{BASE_URL}}/api/v1/evals",
-    json=eval_data,
-    headers={{"Authorization": f"Bearer {{API_KEY}}"}}
+    data=json.dumps(eval_data).encode("utf-8"),
+    headers={{
+        "Authorization": f"Bearer {{API_KEY}}",
+        "Content-Type": "application/json",
+    }},
+    method="POST",
 )
 
-print(f"Created evaluation: {{response.json()['id']}}")"""
+with urlopen(req, timeout=30) as resp:
+    payload = json.loads(resp.read().decode("utf-8"))
+print(f"Created evaluation: {{payload['id']}}")"""
 
 
 def generate_curl_example(api_key: str, base_url: str) -> str:

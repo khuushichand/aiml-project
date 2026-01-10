@@ -7,30 +7,30 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 class StubRegistry:
     def __init__(self):
-             self.increments = []
+        self.increments = []
         self.observes = []
         self.gauges = []
 
     def register_metric(self, *_args, **_kwargs):
 
-             return None
+        return None
 
     def increment(self, name, value, labels):
 
-             self.increments.append((name, value, dict(labels)))
+        self.increments.append((name, value, dict(labels)))
 
     def observe(self, name, value, labels):
 
-             self.observes.append((name, float(value), dict(labels)))
+        self.observes.append((name, float(value), dict(labels)))
 
     def set_gauge(self, name, value, labels):
 
-             self.gauges.append((name, float(value), dict(labels)))
+        self.gauges.append((name, float(value), dict(labels)))
 
 
 @pytest.fixture()
 def jobs_db(tmp_path):
-     db_path = tmp_path / "jobs.db"
+    db_path = tmp_path / "jobs.db"
     ensure_jobs_tables(db_path)
     yield db_path
 

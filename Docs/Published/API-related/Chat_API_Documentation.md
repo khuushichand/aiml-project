@@ -24,9 +24,15 @@ Key fields:
 - `api_provider` (string, optional): Overrides provider selection. Server default used if omitted.
 - `prompt_template_name` (string, optional): Apply a named prompt template (alphanumeric, `_`, `-`).
 - Common sampling params (provider-dependent): `temperature`, `top_p`, `max_tokens`, `n`, `frequency_penalty`, `presence_penalty`, `logprobs`, `top_logprobs`, `logit_bias`.
-- Tools: `tools`, `tool_choice` (provider-dependent tool/function calling).
+- Tools: `tools`, `tool_choice` (provider-dependent tool/function calling). `tool_choice` requires `tools` or the request is rejected.
 - `response_format`: `{ "type": "text" | "json_object" }` (provider-dependent).
 - Chat extensions: `character_id`, `conversation_id` (context hooks), `save_to_db` (persistence toggle).
+
+Provider-specific extensions:
+- Bedrock guardrails:
+  - `extra_headers`: include Bedrock guardrail headers like `X-Amzn-Bedrock-GuardrailIdentifier`, `X-Amzn-Bedrock-GuardrailVersion`, optional `X-Amzn-Bedrock-Trace`.
+  - `extra_body`: include `amazon-bedrock-guardrailConfig` object when needed.
+  - Merge behavior: `extra_headers`/`extra_body` are additive; explicit headers/body keys in the request win on conflicts.
 
 Minimal example (non-streaming):
 ```bash

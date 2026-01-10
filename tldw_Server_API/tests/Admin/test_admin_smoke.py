@@ -75,7 +75,7 @@ def _force_backend(pg: bool):
 def test_admin_smoke_roles_permissions_sqlite_and_pg():
 
 
-     with _fresh_client() as client:
+    with _fresh_client() as client:
         # First run: SQLite branch
         r_roles = client.get("/api/v1/admin/roles")
         if r_roles.status_code != 200:
@@ -150,7 +150,7 @@ def test_admin_smoke_roles_permissions_sqlite_and_pg():
 def test_admin_kanban_fts_maintenance_smoke():
 
 
-     with tempfile.TemporaryDirectory(prefix="kanban_admin_smoke_") as tmp_user_db_dir:
+    with tempfile.TemporaryDirectory(prefix="kanban_admin_smoke_") as tmp_user_db_dir:
         with _fresh_client(test_mode=True, user_db_base_dir=tmp_user_db_dir) as client:
             resp_opt = client.post("/api/v1/admin/kanban/fts/optimize", params={"user_id": 1})
             assert resp_opt.status_code == 200, resp_opt.text

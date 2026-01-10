@@ -3,7 +3,7 @@ import pytest
 
 @pytest.mark.e2e
 def test_chat_ui_add_and_clear_local(page, server_url):
-     page.goto(f"{server_url}/webui/")
+    page.goto(f"{server_url}/webui/")
     page.get_by_role("tab", name="Chat", exact=True).click()
     # The chat UI lives within the Chat Completions tab
     page.get_by_role("tab", name="Chat Completions").click()

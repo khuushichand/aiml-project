@@ -8,7 +8,7 @@ from tldw_Server_API.app.core.Moderation.moderation_service import ModerationSer
 
 @pytest.mark.unit
 def test_check_text_returns_sanitized_snippet_not_pattern():
-     svc = ModerationService()
+    svc = ModerationService()
     lines = [
         "/token\\s*[=:]\\s*([A-Za-z0-9_-]{8,})/ -> block #confidential",
         "secret -> redact:[MASK] #pii",

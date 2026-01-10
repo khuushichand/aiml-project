@@ -16,7 +16,7 @@ from tldw_Server_API.app.core.RAG.rag_service.types import DataSource, Document
 @pytest.mark.unit
 class TestRetrievalConfig:
     def test_defaults_match_expected_contract(self):
-             cfg = RetrievalConfig()
+        cfg = RetrievalConfig()
         assert cfg.max_results == 20
         assert cfg.min_score == 0.0
         assert cfg.use_fts is True
@@ -25,7 +25,7 @@ class TestRetrievalConfig:
 
     def test_custom_configuration_preserves_values(self):
 
-             start = datetime(2024, 1, 1)
+        start = datetime(2024, 1, 1)
         end = datetime(2024, 12, 31)
         cfg = RetrievalConfig(
             max_results=5,

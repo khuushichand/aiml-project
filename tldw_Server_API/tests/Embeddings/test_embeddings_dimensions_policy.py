@@ -10,14 +10,14 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
 @pytest.fixture(autouse=True)
 def _testing_env():
-     os.environ["TESTING"] = "true"
+    os.environ["TESTING"] = "true"
     yield
     os.environ.pop("TESTING", None)
 
 
 @pytest.fixture
 def client():
-     with TestClient(app) as c:
+    with TestClient(app) as c:
         c.cookies.set("csrf_token", "x")
         c.headers["X-CSRF-Token"] = "x"
         c.headers["Authorization"] = "Bearer key"
@@ -27,7 +27,7 @@ def client():
 def _override_user(admin=False):
 
 
-     async def _f():
+    async def _f():
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
         return User(id=1, username="u", email="u@x", is_active=True, is_admin=admin)
     return _f
@@ -35,9 +35,9 @@ def _override_user(admin=False):
 
 class _MC:
     def labels(self, **kwargs):
-             return self
+        return self
     def inc(self, *args, **kwargs):
-             return None
+        return None
 
 
 @pytest.mark.unit
@@ -70,7 +70,7 @@ def test_dimensions_reduce_policy(client, monkeypatch):
 
 @pytest.mark.unit
 def test_dimensions_pad_policy(client, monkeypatch):
-     os.environ["EMBEDDINGS_DIMENSION_POLICY"] = "pad"
+    os.environ["EMBEDDINGS_DIMENSION_POLICY"] = "pad"
     os.environ["USE_REAL_OPENAI_IN_TESTS"] = "true"
 
     async def fake_batch_async(texts, provider, model_id=None, dimensions=None, api_key=None, api_url=None, metadata=None):
@@ -94,7 +94,7 @@ def test_dimensions_pad_policy(client, monkeypatch):
 
 @pytest.mark.unit
 def test_dimensions_ignore_policy(client, monkeypatch):
-     os.environ["EMBEDDINGS_DIMENSION_POLICY"] = "ignore"
+    os.environ["EMBEDDINGS_DIMENSION_POLICY"] = "ignore"
     os.environ["USE_REAL_OPENAI_IN_TESTS"] = "true"
 
     async def fake_batch_async(texts, provider, model_id=None, dimensions=None, api_key=None, api_url=None, metadata=None):

@@ -69,7 +69,7 @@ def test_dlq_list_decrypt_and_redact(disable_heavy_startup, admin_user, redis_cl
 
 class _StubAuditService:
     def __init__(self):
-             self.events = []
+        self.events = []
 
     async def log_event(self, **kwargs):
         self.events.append(kwargs)
@@ -131,7 +131,7 @@ def test_dlq_requeue_audited(disable_heavy_startup, admin_user, redis_client, mo
 def _aesgcm_available() -> bool:
 
 
-     """Check if AESGCM cryptography support is available at runtime.
+    """Check if AESGCM cryptography support is available at runtime.
 
     Returns:
         bool: True if AESGCM can be imported, False otherwise.
@@ -146,7 +146,7 @@ def _aesgcm_available() -> bool:
 
 @pytest.mark.unit
 def test_dlq_crypto_roundtrip_scrypt(monkeypatch):
-     monkeypatch.setenv("EMBEDDINGS_DLQ_ENCRYPTION_KEY", "test-passphrase")
+    monkeypatch.setenv("EMBEDDINGS_DLQ_ENCRYPTION_KEY", "test-passphrase")
     from tldw_Server_API.app.core.Embeddings import dlq_crypto
 
     payload = {"msg": "hello", "count": 3}
@@ -164,7 +164,7 @@ def test_dlq_crypto_roundtrip_scrypt(monkeypatch):
 
 @pytest.mark.unit
 def test_dlq_crypto_uses_stored_kdf_params(monkeypatch):
-     if not _aesgcm_available():
+    if not _aesgcm_available():
         pytest.skip("cryptography not available")
     from tldw_Server_API.app.core.Embeddings import dlq_crypto
 
@@ -196,7 +196,7 @@ def test_dlq_crypto_uses_stored_kdf_params(monkeypatch):
 
 @pytest.mark.unit
 def test_dlq_crypto_roundtrip_legacy(monkeypatch):
-     if not _aesgcm_available():
+    if not _aesgcm_available():
         pytest.skip("cryptography not available")
     from tldw_Server_API.app.core.Embeddings import dlq_crypto
 

@@ -2,6 +2,7 @@
 # Job processing handlers for Prompt Studio
 
 import asyncio
+import json
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 from loguru import logger
@@ -10,7 +11,7 @@ from tldw_Server_API.app.core.Logging.log_context import (
     new_request_id,
 )
 
-from .job_manager import JobManager, JobType, JobStatus
+from .job_types import JobType
 from .test_case_manager import TestCaseManager
 from .test_case_generator import TestCaseGenerator
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
@@ -29,34 +30,59 @@ except Exception:
 class JobProcessor:
     """Processes different types of Prompt Studio jobs."""
 
-    def __init__(self, db: PromptStudioDatabase, job_manager: JobManager):
+    def __init__(self, db: PromptStudioDatabase, job_manager: Optional[object] = None):
         """
         Initialize JobProcessor.
 
         Args:
             db: Database instance
-            job_manager: Job manager instance
+            job_manager: Legacy job manager (ignored; retained for compatibility)
         """
         self.db = db
         self.job_manager = job_manager
         self.test_manager = TestCaseManager(db)
         self.test_generator = TestCaseGenerator(self.test_manager)
-
-        # Register handlers
+        self._handlers: Dict[str, Any] = {}
         self._register_handlers()
 
     async def process_job(self, job: Dict[str, Any]) -> Dict[str, Any]:
-        """Convenience wrapper to process a single job via the JobManager.
+        """Process a single job dict (core Jobs or legacy shape)."""
+        job_type = str(job.get("job_type") or "").lower()
+        handler = self._handlers.get(job_type)
+        if not handler:
+            raise ValueError(f"No handler registered for job type {job_type}")
 
-        Ensures compatibility with tests that call JobProcessor.process_job directly.
-        """
-        return await self.job_manager.process_job(job)
+        payload = job.get("payload") or {}
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except Exception:
+                payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+
+        entity_id = self._resolve_entity_id(job_type, job, payload)
+        return await handler(payload, entity_id)
 
     def _register_handlers(self):
-        """Register job handlers with the job manager."""
-        self.job_manager.register_handler(JobType.GENERATION, self.process_generation_job)
-        self.job_manager.register_handler(JobType.EVALUATION, self.process_evaluation_job)
-        self.job_manager.register_handler(JobType.OPTIMIZATION, self.process_optimization_job)
+        """Register job handlers."""
+        self._handlers[JobType.GENERATION.value] = self.process_generation_job
+        self._handlers[JobType.EVALUATION.value] = self.process_evaluation_job
+        self._handlers[JobType.OPTIMIZATION.value] = self.process_optimization_job
+
+    def _resolve_entity_id(self, job_type: str, job: Dict[str, Any], payload: Dict[str, Any]) -> int:
+        if job_type == JobType.OPTIMIZATION.value:
+            value = payload.get("optimization_id") or payload.get("entity_id") or job.get("entity_id")
+        elif job_type == JobType.EVALUATION.value:
+            value = payload.get("evaluation_id") or payload.get("entity_id") or job.get("entity_id")
+        elif job_type == JobType.GENERATION.value:
+            value = payload.get("project_id") or payload.get("entity_id") or job.get("entity_id")
+        else:
+            value = payload.get("entity_id") or job.get("entity_id")
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
 
     def _ensure_ps_prompt_exists(self, prompt_id: Optional[int], project_id: Optional[int]) -> None:
         """Ensure a minimal prompt exists in prompt_studio_prompts for the given IDs.

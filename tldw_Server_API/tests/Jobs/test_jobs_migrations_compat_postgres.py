@@ -13,7 +13,7 @@ pytestmark = [
 def test_pg_schema_has_aux_tables_and_indexes(jobs_pg_dsn):
 
 
-     ensure_jobs_tables_pg(jobs_pg_dsn)
+    ensure_jobs_tables_pg(jobs_pg_dsn)
     with psycopg.connect(jobs_pg_dsn) as conn:
         with conn.cursor() as cur:
             # Tables exist

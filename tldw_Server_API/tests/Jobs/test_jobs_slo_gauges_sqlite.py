@@ -9,7 +9,7 @@ from tldw_Server_API.app.services.jobs_metrics_service import run_jobs_metrics_g
 def _env(monkeypatch, tmp_path):
 
 
-     monkeypatch.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("JOBS_DB_PATH", os.path.join(os.getcwd(), "Databases", "jobs.db"))
@@ -33,7 +33,7 @@ async def _run_once():
 def test_slo_gauges_sqlite(monkeypatch, tmp_path):
 
 
-     _env(monkeypatch, tmp_path)
+    _env(monkeypatch, tmp_path)
     jm = JobManager()
 
     # Create and complete a few jobs for two owners

@@ -8,28 +8,28 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 class StubRegistry:
     def __init__(self):
-             self.increments = []
+        self.increments = []
 
     def register_metric(self, *_args, **_kwargs):
 
-             return None
+        return None
 
     def increment(self, name, value, labels):
 
-             self.increments.append((name, value, dict(labels)))
+        self.increments.append((name, value, dict(labels)))
 
     def observe(self, *args, **kwargs):
 
-             return None
+        return None
 
     def set_gauge(self, *args, **kwargs):
 
-             return None
+        return None
 
 
 @pytest.fixture(autouse=True)
 def _setup(jobs_pg_dsn):
-     return
+    return
 
 
 def test_structured_error_fields_and_metrics_postgres(monkeypatch, jobs_pg_dsn):

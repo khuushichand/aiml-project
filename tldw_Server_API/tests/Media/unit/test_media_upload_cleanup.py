@@ -65,7 +65,7 @@ async def test_save_uploaded_files_write_failure_cleanup(tmp_media_dir, monkeypa
 
     class _FailOpen:
         def __init__(self, *a, **kw):
-                     pass
+            pass
 
         async def __aenter__(self):
             raise OSError("simulated write open error")
@@ -75,7 +75,7 @@ async def test_save_uploaded_files_write_failure_cleanup(tmp_media_dir, monkeypa
 
     def _fake_open(*a, **kw):
 
-             return _FailOpen()
+        return _FailOpen()
 
     monkeypatch.setattr(media_mod.aiofiles, "open", _fake_open, raising=True)
 

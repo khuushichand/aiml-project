@@ -50,7 +50,7 @@ async def test_dlq_worker_backoff_and_delivery(monkeypatch, tmp_path):
     # Stub afetch behavior: first call fails, second succeeds
     class DummyResp:
         def __init__(self, status_code=200):
-                     self.status_code = status_code
+            self.status_code = status_code
             self.text = "ok"
         async def aclose(self):
             return None

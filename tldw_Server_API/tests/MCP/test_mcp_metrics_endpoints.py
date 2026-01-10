@@ -11,7 +11,7 @@ client = TestClient(app)
 def _api_key():
 
 
-     return os.getenv("SINGLE_USER_API_KEY", "sk-test-1234567890-VALID")
+    return os.getenv("SINGLE_USER_API_KEY", "sk-test-1234567890-VALID")
 
 
 def test_mcp_metrics_json_admin_only():

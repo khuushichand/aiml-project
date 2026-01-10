@@ -8,24 +8,24 @@ from tldw_Server_API.app.core.RAG.rag_service.types import Document
 
 class _FakeCursor:
     def __init__(self, rows):
-             self._rows = rows
+        self._rows = rows
 
     def fetchall(self):
 
-             return self._rows
+        return self._rows
 
 
 class _FakeMediaDB:
     def __init__(self, rows):
-             self._rows = rows
+        self._rows = rows
 
     def execute_query(self, sql, params):
 
-             return _FakeCursor(self._rows)
+        return _FakeCursor(self._rows)
 
     def lookup_section_for_offset(self, media_id, start_char):
 
-             return {
+        return {
             "title": "Intro",
             "start_char": start_char - 5,
             "end_char": start_char + 5,
@@ -34,7 +34,7 @@ class _FakeMediaDB:
 
 @pytest.mark.unit
 def test_chunk_level_fts_preserves_metadata(monkeypatch):
-     monkeypatch.setattr(MediaDBRetriever, "_initialize_vector_store", lambda self: None)
+    monkeypatch.setattr(MediaDBRetriever, "_initialize_vector_store", lambda self: None)
 
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
@@ -78,7 +78,7 @@ def test_chunk_level_fts_preserves_metadata(monkeypatch):
 
 @pytest.mark.unit
 def test_document_location_string_uses_one_based_index():
-     doc = Document(
+    doc = Document(
         id="doc-1",
         content="",
         metadata={},

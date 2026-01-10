@@ -14,6 +14,7 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     finalize_stream,
 )
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
+from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
 
 # Expose a patchable factory for tests; production uses the centralized client
 http_client_factory = _hc_create_client
@@ -202,6 +203,8 @@ class HuggingFaceAdapter(ChatProvider):
         headers = info["headers"]
         payload = self._build_payload(request)
         payload["stream"] = True
+        payload = merge_extra_body(payload, request)
+        headers = merge_extra_headers(headers, request)
         try:
             resolved_timeout = self._resolve_timeout(request, timeout)
             logger.debug("HuggingFace headers: {}", self._mask_headers(headers))
@@ -245,6 +248,8 @@ class HuggingFaceAdapter(ChatProvider):
         headers = info["headers"]
         payload = self._build_payload(request)
         payload["stream"] = False
+        payload = merge_extra_body(payload, request)
+        headers = merge_extra_headers(headers, request)
         try:
             resolved_timeout = self._resolve_timeout(request, timeout)
             logger.debug("HuggingFace headers: {}", self._mask_headers(headers))

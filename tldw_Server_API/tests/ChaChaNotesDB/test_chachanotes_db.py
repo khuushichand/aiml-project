@@ -332,8 +332,10 @@ class TestMessageMetadata:
             db_instance.update_character_card(card_id, update_payload, expected_version=client_expected_version)
 
     def test_update_character_card_not_found(self, db_instance: CharactersRAGDB):
-        with pytest.raises(ConflictError,
-                        match="Record not found in character_cards."):  # Match new _get_current_db_version error
+        with pytest.raises(
+            ConflictError,
+            match="Record not found in character_cards.",
+        ):  # Match new _get_current_db_version error
             db_instance.update_character_card(999, {"description": "Not Found"}, expected_version=1)
 
     def test_soft_delete_character_card(self, db_instance: CharactersRAGDB):
@@ -887,8 +889,9 @@ class TestSyncLog:
 
         update_log_entry = None
         for entry in new_entries:
-            if entry["entity"] == "character_cards" and entry["entity_id"] == str(card_id) and entry[
-                "operation"] == "update":
+            if (entry["entity"] == "character_cards"
+                    and entry["entity_id"] == str(card_id)
+                    and entry["operation"] == "update"):
                 update_log_entry = entry
                 break
 
@@ -911,8 +914,11 @@ class TestSyncLog:
         new_entries = db_instance.get_sync_log_entries(since_change_id=latest_change_id)
         delete_log_entry = None
         for entry in new_entries:
-            if entry["entity"] == "character_cards" and entry["entity_id"] == str(card_id) and entry[
-                "operation"] == "delete":
+            if (
+                entry["entity"] == "character_cards"
+                and entry["entity_id"] == str(card_id)
+                and entry["operation"] == "delete"
+            ):
                 delete_log_entry = entry
                 break
 

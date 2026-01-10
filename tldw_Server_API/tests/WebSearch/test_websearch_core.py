@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict
+from types import SimpleNamespace
 
 import pytest
 
@@ -120,11 +121,11 @@ def test_search_web_brave_builds_expected_request(monkeypatch: pytest.MonkeyPatc
 
     class DummyResponse:
         def raise_for_status(self) -> None:
-                     return None
+            return None
 
         def json(self) -> Dict[str, Any]:
 
-                     return fake_response_payload
+            return fake_response_payload
 
     def fake_get(url: str, headers: Dict[str, str], params: Dict[str, Any]) -> DummyResponse:
         fake_get.last_request = {"url": url, "headers": headers, "params": params}  # type: ignore[attr-defined]
@@ -132,6 +133,12 @@ def test_search_web_brave_builds_expected_request(monkeypatch: pytest.MonkeyPatc
 
     # Patch the Brave wrapper seam instead of requests.get
     monkeypatch.setattr(web_search, "brave_http_get", fake_get)
+    from tldw_Server_API.app.core.Security import egress as egress_module
+    monkeypatch.setattr(
+        egress_module,
+        "evaluate_url_policy",
+        lambda url: SimpleNamespace(allowed=True),
+    )
     monkeypatch.setattr(
         web_search,
         "get_loaded_config",

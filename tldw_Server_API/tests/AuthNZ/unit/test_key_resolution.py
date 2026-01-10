@@ -6,7 +6,7 @@ pytestmark = pytest.mark.unit
 
 class _FakePostgresPool:
     def __init__(self, expected_candidates):
-             self.pool = object()  # signal Postgres backend
+        self.pool = object()  # signal Postgres backend
         self.expected = tuple(expected_candidates)
         self.calls = []
 
@@ -20,7 +20,7 @@ class _FakePostgresPool:
 
 class _FakeSQLitePool:
     def __init__(self, expected_candidates):
-             self.pool = None  # signal SQLite backend
+        self.pool = None  # signal SQLite backend
         self.expected = tuple(expected_candidates)
         self.calls = []
 
@@ -46,7 +46,7 @@ class _FakePostgresKeyIdPool:
 
 class _FakeSQLiteKeyIdOnlyPool:
     def __init__(self, expected_key_id):
-             self.pool = None
+        self.pool = None
         self.expected_key_id = expected_key_id
         self.calls = []
 

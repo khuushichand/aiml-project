@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 def _set_env(monkeypatch):
 
 
-     monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
     import os as _os
@@ -19,7 +19,7 @@ def _set_env(monkeypatch):
 def _map_by_key(rows):
 
 
-     out: Dict[Tuple[str, str, str], Dict] = {}
+    out: Dict[Tuple[str, str, str], Dict] = {}
     for r in rows:
         out[(r["domain"], r["queue"], r["job_type"])] = r
     return out
@@ -87,7 +87,7 @@ def test_jobs_stats_shape_and_counts_sqlite(monkeypatch, tmp_path):
 def test_jobs_stats_filters_sqlite(monkeypatch, tmp_path):
 
 
-     monkeypatch.chdir(tmp_path)
+    monkeypatch.chdir(tmp_path)
     _set_env(monkeypatch)
 
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings

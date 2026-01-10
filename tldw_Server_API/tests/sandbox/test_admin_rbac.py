@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 def _client(monkeypatch) -> TestClient:
 
 
-     monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     # Ensure AuthNZ settings re-read after env change
     try:
@@ -32,13 +32,13 @@ def _client(monkeypatch) -> TestClient:
 def _non_admin_dep():
 
 
-     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
     return User(id=2, username="user", roles=["user"], is_admin=False)
 
 
 @pytest.mark.unit
 def test_admin_endpoints_require_admin_role(monkeypatch) -> None:
-     with _client(monkeypatch) as client:
+    with _client(monkeypatch) as client:
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
         client.app.dependency_overrides[get_request_user] = _non_admin_dep
         for path in (

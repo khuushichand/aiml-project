@@ -3,7 +3,7 @@ import pytest
 
 @pytest.mark.integration
 def test_validate_dictionary_endpoint_success(test_client, auth_headers):
-     payload = {
+    payload = {
         "data": {
             "name": "test",
             "entries": [
@@ -25,7 +25,7 @@ def test_validate_dictionary_endpoint_success(test_client, auth_headers):
 
 @pytest.mark.integration
 def test_validate_dictionary_endpoint_detects_regex_error(test_client, auth_headers):
-     payload = {
+    payload = {
         "data": {
             "name": "test-bad",
             "entries": [

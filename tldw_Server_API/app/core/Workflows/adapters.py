@@ -431,15 +431,9 @@ async def run_rag_search_adapter(config: Dict[str, Any], context: Dict[str, Any]
     try:
         from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
         media_db_path = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
-    except Exception:
-        # Anchor fallback to project root to avoid CWD effects
-        try:
-            from tldw_Server_API.app.core.Utils.Utils import get_project_root
-            from pathlib import Path as _Path
-            media_db_path = str((_Path(get_project_root()) / "Databases" / "Media_DB_v2.db").resolve())
-        except Exception:
-            from pathlib import Path as _Path
-            media_db_path = str((_Path(__file__).resolve().parents[5] / "Databases" / "Media_DB_v2.db").resolve())
+    except Exception as exc:
+        logger.error(f"Failed to resolve Media DB path for workflow search: {exc}")
+        raise RuntimeError("Failed to resolve Media DB path for workflow search") from exc
 
     # Map supported options directly to pipeline
     passthrough_keys = {
@@ -652,14 +646,9 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                     try:
                         from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
                         _mdb_path = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
-                    except Exception:
-                        try:
-                            from tldw_Server_API.app.core.Utils.Utils import get_project_root
-                            from pathlib import Path as _Path
-                            _mdb_path = str((_Path(get_project_root()) / "Databases" / "Media_DB_v2.db").resolve())
-                        except Exception:
-                            from pathlib import Path as _Path
-                            _mdb_path = str((_Path(__file__).resolve().parents[5] / "Databases" / "Media_DB_v2.db").resolve())
+                    except Exception as exc:
+                        logger.error(f"Failed to resolve Media DB path for workflow indexing: {exc}")
+                        raise
                     mdb = MediaDatabase(_mdb_path, client_id="workflow_engine")
                     title = (config.get("metadata", {}) or {}).get("title") or resolved_path.name
                     keywords = (config.get("metadata", {}) or {}).get("tags") or []

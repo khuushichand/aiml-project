@@ -166,10 +166,14 @@ class EventBroadcaster:
             event_type: Event type
             additional_data: Additional event data
         """
-        # Get job details
-        from .job_manager import JobManager
-        job_manager = JobManager(self.db)
-        job = job_manager.get_job(job_id)
+        # Get job details from core Jobs via adapter
+        from .jobs_adapter import PromptStudioJobsAdapter
+        adapter = PromptStudioJobsAdapter()
+        job = adapter.get_job(
+            str(job_id),
+            db=self.db,
+            user_id=None,
+        )
 
         if not job:
             logger.warning(f"Job {job_id} not found for event broadcast")

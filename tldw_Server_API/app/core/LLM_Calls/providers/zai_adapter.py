@@ -5,12 +5,13 @@ from typing import Any, Dict, Iterable, Optional, List, Union
 from .base import ChatProvider
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError, ChatProviderError
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
-from tldw_Server_API.app.core.LLM_Calls.chat_calls import (
-    _safe_cast,
-    create_session_with_retries,
-)
+from tldw_Server_API.app.core.LLM_Calls.chat_calls import _safe_cast
 from tldw_Server_API.app.core.LLM_Calls.error_utils import raise_chat_error_from_http
-from tldw_Server_API.app.core.LLM_Calls.payload_utils import _sanitize_payload_for_logging
+from tldw_Server_API.app.core.LLM_Calls.payload_utils import (
+    _sanitize_payload_for_logging,
+    merge_extra_body,
+    merge_extra_headers,
+)
 from tldw_Server_API.app.core.LLM_Calls.sse import finalize_stream, is_done_line, sse_done, sse_data
 from tldw_Server_API.app.core.LLM_Calls.sse import normalize_provider_line
 from tldw_Server_API.app.core.LLM_Calls.error_utils import (
@@ -38,6 +39,8 @@ def _zai_request(
     request_id: Optional[str] = None,
     custom_prompt_arg: Optional[str] = None,
     app_config: Optional[Dict[str, Any]] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
 ):
     loaded_config_data = app_config or load_and_log_configs()
     zai_config = loaded_config_data.get("zai_api", {})
@@ -88,17 +91,20 @@ def _zai_request(
         "Authorization": f"Bearer {final_api_key}",
         "Content-Type": "application/json",
     }
+    headers = merge_extra_headers(headers, {"extra_headers": extra_headers})
 
     api_base_url = zai_config.get("api_base_url", "https://api.z.ai/api/paas/v4")
     api_url = api_base_url.rstrip("/") + "/chat/completions"
 
+    payload = merge_extra_body(payload, {"extra_body": extra_body})
     payload_metadata = _sanitize_payload_for_logging(payload)
     logging.debug(f"Z.AI request metadata: {payload_metadata}")
 
     try:
         if current_streaming:
             logging.debug("Z.AI: Posting request (streaming)")
-            session = create_session_with_retries(
+            from tldw_Server_API.app.core.LLM_Calls import chat_calls as _chat_calls
+            session = _chat_calls.create_session_with_retries(
                 total=_safe_cast(zai_config.get("api_retries"), int, 3),
                 backoff_factor=_safe_cast(zai_config.get("api_retry_delay"), float, 1.0),
                 status_forcelist=[429, 500, 502, 503, 504],
@@ -166,7 +172,8 @@ def _zai_request(
                 raise
 
         logging.debug("Z.AI: Posting request (non-streaming)")
-        session = create_session_with_retries(
+        from tldw_Server_API.app.core.LLM_Calls import chat_calls as _chat_calls
+        session = _chat_calls.create_session_with_retries(
             total=_safe_cast(zai_config.get("api_retries"), int, 3),
             backoff_factor=_safe_cast(zai_config.get("api_retry_delay"), float, 1.0),
             status_forcelist=[429, 500, 502, 503, 504],
@@ -235,6 +242,8 @@ class ZaiAdapter(ChatProvider):
             "request_id": request.get("request_id"),
             "custom_prompt_arg": request.get("custom_prompt_arg"),
             "app_config": request.get("app_config"),
+            "extra_headers": request.get("extra_headers"),
+            "extra_body": request.get("extra_body"),
         }
 
     def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:

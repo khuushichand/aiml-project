@@ -26,7 +26,7 @@ def patch_sandbox_heartbeat_sleep(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture(autouse=True, scope="session")
 def set_ws_poll_timeout_for_tests():
-     """
+    """
     Configure environment variables to make sandbox WebSocket behavior test-friendly.
 
     Sets sensible defaults only if not already present:
@@ -52,7 +52,7 @@ def set_ws_poll_timeout_for_tests():
 
 @pytest.fixture()
 def ws_flush():
-     """Publish a final frame (heartbeat) for a run to flush WS server loop.
+    """Publish a final frame (heartbeat) for a run to flush WS server loop.
 
     Usage: call ws_flush(run_id) right before closing the client WebSocket.
     """
@@ -68,7 +68,7 @@ def ws_flush():
 
 @pytest.fixture(autouse=True, scope="session")
 def reduce_warnings_noise():
-     """Globally silence warnings for sandbox tests to ensure fast teardown.
+    """Globally silence warnings for sandbox tests to ensure fast teardown.
 
     The main app and its dependencies can emit many deprecations during import.
     For focused sandbox unit tests, silence them to avoid slow exits.

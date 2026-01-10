@@ -173,7 +173,7 @@ async def test_rss_200_sets_etag_last_modified_and_ingests(monkeypatch):
     monkeypatch.setattr(wl_pipeline, "fetch_rss_feed_history", _stub_fetch)
     # Stub site article fetch to avoid network
     def _stub_article(url):
-             return {"title": "X", "url": url, "content": "hello", "author": None}
+        return {"title": "X", "url": url, "content": "hello", "author": None}
     monkeypatch.setattr(wl_pipeline, "fetch_site_article", _stub_article)
 
     job = db.create_job(

@@ -21,7 +21,7 @@ from loguru import logger
 
 @pytest.fixture
 def test_db():
-     """Create a test database with Prompt Studio schema."""
+    """Create a test database with Prompt Studio schema."""
     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
         db_path = tmp.name
 
@@ -38,7 +38,7 @@ def test_db():
 
 @pytest.fixture
 def mock_llm_responses():
-     """Predefined LLM responses for testing."""
+    """Predefined LLM responses for testing."""
     return {
         "test_case_1": "The capital of France is Paris.",
         "test_case_2": "Python is a high-level programming language.",
@@ -48,9 +48,9 @@ def mock_llm_responses():
 
 @pytest.fixture
 def mock_chat_api_call(mock_llm_responses):
-     """Mock the chat_api_call function."""
+    """Mock the LLM adapter call."""
     def _mock_call(*args, **kwargs):
-             # Extract messages to determine which response to return
+        # Extract messages to determine which response to return
         messages = kwargs.get('messages_payload', kwargs.get('messages', []))
 
         # Simple logic to return different responses based on input
@@ -117,8 +117,13 @@ def create_test_prompt(db: PromptStudioDatabase, project_id: int, name: str,
     conn.commit()
     return prompt_id
 
-def create_test_case(db: PromptStudioDatabase, project_id: int, name: str,
-                    inputs: Dict[str, Any], expected_outputs: Dict[str, Any]) -> int:
+def create_test_case(
+    db: PromptStudioDatabase,
+    project_id: int,
+    name: str,
+    inputs: Dict[str, Any],
+    expected_outputs: Dict[str, Any],
+) -> int:
     """Create a test case and return its ID."""
     conn = db.get_connection()
     cursor = conn.cursor()
@@ -145,7 +150,7 @@ class TestPromptStudioEvaluationEndToEnd:
 
     def test_complete_evaluation_workflow(self, test_db, mock_chat_api_call):
 
-             """Test the complete evaluation workflow from start to finish."""
+        """Test the complete evaluation workflow from start to finish."""
         # 1. Create project
         project_id = create_test_project(test_db, "Evaluation Test Project")
         assert project_id > 0
@@ -200,8 +205,10 @@ class TestPromptStudioEvaluationEndToEnd:
         logger.info(f"Created test cases with IDs: {test_case1_id}, {test_case2_id}, {test_case3_id}")
 
         # 4. Run evaluation with mocked LLM
-        with patch('tldw_Server_API.app.core.Prompt_Management.prompt_studio.evaluation_manager.chat_api_call',
-                  mock_chat_api_call):
+        with patch(
+            'tldw_Server_API.app.core.Prompt_Management.prompt_studio.evaluation_manager.EvaluationManager._call_adapter_text',
+            mock_chat_api_call,
+        ):
             eval_manager = EvaluationManager(test_db)
 
             # Run evaluation for first prompt
@@ -237,7 +244,7 @@ class TestPromptStudioEvaluationEndToEnd:
 
     def test_multiple_test_cases_evaluation(self, test_db, mock_chat_api_call):
 
-             """Test evaluation with multiple test cases."""
+        """Test evaluation with multiple test cases."""
         # Setup
         project_id = create_test_project(test_db, "Multi Test Project")
 
@@ -254,11 +261,11 @@ class TestPromptStudioEvaluationEndToEnd:
         test_case_ids = []
         test_cases_data = [
             ("Capital Test", {"question": "What is the capital of France?"},
-             {"response": "The capital of France is Paris."}),
+            {"response": "The capital of France is Paris."}),
             ("Programming Test", {"question": "What is Python?"},
-             {"response": "Python is a high-level programming language."}),
+            {"response": "Python is a high-level programming language."}),
             ("ML Test", {"question": "What is machine learning?"},
-             {"response": "Machine learning is a subset of artificial intelligence."})
+            {"response": "Machine learning is a subset of artificial intelligence."})
         ]
 
         for name, inputs, outputs in test_cases_data:
@@ -266,8 +273,10 @@ class TestPromptStudioEvaluationEndToEnd:
             test_case_ids.append(test_case_id)
 
         # Run evaluation with all test cases
-        with patch('tldw_Server_API.app.core.Prompt_Management.prompt_studio.evaluation_manager.chat_api_call',
-                  mock_chat_api_call):
+        with patch(
+            'tldw_Server_API.app.core.Prompt_Management.prompt_studio.evaluation_manager.EvaluationManager._call_adapter_text',
+            mock_chat_api_call,
+        ):
             eval_manager = EvaluationManager(test_db)
 
             result = eval_manager.run_evaluation(
@@ -289,7 +298,7 @@ class TestPromptStudioEvaluationEndToEnd:
 
     def test_evaluation_metrics_calculation(self, test_db):
 
-             """Test various evaluation metrics calculations."""
+        """Test various evaluation metrics calculations."""
         metrics = EvaluationMetrics()
 
         # Test exact match
@@ -327,7 +336,7 @@ class TestPromptStudioEvaluationEndToEnd:
 
     def test_evaluation_comparison(self, test_db, mock_chat_api_call):
 
-             """Test comparing multiple evaluations."""
+        """Test comparing multiple evaluations."""
         # Setup
         project_id = create_test_project(test_db, "Comparison Project")
         prompt_id = create_test_prompt(
@@ -346,8 +355,10 @@ class TestPromptStudioEvaluationEndToEnd:
             {"response": "The capital of France is Paris."}
         )
 
-        with patch('tldw_Server_API.app.core.Prompt_Management.prompt_studio.evaluation_manager.chat_api_call',
-                  mock_chat_api_call):
+        with patch(
+            'tldw_Server_API.app.core.Prompt_Management.prompt_studio.evaluation_manager.EvaluationManager._call_adapter_text',
+            mock_chat_api_call,
+        ):
             eval_manager = EvaluationManager(test_db)
 
             # Run two evaluations with different parameters
@@ -377,7 +388,7 @@ class TestPromptStudioEvaluationEndToEnd:
 
     def test_error_recovery(self, test_db):
 
-             """Test error handling and recovery."""
+        """Test error handling and recovery."""
         # Setup
         project_id = create_test_project(test_db, "Error Test Project")
         prompt_id = create_test_prompt(
@@ -391,12 +402,14 @@ class TestPromptStudioEvaluationEndToEnd:
         # Create test case with ID that doesn't exist
         eval_manager = EvaluationManager(test_db)
 
-        # Mock chat_api_call to raise an error
+        # Mock adapter call to raise an error
         def failing_llm(*args, **kwargs):
-                     raise Exception("LLM API Error")
+            raise Exception("LLM API Error")
 
-        with patch('tldw_Server_API.app.core.Prompt_Management.prompt_studio.evaluation_manager.chat_api_call',
-                  failing_llm):
+        with patch(
+            'tldw_Server_API.app.core.Prompt_Management.prompt_studio.evaluation_manager.EvaluationManager._call_adapter_text',
+            failing_llm,
+        ):
 
             # Create a valid test case
             test_case_id = create_test_case(
@@ -453,8 +466,10 @@ class TestPromptStudioEvaluationEndToEnd:
             return func(*args, **kwargs)
 
         with patch('asyncio.to_thread', mock_to_thread):
-            with patch('tldw_Server_API.app.core.Prompt_Management.prompt_studio.test_runner.chat_api_call',
-                      mock_chat_api_call):
+            with patch(
+                'tldw_Server_API.app.core.Prompt_Management.prompt_studio.test_runner.TestRunner._call_adapter',
+                mock_chat_api_call,
+            ):
 
                 test_runner = TestRunner(test_db)
 
@@ -487,7 +502,7 @@ class TestPromptStudioEvaluationEndToEnd:
 
     def test_database_integrity(self, test_db):
 
-             """Test database integrity and constraints."""
+        """Test database integrity and constraints."""
         # Test foreign key constraints
         with pytest.raises(Exception):
             # Try to create prompt with non-existent project
@@ -539,7 +554,7 @@ class TestPromptStudioEvaluationEndToEnd:
 
     def test_evaluation_persistence(self, test_db, mock_chat_api_call):
 
-             """Test that evaluation results are properly persisted."""
+        """Test that evaluation results are properly persisted."""
         # Setup
         project_id = create_test_project(test_db, "Persistence Test")
         prompt_id = create_test_prompt(
@@ -558,8 +573,10 @@ class TestPromptStudioEvaluationEndToEnd:
             {"response": "expected"}
         )
 
-        with patch('tldw_Server_API.app.core.Prompt_Management.prompt_studio.evaluation_manager.chat_api_call',
-                  mock_chat_api_call):
+        with patch(
+            'tldw_Server_API.app.core.Prompt_Management.prompt_studio.evaluation_manager.EvaluationManager._call_adapter_text',
+            mock_chat_api_call,
+        ):
             eval_manager = EvaluationManager(test_db)
 
             # Run evaluation

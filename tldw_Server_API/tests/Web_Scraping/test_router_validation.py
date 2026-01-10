@@ -2,9 +2,7 @@ from tldw_Server_API.app.core.Web_Scraping.scraper_router import ScraperRouter
 
 
 def test_validate_rules_normalizes_and_drops_invalid():
-
-
-     raw = {
+    raw = {
         "domains": {
             "invalid": {"backend": "curl", "unknown": True},  # no dot or wildcard
             "example.com": {

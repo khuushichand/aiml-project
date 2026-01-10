@@ -4,14 +4,14 @@ import pytest
 
 class _StubDet:
     def __init__(self, label="table", score=0.9, bbox=None):
-             self.label = label
+        self.label = label
         self.score = score
         self.bbox = bbox or [10.0, 10.0, 100.0, 50.0]
 
 
 class _StubVLMResult:
     def __init__(self):
-             self.detections = [_StubDet()]
+        self.detections = [_StubDet()]
         self.texts = None
         self.extra = None
 
@@ -21,7 +21,7 @@ class _StubBackend:
 
     @classmethod
     def available(cls) -> bool:
-             return True
+        return True
 
     def process_image(self, image_bytes: bytes, *, mime_type=None, context=None):
         return _StubVLMResult()

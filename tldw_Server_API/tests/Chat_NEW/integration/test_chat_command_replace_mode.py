@@ -14,7 +14,7 @@ def test_chat_command_replace_mode(monkeypatch, test_client, auth_headers):
 
     def fake_call(**kwargs):
 
-             captured["messages"] = kwargs.get("messages_payload")
+        captured["messages"] = kwargs.get("messages_payload")
         return {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
 
     monkeypatch.setattr(chat_endpoint, "perform_chat_api_call", fake_call)
@@ -64,7 +64,7 @@ def test_chat_command_revalidates_after_injection(monkeypatch, test_client, auth
 
     def fail_call(**_kwargs):
 
-             raise AssertionError("Provider call should not occur when post-injection validation fails")
+        raise AssertionError("Provider call should not occur when post-injection validation fails")
 
     monkeypatch.setattr(chat_endpoint, "perform_chat_api_call", fail_call)
 

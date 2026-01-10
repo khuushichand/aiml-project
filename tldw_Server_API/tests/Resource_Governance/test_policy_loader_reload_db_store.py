@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.Resource_Governance.policy_loader import PolicyLoa
 
 class _BumpStore:
     def __init__(self):
-             self._ver = 1
+        self._ver = 1
         self._pol = {"chat.default": {"requests": {"rpm": 60}}}
         self._tenant = {"enabled": True}
         self._ts = time.time()

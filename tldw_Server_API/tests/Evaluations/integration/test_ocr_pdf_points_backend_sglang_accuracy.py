@@ -11,7 +11,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.evaluations]
 def _sglang_available():
 
 
-     url = os.getenv("POINTS_SGLANG_URL", "http://127.0.0.1:8081/v1/chat/completions")
+    url = os.getenv("POINTS_SGLANG_URL", "http://127.0.0.1:8081/v1/chat/completions")
     base = url.rsplit("/v1", 1)[0] + "/v1/models"
     try:
         import httpx
@@ -24,7 +24,7 @@ def _sglang_available():
 
 @pytest.mark.requires_llm
 def test_points_sglang_accuracy():
-     pytest.importorskip("requests")
+    pytest.importorskip("requests")
 
     if os.getenv("POINTS_MODE") not in ("sglang", "auto"):
         pytest.skip("POINTS_MODE not set to sglang/auto")

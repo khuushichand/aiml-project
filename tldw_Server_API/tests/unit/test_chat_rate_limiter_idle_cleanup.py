@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.Chat.rate_limiter import (
 
 @pytest.mark.unit
 def test_idle_cleanup_removes_stale_entries():
-     cfg = RateLimitConfig(
+    cfg = RateLimitConfig(
         global_rpm=60,
         per_user_rpm=10,
         per_conversation_rpm=5,

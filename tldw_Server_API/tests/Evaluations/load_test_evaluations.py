@@ -35,7 +35,7 @@ class EvaluationUser(HttpUser):
 
     def on_start(self):
 
-             """Initialize test data on user spawn"""
+        """Initialize test data on user spawn"""
         self.sample_texts = [
             "Climate change is one of the most pressing issues of our time.",
             "Artificial intelligence is revolutionizing various industries.",
@@ -78,7 +78,7 @@ class EvaluationUser(HttpUser):
 
     @task(3)
     def test_geval(self):
-             """Test G-Eval endpoint (most common)"""
+        """Test G-Eval endpoint (most common)"""
         payload = {
             "source_text": random.choice(self.sample_texts),
             "summary": random.choice(self.sample_summaries),
@@ -100,7 +100,7 @@ class EvaluationUser(HttpUser):
 
     @task(2)
     def test_rag_evaluation(self):
-             """Test RAG evaluation endpoint"""
+        """Test RAG evaluation endpoint"""
         idx = random.randint(0, len(self.sample_queries) - 1)
 
         payload = {
@@ -123,7 +123,7 @@ class EvaluationUser(HttpUser):
 
     @task(1)
     def test_response_quality(self):
-             """Test response quality endpoint"""
+        """Test response quality endpoint"""
         payload = {
             "prompt": random.choice(self.sample_queries),
             "response": random.choice(self.sample_responses),
@@ -143,7 +143,7 @@ class EvaluationUser(HttpUser):
 
     @task(1)
     def test_batch_evaluation(self):
-             """Test batch evaluation endpoint (resource intensive)"""
+        """Test batch evaluation endpoint (resource intensive)"""
         items = []
         for i in range(random.randint(2, 5)):  # Small batch for load test
             items.append({
@@ -171,7 +171,7 @@ class EvaluationUser(HttpUser):
 
     @task(1)
     def test_health_check(self):
-             """Test health endpoint (should always work)"""
+        """Test health endpoint (should always work)"""
         with self.client.get(
             "/api/v1/health/evaluations",
             catch_response=True
@@ -183,7 +183,7 @@ class EvaluationUser(HttpUser):
 
     @task(1)
     def test_metrics_endpoint(self):
-             """Test metrics endpoint"""
+        """Test metrics endpoint"""
         with self.client.get(
             "/api/v1/evaluations/metrics",
             catch_response=True
@@ -202,13 +202,13 @@ class StressTestUser(HttpUser):
 
     def on_start(self):
 
-             """Initialize with minimal data"""
+        """Initialize with minimal data"""
         self.test_text = "This is a test text for stress testing."
         self.test_summary = "Test summary."
 
     @task
     def stress_test_geval(self):
-             """Rapidly hit the G-Eval endpoint"""
+        """Rapidly hit the G-Eval endpoint"""
         payload = {
             "source_text": self.test_text,
             "summary": self.test_summary,
@@ -231,7 +231,7 @@ class StressTestUser(HttpUser):
 # Custom event handlers for better reporting
 @events.test_start.add_listener
 def on_test_start(environment, **kwargs):
-     """Log test start"""
+    """Log test start"""
     logger.info(f"Load test starting with host: {environment.host}")
     logger.info(f"Target thresholds:")
     logger.info("  - 100 concurrent users")
@@ -241,7 +241,7 @@ def on_test_start(environment, **kwargs):
 
 @events.test_stop.add_listener
 def on_test_stop(environment, **kwargs):
-     """Generate test report"""
+    """Generate test report"""
     logger.info("\n" + "="*60)
     logger.info("LOAD TEST RESULTS")
     logger.info("="*60)

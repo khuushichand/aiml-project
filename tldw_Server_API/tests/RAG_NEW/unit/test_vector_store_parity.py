@@ -11,7 +11,7 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.pgvector_adapter imp
 def _records(dim=8):
 
 
-     return (
+    return (
         ["a","b","c"],
         [[0.0]*dim, [0.1]*dim, [0.2]*dim],
         ["A","B","C"],
@@ -25,7 +25,7 @@ def _records(dim=8):
 
 @pytest.mark.parametrize("backend", ["chroma", "pgvector"])
 def test_parity_basic_search_and_filter(monkeypatch, backend, request):
-     dim = 8
+    dim = 8
     coll = f"parity_{backend}_demo"
     if backend == "chroma":
         monkeypatch.setenv("CHROMADB_FORCE_STUB", "true")
@@ -53,7 +53,7 @@ def test_parity_basic_search_and_filter(monkeypatch, backend, request):
 
 @pytest.mark.parametrize("backend", ["pgvector"])  # $in and numeric bounds parity primarily for pgvector
 def test_parity_in_and_numeric(monkeypatch, backend, pgvector_dsn):
-     dim = 8
+    dim = 8
     coll = f"parity_{backend}_ops"
     adapter = PGVectorAdapter(VectorStoreConfig(store_type=VectorStoreType.PGVECTOR, connection_params={"dsn": pgvector_dsn}, embedding_dim=dim, user_id="t"))
 
@@ -73,7 +73,7 @@ def test_parity_in_and_numeric(monkeypatch, backend, pgvector_dsn):
 
 @pytest.mark.parametrize("backend", ["pgvector"])  # boolean ops + multi_search (pg only)
 def test_parity_boolean_and_multi_search(monkeypatch, backend, pgvector_dsn):
-     dim = 8
+    dim = 8
     adapter = PGVectorAdapter(VectorStoreConfig(store_type=VectorStoreType.PGVECTOR, connection_params={"dsn": pgvector_dsn}, embedding_dim=dim, user_id="t"))
 
     async def _run():

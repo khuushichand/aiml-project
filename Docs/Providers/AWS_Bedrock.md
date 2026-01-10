@@ -29,6 +29,7 @@ Example Request
 
 Guardrails (Optional)
 - Include guardrails via `extra_headers` and `extra_body` in the request body.
+- Merge behavior: `extra_headers`/`extra_body` are additive; explicit headers/body keys in the request win on conflicts.
 - Example:
 
   {

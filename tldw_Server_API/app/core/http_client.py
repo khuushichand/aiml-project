@@ -188,7 +188,13 @@ def _capture_error_body_hook(response: "httpx.Response") -> None:
 async def _capture_error_body_hook_async(response: "httpx.Response") -> None:
     try:
         if response.status_code >= 400:
-            await response.aread()
+            try:
+                await response.aread()
+            except Exception:
+                try:
+                    response.read()
+                except Exception:
+                    pass
     except Exception:
         pass
 
@@ -1079,7 +1085,7 @@ def create_async_client(
         headers=hdrs,
         transport=transport,
     )
-    kwargs["event_hooks"] = {"response": [_capture_error_body_hook]}
+    kwargs["event_hooks"] = {"response": [_capture_error_body_hook_async]}
     lim = limits or _httpx_limits_default()
     if lim is not None:
         kwargs["limits"] = lim
@@ -1151,7 +1157,7 @@ def create_client(
         headers=hdrs,
         transport=transport,
     )
-    kwargs["event_hooks"] = {"response": [_capture_error_body_hook_async]}
+    kwargs["event_hooks"] = {"response": [_capture_error_body_hook]}
     lim = limits or _httpx_limits_default()
     if lim is not None:
         kwargs["limits"] = lim

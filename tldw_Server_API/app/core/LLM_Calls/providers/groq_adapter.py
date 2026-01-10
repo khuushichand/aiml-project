@@ -5,6 +5,7 @@ import os
 
 from .base import ChatProvider
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
+from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
     fetch as _hc_fetch,
@@ -118,6 +119,8 @@ class GroqAdapter(ChatProvider):
             url = f"{self._resolve_base_url(request).rstrip('/')}/chat/completions"
             payload = self._build_payload(request)
             payload["stream"] = False
+            payload = merge_extra_body(payload, request)
+            headers = merge_extra_headers(headers, request)
             try:
                 resolved_timeout = self._resolve_timeout(request, timeout)
                 with http_client_factory(timeout=resolved_timeout) as client:
@@ -138,6 +141,8 @@ class GroqAdapter(ChatProvider):
             url = f"{self._resolve_base_url(request).rstrip('/')}/chat/completions"
             payload = self._build_payload(request)
             payload["stream"] = True
+            payload = merge_extra_body(payload, request)
+            headers = merge_extra_headers(headers, request)
             try:
                 resolved_timeout = self._resolve_timeout(request, timeout)
                 with http_client_factory(timeout=resolved_timeout) as client:

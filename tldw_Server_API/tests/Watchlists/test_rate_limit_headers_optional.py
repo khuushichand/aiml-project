@@ -34,7 +34,7 @@ def client_with_user(monkeypatch, tmp_path):
 def test_opml_import_rate_limit_headers_optional(client_with_user):
 
 
-     c = client_with_user
+    c = client_with_user
     # Minimal OPML content
     opml = b"""<?xml version='1.0' encoding='UTF-8'?>\n<opml version='1.0'><body><outline text='Feed' title='Feed' type='rss' xmlUrl='https://example.com/feed.xml' /></body></opml>"""
     files = {"file": ("feeds.opml", io.BytesIO(opml), "application/xml")}

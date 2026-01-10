@@ -12,14 +12,14 @@ from tldw_Server_API.app.core.RAG import (
 @pytest.mark.unit
 class TestRAGProfiles:
     def test_profiles_are_registered(self):
-             profiles = list_profiles()
+        profiles = list_profiles()
         assert "production" in profiles
         assert "research" in profiles
         assert "cheap" in profiles
 
     def test_get_profile_kwargs_merges_overrides(self):
 
-             base = get_profile_kwargs("cheap")
+        base = get_profile_kwargs("cheap")
         assert base["search_mode"] in {"fts", "hybrid"}
         # Override a couple of knobs and ensure they take precedence
         overrides = {"top_k": 3, "enable_generation": False}
@@ -29,7 +29,7 @@ class TestRAGProfiles:
 
     def test_apply_profile_to_existing_kwargs(self):
 
-             existing = {"search_mode": "vector", "top_k": 5}
+        existing = {"search_mode": "vector", "top_k": 5}
         merged = apply_profile_to_kwargs("production", existing)
         # Existing keys should win over profile defaults
         assert merged["search_mode"] == "vector"
@@ -39,7 +39,7 @@ class TestRAGProfiles:
 
     def test_multi_tenant_safe_kwargs_enforces_namespace_and_observability(self):
 
-             ns = "tenant-xyz"
+        ns = "tenant-xyz"
         kwargs = get_multi_tenant_safe_kwargs(ns)
         assert kwargs["index_namespace"] == ns
         assert kwargs["enable_observability"] is False
@@ -48,7 +48,7 @@ class TestRAGProfiles:
 
     def test_multi_tenant_safe_kwargs_requires_namespace(self):
 
-             for bad in ("", "   ", None):
+        for bad in ("", "   ", None):
             with pytest.raises(ValueError):
                 # type: ignore[arg-type]
                 get_multi_tenant_safe_kwargs(bad)  # noqa: PT011

@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture()
 def evals_crud_client() -> Tuple[TestClient, dict]:
-     os.environ.setdefault("AUTH_MODE", "single_user")
+    os.environ.setdefault("AUTH_MODE", "single_user")
     os.environ.setdefault("TESTING", "true")
     os.environ.setdefault("TEST_MODE", "true")
 
@@ -26,7 +26,7 @@ def evals_crud_client() -> Tuple[TestClient, dict]:
 
 @pytest.mark.integration
 def test_create_run_uses_typed_model(evals_crud_client, monkeypatch):
-     client, headers = evals_crud_client
+    client, headers = evals_crud_client
 
     # Patch evaluation service with minimal stub
     class _SvcStub:
@@ -65,7 +65,7 @@ def test_create_run_uses_typed_model(evals_crud_client, monkeypatch):
 
 @pytest.mark.integration
 def test_create_run_forbids_extra_keys(evals_crud_client, monkeypatch):
-     client, headers = evals_crud_client
+    client, headers = evals_crud_client
 
     # No need to patch service; validation happens before invocation
     payload = {

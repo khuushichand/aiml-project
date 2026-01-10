@@ -8,7 +8,7 @@ from tldw_Server_API.app.main import app
 
 @pytest.mark.unit
 def test_metrics_text_contains_golden_subset():
-     client = TestClient(app)
+    client = TestClient(app)
     r = client.get("/api/v1/metrics/text")
     assert r.status_code == 200
     body = r.text

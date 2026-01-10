@@ -7,7 +7,7 @@ from tldw_Server_API.app.core.Jobs.pg_util import normalize_pg_dsn, negotiate_pg
 def test_normalize_pg_dsn_encodes_options_spaces():
 
 
-     dsn = "postgresql://tldw_user:TestPassword123!@127.0.0.1:5432/tldw_content"
+    dsn = "postgresql://tldw_user:TestPassword123!@127.0.0.1:5432/tldw_content"
     out = normalize_pg_dsn(dsn)
     assert out.startswith(dsn)
     assert "connect_timeout=" in out
@@ -32,18 +32,18 @@ def test_negotiate_pg_dsn_downgrades_on_unrecognized_parameter(monkeypatch):
 
     def fake_connect(dsn):
 
-             calls["dsns"].append(dsn)
+        calls["dsns"].append(dsn)
         q = dsn.split("?", 1)[-1]
         if "options=" in q and "idle_in_transaction_session_timeout" in q:
             raise FakeError("unrecognized configuration parameter \"idle_in_transaction_session_timeout\"")
         # succeed otherwise
         class _Conn:
             def __enter__(self):
-                             return self
+                return self
 
             def __exit__(self, exc_type, exc, tb):
 
-                             return False
+                return False
 
         return _Conn()
 

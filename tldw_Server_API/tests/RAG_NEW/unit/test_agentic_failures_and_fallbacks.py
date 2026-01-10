@@ -7,7 +7,7 @@ from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
 def _doc() -> Document:
 
 
-     return Document(
+    return Document(
         id="m_fail_1",
         content=("# Intro\nTransformers rely on attention.\n\n# Details\nMulti-head attention improves capacity."),
         metadata={"title": "Transformer"},
@@ -20,7 +20,7 @@ def _doc() -> Document:
 async def test_planner_failure_falls_back_to_heuristics(monkeypatch):
     class FakeRetriever:
         def __init__(self, *args, **kwargs):
-                     pass
+            pass
 
         async def retrieve(self, *args, **kwargs):
             return [_doc()]
@@ -29,7 +29,7 @@ async def test_planner_failure_falls_back_to_heuristics(monkeypatch):
 
     class ExplodingPlanner:
         def __init__(self, *args, **kwargs):
-                     pass
+            pass
 
         async def generate(self, *args, **kwargs):  # noqa: ARG002
             raise RuntimeError("planner explode")
@@ -54,7 +54,7 @@ async def test_planner_failure_falls_back_to_heuristics(monkeypatch):
 async def test_time_budget_breach_early_stop(monkeypatch):
     class FakeRetriever:
         def __init__(self, *args, **kwargs):
-                     pass
+            pass
 
         async def retrieve(self, *args, **kwargs):
             return [_doc()]
@@ -82,7 +82,7 @@ async def test_time_budget_breach_early_stop(monkeypatch):
 async def test_tool_loop_exhaustion_respects_max_calls(monkeypatch):
     class FakeRetriever:
         def __init__(self, *args, **kwargs):
-                     pass
+            pass
 
         async def retrieve(self, *args, **kwargs):
             return [_doc()]

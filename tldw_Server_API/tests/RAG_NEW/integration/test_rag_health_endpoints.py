@@ -17,7 +17,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture()
 def client():
-     async def _fake_get_auth_principal(_request: Request) -> AuthPrincipal:  # type: ignore[override]
+    async def _fake_get_auth_principal(_request: Request) -> AuthPrincipal:  # type: ignore[override]
         # Diagnostics-style principal with system.logs permission and admin flag for RAG health
         return AuthPrincipal(
             kind="service",

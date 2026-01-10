@@ -26,21 +26,21 @@ class TestEvaluationManagerInit:
 
     def test_init_with_default_config(self, temp_db_path):
 
-             """Test initialization with default configuration."""
+        """Test initialization with default configuration."""
         manager = EvaluationManager()
         assert manager.db_path is not None
         assert manager.config is not None
 
     def test_init_with_custom_db_path(self, temp_db_path):
 
-             """Test initialization with custom database path."""
+        """Test initialization with custom database path."""
         with patch.object(EvaluationManager, '_get_db_path', return_value=temp_db_path):
             manager = EvaluationManager()
             assert manager.db_path == temp_db_path
 
     def test_db_path_sanitization(self, temp_db_path):
 
-             """Test that database path is properly sanitized."""
+        """Test that database path is properly sanitized."""
         manager = EvaluationManager()
 
         # Test various malicious path attempts
@@ -65,7 +65,7 @@ class TestEvaluationManagerInit:
 
     def test_database_migration_on_init(self, temp_db_path):
 
-             """Test that database migrations are applied on initialization."""
+        """Test that database migrations are applied on initialization."""
         with patch('tldw_Server_API.app.core.Evaluations.evaluation_manager.migrate_evaluations_database') as mock_migrate:
             with patch.object(EvaluationManager, '_get_db_path', return_value=temp_db_path):
                 manager = EvaluationManager()

@@ -17,14 +17,14 @@ from tldw_Server_API.app.core.AuthNZ.email_service import EmailService, EMAIL_TE
 
 @pytest.fixture
 def mock_settings():
-     """Create mock settings for email service."""
+    """Create mock settings for email service."""
     settings = MagicMock()
     return settings
 
 
 @pytest.fixture
 def email_service(mock_settings, monkeypatch, tmp_path):
-     """Create email service with mock provider."""
+    """Create email service with mock provider."""
     monkeypatch.setenv("EMAIL_PROVIDER", "mock")
     monkeypatch.setenv("EMAIL_MOCK_OUTPUT", "file")
     monkeypatch.setenv("EMAIL_MOCK_FILE_PATH", str(tmp_path))
@@ -38,7 +38,7 @@ class TestEmailTemplates:
 
     def test_password_reset_template_exists(self):
 
-             """Password reset template should be defined."""
+        """Password reset template should be defined."""
         assert "password_reset" in EMAIL_TEMPLATES
         assert "subject" in EMAIL_TEMPLATES["password_reset"]
         assert "html" in EMAIL_TEMPLATES["password_reset"]
@@ -46,14 +46,14 @@ class TestEmailTemplates:
 
     def test_email_verification_template_exists(self):
 
-             """Email verification template should be defined."""
+        """Email verification template should be defined."""
         assert "email_verification" in EMAIL_TEMPLATES
         assert "subject" in EMAIL_TEMPLATES["email_verification"]
         assert "html" in EMAIL_TEMPLATES["email_verification"]
 
     def test_mfa_enabled_template_exists(self):
 
-             """MFA enabled template should be defined."""
+        """MFA enabled template should be defined."""
         assert "mfa_enabled" in EMAIL_TEMPLATES
 
 
@@ -62,7 +62,7 @@ class TestEmailServiceInitialization:
 
     def test_default_provider_is_mock(self, monkeypatch, mock_settings, tmp_path):
 
-             """Default email provider should be mock."""
+        """Default email provider should be mock."""
         monkeypatch.delenv("EMAIL_PROVIDER", raising=False)
         monkeypatch.setenv("EMAIL_MOCK_FILE_PATH", str(tmp_path))
         service = EmailService(settings=mock_settings)
@@ -70,7 +70,7 @@ class TestEmailServiceInitialization:
 
     def test_smtp_provider_configuration(self, monkeypatch, mock_settings):
 
-             """SMTP provider should read configuration from environment."""
+        """SMTP provider should read configuration from environment."""
         monkeypatch.setenv("EMAIL_PROVIDER", "smtp")
         monkeypatch.setenv("SMTP_HOST", "smtp.test.com")
         monkeypatch.setenv("SMTP_PORT", "465")

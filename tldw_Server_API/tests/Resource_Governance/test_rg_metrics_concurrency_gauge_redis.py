@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registr
 async def test_concurrency_gauge_updates_on_reserve_and_release():
     class _Loader:
         def get_policy(self, pid):
-                     return {"streams": {"max_concurrent": 2, "ttl_sec": 60}, "scopes": ["global", "user"]}
+            return {"streams": {"max_concurrent": 2, "ttl_sec": 60}, "scopes": ["global", "user"]}
 
     rg = RedisResourceGovernor(policy_loader=_Loader(), ns="rg_gauge")
     reg = get_metrics_registry()

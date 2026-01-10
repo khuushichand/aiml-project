@@ -8,13 +8,13 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 @pytest.fixture(autouse=True)
 def _setup(jobs_pg_dsn):
-     return
+    return
 
 
 def test_completion_idempotent_postgres(monkeypatch, jobs_pg_dsn):
 
 
-     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
+    jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     j = jm.create_job(domain="test", queue="default", job_type="t", payload={}, owner_user_id="u")
     acq = jm.acquire_next_job(domain="test", queue="default", lease_seconds=10, worker_id="w1")
     assert acq and acq.get("id") == j["id"]

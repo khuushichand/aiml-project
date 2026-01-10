@@ -1855,7 +1855,6 @@ async def lifespan(app: FastAPI):
     chatbooks_cleanup_stop_event = None
     claims_task = None
     jobs_metrics_task = None
-    reembed_task = None
     try:
         import os as _os
         import asyncio as _asyncio
@@ -2124,22 +2123,6 @@ async def lifespan(app: FastAPI):
             logger.info("Workflows DB maintenance worker disabled by flag")
     except Exception as e:
         logger.warning(f"Failed to start Workflows DB maintenance worker: {e}")
-
-    # Embeddings Re-embed expansion worker (Jobs-driven)
-    try:
-        import os as _os
-        import asyncio as _asyncio
-        from tldw_Server_API.app.core.Embeddings.services.reembed_worker import run as _run_reembed
-
-        _enabled = _os.getenv("EMBEDDINGS_REEMBED_WORKER_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}
-        if _enabled:
-            reembed_stop_event = _asyncio.Event()
-            reembed_task = _asyncio.create_task(_run_reembed(reembed_stop_event))
-            logger.info("Embeddings re-embed expansion worker started with explicit stop_event signal")
-        else:
-            logger.info("Embeddings re-embed expansion worker disabled by flag (EMBEDDINGS_REEMBED_WORKER_ENABLED)")
-    except Exception as e:
-        logger.warning(f"Failed to start re-embed expansion worker: {e}")
 
     # Jobs integrity sweeper (periodic validator)
     try:

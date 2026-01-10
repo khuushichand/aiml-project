@@ -31,7 +31,7 @@ class TestConfig:
 
     @classmethod
     def setup_test_environment(cls) -> None:
-             """Set up environment variables for testing."""
+        """Set up environment variables for testing."""
         os.environ["AUTH_MODE"] = cls.AUTH_MODE
         # Don't set API_BEARER - it causes the wrong authentication path in single-user mode
         # os.environ["API_BEARER"] = cls.TEST_API_KEY
@@ -50,17 +50,17 @@ class TestConfig:
 
     @classmethod
     def get_auth_headers(cls) -> Dict[str, str]:
-             """Get authentication headers for API testing."""
+        """Get authentication headers for API testing."""
         return {"Authorization": f"Bearer {cls.TEST_API_KEY}"}
 
     @classmethod
     def get_sk_auth_headers(cls) -> Dict[str, str]:
-             """Get OpenAI-style authentication headers for API testing."""
+        """Get OpenAI-style authentication headers for API testing."""
         return {"Authorization": f"Bearer {cls.TEST_SK_KEY}"}
 
     @classmethod
     def reset_settings(cls) -> None:
-             """Reset authentication settings."""
+        """Reset authentication settings."""
         try:
             from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
             reset_settings()

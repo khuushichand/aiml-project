@@ -18,13 +18,13 @@ def test_chromadb_delete_by_filter_stub(monkeypatch):
     # Minimal Settings shim
     class _Settings:
         def __init__(self, **kwargs):
-                     self.kw = kwargs
+            self.kw = kwargs
     chroma_cfg.Settings = _Settings
     chroma_mod.config = chroma_cfg
     # Minimal Client shim (won't be used under FORCE_STUB)
     class _Client:
         def __init__(self, *a, **k):
-                     pass
+            pass
     chroma_mod.Client = _Client
     chroma_mod.PersistentClient = _Client
     monkeypatch.setitem(sys.modules, "chromadb", chroma_mod)

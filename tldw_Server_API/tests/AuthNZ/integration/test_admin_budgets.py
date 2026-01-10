@@ -9,7 +9,7 @@ pytestmark = pytest.mark.integration
 def test_admin_budgets_list_and_update(isolated_test_environment):
 
 
-     client, db_name = isolated_test_environment
+    client, db_name = isolated_test_environment
     headers = _admin_headers(client, db_name)
 
     org_resp = client.post("/api/v1/admin/orgs", headers=headers, json={"name": "Budget Org"})

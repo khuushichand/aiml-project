@@ -12,11 +12,11 @@ class _ControlledDatetime(rate_limiter_module.datetime):
 
     @classmethod
     def utcnow(cls):
-             return cls.current
+        return cls.current
 
     @classmethod
     def now(cls, tz=None):
-             if tz is None:
+        if tz is None:
             return cls.current
         try:
             return cls.current.astimezone(tz)
@@ -26,7 +26,7 @@ class _ControlledDatetime(rate_limiter_module.datetime):
 
 class _StubRepo:
     def __init__(self) -> None:
-             self._attempts: dict[tuple[str, str], dict[str, object]] = {}
+        self._attempts: dict[tuple[str, str], dict[str, object]] = {}
         self._lockouts: dict[str, datetime] = {}
 
     async def ensure_schema(self) -> None:

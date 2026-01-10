@@ -7,7 +7,7 @@ async def test_pmc_oai_identify_success(monkeypatch, paper_search_app):
 
     def _fake_identify():
 
-             return {"repositoryName": "PMC OAI"}, None
+        return {"repositoryName": "PMC OAI"}, None
 
     from tldw_Server_API.app.core.Third_Party import PMC_OAI as _OAI
     monkeypatch.setattr(_OAI, "pmc_oai_identify", _fake_identify)
@@ -23,7 +23,7 @@ async def test_pmc_oai_list_records_success(monkeypatch, paper_search_app):
 
     def _fake_list_records(metadataPrefix, f, u, s, token):
 
-             return [
+        return [
             {"header": {"identifier": "oai:pubmedcentral.nih.gov:123"}, "metadata": {"title": "X"}},
             {"header": {"identifier": "oai:pubmedcentral.nih.gov:124"}, "metadata": {"title": "Y"}},
         ], "abc123", None
@@ -44,7 +44,7 @@ async def test_pmc_oa_identify_success(monkeypatch, paper_search_app):
 
     def _fake_oa_identify():
 
-             return {"repositoryName": "PMC OA"}, None
+        return {"repositoryName": "PMC OA"}, None
 
     from tldw_Server_API.app.core.Third_Party import PMC_OA as _OA
     monkeypatch.setattr(_OA, "pmc_oa_identify", _fake_oa_identify)
@@ -60,7 +60,7 @@ async def test_pmc_oa_query_success(monkeypatch, paper_search_app):
 
     def _fake_oa_query(f, u, fmt, token, idp):
 
-             return [
+        return [
             {"id": "PMC123", "links": [{"format": "pdf", "href": "http://example/pdf"}]}
         ], "nextToken", None
 
@@ -80,7 +80,7 @@ async def test_pmc_oa_query_filtering(monkeypatch, paper_search_app):
 
     def _fake_oa_query(f, u, fmt, token, idp):
 
-             return [
+        return [
             {"id": "PMC1", "license": "CC BY", "links": [{"format": "pdf", "href": "http://x/a.pdf"}]},
             {"id": "PMC2", "license": "All rights reserved", "links": [{"format": "tgz", "href": "http://x/a.tgz"}]},
         ], None, None
@@ -107,9 +107,9 @@ async def test_pmc_oa_ingest_pdf_success(monkeypatch, paper_search_app):
 
     class _FakeDB:
         def __init__(self):
-                     self.captured = []
+            self.captured = []
         def add_media_with_keywords(self, **kwargs):
-                     self.captured.append(kwargs)
+            self.captured.append(kwargs)
             return 101, "uuid-123", "ok"
 
     # Override DB dependency
@@ -118,7 +118,7 @@ async def test_pmc_oa_ingest_pdf_success(monkeypatch, paper_search_app):
 
     def _fake_download_pdf(pmcid):
 
-             return b"%PDF-1.5\n...", "paper.pdf", None
+        return b"%PDF-1.5\n...", "paper.pdf", None
 
     async def _fake_process_pdf_task(**kwargs):
         return {
@@ -173,9 +173,9 @@ async def test_pmc_oa_ingest_pdf_enrichment(monkeypatch, paper_search_app):
 
     class _FakeDB:
         def __init__(self):
-                     self.captured = []
+            self.captured = []
         def add_media_with_keywords(self, **kwargs):
-                     self.captured.append(kwargs)
+            self.captured.append(kwargs)
             return 101, "uuid-123", "ok"
 
     fake_db = _FakeDB()
@@ -183,7 +183,7 @@ async def test_pmc_oa_ingest_pdf_enrichment(monkeypatch, paper_search_app):
 
     def _fake_download_pdf(pmcid):
 
-             return b"%PDF-1.5\n...", "paper.pdf", None
+        return b"%PDF-1.5\n...", "paper.pdf", None
 
     async def _fake_process_pdf_task(**kwargs):
         return {
@@ -195,7 +195,7 @@ async def test_pmc_oa_ingest_pdf_enrichment(monkeypatch, paper_search_app):
 
     def _fake_oai_get_record(identifier, metadataPrefix):
 
-             return {
+        return {
             "metadata": {
                 "title": "OAI Title",
                 "creators": ["Alice", "Bob"],
@@ -240,7 +240,7 @@ async def test_pmc_oa_fetch_pdf_success(monkeypatch, paper_search_app):
 
     def _fake_download_pdf(pmcid):
 
-             return b"%PDF-1.4\n...", "PMC9999999.pdf", None
+        return b"%PDF-1.4\n...", "PMC9999999.pdf", None
 
     from tldw_Server_API.app.core.Third_Party import PMC_OA as _OA
     monkeypatch.setattr(_OA, "download_pmc_pdf", _fake_download_pdf)

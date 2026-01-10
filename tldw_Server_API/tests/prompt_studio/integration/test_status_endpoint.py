@@ -27,9 +27,7 @@ def _mk_prompt(client, project_id: int, backend_label: str) -> int:
 
 
 def test_status_reports_queue_and_leases(prompt_studio_dual_backend_client):
-
-
-     backend_label, client, db = prompt_studio_dual_backend_client
+    backend_label, client, db = prompt_studio_dual_backend_client
 
     # Baseline status call
     r0 = client.get("/api/v1/prompt-studio/status")

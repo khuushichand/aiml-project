@@ -70,7 +70,7 @@ Flow (story turn):
 6. Story entry + metadata are persisted.
 
 ## 8. Data Model (SQLite default, Postgres supported)
-Per-user database path: `<USER_DB_BASE_DIR>/<user_id>/Story_DB.db` (new). This avoids mixing with `ChaChaNotes_DB` and keeps schema focused. Reuse DB_Management patterns (optimistic locking, soft delete, sync log optional).
+Per-user database path: `<USER_DB_BASE_DIR>/<user_id>/Story_DB.db` (new). This avoids mixing with `ChaChaNotes_DB` and keeps schema focused. Reuse DB_Management patterns (optimistic locking, soft delete, sync log optional). `USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root); override via environment variable or `Config_Files/config.txt` as needed.
 
 Tables (high level):
 - `stories`

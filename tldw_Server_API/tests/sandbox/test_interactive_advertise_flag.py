@@ -25,7 +25,7 @@ def _client(monkeypatch) -> TestClient:
 def test_interactive_supported_advertised_when_execution_enabled(monkeypatch) -> None:
 
 
-     with _client(monkeypatch) as client:
+    with _client(monkeypatch) as client:
         r = client.get("/api/v1/sandbox/runtimes")
         assert r.status_code == 200
         data = r.json()

@@ -12,7 +12,7 @@ class FakeTime:
 
     def __call__(self) -> float:
 
-             return self.t
+        return self.t
 
     def advance(self, s: float) -> None:
         self.t += s

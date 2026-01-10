@@ -7,7 +7,7 @@ from tldw_Server_API.app.main import app
 
 @pytest.mark.unit
 def test_prometheus_metrics_contains_orchestrator_gauges(disable_heavy_startup, admin_user, redis_client):
-     redis_client.run(redis_client.xadd("embeddings:embedding", {"seq": "0"}))
+    redis_client.run(redis_client.xadd("embeddings:embedding", {"seq": "0"}))
     # Trigger snapshot so gauges are set
     client = TestClient(app)
     r0 = client.get("/api/v1/embeddings/orchestrator/summary")
@@ -89,7 +89,7 @@ def test_sse_disconnect_increments_counter(disable_heavy_startup, redis_client, 
 
 @pytest.mark.unit
 def test_stage_flag_metric_after_pause(disable_heavy_startup, admin_user, redis_client):
-     client = TestClient(app)
+    client = TestClient(app)
     # Pause embedding stage via admin API
     r0 = client.post("/api/v1/embeddings/stage/control", json={"stage": "embedding", "action": "pause"})
     assert r0.status_code == 200

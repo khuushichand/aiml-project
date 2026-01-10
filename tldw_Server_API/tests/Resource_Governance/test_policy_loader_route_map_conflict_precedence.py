@@ -11,7 +11,7 @@ pytestmark = pytest.mark.rate_limit
 
 class _StoreWithRouteMap:
     def __init__(self):
-             self._ver = 1
+        self._ver = 1
         self._updated = time.time()
 
     async def get_latest_policy(self):

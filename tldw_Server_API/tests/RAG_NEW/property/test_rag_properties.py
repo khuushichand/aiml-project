@@ -31,7 +31,7 @@ document_content = st.text(min_size=10, max_size=5000)
 # Document strategy
 @st.composite
 def document_strategy(draw):
-     """Generate valid documents."""
+    """Generate valid documents."""
     return Document(
         id=draw(st.text(min_size=1, max_size=50)),
         content=draw(document_content),
@@ -48,7 +48,7 @@ valid_score = st.floats(min_value=0.0, max_value=1.0, allow_nan=False)
 # Configuration strategy
 @st.composite
 def config_strategy(draw):
-     """Generate valid pipeline configurations."""
+    """Generate valid pipeline configurations."""
     return {
         "enable_cache": draw(st.booleans()),
         "enable_expansion": draw(st.booleans()),
@@ -62,7 +62,7 @@ def config_strategy(draw):
 # Retrieval config strategy
 @st.composite
 def retrieval_config_strategy(draw):
-     """Generate valid retrieval configurations aligned with current API."""
+    """Generate valid retrieval configurations aligned with current API."""
     use_fts = draw(st.booleans())
     use_vector = draw(st.booleans())
     # Ensure at least one mode is enabled to be meaningful
@@ -102,7 +102,7 @@ class TestPipelineContextProperties:
         config=config_strategy()
     )
     def test_context_query_preservation(self, query, config):
-             """Original query should always be preserved."""
+        """Original query should always be preserved."""
         context = SimpleContext(
             query=query,
             original_query=query,
@@ -123,7 +123,7 @@ class TestPipelineContextProperties:
         documents=st.lists(document_strategy(), min_size=0, max_size=50)
     )
     def test_context_document_operations(self, documents):
-             """Document operations should maintain consistency."""
+        """Document operations should maintain consistency."""
         context = SimpleContext(
             query="test",
             original_query="test"
@@ -151,7 +151,7 @@ class TestPipelineContextProperties:
         )
     )
     def test_context_error_tracking(self, errors):
-             """Error tracking should preserve all error information."""
+        """Error tracking should preserve all error information."""
         context = SimpleContext(
             query="test",
             original_query="test"
@@ -181,7 +181,7 @@ class TestRetrievalProperties:
         top_k=st.integers(min_value=1, max_value=50)
     )
     def test_retrieval_count_invariant(self, num_docs, top_k):
-             """Retrieved documents should never exceed min(num_docs, top_k)."""
+        """Retrieved documents should never exceed min(num_docs, top_k)."""
         # Create documents
         documents = [
             Document(id=f"doc_{i}", content=f"Content {i}", metadata={})
@@ -203,7 +203,7 @@ class TestRetrievalProperties:
         )
     )
     def test_retrieval_score_ordering(self, documents):
-             """Retrieved documents should be ordered by score (descending)."""
+        """Retrieved documents should be ordered by score (descending)."""
         # Sort by score
         sorted_docs = sorted(documents, key=lambda x: x[1], reverse=True)
 
@@ -223,7 +223,7 @@ class TestRetrievalProperties:
         min_score=st.floats(min_value=0.0, max_value=1.0)
     )
     def test_score_filtering_invariant(self, documents, min_score):
-             """Documents below min_score should be filtered out."""
+        """Documents below min_score should be filtered out."""
         # Assign random scores
         doc_scores = [
             (doc, np.random.random())
@@ -253,7 +253,7 @@ class TestRetrievalProperties:
         config=retrieval_config_strategy()
     )
     def test_retrieval_config_validity(self, query, config):
-             """Retrieval configuration should always be valid."""
+        """Retrieval configuration should always be valid."""
         assert config.max_results > 0
         assert 0 <= config.min_score <= 1.0
         # At least one search mode enabled
@@ -270,7 +270,7 @@ class TestQueryExpansionProperties:
 
     @given(query=valid_query)
     def test_expansion_preserves_original(self, query):
-             """Expansion should preserve original query information."""
+        """Expansion should preserve original query information."""
         expanded = query + " expanded terms"
 
         # Original query should be substring of expanded
@@ -284,7 +284,7 @@ class TestQueryExpansionProperties:
         expansions=st.lists(st.text(min_size=1, max_size=50), min_size=0, max_size=5)
     )
     def test_expansion_additive(self, query, expansions):
-             """Query expansion should only add terms, not remove."""
+        """Query expansion should only add terms, not remove."""
         expanded_query = query
         for expansion in expansions:
             expanded_query = f"{expanded_query} {expansion}"
@@ -303,7 +303,7 @@ class TestQueryExpansionProperties:
     @example(acronym="RAG")
     @example(acronym="ML")
     def test_acronym_expansion_format(self, acronym):
-             """Acronym expansion should follow expected format."""
+        """Acronym expansion should follow expected format."""
         # Simulate acronym expansion
         expanded_forms = {
             "API": "Application Programming Interface",
@@ -331,7 +331,7 @@ class TestRerankingProperties:
         rerank_top_k=st.integers(min_value=1, max_value=10)
     )
     def test_reranking_preserves_documents(self, documents, rerank_top_k):
-             """Reranking should only reorder, not modify documents."""
+        """Reranking should only reorder, not modify documents."""
         # Simulate reranking
         reranked = documents[:min(len(documents), rerank_top_k)]
 
@@ -351,7 +351,7 @@ class TestRerankingProperties:
         rerank_top_k=st.integers(min_value=1, max_value=20)
     )
     def test_reranking_count_invariant(self, num_docs, rerank_top_k):
-             """Reranking should respect top_k limit."""
+        """Reranking should respect top_k limit."""
         documents = [
             Document(id=f"doc_{i}", content=f"Content {i}", metadata={})
             for i in range(num_docs)
@@ -371,7 +371,7 @@ class TestRerankingProperties:
         )
     )
     def test_reranking_improves_relevance(self, documents):
-             """Reranking should improve average relevance score."""
+        """Reranking should improve average relevance score."""
         # Initial scores
         initial_scores = [score for _, score in documents]
         avg_initial = sum(initial_scores) / len(initial_scores) if initial_scores else 0
@@ -401,7 +401,7 @@ class TestCacheProperties:
         documents=st.lists(document_strategy(), min_size=1, max_size=10)
     )
     def test_cache_determinism(self, query1, query2, documents):
-             """Same query should produce same cache key."""
+        """Same query should produce same cache key."""
         # Simulate cache key generation
         def generate_cache_key(query: str) -> str:
             return str(hash(query.lower().strip()))
@@ -423,7 +423,7 @@ class TestCacheProperties:
         access_time=st.integers(min_value=0, max_value=86400)
     )
     def test_cache_ttl_behavior(self, ttl, access_time):
-             """Cache entries should expire after TTL."""
+        """Cache entries should expire after TTL."""
         cache_time = 0
 
         # Entry should be valid before TTL
@@ -441,7 +441,7 @@ class TestCacheProperties:
         num_entries=st.integers(min_value=0, max_value=200)
     )
     def test_cache_size_limit(self, cache_size, num_entries):
-             """Cache should respect size limits."""
+        """Cache should respect size limits."""
         cache = {}
 
         for i in range(num_entries):
@@ -467,7 +467,7 @@ class RAGStateMachine(RuleBasedStateMachine):
 
     def __init__(self):
 
-             super().__init__()
+        super().__init__()
         self.queries = []
         self.documents = {}
         self.cache = {}
@@ -484,7 +484,7 @@ class RAGStateMachine(RuleBasedStateMachine):
         target=queries_bundle
     )
     def add_query(self, query):
-             """Add a query to the system."""
+        """Add a query to the system."""
         self.queries.append(query)
         return query
 
@@ -494,7 +494,7 @@ class RAGStateMachine(RuleBasedStateMachine):
         target=documents_bundle
     )
     def add_document(self, doc_id, content):
-             """Add a document to the system."""
+        """Add a document to the system."""
         if doc_id not in self.documents:
             self.documents[doc_id] = Document(
                 id=doc_id,
@@ -508,7 +508,7 @@ class RAGStateMachine(RuleBasedStateMachine):
         enable_cache=st.booleans()
     )
     def execute_search(self, query, enable_cache):
-             """Execute a search with the query."""
+        """Execute a search with the query."""
         if enable_cache and query in self.cache:
             # Cache hit
             results = self.cache[query]
@@ -530,7 +530,7 @@ class RAGStateMachine(RuleBasedStateMachine):
         doc_id=documents_bundle
     )
     def remove_document(self, doc_id):
-             """Remove a document from the system."""
+        """Remove a document from the system."""
         if doc_id in self.documents:
             del self.documents[doc_id]
             # Invalidate cache entries that contained this document
@@ -543,7 +543,7 @@ class RAGStateMachine(RuleBasedStateMachine):
         top_k=st.integers(min_value=1, max_value=50)
     )
     def update_config(self, top_k):
-             """Update configuration."""
+        """Update configuration."""
         self.config["top_k"] = top_k
         # Config changes might invalidate cache
         if top_k < self.config.get("top_k", 10):
@@ -555,7 +555,7 @@ class RAGStateMachine(RuleBasedStateMachine):
 
     @invariant()
     def cache_consistency(self):
-             """Cache entries should be consistent with current documents."""
+        """Cache entries should be consistent with current documents."""
         for query, cached_docs in self.cache.items():
             for doc in cached_docs:
                 if doc.id in self.documents:
@@ -564,7 +564,7 @@ class RAGStateMachine(RuleBasedStateMachine):
 
     @invariant()
     def result_count_invariant(self):
-             """Results should never exceed top_k."""
+        """Results should never exceed top_k."""
         for cached_results in self.cache.values():
             assert len(cached_results) <= self.config["top_k"]
 
@@ -615,7 +615,7 @@ class TestErrorHandlingProperties:
         )
     )
     def test_invalid_config_handling(self, config):
-             """Invalid configuration should be handled gracefully."""
+        """Invalid configuration should be handled gracefully."""
         # System should validate and reject or fix invalid config
         validated_config = {}
 
@@ -654,7 +654,7 @@ class TestPerformanceProperties:
         top_k=st.integers(min_value=1, max_value=100)
     )
     def test_retrieval_complexity(self, num_documents, top_k):
-             """Retrieval time should scale reasonably with document count."""
+        """Retrieval time should scale reasonably with document count."""
         # Theoretical complexity for different retrieval methods
 
         # Linear scan: O(n)
@@ -674,7 +674,7 @@ class TestPerformanceProperties:
         num_expansions=st.integers(min_value=0, max_value=10)
     )
     def test_expansion_overhead(self, query_length, num_expansions):
-             """Query expansion overhead should be bounded."""
+        """Query expansion overhead should be bounded."""
         # Original query processing time (simulated)
         base_time = query_length * 0.001  # 1ms per character
 
@@ -694,7 +694,7 @@ class TestPerformanceProperties:
         hit_rate=st.floats(min_value=0.0, max_value=1.0)
     )
     def test_cache_efficiency(self, cache_size, hit_rate):
-             """Cache should provide performance benefit when hit rate is high."""
+        """Cache should provide performance benefit when hit rate is high."""
         # Time without cache (ms)
         uncached_time = 100
 

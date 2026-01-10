@@ -12,7 +12,7 @@ pytestmark = pytest.mark.pg_jobs
 def _require_pg(monkeypatch):
 
 
-     db_url = os.getenv("JOBS_DB_URL", "")
+    db_url = os.getenv("JOBS_DB_URL", "")
     if not db_url or not db_url.startswith("postgres"):
         pytest.skip("JOBS_DB_URL not configured for Postgres tests")
     monkeypatch.setenv("JOBS_ENFORCE_LEASE_ACK", "true")
@@ -24,7 +24,7 @@ def _require_pg(monkeypatch):
 def test_pg_quarantine_and_requeue_updates_counters(monkeypatch):
 
 
-     _require_pg(monkeypatch)
+    _require_pg(monkeypatch)
     jm = JobManager(backend="postgres", db_url=os.getenv("JOBS_DB_URL"))
     j = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1")
     acq = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=30, worker_id="wpg")

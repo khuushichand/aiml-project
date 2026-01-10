@@ -141,7 +141,7 @@ Provider selection notes:
 
 - Unit tests:
   - Schema validation: `tldw_Server_API/tests/Chat/test_chat_request_schemas.py` and `tldw_Server_API/tests/Chat_NEW/unit/test_chat_schemas.py`
-  - Chat functions: `tldw_Server_API/tests/Chat/test_chat_functions.py` and `tldw_Server_API/tests/Chat_NEW/unit/test_chat_functions.py`
+  - Chat service/orchestrator: `tldw_Server_API/tests/Chat/unit/test_chat_service_fallback.py` and `tldw_Server_API/tests/Chat/unit/test_chat_service_normalization.py`
   - Dispatch shape/mapping: update tests when changing adapter/capability registries
 - Integration tests:
   - Endpoint flow for `/api/v1/chat/completions`: `tldw_Server_API/tests/Chat/test_chat_endpoint_integration.py`, `tldw_Server_API/tests/Chat/test_chat_completions_integration.py`

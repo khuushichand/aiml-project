@@ -12,7 +12,7 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 
 @pytest.fixture()
 def client_and_db(tmp_path, auth_headers):
-     db = WorkflowsDatabase(str(tmp_path / "wf.db"))
+    db = WorkflowsDatabase(str(tmp_path / "wf.db"))
 
     async def override_user():
         # Match the run's owner and tenant for strict owner checks
@@ -20,7 +20,7 @@ def client_and_db(tmp_path, auth_headers):
 
     def override_db():
 
-             return db
+        return db
 
     app.dependency_overrides[get_request_user] = override_user
     app.dependency_overrides[wf_mod._get_db] = override_db
