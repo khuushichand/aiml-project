@@ -6,6 +6,13 @@ from typing import Any, Optional
 
 from loguru import logger
 
+from tldw_Server_API.app.core.Chat.Chat_Deps import (
+    ChatAPIError,
+    ChatAuthenticationError,
+    ChatBadRequestError,
+    ChatProviderError,
+    ChatRateLimitError,
+)
 from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
 
 
@@ -122,6 +129,61 @@ def log_http_400_body(provider: str, exc: Exception, parsed_body: Any = None, ma
     if max_chars is not None and len(body_text) > max_chars:
         body_text = body_text[:max_chars] + "...(truncated)"
     logger.warning(f"{provider or 'unknown'}: upstream 400 response body: {body_text}")
+
+
+def raise_chat_error_from_http(
+    provider: str,
+    exc: Exception,
+    *,
+    auth_statuses: tuple[int, ...] = (401, 403),
+    rate_limit_statuses: tuple[int, ...] = (429,),
+    bad_request_statuses: tuple[int, ...] = (400, 404, 422),
+    treat_other_4xx_as_bad_request: bool = True,
+) -> None:
+    """Normalize HTTP status errors into ChatAPIError subclasses."""
+    status_code = get_http_status_from_exception(exc)
+    message: str = ""
+    response = getattr(exc, "response", None)
+    parsed_body = None
+
+    if response is not None:
+        try:
+            parsed_body = response.json()
+        except Exception:
+            parsed_body = None
+        log_http_400_body(provider, exc, parsed_body)
+        if isinstance(parsed_body, dict):
+            err_obj = parsed_body.get("error")
+            if isinstance(err_obj, dict) and isinstance(err_obj.get("message"), str):
+                message = err_obj.get("message") or ""
+            elif isinstance(err_obj, str):
+                message = err_obj
+            elif isinstance(parsed_body.get("message"), str):
+                message = parsed_body.get("message") or ""
+        if not message:
+            message = get_http_error_text(exc)
+        safe_text = _redact_sensitive_text(str(message))
+        if safe_text:
+            logger.error(f"{provider or 'unknown'} HTTP error response (status {status_code}): {repr(safe_text)[:500]}")
+    else:
+        logger.error(f"{provider or 'unknown'} HTTP error with no response payload: {exc}")
+        message = get_http_error_text(exc)
+
+    if not message:
+        message = f"{provider} API error" if provider else "API error"
+
+    if status_code in auth_statuses:
+        raise ChatAuthenticationError(provider=provider or None, message=message)
+    if status_code in rate_limit_statuses:
+        raise ChatRateLimitError(provider=provider or None, message=message)
+    if status_code in bad_request_statuses or (
+        treat_other_4xx_as_bad_request and status_code is not None and 400 <= status_code < 500
+    ):
+        raise ChatBadRequestError(provider=provider or None, message=message)
+    if status_code is not None and 500 <= status_code < 600:
+        raise ChatProviderError(provider=provider or None, message=message, status_code=status_code)
+
+    raise ChatAPIError(provider=provider or None, message=message, status_code=status_code or 500)
 
 
 def is_network_error(exc: Exception) -> bool:

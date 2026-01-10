@@ -8,7 +8,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Tran
 
 @pytest.mark.unit
 def test_validate_audio_file_prefers_ffprobe_sibling(monkeypatch, tmp_path):
-     """Ensure ffprobe executable sitting alongside ffmpeg is detected and used."""
+    """Ensure ffprobe executable sitting alongside ffmpeg is detected and used."""
     fake_ffmpeg = tmp_path / "ffmpeg.exe"
     fake_ffmpeg.write_bytes(b"")
     fake_ffprobe = tmp_path / "ffprobe.exe"
@@ -26,7 +26,7 @@ def test_validate_audio_file_prefers_ffprobe_sibling(monkeypatch, tmp_path):
 
     def _fake_run(cmd, *args, **kwargs):
 
-             called["cmd"] = cmd
+        called["cmd"] = cmd
         return run_result
 
     monkeypatch.setattr(audio_lib.subprocess, "run", _fake_run)

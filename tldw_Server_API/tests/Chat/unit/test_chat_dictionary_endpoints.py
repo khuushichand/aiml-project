@@ -15,7 +15,7 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGD
 
 @pytest.fixture()
 def chacha_db(tmp_path):
-     db_path = tmp_path / "ChaChaNotes.db"
+    db_path = tmp_path / "ChaChaNotes.db"
     db = CharactersRAGDB(db_path=str(db_path), client_id="test-client")
     try:
         yield db

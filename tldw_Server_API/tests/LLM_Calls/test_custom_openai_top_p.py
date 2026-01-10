@@ -9,30 +9,26 @@ from tldw_Server_API.app.core.LLM_Calls.local_chat_calls import (
 
 @pytest.mark.unit
 def test_custom_openai_handler_accepts_topp(monkeypatch):
-     captured = {}
+    captured = {}
 
     class FakeResp:
         status_code = 200
 
         def raise_for_status(self):
-
-                     return None
+            return None
 
         def json(self):
-
-                     return {"choices": []}
+            return {"choices": []}
 
     class FakeClient:
         def __enter__(self):
-                     return self
+            return self
 
         def __exit__(self, exc_type, exc, tb):
-
-                     return False
+            return False
 
         def post(self, url, headers=None, json=None):
-
-                     captured["json"] = json
+            captured["json"] = json
             return FakeResp()
 
     with patch(
@@ -51,30 +47,26 @@ def test_custom_openai_handler_accepts_topp(monkeypatch):
 
 @pytest.mark.unit
 def test_custom_openai_handler_prefers_maxp_when_both_provided(monkeypatch):
-     captured = {}
+    captured = {}
 
     class FakeResp:
         status_code = 200
 
         def raise_for_status(self):
-
-                     return None
+            return None
 
         def json(self):
-
-                     return {"choices": []}
+            return {"choices": []}
 
     class FakeClient:
         def __enter__(self):
-                     return self
+            return self
 
         def __exit__(self, exc_type, exc, tb):
-
-                     return False
+            return False
 
         def post(self, url, headers=None, json=None):
-
-                     captured["json"] = json
+            captured["json"] = json
             return FakeResp()
 
     with patch(
@@ -94,30 +86,26 @@ def test_custom_openai_handler_prefers_maxp_when_both_provided(monkeypatch):
 
 @pytest.mark.unit
 def test_custom_openai_2_handler_accepts_topp(monkeypatch):
-     captured = {}
+    captured = {}
 
     class FakeResp:
         status_code = 200
 
         def raise_for_status(self):
-
-                     return None
+            return None
 
         def json(self):
-
-                     return {"choices": []}
+            return {"choices": []}
 
     class FakeClient:
         def __enter__(self):
-                     return self
+            return self
 
         def __exit__(self, exc_type, exc, tb):
-
-                     return False
+            return False
 
         def post(self, url, headers=None, json=None):
-
-                     captured["json"] = json
+            captured["json"] = json
             return FakeResp()
 
     with patch(

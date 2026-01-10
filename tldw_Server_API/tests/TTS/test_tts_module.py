@@ -18,9 +18,11 @@ AV_AVAILABLE = importlib.util.find_spec("av") is not None
 
 @pytest.fixture(autouse=True)
 def clear_tts_env(monkeypatch):
-     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
     return None
+
+
 #
 # Local Imports
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
@@ -30,6 +32,7 @@ from tldw_Server_API.app.core.TTS.adapters.base import TTSAdapter, TTSCapabiliti
 from tldw_Server_API.app.core.TTS.adapters.openai_adapter import OpenAIAdapter
 from tldw_Server_API.app.core.TTS.adapters.kokoro_adapter import KokoroAdapter
 from tldw_Server_API.app.core.TTS.streaming_audio_writer import StreamingAudioWriter, AudioNormalizer
+
 #
 #######################################################################################################################
 #
@@ -40,8 +43,7 @@ class TestStreamingAudioWriter:
     """Tests for StreamingAudioWriter class"""
 
     def test_init_valid_formats(self):
-
-             """Test initialization with valid formats"""
+        """Test initialization with valid formats"""
         formats = ["wav", "mp3", "opus", "flac", "aac", "pcm"]
         for fmt in formats:
             writer = StreamingAudioWriter(format=fmt, sample_rate=24000)
@@ -49,14 +51,12 @@ class TestStreamingAudioWriter:
             assert writer.sample_rate == 24000
 
     def test_init_invalid_format(self):
-
-             """Test initialization with invalid format"""
+        """Test initialization with invalid format"""
         with pytest.raises(ValueError, match="Unsupported audio format"):
             StreamingAudioWriter(format="invalid", sample_rate=24000)
 
     def test_pcm_output(self):
-
-             """Test PCM format output"""
+        """Test PCM format output"""
         writer = StreamingAudioWriter(format="pcm", sample_rate=24000)
 
         # Create test audio data
@@ -73,8 +73,7 @@ class TestStreamingAudioWriter:
         assert final == b""
 
     def test_wav_output(self):
-
-             """Test WAV format output"""
+        """Test WAV format output"""
         writer = StreamingAudioWriter(format="wav", sample_rate=24000)
 
         # Create test audio data
@@ -94,8 +93,7 @@ class TestStreamingAudioWriter:
             assert final[:4] == b"RIFF" or output[:4] == b"RIFF"
 
     def test_wav_spills_to_disk_when_threshold_exceeded(self, tmp_path):
-
-             """WAV should spill to disk once the in-memory threshold is exceeded."""
+        """WAV should spill to disk once the in-memory threshold is exceeded."""
         # Threshold ~1KB to force spill on a single chunk (len * 2 bytes per sample)
         writer = StreamingAudioWriter(format="wav", sample_rate=24000, max_in_memory_bytes=1024)
         big_chunk = np.zeros(2000, dtype=np.int16)  # ~4KB
@@ -116,8 +114,7 @@ class TestAudioNormalizer:
     """Tests for AudioNormalizer class"""
 
     def test_float32_to_int16(self):
-
-             """Test float32 to int16 conversion"""
+        """Test float32 to int16 conversion"""
         normalizer = AudioNormalizer()
 
         # Test data in float32 range [-1, 1]
@@ -131,8 +128,7 @@ class TestAudioNormalizer:
         np.testing.assert_array_almost_equal(int_data, expected, decimal=0)
 
     def test_int16_to_float32(self):
-
-             """Test int16 to float32 conversion"""
+        """Test int16 to float32 conversion"""
         normalizer = AudioNormalizer()
 
         # Test data in int16 range
@@ -146,8 +142,7 @@ class TestAudioNormalizer:
         np.testing.assert_array_almost_equal(float_data, expected, decimal=1)
 
     def test_clipping(self):
-
-             """Test that values outside [-1, 1] are clipped"""
+        """Test that values outside [-1, 1] are clipped"""
         normalizer = AudioNormalizer()
 
         # Test data with values outside valid range
@@ -159,8 +154,8 @@ class TestAudioNormalizer:
         # Check that values are clipped
         assert int_data[0] == -32767  # Clipped from -2.0
         assert int_data[1] == -32767  # Clipped from -1.5
-        assert int_data[3] == 32767   # Clipped from 1.5
-        assert int_data[4] == 32767   # Clipped from 2.0
+        assert int_data[3] == 32767  # Clipped from 1.5
+        assert int_data[4] == 32767  # Clipped from 2.0
 
 
 @pytest.mark.asyncio
@@ -193,6 +188,7 @@ class TestOpenAIAdapter:
         # Mock initialization
         adapter._initialized = True
         from tldw_Server_API.app.core.TTS.adapters.base import VoiceInfo
+
         adapter._capabilities = TTSCapabilities(
             provider_name="openai",
             supports_streaming=True,
@@ -203,8 +199,8 @@ class TestOpenAIAdapter:
             supported_voices=[
                 VoiceInfo(id="alloy", name="Alloy", language="en"),
                 VoiceInfo(id="echo", name="Echo", language="en"),
-                VoiceInfo(id="fable", name="Fable", language="en")
-            ]
+                VoiceInfo(id="fable", name="Fable", language="en"),
+            ],
         )
 
         capabilities = await adapter.get_capabilities()
@@ -216,16 +212,13 @@ class TestOpenAIAdapter:
 # TestTTSService removed - replaced by tests in test_tts_service_v2.py
 
 
-
-
-
 @pytest.mark.asyncio
 class TestTTSEndpoint:
     """Integration tests for TTS API endpoint"""
 
     @pytest.fixture
     def client(self):
-             """Create test client and ensure cleanup"""
+        """Create test client and ensure cleanup"""
         from fastapi import FastAPI
         from tldw_Server_API.app.api.v1.endpoints.audio import router
 
@@ -249,7 +242,7 @@ class TestTTSEndpoint:
 
 # Test utilities
 def test_imports():
-     """Test that all required modules can be imported"""
+    """Test that all required modules can be imported"""
     try:
         from tldw_Server_API.app.core.TTS import tts_service_v2
         from tldw_Server_API.app.core.TTS import adapter_registry

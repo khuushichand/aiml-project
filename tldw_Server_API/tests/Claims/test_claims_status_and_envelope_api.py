@@ -16,7 +16,7 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthC
 def _setup_db_with_claims() -> tuple[str, int]:
 
 
-     tmpdir = tempfile.mkdtemp(prefix="claims_env_")
+    tmpdir = tempfile.mkdtemp(prefix="claims_env_")
     db_path = os.path.join(tmpdir, "media.db")
     db = MediaDatabase(db_path=db_path, client_id="test_client")
     db.initialize_db()
@@ -44,7 +44,7 @@ def _setup_db_with_claims() -> tuple[str, int]:
 def _setup_db_for_policies() -> tuple[str, dict[str, int]]:
 
 
-     tmpdir = tempfile.mkdtemp(prefix="claims_policy_")
+    tmpdir = tempfile.mkdtemp(prefix="claims_policy_")
     db_path = os.path.join(tmpdir, "media.db")
     db = MediaDatabase(db_path=db_path, client_id="test_client")
     db.initialize_db()
@@ -124,7 +124,7 @@ def _principal_override(is_admin: bool):
 def _reset_claims_rebuild_service():
 
 
-     svc = get_claims_rebuild_service()
+    svc = get_claims_rebuild_service()
     svc.stop()
     svc._queue = Queue()  # type: ignore[attr-defined]
     with svc._stats_lock:  # type: ignore[attr-defined]
@@ -150,13 +150,13 @@ def _wait_for_service_completion(expected_processed: int, timeout: float = 5.0, 
 def test_claims_status_admin_ok():
 
 
-     from tldw_Server_API.app.main import app as fastapi_app
+    from tldw_Server_API.app.main import app as fastapi_app
     from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
     class _Admin:
         def __init__(self) -> None:
-                     self.id = 1
+            self.id = 1
             self.username = "admin"
             self.is_admin = True
 
@@ -199,13 +199,13 @@ def test_claims_status_admin_ok():
 def test_claims_envelope_pagination_absolute_link():
 
 
-     from tldw_Server_API.app.main import app as fastapi_app
+    from tldw_Server_API.app.main import app as fastapi_app
     from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
     class _Admin:
         def __init__(self) -> None:
-                     self.id = 1
+            self.id = 1
             self.username = "admin"
             self.is_admin = True
 
@@ -245,12 +245,12 @@ def test_claims_envelope_pagination_absolute_link():
 def test_claims_status_forbidden_non_admin():
 
 
-     from tldw_Server_API.app.main import app as fastapi_app
+    from tldw_Server_API.app.main import app as fastapi_app
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
     class _User:
         def __init__(self) -> None:
-                     self.id = 1
+            self.id = 1
             self.username = "u"
             self.is_admin = False
 
@@ -272,13 +272,13 @@ def test_claims_status_forbidden_non_admin():
 def test_claims_status_reports_queue_activity():
 
 
-     from tldw_Server_API.app.main import app as fastapi_app
+    from tldw_Server_API.app.main import app as fastapi_app
     from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
     class _Admin:
         def __init__(self) -> None:
-                     self.id = 1
+            self.id = 1
             self.username = "admin"
             self.is_admin = True
 
@@ -332,13 +332,13 @@ def test_claims_status_reports_queue_activity():
 def test_claims_rebuild_policies_enqueue_expected_media():
 
 
-     from tldw_Server_API.app.main import app as fastapi_app
+    from tldw_Server_API.app.main import app as fastapi_app
     from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
 
     class _Admin:
         def __init__(self) -> None:
-                     self.id = 1
+            self.id = 1
             self.username = "admin"
             self.is_admin = True
 

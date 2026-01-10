@@ -7,7 +7,7 @@ from tldw_Server_API.app.core.Claims_Extraction.ingestion_claims import (
 
 @pytest.mark.unit
 def test_ingestion_time_ner_extractor_skips_if_unavailable():
-     try:
+    try:
         import spacy  # type: ignore
         try:
             nlp = spacy.load("en_core_web_sm")

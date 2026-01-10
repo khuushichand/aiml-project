@@ -6,9 +6,7 @@ pytestmark = pytest.mark.unit
 
 
 def test_stream_ttl_env_cache_and_clear(monkeypatch):
-
-
-     from tldw_Server_API.app.core.Usage import audio_quota as aq
+    from tldw_Server_API.app.core.Usage import audio_quota as aq
 
     # Ensure a clean start
     aq.clear_stream_ttl_cache()

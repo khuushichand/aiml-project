@@ -4,11 +4,13 @@ import json
 import uuid
 from typing import List, Dict, Any, Optional, Generator
 from io import BytesIO
+
 #
 # Third-party imports
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image as PILImage, PngImagePlugin  # Corrected PIL import
+
 # Third-party imports
 from hypothesis import given, strategies as st, settings, HealthCheck, assume, event, Verbosity, note
 import os
@@ -16,6 +18,7 @@ from unittest.mock import patch, MagicMock  # For unit tests
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.schemas.character_schemas import CharacterUpdate
+
 #
 # Local Imports
 from tldw_Server_API.app.main import app as fastapi_app  # Your FastAPI app instance
@@ -23,9 +26,10 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     ConflictError,
     InputError,
-    CharactersRAGDBError
+    CharactersRAGDBError,
 )
 from tldw_Server_API.app.api.v1.endpoints import characters_endpoint as characters_api_module
+
 #######################################################################################################################
 #
 # --- Constants ---
@@ -36,9 +40,10 @@ CHARACTERS_ENDPOINT_PREFIX = "/api/v1/characters"
 
 # --- Helper Functions / Fixtures for Integration Tests ---
 
+
 @pytest.fixture(scope="function")
 def test_db(tmp_path) -> Generator[CharactersRAGDB, Any, None]:
-     # Using a file-based database to avoid in-memory threading issues
+    # Using a file-based database to avoid in-memory threading issues
     db_path = tmp_path / "test_characters.db"
     db_instance = CharactersRAGDB(str(db_path), client_id=f"db-client-test-{uuid.uuid4().hex[:6]}")
     yield db_instance
@@ -63,21 +68,21 @@ def client(test_db: CharactersRAGDB) -> Generator[TestClient, Any, None]:
         TestConfig.setup_test_environment()
         # Reset settings to pick up env change if necessary
         from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
         reset_settings()
     except Exception:
         pass
 
     def override_get_db_for_test():
-
-             logger.info("<<<<< OVERRIDE override_get_db_for_test CALLED >>>>>")
+        logger.info("<<<<< OVERRIDE override_get_db_for_test CALLED >>>>>")
         try:
             yield test_db
         finally:
             pass  # test_db fixture handles its own close
 
     # Disable CSRF protection for tests
-    original_csrf_setting = global_settings.get('CSRF_ENABLED', None)
-    global_settings['CSRF_ENABLED'] = False
+    original_csrf_setting = global_settings.get("CSRF_ENABLED", None)
+    global_settings["CSRF_ENABLED"] = False
 
     fastapi_app.dependency_overrides[get_chacha_db_for_user] = override_get_db_for_test
     with TestClient(fastapi_app) as c:
@@ -92,9 +97,9 @@ def client(test_db: CharactersRAGDB) -> Generator[TestClient, Any, None]:
     except Exception:
         pass
     if original_csrf_setting is None:
-        global_settings.pop('CSRF_ENABLED', None)
+        global_settings.pop("CSRF_ENABLED", None)
     else:
-        global_settings['CSRF_ENABLED'] = original_csrf_setting
+        global_settings["CSRF_ENABLED"] = original_csrf_setting
 
 
 @pytest.fixture
@@ -107,8 +112,7 @@ def client_with_csrf(test_db: CharactersRAGDB) -> Generator[TestClient, Any, Non
     from tldw_Server_API.tests.test_config import TestConfig
 
     def override_get_db_for_test():
-
-             logger.info("<<<<< OVERRIDE override_get_db_for_test WITH CSRF ENABLED >>>>>")
+        logger.info("<<<<< OVERRIDE override_get_db_for_test WITH CSRF ENABLED >>>>>")
         try:
             yield test_db
         finally:
@@ -135,13 +139,11 @@ def client_with_csrf(test_db: CharactersRAGDB) -> Generator[TestClient, Any, Non
 
 
 def create_dummy_image_base64(width=10, height=10, image_format="PNG") -> str:
-
-
-     img = PILImage.new('RGB', (width, height), color='red')
+    img = PILImage.new("RGB", (width, height), color="red")
     buffered = BytesIO()
     img.save(buffered, format=image_format)
     img_bytes = buffered.getvalue()
-    return base64.b64encode(img_bytes).decode('utf-8')
+    return base64.b64encode(img_bytes).decode("utf-8")
 
 
 def create_sample_character_payload(name_suffix: str = "", **overrides) -> Dict[str, Any]:
@@ -150,34 +152,36 @@ def create_sample_character_payload(name_suffix: str = "", **overrides) -> Dict[
         "description": "A character for API testing.",
         "first_message": "Hello from API Test!",
         "tags": ["api", "test"],
-        "image_base64": create_dummy_image_base64()
+        "image_base64": create_dummy_image_base64(),
     }
     payload.update(overrides)
     return payload
 
 
 # --- Hypothesis Strategies for PBT ---
-st_valid_api_text = st.text(min_size=1, max_size=50, alphabet=st.characters(min_codepoint=32, max_codepoint=126,
-                                                                            blacklist_categories=('Cc', 'Cs')))
+st_valid_api_text = st.text(
+    min_size=1,
+    max_size=50,
+    alphabet=st.characters(min_codepoint=32, max_codepoint=126, blacklist_categories=("Cc", "Cs")),
+)
 st_optional_api_text = st.one_of(st.none(), st_valid_api_text)  # Allow empty string as well, if Pydantic model permits
 st_api_json_list_or_str = st.one_of(
     st.none(),
     st.lists(st_valid_api_text, max_size=2, unique=True),
-    st.lists(st_valid_api_text, max_size=2, unique=True).map(json.dumps)
+    st.lists(st_valid_api_text, max_size=2, unique=True).map(json.dumps),
 )
 st_api_json_dict_or_str = st.one_of(
     st.none(),
-    st.dictionaries(st_valid_api_text, st.one_of(st_valid_api_text, st.integers(0, 100), st.booleans(), st.none()),
-                    max_size=2),
-    st.dictionaries(st_valid_api_text, st_valid_api_text, max_size=2).map(json.dumps)
+    st.dictionaries(
+        st_valid_api_text, st.one_of(st_valid_api_text, st.integers(0, 100), st.booleans(), st.none()), max_size=2
+    ),
+    st.dictionaries(st_valid_api_text, st_valid_api_text, max_size=2).map(json.dumps),
 )
 st_base64_image_str = st.one_of(st.none(), st.just(create_dummy_image_base64()))
 
 
 def st_character_create_payload_pbt():
-
-
-     return st.builds(
+    return st.builds(
         dict,
         name=st_valid_api_text,  # Name is mandatory for create
         description=st_optional_api_text,
@@ -193,17 +197,28 @@ def st_character_create_payload_pbt():
         creator=st_optional_api_text,
         character_version=st_optional_api_text,
         extensions=st_api_json_dict_or_str,
-        image_base64=st_base64_image_str
+        image_base64=st_base64_image_str,
     ).filter(lambda x: x["name"] is not None and x["name"].strip() != "")
 
 
 # Revised strategy for update payload to be less sparse
 def st_character_update_payload_pbt():
-     keys = [  # All fields that can be part of an update payload
-        "name", "description", "personality", "scenario", "system_prompt",
-        "post_history_instructions", "first_message", "message_example",
-        "creator_notes", "alternate_greetings", "tags", "creator",
-        "character_version", "extensions", "image_base64"
+    keys = [  # All fields that can be part of an update payload
+        "name",
+        "description",
+        "personality",
+        "scenario",
+        "system_prompt",
+        "post_history_instructions",
+        "first_message",
+        "message_example",
+        "creator_notes",
+        "alternate_greetings",
+        "tags",
+        "creator",
+        "character_version",
+        "extensions",
+        "image_base64",
     ]
     # Strategies for values that are definitely not None (when chosen to be the "concrete" one)
     concrete_value_strategies = {
@@ -211,7 +226,7 @@ def st_character_update_payload_pbt():
         "description": st_valid_api_text,
         # ... (fill for all keys, ensuring they don't generate None)
         "tags": st.lists(st_valid_api_text, min_size=1, max_size=2, unique=True),
-        "image_base64": st.just(create_dummy_image_base64())
+        "image_base64": st.just(create_dummy_image_base64()),
     }
     # Strategies that can produce None (for other fields not chosen as concrete)
     optional_value_strategies = {
@@ -219,19 +234,22 @@ def st_character_update_payload_pbt():
         "description": st_optional_api_text,
         # ... (fill for all keys)
         "tags": st_api_json_list_or_str,  # Can be None
-        "image_base64": st_base64_image_str  # Can be None
+        "image_base64": st_base64_image_str,  # Can be None
     }
     # Ensure all keys are in both strategy dicts for simplicity in lookup
     for k in keys:
-        if k not in concrete_value_strategies: concrete_value_strategies[k] = st_valid_api_text  # Default concrete
-        if k not in optional_value_strategies: optional_value_strategies[k] = st_optional_api_text  # Default optional
+        if k not in concrete_value_strategies:
+            concrete_value_strategies[k] = st_valid_api_text  # Default concrete
+        if k not in optional_value_strategies:
+            optional_value_strategies[k] = st_optional_api_text  # Default optional
 
     @st.composite
     def at_least_one_concrete_field_payload(draw):
-             # Draw a subset of keys to include in the update payload, must include at least one
+        # Draw a subset of keys to include in the update payload, must include at least one
         num_fields_to_update = draw(st.integers(min_value=1, max_value=len(keys)))
         selected_keys = draw(
-            st.lists(st.sampled_from(keys), min_size=num_fields_to_update, max_size=num_fields_to_update, unique=True))
+            st.lists(st.sampled_from(keys), min_size=num_fields_to_update, max_size=num_fields_to_update, unique=True)
+        )
 
         # From these selected keys, pick one to ensure it gets a concrete (non-None) value
         key_for_concrete_value = draw(st.sampled_from(selected_keys))
@@ -258,16 +276,22 @@ def st_character_update_payload_pbt():
 # If characters.py (the API endpoint file) imports `create_new_character_from_data` from char_lib,
 # then the patch target is 'tldw_Server_API.app.api.v1.endpoints.characters.create_new_character_from_data'
 
-UNIT_TEST_PATCH_PREFIX = 'tldw_Server_API.app.api.v1.endpoints.characters_endpoint'
+UNIT_TEST_PATCH_PREFIX = "tldw_Server_API.app.api.v1.endpoints.characters_endpoint"
 
 
-@patch(f'{UNIT_TEST_PATCH_PREFIX}.create_new_character_from_data')
-@patch(f'{UNIT_TEST_PATCH_PREFIX}.get_character_details')
+@patch(f"{UNIT_TEST_PATCH_PREFIX}.create_new_character_from_data")
+@patch(f"{UNIT_TEST_PATCH_PREFIX}.get_character_details")
 def test_unit_create_character_success(mock_get_details: MagicMock, mock_create: MagicMock, client: TestClient):
     mock_create.return_value = 1
     mock_char_data = {
-        "id": 1, "name": "Unit Test Char", "version": 1, "description": "Desc",
-        "image": b"dummy", "alternate_greetings": ["Hi"], "tags": ["test"], "extensions": {"key": "val"}
+        "id": 1,
+        "name": "Unit Test Char",
+        "version": 1,
+        "description": "Desc",
+        "image": b"dummy",
+        "alternate_greetings": ["Hi"],
+        "tags": ["test"],
+        "extensions": {"key": "val"},
     }
     mock_get_details.return_value = mock_char_data
 
@@ -284,7 +308,7 @@ def test_unit_create_character_success(mock_get_details: MagicMock, mock_create:
     mock_get_details.assert_called_once_with(mock_create.call_args[0][0], 1)
 
 
-@patch(f'{UNIT_TEST_PATCH_PREFIX}.create_new_character_from_data')
+@patch(f"{UNIT_TEST_PATCH_PREFIX}.create_new_character_from_data")
 def test_unit_create_character_conflict(mock_create: MagicMock, client: TestClient):
     mock_create.side_effect = ConflictError("Character with name 'Exists' already exists.")
     payload = {"name": "Exists", "description": "Desc"}
@@ -293,12 +317,15 @@ def test_unit_create_character_conflict(mock_create: MagicMock, client: TestClie
     assert "Character with name 'Exists' already exists." in response.json()["detail"]
 
 
-@patch(f'{UNIT_TEST_PATCH_PREFIX}.create_new_character_from_data')
+@patch(f"{UNIT_TEST_PATCH_PREFIX}.create_new_character_from_data")
 def test_unit_create_character_input_error_from_lib(mock_create: MagicMock, client: TestClient):
     # Test case where Pydantic validation passes, but the library function raises InputError
     mock_create.side_effect = InputError("Lib-level Invalid input for character.")
-    payload = {"name": "ValidPydanticName", "description": "Desc",
-               "image_base64": "invalid-b64!"}  # image_base64 will be caught by lib
+    payload = {
+        "name": "ValidPydanticName",
+        "description": "Desc",
+        "image_base64": "invalid-b64!",
+    }  # image_base64 will be caught by lib
 
     # Simulate that Pydantic validation for 'name' passes
     # The call to create_new_character_from_data inside the endpoint will raise InputError
@@ -314,7 +341,7 @@ def test_unit_create_character_pydantic_error(client: TestClient):  # No mock ne
     assert "String should have at least 1 character" in response.text
 
 
-@patch(f'{UNIT_TEST_PATCH_PREFIX}.get_character_details')
+@patch(f"{UNIT_TEST_PATCH_PREFIX}.get_character_details")
 def test_unit_get_character_success(mock_get_details: MagicMock, client: TestClient):
     mock_char_data = {"id": 1, "name": "Fetched Char", "version": 1, "image": None}
     mock_get_details.return_value = mock_char_data
@@ -326,7 +353,7 @@ def test_unit_get_character_success(mock_get_details: MagicMock, client: TestCli
     mock_get_details.assert_called_once_with(mock_get_details.call_args[0][0], 1)
 
 
-@patch(f'{UNIT_TEST_PATCH_PREFIX}.get_character_details')
+@patch(f"{UNIT_TEST_PATCH_PREFIX}.get_character_details")
 def test_unit_get_character_not_found(mock_get_details: MagicMock, client: TestClient):
     mock_get_details.return_value = None
     response = client.get(f"{CHARACTERS_ENDPOINT_PREFIX}/999")
@@ -334,12 +361,12 @@ def test_unit_get_character_not_found(mock_get_details: MagicMock, client: TestC
     assert "not found" in response.json()["detail"]
 
 
-@patch(f'{UNIT_TEST_PATCH_PREFIX}.update_existing_character_details')
-@patch(f'{UNIT_TEST_PATCH_PREFIX}.get_character_details')
+@patch(f"{UNIT_TEST_PATCH_PREFIX}.update_existing_character_details")
+@patch(f"{UNIT_TEST_PATCH_PREFIX}.get_character_details")
 def test_unit_update_character_success(mock_get_details: MagicMock, mock_update: MagicMock, client: TestClient):
     mock_get_details.side_effect = [
         {"id": 1, "name": "Old Name", "version": 1, "image": None},
-        {"id": 1, "name": "New Name", "version": 2, "image": b"newimg"}
+        {"id": 1, "name": "New Name", "version": 2, "image": b"newimg"},
     ]
     mock_update.return_value = True
 
@@ -357,7 +384,7 @@ def test_unit_update_character_success(mock_get_details: MagicMock, mock_update:
     assert mock_update.call_args[0][3] == 1  # expected_version
 
 
-@patch(f'{UNIT_TEST_PATCH_PREFIX}.get_character_details')  # Only get_character_details is called before version check
+@patch(f"{UNIT_TEST_PATCH_PREFIX}.get_character_details")  # Only get_character_details is called before version check
 def test_unit_update_character_version_mismatch(mock_get_details: MagicMock, client: TestClient):
     mock_get_details.return_value = {"id": 1, "name": "Old Name", "version": 2}
     payload = {"description": "New Desc"}
@@ -366,8 +393,8 @@ def test_unit_update_character_version_mismatch(mock_get_details: MagicMock, cli
     assert "Version mismatch" in response.json()["detail"]
 
 
-@patch(f'{UNIT_TEST_PATCH_PREFIX}.delete_character_from_db')
-@patch(f'{UNIT_TEST_PATCH_PREFIX}.get_character_details')
+@patch(f"{UNIT_TEST_PATCH_PREFIX}.delete_character_from_db")
+@patch(f"{UNIT_TEST_PATCH_PREFIX}.get_character_details")
 def test_unit_delete_character_success(mock_get_details: MagicMock, mock_delete: MagicMock, client: TestClient):
     mock_get_details.return_value = {"id": 1, "name": "ToDelete", "version": 1}
     mock_delete.return_value = True
@@ -377,32 +404,44 @@ def test_unit_delete_character_success(mock_get_details: MagicMock, mock_delete:
     mock_delete.assert_called_once_with(mock_delete.call_args[0][0], 1, 1)
 
 
-@patch(f'{UNIT_TEST_PATCH_PREFIX}.create_new_character_from_data')
-@patch(f'{UNIT_TEST_PATCH_PREFIX}.get_character_details')
+@patch(f"{UNIT_TEST_PATCH_PREFIX}.create_new_character_from_data")
+@patch(f"{UNIT_TEST_PATCH_PREFIX}.get_character_details")
 def test_unit_create_character_success(mock_get_details: MagicMock, mock_create: MagicMock, client: TestClient):
-    mock_create.return_value = 1 # This is char_id
+    mock_create.return_value = 1  # This is char_id
     # This mock_char_data is what get_character_details returns from DB
     mock_char_data_from_db = {
-        "id": 1, "name": "Unit Test Char", "version": 1, "description": "Desc",
-        "image": b"dummy_image_bytes", # mock image bytes from DB
-        "alternate_greetings": ["Hi"], "tags": ["test"], "extensions": {"key": "val"},
+        "id": 1,
+        "name": "Unit Test Char",
+        "version": 1,
+        "description": "Desc",
+        "image": b"dummy_image_bytes",  # mock image bytes from DB
+        "alternate_greetings": ["Hi"],
+        "tags": ["test"],
+        "extensions": {"key": "val"},
         # Add all other fields expected by _convert_db_char_to_response_model / CharacterResponse
-        "personality": None, "scenario": None, "system_prompt": None,
-        "post_history_instructions": None, "first_message": None,
-        "message_example": None, "creator_notes": None, "creator": None,
-        "character_version": None, "created_at": "2023-01-01T00:00:00", "updated_at": "2023-01-01T00:00:00",
-        "deleted": 0
+        "personality": None,
+        "scenario": None,
+        "system_prompt": None,
+        "post_history_instructions": None,
+        "first_message": None,
+        "message_example": None,
+        "creator_notes": None,
+        "creator": None,
+        "character_version": None,
+        "created_at": "2023-01-01T00:00:00",
+        "updated_at": "2023-01-01T00:00:00",
+        "deleted": 0,
     }
     mock_get_details.return_value = mock_char_data_from_db
 
-    payload = {"name": "Unit Test Char", "description": "Desc"} # API input
+    payload = {"name": "Unit Test Char", "description": "Desc"}  # API input
     response = client.post(f"{CHARACTERS_ENDPOINT_PREFIX}/", json=payload)
 
     assert response.status_code == 201, response.text
-    data = response.json() # This is CharacterResponse
+    data = response.json()  # This is CharacterResponse
     assert data["id"] == 1
     assert data["name"] == "Unit Test Char"
-    assert data["image_present"] is True # Because mock_char_data_from_db["image"] is present
+    assert data["image_present"] is True  # Because mock_char_data_from_db["image"] is present
     mock_create.assert_called_once()
     # mock_create is called with (db_obj, character_payload_dict)
     assert mock_create.call_args[0][1]["name"] == payload["name"]
@@ -411,6 +450,7 @@ def test_unit_create_character_success(mock_get_details: MagicMock, mock_create:
 
 
 # ============================= INTEGRATION TESTS ==============================
+
 
 class TestCharacterAPIIntegration:
 
@@ -497,11 +537,14 @@ class TestCharacterAPIIntegration:
         original_version = create_resp_json["version"]
 
         update_payload = {
-            "name": "Updated Character Name", "description": "Updated description.",
-            "tags": ["newtag"], "image_base64": None
+            "name": "Updated Character Name",
+            "description": "Updated description.",
+            "tags": ["newtag"],
+            "image_base64": None,
         }
-        response = client.put(f"{CHARACTERS_ENDPOINT_PREFIX}/{char_id}?expected_version={original_version}",
-                              json=update_payload)
+        response = client.put(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/{char_id}?expected_version={original_version}", json=update_payload
+        )
         assert response.status_code == 200, response.text
         data = response.json()
         assert data["name"] == "Updated Character Name"
@@ -543,8 +586,9 @@ class TestCharacterAPIIntegration:
         assert db_char is None
 
         conn = test_db.get_connection()
-        deleted_record = conn.execute("SELECT deleted, version FROM character_cards WHERE id = ?",
-                                      (char_id,)).fetchone()
+        deleted_record = conn.execute(
+            "SELECT deleted, version FROM character_cards WHERE id = ?", (char_id,)
+        ).fetchone()
         assert deleted_record is not None
         assert deleted_record["deleted"] == 1
         assert deleted_record["version"] == original_version + 1
@@ -553,10 +597,14 @@ class TestCharacterAPIIntegration:
         unique_name_search = f"SearchableNameAPI_{uuid.uuid4().hex[:6]}"
         desc_keyword = f"unique_keyword_search_api_{uuid.uuid4().hex[:4]}"
 
-        client.post(f"{CHARACTERS_ENDPOINT_PREFIX}/",
-                    json=create_sample_character_payload(name=unique_name_search, description=f"Has {desc_keyword}"))
-        client.post(f"{CHARACTERS_ENDPOINT_PREFIX}/",
-                    json=create_sample_character_payload(name=f"OtherSearch_{uuid.uuid4().hex[:6]}"))
+        client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/",
+            json=create_sample_character_payload(name=unique_name_search, description=f"Has {desc_keyword}"),
+        )
+        client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/",
+            json=create_sample_character_payload(name=f"OtherSearch_{uuid.uuid4().hex[:6]}"),
+        )
 
         response = client.get(f"{CHARACTERS_ENDPOINT_PREFIX}/search/?query={unique_name_search}")
         assert response.status_code == 200, response.text
@@ -573,23 +621,29 @@ class TestCharacterAPIIntegration:
     def test_import_character_png_integration(self, client: TestClient, test_db: CharactersRAGDB):
         char_name_for_png = f"PNG Import Char {uuid.uuid4().hex[:4]}"
         dummy_card_data = {
-            "spec": "chara_card_v2", "spec_version": "2.0",
-            "data": {"name": char_name_for_png, "description": "Imported from PNG.",
-                     "personality": "Test", "scenario": "Test",
-                     "first_mes": "Hello from PNG!", "mes_example": "Example"}
+            "spec": "chara_card_v2",
+            "spec_version": "2.0",
+            "data": {
+                "name": char_name_for_png,
+                "description": "Imported from PNG.",
+                "personality": "Test",
+                "scenario": "Test",
+                "first_mes": "Hello from PNG!",
+                "mes_example": "Example",
+            },
         }
         chara_json_str = json.dumps(dummy_card_data)
-        chara_base64 = base64.b64encode(chara_json_str.encode('utf-8')).decode('utf-8')
+        chara_base64 = base64.b64encode(chara_json_str.encode("utf-8")).decode("utf-8")
 
-        img = PILImage.new('RGB', (60, 30), color='blue')
+        img = PILImage.new("RGB", (60, 30), color="blue")
         png_info = PngImagePlugin.PngInfo()  # Corrected usage
         png_info.add_text("chara", chara_base64)
 
         img_byte_arr = BytesIO()
-        img.save(img_byte_arr, format='PNG', pnginfo=png_info)
+        img.save(img_byte_arr, format="PNG", pnginfo=png_info)
         img_byte_arr.seek(0)
 
-        files = {'character_file': (f'{char_name_for_png}.png', img_byte_arr, 'image/png')}
+        files = {"character_file": (f"{char_name_for_png}.png", img_byte_arr, "image/png")}
         response = client.post(f"{CHARACTERS_ENDPOINT_PREFIX}/import", files=files)
 
         assert response.status_code == 201, response.text
@@ -608,6 +662,7 @@ class TestCharacterAPIIntegration:
 
 _PBT_DEBUG = os.getenv("PBT_DEBUG", "").lower() in {"1", "true", "yes", "on"}
 _PBT_RELAX = os.getenv("PBT_RELAX", "").lower() in {"1", "true", "yes", "on"}
+
 
 @settings(
     deadline=None,
@@ -661,7 +716,9 @@ def test_pbt_create_character_api(client: TestClient, test_db: CharactersRAGDB, 
         elif value is None:  # If payload field was None
             # Check if the API response field is also None or a suitable default (e.g., "" for optional strings)
             api_val = data.get(key)
-            assert api_val is None or api_val == "", f"Mismatch for {key} (expected None or empty string, got {api_val})"
+            assert (
+                api_val is None or api_val == ""
+            ), f"Mismatch for {key} (expected None or empty string, got {api_val})"
 
     db_char = test_db.get_character_card_by_id(data["id"])
     assert db_char is not None
@@ -684,9 +741,12 @@ def test_pbt_create_character_api(client: TestClient, test_db: CharactersRAGDB, 
     verbosity=Verbosity.verbose if _PBT_DEBUG else Verbosity.normal,
 )
 @given(initial_payload_gen=st_character_create_payload_pbt(), update_payload_diff_gen=st_character_update_payload_pbt())
-def test_pbt_update_character_api(client: TestClient, test_db: CharactersRAGDB,
-                                  initial_payload_gen: Dict[str, Any],
-                                  update_payload_diff_gen: Dict[str, Any]):
+def test_pbt_update_character_api(
+    client: TestClient,
+    test_db: CharactersRAGDB,
+    initial_payload_gen: Dict[str, Any],
+    update_payload_diff_gen: Dict[str, Any],
+):
     # --- Create initial character ---
     initial_payload = initial_payload_gen.copy()  # Avoid modifying the generated dict directly
     initial_payload["name"] = f"{initial_payload['name']}_{uuid.uuid4().hex[:8]}"
@@ -724,7 +784,7 @@ def test_pbt_update_character_api(client: TestClient, test_db: CharactersRAGDB,
 
         updated_unique_name = f"{update_payload_diff['name']}_{uuid.uuid4().hex[:8]}"
         existing_with_new_name = test_db.get_character_card_by_name(updated_unique_name)
-        if existing_with_new_name and existing_with_new_name['id'] != char_id:
+        if existing_with_new_name and existing_with_new_name["id"] != char_id:
             if _PBT_DEBUG:
                 event("skip:update-name-collision")
                 note(f"Update name collision on {updated_unique_name}")
@@ -771,8 +831,9 @@ def test_pbt_update_character_api(client: TestClient, test_db: CharactersRAGDB,
             assume(False)  # This update wouldn't change anything, skip.
             # Note: `st_character_update_payload_pbt` tries to ensure at least one field.
 
-    update_response = client.put(f"{CHARACTERS_ENDPOINT_PREFIX}/{char_id}?expected_version={current_version}",
-                                 json=update_payload_diff)  # Send original generated diff
+    update_response = client.put(
+        f"{CHARACTERS_ENDPOINT_PREFIX}/{char_id}?expected_version={current_version}", json=update_payload_diff
+    )  # Send original generated diff
 
     if update_response.status_code == 422:  # Pydantic validation error from API
         if _PBT_DEBUG:
@@ -781,8 +842,9 @@ def test_pbt_update_character_api(client: TestClient, test_db: CharactersRAGDB,
         assume(False)  # Generated data was invalid for the model, skip successful assertion part
         return
 
-    assert update_response.status_code == 200, \
-        f"Update failed. Initial: {created_char_data['name']}, UpdatePayload: {update_payload_diff}, SentToLib: {payload_sent_to_lib}, Response: {update_response.text}"
+    assert (
+        update_response.status_code == 200
+    ), f"Update failed. Initial: {created_char_data['name']}, UpdatePayload: {update_payload_diff}, SentToLib: {payload_sent_to_lib}, Response: {update_response.text}"
 
     updated_data_api = update_response.json()  # This is CharacterResponse
 
@@ -811,11 +873,14 @@ def test_pbt_update_character_api(client: TestClient, test_db: CharactersRAGDB,
             elif resp_key == "extensions" and expected_value is None:
                 expected_value = {}  # API converts None to empty dict for extensions
             # The `payload_sent_to_lib` should have Python objects if JSON strings were parsed by Pydantic
-            assert resp_value == expected_value, f"Mismatch for updated key '{resp_key}'. API: {resp_value}, Expected (post-Pydantic): {expected_value}"
+            assert (
+                resp_value == expected_value
+            ), f"Mismatch for updated key '{resp_key}'. API: {resp_value}, Expected (post-Pydantic): {expected_value}"
         else:
             # Key was not in the update payload, so it should be same as original character
             assert resp_value == created_char_data.get(
-                resp_key), f"Mismatch for non-updated key '{resp_key}'. API: {resp_value}, Original: {created_char_data.get(resp_key)}"
+                resp_key
+            ), f"Mismatch for non-updated key '{resp_key}'. API: {resp_value}, Original: {created_char_data.get(resp_key)}"
 
     # Optional: Double check against DB
     db_char_after_update = test_db.get_character_card_by_id(char_id)

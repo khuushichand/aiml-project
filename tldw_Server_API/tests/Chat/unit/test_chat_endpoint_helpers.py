@@ -4,7 +4,7 @@ from tldw_Server_API.app.api.v1.endpoints import chat as chat_endpoint
 def test_queue_estimate_sanitizes_base64_payload():
 
 
-     payload = "data:image/png;base64," + ("a" * 400)
+    payload = "data:image/png;base64," + ("a" * 400)
     raw = (
         "{\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"image_url\",\"image_url\":{\"url\":\""
         + payload

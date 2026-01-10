@@ -34,7 +34,7 @@ def _wait_for_claims_rebuild_completion(timeout: float = 5.0, poll_interval: flo
 
 @pytest.mark.integration
 def test_claims_endpoints_list_and_rebuild():
-     # Create temp DB and seed one media + claim
+    # Create temp DB and seed one media + claim
     tmpdir = tempfile.mkdtemp(prefix="claims_api_")
     db_path = os.path.join(tmpdir, "media.db")
     seed_db = MediaDatabase(db_path=db_path, client_id="test_client")
@@ -66,7 +66,7 @@ def test_claims_endpoints_list_and_rebuild():
 
     class _User:
         def __init__(self):
-                     self.id = 1
+            self.id = 1
             self.username = "tester"
             self.is_admin = True
 

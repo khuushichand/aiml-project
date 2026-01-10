@@ -50,4 +50,40 @@
 **Goal**: Validate Prompt Studio job history/status views for both backends.
 **Success Criteria**: Target tests pass locally (or failures documented).
 **Tests**: `python -m pytest tldw_Server_API/tests/e2e/test_prompt_studio_e2e.py -v`
+**Status**: Complete
+
+## Stage 10: Embeddings Jobs Worker Design (Phase 2)
+**Goal**: Define a Jobs worker execution plan for embeddings and document payload/flow.
+**Success Criteria**: Design doc added under `Docs/Design/Embeddings_Jobs_Worker_Migration.md` with job types, payload shape, and cutover flags.
+**Tests**: N/A (design-only stage)
+**Status**: Complete
+
+## Stage 11: Embeddings Jobs Worker Implementation
+**Goal**: Implement Jobs-backed worker execution for media embeddings and gate API endpoints with `EMBEDDINGS_JOBS_BACKEND`.
+**Success Criteria**: Jobs worker processes `media_embeddings` jobs; API enqueues only in jobs mode; legacy mode unchanged.
+**Tests**: `python -m pytest tldw_Server_API/tests/e2e/test_embeddings_e2e.py -v`
+**Status**: Complete
+
+## Stage 12: Embeddings Jobs Worker Validation
+**Goal**: Validate embeddings Jobs pipeline end-to-end with the worker running.
+**Success Criteria**: Target E2E tests pass in jobs mode (or failures documented with cause).
+**Tests**: `python -m pytest tldw_Server_API/tests/e2e/test_media_update_propagation.py -v`
+**Status**: Complete
+
+## Stage 13: Chatbooks Jobs Worker Design (Phase 2)
+**Goal**: Define Jobs worker execution plan for chatbooks export/import.
+**Success Criteria**: Worker approach documented (job types, payload fields, run command).
+**Tests**: N/A (design-only stage)
+**Status**: Complete
+
+## Stage 14: Chatbooks Jobs Worker Implementation
+**Goal**: Implement Jobs worker service for chatbooks export/import using core Jobs worker SDK.
+**Success Criteria**: Worker processes `chatbooks` jobs and updates export/import job tables.
+**Tests**: `python -m pytest tldw_Server_API/tests/Chatbooks/test_chatbooks_cancellation.py -v`
+**Status**: Complete
+
+## Stage 15: Chatbooks Jobs Worker Validation
+**Goal**: Validate chatbooks async job execution with the worker running.
+**Success Criteria**: Chatbooks async E2E or integration jobs pass (or failures documented).
+**Tests**: `python -m pytest tldw_Server_API/tests/e2e/test_chatbooks_roundtrip.py -v`
 **Status**: Not Started

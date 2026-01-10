@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatBadRequestError, ChatProviderError
-from tldw_Server_API.app.core.LLM_Calls.local_chat_calls import (
+from tldw_Server_API.app.core.LLM_Calls.providers.local_adapters import (
     _chat_with_openai_compatible_local_server,
 )
 
@@ -17,9 +17,9 @@ def _make_httpx_error(status_code: int, url: str = "http://local/v1/chat/complet
 
 @pytest.mark.unit
 def test_local_openai_raises_bad_request_on_4xx():
-     error = _make_httpx_error(400)
+    error = _make_httpx_error(400)
 
-    with patch("tldw_Server_API.app.core.LLM_Calls.local_chat_calls._hc_create_client") as mock_client_cls:
+    with patch("tldw_Server_API.app.core.LLM_Calls.providers.local_adapters._hc_create_client") as mock_client_cls:
         mock_client = MagicMock()
         mock_client.post.side_effect = error
         mock_client.close.return_value = None
@@ -36,9 +36,9 @@ def test_local_openai_raises_bad_request_on_4xx():
 
 @pytest.mark.unit
 def test_local_openai_raises_provider_error_on_5xx():
-     error = _make_httpx_error(502)
+    error = _make_httpx_error(502)
 
-    with patch("tldw_Server_API.app.core.LLM_Calls.local_chat_calls._hc_create_client") as mock_client_cls:
+    with patch("tldw_Server_API.app.core.LLM_Calls.providers.local_adapters._hc_create_client") as mock_client_cls:
         mock_client = MagicMock()
         mock_client.post.side_effect = error
         mock_client.close.return_value = None

@@ -10,15 +10,13 @@ pytestmark = [pytest.mark.integration, pytest.mark.external_api]
 
 def _require_external():
 
-
-     if os.getenv("RUN_EXTERNAL_API_TESTS", "0") != "1":
+    if os.getenv("RUN_EXTERNAL_API_TESTS", "0") != "1":
         pytest.skip("External API tests disabled. Set RUN_EXTERNAL_API_TESTS=1 to enable.")
 
 
 def test_medrxiv_search_basic(client_with_auth):
 
-
-     _require_external()
+    _require_external()
     resp = client_with_auth.get("/api/v1/paper-search/medrxiv", params={"q": "covid", "results_per_page": 3})
     assert resp.status_code in (200, 502, 504), resp.text
     if resp.status_code == 200:
@@ -28,8 +26,7 @@ def test_medrxiv_search_basic(client_with_auth):
 
 def test_medrxiv_raw_details_json(client_with_auth):
 
-
-     _require_external()
+    _require_external()
     resp = client_with_auth.get(
         "/api/v1/paper-search/medrxiv/raw/details",
         params={"recent_days": 3, "cursor": 0, "format": "json"},

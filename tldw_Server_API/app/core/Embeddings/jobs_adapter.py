@@ -94,6 +94,9 @@ class EmbeddingsJobsAdapter:
         media_id: int,
         embedding_model: str,
         embedding_provider: Optional[str] = None,
+        chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None,
+        request_source: Optional[str] = None,
         request_id: Optional[str] = None,
         trace_id: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -102,6 +105,12 @@ class EmbeddingsJobsAdapter:
             "embedding_model": embedding_model,
             "embedding_provider": embedding_provider,
         }
+        if chunk_size is not None:
+            payload["chunk_size"] = int(chunk_size)
+        if chunk_overlap is not None:
+            payload["chunk_overlap"] = int(chunk_overlap)
+        if request_source:
+            payload["request_source"] = str(request_source)
         return self._jm.create_job(
             domain=_EMBEDDINGS_DOMAIN,
             queue=_jobs_queue(),

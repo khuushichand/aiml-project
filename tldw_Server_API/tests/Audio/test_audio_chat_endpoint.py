@@ -22,7 +22,7 @@ def _encode_silence_base64(duration_sec: float = 0.1, sr: int = 16000) -> str:
 
 @pytest.fixture
 def client(monkeypatch):
-     monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("SINGLE_USER_API_KEY", TEST_API_KEY)
     monkeypatch.setenv("SINGLE_USER_FIXED_ID", "1")
@@ -36,7 +36,9 @@ def client(monkeypatch):
     )
 
     async def _fake_run_speech_chat_turn(
+        *,
         request_data: SpeechChatRequest,
+        request=None,
         current_user,
         chat_db,
         tts_service,

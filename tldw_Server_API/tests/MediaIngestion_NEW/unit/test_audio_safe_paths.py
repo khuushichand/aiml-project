@@ -5,7 +5,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_File
 
 @pytest.mark.unit
 def test_process_audio_files_rejects_local_path_outside_temp_dir(tmp_path):
-     allowed_dir = tmp_path / "allowed"
+    allowed_dir = tmp_path / "allowed"
     allowed_dir.mkdir()
     outside_dir = tmp_path / "outside"
     outside_dir.mkdir()

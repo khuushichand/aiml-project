@@ -476,8 +476,7 @@ class TestDatabasePerformance:
             results = {"reads": 0, "writes": 0, "errors": 0}
 
             def read_operation():
-
-                            try:
+                try:
                     api_client.get_media_item(media_id)
                     results["reads"] += 1
                 except:

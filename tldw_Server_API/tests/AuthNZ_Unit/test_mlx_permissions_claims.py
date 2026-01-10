@@ -72,26 +72,22 @@ def _build_app_with_overrides(
 
     class _StubRegistry:
         def __init__(self) -> None:
-                     self.loaded = False
+            self.loaded = False
             self.unloaded = False
 
         def load(self, *args, **kwargs):
-
-                     self.loaded = True
+            self.loaded = True
             return {"status": "ok"}
 
         def unload(self):
-
-                     self.unloaded = True
+            self.unloaded = True
             return {"status": "unloaded"}
 
         def status(self):
-
-                     return {"ok": True}
+            return {"ok": True}
 
     def _get_stub_registry() -> _StubRegistry:
-
-             return _StubRegistry()
+        return _StubRegistry()
 
     app.dependency_overrides[mlx_mod.get_mlx_registry] = _get_stub_registry
 
@@ -100,7 +96,7 @@ def _build_app_with_overrides(
 
 @pytest.mark.unit
 def test_mlx_load_401_when_principal_unavailable():
-     app = _build_app_with_overrides(principal=None, fail_with_401=True)
+    app = _build_app_with_overrides(principal=None, fail_with_401=True)
 
     with TestClient(app) as client:
         resp = client.post("/api/v1/llm/providers/mlx/load", json={})
@@ -111,7 +107,7 @@ def test_mlx_load_401_when_principal_unavailable():
 
 @pytest.mark.unit
 def test_mlx_load_403_when_missing_admin_role():
-     principal = _make_principal(
+    principal = _make_principal(
         is_admin=False,
         roles=["user"],
         permissions=[],
@@ -126,7 +122,7 @@ def test_mlx_load_403_when_missing_admin_role():
 
 @pytest.mark.unit
 def test_mlx_load_200_for_admin_principal(monkeypatch):
-     principal = _make_principal(
+    principal = _make_principal(
         is_admin=True,
         roles=["admin"],
         permissions=[],
@@ -136,15 +132,13 @@ def test_mlx_load_200_for_admin_principal(monkeypatch):
 
     class _StubRegistry:
         def load(self, model_path=None, overrides=None):
-                     return {"status": "ok", "model_path": model_path}
+            return {"status": "ok", "model_path": model_path}
 
         def unload(self):
-
-                     return {"status": "unloaded"}
+            return {"status": "unloaded"}
 
         def status(self):
-
-                     return {"ok": True}
+            return {"ok": True}
 
     monkeypatch.setattr(mlx_mod, "get_mlx_registry", lambda: _StubRegistry())
     app = _build_app_with_overrides(principal=principal)

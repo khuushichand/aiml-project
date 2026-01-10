@@ -5,7 +5,7 @@ import pytest
 
 class _DummyWebSocket:
     def __init__(self, frames):
-             self._frames = list(frames)
+        self._frames = list(frames)
         self.sent = []
         self.closed = False
 
@@ -44,7 +44,7 @@ async def test_status_emitted_when_persistence_degraded(monkeypatch):
 
     class _FakeDiarizer:
         def __init__(self, *args, **kwargs):
-                     self.persistence_method = "wave"  # simulate non-soundfile fallback
+            self.persistence_method = "wave"  # simulate non-soundfile fallback
 
         async def ensure_ready(self):
             return True
@@ -93,7 +93,7 @@ async def test_status_emitted_when_persistence_disabled(monkeypatch):
 
     class _FakeDiarizer2:
         def __init__(self, *args, **kwargs):
-                     self.persistence_method = None  # simulate disabled
+            self.persistence_method = None  # simulate disabled
 
         async def ensure_ready(self):
             return True

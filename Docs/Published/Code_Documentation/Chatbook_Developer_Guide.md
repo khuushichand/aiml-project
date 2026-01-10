@@ -1038,6 +1038,8 @@ CHATBOOK_ENABLE_COMPRESSION=true
 CHATBOOK_COMPRESSION_LEVEL=6
 ```
 
+`USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root). Override via environment variable or `Config_Files/config.txt` as needed.
+
 ### Docker Configuration
 
 ```dockerfile

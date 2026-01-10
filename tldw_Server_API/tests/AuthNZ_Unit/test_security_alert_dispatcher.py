@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.AuthNZ.alerting import SecurityAlertDispatcher
 def test_security_alert_dispatcher_disabled(tmp_path):
 
 
-     log_file = tmp_path / "alerts.log"
+    log_file = tmp_path / "alerts.log"
     settings = SimpleNamespace(
         SECURITY_ALERTS_ENABLED=False,
         SECURITY_ALERT_MIN_SEVERITY="medium",
@@ -39,7 +39,7 @@ def test_security_alert_dispatcher_disabled(tmp_path):
 def test_security_alert_dispatcher_writes_file(tmp_path):
 
 
-     log_file = tmp_path / "alerts.log"
+    log_file = tmp_path / "alerts.log"
     settings = SimpleNamespace(
         SECURITY_ALERTS_ENABLED=True,
         SECURITY_ALERT_MIN_SEVERITY="low",
@@ -76,7 +76,7 @@ def test_security_alert_dispatcher_writes_file(tmp_path):
 def test_security_alert_dispatcher_handles_webhook_failure(tmp_path, monkeypatch):
 
 
-     log_file = tmp_path / "alerts.log"
+    log_file = tmp_path / "alerts.log"
     async def failing_afetch(*args, **kwargs):
         raise RuntimeError("boom")
 
@@ -115,7 +115,7 @@ def test_security_alert_dispatcher_handles_webhook_failure(tmp_path, monkeypatch
 def test_security_alert_validation_requires_sink(tmp_path):
 
 
-     settings = SimpleNamespace(
+    settings = SimpleNamespace(
         SECURITY_ALERTS_ENABLED=True,
         SECURITY_ALERT_MIN_SEVERITY="high",
         SECURITY_ALERT_FILE_PATH="",
@@ -140,7 +140,7 @@ def test_security_alert_validation_requires_sink(tmp_path):
 def test_security_alert_status_snapshot(tmp_path):
 
 
-     log_file = tmp_path / "alerts.log"
+    log_file = tmp_path / "alerts.log"
     settings = SimpleNamespace(
         SECURITY_ALERTS_ENABLED=True,
         SECURITY_ALERT_MIN_SEVERITY="low",
@@ -177,7 +177,7 @@ def test_security_alert_status_snapshot(tmp_path):
 def test_security_alert_per_sink_thresholds(tmp_path, monkeypatch):
 
 
-     log_file = tmp_path / "alerts.log"
+    log_file = tmp_path / "alerts.log"
 
     async def should_not_call_afetch(*args, **kwargs):
         raise AssertionError("webhook should not be invoked")
@@ -222,7 +222,7 @@ def test_security_alert_per_sink_thresholds(tmp_path, monkeypatch):
 def test_security_alert_backoff(tmp_path, monkeypatch):
 
 
-     log_file = tmp_path / "alerts.log"
+    log_file = tmp_path / "alerts.log"
     async def failing_afetch(*args, **kwargs):
         raise RuntimeError("boom")
 

@@ -261,8 +261,7 @@ class WorkflowState:
     """Manage workflow state in a more structured way."""
 
     def __init__(self):
-
-            self.phases = {
+        self.phases = {
             "setup": {"status": "pending", "data": {}},
             "upload": {"status": "pending", "data": []},
             "processing": {"status": "pending", "data": []},

@@ -71,9 +71,15 @@ class TestUserLifecycleModifications:
             # Wait for embeddings to be ready (best-effort)
             self._poll_embeddings_ready(api_client, media_id, timeout_s=20)
 
-            # Text search should find the token
-            sr = api_client.search_media(self.token_old, limit=10)
-            assert self._search_contains_media(sr, media_id), "Uploaded item not found via text search"
+            # Text search should find the token (allow brief indexing delay)
+            found = False
+            for _ in range(5):
+                sr = api_client.search_media(self.token_old, limit=10)
+                if self._search_contains_media(sr, media_id):
+                    found = True
+                    break
+                time.sleep(1)
+            assert found, "Uploaded item not found via text search"
 
             # RAG search may rely on embeddings; allow soft assertion
             try:
@@ -182,6 +188,10 @@ class TestMultiUserDataIsolation:
         if (info.get("auth_mode") or mode_env) not in {"multi_user", "multi-user", "multiuser"}:
             pytest.skip("Not in multi_user mode")
 
+        original_headers = api_client.client.headers.copy()
+        original_token = api_client.token
+        original_refresh = api_client.refresh_token
+
         # User A: already represented by api_client after login/registration in other tests
         # If not authenticated yet, create/login a user A
         try:
@@ -241,3 +251,6 @@ class TestMultiUserDataIsolation:
 
         finally:
             cleanup_test_file(path)
+            api_client.client.headers = original_headers
+            api_client.token = original_token
+            api_client.refresh_token = original_refresh

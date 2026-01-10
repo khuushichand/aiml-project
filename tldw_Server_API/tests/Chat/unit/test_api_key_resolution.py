@@ -12,7 +12,7 @@ from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
 def test_resolver_prefers_module_keys_in_tests(monkeypatch):
 
 
-     monkeypatch.setenv("PYTEST_CURRENT_TEST", "chat/test")
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "chat/test")
     monkeypatch.delenv("TEST_MODE", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
@@ -33,7 +33,7 @@ def test_resolver_prefers_module_keys_in_tests(monkeypatch):
 def test_resolver_ignores_module_keys_outside_tests(monkeypatch):
 
 
-     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     monkeypatch.delenv("TEST_MODE", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
@@ -50,7 +50,7 @@ def test_resolver_ignores_module_keys_outside_tests(monkeypatch):
 def test_resolver_can_skip_module_preference(monkeypatch):
 
 
-     monkeypatch.setenv("PYTEST_CURRENT_TEST", "chat/test")
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "chat/test")
     monkeypatch.delenv("TEST_MODE", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
@@ -70,7 +70,7 @@ def test_resolver_can_skip_module_preference(monkeypatch):
 def test_get_api_keys_supports_hyphenated_provider_env_vars(monkeypatch):
 
 
-     monkeypatch.setenv("LOCAL_LLM_API_KEY", "local-key")
+    monkeypatch.setenv("LOCAL_LLM_API_KEY", "local-key")
     monkeypatch.setenv("CUSTOM_OPENAI_API_KEY", "custom-key")
     monkeypatch.setattr(chat_request_schemas, "load_and_log_configs", lambda: {})
 
@@ -83,7 +83,7 @@ def test_get_api_keys_supports_hyphenated_provider_env_vars(monkeypatch):
 def test_resolver_prefers_provider_override(monkeypatch):
 
 
-     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     monkeypatch.delenv("TEST_MODE", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(chat_request_schemas, "get_api_keys", lambda: {"openai": "env-key"})

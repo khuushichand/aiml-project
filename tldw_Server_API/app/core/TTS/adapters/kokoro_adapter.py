@@ -235,6 +235,25 @@ class KokoroAdapter(TTSAdapter):
         # PyTorch voices directory (for KModel / KPipeline and dynamic voices)
         self.voice_dir = self.config.get("kokoro_voice_dir", "models/kokoro/voices")
 
+        # Optionally defer heavyweight model load (useful for tests)
+        self._lazy_init = parse_bool(
+            self.config.get("kokoro_lazy_init"),
+            default=parse_bool(os.getenv("KOKORO_LAZY_INIT"), default=False),
+        )
+        if not self._lazy_init:
+            test_mode = bool(os.getenv("PYTEST_CURRENT_TEST")) or parse_bool(
+                os.getenv("TESTING"), default=False
+            ) or parse_bool(os.getenv("TEST_MODE"), default=False) or parse_bool(
+                os.getenv("TLDW_TEST_MODE"), default=False
+            )
+            explicit_model = any(
+                key in self.config for key in ("kokoro_model_path", "kokoro_use_onnx", "kokoro_voices_json")
+            )
+            if test_mode and not parse_bool(os.getenv("RUN_TTS_LEGACY_INTEGRATION"), default=False) and not explicit_model:
+                self._lazy_init = True
+        self._deferred_model_load = self._lazy_init
+        self._model_lock = asyncio.Lock()
+
         # Auto-download toggle (Kokoro does not auto-download; provided for consistency)
         cfg_auto = self.config.get("kokoro_auto_download")
         env_auto = os.getenv("KOKORO_AUTO_DOWNLOAD") or os.getenv("TTS_AUTO_DOWNLOAD")
@@ -299,12 +318,45 @@ class KokoroAdapter(TTSAdapter):
         self.audio_normalizer = None
         self._dynamic_voices: List[VoiceInfo] = []
 
+    def _ensure_audio_normalizer(self) -> None:
+        if self.audio_normalizer is not None:
+            return
+        from tldw_Server_API.app.core.TTS.streaming_audio_writer import AudioNormalizer
+
+        self.audio_normalizer = AudioNormalizer()
+
+    def _model_is_loaded(self) -> bool:
+        if self.use_onnx:
+            return self.kokoro_instance is not None
+        return self.kokoro_pt_model is not None or self.model_pt is not None
+
+    async def _ensure_model_loaded(self) -> bool:
+        if self._model_is_loaded():
+            return True
+        async with self._model_lock:
+            if self._model_is_loaded():
+                return True
+            if self.use_onnx:
+                return await self._load_onnx_model()
+            if self.init_timeout_sec:
+                try:
+                    return await asyncio.wait_for(self._load_pytorch_model(), timeout=self.init_timeout_sec)
+                except asyncio.TimeoutError:
+                    logger.error(f"{self.provider_name}: Lazy model load timed out after {self.init_timeout_sec}s")
+                    return False
+            return await self._load_pytorch_model()
+
     async def initialize(self) -> bool:
         """Initialize the Kokoro adapter"""
         try:
-            # Import audio normalizer
-            from tldw_Server_API.app.core.TTS.streaming_audio_writer import AudioNormalizer
-            self.audio_normalizer = AudioNormalizer()
+            if self._lazy_init:
+                try:
+                    self._load_dynamic_voices()
+                except Exception as ve:
+                    logger.warning(f"{self.provider_name}: Failed to load dynamic voices.json: {ve}")
+                logger.info(f"{self.provider_name}: Lazy init enabled; deferring model load")
+                self._status = ProviderStatus.AVAILABLE
+                return True
 
             if self.use_onnx:
                 success = await self._load_onnx_model()
@@ -653,6 +705,14 @@ class KokoroAdapter(TTSAdapter):
                 f"{self.provider_name} not initialized",
                 provider=self.provider_name
             )
+        if self._deferred_model_load and not self._model_is_loaded():
+            loaded = await self._ensure_model_loaded()
+            if not loaded:
+                raise TTSProviderNotConfiguredError(
+                    f"{self.provider_name} model not initialized",
+                    provider=self.provider_name,
+                )
+            self._deferred_model_load = False
 
         # Validate request using new validation system
         try:
@@ -672,6 +732,8 @@ class KokoroAdapter(TTSAdapter):
 
         # Preprocess text
         text = self.preprocess_text(raw_text)
+
+        self._ensure_audio_normalizer()
 
         logger.info(
             f"{self.provider_name}: Generating speech with voice={voice}, "

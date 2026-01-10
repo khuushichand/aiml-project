@@ -41,6 +41,27 @@ def _resolve_model(provider: str, app_config: Dict[str, Any]) -> Optional[str]:
     return model
 
 
+def chat_api_call(**kwargs: Any) -> Any:
+    """Compatibility shim for legacy chat_api_call usage in prompt tooling."""
+    try:
+        from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
+    except Exception:
+        api_endpoint = (
+            kwargs.get("api_endpoint")
+            or kwargs.get("api_name")
+            or kwargs.get("provider")
+            or kwargs.get("endpoint")
+        )
+        if not api_endpoint:
+            raise PromptGenerationError("Provider name is required.")
+        request = dict(kwargs)
+        messages_payload = request.pop("messages_payload", None)
+        if messages_payload is not None and "messages" not in request:
+            request["messages"] = messages_payload
+        return _call_adapter(api_endpoint, request)
+    return perform_chat_api_call(**kwargs)
+
+
 #######################################################################################################################
 # Function Definitions
 
@@ -536,13 +557,11 @@ def generate_prompt(api_endpoint: str, api_key: str, task: str, variables_str: s
 
     # Call adapter to generate the prompt
     try:
-        response = _call_adapter(
-            api_endpoint,
-            {
-                "messages": [{"role": "user", "content": metaprompt}],
-                "api_key": api_key,
-                "temperature": temperature,
-            },
+        response = chat_api_call(
+            api_endpoint=api_endpoint,
+            api_key=api_key,
+            messages_payload=[{"role": "user", "content": metaprompt}],
+            temperature=temperature,
         )
         if response is None:
             raise PromptGenerationError("Chat API returned empty response")
@@ -638,13 +657,11 @@ def test_generated_prompt(
 
     # Send the filled-in prompt to the provider adapter
     try:
-        response = _call_adapter(
-            api_endpoint,
-            {
-                "messages": [{"role": "user", "content": prompt_with_values}],
-                "api_key": api_key,
-                "temperature": temperature,
-            },
+        response = chat_api_call(
+            api_endpoint=api_endpoint,
+            api_key=api_key,
+            messages_payload=[{"role": "user", "content": prompt_with_values}],
+            temperature=temperature,
         )
         if response is None:
             raise PromptGenerationError("Chat API returned empty response")

@@ -24,7 +24,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 class TestTTSGenerateEndpoint:
     """Tests for the /api/v1/audio/speech endpoint."""
-    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost')
     async def test_generate_basic_audio(self, mock_post, test_client, auth_headers):
         """Test basic TTS generation endpoint."""
         # Mock OpenAI API response
@@ -51,7 +51,7 @@ class TestTTSGenerateEndpoint:
         assert len(response.content) > 0
 
     @pytest.mark.streaming
-    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost')
     async def test_generate_basic_audio_streaming(self, mock_post, test_client, auth_headers):
         """Test basic TTS generation endpoint in streaming mode (OpenAI)."""
 
@@ -283,7 +283,7 @@ class TestProviderManagementEndpoints:
     async def test_list_providers(self, test_client, auth_headers):
         """Test listing available TTS providers."""
         with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.get_capabilities') as mock_caps, \
-             patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.list_voices') as mock_voices:
+            patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.list_voices') as mock_voices:
             mock_caps.return_value = {
                 "openai": {"models": ["tts-1", "tts-1-hd"]},
                 "elevenlabs": {"models": ["eleven_multilingual_v2"]},
@@ -551,8 +551,7 @@ class TestBatchProcessing:
         call = {"n": 0}
 
         def side_effect(*args, **kwargs):
-
-                     async def _gen():
+            async def _gen():
                 call["n"] += 1
                 if call["n"] == 2:
                     raise TTSGenerationError("Failed")

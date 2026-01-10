@@ -66,7 +66,7 @@ Legend
 | Capability | Status | Notes | Links |
 |---|---|---|---|
 | Notes + tagging | Working | Notebook-style notes | [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/notes.py) |
-| Prompt library | Working | Import/export | [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/prompts.py) |
+| Prompt library | Working | Import/export, versions, templates, bulk ops, sorting | [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/prompts.py) |
 | Prompt Studio: projects/prompts/tests | Working | Test cases + runs | [docs](API-related/Prompt_Studio_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/prompt_studio_projects.py) |
 | Prompt Studio: optimization + WS | Working | Live updates | [docs](API-related/Prompt_Studio_API.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/prompt_studio_optimization.py) |
 | Character cards & sessions | Working | SillyTavern-compatible | [docs](https://github.com/rmusser01/tldw_server/blob/main/Docs/API-related/CHARACTER_CHAT_API_DOCUMENTATION.md) · [code](https://github.com/rmusser01/tldw_server/blob/main/tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py) |

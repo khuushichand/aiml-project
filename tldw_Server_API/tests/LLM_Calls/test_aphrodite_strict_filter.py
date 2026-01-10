@@ -11,21 +11,21 @@ class DummyResponse:
 
     def raise_for_status(self):
 
-             return None
+            return None
 
     def json(self):
 
-             return {}
+            return {}
 
     def close(self):
 
-             return None
+            return None
 
 
 @pytest.mark.unit
 @pytest.mark.strict_mode
 def test_aphrodite_strict_filter_drops_top_k_from_payload_non_streaming(monkeypatch):
-     # Ensure helper takes the test codepath (raw httpx.Client) instead of central client
+    # Ensure helper takes the test codepath (raw httpx.Client) instead of central client
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "1")
     fake_settings = {
         "aphrodite_api": {
@@ -44,10 +44,10 @@ def test_aphrodite_strict_filter_drops_top_k_from_payload_non_streaming(monkeypa
         return DummyResponse({})
 
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls.load_settings",
+        "tldw_Server_API.app.core.LLM_Calls.providers.local_adapters.load_settings",
         return_value=fake_settings,
     ), patch(
-        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls._hc_create_client"
+        "tldw_Server_API.app.core.LLM_Calls.providers.local_adapters._hc_create_client"
     ) as mock_client_cls:
 
         mock_client = MagicMock()

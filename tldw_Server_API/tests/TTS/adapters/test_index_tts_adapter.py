@@ -30,7 +30,7 @@ def _make_wav_bytes(duration_seconds: float = 0.2, sample_rate: int = 16000) -> 
 
 @pytest.fixture
 def adapter(tmp_path) -> IndexTTS2Adapter:
-     cfg_path = tmp_path / "config.yaml"
+    cfg_path = tmp_path / "config.yaml"
     cfg_path.write_text("model: dummy")
     model_dir = tmp_path / "checkpoints"
     model_dir.mkdir()
@@ -69,7 +69,7 @@ async def test_generate_basic_wav(adapter, monkeypatch):
 
     def fake_infer(spk_audio_prompt, text, output_path, **kwargs):
 
-             infer_calls.append((spk_audio_prompt, text, output_path, kwargs))
+        infer_calls.append((spk_audio_prompt, text, output_path, kwargs))
         audio = np.ones((22050, 1), dtype=np.int16)
         return (22050, audio)
 
@@ -150,11 +150,11 @@ async def test_generate_streaming_wav(adapter, monkeypatch):
 
     def fake_infer(*args, **kwargs):
 
-             assert kwargs.get("stream_return") is True
+        assert kwargs.get("stream_return") is True
 
         def iterator():
 
-                     for chunk in chunks:
+            for chunk in chunks:
                 yield chunk
 
         return iterator()
@@ -176,7 +176,7 @@ async def test_generate_streaming_wav(adapter, monkeypatch):
 
         def close(self):
 
-                     pass
+            pass
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.TTS.adapters.index_tts_adapter.StreamingAudioWriter",
@@ -205,5 +205,5 @@ async def test_generate_streaming_wav(adapter, monkeypatch):
 def test_registry_includes_index_tts_provider():
 
 
-     registry = TTSAdapterRegistry(config={"index_tts_enabled": False})
+    registry = TTSAdapterRegistry(config={"index_tts_enabled": False})
     assert TTSProvider.INDEX_TTS in registry._adapter_specs

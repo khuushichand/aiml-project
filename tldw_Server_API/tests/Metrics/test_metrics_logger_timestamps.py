@@ -14,11 +14,11 @@ from tldw_Server_API.app.core.Metrics import metrics_logger
     ],
 )
 def test_metrics_logger_emits_valid_timestamp(monkeypatch, func, call_args):
-     recorded = {}
+    recorded = {}
 
     class StubLogger:
         def info(self, *args, **kwargs):
-                     recorded["extra"] = kwargs.get("extra")
+            recorded["extra"] = kwargs.get("extra")
 
     stub = StubLogger()
     monkeypatch.setattr(metrics_logger, "logger", stub)

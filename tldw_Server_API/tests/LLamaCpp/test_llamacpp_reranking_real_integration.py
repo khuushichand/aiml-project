@@ -13,27 +13,24 @@ os.environ.setdefault("TEST_MODE", "true")
 
 def _has_llama_embedding() -> bool:
 
-
-     return shutil.which("llama-embedding") is not None
+    return shutil.which("llama-embedding") is not None
 
 
 def _model_path() -> str:
 
-
-     # Allow test-specific override to avoid touching prod config
+    # Allow test-specific override to avoid touching prod config
     return os.getenv("TEST_QWEN_GGUF_MODEL") or os.getenv("RAG_LLAMA_RERANKER_MODEL") or ""
 
 
 def _model_available() -> bool:
 
-
-     m = _model_path()
+    m = _model_path()
     return bool(m and os.path.exists(m))
 
 
 @pytest.fixture(scope="module")
 def client():
-     settings = get_settings()
+    settings = get_settings()
     headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
     with TestClient(app, headers=headers) as c:
         yield c
@@ -47,8 +44,7 @@ pytestmark = [
 
 def _skip_if_unavailable():
 
-
-     if not _has_llama_embedding():
+    if not _has_llama_embedding():
         pytest.skip("llama-embedding binary not found on PATH; set RUN with llama.cpp installed")
     if not _model_available():
         pytest.skip("TEST_QWEN_GGUF_MODEL or RAG_LLAMA_RERANKER_MODEL not set to a readable GGUF file")
@@ -61,11 +57,7 @@ def test_public_reranking_real_integration(client: TestClient):
         "model": model,
         "query": "What is panda?",
         "top_n": 2,
-        "documents": [
-            "hi",
-            "it is a bear",
-            "The giant panda is a bear species endemic to China."
-        ]
+        "documents": ["hi", "it is a bear", "The giant panda is a bear species endemic to China."],
     }
     resp = client.post("/v1/reranking", json=payload)
     assert resp.status_code == 200, resp.text
@@ -86,9 +78,9 @@ def test_llamacpp_reranking_real_integration(client: TestClient):
         "passages": [
             {"id": "a", "text": "Llamas eat bananas and grass."},
             {"id": "b", "text": "Llamas in pyjamas"},
-            {"id": "c", "text": "A bowl of fruit salad"}
+            {"id": "c", "text": "A bowl of fruit salad"},
         ],
-        "model": model
+        "model": model,
     }
     resp = client.post("/api/v1/llamacpp/reranking", json=payload)
     assert resp.status_code == 200, resp.text

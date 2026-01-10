@@ -50,7 +50,7 @@ Navigation:
 **Architecture & Data Flow**
 - Per-user isolation
   - `ChatbookService(user_id, CharactersRAGDB, user_id_int)` creates a secure per‑user storage root under `USER_DB_BASE_DIR/<user_id>/chatbooks/{exports,imports,temp}`.
-  - Base path selection: `USER_DB_BASE_DIR` (env/config) with default `Databases/user_databases` under the repo root.
+  - Base path selection: `USER_DB_BASE_DIR` (from `tldw_Server_API.app.core.config`) defaults to `Databases/user_databases/` under the project root. Override via environment variable or `Config_Files/config.txt` as needed.
 - Export (sync)
   - Validate metadata and quotas → collect selected content → write `manifest.json` + content tree → zip to `exports/` → persist completed ExportJob with `download_url` + `expires_at`.
 - Export (async)
@@ -115,7 +115,7 @@ Navigation:
   - `service.list_export_jobs()`, `service.get_export_job(job_id)`, `service.cancel_export_job(job_id)`; analogous import methods.
 
 **Storage & Paths**
-- Base directory selection: `USER_DB_BASE_DIR` (env/config) with default `Databases/user_databases` under the repo root.
+- Base directory selection: `USER_DB_BASE_DIR` (from `tldw_Server_API.app.core.config`) defaults to `Databases/user_databases/` under the project root. Override via environment variable or `Config_Files/config.txt` as needed.
 - Per user: `USER_DB_BASE_DIR/<user_id>/chatbooks/{exports,imports,temp}` with `0700` perms when possible.
 - Archives: ZIP packages with `manifest.json` and content folders. Exports use `.zip` by default; imports accept `.zip` and `.chatbook`.
 
@@ -159,7 +159,7 @@ Navigation:
 - PS backend does not start local processing; ensure an external PS worker processes jobs.
 - When adding new content types, update: `ContentType` enums, export collectors, import handlers, schemas, and tests.
 - Don’t expose internal `output_path` in APIs; use `download_url` built from job id.
-- For tests, set `USER_DB_BASE_DIR` to isolate chatbooks storage under a temp or test-specific directory.
+- For tests, set `USER_DB_BASE_DIR` (env or `Config_Files/config.txt`) to isolate chatbooks storage under a temp or test-specific directory.
 - Embeddings export currently derives from media rows when `include_embeddings=true`. Explicit embedding exports beyond media vectors are pending in service TODOs.
 - Prompts/Evaluations/Media DBs are optional in some builds; the service will skip those sections if their DBs aren’t available.
 

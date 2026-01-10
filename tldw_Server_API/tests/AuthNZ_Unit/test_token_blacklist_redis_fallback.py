@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.AuthNZ.token_blacklist import TokenBlacklist
 
 class _FakeConn:
     def __init__(self):
-             self.rows = {}
+        self.rows = {}
         self._pending_row = None
 
     async def execute(self, query, *args):
@@ -77,7 +77,7 @@ class _FakeConn:
 
 class _FakePool:
     def __init__(self):
-             self.conn = _FakeConn()
+        self.conn = _FakeConn()
         self.pool = None
         self._initialized = True
 
@@ -100,7 +100,7 @@ async def test_token_blacklist_falls_back_to_database(monkeypatch):
 
     def failing_from_url(*_args, **_kwargs):
 
-             raise RedisError("connection failed")
+        raise RedisError("connection failed")
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.AuthNZ.token_blacklist.redis_async.from_url",

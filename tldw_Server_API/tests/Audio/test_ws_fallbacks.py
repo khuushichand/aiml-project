@@ -7,7 +7,7 @@ import pytest
 
 class _DummyWebSocket:
     def __init__(self, frames):
-             """
+        """
         Construct a dummy WebSocket preloaded with incoming frames for tests.
 
         Parameters:

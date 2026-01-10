@@ -10,21 +10,18 @@ class DummyResponse:
         self.status_code = 200
 
     def raise_for_status(self):
-
-             return None
+        return None
 
     def json(self):
-
-             return {}
+        return {}
 
     def close(self):
-
-             return None
+        return None
 
 
 @pytest.mark.unit
 def test_ollama_accepts_system_message_kwarg_and_inserts_message():
-     fake_settings = {
+    fake_settings = {
         "ollama_api": {
             "api_url": "http://localhost:11434/v1/chat/completions",
             "streaming": False,
@@ -35,17 +32,16 @@ def test_ollama_accepts_system_message_kwarg_and_inserts_message():
     captured_payload = {}
 
     def fake_post(url, headers=None, json=None, timeout=None):
-
-             captured_payload.clear()
+        captured_payload.clear()
         if json:
             captured_payload.update(json)
         return DummyResponse({})
 
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls.load_settings",
+        "tldw_Server_API.app.core.LLM_Calls.providers.local_adapters.load_settings",
         return_value=fake_settings,
     ), patch(
-        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls._hc_create_client"
+        "tldw_Server_API.app.core.LLM_Calls.providers.local_adapters._hc_create_client"
     ) as mock_client_cls:
         mock_client = MagicMock()
         mock_client.post.side_effect = fake_post

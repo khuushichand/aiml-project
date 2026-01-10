@@ -80,7 +80,7 @@ def test_nested_archive_scanning_detects_inner_payload(tmp_path: Path):
 
 @pytest.mark.unit
 def test_html_sanitization_removes_script():
-     validator = FileValidator()
+    validator = FileValidator()
     html = "<html><head><script>alert('x')</script></head><body><p>OK</p></body></html>"
     cleaned = validator.sanitize_html_content(html, config={"strip": True})
     assert "script" not in cleaned.lower()
@@ -89,7 +89,7 @@ def test_html_sanitization_removes_script():
 
 @pytest.mark.unit
 def test_xml_sanitization_strips_comments_and_pi():
-     try:
+    try:
         import defusedxml  # noqa: F401
     except Exception:
         pytest.skip("defusedxml not installed")

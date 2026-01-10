@@ -23,7 +23,7 @@ def iter_sse_lines_requests(
     provider_control_passthru: Optional[bool] = None,
     control_filter: Optional[Callable[[str, str], Optional[Tuple[str, str]]]] = None,
 ) -> Iterator[str]:
-    """Yield normalized SSE lines from a requests.Response stream.
+    """Yield normalized SSE lines from a Response-like stream.
 
     - Skips blank/control lines and suppresses provider [DONE] frames
       (caller should append a final sentinel once).

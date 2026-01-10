@@ -7,9 +7,7 @@ from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
 
 
 def test_apply_overrides_filters_models_and_status() -> None:
-
-
-     set_llm_provider_overrides_cache_for_tests(
+    set_llm_provider_overrides_cache_for_tests(
         {
             "openai": LLMProviderOverride(
                 provider="openai",
@@ -44,9 +42,7 @@ def test_apply_overrides_filters_models_and_status() -> None:
 
 
 def test_validate_provider_override_blocks_disallowed_model() -> None:
-
-
-     set_llm_provider_overrides_cache_for_tests(
+    set_llm_provider_overrides_cache_for_tests(
         {
             "openai": LLMProviderOverride(
                 provider="openai",

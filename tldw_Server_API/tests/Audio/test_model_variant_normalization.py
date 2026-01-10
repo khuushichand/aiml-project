@@ -8,7 +8,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.model_utils impor
 
 @pytest.mark.unit
 def test_parakeet_combined_sets_variant_when_no_override():
-     m, v = normalize_model_and_variant(
+    m, v = normalize_model_and_variant(
         raw_model="parakeet-onnx",
         current_model="parakeet",
         current_variant="standard",
@@ -20,7 +20,7 @@ def test_parakeet_combined_sets_variant_when_no_override():
 
 @pytest.mark.unit
 def test_parakeet_override_wins_over_combined_suffix():
-     m, v = normalize_model_and_variant(
+    m, v = normalize_model_and_variant(
         raw_model="parakeet-mlx",
         current_model="parakeet",
         current_variant="standard",
@@ -32,7 +32,7 @@ def test_parakeet_override_wins_over_combined_suffix():
 
 @pytest.mark.unit
 def test_whisper_hyphenated_collapses_to_base():
-     m, v = normalize_model_and_variant(
+    m, v = normalize_model_and_variant(
         raw_model="whisper-1",
         current_model="parakeet",
         current_variant="standard",
@@ -45,7 +45,7 @@ def test_whisper_hyphenated_collapses_to_base():
 
 @pytest.mark.unit
 def test_canary_hyphenated_collapses_to_base():
-     m, v = normalize_model_and_variant(
+    m, v = normalize_model_and_variant(
         raw_model="canary-1b",
         current_model="parakeet",
         current_variant="onnx",
@@ -57,7 +57,7 @@ def test_canary_hyphenated_collapses_to_base():
 
 @pytest.mark.unit
 def test_unknown_parakeet_suffix_does_not_set_invalid_variant():
-     m, v = normalize_model_and_variant(
+    m, v = normalize_model_and_variant(
         raw_model="parakeet-fast",
         current_model="parakeet",
         current_variant="standard",

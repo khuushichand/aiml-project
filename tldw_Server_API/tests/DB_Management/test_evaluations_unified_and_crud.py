@@ -7,9 +7,7 @@ from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 
 
 def test_evaluations_unified_sqlite_migration_and_crud(tmp_path):
-
-
-     """
+    """
     Ensure unified evaluations table exists after SQLite migrations and basic
     CRUD works. This covers environments without Postgres.
     """
@@ -39,7 +37,7 @@ def test_evaluations_unified_sqlite_migration_and_crud(tmp_path):
     reason="PostgreSQL content backend not configured in this environment",
 )
 def test_evaluations_unified_postgres_presence():
-     """
+    """
     Smoke test: when running against Postgres content backend, an EvaluationsDatabase
     should initialize without error and report unified table presence. Requires
     a configured Postgres instance and psycopg.

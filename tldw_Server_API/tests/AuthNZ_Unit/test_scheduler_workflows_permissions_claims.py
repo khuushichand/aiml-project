@@ -56,7 +56,7 @@ def _build_app_with_overrides(principal: AuthPrincipal) -> FastAPI:
 
     class _FakeScheduler:
         def __init__(self) -> None:
-                     self.calls: Dict[str, Any] = {}
+            self.calls: Dict[str, Any] = {}
             self._aps = SimpleNamespace(get_jobs=lambda: [])
 
         async def _rescan_once(self):
@@ -65,8 +65,7 @@ def _build_app_with_overrides(principal: AuthPrincipal) -> FastAPI:
     fake_scheduler = _FakeScheduler()
 
     def _get_workflows_scheduler():
-
-             return fake_scheduler
+        return fake_scheduler
 
     app.dependency_overrides[sched_mod.get_workflows_scheduler] = _get_workflows_scheduler
 

@@ -13,7 +13,7 @@ import base64
 
 @pytest.fixture(autouse=True)
 def clear_tts_env(monkeypatch):
-     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
     return None
 #
@@ -50,13 +50,13 @@ from tldw_Server_API.app.core.TTS.tts_exceptions import (
 
 @pytest.fixture
 def mock_http_client():
-     """Mock HTTP client for API calls"""
+    """Mock HTTP client for API calls"""
     client = AsyncMock(spec=httpx.AsyncClient)
     return client
 
 @pytest.fixture
 def sample_tts_request():
-     """Sample TTS request for testing"""
+    """Sample TTS request for testing"""
     return TTSRequest(
         text="Hello, this is a test.",
         voice="default",
@@ -69,7 +69,7 @@ def sample_tts_request():
 
 @pytest.fixture
 def mock_audio_response():
-     """Mock audio response data"""
+    """Mock audio response data"""
     return b"FAKE_AUDIO_DATA_" * 100
 
 #######################################################################################################################
@@ -150,7 +150,7 @@ class TestOpenAIAdapterComprehensive:
         # Test fallback
         assert adapter.map_voice("unknown-voice-123") == "alloy"
 
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost')
     async def test_generate_audio_success(self, mock_post, sample_tts_request, mock_audio_response):
         """Test successful audio generation"""
         # Setup mock response
@@ -173,7 +173,7 @@ class TestOpenAIAdapterComprehensive:
         assert response.provider == "OpenAI"
         mock_post.assert_called_once()
 
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost')
     async def test_generate_audio_auth_error(self, mock_post, sample_tts_request):
         """Test authentication error handling"""
         import httpx
@@ -193,7 +193,7 @@ class TestOpenAIAdapterComprehensive:
         with pytest.raises(TTSAuthenticationError):
             await adapter.generate(sample_tts_request)
 
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost')
     async def test_generate_audio_rate_limit(self, mock_post, sample_tts_request):
         """Test rate limit error handling"""
         import httpx
@@ -294,33 +294,12 @@ class TestElevenLabsAdapterComprehensive:
         adapter = ElevenLabsAdapter({"elevenlabs_api_key": "test-key"})
         await adapter.initialize()
 
-        # Mock the stream method for streaming requests
-        async def mock_stream_context():
-            mock_response = AsyncMock()
-            mock_response.status_code = 200
-            mock_response.raise_for_status = AsyncMock()
-
-            # Mock the async iterator for streaming
-            async def mock_aiter_bytes(chunk_size=1024):
-                yield mock_audio_response[:chunk_size]
-                if len(mock_audio_response) > chunk_size:
-                    yield mock_audio_response[chunk_size:]
-
-            mock_response.aiter_bytes = mock_aiter_bytes
-            return mock_response
-
-        # Create a context manager mock
-        mock_stream = AsyncMock()
-        mock_stream.__aenter__ = AsyncMock(side_effect=mock_stream_context)
-        mock_stream.__aexit__ = AsyncMock(return_value=None)
-
-        fake_post_response = AsyncMock()
+        fake_post_response = MagicMock()
         fake_post_response.status_code = 200
         fake_post_response.content = mock_audio_response
-        fake_post_response.raise_for_status = AsyncMock()
+        fake_post_response.raise_for_status = MagicMock()
 
-        with patch.object(adapter.client, 'stream', return_value=mock_stream), \
-             patch.object(adapter.client, 'post', return_value=fake_post_response):
+        with patch('tldw_Server_API.app.core.TTS.adapters.elevenlabs_adapter.afetch', return_value=fake_post_response):
             request = TTSRequest(
                 text="Test with emotion",
                 voice="rachel",
@@ -341,27 +320,11 @@ class TestElevenLabsAdapterComprehensive:
         adapter = ElevenLabsAdapter({"elevenlabs_api_key": "test-key"})
         await adapter.initialize()
 
-        # Mock the stream method for streaming requests
-        async def mock_stream_context():
-            mock_response = AsyncMock()
-            mock_response.status_code = 200
-            mock_response.raise_for_status = AsyncMock()
+        async def fake_stream(*args, **kwargs):
+            for chunk in (b"chunk1", b"chunk2", b"chunk3"):
+                yield chunk
 
-            # Mock the async iterator for streaming
-            async def mock_aiter_bytes(chunk_size=1024):
-                yield b"chunk1"
-                yield b"chunk2"
-                yield b"chunk3"
-
-            mock_response.aiter_bytes = mock_aiter_bytes
-            return mock_response
-
-        # Create a context manager mock
-        mock_stream = AsyncMock()
-        mock_stream.__aenter__ = AsyncMock(side_effect=mock_stream_context)
-        mock_stream.__aexit__ = AsyncMock(return_value=None)
-
-        with patch.object(adapter.client, 'stream', return_value=mock_stream):
+        with patch('tldw_Server_API.app.core.TTS.adapters.elevenlabs_adapter.astream_bytes', new=fake_stream):
             request = TTSRequest(text="Stream test", voice="rachel")
 
             # Test streaming through generate method
@@ -739,7 +702,7 @@ class TestAdapterErrorHandling:
         mock_request = MagicMock()
         network_error = httpx.NetworkError("Connection failed", request=mock_request)
 
-        with patch.object(adapter.client, 'post', side_effect=network_error):
+        with patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost', side_effect=network_error):
             with pytest.raises((TTSNetworkError, httpx.NetworkError)):
                 request = TTSRequest(text="Test", stream=False)
                 await adapter.generate(request)
@@ -789,7 +752,7 @@ class TestAdapterErrorHandling:
             response=mock_response
         )
 
-        with patch.object(adapter.client, 'post', side_effect=error):
+        with patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost', side_effect=error):
             with pytest.raises((TTSGenerationError, httpx.HTTPStatusError, TTSProviderError)):
                 request = TTSRequest(text="Test", stream=False)
                 await adapter.generate(request)
@@ -801,7 +764,7 @@ class TestAdapterErrorHandling:
 
         # _cleanup doesn't exist, check close method instead
         with patch.object(adapter, 'close', new_callable=AsyncMock) as mock_close:
-            with patch('httpx.AsyncClient.post', side_effect=Exception("Unexpected error")):
+            with patch('tldw_Server_API.app.core.TTS.adapters.elevenlabs_adapter.afetch', side_effect=Exception("Unexpected error")):
                 try:
                     await adapter.generate(TTSRequest(text="Test"))
                 except:
@@ -844,7 +807,7 @@ class TestAdapterPerformance:
         await adapter.initialize()
 
         # Mock successful responses
-        with patch('httpx.AsyncClient.post', return_value=AsyncMock(
+        with patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost', return_value=AsyncMock(
             status_code=200,
             content=b"audio_data"
         )):

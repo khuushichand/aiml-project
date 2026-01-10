@@ -6,16 +6,14 @@ from tldw_Server_API.app.main import app
 
 class _FakePSAdapter:
     def __init__(self):
-             self._status = "queued"
+        self._status = "queued"
         self.created_id = 1001
 
     def create_export_job(self, payload, *, request_id=None):
-
-             return {"id": self.created_id}
+        return {"id": self.created_id}
 
     def create_import_job(self, payload, *, request_id=None):
-
-             return {"id": self.created_id}
+        return {"id": self.created_id}
 
     def get(self, job_id: int):
         return {"id": job_id, "status": self._status}
@@ -27,14 +25,12 @@ class _FakePSAdapter:
 
 @pytest.fixture(scope="module")
 def client():
-     with TestClient(app) as c:
+    with TestClient(app) as c:
         yield c
 
 
 def test_ps_status_mapping_pending_and_in_progress(client, monkeypatch):
-
-
-     # Force PS backend and inject fake adapter
+    # Force PS backend and inject fake adapter
     monkeypatch.setenv("CHATBOOKS_JOBS_BACKEND", "prompt_studio")
 
     fake = _FakePSAdapter()

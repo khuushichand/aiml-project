@@ -8,7 +8,7 @@ import pytest
 def _ensure_single_user_row():
 
 
-     db_path = Path("Databases/users.db")
+    db_path = Path("Databases/users.db")
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(str(db_path)) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
@@ -37,7 +37,7 @@ def _ensure_single_user_row():
 
 @pytest.mark.integration
 def test_tool_catalogs_flow():
-     # Configure test env
+    # Configure test env
     os.environ["TEST_MODE"] = "true"
     os.environ["MCP_ALLOWED_IPS"] = "[]"
     # Single-user mode API key; settings will normalize for testing
@@ -156,7 +156,7 @@ def _create_user(conn: sqlite3.Connection, username: str, email: str, role: str 
 def _get_db_path_from_env() -> Path:
 
 
-     url = os.getenv("DATABASE_URL", "sqlite:///./Databases/users.db")
+    url = os.getenv("DATABASE_URL", "sqlite:///./Databases/users.db")
     # crude parse for sqlite file paths
     if url.startswith("sqlite:///"):
         return Path(url.replace("sqlite:///", ""))
@@ -166,7 +166,7 @@ def _get_db_path_from_env() -> Path:
 def _ensure_tables_for_users():
 
 
-     db_path = _get_db_path_from_env()
+    db_path = _get_db_path_from_env()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(str(db_path)) as conn:
         conn.execute("PRAGMA foreign_keys = ON")

@@ -60,9 +60,7 @@ async def _create_api_key(user_id: int):
 
 
 def _override_rag(app, monkeypatch):
-
-
-     from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+    from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
     from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
     from tldw_Server_API.app.api.v1.endpoints import rag_unified as rag_mod
 

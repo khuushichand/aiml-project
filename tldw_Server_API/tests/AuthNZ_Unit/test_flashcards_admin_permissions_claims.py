@@ -65,7 +65,7 @@ def _build_app_with_flashcards(principal: AuthPrincipal) -> FastAPI:
 
     class _FakeDB(CharactersRAGDB):  # type: ignore[misc]
         def __init__(self):
-                     pass
+            pass
 
         def list_decks(self, limit: int, offset: int, include_deleted: bool = False):
             return []
@@ -74,16 +74,13 @@ def _build_app_with_flashcards(principal: AuthPrincipal) -> FastAPI:
             return 1
 
         def add_flashcard(self, data):
-
-                     return "uuid"
+            return "uuid"
 
         def set_flashcard_tags(self, _uuid, _tags):
-
-                     return None
+            return None
 
         def get_flashcard(self, _uuid):
-
-                     return {"id": "uuid", "deck_name": "D", "front": "F", "back": "B"}
+            return {"id": "uuid", "deck_name": "D", "front": "F", "back": "B"}
 
     async def _fake_get_chacha_db_for_user():
         return _FakeDB()
@@ -97,7 +94,7 @@ def _build_app_with_flashcards(principal: AuthPrincipal) -> FastAPI:
 
 @pytest.mark.unit
 def test_flashcards_import_overrides_forbidden_without_permission():
-     principal = _make_principal(roles=["user"], permissions=[], is_admin=False)
+    principal = _make_principal(roles=["user"], permissions=[], is_admin=False)
     app = _build_app_with_flashcards(principal)
 
     with TestClient(app) as client:
@@ -111,7 +108,7 @@ def test_flashcards_import_overrides_forbidden_without_permission():
 
 @pytest.mark.unit
 def test_flashcards_import_overrides_allowed_with_flashcards_admin_permission():
-     principal = _make_principal(roles=["user"], permissions=[FLASHCARDS_ADMIN], is_admin=False)
+    principal = _make_principal(roles=["user"], permissions=[FLASHCARDS_ADMIN], is_admin=False)
     app = _build_app_with_flashcards(principal)
 
     with TestClient(app) as client:
@@ -125,7 +122,7 @@ def test_flashcards_import_overrides_allowed_with_flashcards_admin_permission():
 
 @pytest.mark.unit
 def test_flashcards_import_no_overrides_does_not_require_special_permission():
-     principal = _make_principal(roles=["user"], permissions=[], is_admin=False)
+    principal = _make_principal(roles=["user"], permissions=[], is_admin=False)
     app = _build_app_with_flashcards(principal)
 
     with TestClient(app) as client:
@@ -139,7 +136,7 @@ def test_flashcards_import_no_overrides_does_not_require_special_permission():
 
 @pytest.mark.unit
 def test_flashcards_import_json_overrides_forbidden_without_permission():
-     principal = _make_principal(roles=["user"], permissions=[], is_admin=False)
+    principal = _make_principal(roles=["user"], permissions=[], is_admin=False)
     app = _build_app_with_flashcards(principal)
 
     payload = b'[{"deck":"D","front":"F","back":"B"}]'
@@ -154,7 +151,7 @@ def test_flashcards_import_json_overrides_forbidden_without_permission():
 
 @pytest.mark.unit
 def test_flashcards_import_json_overrides_allowed_with_flashcards_admin_permission():
-     principal = _make_principal(roles=["user"], permissions=[FLASHCARDS_ADMIN], is_admin=False)
+    principal = _make_principal(roles=["user"], permissions=[FLASHCARDS_ADMIN], is_admin=False)
     app = _build_app_with_flashcards(principal)
 
     payload = b'[{"deck":"D","front":"F","back":"B"}]'

@@ -7,7 +7,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_File
 
 @pytest.mark.unit
 def test_download_audio_file_blocks_disallowed_url(monkeypatch, tmp_path):
-     def fake_evaluate_url_policy(*_args, **_kwargs):
+    def fake_evaluate_url_policy(*_args, **_kwargs):
         return SimpleNamespace(allowed=False, reason="blocked")
 
     monkeypatch.setattr(audio_files, "evaluate_url_policy", fake_evaluate_url_policy)
@@ -20,7 +20,7 @@ def test_download_audio_file_blocks_disallowed_url(monkeypatch, tmp_path):
 
 @pytest.mark.unit
 def test_download_youtube_audio_blocks_disallowed_url(monkeypatch):
-     def fake_evaluate_url_policy(*_args, **_kwargs):
+    def fake_evaluate_url_policy(*_args, **_kwargs):
         return SimpleNamespace(allowed=False, reason="blocked")
 
     monkeypatch.setattr(audio_files, "evaluate_url_policy", fake_evaluate_url_policy)

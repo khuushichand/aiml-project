@@ -6,7 +6,7 @@ from tldw_Server_API.app.core.Claims_Extraction.claims_rebuild_service import Cl
 def test_claims_rebuild_service_worker_handles_failure(monkeypatch):
 
 
-     svc = ClaimsRebuildService(worker_threads=1)
+    svc = ClaimsRebuildService(worker_threads=1)
     # Monkeypatch _process_task to raise an error
     def _boom(task: ClaimsRebuildTask):  # noqa: ARG001
         raise RuntimeError("boom")

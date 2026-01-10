@@ -10,22 +10,19 @@ class DummyResponse:
         self.status_code = 200
 
     def raise_for_status(self):
-
-             return None
+        return None
 
     def json(self):
-
-             return {}
+        return {}
 
     def close(self):
-
-             return None
+        return None
 
 
 @pytest.mark.unit
 @pytest.mark.strict_mode
 def test_vllm_strict_filter_drops_top_k_from_payload_non_streaming():
-     # vLLM strict mode configuration
+    # vLLM strict mode configuration
     fake_settings = {
         "vllm_api": {
             "api_ip": "http://localhost:9001/v1/chat/completions",
@@ -37,17 +34,16 @@ def test_vllm_strict_filter_drops_top_k_from_payload_non_streaming():
     captured_payload = {}
 
     def fake_post(url, headers=None, json=None, timeout=None):
-
-             captured_payload.clear()
+        captured_payload.clear()
         if json:
             captured_payload.update(json)
         return DummyResponse({})
 
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls.load_settings",
+        "tldw_Server_API.app.core.LLM_Calls.providers.local_adapters.load_settings",
         return_value=fake_settings,
     ), patch(
-        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls._hc_create_client"
+        "tldw_Server_API.app.core.LLM_Calls.providers.local_adapters._hc_create_client"
     ) as mock_client_cls:
         mock_client = MagicMock()
         mock_client.post.side_effect = fake_post

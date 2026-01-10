@@ -11,7 +11,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
 def test_chat_completion_persists_system_message(authenticated_client, mock_chacha_db, setup_dependencies):
 
 
-     """Ensure system prompt is stored with an ID and returned in message history."""
+    """Ensure system prompt is stored with an ID and returned in message history."""
     _ = setup_dependencies  # Silence ARG001 by explicitly touching the fixture.
     mock_chacha_db.client_id = "1"
     request_data = ChatCompletionRequest(
@@ -25,7 +25,7 @@ def test_chat_completion_persists_system_message(authenticated_client, mock_chac
     )
 
     with patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_llm, \
-         patch("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test-key"}):
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test-key"}):
         mock_llm.return_value = {
             "id": "chatcmpl-test",
             "choices": [{

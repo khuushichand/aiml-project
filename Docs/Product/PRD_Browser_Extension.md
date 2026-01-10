@@ -102,6 +102,11 @@ You’ve inherited the project and an in‑progress extension. The goal is to sh
   - Base: `GET/POST /api/v1/prompts` (no trailing slash)
   - Search: `POST /api/v1/prompts/search` (no trailing slash)
   - Export: `GET /api/v1/prompts/export` (no trailing slash)
+  - Import: `POST /api/v1/prompts/import` (no trailing slash)
+  - Versions: `GET /api/v1/prompts/{id}/versions` (no trailing slash)
+  - Restore: `POST /api/v1/prompts/{id}/versions/{version}/restore` (no trailing slash)
+  - Templates: `POST /api/v1/prompts/templates/variables`, `POST /api/v1/prompts/templates/render`
+  - Bulk: `POST /api/v1/prompts/bulk/delete`, `POST /api/v1/prompts/bulk/keywords`
   - Keywords collection: `/api/v1/prompts/keywords/` (trailing slash)
 
 ### API Semantics

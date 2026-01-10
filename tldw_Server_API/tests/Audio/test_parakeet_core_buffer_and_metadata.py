@@ -10,7 +10,7 @@ import pytest
 
 @pytest.mark.unit
 def test_audio_buffer_overlap_math():
-     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Parakeet_Core_Streaming.buffer import AudioBuffer
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Parakeet_Core_Streaming.buffer import AudioBuffer
 
     sr = 10
     buf = AudioBuffer(sample_rate=sr, max_duration=10.0)
@@ -46,7 +46,7 @@ async def test_transcriber_metadata_and_vocab(monkeypatch, tmp_path):
 
     # Fake decode that returns 'foo' so replacement yields 'bar'
     def _decode(audio_np, sr):
-             """
+        """
         Return a placeholder transcription for the provided audio.
 
         Parameters:
@@ -96,19 +96,19 @@ async def test_transcriber_metadata_and_vocab(monkeypatch, tmp_path):
 
 @pytest.mark.unit
 def test_variant_decode_selection(monkeypatch):
-     # Create dummy modules for each variant path
+    # Create dummy modules for each variant path
     mod_nemo = types.ModuleType("Audio_Transcription_Nemo")
     def _tx_parakeet(audio_np, sample_rate, variant="standard"):
-             """
+        """
         Create a placeholder transcription label that encodes the Parakeet variant.
 
         Parameters:
-        	audio_np (numpy.ndarray): Array of audio samples.
-        	sample_rate (int): Sample rate of the audio in Hz.
-        	variant (str): Variant identifier to include in the label (default: "standard").
+            audio_np (numpy.ndarray): Array of audio samples.
+            sample_rate (int): Sample rate of the audio in Hz.
+            variant (str): Variant identifier to include in the label (default: "standard").
 
         Returns:
-        	transcription (str): String in the form `nemo:{variant}`.
+            transcription (str): String in the form `nemo:{variant}`.
         """
         return f"nemo:{variant}"
     mod_nemo.transcribe_with_parakeet = _tx_parakeet
@@ -164,7 +164,7 @@ def test_variant_decode_selection(monkeypatch):
 async def test_decode_offloaded_to_thread():
     # Decode function that blocks the thread briefly
     def _slow_decode(audio_np, sr):
-             """
+        """
         Simulates a slow synchronous decode operation for an audio buffer.
 
         Parameters:

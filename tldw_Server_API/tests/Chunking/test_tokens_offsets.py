@@ -6,9 +6,9 @@ import pytest
 
 def _has_tiktoken():
 
-
-     try:
+    try:
         import tiktoken  # noqa: F401
+
         return True
     except Exception:
         return False
@@ -16,18 +16,14 @@ def _has_tiktoken():
 
 def test_tokens_offsets_tiktoken_monotonic_and_slice_match():
 
-
-     if not _has_tiktoken():
+    if not _has_tiktoken():
         pytest.skip("tiktoken not available")
 
     from tldw_Server_API.app.core.Chunking.strategies.tokens import (
         TokenChunkingStrategy,
     )
 
-    text = (
-        "Hello,  world!\nHello world!  Goodbye.\n"
-        "Repeated phrase. Repeated phrase. Repeated phrase."
-    )
+    text = "Hello,  world!\nHello world!  Goodbye.\n" "Repeated phrase. Repeated phrase. Repeated phrase."
     strat = TokenChunkingStrategy(tokenizer_name="gpt-3.5-turbo")
     results = strat.chunk_with_metadata(text, max_size=12, overlap=4)
 
@@ -51,8 +47,7 @@ def test_tokens_offsets_tiktoken_monotonic_and_slice_match():
 
 def test_tokens_offsets_tiktoken_repeated_substrings_heavy_overlap():
 
-
-     if not _has_tiktoken():
+    if not _has_tiktoken():
         pytest.skip("tiktoken not available")
 
     from tldw_Server_API.app.core.Chunking.strategies.tokens import (
@@ -60,11 +55,7 @@ def test_tokens_offsets_tiktoken_repeated_substrings_heavy_overlap():
     )
 
     # Repeated patterns can confuse naive substring matching; ensure offsets handle it
-    text = (
-        "foo bar foo bar foo bar foo bar\n"
-        "foo bar foo bar foo bar foo bar\n"
-        "foo bar foo bar foo bar"
-    )
+    text = "foo bar foo bar foo bar foo bar\n" "foo bar foo bar foo bar foo bar\n" "foo bar foo bar foo bar"
     strat = TokenChunkingStrategy(tokenizer_name="gpt-3.5-turbo")
     results = strat.chunk_with_metadata(text, max_size=8, overlap=7)
 
@@ -79,8 +70,7 @@ def test_tokens_offsets_tiktoken_repeated_substrings_heavy_overlap():
 
 def test_tokens_offsets_tiktoken_unicode_emojis_multibyte():
 
-
-     if not _has_tiktoken():
+    if not _has_tiktoken():
         pytest.skip("tiktoken not available")
 
     from tldw_Server_API.app.core.Chunking.strategies.tokens import (
@@ -100,6 +90,7 @@ def test_tokens_offsets_tiktoken_unicode_emojis_multibyte():
     results = strat.chunk_with_metadata(text, max_size=20, overlap=10)
 
     import unicodedata as _ud
+
     assert results
     for r in results:
         s = r.metadata.start_char
@@ -112,9 +103,7 @@ def test_tokens_offsets_tiktoken_unicode_emojis_multibyte():
 
 
 def test_tokens_offsets_transformers_path_via_mock():
-
-
-     """Exercise the transformers offset_mapping logic via a mocked tokenizer."""
+    """Exercise the transformers offset_mapping logic via a mocked tokenizer."""
     from tldw_Server_API.app.core.Chunking.strategies.tokens import (
         TokenChunkingStrategy,
     )
@@ -134,7 +123,7 @@ def test_tokens_offsets_transformers_path_via_mock():
 
         def decode(self, token_ids):
 
-                     # map -1/-2 to empty, others index into original text
+            # map -1/-2 to empty, others index into original text
             out = []
             for tid in token_ids:
                 if tid in (-1, -2):
@@ -149,9 +138,7 @@ def test_tokens_offsets_transformers_path_via_mock():
     # Force our mocked wrapper
     strat._tokenizer = wrapper  # type: ignore[attr-defined]
 
-    results = strat.chunk_with_metadata(
-        text, max_size=5, overlap=2, add_special_tokens=True
-    )
+    results = strat.chunk_with_metadata(text, max_size=5, overlap=2, add_special_tokens=True)
 
     assert results
     # Validate per-chunk spans map back to original text
@@ -165,8 +152,7 @@ def test_tokens_offsets_transformers_path_via_mock():
 
 def test_tokens_offsets_fallback_path():
 
-
-     from tldw_Server_API.app.core.Chunking.strategies.tokens import (
+    from tldw_Server_API.app.core.Chunking.strategies.tokens import (
         TokenChunkingStrategy,
         FallbackTokenizer,
     )

@@ -17,9 +17,7 @@ pytestmark = pytest.mark.pg_integration
 
 
 def test_chroma_to_pgvector_seeds_and_migrates(pgvector_dsn, monkeypatch):
-
-
-     monkeypatch.setenv("CHROMADB_FORCE_STUB", "true")
+    monkeypatch.setenv("CHROMADB_FORCE_STUB", "true")
 
     user_id = f"cli_test_{uuid.uuid4().hex[:8]}"
     source_collection = "demo_cli_collection"

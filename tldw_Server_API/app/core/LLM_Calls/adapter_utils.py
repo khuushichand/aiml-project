@@ -50,7 +50,20 @@ def resolve_provider_section(provider: str) -> str:
 
 
 def ensure_app_config(app_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    return app_config or load_and_log_configs() or {}
+    if app_config is not None:
+        return app_config
+    # Prefer the chat_calls loader when tests monkeypatch it.
+    try:
+        from tldw_Server_API.app.core.LLM_Calls import chat_calls as _chat_calls
+
+        loader = getattr(_chat_calls, "load_and_log_configs", None)
+        if callable(loader):
+            cfg = loader()
+            if cfg is not None:
+                return cfg
+    except Exception:
+        pass
+    return load_and_log_configs() or {}
 
 
 def resolve_provider_model(provider: str, app_config: Dict[str, Any]) -> Optional[str]:

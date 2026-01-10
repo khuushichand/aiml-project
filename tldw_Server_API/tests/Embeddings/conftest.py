@@ -13,13 +13,13 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture
 def disable_heavy_startup():
-     """Deprecated no-op fixture retained for backward compatibility."""
+    """Deprecated no-op fixture retained for backward compatibility."""
     yield
 
 
 @pytest.fixture
 def admin_user():
-     async def _admin():
+    async def _admin():
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
         return User(id=42, username="admin", email="a@x", is_active=True, is_admin=True)
 
@@ -70,30 +70,26 @@ class _RedisHarness:
         self.url = url
 
     def run(self, awaitable):
-
-             """Execute coroutine using the dedicated loop."""
+        """Execute coroutine using the dedicated loop."""
         return self.loop.run_until_complete(awaitable)
 
     def flush(self):
-
-             """Flush database via synchronous client."""
+        """Flush database via synchronous client."""
         return self._sync_client.flushdb()
 
     def close_sync(self):
-
-             try:
+        try:
             self._sync_client.close()
         except Exception:
             pass
 
     def __getattr__(self, item):
-
-             return getattr(self.client, item)
+        return getattr(self.client, item)
 
 
 @pytest.fixture
 def redis_client():
-     """Provide a real Redis client when available; skip otherwise."""
+    """Provide a real Redis client when available; skip otherwise."""
     try:
         import redis  # type: ignore
         import redis.asyncio as aioredis  # type: ignore
@@ -169,7 +165,7 @@ def redis_client():
 # Lightweight app client + auth fixtures for property/unit tests in this package
 @pytest.fixture
 def test_client(disable_heavy_startup):
-     """Minimal TestClient with CSRF and auth header set.
+    """Minimal TestClient with CSRF and auth header set.
 
     Scope: function - keeps isolation across property-based runs.
     """
@@ -192,7 +188,7 @@ def test_client(disable_heavy_startup):
 
 @pytest.fixture
 def auth_headers():
-     csrf = "test-csrf"
+    csrf = "test-csrf"
     return {
         "Authorization": "Bearer test-api-key",
         "X-CSRF-Token": csrf,
@@ -202,12 +198,12 @@ def auth_headers():
 
 @pytest.fixture
 def regular_user():
-     return User(id=1, username="testuser", email="t@example.com", is_active=True, is_admin=False)
+    return User(id=1, username="testuser", email="t@example.com", is_active=True, is_admin=False)
 
 
 @pytest.fixture(autouse=True)
 def _sanitize_jsonschema_module(monkeypatch):
-     """Ensure sys.modules['jsonschema'] is a proper ModuleType when present.
+    """Ensure sys.modules['jsonschema'] is a proper ModuleType when present.
 
     Some tests stub 'jsonschema' with a SimpleNamespace for targeted assertions.
     Hypothesis inspects sys.modules and expects hashable module objects; wrapping
@@ -229,7 +225,7 @@ def _sanitize_jsonschema_module(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _patch_hypothesis_local_constants(monkeypatch):
-     """Patch Hypothesis provider constants discovery to tolerate unhashable stubs.
+    """Patch Hypothesis provider constants discovery to tolerate unhashable stubs.
 
     Some tests insert non-module stubs (e.g., SimpleNamespace) into sys.modules.
     Hypothesis scans sys.modules and assumes hashable values; guard this by

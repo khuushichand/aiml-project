@@ -21,7 +21,7 @@ class _DummyResp:
 
     def json(self):
 
-             return self._json_data
+        return self._json_data
 
     async def aclose(self):
         return None
@@ -32,7 +32,7 @@ class TestExternalProvider:
 
     @pytest.fixture
     def sample_audio(self):
-             """Generate sample audio data."""
+        """Generate sample audio data."""
         sample_rate = 16000
         duration = 1.0
         t = np.linspace(0, duration, int(sample_rate * duration), False)
@@ -41,7 +41,7 @@ class TestExternalProvider:
 
     @pytest.fixture
     def provider_config(self):
-             """Create test provider configuration."""
+        """Create test provider configuration."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_External_Provider import (
             ExternalProviderConfig
         )
@@ -58,7 +58,7 @@ class TestExternalProvider:
 
     def test_import_module(self):
 
-             """Test module imports."""
+        """Test module imports."""
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_External_Provider import (
                 transcribe_with_external_provider,
@@ -74,7 +74,7 @@ class TestExternalProvider:
 
     def test_config_validation(self, provider_config):
 
-             """Test configuration validation."""
+        """Test configuration validation."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_External_Provider import (
             validate_external_provider_config,
             ExternalProviderConfig
@@ -123,7 +123,7 @@ class TestExternalProvider:
 
     def test_add_and_list_providers(self, provider_config):
 
-             """Test adding and listing providers."""
+        """Test adding and listing providers."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_External_Provider import (
             add_external_provider,
             list_external_providers,
@@ -303,7 +303,7 @@ class TestExternalProvider:
 
     def test_synchronous_wrapper(self, sample_audio, provider_config):
 
-             """Test synchronous wrapper function."""
+        """Test synchronous wrapper function."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_External_Provider import (
             transcribe_with_external_provider
         )
@@ -386,7 +386,7 @@ class TestExternalProviderIntegration:
 
     def test_integration_with_main_library(self):
 
-             """Test integration with main transcription library."""
+        """Test integration with main transcription library."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_External_Provider import (
             register_external_provider_with_library
         )

@@ -11,29 +11,36 @@ from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import ServerEr
 
 class DummyProc:
     def __init__(self, pid=777):
-             self.pid = pid
+        self.pid = pid
         self.returncode = None
         self.stdout = None
         self.stderr = None
+
     async def wait(self):
         return 0
 
 
 @pytest.mark.asyncio
 async def test_windows_creationflags(monkeypatch, tmp_path: Path):
-    exe = tmp_path / "llama_server"; exe.write_text("#!/bin/sh\n")
-    model_dir = tmp_path / "models"; model_dir.mkdir(); (model_dir / "m.gguf").write_text("x")
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / "m.gguf").write_text("x")
     cfg = LlamaCppConfig(executable_path=exe, models_dir=model_dir)
     handler = LlamaCppHandler(cfg, global_app_config={})
 
     monkeypatch.setattr(platform, "system", lambda: "Windows")
     captured = {}
+
     async def fake_cpe(*args, **kwargs):
         captured.update(kwargs)
         return DummyProc()
+
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_cpe)
 
     import tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler as llama_mod
+
     monkeypatch.setattr(llama_mod, "wait_for_http_ready", lambda *a, **k: asyncio.sleep(0, result=True))
 
     res = await handler.start_server("m.gguf")
@@ -43,8 +50,11 @@ async def test_windows_creationflags(monkeypatch, tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_denylist_hf_token_rejected(monkeypatch, tmp_path: Path):
-    exe = tmp_path / "llama_server"; exe.write_text("#!/bin/sh\n")
-    model_dir = tmp_path / "models"; model_dir.mkdir(); (model_dir / "m.gguf").write_text("x")
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / "m.gguf").write_text("x")
     cfg = LlamaCppConfig(executable_path=exe, models_dir=model_dir, allow_unvalidated_args=True)
     handler = LlamaCppHandler(cfg, global_app_config={})
     with pytest.raises(ServerError):
@@ -53,13 +63,20 @@ async def test_denylist_hf_token_rejected(monkeypatch, tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_allow_cli_secrets_allows_hf_token(monkeypatch, tmp_path: Path):
-    exe = tmp_path / "llama_server"; exe.write_text("#!/bin/sh\n")
-    model_dir = tmp_path / "models"; model_dir.mkdir(); (model_dir / "m.gguf").write_text("x")
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / "m.gguf").write_text("x")
     cfg = LlamaCppConfig(executable_path=exe, models_dir=model_dir, allow_unvalidated_args=True, allow_cli_secrets=True)
     handler = LlamaCppHandler(cfg, global_app_config={})
-    async def fake_cpe(*a, **k): return DummyProc()
+
+    async def fake_cpe(*a, **k):
+        return DummyProc()
+
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_cpe)
     import tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler as llama_mod
+
     monkeypatch.setattr(llama_mod, "wait_for_http_ready", lambda *a, **k: asyncio.sleep(0, result=True))
     res = await handler.start_server("m.gguf", server_args={"hf_token": "ABC"})
     assert res["status"] == "started"
@@ -67,8 +84,11 @@ async def test_allow_cli_secrets_allows_hf_token(monkeypatch, tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_path_safety(monkeypatch, tmp_path: Path):
-    exe = tmp_path / "llama_server"; exe.write_text("#!/bin/sh\n")
-    model_dir = tmp_path / "models"; model_dir.mkdir(); (model_dir / "m.gguf").write_text("x")
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / "m.gguf").write_text("x")
     cfg = LlamaCppConfig(executable_path=exe, models_dir=model_dir)
     handler = LlamaCppHandler(cfg, global_app_config={})
 
@@ -77,9 +97,13 @@ async def test_path_safety(monkeypatch, tmp_path: Path):
         await handler.start_server("m.gguf", server_args={"grammar_file": str(tmp_path / "outside.bnf")})
 
     # Inside models_dir should pass
-    inside = model_dir / "g.bnf"; inside.write_text("rule := 'x'")
+    inside = model_dir / "g.bnf"
+    inside.write_text("rule := 'x'")
     import tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler as llama_mod
-    async def fake_cpe(*a, **k): return DummyProc()
+
+    async def fake_cpe(*a, **k):
+        return DummyProc()
+
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_cpe)
     monkeypatch.setattr(llama_mod, "wait_for_http_ready", lambda *a, **k: asyncio.sleep(0, result=True))
     res = await handler.start_server("m.gguf", server_args={"grammar_file": str(inside)})
@@ -88,33 +112,49 @@ async def test_path_safety(monkeypatch, tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_path_prefix_bypass_rejected(tmp_path: Path):
-    exe = tmp_path / "llama_server"; exe.write_text("#!/bin/sh\n")
-    model_dir = tmp_path / "models"; model_dir.mkdir(); (model_dir / "m.gguf").write_text("x")
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / "m.gguf").write_text("x")
     cfg = LlamaCppConfig(executable_path=exe, models_dir=model_dir)
     handler = LlamaCppHandler(cfg, global_app_config={})
 
     # Path shares prefix with models_dir but is not a child
-    outside_dir = tmp_path / "models2"; outside_dir.mkdir()
-    outside = outside_dir / "g.bnf"; outside.write_text("rule := 'x'")
+    outside_dir = tmp_path / "models2"
+    outside_dir.mkdir()
+    outside = outside_dir / "g.bnf"
+    outside.write_text("rule := 'x'")
     with pytest.raises(ServerError):
         await handler.start_server("m.gguf", server_args={"grammar_file": str(outside)})
 
 
 @pytest.mark.asyncio
 async def test_port_autoselect(monkeypatch, tmp_path: Path):
-    exe = tmp_path / "llama_server"; exe.write_text("#!/bin/sh\n")
-    model_dir = tmp_path / "models"; model_dir.mkdir(); (model_dir / "m.gguf").write_text("x")
-    cfg = LlamaCppConfig(executable_path=exe, models_dir=model_dir, default_port=9000, port_autoselect=True, port_probe_max=5)
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / "m.gguf").write_text("x")
+    cfg = LlamaCppConfig(
+        executable_path=exe, models_dir=model_dir, default_port=9000, port_autoselect=True, port_probe_max=5
+    )
     handler = LlamaCppHandler(cfg, global_app_config={})
 
     seq = {"i": 0}
+
     def fake_is_free(host, port):
-             seq["i"] += 1
+        seq["i"] += 1
         return seq["i"] >= 2  # first port busy, second free
+
     monkeypatch.setattr(handler, "_is_port_free", fake_is_free)
-    async def fake_cpe(*a, **k): return DummyProc()
+
+    async def fake_cpe(*a, **k):
+        return DummyProc()
+
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_cpe)
     import tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler as llama_mod
+
     monkeypatch.setattr(llama_mod, "wait_for_http_ready", lambda *a, **k: asyncio.sleep(0, result=True))
     res = await handler.start_server("m.gguf")
     assert res["status"] == "started"
@@ -124,8 +164,11 @@ async def test_port_autoselect(monkeypatch, tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_streaming_inference_yields_sse(monkeypatch, tmp_path: Path):
-    exe = tmp_path / "llama_server"; exe.write_text("#!/bin/sh\n")
-    model_dir = tmp_path / "models"; model_dir.mkdir(); (model_dir / "m.gguf").write_text("x")
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / "m.gguf").write_text("x")
     cfg = LlamaCppConfig(executable_path=exe, models_dir=model_dir)
     handler = LlamaCppHandler(cfg, global_app_config={})
     # Fake running process
@@ -136,22 +179,32 @@ async def test_streaming_inference_yields_sse(monkeypatch, tmp_path: Path):
     class FakeStream:
         async def __aenter__(self):
             return self
+
         async def __aexit__(self, exc_type, exc, tb):
             return False
+
         def raise_for_status(self):
-                     return None
+            return None
+
         async def aiter_lines(self):
-            yield "data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}"
+            yield 'data: {"choices":[{"delta":{"content":"Hi"}}]}'
             yield "data: [DONE]"
 
     class FakeClient:
-        def __init__(self, *a, **k): pass
-        async def __aenter__(self): return self
-        async def __aexit__(self, exc_type, exc, tb): return False
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
         def stream(self, method, url, json=None, headers=None):
-                     return FakeStream()
+            return FakeStream()
 
     import tldw_Server_API.app.core.Local_LLM.http_utils as http_utils
+
     monkeypatch.setattr(http_utils, "create_async_client", lambda *a, **k: FakeClient())
 
     chunks = []
@@ -162,17 +215,23 @@ async def test_streaming_inference_yields_sse(monkeypatch, tmp_path: Path):
 
 # --- Tests for symlink path traversal protection ---
 
+
 @pytest.mark.asyncio
 async def test_symlink_path_traversal_rejected(tmp_path: Path):
     """Test that symlinks pointing outside allowed directories are rejected."""
     import os
 
-    exe = tmp_path / "llama_server"; exe.write_text("#!/bin/sh\n")
-    model_dir = tmp_path / "models"; model_dir.mkdir(); (model_dir / "m.gguf").write_text("x")
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / "m.gguf").write_text("x")
 
     # Create a secret file outside models_dir
-    secret_dir = tmp_path / "secrets"; secret_dir.mkdir()
-    secret_file = secret_dir / "secret.txt"; secret_file.write_text("sensitive data")
+    secret_dir = tmp_path / "secrets"
+    secret_dir.mkdir()
+    secret_file = secret_dir / "secret.txt"
+    secret_file.write_text("sensitive data")
 
     # Create a symlink inside models_dir pointing to the secret file
     symlink_path = model_dir / "evil_link"
@@ -194,12 +253,17 @@ async def test_symlink_in_allowed_paths_resolved(tmp_path: Path):
     """Test that symlinks in allowed_paths config are properly resolved."""
     import os
 
-    exe = tmp_path / "llama_server"; exe.write_text("#!/bin/sh\n")
-    model_dir = tmp_path / "models"; model_dir.mkdir(); (model_dir / "m.gguf").write_text("x")
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / "m.gguf").write_text("x")
 
     # Create a real directory
-    real_dir = tmp_path / "real_files"; real_dir.mkdir()
-    real_file = real_dir / "grammar.bnf"; real_file.write_text("rule := 'x'")
+    real_dir = tmp_path / "real_files"
+    real_dir.mkdir()
+    real_file = real_dir / "grammar.bnf"
+    real_file.write_text("rule := 'x'")
 
     # Create a symlink directory pointing to real_dir
     symlink_dir = tmp_path / "link_to_files"
@@ -209,19 +273,18 @@ async def test_symlink_in_allowed_paths_resolved(tmp_path: Path):
         pytest.skip("Cannot create symlinks on this platform")
 
     # Add the symlinked path to allowed_paths
-    cfg = LlamaCppConfig(
-        executable_path=exe,
-        models_dir=model_dir,
-        allowed_paths=[symlink_dir]
-    )
+    cfg = LlamaCppConfig(executable_path=exe, models_dir=model_dir, allowed_paths=[symlink_dir])
     handler = LlamaCppHandler(cfg, global_app_config={})
 
     # File accessed via symlink should work (symlink is properly resolved)
-    async def fake_cpe(*a, **k): return DummyProc()
+    async def fake_cpe(*a, **k):
+        return DummyProc()
+
     import tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler as llama_mod
 
     # We need to mock these for the test
     import asyncio as asyncio_mod
+
     original_cpe = asyncio_mod.create_subprocess_exec
 
     async def mock_cpe(*args, **kwargs):
@@ -247,10 +310,13 @@ async def test_symlink_in_allowed_paths_resolved(tmp_path: Path):
 
 # --- Test for cleanup guard ---
 
+
 def test_cleanup_guard_prevents_double_cleanup(tmp_path: Path):
     """Test that cleanup only runs once even if called multiple times."""
-    exe = tmp_path / "llama_server"; exe.write_text("#!/bin/sh\n")
-    model_dir = tmp_path / "models"; model_dir.mkdir()
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
     cfg = LlamaCppConfig(executable_path=exe, models_dir=model_dir)
     handler = LlamaCppHandler(cfg, global_app_config={})
 
@@ -265,11 +331,14 @@ def test_cleanup_guard_prevents_double_cleanup(tmp_path: Path):
 
 # --- Test for model swap rollback ---
 
+
 @pytest.mark.asyncio
 async def test_model_swap_rollback_on_stop_failure(monkeypatch, tmp_path: Path):
     """Test that model swap restores state if stop_server fails."""
-    exe = tmp_path / "llama_server"; exe.write_text("#!/bin/sh\n")
-    model_dir = tmp_path / "models"; model_dir.mkdir()
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
     (model_dir / "model1.gguf").write_text("x")
     (model_dir / "model2.gguf").write_text("y")
 

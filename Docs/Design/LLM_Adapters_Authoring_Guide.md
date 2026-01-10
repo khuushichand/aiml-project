@@ -93,7 +93,7 @@ class MyProviderAdapter(ChatProvider):
         # Yield normalized SSE lines; do not yield [DONE]
         ...
 ```
-- Wire async shims in `adapter_calls.py` if legacy callers need them; adapter registry handles async routing for orchestrator paths.
+- Use `chat_service.perform_chat_api_call_async` for legacy async call sites; the adapter registry handles async routing for orchestrator paths.
 
 ## Embeddings Adapters
 - For embeddings, implement `EmbeddingsProvider` in `providers/base.py` and return an OpenAI-like shape:

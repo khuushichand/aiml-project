@@ -11,7 +11,7 @@ from tldw_Server_API.tests.test_utils import create_test_media
 def _principal_override():
 
 
-     async def _override(request=None) -> AuthPrincipal:
+    async def _override(request=None) -> AuthPrincipal:
         principal = AuthPrincipal(
             kind="user",
             user_id=1,
@@ -40,7 +40,7 @@ def _principal_override():
 def test_reprocess_rebuilds_chunks(tmp_path, monkeypatch):
 
 
-     from tldw_Server_API.app.main import app as fastapi_app
+    from tldw_Server_API.app.main import app as fastapi_app
     from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
     from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
@@ -102,7 +102,7 @@ def test_reprocess_rebuilds_chunks(tmp_path, monkeypatch):
 def test_reprocess_missing_media_returns_404(tmp_path):
 
 
-     from tldw_Server_API.app.main import app as fastapi_app
+    from tldw_Server_API.app.main import app as fastapi_app
     from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
     from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user

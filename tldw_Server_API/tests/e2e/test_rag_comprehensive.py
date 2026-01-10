@@ -191,8 +191,7 @@ class TestRAGComprehensive:
         """Benchmark search performance."""
 
         def perform_search():
-
-                    response = api_client.client.post(
+            response = api_client.client.post(
                 f"{api_client.base_url}/api/v1/rag/search",
                 json={
                     "query": "machine learning",
@@ -229,8 +228,7 @@ class TestRAGComprehensive:
         ]
 
         def search(query_mode):
-
-                    query, mode = query_mode
+            query, mode = query_mode
             response = api_client.client.post(
                 f"{api_client.base_url}/api/v1/rag/search",
                 json={

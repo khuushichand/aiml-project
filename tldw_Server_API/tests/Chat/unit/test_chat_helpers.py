@@ -24,20 +24,20 @@ from tldw_Server_API.app.core.Chat.chat_helpers import (
 class MockChatRequest:
     """Mock chat request for testing."""
     def __init__(self, messages=None):
-             self.messages = messages or []
+        self.messages = messages or []
 
 
 class MockMessage:
     """Mock message for testing."""
     def __init__(self, role="user", content="test"):
-             self.role = role
+        self.role = role
         self.content = content
 
 
 class MockMessagePart:
     """Mock message part for testing."""
     def __init__(self, type="text", text=None):
-             self.type = type
+        self.type = type
         self.text = text
 
 
@@ -60,29 +60,29 @@ class MockDatabase:
 
     def transaction(self):
 
-             """Mock transaction context manager."""
+        """Mock transaction context manager."""
         from contextlib import contextmanager
 
         @contextmanager
         def mock_transaction():
-                     yield self
+            yield self
 
         return mock_transaction()
 
     def get_character_card_by_id(self, char_id):
 
-             return self._characters.get(char_id)
+        return self._characters.get(char_id)
 
     def get_character_card_by_name(self, name):
 
-             for card in self._characters.values():
+        for card in self._characters.values():
             if card.get("name") == name:
                 return card
         return None
 
     def add_character_card(self, data):
 
-             new_id = data.get("id") or self._next_id
+        new_id = data.get("id") or self._next_id
         self._next_id += 1
         card = dict(data)
         card["id"] = new_id
@@ -91,7 +91,7 @@ class MockDatabase:
 
     def get_conversation_by_id(self, conv_id):
 
-             if conv_id == "existing_conv":
+        if conv_id == "existing_conv":
             return {
                 "id": "existing_conv",
                 "character_id": 1,
@@ -102,11 +102,11 @@ class MockDatabase:
 
     def add_conversation(self, data):
 
-             return f"new_conv_{data.get('character_id', 0)}"
+        return f"new_conv_{data.get('character_id', 0)}"
 
     def get_messages_for_conversation(self, conv_id, limit, offset, order):
 
-             if conv_id == "existing_conv":
+        if conv_id == "existing_conv":
             return [
                 {
                     "id": 1,

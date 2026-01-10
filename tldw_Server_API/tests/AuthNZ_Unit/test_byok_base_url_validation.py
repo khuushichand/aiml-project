@@ -5,9 +5,7 @@ from tldw_Server_API.app.core.Security import egress
 
 
 def _clear_egress_env(monkeypatch) -> None:
-
-
-     monkeypatch.setenv("WORKFLOWS_EGRESS_PROFILE", "permissive")
+    monkeypatch.setenv("WORKFLOWS_EGRESS_PROFILE", "permissive")
     monkeypatch.setenv("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "true")
     monkeypatch.delenv("WORKFLOWS_EGRESS_ALLOWLIST", raising=False)
     monkeypatch.delenv("WORKFLOWS_EGRESS_DENYLIST", raising=False)
@@ -16,36 +14,28 @@ def _clear_egress_env(monkeypatch) -> None:
 
 
 def test_validate_base_url_override_rejects_invalid_scheme(monkeypatch):
-
-
-     _clear_egress_env(monkeypatch)
+    _clear_egress_env(monkeypatch)
     with pytest.raises(ValueError) as exc:
         validate_base_url_override("ftp://example.com/resource")
     assert "scheme" in str(exc.value).lower()
 
 
 def test_validate_base_url_override_blocks_private_ip(monkeypatch):
-
-
-     _clear_egress_env(monkeypatch)
+    _clear_egress_env(monkeypatch)
     with pytest.raises(ValueError) as exc:
         validate_base_url_override("http://127.0.0.1")
     assert "private" in str(exc.value).lower()
 
 
 def test_validate_base_url_override_blocks_metadata_ip(monkeypatch):
-
-
-     _clear_egress_env(monkeypatch)
+    _clear_egress_env(monkeypatch)
     with pytest.raises(ValueError) as exc:
         validate_base_url_override("http://169.254.169.254/latest/meta-data")
     assert "private" in str(exc.value).lower()
 
 
 def test_validate_base_url_override_blocks_dns_rebind(monkeypatch):
-
-
-     _clear_egress_env(monkeypatch)
+    _clear_egress_env(monkeypatch)
 
     def _fake_resolve(host: str):
         if host == "rebind.test":
@@ -60,9 +50,7 @@ def test_validate_base_url_override_blocks_dns_rebind(monkeypatch):
 
 
 def test_validate_base_url_override_allows_public_host(monkeypatch):
-
-
-     _clear_egress_env(monkeypatch)
+    _clear_egress_env(monkeypatch)
 
     def _always_public(host: str):
         return True, ["203.0.113.10"]

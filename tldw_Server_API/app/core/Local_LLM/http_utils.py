@@ -171,7 +171,7 @@ async def request_json(
         import warnings
         warnings.warn(
             "Using non-httpx.AsyncClient in request_json is deprecated. "
-            "Use httpx.AsyncClient or mock httpx.AsyncClient directly in tests.",
+            "Use httpx.AsyncClient or patch the http_client factory/helpers in tests.",
             DeprecationWarning,
             stacklevel=2,
         )

@@ -32,11 +32,8 @@ async def test_kokoro_pytorch_requires_pkg(monkeypatch):
 
     # Force use_onnx=False and point to a fake model path; mock os.path.exists to True
     from tldw_Server_API.app.core.TTS.adapters.kokoro_adapter import KokoroAdapter
-    adapter = KokoroAdapter({
-        "kokoro_use_onnx": False,
-        "kokoro_model_path": "/fake/model.pth",
-        "kokoro_device": "cpu"
-    })
+
+    adapter = KokoroAdapter({"kokoro_use_onnx": False, "kokoro_model_path": "/fake/model.pth", "kokoro_device": "cpu"})
 
     monkeypatch.setattr("os.path.exists", lambda p: True)
 
@@ -47,29 +44,28 @@ async def test_kokoro_pytorch_requires_pkg(monkeypatch):
         return mock_resource_manager
 
     monkeypatch.setattr(
-        "tldw_Server_API.app.core.TTS.adapters.kokoro_adapter.get_resource_manager",
-        fake_get_resource_manager
+        "tldw_Server_API.app.core.TTS.adapters.kokoro_adapter.get_resource_manager", fake_get_resource_manager
     )
 
     class DummyTorchModule:
         def eval(self):
-                     return self
+            return self
 
         def to(self, *args, **kwargs):
-
-                     return self
+            return self
 
     import torch
+
     monkeypatch.setattr("torch.jit.load", lambda *args, **kwargs: DummyTorchModule())
     monkeypatch.setattr("torch.load", lambda *args, **kwargs: DummyTorchModule())
 
     # Ensure 'kokoro' module import fails to trigger guidance error
     import builtins
+
     real_import = builtins.__import__
 
     def fake_import(name, *args, **kwargs):
-
-             if name == "kokoro":
+        if name == "kokoro" or name.startswith("kokoro."):
             raise ImportError("kokoro package not installed")
         return real_import(name, *args, **kwargs)
 
@@ -86,16 +82,17 @@ async def test_kokoro_pytorch_requires_pkg(monkeypatch):
     monkeypatch.setattr(
         "tldw_Server_API.app.core.TTS.adapters.kokoro_adapter.KokoroAdapter._stream_audio_kokoro",
         fake_stream,
-        raising=False
+        raising=False,
     )
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.TTS.adapters.kokoro_adapter.KokoroAdapter.preprocess_text",
         lambda self, text: text,
-        raising=False
+        raising=False,
     )
 
     from tldw_Server_API.app.core.TTS.adapters.base import TTSRequest, AudioFormat
+
     req = TTSRequest(text="hello", voice="af_bella", format=AudioFormat.WAV, stream=True)
     # Expect a generation error indicating kokoro package requirement
     with pytest.raises(TTSGenerationError):

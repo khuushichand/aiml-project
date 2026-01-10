@@ -46,18 +46,32 @@ async def test_formatted_for_completions_includes_tool_messages_and_metadata():
             r = await client.get(f"/api/v1/chats/{chat_id}/messages", headers=headers)
             assert r.status_code == 200
             msgs = r.json().get("messages", [])
-            assistant_msg_id = next((m.get("id") for m in msgs if m.get("sender") == "assistant" and m.get("content") == "Here is a response"), None)
+            assistant_msg_id = next(
+                (
+                    m.get("id")
+                    for m in msgs
+                    if m.get("sender") == "assistant" and m.get("content") == "Here is a response"
+                ),
+                None,
+            )
             assert assistant_msg_id, "Assistant message not found in conversation after creation"
 
             # Determine user DB path (single-user mode uses fixed user id)
             user_id = get_settings().SINGLE_USER_FIXED_ID
             from tldw_Server_API.app.core.config import settings as cfg_settings
+
             base_dir = cfg_settings.get("USER_DB_BASE_DIR")
             db_path = Path(base_dir) / str(user_id) / "ChaChaNotes.db"
 
             # Add inline tool_calls suffix using public API (edit with optimistic version)
             tool_call_id = "call_123"
-            tool_calls = [{"id": tool_call_id, "type": "function", "function": {"name": "search", "arguments": "{\"query\": \"hello\"}"}}]
+            tool_calls = [
+                {
+                    "id": tool_call_id,
+                    "type": "function",
+                    "function": {"name": "search", "arguments": '{"query": "hello"}'},
+                }
+            ]
             # Fetch version for optimistic locking
             r = await client.get(f"/api/v1/chats/{chat_id}/messages", headers=headers)
             assert r.status_code == 200
@@ -66,6 +80,7 @@ async def test_formatted_for_completions_includes_tool_messages_and_metadata():
             assert m is not None
             expected_version = m.get("version")
             import json as _json
+
             new_content = (m.get("content") or "").rstrip() + "\n\n[tool_calls]: " + _json.dumps(tool_calls)
             r = await client.put(
                 f"/api/v1/messages/{assistant_msg_id}",

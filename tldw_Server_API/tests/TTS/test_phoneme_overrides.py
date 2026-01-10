@@ -15,9 +15,7 @@ from tldw_Server_API.app.core.TTS.phoneme_overrides import (
 
 
 def test_apply_overrides_respects_lang_and_boundaries():
-
-
-     entries = [
+    entries = [
         PhonemeOverrideEntry(term="OpenAI", phonemes="ow p en aɪ", lang="en", boundary=True),
         PhonemeOverrideEntry(term="bonjour", phonemes="b ɔ̃ ʒ u ʁ", lang="fr", boundary=True),
     ]
@@ -30,9 +28,7 @@ def test_apply_overrides_respects_lang_and_boundaries():
 
 
 def test_merge_precedence_request_wins():
-
-
-     global_entries = parse_override_entries({"demo": "AAA"})
+    global_entries = parse_override_entries({"demo": "AAA"})
     provider_entries = parse_override_entries([{"term": "demo", "phonemes": "BBB", "boundary": False}])
     request_entries = parse_override_entries({"demo": "CCC"})
 

@@ -8,8 +8,7 @@ from tldw_Server_API.app.core.Chunking.strategies.words import WordChunkingStrat
 
 def test_words_min_chunk_size_no_space_merge(monkeypatch):
 
-
-     strategy = WordChunkingStrategy(language="zh")
+    strategy = WordChunkingStrategy(language="zh")
     tokens = ["a", "b", "c", "d"]
     monkeypatch.setattr(strategy, "_tokenize_text", lambda text: tokens)
     text = "".join(tokens)
@@ -19,8 +18,7 @@ def test_words_min_chunk_size_no_space_merge(monkeypatch):
 
 def test_words_chunk_generator_matches_chunk_with_min_size(monkeypatch):
 
-
-     strategy = WordChunkingStrategy(language="en")
+    strategy = WordChunkingStrategy(language="en")
     tokens = ["one", "two", "three", "four", "five"]
     monkeypatch.setattr(strategy, "_tokenize_text", lambda text: tokens)
     text = " ".join(tokens)
@@ -31,13 +29,12 @@ def test_words_chunk_generator_matches_chunk_with_min_size(monkeypatch):
 
 def test_sentence_strategy_language_reconfigure_via_chunker(monkeypatch):
 
-
-     fake_pkg = types.ModuleType("pythainlp")
+    fake_pkg = types.ModuleType("pythainlp")
     fake_tokenize = types.ModuleType("pythainlp.tokenize")
 
     def sent_tokenize(text):
 
-             return [text]
+        return [text]
 
     fake_tokenize.sent_tokenize = sent_tokenize
     fake_pkg.tokenize = fake_tokenize
@@ -56,8 +53,7 @@ def test_sentence_strategy_language_reconfigure_via_chunker(monkeypatch):
 
 def test_hierarchical_sentences_respects_combine_short():
 
-
-     ck = Chunker()
+    ck = Chunker()
     text = "A. B. C. D."
     base = ck.chunk_text(
         text,

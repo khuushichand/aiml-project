@@ -13,7 +13,7 @@ import os
 import pytest
 import httpx
 
-from .fixtures import api_client, test_user_credentials
+from .fixtures import api_client, test_user_credentials, APIClient
 
 
 @pytest.mark.multi_user
@@ -24,9 +24,12 @@ def test_multi_user_register_login_and_admin_access(api_client, test_user_creden
     if (info.get("auth_mode") or mode_env) not in {"multi_user", "multi-user", "multiuser"}:
         pytest.skip("Not in multi_user mode")
 
+    # Use an isolated client so we don't mutate the shared session client
+    client = APIClient(api_client.base_url)
+
     # 1) Register
     try:
-        reg = api_client.register(
+        reg = client.register(
             username=test_user_credentials["username"],
             email=test_user_credentials["email"],
             password=test_user_credentials["password"],
@@ -38,19 +41,19 @@ def test_multi_user_register_login_and_admin_access(api_client, test_user_creden
             raise
 
     # 2) Login
-    login = api_client.login(
+    login = client.login(
         username=test_user_credentials["username"],
         password=test_user_credentials["password"],
     )
     assert "access_token" in login or "token" in login
 
     # 3) Call a user-level endpoint (notes list)
-    r = api_client.client.get("/api/v1/notes/?limit=1&offset=0")
+    r = client.client.get("/api/v1/notes/?limit=1&offset=0")
     # Notes may require setup; accept 200 or 404
     assert r.status_code in (200, 404)
 
     # 4) Verify admin endpoint forbidden for non-admin
-    admin = api_client.client.get("/api/v1/admin/users")
+    admin = client.client.get("/api/v1/admin/users")
     assert admin.status_code == 403
 
     # 5) Optional: if ADMIN_TOKEN provided, verify admin access

@@ -41,7 +41,7 @@ class DummyWebSocket:
 
 class _DummyTTSService:
     def __init__(self, chunks):
-             self._chunks = chunks
+        self._chunks = chunks
 
     async def generate_speech(self, *_args, **_kwargs):  # noqa: ARG002
         for chunk in self._chunks:
@@ -92,12 +92,12 @@ async def test_websocket_tts_records_underrun(monkeypatch: pytest.MonkeyPatch):
 
     class QueueStub:
         def __init__(self, *_args, **_kwargs):
-                     self.items = []
+            self.items = []
             self.first_full = True
 
         def put_nowait(self, item):
 
-                     if self.first_full:
+            if self.first_full:
                 self.first_full = False
                 raise asyncio.QueueFull
             self.items.append(item)
@@ -112,17 +112,17 @@ async def test_websocket_tts_records_underrun(monkeypatch: pytest.MonkeyPatch):
 
         def get_nowait(self):
 
-                     if not self.items:
+            if not self.items:
                 raise asyncio.QueueEmpty
             return self.items.pop(0)
 
     class DummyRegistry:
         def __init__(self):
-                     self.increments = []
+            self.increments = []
 
         def increment(self, name, value=1, labels=None):
 
-                     self.increments.append((name, value, labels or {}))
+            self.increments.append((name, value, labels or {}))
 
         def observe(self, *_args, **_kwargs):  # noqa: ARG002
             return None

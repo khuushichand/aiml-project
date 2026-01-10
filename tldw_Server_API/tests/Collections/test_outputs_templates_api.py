@@ -9,7 +9,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture()
 def client_with_user(monkeypatch):
-     async def override_user():
+    async def override_user():
         return User(id=123, username="tester", email=None, is_active=True)
 
     # Use full app profile for Collections/outputs endpoints
@@ -25,8 +25,7 @@ def client_with_user(monkeypatch):
 
 def test_templates_crud_and_preview(client_with_user):
 
-
-     client = client_with_user
+    client = client_with_user
 
     # Create
     payload = {

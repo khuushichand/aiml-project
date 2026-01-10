@@ -8,8 +8,7 @@ from tldw_Server_API.app.core.PrivilegeMaps.service import PrivilegeMapService
 
 def _build_catalog() -> PrivilegeCatalog:
 
-
-     payload = {
+    payload = {
         "version": "test-roles-1.0",
         "updated_at": datetime(2025, 1, 1, tzinfo=timezone.utc).isoformat(),
         "scopes": [
@@ -41,8 +40,7 @@ def _build_catalog() -> PrivilegeCatalog:
 
 def test_scope_resolution_normalizes_role_case():
 
-
-     catalog = _build_catalog()
+    catalog = _build_catalog()
     service = PrivilegeMapService(route_registry={}, catalog=catalog)
 
     scopes = service._resolve_scopes_for_user(["Analyst"], [])
@@ -52,8 +50,7 @@ def test_scope_resolution_normalizes_role_case():
 
 def test_group_by_role_normalizes_case():
 
-
-     catalog = _build_catalog()
+    catalog = _build_catalog()
     service = PrivilegeMapService(route_registry={}, catalog=catalog)
 
     users = [
@@ -80,8 +77,7 @@ def test_group_by_role_normalizes_case():
 
 def test_detail_role_filter_is_case_insensitive():
 
-
-     catalog = _build_catalog()
+    catalog = _build_catalog()
     service = PrivilegeMapService(route_registry={}, catalog=catalog)
 
     users = [

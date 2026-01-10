@@ -17,7 +17,7 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHA
 
 @pytest.fixture(scope="function")
 def real_test_db():
-     """Create a real temporary ChaChaNotes database for testing."""
+    """Create a real temporary ChaChaNotes database for testing."""
     # Create a temporary directory for the test database
     temp_dir = tempfile.mkdtemp(prefix="test_chacha_")
     db_path = os.path.join(temp_dir, "test_chacha.db")
@@ -98,7 +98,7 @@ def real_test_db():
 
 @pytest.fixture(scope="function")
 def real_media_db():
-     """Create a real temporary Media database for testing."""
+    """Create a real temporary Media database for testing."""
     # Create a temporary directory for the test database
     temp_dir = tempfile.mkdtemp(prefix="test_media_")
     db_path = os.path.join(temp_dir, "test_media.db")
@@ -121,7 +121,7 @@ def real_media_db():
 
 @pytest.fixture(scope="function")
 def test_user():
-     """Create a test user object."""
+    """Create a test user object."""
     return User(
         id=1,
         username="test_user",
@@ -132,7 +132,7 @@ def test_user():
 
 @pytest.fixture(scope="function")
 def auth_headers(test_user):
-     """Generate proper authentication headers."""
+    """Generate proper authentication headers."""
     settings = get_settings()
 
     if settings.AUTH_MODE == "multi_user":
@@ -157,7 +157,7 @@ def auth_headers(test_user):
 
 @pytest.fixture(scope="function", autouse=True)
 def setup_test_auth(test_user, real_test_db, real_media_db):
-     """Set up authentication and database dependencies for tests."""
+    """Set up authentication and database dependencies for tests."""
     from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
     from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user

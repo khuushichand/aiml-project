@@ -18,6 +18,7 @@ import asyncio
 import time
 import json as _json
 import os
+import inspect
 from pathlib import Path
 from functools import lru_cache
 
@@ -37,7 +38,7 @@ from tldw_Server_API.app.core.Chat.prompt_template_manager import (
     load_template,
     apply_template_to_string,
 )
-from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry as get_llm_registry
+from tldw_Server_API.app.core.LLM_Calls import adapter_registry as _adapter_registry
 from tldw_Server_API.app.core.Chat.streaming_utils import (
     create_streaming_response_with_timeout,
 )
@@ -653,22 +654,22 @@ def _build_adapter_request_from_chat_args(chat_args: Dict[str, Any]) -> Tuple[st
 
 
 def _attach_internal_http_hooks(adapter: Any, request: Dict[str, Any], internal: Dict[str, Any]) -> None:
-    """Attach http_client_factory/http_fetcher only for legacy adapters."""
+    """Attach http_client_factory/http_fetcher only for adapters that opt in."""
     if not internal:
         return
-    try:
-        from tldw_Server_API.app.core.LLM_Calls.providers.compat_adapters import CompatChatAdapter
-        if isinstance(adapter, CompatChatAdapter):
-            request.update(internal)
-    except Exception:
-        # Ignore adapter detection failures; internal hooks are optional.
-        return
+    if getattr(adapter, "accepts_internal_http_hooks", False):
+        request.update(internal)
+
+
+def _get_llm_registry():
+    """Resolve the adapter registry at call time to honor test monkeypatching."""
+    return _adapter_registry.get_registry()
 
 
 def perform_chat_api_call(**kwargs: Any) -> Any:
     """Adapter-backed replacement for chat_orchestrator.chat_api_call."""
     provider, request, internal = _build_adapter_request_from_chat_args(kwargs)
-    adapter = get_llm_registry().get_adapter(provider)
+    adapter = _get_llm_registry().get_adapter(provider)
     if adapter is None:
         raise ChatConfigurationError(provider=provider, message="LLM adapter unavailable.")
     _attach_internal_http_hooks(adapter, request, internal)
@@ -680,14 +681,17 @@ def perform_chat_api_call(**kwargs: Any) -> Any:
 async def perform_chat_api_call_async(**kwargs: Any) -> Any:
     """Async adapter-backed replacement for chat_orchestrator.chat_api_call_async."""
     provider, request, internal = _build_adapter_request_from_chat_args(kwargs)
-    adapter = get_llm_registry().get_adapter(provider)
+    adapter = _get_llm_registry().get_adapter(provider)
     if adapter is None:
         raise ChatConfigurationError(provider=provider, message="LLM adapter unavailable.")
     _attach_internal_http_hooks(adapter, request, internal)
 
     if request.get("stream"):
         try:
-            return adapter.astream(request)
+            stream_iter = adapter.astream(request)
+            if inspect.isawaitable(stream_iter):
+                stream_iter = await stream_iter
+            return stream_iter
         except NotImplementedError:
             stream_iter = adapter.stream(request)
 

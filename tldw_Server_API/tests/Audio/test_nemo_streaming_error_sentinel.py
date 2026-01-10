@@ -4,7 +4,7 @@ import pytest
 
 @pytest.mark.unit
 def test_nemo_streaming_suppresses_error_sentinel(monkeypatch):
-     """
+    """
     NemoStreamingTranscriber should not treat STT error sentinel strings as real user text.
 
     When the underlying transcriber returns a sentinel like "[Transcription error] ...",
@@ -39,7 +39,7 @@ def test_nemo_streaming_suppresses_error_sentinel(monkeypatch):
 
 @pytest.mark.unit
 def test_parakeet_rnnt_eou_token_stripped():
-     """
+    """
     The helper used by the Parakeet RNNT streaming path should strip the
     literal `<EOU>` token emitted by Parakeet-Realtime-EOU style models.
     """

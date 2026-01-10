@@ -4,7 +4,7 @@ import pytest
 def test_agglomerative_param_compatibility():
 
 
-     """Ensure AgglomerativeClustering accepts 'metric' on newer sklearn or falls back to 'affinity'."""
+    """Ensure AgglomerativeClustering accepts 'metric' on newer sklearn or falls back to 'affinity'."""
     try:
         from sklearn.cluster import AgglomerativeClustering  # type: ignore
     except Exception:

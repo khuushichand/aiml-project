@@ -11,7 +11,7 @@ import httpx
 
 class DummyProcess:
     def __init__(self):
-             self.pid = 12345
+        self.pid = 12345
         self.returncode = None
         self.stdout = None
         self.stderr = None
@@ -21,7 +21,7 @@ class DummyProcess:
 
     def terminate(self):
 
-             self.returncode = 0
+        self.returncode = 0
 
 
 @pytest.mark.asyncio
@@ -45,6 +45,7 @@ async def test_llamacpp_start_server_with_readiness(monkeypatch, tmp_path: Path)
     # Stub subprocess and readiness
     async def _fake_cpe(*a, **k):
         return DummyProcess()
+
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_cpe)
     from tldw_Server_API.app.core.Local_LLM import http_utils
 
@@ -103,12 +104,14 @@ async def test_llamacpp_inference_http_5xx(monkeypatch, tmp_path: Path):
     class RunningProc:
         pid = 1
         returncode = None
+
     handler._active_server_process = RunningProc()
     handler._active_server_host = "127.0.0.1"
     handler._active_server_port = 8199
 
     # Make request_json raise HTTPStatusError
     import tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler as llama_mod
+
     req = httpx.Request("POST", "http://127.0.0.1:8199/v1/chat/completions")
     resp = httpx.Response(500, request=req, text="server error")
     err = httpx.HTTPStatusError("error", request=req, response=resp)
@@ -120,19 +123,24 @@ async def test_llamacpp_inference_http_5xx(monkeypatch, tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_llamacpp_stop_timeout(monkeypatch, tmp_path: Path):
-    exe = tmp_path / "llama_server"; exe.write_text("#!/bin/sh\n")
-    model_dir = tmp_path / "models"; model_dir.mkdir(); (model_dir / "toy.gguf").write_text("fake")
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / "toy.gguf").write_text("fake")
     cfg = LlamaCppConfig(executable_path=exe, models_dir=model_dir)
     handler = LlamaCppHandler(cfg, global_app_config={})
 
     class SlowProc:
         def __init__(self):
-                     self.pid = 88
+            self.pid = 88
             self.returncode = None
+
         async def wait(self):
             return 0
+
         def terminate(self):
-                     self.returncode = None
+            self.returncode = None
 
     handler._active_server_process = SlowProc()
     handler._active_server_model = "toy.gguf"
@@ -144,14 +152,20 @@ async def test_llamacpp_stop_timeout(monkeypatch, tmp_path: Path):
 
     monkeypatch.setattr(asyncio, "wait_for", fake_wait_for)
     import os as _os
+
     monkeypatch.setattr(_os, "killpg", lambda *a, **k: None, raising=False)
 
     msg = await handler.stop_server()
     assert "stopped" in msg.lower() or "terminated" in msg.lower()
+
+
 @pytest.mark.asyncio
 async def test_llamacpp_start_server_not_ready(monkeypatch, tmp_path: Path):
-    exe = tmp_path / "llama_server"; exe.write_text("#!/bin/sh\n")
-    model_dir = tmp_path / "models"; model_dir.mkdir(); (model_dir / "toy.gguf").write_text("fake")
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / "toy.gguf").write_text("fake")
     cfg = LlamaCppConfig(executable_path=exe, models_dir=model_dir, default_port=8099)
     handler = LlamaCppHandler(cfg, global_app_config={})
 
@@ -160,11 +174,16 @@ async def test_llamacpp_start_server_not_ready(monkeypatch, tmp_path: Path):
         returncode = None
         stdout = None
         stderr = None
-        def terminate(self): pass
+
+        def terminate(self):
+            pass
+
     async def _fake_cpe2(*a, **k):
         return DP()
+
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_cpe2)
     from tldw_Server_API.app.core.Local_LLM import http_utils
+
     monkeypatch.setattr(http_utils, "wait_for_http_ready", lambda *a, **k: asyncio.sleep(0, result=False))
 
     with pytest.raises(ServerError):
@@ -174,8 +193,11 @@ async def test_llamacpp_start_server_not_ready(monkeypatch, tmp_path: Path):
 @pytest.mark.asyncio
 async def test_llamacpp_allow_unvalidated_args_unknown_flags_passthrough(monkeypatch, tmp_path: Path):
     # Prepare dummy executable and model
-    exe = tmp_path / "llama_server"; exe.write_text("#!/bin/sh\n")
-    model_dir = tmp_path / "models"; model_dir.mkdir(); (model_dir / "toy.gguf").write_text("fake")
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / "toy.gguf").write_text("fake")
 
     # Enable allow_unvalidated_args to allow passthrough of unknown flags
     cfg = LlamaCppConfig(
@@ -195,6 +217,7 @@ async def test_llamacpp_allow_unvalidated_args_unknown_flags_passthrough(monkeyp
         returncode = None
         stdout = None
         stderr = None
+
         async def wait(self):
             return 0
 
@@ -206,6 +229,7 @@ async def test_llamacpp_allow_unvalidated_args_unknown_flags_passthrough(monkeyp
 
     # Patch the symbol imported into the module (not http_utils) to avoid 30s wait
     import tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler as llama_mod
+
     monkeypatch.setattr(llama_mod, "wait_for_http_ready", lambda *a, **k: asyncio.sleep(0, result=True))
 
     # Unknown flags should be converted to --unknown-flag and --bool-flag (no value)

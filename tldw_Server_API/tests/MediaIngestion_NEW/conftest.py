@@ -36,7 +36,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
 
 def pytest_configure(config):
 
-     """Register custom markers for test categorization."""
+    """Register custom markers for test categorization."""
     config.addinivalue_line("markers", "unit: Unit tests with minimal mocking")
     config.addinivalue_line("markers", "integration: Integration tests with real components")
     config.addinivalue_line("markers", "property: Property-based tests")
@@ -54,7 +54,7 @@ def pytest_configure(config):
 
 @pytest.fixture
 def test_env_vars():
-     """Set up test environment variables."""
+    """Set up test environment variables."""
     original_env = os.environ.copy()
 
     # Set test mode
@@ -77,14 +77,14 @@ def test_env_vars():
 
 @pytest.fixture
 def temp_db_path() -> Generator[Path, None, None]:
-     """Create a temporary database path."""
+    """Create a temporary database path."""
     with tempfile.TemporaryDirectory() as temp_dir:
         db_path = Path(temp_dir) / "test_media.db"
         yield db_path
 
 @pytest.fixture
 def media_database(temp_db_path) -> MediaDatabase:
-     """Create a real MediaDatabase instance for testing."""
+    """Create a real MediaDatabase instance for testing."""
     db = MediaDatabase(
         db_path=str(temp_db_path),
         client_id="test_client"
@@ -94,7 +94,7 @@ def media_database(temp_db_path) -> MediaDatabase:
 
 @pytest.fixture
 def populated_media_db(media_database) -> MediaDatabase:
-     """Create a MediaDatabase with test data."""
+    """Create a MediaDatabase with test data."""
     # Add test media items
     from uuid import uuid4
 
@@ -146,14 +146,14 @@ def populated_media_db(media_database) -> MediaDatabase:
 
 @pytest.fixture
 def test_media_dir() -> Generator[Path, None, None]:
-     """Create a temporary directory for test media files."""
+    """Create a temporary directory for test media files."""
     with tempfile.TemporaryDirectory() as temp_dir:
         media_dir = Path(temp_dir)
         yield media_dir
 
 @pytest.fixture
 def test_audio_file(test_media_dir) -> Path:
-     """Create a test audio file (WAV format)."""
+    """Create a test audio file (WAV format)."""
     audio_path = test_media_dir / "test_audio.wav"
 
     # Generate a simple sine wave audio
@@ -179,7 +179,7 @@ def test_audio_file(test_media_dir) -> Path:
 
 @pytest.fixture
 def test_video_file(test_media_dir) -> Path:
-     """Create a test video file (mock)."""
+    """Create a test video file (mock)."""
     # For testing, we'll create a dummy file
     # Real video generation would require ffmpeg
     video_path = test_media_dir / "test_video.mp4"
@@ -197,7 +197,7 @@ def test_video_file(test_media_dir) -> Path:
 
 @pytest.fixture
 def test_pdf_file(test_media_dir) -> Path:
-     """Create a test PDF file."""
+    """Create a test PDF file."""
     pdf_path = test_media_dir / "test_document.pdf"
 
     # Create a minimal valid PDF
@@ -241,7 +241,7 @@ startxref
 
 @pytest.fixture
 def test_text_file(test_media_dir) -> Path:
-     """Create a test text file."""
+    """Create a test text file."""
     text_path = test_media_dir / "test_document.txt"
 
     with open(text_path, 'w', encoding='utf-8') as f:
@@ -257,7 +257,7 @@ def test_text_file(test_media_dir) -> Path:
 
 @pytest.fixture
 def malicious_file(test_media_dir) -> Path:
-     """Create a file with potentially malicious content for security testing."""
+    """Create a file with potentially malicious content for security testing."""
     mal_path = test_media_dir / "malicious.txt"
 
     with open(mal_path, 'w') as f:
@@ -273,7 +273,7 @@ def malicious_file(test_media_dir) -> Path:
 
 @pytest.fixture
 def mock_media_db():
-     """Mock MediaDatabase for unit tests."""
+    """Mock MediaDatabase for unit tests."""
     mock_db = MagicMock(spec=MediaDatabase)
 
     mock_db.add_media.return_value = 1
@@ -289,7 +289,7 @@ def mock_media_db():
 
 @pytest.fixture
 def mock_whisper_model():
-     """Mock Whisper model for unit tests."""
+    """Mock Whisper model for unit tests."""
     mock_model = MagicMock()
 
     mock_model.transcribe.return_value = {
@@ -308,7 +308,7 @@ def mock_whisper_model():
 
 @pytest.fixture
 def mock_ffmpeg():
-     """Mock FFmpeg operations for unit tests."""
+    """Mock FFmpeg operations for unit tests."""
     with patch('subprocess.run') as mock_run:
         mock_run.return_value.returncode = 0
         mock_run.return_value.stdout = b"Output from ffmpeg"
@@ -320,7 +320,7 @@ def mock_ffmpeg():
 
 @pytest.fixture
 def basic_media_request() -> Dict[str, Any]:
-     """Basic media processing request."""
+    """Basic media processing request."""
     return {
         "url": "http://example.com/media.mp4",
         "title": "Test Media",
@@ -331,7 +331,7 @@ def basic_media_request() -> Dict[str, Any]:
 
 @pytest.fixture
 def audio_process_request() -> Dict[str, Any]:
-     """Audio processing request."""
+    """Audio processing request."""
     return {
         "title": "Test Audio",
         "author": "Test Author",
@@ -344,7 +344,7 @@ def audio_process_request() -> Dict[str, Any]:
 
 @pytest.fixture
 def document_process_request() -> Dict[str, Any]:
-     """Document processing request."""
+    """Document processing request."""
     return {
         "title": "Test Document",
         "author": "Test Author",
@@ -360,7 +360,7 @@ def document_process_request() -> Dict[str, Any]:
 
 @pytest.fixture
 def parakeet_mlx_config():
-     """Configuration for Parakeet MLX provider."""
+    """Configuration for Parakeet MLX provider."""
     return {
         "model_name": "parakeet-mlx-small",
         "device": "cpu",
@@ -370,7 +370,7 @@ def parakeet_mlx_config():
 
 @pytest.fixture
 def parakeet_onnx_config():
-     """Configuration for Parakeet ONNX provider."""
+    """Configuration for Parakeet ONNX provider."""
     return {
         "model_path": "/models/parakeet-onnx",
         "providers": ["CPUExecutionProvider"],
@@ -380,7 +380,7 @@ def parakeet_onnx_config():
 
 @pytest.fixture
 def nemo_config():
-     """Configuration for Nemo provider."""
+    """Configuration for Nemo provider."""
     return {
         "model_name": "QuartzNet15x5Base-En",
         "device": "cpu",
@@ -394,7 +394,7 @@ def nemo_config():
 
 @pytest.fixture
 def valid_validation_result():
-     """A valid file validation result."""
+    """A valid file validation result."""
     return ValidationResult(
         is_valid=True,
         issues=[],
@@ -405,7 +405,7 @@ def valid_validation_result():
 
 @pytest.fixture
 def invalid_validation_result():
-     """An invalid file validation result."""
+    """An invalid file validation result."""
     return ValidationResult(
         is_valid=False,
         issues=["File type not allowed", "File size exceeds limit"],
@@ -420,7 +420,7 @@ def invalid_validation_result():
 
 @pytest.fixture
 def sample_text_for_chunking():
-     """Sample text for testing chunking strategies."""
+    """Sample text for testing chunking strategies."""
     return """This is the first sentence. This is the second sentence.
 
     This is a new paragraph with multiple sentences. It contains important information
@@ -433,7 +433,7 @@ def sample_text_for_chunking():
 
 @pytest.fixture
 def expected_chunks():
-     """Expected chunks for different strategies."""
+    """Expected chunks for different strategies."""
     return {
         "sentences": [
             "This is the first sentence.",
@@ -461,14 +461,14 @@ def expected_chunks():
 
 @pytest.fixture
 def test_client(test_env_vars):
-     """Create a test client for the FastAPI app."""
+    """Create a test client for the FastAPI app."""
     from tldw_Server_API.app.main import app
     with TestClient(app) as client:
         yield client
 
 @pytest.fixture
 def auth_headers(test_env_vars):
-     """Authentication headers for API requests.
+    """Authentication headers for API requests.
 
     - If AUTH_MODE=single_user: use X-API-KEY from settings directly.
     - If AUTH_MODE=multi_user: provision a test user and create a real API key
@@ -548,7 +548,7 @@ def auth_headers(test_env_vars):
 
 @pytest.fixture(autouse=True)
 def cleanup_after_test():
-     """Cleanup after each test."""
+    """Cleanup after each test."""
     yield
     # Any cleanup code here
     import gc

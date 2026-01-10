@@ -65,7 +65,7 @@ This guide helps project developers understand the Audit module’s architecture
 
 ## Data Model & Storage
 
-When using DI (single or multi-user), the audit DB path is per-user under `<USER_DB_BASE_DIR>/<user_id>/audit/unified_audit.db`. If you construct the service directly without DI, the default path is `./Databases/unified_audit.db`.
+When using DI (single or multi-user), the audit DB path is per-user under `<USER_DB_BASE_DIR>/<user_id>/audit/unified_audit.db` (where `USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config`, defaults to `Databases/user_databases/`, and can be overridden via environment variable or `Config_Files/config.txt`). If you construct the service directly without DI, the default path is `./Databases/unified_audit.db`.
 
 Tables:
 - `audit_events` (primary table):
@@ -92,7 +92,7 @@ Environment and settings (read from `app.core.config.settings` and env):
 - `AUDIT_PII_USE_RAG_PATTERNS` (settings bool): merge RAG patterns into `PIIDetector`.
 - `AUDIT_PII_PATTERNS` (settings dict): override/add regex groups.
 - `AUDIT_PII_SCAN_FIELDS` (settings list/CSV): extra event fields to scan (default includes `action`, `resource_id`, `error_message`, `context_user_agent`). Use `context_*` for context fields.
-- `USER_DB_BASE_DIR` (settings): per-user DB root directory; defaults to `Databases/user_databases/` under the project root.
+- `USER_DB_BASE_DIR` (from `tldw_Server_API.app.core.config`): per-user DB root directory; defaults to `Databases/user_databases/` under the project root. Override via environment variable or `Config_Files/config.txt` as needed.
 
 Constructor overrides (per instance): `db_path`, `retention_days`, `buffer_size`, `flush_interval`, `enable_pii_detection`, `enable_risk_scoring`, `max_db_mb`.
 

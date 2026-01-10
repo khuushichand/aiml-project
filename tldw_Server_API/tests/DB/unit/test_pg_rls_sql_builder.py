@@ -5,8 +5,7 @@ from tldw_Server_API.app.core.DB_Management.backends.pg_rls_policies import buil
 
 def test_build_rls_sql_contains_expected_policies():
 
-
-     stmts = "\n".join(build_prompt_studio_rls_sql())
+    stmts = "\n".join(build_prompt_studio_rls_sql())
     # Ensure core tables are covered
     for table in [
         "prompt_studio_projects",

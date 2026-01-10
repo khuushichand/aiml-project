@@ -177,6 +177,22 @@ def _get_project_version() -> str:
     return _CACHED_VERSION
 
 
+def _capture_error_body_hook(response: "httpx.Response") -> None:
+    try:
+        if response.status_code >= 400:
+            response.read()
+    except Exception:
+        pass
+
+
+async def _capture_error_body_hook_async(response: "httpx.Response") -> None:
+    try:
+        if response.status_code >= 400:
+            await response.aread()
+    except Exception:
+        pass
+
+
 def _register_http_client_metrics_once() -> None:
     reg = get_metrics_registry()
     # Register http-client-specific metrics if not present
@@ -1063,6 +1079,7 @@ def create_async_client(
         headers=hdrs,
         transport=transport,
     )
+    kwargs["event_hooks"] = {"response": [_capture_error_body_hook]}
     lim = limits or _httpx_limits_default()
     if lim is not None:
         kwargs["limits"] = lim
@@ -1134,6 +1151,7 @@ def create_client(
         headers=hdrs,
         transport=transport,
     )
+    kwargs["event_hooks"] = {"response": [_capture_error_body_hook_async]}
     lim = limits or _httpx_limits_default()
     if lim is not None:
         kwargs["limits"] = lim
@@ -1238,6 +1256,19 @@ async def _afetch_httpx(
                     json=json,
                     data=data,
                     files=files,
+                    timeout=timeout,
+                    follow_redirects=False,
+                )
+            elif method_upper == "GET" and hasattr(ac, "get") and verify is None:
+                try:
+                    logger.debug("afetch _do_once: using AsyncClient.get")
+                except Exception:
+                    pass
+                r = await ac.get(
+                    target_url,
+                    headers=req_headers,
+                    cookies=cookies,
+                    params=params,
                     timeout=timeout,
                     follow_redirects=False,
                 )
@@ -1922,8 +1953,8 @@ async def apost(
     Minimal async POST helper that enforces egress policy.
 
     This is intentionally lightweight (no retries/redirect handling) so that
-    adapters and unit tests that monkeypatch `httpx.AsyncClient.post` can still
-    intercept calls, while centralizing the egress check.
+    adapters and unit tests can patch `apost` (or the async client factory)
+    to intercept calls while centralizing the egress check.
     """
     if httpx is None:  # pragma: no cover
         raise RuntimeError("httpx is not available")
@@ -2480,6 +2511,17 @@ async def _astream_bytes_httpx(
             )
     except asyncio.CancelledError:
         # propagate cancellations cleanly
+        raise
+    except httpx.HTTPStatusError as e:
+        _log_outbound_request(
+            method=method,
+            url=url,
+            status_code=int(getattr(getattr(e, "response", None), "status_code", 0) or 0),
+            start_time=t0,
+            attempt=1,
+            last_retry_delay_s=0.0,
+            exception_class=e.__class__.__name__,
+        )
         raise
     except httpx.HTTPError as e:
         _log_outbound_request(

@@ -7,23 +7,25 @@ import tldw_Server_API.app.core.config as _cfg_mod
 # Keep regex operations snappy via config patch
 @pytest.fixture(autouse=True)
 def _patch_chunking_regex_policy(monkeypatch):
-     class _DummyCfg:
+    class _DummyCfg:
         def has_section(self, name):
-                     return name == 'Chunking'
+            return name == "Chunking"
+
         def get(self, section, key, fallback=None):
-                     mapping = {
-                'regex_timeout_seconds': '0.5',
-                'regex_disable_multiprocessing': '1',
-                'regex_simple_only': '1',
+            mapping = {
+                "regex_timeout_seconds": "0.5",
+                "regex_disable_multiprocessing": "1",
+                "regex_simple_only": "1",
             }
             return mapping.get(key, fallback)
-    monkeypatch.setattr(_cfg_mod, 'load_comprehensive_config', lambda: _DummyCfg())
+
+    monkeypatch.setattr(_cfg_mod, "load_comprehensive_config", lambda: _DummyCfg())
 
 
 @pytest.mark.unit
 @pytest.mark.timeout(5)
 def test_ebook_chapters_overlap_ge_maxsize_does_not_hang():
-     """Ensure ebook_chapters chunking makes forward progress when overlap >= max_size.
+    """Ensure ebook_chapters chunking makes forward progress when overlap >= max_size.
 
     This guards against infinite/negative-step loops and verifies that we return chunks.
     """
@@ -42,7 +44,7 @@ def test_ebook_chapters_overlap_ge_maxsize_does_not_hang():
 @pytest.mark.unit
 @pytest.mark.timeout(5)
 def test_ebook_chapters_with_metadata_overlap_ge_maxsize_does_not_hang():
-     """Same safety check for the with_metadata path."""
+    """Same safety check for the with_metadata path."""
     chunker = Chunker()
     text = " ".join(["word"] * 1000)
 

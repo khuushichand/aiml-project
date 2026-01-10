@@ -9,7 +9,7 @@ from fastapi import status
 def check_batch_response(response, expected_status, expected_processed=None, expected_errors=None, check_results_len=None):
 
 
-     assert response.status_code == expected_status, f"Expected {expected_status}, got {response.status_code}: {response.text}"
+    assert response.status_code == expected_status, f"Expected {expected_status}, got {response.status_code}: {response.text}"
     data = response.json()
     assert isinstance(data, dict)
     assert "results" in data and isinstance(data["results"], list)
@@ -25,7 +25,7 @@ def check_batch_response(response, expected_status, expected_processed=None, exp
 
 @pytest.fixture()
 def client(client_user_only):
-     """
+    """
     Use the shared single-user TestClient fixture from the main test suite.
 
     This ensures auth wiring is consistent with other media tests and avoids
@@ -36,7 +36,7 @@ def client(client_user_only):
 
 @pytest.fixture
 def dummy_headers():
-     return {"token": "dummy"}
+    return {"token": "dummy"}
 
 
 class TestProcessCode:

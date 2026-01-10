@@ -3,7 +3,7 @@ import pytest
 
 @pytest.mark.unit
 def test_stream_status_shape(client_user_only):
-     """
+    """
     Verify the audio stream status endpoint returns the expected JSON structure and values.
 
     Asserts that the response from GET /api/v1/audio/stream/status has HTTP 200 and a JSON object containing:

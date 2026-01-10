@@ -113,8 +113,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS flashcards_fts USING fts5(front, back, notes,
 
 def test_sqlite_migration_v9_to_v10_backfills_and_indexes(tmp_path):
 
-
-     db_path = tmp_path / "chacha_v9.db"
+    db_path = tmp_path / "chacha_v9.db"
     _bootstrap_v9_sqlite_db(str(db_path))
 
     # Trigger migration to current schema version
@@ -134,9 +133,12 @@ def test_sqlite_migration_v9_to_v10_backfills_and_indexes(tmp_path):
         assert state_value == "in-progress"
 
         conv_indexes = {row[1] for row in conn.execute("PRAGMA index_list('conversations')").fetchall()}
-        assert {"idx_conversations_state", "idx_conversations_cluster", "idx_conversations_last_modified", "idx_conversations_topic_label"}.issubset(
-            conv_indexes
-        )
+        assert {
+            "idx_conversations_state",
+            "idx_conversations_cluster",
+            "idx_conversations_last_modified",
+            "idx_conversations_topic_label",
+        }.issubset(conv_indexes)
 
         # Notes should have backlink columns
         note_cols = [row[1] for row in conn.execute("PRAGMA table_info('notes')").fetchall()]

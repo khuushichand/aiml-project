@@ -29,7 +29,7 @@ from datetime import datetime
 from fixtures import (
     api_client, authenticated_client, data_tracker, test_user_credentials,
     create_test_file, cleanup_test_file,
-    BASE_URL, API_PREFIX
+    BASE_URL, API_PREFIX, require_llm_or_skip
 )
 from test_data import TestDataGenerator
 
@@ -644,8 +644,7 @@ class TestConcurrentCRUD:
         }
 
         def create_note():
-
-                    try:
+            try:
                 # Add small random delay to spread out requests
                 time.sleep(random.uniform(0.05, 0.15))
                 response = authenticated_client.create_note(
@@ -661,8 +660,7 @@ class TestConcurrentCRUD:
                 return None
 
         def update_note(note_id):
-
-                    if not note_id:
+            if not note_id:
                 return
             try:
                 response = authenticated_client.update_note(
@@ -675,8 +673,7 @@ class TestConcurrentCRUD:
                 results['errors'].append(('update', str(e)))
 
         def delete_note(note_id):
-
-                    if not note_id:
+            if not note_id:
                 return
             try:
                 response = authenticated_client.delete_note(note_id)
@@ -723,6 +720,7 @@ class TestConcurrentCRUD:
     def test_concurrent_character_chat_sessions(self, authenticated_client, data_tracker):
 
         """Test multiple concurrent chat sessions with characters."""
+        model = require_llm_or_skip(authenticated_client)
         # Create a test character first
         character_data = TestDataGenerator.sample_character_card()
 
@@ -745,7 +743,7 @@ class TestConcurrentCRUD:
 
             return client.chat_completion(
                 messages=messages,
-                model="gpt-3.5-turbo",
+                model=model,
                 temperature=0.7
             )
 
@@ -1075,8 +1073,7 @@ class TestStateConsistency:
         results = {'read_success': 0, 'read_failed': 0, 'delete_success': False}
 
         def read_note():
-
-                    try:
+            try:
                 response = authenticated_client.client.get(f"{API_PREFIX}/notes/{note_id}")
                 response.raise_for_status()
                 results['read_success'] += 1
@@ -1087,8 +1084,7 @@ class TestStateConsistency:
                     raise
 
         def delete_note():
-
-                    try:
+            try:
                 response = authenticated_client.delete_note(note_id)
                 results['delete_success'] = True
             except:

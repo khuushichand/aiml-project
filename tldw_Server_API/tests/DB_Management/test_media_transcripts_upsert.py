@@ -38,8 +38,7 @@ def _insert_minimal_media(db: MediaDatabase) -> int:
 
 def test_sqlite_upsert_transcript_roundtrip(tmp_path):
 
-
-     db = MediaDatabase(db_path=str(tmp_path / "media.db"), client_id="unit-sqlite")
+    db = MediaDatabase(db_path=str(tmp_path / "media.db"), client_id="unit-sqlite")
     media_id = _insert_minimal_media(db)
 
     # Insert new transcript
@@ -52,13 +51,14 @@ def test_sqlite_upsert_transcript_roundtrip(tmp_path):
 
     # Latest transcription should be updated
     from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import get_latest_transcription
+
     latest = get_latest_transcription(db, media_id)
     assert latest == "updated text"
 
 
 @pytest.mark.integration
 def test_postgres_upsert_transcript_roundtrip_if_available(tmp_path, pg_eval_params):
-     cfg = DatabaseConfig(
+    cfg = DatabaseConfig(
         backend_type=BackendType.POSTGRESQL,
         pg_host=pg_eval_params["host"],
         pg_port=int(pg_eval_params["port"]),
@@ -81,13 +81,14 @@ def test_postgres_upsert_transcript_roundtrip_if_available(tmp_path, pg_eval_par
     assert p2["version"] == p1["version"] + 1
 
     from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import get_latest_transcription
+
     latest = get_latest_transcription(db, media_id)
     assert latest == "pg updated"
 
 
 @pytest.mark.integration
 def test_postgres_transaction_context_commits_if_available(tmp_path, pg_eval_params):
-     cfg = DatabaseConfig(
+    cfg = DatabaseConfig(
         backend_type=BackendType.POSTGRESQL,
         pg_host=pg_eval_params["host"],
         pg_port=int(pg_eval_params["port"]),

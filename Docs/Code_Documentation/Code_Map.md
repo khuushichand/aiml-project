@@ -92,7 +92,7 @@ Routers are mounted in `main.py` with prefix `/api/v1`.
 - Vector store (per user): ChromaDB at `<USER_DB_BASE_DIR>/<user_id>/chroma_storage/` with meta/jobs SQLite under `vector_store/`
 - Per-user storage (non-DB assets): outputs (`<USER_DB_BASE_DIR>/<user_id>/outputs/`), voices (`<USER_DB_BASE_DIR>/<user_id>/voices/`), rewrite cache (`<USER_DB_BASE_DIR>/<user_id>/Rewrite_Cache/rewrite_cache.jsonl`), personalization (`<USER_DB_BASE_DIR>/<user_id>/rag_personalization.json`)
 
-Note: All paths can be overridden by environment or config. `USER_DB_BASE_DIR` controls the per-user root (defaults to `Databases/user_databases`); `USER_DB_BASE` is deprecated and only used as an alias for rewrite cache resolution.
+Note: All paths can be overridden by environment variable or `Config_Files/config.txt`. `USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` and controls the per-user root (defaults to `Databases/user_databases/`); `USER_DB_BASE` is deprecated and only used as an alias for rewrite cache resolution.
 
 ## Key Flows
 

@@ -8,9 +8,7 @@ def _b64_key(byte_char: bytes) -> str:
 
 
 def test_byok_encrypt_decrypt_roundtrip(monkeypatch) -> None:
-
-
-     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
         encrypt_byok_payload,
         decrypt_byok_payload,
@@ -26,9 +24,7 @@ def test_byok_encrypt_decrypt_roundtrip(monkeypatch) -> None:
 
 
 def test_byok_decrypt_with_secondary_key(monkeypatch) -> None:
-
-
-     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
     from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
         encrypt_byok_payload,
         decrypt_byok_payload,

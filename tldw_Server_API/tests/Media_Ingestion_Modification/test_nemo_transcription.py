@@ -19,7 +19,7 @@ class TestNemoTranscription:
 
     @pytest.fixture
     def sample_audio(self):
-             """Generate sample audio data for testing."""
+        """Generate sample audio data for testing."""
         # Create a simple sine wave as test audio
         sample_rate = 16000
         duration = 1  # 1 second
@@ -30,7 +30,7 @@ class TestNemoTranscription:
 
     @pytest.fixture
     def mock_config(self):
-             """Mock configuration for testing."""
+        """Mock configuration for testing."""
         return {
             'STT-Settings': {
                 'default_transcriber': 'parakeet',
@@ -42,7 +42,7 @@ class TestNemoTranscription:
 
     def test_import_nemo_module(self):
 
-             """Test that the Nemo module can be imported."""
+        """Test that the Nemo module can be imported."""
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Transcription_Nemo
             assert Audio_Transcription_Nemo is not None
@@ -51,7 +51,7 @@ class TestNemoTranscription:
 
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo.loaded_config_data')
     def test_cache_dir_creation(self, mock_config_data, mock_config):
-             """Test that cache directory is created properly."""
+        """Test that cache directory is created properly."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
             _get_cache_dir
         )
@@ -65,7 +65,7 @@ class TestNemoTranscription:
 
     def test_model_cache_key_generation(self):
 
-             """Test model cache key generation."""
+        """Test model cache key generation."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
             _get_model_cache_key
         )
@@ -82,7 +82,7 @@ class TestNemoTranscription:
     @patch('nemo.collections.asr.models.EncDecRNNTBPEModel.from_pretrained')
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo.loaded_config_data')
     def test_load_parakeet_standard(self, mock_config_data, mock_from_pretrained, mock_config):
-             """Test loading standard Parakeet model."""
+        """Test loading standard Parakeet model."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
             load_parakeet_model, _model_cache
         )
@@ -103,7 +103,7 @@ class TestNemoTranscription:
     @patch('nemo.collections.asr.models.EncDecMultiTaskModel.from_pretrained')
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo.loaded_config_data')
     def test_load_canary_model(self, mock_config_data, mock_from_pretrained, mock_config):
-             """Test loading Canary model."""
+        """Test loading Canary model."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
             load_canary_model, _model_cache
         )
@@ -123,7 +123,7 @@ class TestNemoTranscription:
 
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo.load_parakeet_model')
     def test_transcribe_with_parakeet(self, mock_load_model, sample_audio):
-             """Test Parakeet transcription with mocked model."""
+        """Test Parakeet transcription with mocked model."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
             transcribe_with_parakeet
         )
@@ -142,7 +142,7 @@ class TestNemoTranscription:
 
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo.load_canary_model')
     def test_transcribe_with_canary(self, mock_load_model, sample_audio):
-             """Test Canary transcription with mocked model."""
+        """Test Canary transcription with mocked model."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
             transcribe_with_canary
         )
@@ -161,7 +161,7 @@ class TestNemoTranscription:
 
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo.load_canary_model')
     def test_transcribe_with_canary_translate_uses_language_kwargs(self, mock_load_model, sample_audio):
-             """Canary translate task should pass source/target language to NeMo."""
+        """Canary translate task should pass source/target language to NeMo."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
             transcribe_with_canary,
         )
@@ -191,7 +191,7 @@ class TestNemoTranscription:
 
     def test_transcribe_with_nemo_unified(self, sample_audio):
 
-             """Test unified Nemo transcription entry point."""
+        """Test unified Nemo transcription entry point."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
             transcribe_with_nemo
         )
@@ -204,7 +204,7 @@ class TestNemoTranscription:
 
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo.load_parakeet_model')
     def test_model_loading_failure(self, mock_load_model):
-             """Test handling of model loading failures."""
+        """Test handling of model loading failures."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
             transcribe_with_parakeet
         )
@@ -217,7 +217,7 @@ class TestNemoTranscription:
 
     def test_unload_models(self):
 
-             """Test unloading all Nemo models from cache."""
+        """Test unloading all Nemo models from cache."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
             unload_nemo_models, _model_cache
         )
@@ -238,7 +238,7 @@ class TestNemoTranscription:
     @patch('huggingface_hub.snapshot_download')
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo.loaded_config_data')
     def test_load_parakeet_onnx(self, mock_config_data, mock_download, mock_ort_session, mock_config):
-             """Test loading ONNX variant of Parakeet."""
+        """Test loading ONNX variant of Parakeet."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
             load_parakeet_model
         )
@@ -273,7 +273,7 @@ class TestAudioTranscriptionLibIntegration:
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo.transcribe_with_parakeet')
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.loaded_config_data')
     def test_transcribe_audio_with_parakeet(self, mock_config, mock_transcribe_parakeet):
-             """Test transcribe_audio function with Parakeet provider."""
+        """Test transcribe_audio function with Parakeet provider."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
             transcribe_audio
         )
@@ -296,7 +296,7 @@ class TestAudioTranscriptionLibIntegration:
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo.transcribe_with_canary')
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.loaded_config_data')
     def test_transcribe_audio_with_canary(self, mock_config, mock_transcribe_canary):
-             """Test transcribe_audio function with Canary provider."""
+        """Test transcribe_audio function with Canary provider."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
             transcribe_audio
         )
@@ -318,7 +318,7 @@ class TestAudioTranscriptionLibIntegration:
 
     def test_unload_all_models(self):
 
-             """Test unloading all transcription models."""
+        """Test unloading all transcription models."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
             unload_all_transcription_models
         )
@@ -337,7 +337,7 @@ class TestNemoModelsActual:
 
     @pytest.mark.slow
     def test_actual_parakeet_loading(self):
-             """Test actual Parakeet model loading (requires downloading model)."""
+        """Test actual Parakeet model loading (requires downloading model)."""
         pytest.skip("Skipping actual model download test - run manually if needed")
 
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
@@ -349,7 +349,7 @@ class TestNemoModelsActual:
 
     @pytest.mark.slow
     def test_actual_canary_loading(self):
-             """Test actual Canary model loading (requires downloading model)."""
+        """Test actual Canary model loading (requires downloading model)."""
         pytest.skip("Skipping actual model download test - run manually if needed")
 
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (

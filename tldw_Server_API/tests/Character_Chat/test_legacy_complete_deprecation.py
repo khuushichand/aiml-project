@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 @pytest.mark.integration
 def test_legacy_complete_deprecation_headers():
-     os.environ.setdefault("AUTH_MODE", "single_user")
+    os.environ.setdefault("AUTH_MODE", "single_user")
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
     from tldw_Server_API.app.main import app
 

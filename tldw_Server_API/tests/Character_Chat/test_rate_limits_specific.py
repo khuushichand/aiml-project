@@ -36,6 +36,7 @@ async def test_max_messages_per_chat_limit():
     clear_config_cache()
     try:
         import tldw_Server_API.app.core.Character_Chat.character_rate_limiter as crl  # noqa: WPS433
+
         crl._rate_limiter = None
 
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings
@@ -92,6 +93,7 @@ async def test_max_chats_per_user_limit():
     original_max_chats = os.environ.get("MAX_CHATS_PER_USER")
     try:
         import tldw_Server_API.app.core.Character_Chat.character_rate_limiter as crl  # noqa: WPS433
+
         crl._rate_limiter = None
 
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings
@@ -156,6 +158,7 @@ async def test_chat_completion_per_minute_rate_limit():
     original_max_chats = os.environ.get("MAX_CHATS_PER_USER")
     try:
         import tldw_Server_API.app.core.Character_Chat.character_rate_limiter as crl  # noqa: WPS433
+
         crl._rate_limiter = None
 
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings

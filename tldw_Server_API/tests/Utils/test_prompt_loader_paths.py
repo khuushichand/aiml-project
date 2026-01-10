@@ -3,9 +3,7 @@ from pathlib import Path
 
 
 def test_prompts_dir_default_points_to_api_config_prompts():
-
-
-     from tldw_Server_API.app.core.Utils import prompt_loader as pl
+    from tldw_Server_API.app.core.Utils import prompt_loader as pl
 
     p = Path(pl._prompts_dir()).resolve()
     # Exists and has expected structure: .../tldw_Server_API/Config_Files/Prompts
@@ -16,9 +14,7 @@ def test_prompts_dir_default_points_to_api_config_prompts():
 
 
 def test_prompts_dir_respects_env_override(tmp_path, monkeypatch):
-
-
-     # Create an override config dir with Prompts subfolder
+    # Create an override config dir with Prompts subfolder
     cfg_dir = tmp_path / "my_config"
     prompts = cfg_dir / "Prompts"
     prompts.mkdir(parents=True)

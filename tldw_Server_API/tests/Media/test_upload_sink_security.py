@@ -14,7 +14,7 @@ pytestmark = pytest.mark.unit
 def test_validate_file_mime_mismatch_hard_fail(tmp_path, monkeypatch):
 
 
-     """Reject when magic-detected MIME disagrees with allowed and do not accept fallback."""
+    """Reject when magic-detected MIME disagrees with allowed and do not accept fallback."""
     # Arrange: create a non-PDF file with .pdf extension
     p = tmp_path / "fake.pdf"
     p.write_bytes(b"not-a-pdf")
@@ -25,7 +25,7 @@ def test_validate_file_mime_mismatch_hard_fail(tmp_path, monkeypatch):
     class DummyMagic:
         @staticmethod
         def from_file(path, mime=True):
-                     return "application/x-msdownload"
+            return "application/x-msdownload"
 
     monkeypatch.setattr(US, "puremagic", DummyMagic)
 
@@ -40,7 +40,7 @@ def test_validate_file_mime_mismatch_hard_fail(tmp_path, monkeypatch):
 def test_validate_archive_rejects_encrypted_zip(tmp_path, monkeypatch):
 
 
-     """Explicitly reject encrypted ZIP entries using flag_bits check."""
+    """Explicitly reject encrypted ZIP entries using flag_bits check."""
     zpath = tmp_path / "enc.zip"
     with zipfile.ZipFile(zpath, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("ok.txt", "hello")
@@ -54,11 +54,11 @@ def test_validate_archive_rejects_encrypted_zip(tmp_path, monkeypatch):
 
         def is_dir(self):
 
-                     return False
+            return False
 
     def fake_infolist(self):
 
-             return [DummyInfo()]
+        return [DummyInfo()]
 
     monkeypatch.setattr(zipfile.ZipFile, "infolist", fake_infolist, raising=False)
 
@@ -73,7 +73,7 @@ def test_validate_archive_rejects_encrypted_zip(tmp_path, monkeypatch):
 def test_validate_archive_flags_zip_symlink(tmp_path, monkeypatch):
 
 
-     """Symlink entries in ZIP are flagged and skipped."""
+    """Symlink entries in ZIP are flagged and skipped."""
     zpath = tmp_path / "sym.zip"
     with zipfile.ZipFile(zpath, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("ok.txt", "hello")
@@ -89,11 +89,11 @@ def test_validate_archive_flags_zip_symlink(tmp_path, monkeypatch):
 
         def is_dir(self):
 
-                     return False
+            return False
 
     def fake_infolist(self):
 
-             return [DummyInfo()]
+        return [DummyInfo()]
 
     monkeypatch.setattr(zipfile.ZipFile, "infolist", fake_infolist, raising=False)
 
@@ -108,7 +108,7 @@ def test_validate_archive_flags_zip_symlink(tmp_path, monkeypatch):
 def test_validate_archive_flags_tar_bad_types(tmp_path, monkeypatch):
 
 
-     """Non-file TAR members are flagged and not extracted."""
+    """Non-file TAR members are flagged and not extracted."""
     tpath = tmp_path / "bad.tar"
     with tarfile.open(tpath, "w") as tf:
         data = b"hello"
@@ -124,23 +124,23 @@ def test_validate_archive_flags_tar_bad_types(tmp_path, monkeypatch):
 
         def isdir(self):
 
-                     return False
+            return False
 
         def issym(self):
 
-                     return True
+            return True
 
         def islnk(self):
 
-                     return False
+            return False
 
         def isfile(self):
 
-                     return False
+            return False
 
     def fake_getmembers(self):
 
-             return [DummyTarInfo()]
+        return [DummyTarInfo()]
 
     monkeypatch.setattr(tarfile.TarFile, "getmembers", fake_getmembers, raising=False)
 
@@ -155,7 +155,7 @@ def test_validate_archive_flags_tar_bad_types(tmp_path, monkeypatch):
 def test_svg_treated_as_xml_and_allowed(tmp_path):
 
 
-     """SVG is handled under XML rules and accepted (sanitization path available)."""
+    """SVG is handled under XML rules and accepted (sanitization path available)."""
     svg_path = tmp_path / "img.svg"
     svg_path.write_text("<svg xmlns='http://www.w3.org/2000/svg'><title>T</title></svg>")
 

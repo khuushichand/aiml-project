@@ -31,7 +31,7 @@ from tldw_Server_API.app.core.TTS.adapters.base import (
 
 def check_dia_model_exists():
 
-     """Check if Dia model is available"""
+    """Check if Dia model is available"""
     # Check for model files or API access
     model_paths = [
         os.path.expanduser("~/.cache/huggingface/hub/models--nari-labs--dia"),
@@ -51,7 +51,7 @@ def check_dia_model_exists():
 
 def get_compute_capability():
 
-     """Detect compute capabilities"""
+    """Detect compute capabilities"""
     if platform.system() == "Darwin":
         if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
             return "mps"

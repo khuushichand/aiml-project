@@ -12,7 +12,7 @@ from tldw_Server_API.app.services.claims_review_metrics_scheduler import run_cla
 def _seed_review_metrics_db() -> MediaDatabase:
 
 
-     tmpdir = tempfile.mkdtemp(prefix="claims_review_metrics_")
+    tmpdir = tempfile.mkdtemp(prefix="claims_review_metrics_")
     db_path = os.path.join(tmpdir, "media.db")
     db = MediaDatabase(db_path=db_path, client_id="1")
     db.initialize_db()

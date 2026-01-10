@@ -18,6 +18,7 @@ async def test_get_chat_messages_includes_tool_calls_field_when_requested():
     os.environ["USER_DB_BASE_DIR"] = tmpdir
     try:
         from tldw_Server_API.app.main import app
+
         settings = get_settings()
         headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
         transport = httpx.ASGITransport(app=app)
@@ -31,14 +32,14 @@ async def test_get_chat_messages_includes_tool_calls_field_when_requested():
             chat_id = r.json()["id"]
 
             # Send a message
-            r = await client.post(f"/api/v1/chats/{chat_id}/messages", headers=headers, json={"role": "user", "content": "hi"})
+            r = await client.post(
+                f"/api/v1/chats/{chat_id}/messages", headers=headers, json={"role": "user", "content": "hi"}
+            )
             assert r.status_code == 201
 
             # Fetch messages with include_tool_calls=true
             r = await client.get(
-                f"/api/v1/chats/{chat_id}/messages",
-                headers=headers,
-                params={"include_tool_calls": True}
+                f"/api/v1/chats/{chat_id}/messages", headers=headers, params={"include_tool_calls": True}
             )
             assert r.status_code == 200
             data = r.json()
@@ -54,6 +55,7 @@ async def test_get_single_message_includes_tool_calls_field_when_requested():
     os.environ["USER_DB_BASE_DIR"] = tmpdir
     try:
         from tldw_Server_API.app.main import app
+
         settings = get_settings()
         headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
         transport = httpx.ASGITransport(app=app)
@@ -62,7 +64,9 @@ async def test_get_single_message_includes_tool_calls_field_when_requested():
             character_id = r.json()[0]["id"]
             r = await client.post("/api/v1/chats/", headers=headers, json={"character_id": character_id})
             chat_id = r.json()["id"]
-            r = await client.post(f"/api/v1/chats/{chat_id}/messages", headers=headers, json={"role": "user", "content": "hi"})
+            r = await client.post(
+                f"/api/v1/chats/{chat_id}/messages", headers=headers, json={"role": "user", "content": "hi"}
+            )
             msg_id = r.json()["id"]
 
             r = await client.get(f"/api/v1/messages/{msg_id}", headers=headers, params={"include_tool_calls": True})

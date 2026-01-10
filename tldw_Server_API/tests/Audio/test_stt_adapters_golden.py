@@ -51,7 +51,7 @@ def _bool_env(name: str) -> bool:
 def _require_golden_env() -> Path:
 
 
-     if not _bool_env("TLDW_STT_GOLDEN_ENABLE"):
+    if not _bool_env("TLDW_STT_GOLDEN_ENABLE"):
         pytest.skip("TLDW_STT_GOLDEN_ENABLE not set; skipping STT golden tests")
     base = os.getenv("TLDW_STT_GOLDEN_AUDIO_DIR")
     if not base:
@@ -151,7 +151,7 @@ def _load_golden_cases(base: Path, pattern: str) -> List[GoldenCase]:
 
 @pytest.mark.stt_golden
 def test_faster_whisper_golden_clips():
-     """
+    """
     Validate faster-whisper adapter on golden audio clips.
 
     Looks for JSON files matching `whisper_*.golden.json` under
@@ -189,7 +189,7 @@ def test_faster_whisper_golden_clips():
 
 @pytest.mark.stt_golden
 def test_parakeet_golden_clips():
-     """
+    """
     Validate Parakeet adapter on golden audio clips when Nemo is available.
     """
     base = _require_golden_env()
@@ -233,7 +233,7 @@ def test_parakeet_golden_clips():
 
 @pytest.mark.stt_golden
 def test_canary_golden_clips():
-     """
+    """
     Validate Canary adapter on golden audio clips when Nemo is available.
     """
     base = _require_golden_env()

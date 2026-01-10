@@ -15,7 +15,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Video import Video_DL_I
 
 @pytest.mark.unit
 def test_parse_and_expand_urls_preserves_non_vimeo_entries():
-     local_path = "/Users/example/video.mp4"
+    local_path = "/Users/example/video.mp4"
     generic_url = "https://example.com/video.mp4"
 
     expanded = parse_and_expand_urls([local_path, generic_url])
@@ -26,28 +26,28 @@ def test_parse_and_expand_urls_preserves_non_vimeo_entries():
 
 @pytest.mark.unit
 def test_parse_and_expand_urls_normalizes_vimeo():
-     vimeo_url = "http://vimeo.com/12345"
+    vimeo_url = "http://vimeo.com/12345"
     expanded = parse_and_expand_urls([vimeo_url])
     assert expanded == ["https://vimeo.com/12345"]
 
 
 @pytest.mark.unit
 def test_parse_and_expand_urls_ignores_non_youtube_list_queries():
-     tricky_url = "https://notyoutube.com/watch?list=foo"
+    tricky_url = "https://notyoutube.com/watch?list=foo"
     expanded = parse_and_expand_urls([tricky_url])
     assert expanded == [tricky_url]
 
 
 @pytest.mark.unit
 def test_parse_and_expand_urls_respects_vimeo_netloc_and_query():
-     vimeo_url = "https://player.vimeo.com/video/12345?h=abc123"
+    vimeo_url = "https://player.vimeo.com/video/12345?h=abc123"
     expanded = parse_and_expand_urls([vimeo_url])
     assert expanded == [vimeo_url]
 
 
 @pytest.mark.unit
 def test_cookies_to_header_value_supports_netscape_export():
-     netscape_blob = """# Netscape HTTP Cookie File\n#HttpOnly_example.com\tTRUE\t/\tFALSE\t0\tsessionid\tabc123\nexample.com\tTRUE\t/\tTRUE\t0\tcsrftoken\txyz456\n"""
+    netscape_blob = """# Netscape HTTP Cookie File\n#HttpOnly_example.com\tTRUE\t/\tFALSE\t0\tsessionid\tabc123\nexample.com\tTRUE\t/\tTRUE\t0\tcsrftoken\txyz456\n"""
     header = _cookies_to_header_value(netscape_blob)
     assert header == "sessionid=abc123; csrftoken=xyz456"
 
@@ -57,7 +57,7 @@ def test_cookies_to_header_value_supports_netscape_export():
 @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.run_geval")
 @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.process_single_video")
 def test_confabulation_check_invokes_geval(mock_single, mock_geval, _mock_resolve_key, tmp_path):
-     transcript_text = "this is a transcript"
+    transcript_text = "this is a transcript"
     summary_text = "summary content"
 
     mock_single.return_value = {
@@ -118,7 +118,7 @@ def test_confabulation_check_invokes_geval(mock_single, mock_geval, _mock_resolv
 @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.run_geval")
 @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.process_single_video")
 def test_confabulation_requires_keys_for_commercial_providers(mock_single, mock_geval, _mock_resolve_key, tmp_path):
-     transcript_text = "doc transcript"
+    transcript_text = "doc transcript"
     summary_text = "summary text"
 
     mock_single.return_value = {
@@ -174,7 +174,7 @@ def test_confabulation_requires_keys_for_commercial_providers(mock_single, mock_
 @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.run_geval")
 @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.process_single_video")
 def test_confabulation_allows_keyless_provider(mock_single, mock_geval, _mock_resolve_key, tmp_path):
-     transcript_text = "local transcript"
+    transcript_text = "local transcript"
     summary_text = "summary via local model"
 
     mock_single.return_value = {
@@ -235,7 +235,7 @@ def test_confabulation_allows_keyless_provider(mock_single, mock_geval, _mock_re
 @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.parse_and_expand_urls")
 @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.process_single_video")
 def test_process_videos_expands_playlist_inputs(mock_single, mock_expand, tmp_path):
-     mock_expand.return_value = ["https://example.com/watch?v=a", "https://example.com/watch?v=b"]
+    mock_expand.return_value = ["https://example.com/watch?v=a", "https://example.com/watch?v=b"]
     mock_single.side_effect = [
         {
             "status": "Success",
@@ -305,7 +305,7 @@ def test_process_videos_expands_playlist_inputs(mock_single, mock_expand, tmp_pa
 
 @pytest.mark.unit
 def test_resolve_eval_api_key_supports_configured_providers(monkeypatch):
-     fake_config = {
+    fake_config = {
         "openai_api": {"api_key": "cfg-openai"},
         "custom_openai_api": {"api_key": "cfg-custom1"},
         "custom_openai_api_2": {"api_key": "cfg-custom2"},
@@ -325,7 +325,7 @@ def test_resolve_eval_api_key_supports_configured_providers(monkeypatch):
 
 @pytest.mark.unit
 def test_resolve_eval_api_key_normalizes_environment_lookup(monkeypatch):
-     monkeypatch.setattr(
+    monkeypatch.setattr(
         "tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.loaded_config_data",
         {},
         raising=False,
@@ -340,7 +340,7 @@ def test_resolve_eval_api_key_normalizes_environment_lookup(monkeypatch):
 @pytest.mark.unit
 @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.yt_dlp.YoutubeDL")
 def test_download_video_returns_downloaded_file(mock_ydl_cls, tmp_path):
-     download_dir = tmp_path / "downloads"
+    download_dir = tmp_path / "downloads"
     download_dir.mkdir()
     downloaded_file = download_dir / "sample.m4a"
     downloaded_file.write_bytes(b"\x00\x01")
@@ -368,7 +368,7 @@ def test_download_video_returns_downloaded_file(mock_ydl_cls, tmp_path):
 @pytest.mark.unit
 @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.yt_dlp.YoutubeDL")
 def test_download_video_respects_declared_size(mock_ydl_cls, tmp_path):
-     info_dict = {"filesize": video_lib.DEFAULT_MAX_VIDEO_FILE_SIZE_BYTES + 1}
+    info_dict = {"filesize": video_lib.DEFAULT_MAX_VIDEO_FILE_SIZE_BYTES + 1}
 
     with pytest.raises(ValueError):
         video_lib.download_video(
@@ -392,7 +392,7 @@ def test_process_single_video_remote_download_success(
     mock_transcribe,
     tmp_path,
 ):
-     mock_extract_metadata.return_value = {"title": "Online Clip"}
+    mock_extract_metadata.return_value = {"title": "Online Clip"}
 
     downloaded_file = tmp_path / "downloaded.m4a"
     downloaded_file.write_bytes(b"\x00\x01")
@@ -435,7 +435,7 @@ def test_process_single_video_remote_download_success(
 
 @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.process_single_video")
 def test_process_videos_collects_warnings_separately(mock_single, tmp_path):
-     warning_msg = "chunking skipped due to length"
+    warning_msg = "chunking skipped due to length"
     mock_single.return_value = {
         "status": "Warning",
         "input_ref": "https://example.com/video",
@@ -488,7 +488,7 @@ def test_process_videos_collects_warnings_separately(mock_single, tmp_path):
 
 @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.process_single_video")
 def test_process_videos_counts_success_and_warning_as_processed(mock_single, tmp_path):
-     success_result = {
+    success_result = {
         "status": "Success",
         "input_ref": "https://example.com/a",
         "processing_source": "https://example.com/a",
@@ -581,7 +581,7 @@ def test_process_single_video_sets_kept_path_on_success(
     mock_store,
     tmp_path,
 ):
-     mock_transcribe.return_value = ("audio.wav", [{"Text": "hello world", "Time_Start": 0, "Time_End": 1}])
+    mock_transcribe.return_value = ("audio.wav", [{"Text": "hello world", "Time_Start": 0, "Time_End": 1}])
     kept_path = tmp_path / "stored" / "video.mp4"
     mock_store.return_value = kept_path
 
@@ -625,7 +625,7 @@ def test_process_single_video_sets_kept_path_on_success(
 
 @pytest.mark.unit
 def test_process_single_video_rejects_local_path_outside_temp_dir(tmp_path):
-     allowed_dir = tmp_path / "allowed"
+    allowed_dir = tmp_path / "allowed"
     allowed_dir.mkdir()
     outside_dir = tmp_path / "outside"
     outside_dir.mkdir()
@@ -667,7 +667,7 @@ def test_process_single_video_rejects_local_path_outside_temp_dir(tmp_path):
 
 @pytest.mark.unit
 def test_process_single_video_blocks_disallowed_url(monkeypatch, tmp_path):
-     def fake_evaluate_url_policy(*_args, **_kwargs):
+    def fake_evaluate_url_policy(*_args, **_kwargs):
         class _Res:
             allowed = False
             reason = "blocked"
@@ -711,7 +711,7 @@ def test_process_single_video_blocks_disallowed_url(monkeypatch, tmp_path):
 
 @pytest.mark.unit
 def test_download_video_blocks_disallowed_url(monkeypatch, tmp_path):
-     def fake_evaluate_url_policy(*_args, **_kwargs):
+    def fake_evaluate_url_policy(*_args, **_kwargs):
         class _Res:
             allowed = False
             reason = "blocked"
@@ -735,7 +735,7 @@ def test_download_video_blocks_disallowed_url(monkeypatch, tmp_path):
 @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.extract_text_from_segments")
 @patch("tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.perform_transcription")
 def test_process_single_video_returns_error_for_sentinel_transcript(mock_transcribe, mock_extract, tmp_path):
-     mock_transcribe.return_value = ("audio.wav", [{"Text": "text", "Time_Start": 0, "Time_End": 1}])
+    mock_transcribe.return_value = ("audio.wav", [{"Text": "text", "Time_Start": 0, "Time_End": 1}])
     mock_extract.return_value = video_lib._TRANSCRIPTION_EXTRACTION_ERROR_SENTINEL
 
     local_video = tmp_path / "local_sentinel.mp4"
@@ -776,7 +776,7 @@ def test_process_single_video_returns_error_for_sentinel_transcript(mock_transcr
 def test_store_video_file_respects_limits(monkeypatch, tmp_path):
 
 
-     storage_root = tmp_path / "storage"
+    storage_root = tmp_path / "storage"
     monkeypatch.setattr(video_lib, "_VIDEO_STORAGE_ROOT", storage_root)
     monkeypatch.setattr(video_lib, "_KEEP_VIDEO_MAX_FILES", 2)
     monkeypatch.setattr(video_lib, "_KEEP_VIDEO_MAX_STORAGE_MB", 1)

@@ -3,8 +3,7 @@ from tldw_Server_API.app.core.Chunking.strategies.sentences import SentenceChunk
 
 def _inputs():
 
-
-     # Mixed whitespace and punctuation scenarios
+    # Mixed whitespace and punctuation scenarios
     yield "Hello world!  This is a test.\nNew line.  Another sentence?"
     yield "  Leading spaces. Middle   spaces.\n\nParagraph break!  \nTail.  "
     yield "No punctuation here but newlines\nwill be treated as boundaries\n when needed"
@@ -13,8 +12,7 @@ def _inputs():
 
 def test_split_sentences_with_spans_round_trip_like():
 
-
-     strat = SentenceChunkingStrategy(language='en')
+    strat = SentenceChunkingStrategy(language="en")
     for text in _inputs():
         spans = strat._split_sentences_with_spans(text)
         # Monotonic non-overlapping and within bounds

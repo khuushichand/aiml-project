@@ -19,7 +19,7 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 def _fake_provider_stream_simple() -> Iterator[str]:
 
 
-     yield (
+    yield (
         "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"Hello from chat completions\"},\"index\":0,\"finish_reason\":null}]}\n\n"
     )
     yield "data: [DONE]\n\n"
@@ -62,7 +62,7 @@ async def test_chat_completions_streaming_unified_sse_simple(monkeypatch):
 
         def _stub_perform_chat_api_call(*args, **kwargs):
 
-                     return _fake_provider_stream_simple()
+            return _fake_provider_stream_simple()
 
         chat_ep.perform_chat_api_call = _stub_perform_chat_api_call  # type: ignore
 
@@ -124,7 +124,7 @@ async def test_chat_completions_streaming_unified_sse_slow_async_heartbeat(monke
 
         def _stub_perform_chat_api_call(*args, **kwargs):
 
-                     return _fake_provider_stream_slow_async()
+            return _fake_provider_stream_slow_async()
 
         chat_ep.perform_chat_api_call = _stub_perform_chat_api_call  # type: ignore
 
@@ -188,7 +188,7 @@ async def test_chat_completions_streaming_unified_sse_provider_duplicate_done(mo
 
         def _stub_perform_chat_api_call(*args, **kwargs):
 
-                     return _fake_provider_stream_with_duplicate_done()
+            return _fake_provider_stream_with_duplicate_done()
 
         chat_ep.perform_chat_api_call = _stub_perform_chat_api_call  # type: ignore
 

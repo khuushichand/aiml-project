@@ -7,7 +7,7 @@ from tldw_Server_API.app.core.LLM_Calls.providers.base import ChatProvider
 def test_registry_default_adapters_initialize():
 
 
-     registry = get_registry()
+    registry = get_registry()
     expected = {
         "openai",
         "anthropic",

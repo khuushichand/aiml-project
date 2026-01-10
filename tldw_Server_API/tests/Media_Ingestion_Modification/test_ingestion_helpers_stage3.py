@@ -53,7 +53,7 @@ class _DummyValidator:
 def test_tempdirmanager_creates_and_cleans() -> None:
 
 
-     mgr = TempDirManager(prefix="test_media_stage3_", cleanup=True)
+    mgr = TempDirManager(prefix="test_media_stage3_", cleanup=True)
     with mgr as tmp_dir:
         assert isinstance(tmp_dir, Path)
         assert tmp_dir.is_dir()
@@ -149,7 +149,7 @@ async def test_run_batch_processor_counts_and_orders(tmp_path: Path) -> None:
 def test_normalize_process_batch_orders_and_sets_defaults() -> None:
 
 
-     batch: Dict[str, Any] = {
+    batch: Dict[str, Any] = {
         "results": [
             {"status": "Error", "input_ref": "b"},
             {"status": "Success", "input_ref": "a"},

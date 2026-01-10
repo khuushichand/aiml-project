@@ -8,9 +8,7 @@ from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registr
 
 
 def _metric_entries(registry, name):
-
-
-     seq = registry.values.get(name)
+    seq = registry.values.get(name)
     if not seq:
         return []
     return list(seq)
@@ -108,19 +106,15 @@ async def test_async_client_fallback_records_metrics(monkeypatch):
 
 
 def test_sync_client_error_records_metrics(monkeypatch):
-
-
-     class FailingSyncRedis:
+    class FailingSyncRedis:
         def ping(self):
-                     raise ConnectionError("nope")
+            raise ConnectionError("nope")
 
         def close(self):
-
-                     return None
+            return None
 
     def fake_from_url(*args, **kwargs):
-
-             return FailingSyncRedis()
+        return FailingSyncRedis()
 
     monkeypatch.setattr(
         rf,

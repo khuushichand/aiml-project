@@ -10,7 +10,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 def test_rebuild_all_stale_policy_enqueues_expected_media(monkeypatch):
 
 
-     # Temp DB and seed: two media, both have claims; make one stale by bumping Media.last_modified
+    # Temp DB and seed: two media, both have claims; make one stale by bumping Media.last_modified
     tmpdir = tempfile.mkdtemp(prefix="claims_stale_")
     db_path = os.path.join(tmpdir, "media.db")
     db = MediaDatabase(db_path=db_path, client_id="test_client")
@@ -61,7 +61,7 @@ def test_rebuild_all_stale_policy_enqueues_expected_media(monkeypatch):
 
     class _User:
         def __init__(self):
-                     self.id = 1
+            self.id = 1
             self.username = "admin"
             self.is_admin = True
 

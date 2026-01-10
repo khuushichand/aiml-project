@@ -30,6 +30,12 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 #
 # Functions:
 
+# Back-compat for tests that patch this module-level path.
+try:
+    MAIN_USER_DATA_BASE_DIR = DatabasePaths.get_user_db_base_dir()
+except Exception:
+    MAIN_USER_DATA_BASE_DIR = None
+
 # --- Configuration ---
 SERVER_CLIENT_ID = settings.get("SERVER_CLIENT_ID")
 if not SERVER_CLIENT_ID:

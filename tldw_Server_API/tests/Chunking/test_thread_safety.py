@@ -20,8 +20,7 @@ class TestSecurityLoggerThreadSafety:
     """Tests for thread-safe security logger singleton."""
 
     def test_get_security_logger_returns_same_instance(self):
-
-             """Verify get_security_logger returns the same instance."""
+        """Verify get_security_logger returns the same instance."""
         from tldw_Server_API.app.core.Chunking.security_logger import (
             get_security_logger,
             configure_security_logging,
@@ -37,8 +36,7 @@ class TestSecurityLoggerThreadSafety:
         assert logger1 is logger2
 
     def test_get_security_logger_concurrent_access(self):
-
-             """Test concurrent calls to get_security_logger return same instance."""
+        """Test concurrent calls to get_security_logger return same instance."""
         from tldw_Server_API.app.core.Chunking.security_logger import (
             get_security_logger,
             configure_security_logging,
@@ -52,7 +50,7 @@ class TestSecurityLoggerThreadSafety:
 
         def get_logger():
 
-                     try:
+            try:
                 instance = get_security_logger()
                 instances.append(instance)
             except Exception as e:
@@ -71,8 +69,7 @@ class TestSecurityLoggerThreadSafety:
         assert all(inst is instances[0] for inst in instances)
 
     def test_configure_security_logging_thread_safe(self):
-
-             """Test configure_security_logging is thread-safe."""
+        """Test configure_security_logging is thread-safe."""
         from tldw_Server_API.app.core.Chunking.security_logger import (
             get_security_logger,
             configure_security_logging,
@@ -82,7 +79,7 @@ class TestSecurityLoggerThreadSafety:
 
         def reconfigure():
 
-                     try:
+            try:
                 configure_security_logging()
             except Exception as e:
                 errors.append(e)
@@ -105,8 +102,7 @@ class TestMetricsThreadSafety:
     """Tests for thread-safe metrics singleton."""
 
     def test_get_metrics_returns_same_instance(self):
-
-             """Verify get_metrics returns the same instance."""
+        """Verify get_metrics returns the same instance."""
         from tldw_Server_API.app.core.Chunking.utils.metrics import get_metrics
 
         metrics1 = get_metrics()
@@ -115,8 +111,7 @@ class TestMetricsThreadSafety:
         assert metrics1 is metrics2
 
     def test_get_metrics_concurrent_access(self):
-
-             """Test concurrent calls to get_metrics return same instance."""
+        """Test concurrent calls to get_metrics return same instance."""
         from tldw_Server_API.app.core.Chunking.utils.metrics import get_metrics
 
         instances = []
@@ -124,7 +119,7 @@ class TestMetricsThreadSafety:
 
         def get_instance():
 
-                     try:
+            try:
                 instance = get_metrics()
                 instances.append(instance)
             except Exception as e:
@@ -147,8 +142,7 @@ class TestTokenizerFailedCacheThreadSafety:
     """Tests for thread-safe TokenChunkingStrategy._failed_tokenizers."""
 
     def test_failed_tokenizers_concurrent_access(self):
-
-             """Test concurrent access to _failed_tokenizers set is thread-safe."""
+        """Test concurrent access to _failed_tokenizers set is thread-safe."""
         from tldw_Server_API.app.core.Chunking.strategies.tokens import (
             TokenChunkingStrategy,
         )
@@ -191,8 +185,7 @@ class TestTokenizerFailedCacheThreadSafety:
             assert len(TokenChunkingStrategy._failed_tokenizers) == 50
 
     def test_tokenizer_property_concurrent_initialization(self):
-
-             """Test concurrent tokenizer property access is thread-safe."""
+        """Test concurrent tokenizer property access is thread-safe."""
         from tldw_Server_API.app.core.Chunking.strategies.tokens import (
             TokenChunkingStrategy,
         )
@@ -206,7 +199,7 @@ class TestTokenizerFailedCacheThreadSafety:
 
         def get_tokenizer():
 
-                     try:
+            try:
                 # Use a standard tokenizer name - we're testing thread safety, not fallback behavior
                 strategy = TokenChunkingStrategy(tokenizer_name="gpt2")
                 tok = strategy.tokenizer
@@ -231,8 +224,7 @@ class TestRaceConditionScenarios:
     """Tests for specific race condition scenarios."""
 
     def test_no_duplicate_initialization(self):
-
-             """Verify singletons don't get initialized multiple times under load."""
+        """Verify singletons don't get initialized multiple times under load."""
         from tldw_Server_API.app.core.Chunking.security_logger import (
             SecurityLogger,
             configure_security_logging,
@@ -245,14 +237,14 @@ class TestRaceConditionScenarios:
 
         def counting_init(self, *args, **kwargs):
 
-                     nonlocal init_count
+            nonlocal init_count
             init_count += 1
             return original_init(self, *args, **kwargs)
 
         # Reset and patch
         configure_security_logging()  # Reset to known state
 
-        with patch.object(SecurityLogger, '__init__', counting_init):
+        with patch.object(SecurityLogger, "__init__", counting_init):
             # Reconfigure to use patched init
             configure_security_logging()
             init_count = 0  # Reset after configure
@@ -272,8 +264,7 @@ class TestThreadPoolExecutorAccess:
     """Tests using ThreadPoolExecutor for more controlled concurrency."""
 
     def test_security_logger_with_executor(self):
-
-             """Test security logger access with ThreadPoolExecutor."""
+        """Test security logger access with ThreadPoolExecutor."""
         from tldw_Server_API.app.core.Chunking.security_logger import (
             get_security_logger,
             configure_security_logging,
@@ -284,11 +275,8 @@ class TestThreadPoolExecutorAccess:
 
         def get_and_log():
 
-                     logger = get_security_logger()
-            logger.log_event(
-                SecurityEventType.INVALID_INPUT,  # Use proper enum value
-                "test message"
-            )
+            logger = get_security_logger()
+            logger.log_event(SecurityEventType.INVALID_INPUT, "test message")  # Use proper enum value
             return id(logger)
 
         # Use executor for concurrent access
@@ -300,13 +288,12 @@ class TestThreadPoolExecutorAccess:
         assert len(set(results)) == 1
 
     def test_metrics_with_executor(self):
-
-             """Test metrics access with ThreadPoolExecutor."""
+        """Test metrics access with ThreadPoolExecutor."""
         from tldw_Server_API.app.core.Chunking.utils.metrics import get_metrics
 
         def get_and_record():
 
-                     metrics = get_metrics()
+            metrics = get_metrics()
             metrics.record_request("test_method", "success")
             return id(metrics)
 

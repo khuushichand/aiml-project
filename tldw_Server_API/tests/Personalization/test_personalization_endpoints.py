@@ -15,7 +15,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture()
 def client_with_personalization_db(tmp_path):
-     db_path = tmp_path / "personalization.db"
+    db_path = tmp_path / "personalization.db"
     db = PersonalizationDB(str(db_path))
 
     async def override_user():
@@ -23,7 +23,7 @@ def client_with_personalization_db(tmp_path):
 
     def override_db_dep():
 
-             return db
+        return db
 
     fastapi_app.dependency_overrides[get_request_user] = override_user
     fastapi_app.dependency_overrides[get_personalization_db_for_user] = override_db_dep
@@ -58,7 +58,10 @@ def test_profile_roundtrip(client_with_personalization_db: TestClient):
 def test_memories_crud(client_with_personalization_db: TestClient):
     c = client_with_personalization_db
     # Add
-    add = c.post("/api/v1/personalization/memories", json={"id": "tmp", "type": "semantic", "content": "Remember this", "pinned": False})
+    add = c.post(
+        "/api/v1/personalization/memories",
+        json={"id": "tmp", "type": "semantic", "content": "Remember this", "pinned": False},
+    )
     assert add.status_code == 201
     mid = add.json()["id"]
     # List

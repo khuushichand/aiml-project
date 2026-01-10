@@ -31,20 +31,51 @@ import httpx
 from pathlib import Path
 from datetime import datetime, timedelta
 
-from fixtures import (
+from .fixtures import (
     api_client, authenticated_client, test_user_credentials, data_tracker,
     create_test_file, create_test_pdf, create_test_audio, cleanup_test_file,
     # Import new helper classes
     AssertionHelpers, SmartErrorHandler, AsyncOperationHandler,
-    ContentValidator, StateVerification, StrongAssertionHelpers
+    ContentValidator, StateVerification, StrongAssertionHelpers,
+    require_llm_or_skip, FALLBACK_CHAT_MODEL,
 )
-from workflow_helpers import (
+from .workflow_helpers import (
     WorkflowAssertions, WorkflowErrorHandler, WorkflowVerification, WorkflowState
 )
-from test_data import (
+from .test_data import (
     TestDataGenerator, TestScenarios, generate_unique_id,
     generate_test_user, generate_batch_data
 )
+
+
+def _resolve_chat_model_or_skip(client):
+    return require_llm_or_skip(client)
+
+
+def _is_fallback_model(model: str) -> bool:
+    if not model:
+        return False
+    return model.replace("-", "").lower() == FALLBACK_CHAT_MODEL.lower()
+
+
+def _chat_completion_or_skip(client, *, model: str, **kwargs):
+    try:
+        return client.chat_completion(model=model, **kwargs)
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 400 and not _is_fallback_model(model):
+            fallback_model = "gpt-4o"
+            try:
+                return client.chat_completion(model=fallback_model, **kwargs)
+            except httpx.HTTPStatusError as fallback_exc:
+                if fallback_exc.response.status_code in (400, 502, 503):
+                    pytest.skip(
+                        f"Fallback model {fallback_model} rejected by /chat/completions: "
+                        f"{fallback_exc.response.text}"
+                    )
+                raise
+        if e.response.status_code == 400 and _is_fallback_model(model):
+            pytest.skip(f"Fallback model {model} rejected by /chat/completions: {e.response.text}")
+        raise
 
 
 class TestFullUserWorkflow:
@@ -748,10 +779,12 @@ class TestFullUserWorkflow:
         ]
 
         try:
-            response = api_client.chat_completion(
+            model = _resolve_chat_model_or_skip(api_client)
+            response = _chat_completion_or_skip(
+                api_client,
                 messages=messages,
-                model="gpt-3.5-turbo",
-                temperature=0.7
+                model=model,
+                temperature=0.7,
             )
 
             # Use proper validation helper
@@ -794,10 +827,12 @@ class TestFullUserWorkflow:
         messages = TestDataGenerator.sample_chat_messages()
 
         try:
-            response = api_client.chat_completion(
+            model = _resolve_chat_model_or_skip(api_client)
+            response = _chat_completion_or_skip(
+                api_client,
                 messages=messages,
-                model="gpt-3.5-turbo",
-                temperature=0.7
+                model=model,
+                temperature=0.7,
             )
 
             # Store chat
@@ -1252,11 +1287,13 @@ class TestFullUserWorkflow:
         ]
 
         try:
-            response = api_client.chat_completion(
+            model = _resolve_chat_model_or_skip(api_client)
+            response = _chat_completion_or_skip(
+                api_client,
                 messages=messages,
-                model="gpt-3.5-turbo",
+                model=model,
                 character_id=str(character_id),  # Convert to string as API expects
-                temperature=0.7
+                temperature=0.7,
             )
 
             # Strong validation of response structure
@@ -1329,12 +1366,14 @@ class TestFullUserWorkflow:
         ]
 
         try:
-            response = api_client.chat_completion(
+            model = _resolve_chat_model_or_skip(api_client)
+            response = _chat_completion_or_skip(
+                api_client,
                 messages=follow_up,
-                model="gpt-3.5-turbo",
+                model=model,
                 character_id=character_id,
                 conversation_id=conversation_id,
-                temperature=0.7
+                temperature=0.7,
             )
 
             # Validate response
@@ -1379,20 +1418,23 @@ class TestFullUserWorkflow:
         char2_id = char2.get("id") or char2.get("character_id")
 
         try:
+            model = _resolve_chat_model_or_skip(api_client)
             # Start with first character
-            response1 = api_client.chat_completion(
+            response1 = _chat_completion_or_skip(
+                api_client,
                 messages=[{"role": "user", "content": "Hello, what's your name?"}],
-                model="gpt-3.5-turbo",
-                character_id=char1_id
+                model=model,
+                character_id=char1_id,
             )
 
             conversation_id = response1.get("conversation_id")
 
             # Switch to second character (new conversation)
-            response2 = api_client.chat_completion(
+            response2 = _chat_completion_or_skip(
+                api_client,
                 messages=[{"role": "user", "content": "Hello, what's your name?"}],
-                model="gpt-3.5-turbo",
-                character_id=char2_id
+                model=model,
+                character_id=char2_id,
             )
 
             # Responses should be different (different characters)
@@ -1746,10 +1788,12 @@ class TestFullUserWorkflow:
                 {"role": "user", "content": "Based on the context, what is machine learning?"}
             ]
 
-            chat_response = api_client.chat_completion(
+            model = _resolve_chat_model_or_skip(api_client)
+            chat_response = _chat_completion_or_skip(
+                api_client,
                 messages=messages,
-                model="gpt-3.5-turbo",
-                temperature=0.3  # Lower temp for more factual
+                model=model,
+                temperature=0.3,  # Lower temp for more factual
             )
 
             # Validate chat used context

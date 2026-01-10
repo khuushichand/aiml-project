@@ -5,7 +5,7 @@ This document describes the persistence layer used by tldw_server: relational da
 ## At a Glance
 - Default relational store: SQLite (production supports PostgreSQL for AuthNZ and is wired for content DB backends).
 - Vector store: ChromaDB per user, on disk.
-- Per-user data root: `USER_DB_BASE_DIR` (defaults to `Databases/user_databases`; `USER_DB_BASE` is a deprecated alias for rewrite cache resolution only).
+- Per-user data root: `USER_DB_BASE_DIR` (defined in `tldw_Server_API.app.core.config`, defaults to `Databases/user_databases/` under the project root; override via environment variable or `Config_Files/config.txt`; `USER_DB_BASE` is a deprecated alias for rewrite cache resolution only).
 - Soft deletes, versioning, and sync logging are first-class across content DBs.
 - FTS5 is used for full-text search in multiple databases (Media, Prompts, Prompt Studio).
 
@@ -19,7 +19,8 @@ Environment and config determine paths. Defaults are created on startup if missi
 
 - `USER_DB_BASE_DIR` (base for per-user data)
   - Default: `Databases/user_databases` (resolved from repo root; `~` expands; normalized for Windows)
-  - Source: tldw_Server_API/app/core/config.py:403
+  - Defined in `tldw_Server_API.app.core.config` (see `tldw_Server_API/app/core/config.py:403`)
+  - Override via environment variable or `Config_Files/config.txt` as needed.
   - `USER_DB_BASE` is deprecated and treated as an alias for rewrite cache resolution.
 
 - AuthNZ main database (`DATABASE_URL`)

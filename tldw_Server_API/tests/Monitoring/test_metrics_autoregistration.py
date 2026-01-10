@@ -12,7 +12,7 @@ pytestmark = pytest.mark.monitoring
 def _make_test_app() -> FastAPI:
 
 
-     app = FastAPI()
+    app = FastAPI()
 
     @app.get("/metrics", include_in_schema=False)
     async def metrics_root():
@@ -25,7 +25,7 @@ def _make_test_app() -> FastAPI:
 
 @pytest.fixture
 def client():
-     app = _make_test_app()
+    app = _make_test_app()
     with TestClient(app) as c:
         yield c
 
@@ -33,10 +33,10 @@ def client():
 def test_track_metrics_autoregisters_metrics(client):
 
 
-     # Use a unique base name to avoid interference
+    # Use a unique base name to avoid interference
     @track_metrics(name="test_auto_reg.myop")
     def sample_op():
-             return 42
+        return 42
 
     # Invoke a few times
     for _ in range(3):

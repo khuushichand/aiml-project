@@ -95,7 +95,5 @@ def get_pg_env() -> PGEnv:
 
 
 def pg_dsn() -> str:
-
-
-     """Return the DSN string honoring the standard precedence."""
+    """Return the DSN string honoring the standard precedence."""
     return get_pg_env().dsn

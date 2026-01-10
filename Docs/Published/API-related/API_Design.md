@@ -108,7 +108,11 @@ This document outlines the current API design for the TL;DW Server (tldw_server)
   - `POST /api/v1/audio/speech`, `POST /api/v1/audio/transcriptions`
   - `WS /api/v1/audio/stream/transcribe`
 - Prompts & Prompt Studio
-  - `GET /api/v1/prompts`, `POST /api/v1/prompts`
+  - `GET /api/v1/prompts`, `POST /api/v1/prompts`, `PUT /api/v1/prompts/{id}`, `DELETE /api/v1/prompts/{id}`
+  - `POST /api/v1/prompts/search`, `GET /api/v1/prompts/export`, `POST /api/v1/prompts/import`
+  - `GET /api/v1/prompts/{id}/versions`, `POST /api/v1/prompts/{id}/versions/{version}/restore`
+  - `POST /api/v1/prompts/templates/variables`, `POST /api/v1/prompts/templates/render`
+  - `POST /api/v1/prompts/bulk/delete`, `POST /api/v1/prompts/bulk/keywords`
   - `GET /api/v1/prompts/keywords`, `POST /api/v1/prompts/keywords`
 - Evaluations
   - `POST /api/v1/evaluations`, `GET /api/v1/evaluations/runs`

@@ -1,6 +1,7 @@
 """
 Simple chat endpoint test using the simplified fixtures.
 """
+
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 from fastapi import status
@@ -9,49 +10,42 @@ from fastapi import status
 
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     ChatCompletionRequest,
-    ChatCompletionUserMessageParam
+    ChatCompletionUserMessageParam,
 )
 from tldw_Server_API.app.core.security_utils import redact_secret
 
 
 def test_chat_completion_works(client, auth_token, mock_chacha_db, setup_dependencies, configure_for_mock_server):
-
-
-     """Test that chat completion works with proper auth."""
+    """Test that chat completion works with proper auth."""
 
     # Set the app to debug mode for better error messages
     from tldw_Server_API.app.main import app as main_app
+
     original_debug = main_app.debug
     main_app.debug = True
 
     request_data = ChatCompletionRequest(
         model="local-llm",  # Use a local model that doesn't require API key
-        messages=[
-            ChatCompletionUserMessageParam(role="user", content="Hello, how are you?")
-        ],
-        api_provider="local-llm"  # Explicitly set the provider
+        messages=[ChatCompletionUserMessageParam(role="user", content="Hello, how are you?")],
+        api_provider="local-llm",  # Explicitly set the provider
     )
 
     # Mock the LLM call function and API_KEYS
-    with patch("tldw_Server_API.app.core.Chat.chat_orchestrator.chat_api_call") as mock_llm, \
-         patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"local-llm": "dummy-key"}), \
-         patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_perform:
+    with (
+        patch("tldw_Server_API.app.core.Chat.chat_orchestrator.chat_api_call") as mock_llm,
+        patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"local-llm": "dummy-key"}),
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_perform,
+    ):
         # Set up the mock response
         mock_response = {
             "id": "chatcmpl-test",
             "object": "chat.completion",
             "created": 1234567890,
             "model": "local-llm",
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": "I'm doing well!"},
-                "finish_reason": "stop"
-            }],
-            "usage": {
-                "prompt_tokens": 10,
-                "completion_tokens": 5,
-                "total_tokens": 15
-            }
+            "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "I'm doing well!"}, "finish_reason": "stop"}
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
         }
 
         # Mock both functions to return the same response
@@ -60,6 +54,7 @@ def test_chat_completion_works(client, auth_token, mock_chacha_db, setup_depende
 
         # Make request with authentication
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
         settings = get_settings()
         print(f"AUTH_MODE: {settings.AUTH_MODE}")
         print(f"Expected API key is {'set' if settings.SINGLE_USER_API_KEY else 'not set'}")
@@ -82,14 +77,11 @@ def test_chat_completion_works(client, auth_token, mock_chacha_db, setup_depende
         print(f"Headers being sent: {redacted_headers}")
 
         try:
-            response = client.post(
-                "/api/v1/chat/completions",
-                json=request_data.model_dump(),
-                headers=headers
-            )
+            response = client.post("/api/v1/chat/completions", json=request_data.model_dump(), headers=headers)
         except Exception as e:
             print(f"Exception during request: {e}")
             import traceback
+
             traceback.print_exc()
             raise
 
@@ -98,9 +90,12 @@ def test_chat_completion_works(client, auth_token, mock_chacha_db, setup_depende
         if response.status_code != 200:
             print(f"Response: {response.text}")
             from tldw_Server_API.app.main import app as main_app
+
             print(f"Main app overrides: {list(main_app.dependency_overrides.keys())}")
 
-        assert response.status_code == status.HTTP_200_OK, f"Expected 200 but got {response.status_code}: {response.text}"
+        assert (
+            response.status_code == status.HTTP_200_OK
+        ), f"Expected 200 but got {response.status_code}: {response.text}"
         data = response.json()
         assert "choices" in data
         assert len(data["choices"]) > 0

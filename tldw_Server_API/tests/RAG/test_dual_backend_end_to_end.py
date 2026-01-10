@@ -132,7 +132,7 @@ async def test_dual_backend_hybrid_retrieval(
 
     class _StubVectorStore:
         def __init__(self, record) -> None:
-                     self._record = record
+            self._record = record
             self._initialized = False
 
         async def initialize(self) -> None:

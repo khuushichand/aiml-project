@@ -9,7 +9,7 @@ pytestmark = pytest.mark.unit
 def test_conversation_search_global_bm25_normalization(tmp_path):
 
 
-     db_path = tmp_path / "chacha.db"
+    db_path = tmp_path / "chacha.db"
     db = CharactersRAGDB(db_path=str(db_path), client_id="user-1")
 
     conv_ids = []

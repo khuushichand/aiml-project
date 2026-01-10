@@ -18,13 +18,21 @@ async def test_world_book_duplicate_and_missing_paths():
     os.environ["USER_DB_BASE_DIR"] = tmpdir
     try:
         from tldw_Server_API.app.main import app
+
         settings = get_settings()
         headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             # Create world book
             name = f"WB {_uuid.uuid4()}"
-            body = {"name": name, "description": "d", "scan_depth": 2, "token_budget": 100, "recursive_scanning": False, "enabled": True}
+            body = {
+                "name": name,
+                "description": "d",
+                "scan_depth": 2,
+                "token_budget": 100,
+                "recursive_scanning": False,
+                "enabled": True,
+            }
             r = await client.post("/api/v1/characters/world-books", headers=headers, json=body)
             assert r.status_code == 201
             wb_id = r.json()["id"]
@@ -38,7 +46,9 @@ async def test_world_book_duplicate_and_missing_paths():
             assert r.status_code == 404
 
             # Non-existent update -> 404
-            r = await client.put("/api/v1/characters/world-books/999999", headers=headers, json={"name": f"WB {_uuid.uuid4()}"})
+            r = await client.put(
+                "/api/v1/characters/world-books/999999", headers=headers, json={"name": f"WB {_uuid.uuid4()}"}
+            )
             assert r.status_code == 404
 
             # Non-existent delete -> 404
@@ -47,7 +57,9 @@ async def test_world_book_duplicate_and_missing_paths():
 
             # Entry-level negatives
             # Non-existent entry update -> 404
-            r = await client.put("/api/v1/characters/world-books/entries/999999", headers=headers, json={"content": "x"})
+            r = await client.put(
+                "/api/v1/characters/world-books/entries/999999", headers=headers, json={"content": "x"}
+            )
             assert r.status_code == 404
             # Non-existent entry delete -> 404
             r = await client.delete("/api/v1/characters/world-books/entries/999999", headers=headers)
@@ -59,7 +71,9 @@ async def test_world_book_duplicate_and_missing_paths():
             character_id = r.json()[0]["id"]
 
             # Attach non-existent world book -> 404
-            r = await client.post(f"/api/v1/characters/{character_id}/world-books", headers=headers, json={"world_book_id": 999999})
+            r = await client.post(
+                f"/api/v1/characters/{character_id}/world-books", headers=headers, json={"world_book_id": 999999}
+            )
             assert r.status_code == 404
 
             # Detach non-existent or non-attached -> 404

@@ -46,7 +46,7 @@ Key references (current state):
 - Backend/API maintainers (Chat, AuthNZ, Metrics)
 - Frontend team (no API shape changes expected)
 - QA/CI owners
-- Downstream integrators using `Chat_Functions` shim
+- Downstream integrators using `chat_orchestrator`/`chat_service`
 
 ## User Stories
 
@@ -109,7 +109,7 @@ Current implementation (2025-11-23):
     - `asyncio.run` when no event loop is running on the calling thread.
     - A `ThreadPoolExecutor` worker that owns its own event loop when a loop is already running.
   - Streaming: delegates to a preserved sync implementation `_chat_sync_impl(...)` so existing generator-based streaming behavior remains unchanged for legacy callers.
-- `Chat_Functions.chat` remains a compatibility shim but internally calls `chat_orchestrator.chat`; it temporarily patches `chat_orchestrator.chat_api_call`, `chat_api_call_async`, and `load_and_log_configs` so tests that monkeypatch `Chat_Functions.chat_api_call` continue to work.
+- The legacy compatibility shim was removed after call-site migrations; tests now patch adapters or `perform_chat_api_call` as needed.
 - `Workflows.py` imports `chat` from `chat_orchestrator`; sync workflows now transitively use `achat(...)` for non-streaming calls via the wrapper.
 - New unit tests cover:
   - Sync-context invocation of `chat(...)` delegating to `achat(...)`.

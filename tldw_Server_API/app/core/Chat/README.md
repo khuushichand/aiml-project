@@ -25,7 +25,6 @@ The Chat module powers the `/api/v1/chat/completions` endpoint, orchestrating re
 | `request_queue.py` | Priority queue with backpressure, streaming pipe support, and worker pool management. |
 | `streaming_utils.py` | SSE utilities (heartbeat, idle timeout, chunk normalization, cancellation). |
 | `chat_metrics.py` | Prometheus/OpenTelemetry metric definitions specific to chat workflows. |
-| `Chat_Functions.py` | Backwards-compatible shim that now only exposes `chat`, `chat_api_call`, `DEFAULT_CHARACTER_NAME`, and `approximate_token_count`; import other helpers from their dedicated modules. |
 | `chat_exceptions.py` / `Chat_Deps.py` | Exception types used across the stack for consistent error handling. |
 | `chat_metrics.py`, `document_generator.py`, `Workflows.py` | Secondary features: telemetry, document production, and workflow automation (delegating to `chat_orchestrator`). |
 
@@ -55,7 +54,7 @@ FastAPI endpoint (app/api/v1/endpoints/chat.py)
       │       └─ `chat_service.build_call_params_from_request`
       │       └─ `chat_orchestrator.chat_api_call` or async variant
       │                ◦ adapter registry validation + aliasing
-      │                ◦ adapter from registry (legacy shims only when forced)
+      │                ◦ adapter from registry
       │
       ├─► Streaming or blocking response handling (`streaming_utils`)
       │
@@ -151,7 +150,7 @@ Set `TEST_MODE=1` in the environment when running tests to disable background lo
 5. **Streaming changes**: update `StreamingResponseHandler` to handle new SSE formats; keep `_extract_text_from_upstream_sse` tolerant to provider quirks.
 6. **Document generator**: extend `DocumentType` and default prompts, ensure chat history retrieval is efficient (batch DB reads).
 
-Always update this README and `REFACTORING_PLAN.md` when architectural decisions change. Treat `Chat_Functions.py` as a minimal compatibility shim; import from the focused modules (`chat_orchestrator`, `chat_history`, `chat_dictionary`, `chat_characters`) for new work and plan to retire the shim once remaining callers migrate.
+Always update this README and `REFACTORING_PLAN.md` when architectural decisions change. Import from the focused modules (`chat_orchestrator`, `chat_history`, `chat_dictionary`, `chat_characters`) for new work and keep compatibility paths in the registry as the single legacy surface.
 
 ---
 

@@ -7,7 +7,6 @@ import pytest
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatRateLimitError, ChatBadRequestError
 from tldw_Server_API.app.core.LLM_Calls.providers import mlx_provider as mp
-from tldw_Server_API.app.core.LLM_Calls import adapter_calls
 
 
 IS_APPLE = platform.system() == "Darwin"
@@ -15,31 +14,25 @@ pytestmark = pytest.mark.skipif(not IS_APPLE, reason="MLX targets Apple Silicon;
 
 
 def _fake_mlx_module():
-
-
-     class FakeTokenizer:
+    class FakeTokenizer:
         def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True, chat_template=None):
-                     parts = []
+            parts = []
             for m in messages:
                 parts.append(f"{m.get('role')}:{m.get('content')}")
             return " | ".join(parts) + (" <gen>" if add_generation_prompt else "")
 
     def load(model_path, **kwargs):
-
-             return ("model", FakeTokenizer())
+        return ("model", FakeTokenizer())
 
     def generate(model, tokenizer, prompt, stream=False, verbose=False, **kwargs):
-
-             return f"out:{prompt}"
+        return f"out:{prompt}"
 
     def generate_stream(model, tokenizer, prompt, verbose=False, **kwargs):
-
-             yield "hi"
+        yield "hi"
         yield "there"
 
     def embed(model, tokenizer, text):
-
-             return [0.1, 0.2, 0.3]
+        return [0.1, 0.2, 0.3]
 
     mod = types.SimpleNamespace()
     mod.load = load
@@ -50,18 +43,14 @@ def _fake_mlx_module():
 
 
 def _patch_mlx(monkeypatch):
-
-
-     fake = _fake_mlx_module()
-    monkeypatch.setattr(mp.importlib, "import_module", lambda name: fake)
+    fake = _fake_mlx_module()
+    monkeypatch.setattr(mp.MLXSessionRegistry, "_import_mlx", lambda self: fake)
     mp._registry = None  # reset global registry
     return fake
 
 
 def test_load_and_unload(monkeypatch):
-
-
-     _patch_mlx(monkeypatch)
+    _patch_mlx(monkeypatch)
     reg = mp.get_mlx_registry()
     status = reg.load(model_path="fake-model", overrides={"max_concurrent": 1})
     assert status["active"] is True
@@ -72,9 +61,7 @@ def test_load_and_unload(monkeypatch):
 
 
 def test_overflow_raises_rate_limit(monkeypatch):
-
-
-     _patch_mlx(monkeypatch)
+    _patch_mlx(monkeypatch)
     reg = mp.get_mlx_registry()
     reg.load(model_path="fake-model", overrides={"max_concurrent": 1})
     with reg.session_scope():
@@ -84,9 +71,7 @@ def test_overflow_raises_rate_limit(monkeypatch):
 
 
 def test_chat_and_embeddings(monkeypatch):
-
-
-     _patch_mlx(monkeypatch)
+    _patch_mlx(monkeypatch)
     reg = mp.get_mlx_registry()
     reg.load(model_path="fake-model", overrides={"max_concurrent": 1})
     chat_adapter = mp.MLXChatAdapter()
@@ -106,18 +91,14 @@ def test_chat_and_embeddings(monkeypatch):
 
 
 def test_session_scope_without_load_raises():
-
-
-     reg = mp.MLXSessionRegistry()
+    reg = mp.MLXSessionRegistry()
     with pytest.raises(ChatBadRequestError):
         with reg.session_scope():
             pass
 
 
 def test_embeddings_missing_input_raises(monkeypatch):
-
-
-     _patch_mlx(monkeypatch)
+    _patch_mlx(monkeypatch)
     reg = mp.get_mlx_registry()
     reg.load(model_path="fake-model", overrides={"max_concurrent": 1})
     emb_adapter = mp.MLXEmbeddingsAdapter()
@@ -130,8 +111,11 @@ async def test_async_chat_handler(monkeypatch):
     _patch_mlx(monkeypatch)
     reg = mp.get_mlx_registry()
     reg.load(model_path="fake-model", overrides={"max_concurrent": 1})
-    stream = await adapter_calls.mlx_chat_handler_async(
-        input_data=[{"role": "user", "content": "hi"}],
+    from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
+
+    stream = await perform_chat_api_call_async(
+        api_provider="mlx",
+        messages=[{"role": "user", "content": "hi"}],
         streaming=True,
         model="fake-model",
     )

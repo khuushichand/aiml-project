@@ -71,7 +71,7 @@ class TestMimeTypeDetection:
 
     @pytest.mark.unit
     def test_detect_text_file(self, test_text_file):
-             """Test detection of text file MIME type."""
+        """Test detection of text file MIME type."""
         result = validate_file_type(test_text_file)
 
         # File may be treated generically; ensure detection fields populated
@@ -80,7 +80,7 @@ class TestMimeTypeDetection:
 
     @pytest.mark.unit
     def test_detect_pdf_file(self, test_pdf_file):
-             """Test detection of PDF file MIME type."""
+        """Test detection of PDF file MIME type."""
         result = validate_file_type(test_pdf_file)
 
         assert "pdf" in result.detected_mime_type.lower()
@@ -88,7 +88,7 @@ class TestMimeTypeDetection:
 
     @pytest.mark.unit
     def test_detect_audio_file(self, test_audio_file):
-             """Test detection of audio file MIME type."""
+        """Test detection of audio file MIME type."""
         result = validate_file_type(test_audio_file)
 
         assert "audio" in (result.detected_mime_type or '').lower() or "wav" in (result.detected_mime_type or '').lower()
@@ -96,7 +96,7 @@ class TestMimeTypeDetection:
 
     @pytest.mark.unit
     def test_detect_video_file(self, test_video_file):
-             """Test detection of video file MIME type."""
+        """Test detection of video file MIME type."""
         result = validate_file_type(test_video_file)
 
         # Video validation might depend on actual implementation
@@ -104,7 +104,7 @@ class TestMimeTypeDetection:
 
     @pytest.mark.unit
     def test_reject_executable_file(self, test_media_dir):
-             """Test rejection of executable files."""
+        """Test rejection of executable files."""
         exe_path = test_media_dir / "malicious.exe"
 
         # Create a fake executable with PE header
@@ -118,7 +118,7 @@ class TestMimeTypeDetection:
 
     @pytest.mark.unit
     def test_reject_unknown_extension(self, tmp_path):
-             """Unknown extensions should be rejected."""
+        """Unknown extensions should be rejected."""
         unknown = tmp_path / "payload.unknown"
         unknown.write_text("payload")
 
@@ -131,7 +131,7 @@ class TestMimeTypeDetection:
 
     @pytest.mark.unit
     def test_mime_validation_without_magic_allows_plaintext(self, tmp_path, monkeypatch):
-             """Fallback MIME detection should succeed when puremagic is unavailable."""
+        """Fallback MIME detection should succeed when puremagic is unavailable."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing import Upload_Sink as sink
 
         monkeypatch.setattr(sink, "puremagic", None, raising=False)
@@ -160,7 +160,7 @@ class TestFileSizeValidation:
 
     @pytest.mark.unit
     def test_accept_small_file(self, test_text_file):
-             """Test acceptance of small files."""
+        """Test acceptance of small files."""
         max_size = 10 * 1024 * 1024  # 10MB
 
         result = check_file_size(test_text_file, max_size)
@@ -170,7 +170,7 @@ class TestFileSizeValidation:
 
     @pytest.mark.unit
     def test_reject_large_file(self, test_media_dir):
-             """Test rejection of files exceeding size limit."""
+        """Test rejection of files exceeding size limit."""
         large_file = test_media_dir / "large_file.bin"
 
         # Create a file that appears large (sparse file)
@@ -187,7 +187,7 @@ class TestFileSizeValidation:
 
     @pytest.mark.unit
     def test_handle_zero_size_file(self, test_media_dir):
-             """Test handling of zero-size files."""
+        """Test handling of zero-size files."""
         empty_file = test_media_dir / "empty.txt"
         empty_file.touch()
 
@@ -206,7 +206,7 @@ class TestFilenameSanitization:
 
     @pytest.mark.unit
     def test_sanitize_normal_filename(self):
-             """Test sanitization of normal filename."""
+        """Test sanitization of normal filename."""
         filename = "document.pdf"
         sanitized = sanitize_filename(filename)
 
@@ -214,7 +214,7 @@ class TestFilenameSanitization:
 
     @pytest.mark.unit
     def test_sanitize_special_characters(self):
-             """Test removal of special characters."""
+        """Test removal of special characters."""
         filename = "my<file>name|with*special?chars.txt"
         sanitized = sanitize_filename(filename)
 
@@ -227,7 +227,7 @@ class TestFilenameSanitization:
 
     @pytest.mark.unit
     def test_sanitize_path_traversal(self):
-             """Test prevention of path traversal."""
+        """Test prevention of path traversal."""
         filename = "../../etc/passwd"
         sanitized = sanitize_filename(filename)
 
@@ -236,7 +236,7 @@ class TestFilenameSanitization:
 
     @pytest.mark.unit
     def test_sanitize_unicode_filename(self):
-             """Test handling of unicode filenames."""
+        """Test handling of unicode filenames."""
         filename = "文档文件.pdf"
         sanitized = sanitize_filename(filename)
 
@@ -246,7 +246,7 @@ class TestFilenameSanitization:
 
     @pytest.mark.unit
     def test_sanitize_very_long_filename(self):
-             """Test truncation of very long filenames."""
+        """Test truncation of very long filenames."""
         filename = "a" * 500 + ".txt"
         sanitized = sanitize_filename(filename)
 
@@ -263,7 +263,7 @@ class TestSecurityValidation:
 
     @pytest.mark.unit
     def test_detect_php_code(self, malicious_file):
-             """Test detection of PHP code in files."""
+        """Test detection of PHP code in files."""
         if _validator.compiled_yara_rules is None:
             pytest.xfail("Yara not configured")
         result = scan_for_malicious_content(malicious_file)
@@ -271,7 +271,7 @@ class TestSecurityValidation:
 
     @pytest.mark.unit
     def test_detect_script_tags(self, test_media_dir):
-             """Test detection of script tags."""
+        """Test detection of script tags."""
         html_file = test_media_dir / "test.html"
         with open(html_file, 'w') as f:
             f.write("<html><script>alert('XSS')</script></html>")
@@ -284,7 +284,7 @@ class TestSecurityValidation:
 
     @pytest.mark.unit
     def test_accept_safe_content(self, test_text_file):
-             """Test acceptance of safe content."""
+        """Test acceptance of safe content."""
         result = scan_for_malicious_content(test_text_file)
 
         assert result.is_valid
@@ -299,7 +299,7 @@ class TestCompleteValidation:
 
     @pytest.mark.unit
     def test_complete_valid_file(self, test_text_file):
-             """Test complete validation of a valid file."""
+        """Test complete validation of a valid file."""
         vt = validate_file_type(test_text_file)
         if not vt:
             pytest.skip("Type validation failed in this environment")
@@ -310,14 +310,14 @@ class TestCompleteValidation:
 
     @pytest.mark.unit
     def test_validation_stops_on_type_failure(self, test_text_file):
-             """Test that validation stops early on type check failure."""
+        """Test that validation stops early on type check failure."""
         # Force mismatch by lying about extension mapping
         res = _validator.validate_file(test_text_file, media_type_key='video')
         assert not res.is_valid
 
     @pytest.mark.unit
     def test_handle_nonexistent_file(self):
-             """Test handling of nonexistent files."""
+        """Test handling of nonexistent files."""
         fake_path = Path("/nonexistent/file.txt")
         res = _validator.validate_file(fake_path)
         assert not res.is_valid
@@ -332,7 +332,7 @@ class TestEdgeCases:
 
     @pytest.mark.unit
     def test_symlink_handling(self, test_media_dir, test_text_file):
-             """Test handling of symbolic links."""
+        """Test handling of symbolic links."""
         symlink = test_media_dir / "symlink.txt"
         symlink.symlink_to(test_text_file)
 
@@ -344,7 +344,7 @@ class TestEdgeCases:
 
     @pytest.mark.unit
     def test_handle_corrupted_file(self, test_media_dir):
-             """Test handling of corrupted files."""
+        """Test handling of corrupted files."""
         corrupted = test_media_dir / "corrupted.pdf"
 
         # Create corrupted PDF (invalid structure)
@@ -363,7 +363,7 @@ class TestArchiveExtensionHandling:
 
     @pytest.mark.unit
     def test_tar_gz_archive_extension_is_accepted(self, tmp_path):
-             validator = FileValidator(custom_media_configs={
+        validator = FileValidator(custom_media_configs={
             "archive": {"allowed_mimetypes": set()},
             "document": {"allowed_mimetypes": set()},
         })
@@ -390,11 +390,11 @@ class TestArchiveExtensionHandling:
         ],
     )
     def test_multi_suffix_archive_extension_resolves_media_type(self, filename):
-             assert _resolve_media_type_key(filename) == "archive"
+        assert _resolve_media_type_key(filename) == "archive"
 
     @pytest.mark.unit
     def test_zip_symlink_is_rejected(self, tmp_path):
-             validator = FileValidator(custom_media_configs={
+        validator = FileValidator(custom_media_configs={
             "archive": {"allowed_mimetypes": set()},
             "document": {"allowed_mimetypes": set()},
         })
@@ -415,7 +415,7 @@ class TestArchiveExtensionHandling:
 
     @pytest.mark.unit
     def test_tar_symlink_is_rejected(self, tmp_path):
-             validator = FileValidator(custom_media_configs={
+        validator = FileValidator(custom_media_configs={
             "archive": {"allowed_mimetypes": set()},
             "document": {"allowed_mimetypes": set()},
         })

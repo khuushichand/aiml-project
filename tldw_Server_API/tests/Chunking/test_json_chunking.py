@@ -5,8 +5,7 @@ import pytest
 
 def test_json_single_metadata_reference_list_mode():
 
-
-     from tldw_Server_API.app.core.Chunking.strategies.json_xml import (
+    from tldw_Server_API.app.core.Chunking.strategies.json_xml import (
         JSONChunkingStrategy,
     )
 
@@ -51,8 +50,7 @@ def test_json_single_metadata_reference_list_mode():
 
 def test_json_single_metadata_reference_dict_mode():
 
-
-     from tldw_Server_API.app.core.Chunking.strategies.json_xml import (
+    from tldw_Server_API.app.core.Chunking.strategies.json_xml import (
         JSONChunkingStrategy,
     )
 
@@ -93,8 +91,7 @@ def test_json_single_metadata_reference_dict_mode():
 
 def test_json_single_metadata_reference_via_config(monkeypatch):
 
-
-     import configparser
+    import configparser
     from tldw_Server_API.app.core.Chunking.strategies.json_xml import (
         JSONChunkingStrategy,
     )
@@ -110,9 +107,7 @@ def test_json_single_metadata_reference_via_config(monkeypatch):
     cp.set("Chunking", "json_metadata_reference_key", "ref_id")
 
     # Patch the loader used by the strategy helpers
-    monkeypatch.setattr(
-        "tldw_Server_API.app.core.config.load_comprehensive_config", lambda: cp
-    )
+    monkeypatch.setattr("tldw_Server_API.app.core.config.load_comprehensive_config", lambda: cp)
 
     strategy = JSONChunkingStrategy()
     payload = {

@@ -48,7 +48,7 @@ In scope (Phase 1–4)
 - Extract adapters for top providers used in tests and defaults: OpenAI, Anthropic, Groq, OpenRouter, Google (Gemini), Mistral, HuggingFace, Qwen, DeepSeek, plus a generic OpenAI-compatible adapter used by several custom/local servers.
 - Move streaming normalization to a shared path via `sse.py` and `streaming.py`; remove per-provider ad-hoc parsing.
 - Centralize error mapping and tool_choice gating utilities.
-- Keep legacy dispatch compatibility via `adapter_calls.py` routing to registry-backed adapters to avoid endpoint changes.
+- Keep legacy dispatch compatibility via `chat_service.perform_chat_api_call` routing to registry-backed adapters to avoid endpoint changes.
 - Update `GET /api/v1/llm/providers` to draw capabilities from the registry (keeping existing metadata shape).
 - Add embeddings adapters + registry for OpenAI/HuggingFace/Google and wire the endpoint behind `LLM_EMBEDDINGS_ADAPTERS_ENABLED=1`.
 
@@ -282,8 +282,9 @@ Stage 2: Core providers (Anthropic, Groq, OpenRouter, Google, Mistral)
 Stage 3: Remaining providers + monolith cleanup
 - [x] Implement Qwen, DeepSeek, HuggingFace, generic OpenAI-compatible (for local/custom servers)
 - [x] Route legacy handlers to adapters for all migrated providers
-- [ ] Remove provider-specific branching from `chat_calls.py` and `local_chat_calls.py`, keeping thin wrappers only
-- [ ] Centralize tool_choice and error normalization (delete duplicates in monolith)
+- [x] Remove provider-specific branching from `chat_calls.py`, keeping thin wrappers only
+- [x] Remove provider-specific branching from `local_chat_calls.py`, keeping thin wrappers only
+- [x] Centralize tool_choice and error normalization (delete duplicates in monolith)
 - [ ] Re-run entire LLM test suite including `tests/LLM_Calls/test_async_streaming_dedup.py` and strict filter tests
 
 Stage 4: Embeddings adapters (scaffold → endpoint wiring)
@@ -330,5 +331,5 @@ Definition of Done (Phase 1–4)
 Reference Artifacts
 - Base/Registry: `tldw_Server_API/app/core/LLM_Calls/providers/base.py`, `tldw_Server_API/app/core/LLM_Calls/adapter_registry.py`
 - Shared Streaming: `tldw_Server_API/app/core/LLM_Calls/sse.py`, `tldw_Server_API/app/core/LLM_Calls/streaming.py`, `tldw_Server_API/app/core/http_client.py`
-- Legacy Dispatch: `tldw_Server_API/app/core/LLM_Calls/adapter_calls.py` (delegates to registry)
+- Legacy Dispatch: `tldw_Server_API/app/core/Chat/chat_service.py` (`perform_chat_api_call` delegates to registry)
 - Health/Fallback: `tldw_Server_API/app/core/Chat/provider_manager.py`

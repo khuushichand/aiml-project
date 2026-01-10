@@ -17,40 +17,40 @@ from tldw_Server_API.app.core.Chat.chat_service import (
 
 class _DummyMetrics:
     def __init__(self):
-             self.llm_calls = []
+        self.llm_calls = []
         self.fallback_successes = []
 
     def track_llm_call(self, provider, model, latency, success, error_type=None):
 
-             self.llm_calls.append((provider, model, success, error_type))
+        self.llm_calls.append((provider, model, success, error_type))
 
     def track_provider_fallback_success(self, **metadata):
 
-             self.fallback_successes.append(metadata)
+        self.fallback_successes.append(metadata)
 
     def track_tokens(self, **_kwargs):
 
-             return None
+        return None
 
 
 class _DummyProviderManager:
     def __init__(self):
-             self.failure_records = []
+        self.failure_records = []
         self.success_records = []
         self.fallback_requests = []
 
     def get_available_provider(self, exclude=None):
 
-             self.fallback_requests.append(tuple(exclude or []))
+        self.fallback_requests.append(tuple(exclude or []))
         return "openai"
 
     def record_failure(self, provider, error):
 
-             self.failure_records.append((provider, type(error).__name__))
+        self.failure_records.append((provider, type(error).__name__))
 
     def record_success(self, provider, latency):
 
-             self.success_records.append(provider)
+        self.success_records.append(provider)
 
 
 class _DummyModeration:
@@ -60,19 +60,19 @@ class _DummyModeration:
 
     def get_effective_policy(self, *_args, **_kwargs):
 
-             return self._Policy()
+        return self._Policy()
 
     def evaluate_action(self, *_args, **_kwargs):
 
-             return None
+        return None
 
     def check_text(self, *_args, **_kwargs):
 
-             return (False, None)
+        return (False, None)
 
     def redact_text(self, text, *_args, **_kwargs):
 
-             return text
+        return text
 
 
 @pytest.mark.asyncio
@@ -100,7 +100,7 @@ async def test_execute_non_stream_call_refreshes_credentials(monkeypatch):
 
     def failing_llm_call():
 
-             raise ChatProviderError(provider="anthropic", message="primary failed", status_code=502)
+        raise ChatProviderError(provider="anthropic", message="primary failed", status_code=502)
 
     async def save_message_fn(*_args, **_kwargs):
         return None
@@ -178,7 +178,7 @@ async def test_execute_streaming_call_preserves_http_exception(monkeypatch):
 
     def failing_llm_call():
 
-             raise http_exc
+        raise http_exc
 
     async def save_message_fn(*_args, **_kwargs):
         return None
@@ -257,7 +257,7 @@ async def test_execute_streaming_call_preserves_http_exception(monkeypatch):
 def test_merge_api_keys_prefers_dynamic_over_module():
 
 
-     module_keys = {"openai": "module-key", "anthropic": "module-anthropic"}
+    module_keys = {"openai": "module-key", "anthropic": "module-anthropic"}
     dynamic_keys = {"openai": "dynamic-key", "anthropic": ""}
 
     raw_openai, normalized_openai = merge_api_keys_for_provider(

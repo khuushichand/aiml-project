@@ -194,6 +194,22 @@ scopes:
     ownership_predicates:
       - same_org
     doc_url: https://docs.example.com/privileges/audio-stream-transcribe
+  - id: audio.stream.tts
+    description: Real-time streaming text-to-speech over WebSocket.
+    resource_tags:
+      - audio
+      - tts
+      - websocket
+    sensitivity_tier: moderate
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/audio-stream-tts
   - id: audio.chat
     description: Non-streaming speech-to-speech chat (STT → LLM → TTS).
     resource_tags:
@@ -211,6 +227,24 @@ scopes:
     ownership_predicates:
       - same_org
     doc_url: https://docs.example.com/privileges/audio-chat
+  - id: audio.chat.stream
+    description: Real-time streaming speech-to-speech chat over WebSocket.
+    resource_tags:
+      - audio
+      - stt
+      - tts
+      - chat
+      - websocket
+    sensitivity_tier: high
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/audio-chat-stream
   - id: workflows
     description: Create and manage automated workflow schedules and runs.
     resource_tags:

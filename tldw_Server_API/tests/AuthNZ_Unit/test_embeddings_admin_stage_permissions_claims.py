@@ -81,7 +81,7 @@ def _build_app_with_overrides(
 
 @pytest.mark.unit
 def test_embeddings_stage_status_401_when_principal_unavailable():
-     app = _build_app_with_overrides(principal=None, fail_with_401=True)
+    app = _build_app_with_overrides(principal=None, fail_with_401=True)
 
     with TestClient(app) as client:
         resp = client.get("/api/v1/embeddings/stage/status")
@@ -92,7 +92,7 @@ def test_embeddings_stage_status_401_when_principal_unavailable():
 
 @pytest.mark.unit
 def test_embeddings_stage_status_403_without_embeddings_admin_permission():
-     principal = _make_principal(is_admin=False, roles=["user"], permissions=[])
+    principal = _make_principal(is_admin=False, roles=["user"], permissions=[])
     app = _build_app_with_overrides(principal=principal)
 
     with TestClient(app) as client:
@@ -103,7 +103,7 @@ def test_embeddings_stage_status_403_without_embeddings_admin_permission():
 
 @pytest.mark.unit
 def test_embeddings_stage_status_200_with_embeddings_admin_permission(monkeypatch):
-     principal = _make_principal(is_admin=False, roles=["user"], permissions=[EMBEDDINGS_ADMIN])
+    principal = _make_principal(is_admin=False, roles=["user"], permissions=[EMBEDDINGS_ADMIN])
     app = _build_app_with_overrides(principal=principal)
 
     class _FakeRedis:

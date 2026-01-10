@@ -8,9 +8,7 @@ from tldw_Server_API.app.core.Usage.pricing_catalog import PricingCatalog
 
 
 def test_pricing_defaults_and_partial_match():
-
-
-     cat = PricingCatalog()
+    cat = PricingCatalog()
     pr, cr, est = cat.get_rates('openai', 'gpt-3.5-turbo')
     assert pr > 0 and cr > 0
     assert est is False
@@ -26,9 +24,7 @@ def test_pricing_defaults_and_partial_match():
 
 
 def test_pricing_env_override(monkeypatch):
-
-
-     overrides = {
+    overrides = {
         "openai": {"gpt-3.5-turbo": {"prompt": 0.123, "completion": 0.456}}
     }
     monkeypatch.setenv('PRICING_OVERRIDES', json.dumps(overrides))

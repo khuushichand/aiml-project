@@ -17,15 +17,7 @@ def _assert_offsets_fidelity(text: str, chunks: list[dict]):
 
 def test_hierarchical_offsets_with_code_fences():
 
-
-     text = (
-        "Intro line\n\n"
-        "```\n"
-        "print('hi')\n"
-        "print('hi')\n"
-        "```\n\n"
-        "Outro line.\n"
-    )
+    text = "Intro line\n\n" "```\n" "print('hi')\n" "print('hi')\n" "```\n\n" "Outro line.\n"
     ck = Chunker()
     # Use sentences to mirror typical scraping config; keep small sizes to force chunk boundaries
     chunks = ck.chunk_text_hierarchical_flat(text, method="sentences", max_size=2, overlap=0)
@@ -37,8 +29,7 @@ def test_hierarchical_offsets_with_code_fences():
 
 def test_hierarchical_offsets_with_repeated_content_monotonic():
 
-
-     # Repeated paragraphs and tokens can confuse naive substring mapping
+    # Repeated paragraphs and tokens can confuse naive substring mapping
     para = "Alpha Beta Alpha Beta Alpha Beta"
     text = f"{para}\n\n{para}\n\n{para}."
     ck = Chunker()
@@ -46,6 +37,6 @@ def test_hierarchical_offsets_with_repeated_content_monotonic():
     assert chunks, "Expected non-empty chunks"
     _assert_offsets_fidelity(text, chunks)
     # Global monotonicity by document order
-    starts = [ (c.get("metadata") or {}).get("start_offset", -1) for c in chunks ]
+    starts = [(c.get("metadata") or {}).get("start_offset", -1) for c in chunks]
     assert all(isinstance(s, int) for s in starts)
     assert starts == sorted(starts), "Chunks should be emitted in non-decreasing document order"

@@ -18,13 +18,12 @@ class _CursorStub:
 
     def fetchall(self) -> List[Dict[str, Any]]:
 
-             return list(self._rows)
+        return list(self._rows)
 
 
 def _make_postgres_db() -> CharactersRAGDB:
 
-
-     db = CharactersRAGDB.__new__(CharactersRAGDB)
+    db = CharactersRAGDB.__new__(CharactersRAGDB)
     db.backend_type = BackendType.POSTGRESQL
     db.backend = MagicMock()
     db._CHARACTER_CARD_JSON_FIELDS = []
@@ -33,8 +32,7 @@ def _make_postgres_db() -> CharactersRAGDB:
 
 def test_rebuild_full_text_indexes_postgres_calls_backend():
 
-
-     db = _make_postgres_db()
+    db = _make_postgres_db()
     db._FTS_CONFIG = [
         ("character_cards_fts", "character_cards", ["name"]),
         ("messages_fts", "messages", ["content"]),
@@ -62,8 +60,7 @@ def test_rebuild_full_text_indexes_postgres_calls_backend():
 
 def test_rebuild_full_text_indexes_sqlite_executes_rebuild():
 
-
-     db = CharactersRAGDB.__new__(CharactersRAGDB)
+    db = CharactersRAGDB.__new__(CharactersRAGDB)
     db.backend_type = BackendType.SQLITE
     db._FTS_CONFIG = [
         ("keywords_fts", "keywords", []),
@@ -78,7 +75,7 @@ def test_rebuild_full_text_indexes_sqlite_executes_rebuild():
 
     @contextmanager
     def fake_transaction() -> Iterable[_Conn]:
-             yield _Conn()
+        yield _Conn()
 
     db.transaction = fake_transaction  # type: ignore[assignment]
 
@@ -120,8 +117,7 @@ def test_list_flashcards_postgres_translates_fts(monkeypatch: pytest.MonkeyPatch
 
 def test_manage_link_postgres_uses_on_conflict():
 
-
-     db = _make_postgres_db()
+    db = _make_postgres_db()
     db.client_id = "pg-test"
     db._get_current_utc_timestamp_iso = lambda: "2025-01-01T00:00:00Z"  # type: ignore[assignment]
 
@@ -131,7 +127,7 @@ def test_manage_link_postgres_uses_on_conflict():
 
     class _Conn:
         def __init__(self) -> None:
-                     self.calls: List[str] = []
+            self.calls: List[str] = []
 
         def execute(self, sql: str, params: Any = None) -> _Cursor:
             self.calls.append(sql)
@@ -141,7 +137,7 @@ def test_manage_link_postgres_uses_on_conflict():
 
     @contextmanager
     def fake_transaction():
-             yield conn
+        yield conn
 
     db.transaction = fake_transaction  # type: ignore[assignment]
 
@@ -155,8 +151,7 @@ def test_manage_link_postgres_uses_on_conflict():
 
 def test_set_flashcard_tags_postgres_uses_on_conflict():
 
-
-     db = _make_postgres_db()
+    db = _make_postgres_db()
     db.client_id = "pg-test"
     db._get_current_utc_timestamp_iso = lambda: "2025-01-01T00:00:00Z"  # type: ignore[assignment]
     db.get_keyword_by_text = lambda _text: None  # type: ignore[assignment]
@@ -169,15 +164,15 @@ def test_set_flashcard_tags_postgres_uses_on_conflict():
 
         def fetchone(self):
 
-                     return self._rows[0] if self._rows else None
+            return self._rows[0] if self._rows else None
 
         def fetchall(self):
 
-                     return list(self._rows)
+            return list(self._rows)
 
     class _Conn:
         def __init__(self) -> None:
-                     self.calls: List[str] = []
+            self.calls: List[str] = []
 
         def execute(self, sql: str, params: Any = None) -> _Cursor:
             self.calls.append(sql)
@@ -196,7 +191,7 @@ def test_set_flashcard_tags_postgres_uses_on_conflict():
 
     @contextmanager
     def fake_transaction():
-             yield conn
+        yield conn
 
     db.transaction = fake_transaction  # type: ignore[assignment]
 

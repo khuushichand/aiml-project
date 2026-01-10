@@ -17,10 +17,10 @@ class _StubUsageLogger:
 
 @pytest.fixture
 def media_processing_client(client_user_only):
-     async def _override_get_media_db_for_user():
+    async def _override_get_media_db_for_user():
         class _FakeDB:
             def close_all_connections(self):
-                             return None
+                return None
         yield _FakeDB()
 
     original_db_override = app.dependency_overrides.get(get_media_db_for_user)

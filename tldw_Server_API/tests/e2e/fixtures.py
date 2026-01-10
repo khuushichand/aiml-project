@@ -34,6 +34,19 @@ MAX_RETRIES = int(os.getenv("E2E_MAX_RETRIES", "3"))  # Max retries for rate lim
 SERVER_STARTUP_TIMEOUT = int(os.getenv("E2E_SERVER_STARTUP_TIMEOUT", "30"))  # Max time to wait for server
 E2E_INPROCESS = os.getenv("E2E_INPROCESS", "").lower() in {"1", "true", "yes", "on"}
 _INPROCESS_DB_URL: Optional[str] = None
+NO_RETRY_HEADER = "X-E2E-No-Retry"
+FALLBACK_CHAT_MODEL = "gpt4o"
+
+
+def _normalize_chat_model(model: Optional[str]) -> Optional[str]:
+    if not model:
+        return model
+    normalized = model.strip()
+    alias_map = {
+        "gpt4o": "gpt-4o",
+        "gpt4o-mini": "gpt-4o-mini",
+    }
+    return alias_map.get(normalized.lower(), normalized)
 
 
 def _looks_like_jwt(token: str) -> bool:
@@ -46,6 +59,27 @@ def _looks_like_jwt(token: str) -> bool:
     if len(parts) != 3:
         return False
     return all(part for part in parts)
+
+
+def _retry_delay_from_response(response: httpx.Response, attempt: int) -> float:
+    delay = RATE_LIMIT_RETRY_DELAY * (2 ** attempt)
+    retry_after: Optional[float] = None
+    try:
+        header_val = response.headers.get("Retry-After")
+        if header_val is not None:
+            retry_after = float(header_val)
+    except Exception:
+        retry_after = None
+    if retry_after is None:
+        try:
+            body = response.json()
+            if isinstance(body, dict):
+                retry_after = float(body.get("retry_after"))
+        except Exception:
+            retry_after = None
+    if retry_after is not None:
+        delay = max(delay, retry_after)
+    return delay + (time.time() % 0.1)
 
 
 def _build_inprocess_httpx_client() -> httpx.Client:
@@ -113,6 +147,9 @@ class APIClient:
         auto_auth: bool = True,
     ):
         self.base_url = base_url
+        self._default_chat_model: Optional[str] = None
+        self._default_chat_model_checked = False
+        self._llm_providers_configured: Optional[bool] = None
         # Prefer provided client (e.g., in-process), otherwise decide based on env
         if client is not None:
             self.client = client
@@ -132,6 +169,8 @@ class APIClient:
         APIClient._registry.add(self)
         if keep_open:
             APIClient._protected_ids.add(id(self))
+
+        self._wrap_client_for_rate_limits()
 
         # Note: TEST_MODE must be set on the server, not passed as header
         if auto_auth:
@@ -171,13 +210,114 @@ class APIClient:
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 429:
                     if attempt < MAX_RETRIES - 1:
-                        # Exponential backoff with jitter
-                        delay = RATE_LIMIT_RETRY_DELAY * (2 ** attempt) + (time.time() % 0.1)
+                        delay = _retry_delay_from_response(e.response, attempt)
                         print(f"Rate limited, retrying in {delay:.2f}s (attempt {attempt + 1}/{MAX_RETRIES})")
                         time.sleep(delay)
                         continue
                 raise
         return func(*args, **kwargs)
+
+    def _wrap_client_for_rate_limits(self) -> None:
+        if getattr(self.client, "_e2e_rate_limit_wrapped", False):
+            return
+        original_request = self.client.request
+
+        def _request_with_retry(method: str, url: str, **kwargs):
+            headers = kwargs.get("headers")
+            if headers:
+                no_retry = headers.get(NO_RETRY_HEADER)
+                if no_retry:
+                    safe_headers = dict(headers)
+                    safe_headers.pop(NO_RETRY_HEADER, None)
+                    kwargs["headers"] = safe_headers
+                    return original_request(method, url, **kwargs)
+
+            def _do_request():
+                response = original_request(method, url, **kwargs)
+                if response.status_code == 429:
+                    raise httpx.HTTPStatusError(
+                        "Rate limited",
+                        request=response.request,
+                        response=response,
+                    )
+                return response
+
+            return self._handle_rate_limit(_do_request)
+
+        self.client.request = _request_with_retry  # type: ignore[assignment]
+        setattr(self.client, "_e2e_rate_limit_wrapped", True)
+
+    def get_default_chat_model(self) -> Optional[str]:
+        if self._default_chat_model_checked:
+            return self._default_chat_model
+
+        def _fetch():
+            response = self.client.get(f"{API_PREFIX}/llm/providers")
+            response.raise_for_status()
+            return response.json()
+
+        try:
+            data = self._handle_rate_limit(_fetch)
+        except Exception:
+            return None
+
+        providers = data.get("providers") or []
+        total_configured = data.get("total_configured")
+        has_models = False
+        for provider in providers:
+            if not isinstance(provider, dict):
+                continue
+            default_model = provider.get("default_model")
+            models = provider.get("models") or []
+            if isinstance(default_model, str) and default_model.strip():
+                has_models = True
+                break
+            if any(isinstance(m, str) and m.strip() for m in models):
+                has_models = True
+                break
+        if isinstance(total_configured, int):
+            self._llm_providers_configured = total_configured > 0 and has_models
+        else:
+            self._llm_providers_configured = bool(providers) and has_models
+
+        default_provider = data.get("default_provider")
+
+        def _pick_model(provider: Dict[str, Any]) -> Optional[str]:
+            if not isinstance(provider, dict):
+                return None
+            model = provider.get("default_model")
+            if isinstance(model, str) and model.strip():
+                return model
+            models = provider.get("models") or []
+            if isinstance(models, list):
+                for item in models:
+                    if isinstance(item, str) and item.strip():
+                        return item
+            return None
+
+        chosen = None
+        if default_provider:
+            match = next(
+                (p for p in providers if isinstance(p, dict) and p.get("name") == default_provider),
+                None,
+            )
+            chosen = _pick_model(match or {})
+
+        if not chosen:
+            for provider in providers:
+                chosen = _pick_model(provider)
+                if chosen:
+                    break
+
+        self._default_chat_model = chosen
+        self._default_chat_model_checked = True
+        return chosen
+
+    def llm_configured(self) -> Optional[bool]:
+        if self._llm_providers_configured is not None:
+            return self._llm_providers_configured
+        self.get_default_chat_model()
+        return self._llm_providers_configured
 
     def set_auth_token(self, token: str, refresh_token: Optional[str] = None):
         """Set authentication tokens."""
@@ -416,18 +556,30 @@ class APIClient:
 
     # Chat endpoints
     def chat_completion(self, messages: List[Dict[str, str]],
-                        model: str = "gpt-3.5-turbo",
+                        model: Optional[str] = "gpt-3.5-turbo",
                         temperature: float = 0.7,
                         character_id: Optional[int] = None,
                         conversation_id: Optional[str] = None,
-                        stream: bool = False) -> Dict[str, Any]:
+                        stream: bool = False,
+                        api_provider: Optional[str] = None) -> Dict[str, Any]:
         """Send chat completion request with optional character context."""
+        resolved_model = model
+        if resolved_model in (None, "", "gpt-3.5-turbo"):
+            fallback = self.get_default_chat_model()
+            if fallback:
+                resolved_model = fallback
         data = {
             "messages": messages,
-            "model": model,
             "temperature": temperature,
             "stream": stream
         }
+        normalized_model = _normalize_chat_model(resolved_model) if resolved_model else None
+        if normalized_model:
+            data["model"] = normalized_model
+            if api_provider:
+                data["api_provider"] = api_provider
+            elif normalized_model.replace("-", "").lower() == "gpt4o":
+                data["api_provider"] = "openai"
         if character_id is not None:
             data["character_id"] = str(character_id)  # API expects string
         if conversation_id is not None:
@@ -874,6 +1026,12 @@ def has_openai_api_key() -> bool:
     if os.getenv("OPENAI_API_KEY"):
         return True
     return bool(_env_file_value("OPENAI_API_KEY"))
+
+
+def require_llm_or_skip(client: "APIClient") -> Optional[str]:
+    """Return a usable LLM model, falling back to gpt4o when none is configured."""
+    model = client.get_default_chat_model()
+    return _normalize_chat_model(model) or _normalize_chat_model(FALLBACK_CHAT_MODEL)
 
 
 @pytest.fixture(scope="session")

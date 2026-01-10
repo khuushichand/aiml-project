@@ -18,7 +18,7 @@ class TestBufferedTranscription:
 
     @pytest.fixture
     def sample_audio_data(self):
-             """Generate audio data for testing."""
+        """Generate audio data for testing."""
         sample_rate = 16000
         duration = 10.0
         t = np.linspace(0, duration, int(sample_rate * duration), False)
@@ -28,7 +28,7 @@ class TestBufferedTranscription:
 
     @pytest.fixture
     def long_audio_data(self):
-             """Generate long audio for testing chunking."""
+        """Generate long audio for testing chunking."""
         sample_rate = 16000
         duration = 300.0  # 5 minutes
         t = np.linspace(0, duration, int(sample_rate * duration), False)
@@ -37,7 +37,7 @@ class TestBufferedTranscription:
 
     @pytest.fixture
     def config(self):
-             """Create test configuration."""
+        """Create test configuration."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
             BufferedTranscriptionConfig, MergeAlgorithm
         )
@@ -52,7 +52,7 @@ class TestBufferedTranscription:
 
     def test_import_module(self):
 
-             """Test module imports."""
+        """Test module imports."""
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
                 BufferedTranscriber,
@@ -69,7 +69,7 @@ class TestBufferedTranscription:
 
     def test_config_creation(self):
 
-             """Test configuration dataclass."""
+        """Test configuration dataclass."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
             BufferedTranscriptionConfig, MergeAlgorithm
         )
@@ -87,7 +87,7 @@ class TestBufferedTranscription:
 
     def test_chunk_creation(self, sample_audio_data, config):
 
-             """Test audio chunking logic."""
+        """Test audio chunking logic."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
             BufferedTranscriber
         )
@@ -116,7 +116,7 @@ class TestBufferedTranscription:
 
     def test_middle_merge_algorithm(self, config):
 
-             """Test middle merge algorithm."""
+        """Test middle merge algorithm."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
             BufferedTranscriber
         )
@@ -158,7 +158,7 @@ class TestBufferedTranscription:
 
     def test_lcs_merge_algorithm(self, config):
 
-             """Test LCS (Longest Common Subsequence) merge algorithm."""
+        """Test LCS (Longest Common Subsequence) merge algorithm."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
             LCSMergeTranscriber, MergeAlgorithm
         )
@@ -178,7 +178,7 @@ class TestBufferedTranscription:
 
     def test_lcs_length_calculation(self, config):
 
-             """Test LCS length calculation."""
+        """Test LCS length calculation."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
             LCSMergeTranscriber, MergeAlgorithm
         )
@@ -195,7 +195,7 @@ class TestBufferedTranscription:
 
     def test_process_audio_with_mock_transcriber(self, sample_audio_data, config):
 
-             """Test full audio processing with mocked transcription."""
+        """Test full audio processing with mocked transcription."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
             BufferedTranscriber
         )
@@ -206,13 +206,13 @@ class TestBufferedTranscription:
         # Mock transcribe function
         transcribe_calls = []
         def mock_transcribe(chunk_audio):
-                     transcribe_calls.append(len(chunk_audio))
+            transcribe_calls.append(len(chunk_audio))
             return f"Transcription {len(transcribe_calls)}"
 
         # Track progress
         progress_calls = []
         def progress_callback(current, total):
-                     progress_calls.append((current, total))
+            progress_calls.append((current, total))
 
         result = transcriber.process_audio(
             audio_data,
@@ -229,7 +229,7 @@ class TestBufferedTranscription:
     @patch('soundfile.read')
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX.transcribe_with_parakeet_mlx')
     def test_transcribe_long_audio_mlx(self, mock_transcribe_mlx, mock_sf_read, long_audio_data):
-             """Test transcribe_long_audio with MLX backend."""
+        """Test transcribe_long_audio with MLX backend."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
             transcribe_long_audio
         )
@@ -260,7 +260,7 @@ class TestBufferedTranscription:
 
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX.transcribe_with_parakeet_onnx')
     def test_transcribe_long_audio_onnx(self, mock_transcribe_onnx, long_audio_data):
-             """Test transcribe_long_audio with ONNX backend."""
+        """Test transcribe_long_audio with ONNX backend."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
             transcribe_long_audio
         )
@@ -283,7 +283,7 @@ class TestBufferedTranscription:
 
     def test_merge_algorithm_enum(self):
 
-             """Test MergeAlgorithm enum values."""
+        """Test MergeAlgorithm enum values."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
             MergeAlgorithm
         )
@@ -296,7 +296,7 @@ class TestBufferedTranscription:
 
     def test_resampling(self, config):
 
-             """Test audio resampling functionality."""
+        """Test audio resampling functionality."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
             BufferedTranscriber
         )
@@ -325,7 +325,7 @@ class TestBufferedTranscription:
 
     def test_stereo_to_mono_conversion(self):
 
-             """Test stereo to mono conversion."""
+        """Test stereo to mono conversion."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
             transcribe_long_audio
         )
@@ -354,7 +354,7 @@ class TestBufferedTranscription:
 
     def test_progress_callback(self, sample_audio_data, config):
 
-             """Test progress callback functionality."""
+        """Test progress callback functionality."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
             BufferedTranscriber
         )
@@ -364,7 +364,7 @@ class TestBufferedTranscription:
 
         progress_updates = []
         def progress_callback(current, total):
-                     progress_updates.append({
+            progress_updates.append({
                 'current': current,
                 'total': total,
                 'percentage': (current / total) * 100 if total > 0 else 0
@@ -372,7 +372,7 @@ class TestBufferedTranscription:
 
         def mock_transcribe(chunk):
 
-                     return "test"
+            return "test"
 
         transcriber.process_audio(
             audio_data,
@@ -395,7 +395,7 @@ class TestBufferedTranscriptionIntegration:
 
     def test_integration_with_different_merge_algorithms(self):
 
-             """Test all merge algorithms produce valid results."""
+        """Test all merge algorithms produce valid results."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
             transcribe_long_audio
         )
@@ -428,7 +428,7 @@ class TestBufferedTranscriptionPerformance:
 
     def test_chunking_overhead(self):
 
-             """Measure overhead of chunking vs direct processing."""
+        """Measure overhead of chunking vs direct processing."""
         import time
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
             BufferedTranscriber,
@@ -443,7 +443,7 @@ class TestBufferedTranscriptionPerformance:
 
         # Mock transcribe function with delay
         def mock_transcribe(chunk):
-                     time.sleep(0.001)  # Simulate processing
+            time.sleep(0.001)  # Simulate processing
             return f"Transcribed {len(chunk)} samples"
 
         # Test with chunking

@@ -2,34 +2,42 @@ import json
 
 
 def test_google_stream_emits_done_once(monkeypatch):
-
-
-     class _Client:
+    class _Client:
         def __enter__(self):
-                     return self
+            return self
+
         def __exit__(self, exc_type, exc, tb):
-                     return False
+            return False
+
         def stream(self, method, url, **kwargs):
-                     class _Resp:
+            class _Resp:
                 status_code = 200
+
                 def raise_for_status(self):
-                                     return None
+                    return None
+
                 def __enter__(self):
-                                     return self
+                    return self
+
                 def __exit__(self, exc_type, exc, tb):
-                                     return False
+                    return False
+
                 def iter_lines(self):
-                                     first_chunk = {
+                    first_chunk = {
                         "candidates": [
                             {"content": {"parts": [{"text": "hello"}]}}
                         ]
                     }
-                    return iter([
-                        f"data: {json.dumps(first_chunk)}".encode("utf-8"),
-                        b"data: [DONE]",
-                    ])
+                    return iter(
+                        [
+                            f"data: {json.dumps(first_chunk)}".encode("utf-8"),
+                            b"data: [DONE]",
+                        ]
+                    )
+
                 def close(self):
-                                     return None
+                    return None
+
             return _Resp()
 
     monkeypatch.setattr(
@@ -38,6 +46,7 @@ def test_google_stream_emits_done_once(monkeypatch):
     )
 
     from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_google
+
     gen = chat_with_google(
         input_data=[{"role": "user", "content": "hi"}],
         api_key="test-key",
@@ -51,24 +60,28 @@ def test_google_stream_emits_done_once(monkeypatch):
 
 
 def test_huggingface_headers_are_masked(monkeypatch):
-
-
-     from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_huggingface
+    from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_huggingface
 
     class _Client:
         def __enter__(self):
-                     return self
+            return self
+
         def __exit__(self, exc_type, exc, tb):
-                     return False
+            return False
+
         def post(self, url, headers=None, json=None):
-                     class _Resp:
+            class _Resp:
                 status_code = 200
+
                 def raise_for_status(self):
-                                     return None
+                    return None
+
                 def json(self):
-                                     return {"id": "ok", "choices": [{"message": {"content": "hi"}}]}
+                    return {"id": "ok", "choices": [{"message": {"content": "hi"}}]}
+
                 def close(self):
-                                     return None
+                    return None
+
             return _Resp()
 
     monkeypatch.setattr(
@@ -79,8 +92,7 @@ def test_huggingface_headers_are_masked(monkeypatch):
     captured_debug = []
 
     def _fake_debug(msg, *args, **kwargs):
-
-             rendered = str(msg)
+        rendered = str(msg)
         if args:
             try:
                 rendered = rendered.format(*args)

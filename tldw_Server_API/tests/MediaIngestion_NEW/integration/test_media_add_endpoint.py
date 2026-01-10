@@ -33,7 +33,7 @@ class TestAddMediaEndpoint:
     @pytest.mark.unit
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.perform_transcription')
     def test_add_video_from_url(self, mock_transcribe, test_client, auth_headers, test_video_file):
-             """Test adding a video via file upload to avoid URL-specific behaviors."""
+        """Test adding a video via file upload to avoid URL-specific behaviors."""
         mock_transcribe.return_value = ("This is a test transcription.", [])
 
         with open(test_video_file, 'rb') as f:
@@ -64,7 +64,7 @@ class TestAddMediaEndpoint:
 
     @pytest.mark.unit
     def test_add_document_with_content(self, test_client, auth_headers, populated_media_db, test_text_file):
-             """Test adding a document by uploading a text file."""
+        """Test adding a document by uploading a text file."""
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
         from tldw_Server_API.app.main import app
 
@@ -102,7 +102,7 @@ class TestAddMediaEndpoint:
 
     @pytest.mark.unit
     def test_add_with_invalid_url(self, test_client, auth_headers):
-             """Test adding media with invalid URL returns 422."""
+        """Test adding media with invalid URL returns 422."""
         form = [
             ("media_type", "video"),
             ("title", "Invalid Media"),
@@ -119,7 +119,7 @@ class TestAddMediaEndpoint:
 
     @pytest.mark.unit
     def test_add_without_required_fields(self, test_client, auth_headers):
-             """Test adding media without any URLs or files should be 400."""
+        """Test adding media without any URLs or files should be 400."""
         response = test_client.post(
             "/api/v1/media/add",
             data={"media_type": "video"},
@@ -137,7 +137,7 @@ class TestChunkingStrategies:
 
     @pytest.mark.unit
     def test_add_with_token_chunking(self, test_client, auth_headers, populated_media_db, test_media_dir):
-             """Test adding media with token-based chunking via upload."""
+        """Test adding media with token-based chunking via upload."""
         from tldw_Server_API.app.main import app
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 
@@ -170,7 +170,7 @@ class TestChunkingStrategies:
 
     @pytest.mark.unit
     def test_add_with_sentence_chunking(self, test_client, auth_headers, populated_media_db, test_media_dir):
-             """Test adding media with sentence-based chunking via upload."""
+        """Test adding media with sentence-based chunking via upload."""
         from tldw_Server_API.app.main import app
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 
@@ -210,7 +210,7 @@ class TestDatabasePersistence:
 
     @pytest.mark.unit
     def test_media_persisted_correctly(self, test_client, auth_headers, media_database, test_text_file):
-             """Test that media is correctly saved to database."""
+        """Test that media is correctly saved to database."""
         from tldw_Server_API.app.main import app
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 
@@ -251,7 +251,7 @@ class TestDatabasePersistence:
 
     @pytest.mark.unit
     def test_media_versioning(self, test_client, auth_headers, media_database, test_media_dir):
-             """Test that media versions are tracked."""
+        """Test that media versions are tracked."""
         from tldw_Server_API.app.main import app
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 
@@ -306,7 +306,7 @@ class TestClaimsExtractionToggles:
 
     @pytest.mark.unit
     def test_claims_extraction_enabled_override(self, test_client, auth_headers, media_database, test_text_file):
-             """When disabled globally, an explicit true toggle should persist claims."""
+        """When disabled globally, an explicit true toggle should persist claims."""
         from tldw_Server_API.app.main import app
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
         from tldw_Server_API.app.core.config import settings as app_settings
@@ -348,7 +348,7 @@ class TestClaimsExtractionToggles:
 
     @pytest.mark.unit
     def test_claims_extraction_disabled_override(self, test_client, auth_headers, media_database, test_text_file):
-             """When enabled globally, forcing false should skip persistence."""
+        """When enabled globally, forcing false should skip persistence."""
         from tldw_Server_API.app.main import app
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
         from tldw_Server_API.app.core.config import settings as app_settings
@@ -390,7 +390,7 @@ class TestClaimsExtractionToggles:
 
     @pytest.mark.unit
     def test_claims_extraction_inherits_global_setting(self, test_client, auth_headers, media_database, test_text_file):
-             """When unset, behaviour should follow the config flag."""
+        """When unset, behaviour should follow the config flag."""
         from tldw_Server_API.app.main import app
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
         from tldw_Server_API.app.core.config import settings as app_settings
@@ -456,7 +456,7 @@ class TestErrorHandling:
     @pytest.mark.unit
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.perform_transcription')
     def test_transcription_failure_handling(self, mock_transcribe, test_client, auth_headers, test_video_file):
-             """Test handling of transcription failures for uploaded video."""
+        """Test handling of transcription failures for uploaded video."""
         mock_transcribe.side_effect = Exception("Transcription failed")
 
         with open(test_video_file, 'rb') as f:
@@ -484,7 +484,7 @@ class TestErrorHandling:
 
     @pytest.mark.unit
     def test_database_failure_handling(self, test_client, auth_headers):
-             """Test handling of database failures."""
+        """Test handling of database failures."""
         from tldw_Server_API.app.main import app
         from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 
@@ -517,7 +517,7 @@ class TestFileUpload:
 
     @pytest.mark.unit
     def test_upload_text_file(self, test_client, auth_headers, test_text_file):
-             """Test uploading a text file."""
+        """Test uploading a text file."""
         with open(test_text_file, 'rb') as f:
             files = {"file": ("test.txt", f, "text/plain")}
 
@@ -538,7 +538,7 @@ class TestFileUpload:
 
     @pytest.mark.unit
     def test_upload_invalid_file_type(self, test_client, auth_headers, test_media_dir):
-             """Test rejection of invalid file types."""
+        """Test rejection of invalid file types."""
         exe_file = test_media_dir / "test.exe"
         exe_file.write_bytes(b'MZ\x00\x00')  # PE header
 
@@ -571,7 +571,7 @@ class TestMediaAddGoldenEnvelopes:
         auth_headers,
         test_video_file,
     ):
-             """Verify video /media/add envelope matches golden sample when core helper returns known data."""
+        """Verify video /media/add envelope matches golden sample when core helper returns known data."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing import (  # type: ignore
             persistence as persistence_mod,
         )
@@ -602,7 +602,7 @@ class TestMediaAddGoldenEnvelopes:
         auth_headers,
         test_video_file,
     ):
-             """Verify mixed URL+file video /media/add envelope matches golden sample."""
+        """Verify mixed URL+file video /media/add envelope matches golden sample."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing import (  # type: ignore
             persistence as persistence_mod,
         )
@@ -641,7 +641,7 @@ class TestMediaAddGoldenEnvelopes:
         auth_headers,
         test_text_file,
     ):
-             """Verify document /media/add envelope matches golden sample when core helper returns known data."""
+        """Verify document /media/add envelope matches golden sample when core helper returns known data."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing import (  # type: ignore
             persistence as persistence_mod,
         )
@@ -673,7 +673,7 @@ class TestMediaAddGoldenEnvelopes:
         auth_headers,
         test_text_file,
     ):
-             """Verify mixed URL+file document /media/add envelope matches golden sample."""
+        """Verify mixed URL+file document /media/add envelope matches golden sample."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing import (  # type: ignore
             persistence as persistence_mod,
         )
@@ -716,7 +716,7 @@ class TestMediaAddGoldenEnvelopes:
         test_client,
         auth_headers,
     ):
-             """Verify email /media/add envelope matches golden sample when core helper returns known data."""
+        """Verify email /media/add envelope matches golden sample when core helper returns known data."""
         from io import BytesIO
 
         from tldw_Server_API.app.core.Ingestion_Media_Processing import (  # type: ignore
@@ -762,7 +762,7 @@ class TestMediaAddGoldenEnvelopes:
         test_client,
         auth_headers,
     ):
-             """Verify mixed URL+file email /media/add envelope matches golden sample."""
+        """Verify mixed URL+file email /media/add envelope matches golden sample."""
         from io import BytesIO
 
         from tldw_Server_API.app.core.Ingestion_Media_Processing import (  # type: ignore

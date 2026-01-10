@@ -829,18 +829,13 @@ def _chat_sync_impl(
         llm_messages_payload: List[Dict[str, Any]] = []
 
         # PHILOSOPHY:
-        # `chat()` prepares the `llm_messages_payload` (user/assistant turns with multimodal content).
-        # `chat()` also collects the `system_message`.
-        # `chat_api_call()` receives both `llm_messages_payload` and the separate `system_message`.
-        # `chat_api_call()` then dispatches these to the specific provider function (e.g., `chat_with_openai`).
-        # The provider function (e.g., `chat_with_openai`) is responsible for:
-        #   1. Taking the `messages` (which is `llm_messages_payload`).
-        #   2. Taking the `system_message` parameter.
-        #   3. If `system_message` is provided, *it* prepends `{"role": "system", "content": system_message}`
-        #      to the `messages` list *if* that's how its API works (like OpenAI).
-        #   4. Or, if its API takes system message as a separate top-level parameter (like Anthropic's `system_prompt`),
-        #      it uses it directly there.
-        # This way, `chat()` doesn't need to know the specifics of each API for system prompts
+        # `chat()` prepares the `llm_messages_payload` (user/assistant turns with multimodal content)
+        # and collects a separate `system_message`.
+        # `chat_api_call()` hands both to the adapter registry via `chat_service.perform_chat_api_call`.
+        # Each adapter is responsible for system-message placement:
+        #   - Providers that require a system message inside `messages` (OpenAI) prepend it.
+        #   - Providers that accept a dedicated system field (Anthropic `system_prompt`) map it.
+        # This keeps `chat()` provider-agnostic.
 
 
         # 2. Process History (now expecting list of OpenAI message dicts)

@@ -27,7 +27,7 @@ def _analyze_stub(api_name: str, input_data: Any, custom_prompt_arg: Optional[st
 
 @pytest.mark.unit
 def test_claims_engine_llm_only_labels_supported():
-     engine = ClaimsEngine(_analyze_stub)
+    engine = ClaimsEngine(_analyze_stub)
     answer = "Alpha. Beta."
     query = "Q"
     documents = [Doc("d1", "Alpha Beta context", 0.5)]
@@ -54,7 +54,7 @@ def test_claims_engine_llm_only_labels_supported():
 
 @pytest.mark.unit
 def test_claims_engine_nli_only_without_model_returns_nei():
-     # No transformers/NLI model available in test env, so NLI path should return NEI without LLM fallback
+    # No transformers/NLI model available in test env, so NLI path should return NEI without LLM fallback
     def _analyze_noop(api_name: str, input_data: Any, custom_prompt_arg: Optional[str] = None,
                       api_key: Optional[str] = None, system_message: Optional[str] = None,
                       temp: Optional[float] = None, **kwargs):

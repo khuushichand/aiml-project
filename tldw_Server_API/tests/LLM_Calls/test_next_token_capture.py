@@ -6,7 +6,7 @@ from tldw_Server_API.app.core.Evaluations.benchmark_utils import NextTokenCaptur
 def test_parse_logprobs_completions_style():
 
 
-     capture = NextTokenCapture(top_k=2)
+    capture = NextTokenCapture(top_k=2)
     response = {
         "choices": [
             {
@@ -30,7 +30,7 @@ def test_parse_logprobs_completions_style():
 def test_parse_logprobs_chat_style():
 
 
-     capture = NextTokenCapture(top_k=2)
+    capture = NextTokenCapture(top_k=2)
     response = {
         "choices": [
             {

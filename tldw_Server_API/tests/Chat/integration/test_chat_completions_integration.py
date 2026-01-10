@@ -1,5 +1,6 @@
 # tests/integration/api/v1/test_chat_completions_integration.py
 import pytest
+
 pytestmark = pytest.mark.unit
 import os
 import json
@@ -33,6 +34,7 @@ from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     # ChatCompletionRequestMessageContentPartImage,
     # ChatCompletionRequestMessageContentPartImageURL
 )
+
 # For mocking DB dependencies if your endpoint uses them
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
@@ -48,10 +50,12 @@ from tldw_Server_API.app.core.Usage.pricing_catalog import (
 # --- Fixtures defined locally in this file ---
 API_BEARER = os.getenv("API_BEARER", "test-api-key-12345")
 
+
 @pytest.fixture
 def mock_user():
-     """Create a mock user for testing."""
+    """Create a mock user for testing."""
     import datetime
+
     return User(
         id=1,
         username="test_user",
@@ -59,12 +63,13 @@ def mock_user():
         is_active=True,
         is_admin=False,
         created_at=datetime.datetime.now(),
-        updated_at=datetime.datetime.now()
+        updated_at=datetime.datetime.now(),
     )
+
 
 @pytest.fixture(autouse=True)
 def setup_auth_override(mock_user):
-     """Automatically override authentication for all tests based on AUTH_MODE."""
+    """Automatically override authentication for all tests based on AUTH_MODE."""
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
     settings = get_settings()
@@ -84,29 +89,31 @@ def setup_auth_override(mock_user):
         # In single-user mode, no override needed
         yield
 
+
 # Helper function to make requests with CSRF token
 def make_request_with_csrf(client, method, url, headers=None, **kwargs):
-     """Helper to make requests with CSRF token included"""
+    """Helper to make requests with CSRF token included"""
     if headers is None:
         headers = {}
 
     # Get CSRF token from cookies if not already set
-    if not hasattr(client, 'csrf_token'):
+    if not hasattr(client, "csrf_token"):
         # Make a GET request to get CSRF token
         response = client.get("/api/v1/health")
         csrf_token = response.cookies.get("csrf_token", "")
         client.csrf_token = csrf_token
 
     # Add CSRF token to headers
-    headers["X-CSRF-Token"] = getattr(client, 'csrf_token', '')
+    headers["X-CSRF-Token"] = getattr(client, "csrf_token", "")
 
     # Make the request
     method_func = getattr(client, method.lower())
     return method_func(url, headers=headers, **kwargs)
 
+
 @pytest.fixture(scope="function")
 def client():
-     """Yields a TestClient instance for making requests to the app."""
+    """Yields a TestClient instance for making requests to the app."""
     with TestClient(app) as c:
         # Get a CSRF token by making a GET request first
         response = c.get("/api/v1/health")
@@ -124,7 +131,7 @@ def client():
 
 @pytest.fixture
 def valid_auth_token() -> str:
-     """Generate appropriate auth token based on current AUTH_MODE."""
+    """Generate appropriate auth token based on current AUTH_MODE."""
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
     settings = get_settings()
@@ -143,7 +150,7 @@ def valid_auth_token() -> str:
             "username": "test_user",
             "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1),
             "iat": datetime.datetime.utcnow(),
-            "type": "access"
+            "type": "access",
         }
         test_token = jwt.encode(payload, secret_key, algorithm=settings.JWT_ALGORITHM)
         return f"Bearer {test_token}"
@@ -174,21 +181,28 @@ except ImportError:
     APP_API_KEYS_FROM_SCHEMA = {}
     ALL_CONFIGURED_PROVIDERS_FROM_APP = []
     print(
-        "Warning: Could not import APP_API_KEYS_FROM_SCHEMA or adapter registry for integration test parametrization.")
+        "Warning: Could not import APP_API_KEYS_FROM_SCHEMA or adapter registry for integration test parametrization."
+    )
 
 
 def get_commercial_providers_with_keys_integration():
-
-
-     """
+    """
     Returns a list of commercial providers for which API keys are actually set
     and non-empty, as understood by the application's schema.
 
     Only gate by presence of provider API keys. No other qualifiers.
     """
     potentially_commercial = [
-        "openai", "anthropic", "cohere", "groq", "openrouter",
-        "deepseek", "mistral", "google", "huggingface", "qwen"
+        "openai",
+        "anthropic",
+        "cohere",
+        "groq",
+        "openrouter",
+        "deepseek",
+        "mistral",
+        "google",
+        "huggingface",
+        "qwen",
         # Add others that are external and need keys from your config
     ]
     # Check against keys actually loaded by the app's config (via schemas)
@@ -202,16 +216,21 @@ def get_commercial_providers_with_keys_integration():
 
 
 def get_local_providers_integration():
-
-
-     """
+    """
     Returns a list of providers considered "local" or that might use URLs/config
     instead of globally managed API keys.
     """
     local_provider_names = [
-        "llama.cpp", "kobold", "ooba", "tabbyapi", "vllm",
-        "local-llm", "ollama", "aphrodite",
-        "custom-openai-api", "custom-openai-api-2"
+        "llama.cpp",
+        "kobold",
+        "ooba",
+        "tabbyapi",
+        "vllm",
+        "local-llm",
+        "ollama",
+        "aphrodite",
+        "custom-openai-api",
+        "custom-openai-api-2",
         # Add other local providers from your config
     ]
     return [p for p in local_provider_names if p in ALL_CONFIGURED_PROVIDERS_FROM_APP]
@@ -222,9 +241,10 @@ INTEGRATION_MESSAGES_NO_SYS_SCHEMA = [
     ChatCompletionUserMessageParam(role="user", content="Explain the theory of relativity simply in one sentence.")
 ]
 INTEGRATION_MESSAGES_WITH_SYS_SCHEMA = [
-    ChatCompletionSystemMessageParam(role="system",
-                                     content="You are Albert Einstein. Explain things from your perspective, but keep it brief."),
-    ChatCompletionUserMessageParam(role="user", content="Explain the theory of relativity simply.")
+    ChatCompletionSystemMessageParam(
+        role="system", content="You are Albert Einstein. Explain things from your perspective, but keep it brief."
+    ),
+    ChatCompletionUserMessageParam(role="user", content="Explain the theory of relativity simply."),
 ]
 STREAM_INTEGRATION_MESSAGES_SCHEMA = [  # For streaming tests
     ChatCompletionUserMessageParam(role="user", content="Stream a very short poem about a star. Max 3 lines.")
@@ -269,6 +289,7 @@ def _chat_default_model_for_provider(provider_name: str) -> str:
         return env_val
     try:
         from tldw_Server_API.app.api.v1.endpoints import chat as chat_endpoint
+
         cfg = getattr(chat_endpoint, "_chat_config", {}) or {}
         cfg_val = cfg.get(f"default_model_{normalized.lower()}")
         return cfg_val or ""
@@ -329,7 +350,10 @@ def resolve_test_model_from_catalog(provider_name: str) -> str:
     # Prefer concrete ids (-latest, dated suffixes, context sizes) when available
     def _looks_concrete(mid: str) -> bool:
         ml = (mid or "").lower()
-        return any(tok in ml for tok in ("-latest", "2023", "2024", "2025", "-8192", "-instruct", "-versatile", "-instant", ":"))
+        return any(
+            tok in ml
+            for tok in ("-latest", "2023", "2024", "2025", "-8192", "-instruct", "-versatile", "-instant", ":")
+        )
 
     concrete = [m for m in chat_models if _looks_concrete(m)] or chat_models
 
@@ -365,10 +389,12 @@ def resolve_test_model_from_catalog(provider_name: str) -> str:
     # Choose the cheapest (prompt+completion) using catalog rates, after canonicalization
     try:
         catalog = get_pricing_catalog()
+
         def total_cost(mid: str) -> float:
             # Compare prices using catalog keys as-is
             pr, cr, _ = catalog.get_rates(provider_name, mid)
             return float(pr or 0.0) + float(cr or 0.0)
+
         concrete.sort(key=lambda mm: (total_cost(mm), mm))
         return _canonicalize(provider_name, concrete[0])
     except Exception:
@@ -383,6 +409,7 @@ def _configured_default_model(provider_name: str) -> str:
 def _provider_base_url_override(provider_name: str) -> str:
     try:
         from tldw_Server_API.app.core.LLM_Calls.adapter_utils import ensure_app_config, resolve_provider_section
+
         cfg = ensure_app_config(None)
         section = resolve_provider_section(provider_name)
         if section:
@@ -403,29 +430,31 @@ def _provider_base_url_override(provider_name: str) -> str:
 
 # Fixture to mock DB dependencies for integration tests if the endpoint uses them
 # In tldw_Server_API/tests/Chat/test_chat_completions_integration.py
-from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME # Import
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME  # Import
+
 
 @pytest.fixture
 def mock_db_dependencies_for_integration():
-     mock_media_db_inst = MagicMock()
+    mock_media_db_inst = MagicMock()
     mock_chat_db_inst = MagicMock(spec=CharactersRAGDB)
 
     # --- Configure mock_chat_db_inst ---
     # For default character loading by name:
     default_char_card_data = {
-        'id': 9999,  # Use an int to mirror real DB rows and avoid type quirks
-        'name': DEFAULT_CHARACTER_NAME,
-        'system_prompt': 'This is a mock default system prompt for integration tests.',
+        "id": 9999,  # Use an int to mirror real DB rows and avoid type quirks
+        "name": DEFAULT_CHARACTER_NAME,
+        "system_prompt": "This is a mock default system prompt for integration tests.",
         # Add other fields the endpoint might access from the default character
         # e.g., client_id if it's directly on the card (though less likely)
     }
+
     def mock_get_character_card_by_name(name_or_id):
-             if name_or_id == DEFAULT_CHARACTER_NAME:
+        if name_or_id == DEFAULT_CHARACTER_NAME:
             return default_char_card_data
-        return None # For any other name
+        return None  # For any other name
 
     mock_chat_db_inst.get_character_card_by_name.side_effect = mock_get_character_card_by_name
-    mock_chat_db_inst.get_character_card_by_id.return_value = None # Keep this for by_id lookups unless a test needs it
+    mock_chat_db_inst.get_character_card_by_id.return_value = None  # Keep this for by_id lookups unless a test needs it
 
     # For new conversation creation
     mock_chat_db_inst.add_conversation.return_value = "integration_mock_conv_id"
@@ -438,7 +467,7 @@ def mock_db_dependencies_for_integration():
     # <<< Crucial: Ensure 'get_conversation_by_id' returns something sensible or None based on test needs >>>
     # For cases where a conversation ID *is* provided in the request and is expected to exist or not.
     # For these "no template" tests, usually no conv_id is provided initially.
-    mock_chat_db_inst.get_conversation_by_id.return_value = None # Default to not found
+    mock_chat_db_inst.get_conversation_by_id.return_value = None  # Default to not found
 
     # --- Dependency Override ---
     original_media_db_dep = app.dependency_overrides.get(get_media_db_for_user)
@@ -465,16 +494,19 @@ def mock_db_dependencies_for_integration():
 @pytest.mark.external_api  # Custom marker (register in pytest.ini or pyproject.toml)
 @pytest.mark.integration
 @pytest.mark.parametrize("provider_name", COMMERCIAL_PROVIDERS_FOR_TEST)
-@pytest.mark.skipif(not COMMERCIAL_PROVIDERS_FOR_TEST,
-                    reason="No commercial providers with API keys configured for integration tests.")
+@pytest.mark.skipif(
+    not COMMERCIAL_PROVIDERS_FOR_TEST, reason="No commercial providers with API keys configured for integration tests."
+)
 def test_commercial_provider_non_streaming_no_template(
-        client, provider_name, valid_auth_token, mock_db_dependencies_for_integration
+    client, provider_name, valid_auth_token, mock_db_dependencies_for_integration
 ):
-     # This test uses the DEFAULT_RAW_PASSTHROUGH_TEMPLATE because prompt_template_name is None
+    # This test uses the DEFAULT_RAW_PASSTHROUGH_TEMPLATE because prompt_template_name is None
 
     selected_model = resolve_test_model_from_catalog(provider_name)
     if not selected_model and not _configured_default_model(provider_name):
-        pytest.skip(f"No default model configured for {provider_name}; set {provider_name.upper()}_TEST_MODEL or config.")
+        pytest.skip(
+            f"No default model configured for {provider_name}; set {provider_name.upper()}_TEST_MODEL or config."
+        )
     base_url_override = _provider_base_url_override(provider_name)
     if provider_name != "openai" and "api.openai.com" in base_url_override:
         pytest.skip(f"{provider_name} base_url overridden to OpenAI; skipping external provider test.")
@@ -483,27 +515,33 @@ def test_commercial_provider_non_streaming_no_template(
         "messages": [msg.model_dump(exclude_none=True) for msg in INTEGRATION_MESSAGES_NO_SYS_SCHEMA],
         "temperature": 0.7,
         "stream": False,
-        "prompt_template_name": None  # Explicitly no template, should use default passthrough
+        "prompt_template_name": None,  # Explicitly no template, should use default passthrough
     }
     if selected_model:
         request_body["model"] = selected_model
     if provider_name == "anthropic":  # Anthropic (Claude) often requires max_tokens
         request_body["max_tokens"] = 200  # Adjusted for potentially longer explanations
 
-    print(f"\nTesting NON-STREAMING (no template) with {provider_name} using model {request_body.get('model', '<server-default>')}")
+    print(
+        f"\nTesting NON-STREAMING (no template) with {provider_name} using model {request_body.get('model', '<server-default>')}"
+    )
     response = client.post_with_csrf("/api/v1/chat/completions", json=request_body, headers={"Token": valid_auth_token})
     # XFAIL policy for known upstream/provider issues (stabilize CI)
     if provider_name == "cohere" and (response.status_code in (400, 404) or response.status_code >= 500):
         pytest.xfail(f"Cohere upstream not stable for /v1/chat (status {response.status_code}). {response.text[:180]}")
-    if provider_name in {"deepseek", "anthropic", "openrouter", "google", "huggingface"} and response.status_code >= 500:
+    if (
+        provider_name in {"deepseek", "anthropic", "openrouter", "google", "huggingface"}
+        and response.status_code >= 500
+    ):
         pytest.xfail(f"{provider_name} returned 5xx on non-stream call. {response.text[:180]}")
 
     assert response.status_code == status.HTTP_200_OK, f"Provider {provider_name} failed: {response.text}"
     data = response.json()
 
     assert data.get("id") is not None, f"Missing 'id' for {provider_name}"
-    assert data.get("choices") and isinstance(data["choices"], list) and len(
-        data["choices"]) > 0, f"Missing 'choices' for {provider_name}"
+    assert (
+        data.get("choices") and isinstance(data["choices"], list) and len(data["choices"]) > 0
+    ), f"Missing 'choices' for {provider_name}"
     message = data["choices"][0].get("message", {})
     assert message.get("role") == "assistant", f"Incorrect role for {provider_name}"
     content = message.get("content")
@@ -514,14 +552,17 @@ def test_commercial_provider_non_streaming_no_template(
 @pytest.mark.external_api
 @pytest.mark.integration
 @pytest.mark.parametrize("provider_name", COMMERCIAL_PROVIDERS_FOR_TEST)
-@pytest.mark.skipif(not COMMERCIAL_PROVIDERS_FOR_TEST,
-                    reason="No commercial providers with API keys configured for streaming tests.")
+@pytest.mark.skipif(
+    not COMMERCIAL_PROVIDERS_FOR_TEST, reason="No commercial providers with API keys configured for streaming tests."
+)
 def test_commercial_provider_streaming_no_template(
-        client, provider_name, valid_auth_token, mock_db_dependencies_for_integration
+    client, provider_name, valid_auth_token, mock_db_dependencies_for_integration
 ):
-     selected_model = resolve_test_model_from_catalog(provider_name)
+    selected_model = resolve_test_model_from_catalog(provider_name)
     if not selected_model and not _configured_default_model(provider_name):
-        pytest.skip(f"No default model configured for {provider_name}; set {provider_name.upper()}_TEST_MODEL or config.")
+        pytest.skip(
+            f"No default model configured for {provider_name}; set {provider_name.upper()}_TEST_MODEL or config."
+        )
     base_url_override = _provider_base_url_override(provider_name)
     if provider_name != "openai" and "api.openai.com" in base_url_override:
         pytest.skip(f"{provider_name} base_url overridden to OpenAI; skipping external provider test.")
@@ -530,16 +571,19 @@ def test_commercial_provider_streaming_no_template(
         "messages": [msg.model_dump(exclude_none=True) for msg in STREAM_INTEGRATION_MESSAGES_SCHEMA],
         "temperature": 0.7,
         "stream": True,
-        "prompt_template_name": None
+        "prompt_template_name": None,
     }
     if selected_model:
         request_body["model"] = selected_model
-    if provider_name == "anthropic": request_body["max_tokens"] = 300
+    if provider_name == "anthropic":
+        request_body["max_tokens"] = 300
 
-    print(f"\nTesting STREAMING (no template) with {provider_name} using model {request_body.get('model', '<server-default>')}")
+    print(
+        f"\nTesting STREAMING (no template) with {provider_name} using model {request_body.get('model', '<server-default>')}"
+    )
 
     # Use streaming context to avoid buffering entire body and potential hangs
-    headers = {"Token": valid_auth_token, "X-CSRF-Token": getattr(client, 'csrf_token', '')}
+    headers = {"Token": valid_auth_token, "X-CSRF-Token": getattr(client, "csrf_token", "")}
     full_content = ""
     received_done = False
     raw_stream_text_for_debug = ""
@@ -549,7 +593,7 @@ def test_commercial_provider_streaming_no_template(
             response.read()
             pytest.fail(f"Provider {provider_name} streaming pre-check failed: {response.text}")
         assert response.status_code == status.HTTP_200_OK
-        assert 'text/event-stream' in response.headers.get('content-type', '').lower()
+        assert "text/event-stream" in response.headers.get("content-type", "").lower()
 
         try:
             for line in response.iter_lines():
@@ -562,7 +606,7 @@ def test_commercial_provider_streaming_no_template(
                     break
                 if not s.startswith("data:"):
                     continue
-                payload = s[len("data:"):].strip()
+                payload = s[len("data:") :].strip()
                 if not payload or payload == "[DONE]":
                     continue
                 try:
@@ -597,8 +641,12 @@ def test_commercial_provider_streaming_no_template(
                 f"{provider_name} streaming unstable for this account/env (received_done={received_done}, len={len(full_content)})."
             )
 
-    assert received_done, f"Stream for {provider_name} did not finish correctly. Last 500 chars:\n{raw_stream_text_for_debug[-500:]}"
-    assert len(full_content) > 0, f"Streamed content for {provider_name} was too short or empty. Received: '{full_content}'"
+    assert (
+        received_done
+    ), f"Stream for {provider_name} did not finish correctly. Last 500 chars:\n{raw_stream_text_for_debug[-500:]}"
+    assert (
+        len(full_content) > 0
+    ), f"Streamed content for {provider_name} was too short or empty. Received: '{full_content}'"
     print(f"Streamed response from {provider_name} (no template): {full_content[:80]}...")
 
 
@@ -606,9 +654,9 @@ def test_commercial_provider_streaming_no_template(
 @pytest.mark.external_api
 @pytest.mark.integration
 def test_commercial_provider_with_template_and_char_data_openai_integration(
-        client, valid_auth_token, mock_db_dependencies_for_integration
+    client, valid_auth_token, mock_db_dependencies_for_integration
 ):
-     provider_name = "openai"
+    provider_name = "openai"
     if provider_name not in COMMERCIAL_PROVIDERS_FOR_TEST:
         pytest.skip(f"{provider_name} not configured with API key for this templating test.")
 
@@ -622,13 +670,15 @@ def test_commercial_provider_with_template_and_char_data_openai_integration(
         name=test_template_name,
         system_message_template="Ye be talkin' to Cap'n {char_name}! {character_system_prompt}. The request mentioned: {original_system_message_from_request}",
         user_message_content_template="Arr, the landlubber {char_name} be askin': {message_content}",
-        assistant_message_content_template=None  # Not used in request path
+        assistant_message_content_template=None,  # Not used in request path
     )
     test_char_id_for_template = "pirate_blackheart"
     mock_character_data_for_template = {
-        "id": test_char_id_for_template, "name": "Blackheart",
+        "id": test_char_id_for_template,
+        "name": "Blackheart",
         "system_prompt": "I only speak in pirate tongues and seek treasure!",
-        "personality": "Gruff but fair", "description": "A legendary pirate captain.",
+        "personality": "Gruff but fair",
+        "description": "A legendary pirate captain.",
         # Add other fields your template might use
     }
     # Configure the mock_chat_db_inst that the endpoint will use
@@ -636,10 +686,10 @@ def test_commercial_provider_with_template_and_char_data_openai_integration(
 
     # Ensure get_character_card_by_name returns the pirate when called with "pirate_blackheart"
     def specific_char_by_name_lookup(name_or_id):
-             if name_or_id == test_char_id_for_template:  # "pirate_blackheart"
+        if name_or_id == test_char_id_for_template:  # "pirate_blackheart"
             return mock_character_data_for_template
         if name_or_id == DEFAULT_CHARACTER_NAME:  # Still handle default if needed elsewhere
-            return {'id': 10000, 'name': DEFAULT_CHARACTER_NAME, 'system_prompt': 'Default'}
+            return {"id": 10000, "name": DEFAULT_CHARACTER_NAME, "system_prompt": "Default"}
         return None
 
     mock_chat_db_inst.get_character_card_by_name.side_effect = specific_char_by_name_lookup
@@ -653,13 +703,15 @@ def test_commercial_provider_with_template_and_char_data_openai_integration(
             "prompt_template_name": test_template_name,
             "character_id": test_char_id_for_template,
             "temperature": 0.5,  # Give it some creativity
-            "stream": False
+            "stream": False,
         }
         if chosen_model:
             request_body["model"] = chosen_model
 
         print(f"\nTesting TEMPLATING with {provider_name} model {request_body.get('model', '<server-default>')}")
-        response = client.post_with_csrf("/api/v1/chat/completions", json=request_body, headers={"Token": valid_auth_token})
+        response = client.post_with_csrf(
+            "/api/v1/chat/completions", json=request_body, headers={"Token": valid_auth_token}
+        )
 
         assert response.status_code == status.HTTP_200_OK, f"{provider_name} with template failed: {response.text}"
         data = response.json()
@@ -672,8 +724,12 @@ def test_commercial_provider_with_template_and_char_data_openai_integration(
         # Note: The mock server doesn't actually process the pirate template, so we skip this assertion for mock
         # In a real test with actual LLM, this would verify the pirate-themed response
         if "mock" not in response.text.lower():
-            assert "arr" in content.lower() or "matey" in content.lower() or "treasure" in content.lower() or "cap'n" in content.lower(), \
-                f"Response from {provider_name} with pirate template didn't sound pirate-y enough! Got: '{content}'"
+            assert (
+                "arr" in content.lower()
+                or "matey" in content.lower()
+                or "treasure" in content.lower()
+                or "cap'n" in content.lower()
+            ), f"Response from {provider_name} with pirate template didn't sound pirate-y enough! Got: '{content}'"
         else:
             # For mock server, just verify we got a response
             assert len(content) > 0, f"Empty response from {provider_name}"
@@ -692,17 +748,25 @@ LOCAL_PROVIDERS_FOR_TEST = get_local_providers_integration()
 @pytest.mark.parametrize("provider_name", LOCAL_PROVIDERS_FOR_TEST)
 @pytest.mark.skipif(not LOCAL_PROVIDERS_FOR_TEST, reason="No local providers configured for integration tests.")
 def test_local_provider_non_streaming_no_template(
-        client, provider_name, valid_auth_token, mock_db_dependencies_for_integration, request
-        # request is a pytest fixture
+    client,
+    provider_name,
+    valid_auth_token,
+    mock_db_dependencies_for_integration,
+    request,
+    # request is a pytest fixture
 ):
-     # Configuration for local provider URLs (examples, adjust to your env var names)
+    # Configuration for local provider URLs (examples, adjust to your env var names)
     config_var_map = {
-        "ollama": "OLLAMA_HOST", "llama.cpp": "LLAMA_CPP_URL", "ooba": "OOBA_URL",
-        "vllm": "VLLM_URL", "tabbyapi": "TABBYAPI_URL",
-        "local-llm": "LOCAL_LLM_API_IP", "aphrodite": "APHRODITE_API_IP",
+        "ollama": "OLLAMA_HOST",
+        "llama.cpp": "LLAMA_CPP_URL",
+        "ooba": "OOBA_URL",
+        "vllm": "VLLM_URL",
+        "tabbyapi": "TABBYAPI_URL",
+        "local-llm": "LOCAL_LLM_API_IP",
+        "aphrodite": "APHRODITE_API_IP",
         "kobold": "KOBOLD_API_IP",
         "custom-openai-api": "CUSTOM_OPENAI_API_IP_1",
-        "custom-openai-api-2": "CUSTOM_OPENAI_API_IP_2"
+        "custom-openai-api-2": "CUSTOM_OPENAI_API_IP_2",
     }
     required_env_var = config_var_map.get(provider_name)
     # Skip if the URL env var is not set AND the provider isn't one that might have its URL in APP_API_KEYS_FROM_SCHEMA (less common)
@@ -713,18 +777,21 @@ def test_local_provider_non_streaming_no_template(
         is_url_in_app_config = APP_API_KEYS_FROM_SCHEMA.get(provider_name, "").startswith("http")
         if not is_url_in_app_config:
             pytest.skip(
-                f"Environment variable like '{required_env_var}' for {provider_name} URL not set, and not found in app config. Skipping.")
+                f"Environment variable like '{required_env_var}' for {provider_name} URL not set, and not found in app config. Skipping."
+            )
 
     model_name = "test-local-model"  # Generic, may be ignored by server if model is pre-loaded
-    if provider_name == "ollama": model_name = os.getenv("OLLAMA_TEST_MODEL", "phi3:mini")  # Example: use a small model
-    if provider_name == "vllm": model_name = os.getenv("VLLM_TEST_MODEL", "mistralai/Mistral-7B-Instruct-v0.1")
+    if provider_name == "ollama":
+        model_name = os.getenv("OLLAMA_TEST_MODEL", "phi3:mini")  # Example: use a small model
+    if provider_name == "vllm":
+        model_name = os.getenv("VLLM_TEST_MODEL", "mistralai/Mistral-7B-Instruct-v0.1")
 
     request_body = {
         "api_provider": provider_name,
         "model": model_name,
         "messages": [msg.model_dump(exclude_none=True) for msg in INTEGRATION_MESSAGES_NO_SYS_SCHEMA],
         "stream": False,
-        "prompt_template_name": None  # Ensure default passthrough template
+        "prompt_template_name": None,  # Ensure default passthrough template
     }
 
     print(f"\nTesting LOCAL NON-STREAMING (no template) with {provider_name} using model {request_body['model']}")
@@ -734,8 +801,9 @@ def test_local_provider_non_streaming_no_template(
     data = response.json()
 
     assert data.get("id") is not None, f"Missing 'id' for local {provider_name}"
-    assert data.get("choices") and isinstance(data["choices"], list) and len(
-        data["choices"]) > 0, f"Missing 'choices' for local {provider_name}"
+    assert (
+        data.get("choices") and isinstance(data["choices"], list) and len(data["choices"]) > 0
+    ), f"Missing 'choices' for local {provider_name}"
     message = data["choices"][0].get("message", {})
     assert message.get("role") == "assistant", f"Incorrect role for local {provider_name}"
     content = message.get("content")
@@ -746,41 +814,47 @@ def test_local_provider_non_streaming_no_template(
 
 # --- Invalid Key Test (for a commercial provider that needs a key) ---
 @patch.dict("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "invalid_key"})
-@patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") # Mock the shim
+@patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call")  # Mock the shim
 def test_chat_integration_invalid_key_for_commercial_provider_standalone(
     mock_chat_api_call_shim, client, valid_auth_token, mock_db_dependencies_for_integration
 ):
-     provider_to_test_invalid_key = "openai"
+    provider_to_test_invalid_key = "openai"
     # Simulate that the call to the provider resulted in an auth error
     mock_chat_api_call_shim.side_effect = ChatAuthenticationError(
-        provider=provider_to_test_invalid_key,
-        message="Simulated auth error: Invalid API Key"
+        provider=provider_to_test_invalid_key, message="Simulated auth error: Invalid API Key"
     )
 
-    request_body = { # ... minimal request body ...
+    request_body = {  # ... minimal request body ...
         "api_provider": provider_to_test_invalid_key,
         "model": "gpt-4o-mini",
-        "messages": [msg.model_dump(exclude_none=True) for msg in INTEGRATION_MESSAGES_NO_SYS_SCHEMA]
+        "messages": [msg.model_dump(exclude_none=True) for msg in INTEGRATION_MESSAGES_NO_SYS_SCHEMA],
     }
     response = client.post_with_csrf("/api/v1/chat/completions", json=request_body, headers={"Token": valid_auth_token})
     print(f"CI DEBUG: Status Code: {response.status_code}")
     print(f"CI DEBUG: Response Headers: {response.headers}")
     print(f"CI DEBUG: Response Text: {response.text}")
-    assert response.status_code in [status.HTTP_401_UNAUTHORIZED, status.HTTP_400_BAD_REQUEST], \
-        f"Expected 401/400 for invalid key with {provider_to_test_invalid_key}, got {response.status_code}. Response: {response.text}"
+    assert response.status_code in [
+        status.HTTP_401_UNAUTHORIZED,
+        status.HTTP_400_BAD_REQUEST,
+    ], f"Expected 401/400 for invalid key with {provider_to_test_invalid_key}, got {response.status_code}. Response: {response.text}"
 
     detail = response.json().get("detail", "").lower()
-    assert "authentication" in detail or "invalid" in detail or "key" in detail or "token" in detail or "unauthorized" in detail, \
-        f"Error detail for invalid key with {provider_to_test_invalid_key} did not match expected. Got: {detail}"
+    assert (
+        "authentication" in detail
+        or "invalid" in detail
+        or "key" in detail
+        or "token" in detail
+        or "unauthorized" in detail
+    ), f"Error detail for invalid key with {provider_to_test_invalid_key} did not match expected. Got: {detail}"
     print(f"\nInvalid Key Response Detail ({provider_to_test_invalid_key}): {response.json().get('detail')}")
 
 
 # --- Bad Request Test (e.g., missing messages) ---
 @pytest.mark.integration
 def test_chat_integration_bad_request_missing_messages_standalone(
-        client, valid_auth_token, mock_db_dependencies_for_integration  # Add DB mock for consistency
+    client, valid_auth_token, mock_db_dependencies_for_integration  # Add DB mock for consistency
 ):
-     request_body = {
+    request_body = {
         "api_provider": "openai",  # Could be any provider
         "model": "test-model",
         # "messages" field is intentionally missing

@@ -19,17 +19,17 @@ class _FakeResponse:
 
     @property
     def url(self):
-             # Mimic httpx.URL-like with .path and maybe host
+        # Mimic httpx.URL-like with .path and maybe host
         class _U:
             def __init__(self, path):
-                             self.path = f"/{path}" if not path.startswith("/") else path
+                self.path = f"/{path}" if not path.startswith("/") else path
                 self.host = "example.org"
 
         return _U(self._url.path)
 
     def raise_for_status(self):
 
-             return None
+        return None
 
     async def aiter_bytes(self, chunk_size=8192):  # pragma: no cover - simple stream
         yield self._content

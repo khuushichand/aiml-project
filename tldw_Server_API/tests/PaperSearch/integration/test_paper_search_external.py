@@ -17,15 +17,13 @@ def _require_env_or_skip(var_name: str):
 
 def _require_external():
 
-
-     if os.getenv("RUN_EXTERNAL_API_TESTS", "0") != "1":
+    if os.getenv("RUN_EXTERNAL_API_TESTS", "0") != "1":
         pytest.skip("External API tests disabled. Set RUN_EXTERNAL_API_TESTS=1 to enable.")
 
 
 def test_acm_search_openalex_integration(client_with_auth):
 
-
-     _require_external()
+    _require_external()
     client = client_with_auth
     resp = client.get(
         "/api/v1/paper-search/acm",
@@ -48,8 +46,7 @@ def test_acm_search_openalex_integration(client_with_auth):
 
 def test_wiley_search_openalex_integration(client_with_auth):
 
-
-     _require_external()
+    _require_external()
     client = client_with_auth
     resp = client.get(
         "/api/v1/paper-search/wiley",
@@ -70,8 +67,7 @@ def test_wiley_search_openalex_integration(client_with_auth):
 
 def test_crossref_by_doi_lookup(client_with_auth):
 
-
-     _require_external()
+    _require_external()
     client = client_with_auth
     doi = "10.1038/nature14539"  # Nature AlphaGo paper
     resp = client.get("/api/v1/paper-search/acm/by-doi", params={"doi": doi})
@@ -84,8 +80,7 @@ def test_crossref_by_doi_lookup(client_with_auth):
 
 def test_ieee_returns_not_configured_without_key(client_with_auth):
 
-
-     client = client_with_auth
+    client = client_with_auth
     # Ensure key not set
     if os.getenv("IEEE_API_KEY"):
         pytest.skip("IEEE_API_KEY present; this test targets missing-key behavior.")
@@ -95,8 +90,7 @@ def test_ieee_returns_not_configured_without_key(client_with_auth):
 
 def test_springer_returns_not_configured_without_key(client_with_auth):
 
-
-     client = client_with_auth
+    client = client_with_auth
     if os.getenv("SPRINGER_NATURE_API_KEY"):
         pytest.skip("SPRINGER_NATURE_API_KEY present; this test targets missing-key behavior.")
     resp = client.get("/api/v1/paper-search/springer", params={"q": "graph", "page": 1, "results_per_page": 1})
@@ -105,8 +99,7 @@ def test_springer_returns_not_configured_without_key(client_with_auth):
 
 def test_scopus_returns_not_configured_without_key(client_with_auth):
 
-
-     client = client_with_auth
+    client = client_with_auth
     if os.getenv("ELSEVIER_API_KEY"):
         pytest.skip("ELSEVIER_API_KEY present; this test targets missing-key behavior.")
     resp = client.get("/api/v1/paper-search/scopus", params={"q": "vision", "page": 1, "results_per_page": 1})
@@ -115,7 +108,7 @@ def test_scopus_returns_not_configured_without_key(client_with_auth):
 
 @pytest.mark.slow
 def test_oa_ingest_by_doi_when_configured(client_with_auth):
-     _require_external()
+    _require_external()
     _require_env_or_skip("UNPAYWALL_EMAIL")
     client = client_with_auth
     # Use an arXiv DOI that should be OA
@@ -137,7 +130,7 @@ def test_oa_ingest_by_doi_when_configured(client_with_auth):
 
 @pytest.mark.requires_api_key
 def test_ieee_search_with_key_integration(client_with_auth):
-     _require_external()
+    _require_external()
     _require_env_or_skip("IEEE_API_KEY")
     client = client_with_auth
     resp = client.get(
@@ -154,7 +147,7 @@ def test_ieee_search_with_key_integration(client_with_auth):
 
 @pytest.mark.requires_api_key
 def test_springer_search_with_key_integration(client_with_auth):
-     _require_external()
+    _require_external()
     _require_env_or_skip("SPRINGER_NATURE_API_KEY")
     client = client_with_auth
     resp = client.get(
@@ -170,7 +163,7 @@ def test_springer_search_with_key_integration(client_with_auth):
 
 @pytest.mark.requires_api_key
 def test_scopus_search_with_key_integration(client_with_auth):
-     _require_external()
+    _require_external()
     _require_env_or_skip("ELSEVIER_API_KEY")
     client = client_with_auth
     resp = client.get(

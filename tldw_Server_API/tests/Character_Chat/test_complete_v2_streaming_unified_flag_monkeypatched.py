@@ -23,34 +23,38 @@ async def test_complete_v2_streaming_unified_flag_two_providers(monkeypatch):
 
     # Fake SSE chunks (as strings) from provider
     streaming_payloads = [
-        _json.dumps({
-            "id": "chatcmpl-1",
-            "object": "chat.completion.chunk",
-            "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]
-        }),
-        _json.dumps({
-            "id": "chatcmpl-1",
-            "object": "chat.completion.chunk",
-            "choices": [{"index": 0, "delta": {"content": "Hello"}, "finish_reason": None}]
-        }),
-        _json.dumps({
-            "id": "chatcmpl-1",
-            "object": "chat.completion.chunk",
-            "choices": [{"index": 0, "delta": {"content": " world"}, "finish_reason": None}]
-        }),
+        _json.dumps(
+            {
+                "id": "chatcmpl-1",
+                "object": "chat.completion.chunk",
+                "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+            }
+        ),
+        _json.dumps(
+            {
+                "id": "chatcmpl-1",
+                "object": "chat.completion.chunk",
+                "choices": [{"index": 0, "delta": {"content": "Hello"}, "finish_reason": None}],
+            }
+        ),
+        _json.dumps(
+            {
+                "id": "chatcmpl-1",
+                "object": "chat.completion.chunk",
+                "choices": [{"index": 0, "delta": {"content": " world"}, "finish_reason": None}],
+            }
+        ),
     ]
-    stream_chunks = [
-        f"data: {payload}" for payload in streaming_payloads
-    ]
+    stream_chunks = [f"data: {payload}" for payload in streaming_payloads]
     stream_chunks.append("data: [DONE]")
 
     import tldw_Server_API.app.api.v1.endpoints.character_chat_sessions as chat_sessions_mod
 
     def _fake_perform_chat_api_call(*args, **kwargs):
-
-             def _generator():
+        def _generator():
             for chunk in stream_chunks:
                 yield chunk
+
         return _generator()
 
     monkeypatch.setattr(chat_sessions_mod, "perform_chat_api_call", _fake_perform_chat_api_call)
@@ -61,6 +65,7 @@ async def test_complete_v2_streaming_unified_flag_two_providers(monkeypatch):
     os.environ.setdefault("OPENAI_API_KEY", "test-key")
     try:
         from tldw_Server_API.app.main import app
+
         settings = get_settings()
         headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
         transport = httpx.ASGITransport(app=app)
@@ -76,13 +81,18 @@ async def test_complete_v2_streaming_unified_flag_two_providers(monkeypatch):
             async def _stream_and_collect(provider_name: str):
                 url = f"/api/v1/chats/{chat_id}/complete-v2"
                 collected = []
-                async with client.stream("POST", url, headers=headers, json={
-                    "provider": provider_name,
-                    "model": "gpt-4o-mini",
-                    "append_user_message": "ping",
-                    "save_to_db": False,
-                    "stream": True
-                }) as response:
+                async with client.stream(
+                    "POST",
+                    url,
+                    headers=headers,
+                    json={
+                        "provider": provider_name,
+                        "model": "gpt-4o-mini",
+                        "append_user_message": "ping",
+                        "save_to_db": False,
+                        "stream": True,
+                    },
+                ) as response:
                     assert response.status_code == 200
                     async for line in response.aiter_lines():
                         if line and line.startswith("data: "):

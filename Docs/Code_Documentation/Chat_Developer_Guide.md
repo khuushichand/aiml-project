@@ -24,7 +24,6 @@ This guide explains the Chat module’s architecture, key components, and how to
 ## Directory Map
 
  - `tldw_Server_API/app/core/Chat/`
-  - `Chat_Functions.py` - Minimal compatibility shim exporting only `chat`, `chat_api_call`, `DEFAULT_CHARACTER_NAME`, and `approximate_token_count`. Import history/dictionary/character helpers from their dedicated modules.
   - `chat_orchestrator.py` - Primary dispatcher/utilities (build inputs, assemble context) that delegate to the adapter registry
   - `chat_helpers.py` - Request shaping helpers, conversion from API schemas, dictionary/character hooks
   - `provider_manager.py` - Provider health/fallback management; adapter registry + capability registry are authoritative for handlers/params
@@ -50,7 +49,7 @@ Related:
 2. `chat_helpers.py` and endpoint logic build the internal payload, apply defaults, and optionally enrich messages with:
    - Character info (system prompts, world books) when requested
    - Chat dictionaries (keyword substitutions, token budgeting)
-3. The endpoint uses `chat_service` helpers and delegates to `chat_orchestrator.chat_api_call(...)`. Provider routing/validation comes from the adapter + capability registries. A minimal compatibility shim (`Chat_Functions.chat_api_call`) remains for legacy callers/tests; new code should import from `chat_orchestrator` directly.
+3. The endpoint uses `chat_service` helpers and delegates to `chat_orchestrator.chat_api_call(...)`. Provider routing/validation comes from the adapter + capability registries; new code should import from `chat_orchestrator` directly.
 4. `LLM_Calls/*` executes the provider-specific request (cloud or local APIs). Streaming responses are normalized to SSE frames via `streaming_utils`.
 5. `chat_exceptions` ensures errors from providers, validation, or networking are translated to module exceptions and proper HTTP responses.
 6. `chat_metrics` records counters, latencies, sizes, and success/failure labels.
@@ -151,7 +150,7 @@ Provider selection notes:
 
 ## Maintenance Notes
 
-- Treat adapter/capability registries as authoritative for handler/parameter mappings going forward; avoid duplicating translation in provider call sites. The legacy duplicate in `Chat_Functions.py` has been removed to prevent drift.
+- Treat adapter/capability registries as authoritative for handler/parameter mappings going forward; avoid duplicating translation in provider call sites. Legacy duplicates have been removed to prevent drift.
 - Log safe: escape curly braces and large payloads before logging (see existing patterns in exception handling).
 - Preserve OpenAI response compatibility in streaming and non-streaming outputs to avoid client regressions.
 - Be careful when altering schema constraints; downstream clients (UI and tools) rely on them.

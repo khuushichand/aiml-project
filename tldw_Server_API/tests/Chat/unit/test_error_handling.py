@@ -36,7 +36,7 @@ class TestChatExceptions:
 
     def test_chat_module_exception_creation(self):
 
-             """Test creating a ChatModuleException with all fields."""
+        """Test creating a ChatModuleException with all fields."""
         error = ChatModuleException(
             code=ChatErrorCode.INT_UNEXPECTED_ERROR,
             message="Test error message",
@@ -55,7 +55,7 @@ class TestChatExceptions:
 
     def test_exception_to_log_dict(self):
 
-             """Test converting exception to log dictionary."""
+        """Test converting exception to log dictionary."""
         original_error = ValueError("Original error")
         error = ChatModuleException(
             code=ChatErrorCode.DB_QUERY_ERROR,
@@ -76,7 +76,7 @@ class TestChatExceptions:
 
     def test_exception_to_response_dict(self):
 
-             """Test converting exception to safe response dictionary."""
+        """Test converting exception to safe response dictionary."""
         error = ChatModuleException(
             code=ChatErrorCode.AUTH_INVALID_TOKEN,
             message="Token validation failed - secret details",
@@ -96,7 +96,7 @@ class TestChatExceptions:
 
     def test_specific_exception_classes(self):
 
-             """Test specific exception subclasses."""
+        """Test specific exception subclasses."""
         # Authentication error
         auth_error = ChatAuthenticationError("Invalid token")
         assert auth_error.code == ChatErrorCode.AUTH_INVALID_TOKEN
@@ -148,7 +148,7 @@ class TestRequestIDContext:
 
     def test_set_and_get_request_id(self):
 
-             """Test setting and getting request ID."""
+        """Test setting and getting request ID."""
         # Set a specific request ID
         request_id = "test-request-123"
         set_id = set_request_id(request_id)
@@ -158,7 +158,7 @@ class TestRequestIDContext:
 
     def test_auto_generate_request_id(self):
 
-             """Test automatic request ID generation."""
+        """Test automatic request ID generation."""
         # Don't provide an ID
         request_id = set_request_id()
 
@@ -168,7 +168,7 @@ class TestRequestIDContext:
 
     def test_request_id_in_exception(self):
 
-             """Test that exceptions capture the current request ID."""
+        """Test that exceptions capture the current request ID."""
         request_id = set_request_id("exception-test-123")
 
         error = ChatModuleException(
@@ -188,7 +188,7 @@ class TestErrorHandlerUtilities:
 
     def test_handle_database_error_integrity(self):
 
-             """Test handling database integrity errors."""
+        """Test handling database integrity errors."""
         error = sqlite3.IntegrityError("UNIQUE constraint failed")
 
         result = handle_database_error(
@@ -201,7 +201,7 @@ class TestErrorHandlerUtilities:
 
     def test_handle_database_error_operational(self):
 
-             """Test handling database operational errors."""
+        """Test handling database operational errors."""
         error = sqlite3.OperationalError("database is locked")
 
         result = handle_database_error(
@@ -214,7 +214,7 @@ class TestErrorHandlerUtilities:
 
     def test_handle_database_error_generic(self):
 
-             """Test handling generic database errors."""
+        """Test handling generic database errors."""
         error = Exception("Unknown database error")
 
         result = handle_database_error(
@@ -227,7 +227,7 @@ class TestErrorHandlerUtilities:
 
     def test_sanitize_error_message_removes_paths(self):
 
-             """Test that file paths are sanitized from error messages."""
+        """Test that file paths are sanitized from error messages."""
         error = Exception("Error in /home/user/project/secret/file.py at line 42")
 
         sanitized = sanitize_error_message(error)
@@ -238,7 +238,7 @@ class TestErrorHandlerUtilities:
 
     def test_sanitize_error_message_removes_ips(self):
 
-             """Test that IP addresses are sanitized from error messages."""
+        """Test that IP addresses are sanitized from error messages."""
         error = Exception("Connection failed to 192.168.1.100:8080")
 
         sanitized = sanitize_error_message(error)
@@ -249,7 +249,7 @@ class TestErrorHandlerUtilities:
 
     def test_sanitize_error_message_removes_secrets(self):
 
-             """Test that potential secrets are sanitized from error messages."""
+        """Test that potential secrets are sanitized from error messages."""
         error = Exception("API key sk_test_abcdef1234567890abcdef1234567890 is invalid")
 
         sanitized = sanitize_error_message(error)
@@ -260,7 +260,7 @@ class TestErrorHandlerUtilities:
 
     def test_sanitize_error_message_truncates_long(self):
 
-             """Test that long error messages are truncated."""
+        """Test that long error messages are truncated."""
         long_message = "Error: " + "x" * 300
         error = Exception(long_message)
 
@@ -279,7 +279,7 @@ class TestErrorHandlerContext:
 
     def test_error_handler_success(self):
 
-             """Test ErrorHandler with successful operation."""
+        """Test ErrorHandler with successful operation."""
         with ErrorHandler("test_operation") as handler:
             # Successful operation
             result = 1 + 1
@@ -289,7 +289,7 @@ class TestErrorHandlerContext:
 
     def test_error_handler_catches_exception(self):
 
-             """Test ErrorHandler catches and wraps exceptions."""
+        """Test ErrorHandler catches and wraps exceptions."""
         with ErrorHandler("test_operation", default_return="default"):
             # This will raise an exception
             raise ValueError("Test error")
@@ -299,14 +299,14 @@ class TestErrorHandlerContext:
 
     def test_error_handler_preserves_chat_exceptions(self):
 
-             """Test ErrorHandler preserves ChatModuleException."""
+        """Test ErrorHandler preserves ChatModuleException."""
         with pytest.raises(ChatAuthenticationError):
             with ErrorHandler("test_operation"):
                 raise ChatAuthenticationError("Auth failed")
 
     def test_error_handler_sets_request_id(self):
 
-             """Test ErrorHandler sets a request ID."""
+        """Test ErrorHandler sets a request ID."""
         initial_id = get_request_id()
 
         with ErrorHandler("test_operation"):
@@ -326,7 +326,7 @@ class TestErrorHandlingIntegration:
 
     @patch('tldw_Server_API.app.core.Chat.chat_exceptions.logger')
     def test_database_error_logging(self, mock_logger):
-             """Test that database errors are properly logged."""
+        """Test that database errors are properly logged."""
         error = ChatDatabaseError(
             message="Failed to save message",
             operation="save_message",
@@ -346,7 +346,7 @@ class TestErrorHandlingIntegration:
 
     @patch('tldw_Server_API.app.core.Chat.chat_exceptions.logger')
     def test_critical_error_logging(self, mock_logger):
-             """Test that critical errors are logged at correct level."""
+        """Test that critical errors are logged at correct level."""
         error = ChatModuleException(
             code=ChatErrorCode.INT_UNEXPECTED_ERROR,
             message="Critical system failure",
@@ -360,7 +360,7 @@ class TestErrorHandlingIntegration:
 
     def test_error_chain_with_cause(self):
 
-             """Test error chaining with cause tracking."""
+        """Test error chaining with cause tracking."""
         original_error = ValueError("Original problem")
 
         db_error = ChatDatabaseError(

@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.config import settings
 def test_claims_rebuild_health_reads_persisted(monkeypatch, tmp_path):
 
 
-     base_dir = tmp_path / "user_dbs"
+    base_dir = tmp_path / "user_dbs"
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
     monkeypatch.setenv("CLAIMS_MONITORING_SYSTEM_USER_ID", "1")
     settings["USER_DB_BASE_DIR"] = str(base_dir)

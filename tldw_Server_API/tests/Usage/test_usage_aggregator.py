@@ -133,7 +133,7 @@ async def test_aggregate_sqlite(monkeypatch):
 
     # Normalize rows to list[dict]
     def _to_dict(r):
-             if isinstance(r, dict):
+        if isinstance(r, dict):
             return r
         return {
             "user_id": r[0],

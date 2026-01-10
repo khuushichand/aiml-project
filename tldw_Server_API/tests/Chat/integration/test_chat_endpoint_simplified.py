@@ -1,6 +1,7 @@
 """
 Simplified chat endpoint tests using real database and authentication.
 """
+
 import pytest
 from fastapi import status
 from types import SimpleNamespace
@@ -10,41 +11,35 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
     ChatCompletionRequest,
-    ChatCompletionUserMessageParam
+    ChatCompletionUserMessageParam,
 )
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
 
 
 def test_chat_completion_basic(authenticated_client, mock_chacha_db, setup_dependencies):
-
-
-     """Test basic chat completion with authenticated user."""
+    """Test basic chat completion with authenticated user."""
 
     # Prepare request data - must include api_provider
     request_data = ChatCompletionRequest(
         model="test-model",
         api_provider="openai",  # Must specify provider
-        messages=[
-            ChatCompletionUserMessageParam(role="user", content="Hello, how are you?")
-        ]
+        messages=[ChatCompletionUserMessageParam(role="user", content="Hello, how are you?")],
     )
 
     # Mock the LLM call and API keys
-    with patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_llm, \
-         patch("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test-key"}):
+    with (
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_llm,
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test-key"}),
+    ):
         mock_llm.return_value = {
             "id": "chatcmpl-test",
-            "choices": [{
-                "message": {"role": "assistant", "content": "I'm doing well, thank you!"},
-                "finish_reason": "stop"
-            }]
+            "choices": [
+                {"message": {"role": "assistant", "content": "I'm doing well, thank you!"}, "finish_reason": "stop"}
+            ],
         }
 
         # Make request
-        response = authenticated_client.post(
-            "/api/v1/chat/completions",
-            json=request_data.model_dump()
-        )
+        response = authenticated_client.post("/api/v1/chat/completions", json=request_data.model_dump())
 
         # Verify response
         assert response.status_code == status.HTTP_200_OK
@@ -57,33 +52,30 @@ def test_chat_completion_basic(authenticated_client, mock_chacha_db, setup_depen
 
 @pytest.mark.skip(reason="Streaming tests hang with TestClient")
 def test_chat_completion_streaming(authenticated_client, mock_chacha_db):
-     """Test streaming chat completion."""
+    """Test streaming chat completion."""
 
     request_data = ChatCompletionRequest(
         model="test-model",
         api_provider="openai",
-        messages=[
-            ChatCompletionUserMessageParam(role="user", content="Tell me a story")
-        ],
-        stream=True
+        messages=[ChatCompletionUserMessageParam(role="user", content="Tell me a story")],
+        stream=True,
     )
 
     # Mock streaming response
     def mock_stream():
-             yield "data: {\"choices\": [{\"delta\": {\"content\": \"Once \"}}]}\n\n"
-        yield "data: {\"choices\": [{\"delta\": {\"content\": \"upon \"}}]}\n\n"
-        yield "data: {\"choices\": [{\"delta\": {\"content\": \"a \"}}]}\n\n"
-        yield "data: {\"choices\": [{\"delta\": {\"content\": \"time...\"}}]}\n\n"
+        yield 'data: {"choices": [{"delta": {"content": "Once "}}]}\n\n'
+        yield 'data: {"choices": [{"delta": {"content": "upon "}}]}\n\n'
+        yield 'data: {"choices": [{"delta": {"content": "a "}}]}\n\n'
+        yield 'data: {"choices": [{"delta": {"content": "time..."}}]}\n\n'
         yield "data: [DONE]\n\n"
 
-    with patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_llm, \
-         patch("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test-key"}):
+    with (
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_llm,
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test-key"}),
+    ):
         mock_llm.return_value = mock_stream()
 
-        response = authenticated_client.post(
-            "/api/v1/chat/completions",
-            json=request_data.model_dump()
-        )
+        response = authenticated_client.post("/api/v1/chat/completions", json=request_data.model_dump())
 
         assert response.status_code == status.HTTP_200_OK
         # For streaming, we just verify it doesn't error
@@ -91,41 +83,35 @@ def test_chat_completion_streaming(authenticated_client, mock_chacha_db):
 
 
 def test_chat_completion_with_character(authenticated_client, mock_chacha_db, setup_dependencies):
-
-
-     """Test chat completion with a specific character."""
+    """Test chat completion with a specific character."""
 
     # Add a character to the mock database
-    character_id = mock_chacha_db.add_character_card({
-        "name": "TestBot",
-        "description": "A test character",
-        "personality": "Friendly and helpful",
-        "system_prompt": "You are TestBot, a friendly assistant."
-    })
+    character_id = mock_chacha_db.add_character_card(
+        {
+            "name": "TestBot",
+            "description": "A test character",
+            "personality": "Friendly and helpful",
+            "system_prompt": "You are TestBot, a friendly assistant.",
+        }
+    )
 
     request_data = ChatCompletionRequest(
         model="test-model",
         api_provider="openai",
-        messages=[
-            ChatCompletionUserMessageParam(role="user", content="Who are you?")
-        ],
-        character_id=str(character_id)
+        messages=[ChatCompletionUserMessageParam(role="user", content="Who are you?")],
+        character_id=str(character_id),
     )
 
-    with patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_llm, \
-         patch("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test-key"}):
+    with (
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_llm,
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test-key"}),
+    ):
         mock_llm.return_value = {
             "id": "chatcmpl-test",
-            "choices": [{
-                "message": {"role": "assistant", "content": "I am TestBot!"},
-                "finish_reason": "stop"
-            }]
+            "choices": [{"message": {"role": "assistant", "content": "I am TestBot!"}, "finish_reason": "stop"}],
         }
 
-        response = authenticated_client.post(
-            "/api/v1/chat/completions",
-            json=request_data.model_dump()
-        )
+        response = authenticated_client.post("/api/v1/chat/completions", json=request_data.model_dump())
 
         assert response.status_code == status.HTTP_200_OK
 
@@ -135,9 +121,7 @@ def test_chat_completion_with_character(authenticated_client, mock_chacha_db, se
 
 
 def test_chat_completion_unauthorized(mock_chacha_db):
-
-
-     """Test that unauthenticated requests are rejected."""
+    """Test that unauthenticated requests are rejected."""
     from fastapi.testclient import TestClient
     from tldw_Server_API.app.main import app
 
@@ -147,102 +131,80 @@ def test_chat_completion_unauthorized(mock_chacha_db):
         csrf_token = response.cookies.get("csrf_token", "")
 
         request_data = ChatCompletionRequest(
-            model="test-model",
-            messages=[
-                ChatCompletionUserMessageParam(role="user", content="Hello")
-            ]
+            model="test-model", messages=[ChatCompletionUserMessageParam(role="user", content="Hello")]
         )
 
         response = client.post(
-            "/api/v1/chat/completions",
-            json=request_data.model_dump(),
-            headers={"X-CSRF-Token": csrf_token}
+            "/api/v1/chat/completions", json=request_data.model_dump(), headers={"X-CSRF-Token": csrf_token}
         )
 
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
 
 def test_chat_completion_invalid_model(authenticated_client, mock_chacha_db, setup_dependencies):
-
-
-     """Test handling of invalid model requests."""
+    """Test handling of invalid model requests."""
 
     # Use a valid provider but configure it to fail
     request_data = ChatCompletionRequest(
         model="invalid-model-xyz",
         api_provider="openai",  # Use a valid provider
-        messages=[
-            ChatCompletionUserMessageParam(role="user", content="Hello")
-        ]
+        messages=[ChatCompletionUserMessageParam(role="user", content="Hello")],
     )
 
-    with patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_llm, \
-         patch("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test-key"}):
+    with (
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_llm,
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test-key"}),
+    ):
         # Simulate an error for invalid model
         mock_llm.side_effect = Exception("Invalid model: invalid-model-xyz")
 
-        response = authenticated_client.post(
-            "/api/v1/chat/completions",
-            json=request_data.model_dump()
-        )
+        response = authenticated_client.post("/api/v1/chat/completions", json=request_data.model_dump())
 
         # Should return an error status
         assert response.status_code >= 400
 
 
 def test_chat_completion_with_conversation_history(authenticated_client, mock_chacha_db, setup_dependencies):
-
-
-     """Test chat with conversation history."""
+    """Test chat with conversation history."""
 
     # Get the actual default character ID (it's usually 2 based on our tests)
     # First check what character exists
     default_char = mock_chacha_db.get_character_card_by_name(DEFAULT_CHARACTER_NAME)
-    char_id = default_char['id'] if default_char else 2
+    char_id = default_char["id"] if default_char else 2
 
     # Create a conversation with the correct client_id
     # The mock_chacha_db has a client_id attribute
-    conv_id = mock_chacha_db.add_conversation({
-        "character_id": char_id,
-        "title": "Test Conversation",
-        "client_id": mock_chacha_db.client_id  # Use the database's client_id
-    })
+    conv_id = mock_chacha_db.add_conversation(
+        {
+            "character_id": char_id,
+            "title": "Test Conversation",
+            "client_id": mock_chacha_db.client_id,  # Use the database's client_id
+        }
+    )
 
     # Add some history
-    mock_chacha_db.add_message({
-        "conversation_id": conv_id,
-        "sender": "user",
-        "content": "Previous message"
-    })
-    mock_chacha_db.add_message({
-        "conversation_id": conv_id,
-        "sender": "assistant",
-        "content": "Previous response"
-    })
+    mock_chacha_db.add_message({"conversation_id": conv_id, "sender": "user", "content": "Previous message"})
+    mock_chacha_db.add_message({"conversation_id": conv_id, "sender": "assistant", "content": "Previous response"})
 
     request_data = ChatCompletionRequest(
         model="test-model",
         api_provider="openai",
-        messages=[
-            ChatCompletionUserMessageParam(role="user", content="Continue our conversation")
-        ],
-        conversation_id=str(conv_id)
+        messages=[ChatCompletionUserMessageParam(role="user", content="Continue our conversation")],
+        conversation_id=str(conv_id),
     )
 
-    with patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_llm, \
-         patch("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test-key"}):
+    with (
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_llm,
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test-key"}),
+    ):
         mock_llm.return_value = {
             "id": "chatcmpl-test",
-            "choices": [{
-                "message": {"role": "assistant", "content": "Continuing from before..."},
-                "finish_reason": "stop"
-            }]
+            "choices": [
+                {"message": {"role": "assistant", "content": "Continuing from before..."}, "finish_reason": "stop"}
+            ],
         }
 
-        response = authenticated_client.post(
-            "/api/v1/chat/completions",
-            json=request_data.model_dump()
-        )
+        response = authenticated_client.post("/api/v1/chat/completions", json=request_data.model_dump())
 
         assert response.status_code == status.HTTP_200_OK
 
@@ -262,35 +224,27 @@ def test_chat_completion_with_conversation_history(authenticated_client, mock_ch
 
 
 def test_chat_completion_rate_limiting(authenticated_client, mock_chacha_db, setup_dependencies):
-
-
-     """Test rate limiting functionality."""
+    """Test rate limiting functionality."""
 
     request_data = ChatCompletionRequest(
         model="test-model",
         api_provider="openai",
-        messages=[
-            ChatCompletionUserMessageParam(role="user", content="Hello")
-        ]
+        messages=[ChatCompletionUserMessageParam(role="user", content="Hello")],
     )
 
-    with patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_llm, \
-         patch("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test-key"}):
+    with (
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_llm,
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS", {"openai": "test-key"}),
+    ):
         mock_llm.return_value = {
             "id": "chatcmpl-test",
-            "choices": [{
-                "message": {"role": "assistant", "content": "Response"},
-                "finish_reason": "stop"
-            }]
+            "choices": [{"message": {"role": "assistant", "content": "Response"}, "finish_reason": "stop"}],
         }
 
         # Make multiple rapid requests
         responses = []
         for _ in range(5):
-            response = authenticated_client.post(
-                "/api/v1/chat/completions",
-                json=request_data.model_dump()
-            )
+            response = authenticated_client.post("/api/v1/chat/completions", json=request_data.model_dump())
             responses.append(response.status_code)
 
         # All should succeed (rate limiting might not be enabled in test)
@@ -304,9 +258,7 @@ def test_chat_completion_rg_primary_deny(
     setup_dependencies,
     monkeypatch,
 ):
-
-
-     """
+    """
     When ResourceGovernor is enabled and the RG gate denies,
     the chat endpoint should surface a 429 with a policy-aware message.
     """
@@ -314,9 +266,7 @@ def test_chat_completion_rg_primary_deny(
     request_data = ChatCompletionRequest(
         model="test-model",
         api_provider="openai",
-        messages=[
-            ChatCompletionUserMessageParam(role="user", content="Hello under RG")
-        ],
+        messages=[ChatCompletionUserMessageParam(role="user", content="Hello under RG")],
     )
 
     monkeypatch.setenv("RG_ENABLED", "1")
@@ -327,9 +277,10 @@ def test_chat_completion_rg_primary_deny(
         gov = app.state.rg_governor
 
     if getattr(app.state, "rg_policy_loader", None) is None:
+
         class _Loader:
             def get_policy(self, _policy_id):
-                             return {}
+                return {}
 
         app.state.rg_policy_loader = _Loader()
 
@@ -345,11 +296,12 @@ def test_chat_completion_rg_primary_deny(
     monkeypatch.setattr(gov, "reserve", fake_reserve, raising=True)
     monkeypatch.setattr(gov, "commit", fake_commit, raising=False)
 
-    with patch(
-        "tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call"
-    ) as mock_llm, patch(
-        "tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS",
-        {"openai": "test-key"},
+    with (
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_llm,
+        patch(
+            "tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS",
+            {"openai": "test-key"},
+        ),
     ):
         mock_llm.return_value = {
             "id": "chatcmpl-test",
@@ -377,9 +329,7 @@ def test_chat_completion_rg_shadow_vs_primary_behaviour(
     setup_dependencies,
     monkeypatch,
 ):
-
-
-     """
+    """
     Exercise /api/v1/chat/completions under RG allow/deny decisions to
     validate 200/429 behavior.
     """
@@ -387,9 +337,7 @@ def test_chat_completion_rg_shadow_vs_primary_behaviour(
     request_data = ChatCompletionRequest(
         model="test-model",
         api_provider="openai",
-        messages=[
-            ChatCompletionUserMessageParam(role="user", content="Hello RG shadow/primary")
-        ],
+        messages=[ChatCompletionUserMessageParam(role="user", content="Hello RG shadow/primary")],
     )
 
     monkeypatch.setenv("TEST_MODE", "true")
@@ -401,9 +349,10 @@ def test_chat_completion_rg_shadow_vs_primary_behaviour(
         gov = app.state.rg_governor
 
     if getattr(app.state, "rg_policy_loader", None) is None:
+
         class _Loader:
             def get_policy(self, _policy_id):
-                             return {}
+                return {}
 
         app.state.rg_policy_loader = _Loader()
 
@@ -423,11 +372,12 @@ def test_chat_completion_rg_shadow_vs_primary_behaviour(
     async def fake_commit(*_args, **_kwargs):
         return None
 
-    with patch(
-        "tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call"
-    ) as mock_llm, patch(
-        "tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS",
-        {"openai": "test-key"},
+    with (
+        patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call") as mock_llm,
+        patch(
+            "tldw_Server_API.app.api.v1.endpoints.chat.API_KEYS",
+            {"openai": "test-key"},
+        ),
     ):
         mock_llm.return_value = {
             "id": "chatcmpl-test",

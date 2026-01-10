@@ -16,90 +16,103 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 class _FakeStreamingResponse:
     def __init__(self, lines):
-             self._lines = list(lines)
+        self._lines = list(lines)
         self.status_code = 200
 
     def raise_for_status(self):
 
-             return None
+        return None
 
     def iter_lines(self, decode_unicode=True):
 
-             for line in self._lines:
+        for line in self._lines:
             yield line
 
     def close(self):
 
-             return None
+        return None
 
 
 class _FakeSession:
     def __init__(self, *args, **kwargs):
-             pass
+        pass
 
     def __enter__(self):
 
-             return self
+        return self
 
     def __exit__(self, exc_type, exc, tb):
 
-             return False
+        return False
 
     def mount(self, *args, **kwargs):
 
-             return None
+        return None
 
     def post(self, url, headers=None, json=None, stream=False, timeout=30):
 
-             # Provide a deterministic multi-chunk SSE response
+        # Provide a deterministic multi-chunk SSE response
         # 2 delta chunks and then [DONE]
         chunks = [
-            'data: ' + _json.dumps({
-                "id": "chatcmpl-1",
-                "object": "chat.completion.chunk",
-                "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]
-            }),
-            'data: ' + _json.dumps({
-                "id": "chatcmpl-1",
-                "object": "chat.completion.chunk",
-                "choices": [{"index": 0, "delta": {"content": "Hello"}, "finish_reason": None}]
-            }),
-            'data: ' + _json.dumps({
-                "id": "chatcmpl-1",
-                "object": "chat.completion.chunk",
-                "choices": [{"index": 0, "delta": {"content": " world"}, "finish_reason": None}]
-            }),
-            'data: [DONE]'
+            "data: "
+            + _json.dumps(
+                {
+                    "id": "chatcmpl-1",
+                    "object": "chat.completion.chunk",
+                    "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+                }
+            ),
+            "data: "
+            + _json.dumps(
+                {
+                    "id": "chatcmpl-1",
+                    "object": "chat.completion.chunk",
+                    "choices": [{"index": 0, "delta": {"content": "Hello"}, "finish_reason": None}],
+                }
+            ),
+            "data: "
+            + _json.dumps(
+                {
+                    "id": "chatcmpl-1",
+                    "object": "chat.completion.chunk",
+                    "choices": [{"index": 0, "delta": {"content": " world"}, "finish_reason": None}],
+                }
+            ),
+            "data: [DONE]",
         ]
         return _FakeStreamingResponse(chunks)
 
 
 @pytest.mark.asyncio
 async def test_complete_v2_streaming_e2e_monkeypatched(monkeypatch):
-    # Monkeypatch requests.Session used by chat_with_openai to emit SSE chunks
     import tldw_Server_API.app.core.LLM_Calls.chat_calls as llm_mod
-    monkeypatch.setattr(llm_mod.requests, "Session", _FakeSession)
+
+    monkeypatch.setattr(llm_mod, "create_session_with_retries", lambda *args, **kwargs: _FakeSession())
 
     streaming_payloads = [
-        _json.dumps({
-            "id": "chatcmpl-1",
-            "object": "chat.completion.chunk",
-            "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]
-        }),
-        _json.dumps({
-            "id": "chatcmpl-1",
-            "object": "chat.completion.chunk",
-            "choices": [{"index": 0, "delta": {"content": "Hello"}, "finish_reason": None}]
-        }),
-        _json.dumps({
-            "id": "chatcmpl-1",
-            "object": "chat.completion.chunk",
-            "choices": [{"index": 0, "delta": {"content": " world"}, "finish_reason": None}]
-        }),
+        _json.dumps(
+            {
+                "id": "chatcmpl-1",
+                "object": "chat.completion.chunk",
+                "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+            }
+        ),
+        _json.dumps(
+            {
+                "id": "chatcmpl-1",
+                "object": "chat.completion.chunk",
+                "choices": [{"index": 0, "delta": {"content": "Hello"}, "finish_reason": None}],
+            }
+        ),
+        _json.dumps(
+            {
+                "id": "chatcmpl-1",
+                "object": "chat.completion.chunk",
+                "choices": [{"index": 0, "delta": {"content": " world"}, "finish_reason": None}],
+            }
+        ),
     ]
-    stream_chunks = [
-        f"event: completion.chunk\ndata: {payload}\n\n" for payload in streaming_payloads
-    ]
+    stream_chunks = [f"event: completion.chunk\ndata: {payload}\n\n" for payload in streaming_payloads]
     stream_chunks.append("event: close\n\n")
     stream_chunks.append("data: [DONE]\n\n")
 
@@ -107,9 +120,10 @@ async def test_complete_v2_streaming_e2e_monkeypatched(monkeypatch):
 
     def _fake_perform_chat_api_call(*args, **kwargs):
 
-             def _generator():
+        def _generator():
             for chunk in stream_chunks:
                 yield chunk
+
         return _generator()
 
     monkeypatch.setattr(chat_sessions_mod, "perform_chat_api_call", _fake_perform_chat_api_call)
@@ -122,6 +136,7 @@ async def test_complete_v2_streaming_e2e_monkeypatched(monkeypatch):
     monkeypatch.setenv("OPENAI_API_BASE_URL", "http://mock.local")
     try:
         from tldw_Server_API.app.main import app
+
         settings = get_settings()
         headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
         transport = httpx.ASGITransport(app=app)
@@ -138,19 +153,24 @@ async def test_complete_v2_streaming_e2e_monkeypatched(monkeypatch):
             url = f"/api/v1/chats/{chat_id}/complete-v2"
             expected_lines = [
                 # Each line should be forwarded 1:1
-                'data: ' + streaming_payloads[0],
-                'data: ' + streaming_payloads[1],
-                'data: ' + streaming_payloads[2],
-                'data: [DONE]'
+                "data: " + streaming_payloads[0],
+                "data: " + streaming_payloads[1],
+                "data: " + streaming_payloads[2],
+                "data: [DONE]",
             ]
             collected = []
-            async with client.stream("POST", url, headers=headers, json={
-                "provider": "openai",
-                "model": "gpt-4o-mini",
-                "append_user_message": "ping",
-                "save_to_db": False,
-                "stream": True
-            }) as response:
+            async with client.stream(
+                "POST",
+                url,
+                headers=headers,
+                json={
+                    "provider": "openai",
+                    "model": "gpt-4o-mini",
+                    "append_user_message": "ping",
+                    "save_to_db": False,
+                    "stream": True,
+                },
+            ) as response:
                 assert response.status_code == 200
                 async for line in response.aiter_lines():
                     if line and line.startswith("data: "):

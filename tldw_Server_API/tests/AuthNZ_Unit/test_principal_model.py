@@ -10,9 +10,7 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import (
 
 
 def test_compute_principal_id_is_stable_and_pseudonymous():
-
-
-     kind = "user"
+    kind = "user"
     subject = "user:123"
 
     first = compute_principal_id(kind, subject)
@@ -27,27 +25,21 @@ def test_compute_principal_id_is_stable_and_pseudonymous():
 
 
 def test_auth_principal_derives_principal_id_from_user_id():
-
-
-     principal = AuthPrincipal(kind="user", user_id=42, roles=["user"], permissions=[])
+    principal = AuthPrincipal(kind="user", user_id=42, roles=["user"], permissions=[])
 
     expected = compute_principal_id("user", "user:42")
     assert principal.principal_id == expected
 
 
 def test_auth_principal_derives_principal_id_from_api_key_id():
-
-
-     principal = AuthPrincipal(kind="api_key", api_key_id=7)
+    principal = AuthPrincipal(kind="api_key", api_key_id=7)
 
     expected = compute_principal_id("api_key", "api_key:7")
     assert principal.principal_id == expected
 
 
 def test_auth_principal_prefers_explicit_subject_for_principal_id():
-
-
-     principal = AuthPrincipal(
+    principal = AuthPrincipal(
         kind="service",
         subject="service:workflow-engine",
         user_id=None,
@@ -60,9 +52,7 @@ def test_auth_principal_prefers_explicit_subject_for_principal_id():
 
 
 def test_auth_context_wraps_principal_and_metadata():
-
-
-     principal = AuthPrincipal(kind="anonymous")
+    principal = AuthPrincipal(kind="anonymous")
     ctx = AuthContext(
         principal=principal,
         ip="127.0.0.1",
@@ -77,16 +67,12 @@ def test_auth_context_wraps_principal_and_metadata():
 
 
 def test_is_single_user_principal_prefers_explicit_subject():
-
-
-     principal = AuthPrincipal(kind="user", user_id=123, subject="single_user")
+    principal = AuthPrincipal(kind="user", user_id=123, subject="single_user")
     assert is_single_user_principal(principal) is True
 
 
 def test_is_single_user_principal_fixed_id_fallback_requires_single_user_mode(monkeypatch):
-
-
-     from tldw_Server_API.app.core.AuthNZ import settings as auth_settings
+    from tldw_Server_API.app.core.AuthNZ import settings as auth_settings
 
     monkeypatch.setattr(
         auth_settings,

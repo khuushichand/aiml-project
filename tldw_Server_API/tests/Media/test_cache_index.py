@@ -3,23 +3,23 @@ import pytest
 
 class _FakeRedis:
     def __init__(self):
-             self.calls = []
+        self.calls = []
         self.kv = {}
         self.sets = {}
 
     # Basic KV
     def setex(self, key, ttl, value):
-             self.calls.append(("setex", key, ttl, value))
+        self.calls.append(("setex", key, ttl, value))
         self.kv[key] = value
 
     def get(self, key):
 
-             self.calls.append(("get", key))
+        self.calls.append(("get", key))
         return self.kv.get(key)
 
     def delete(self, *keys):
 
-             self.calls.append(("delete", keys))
+        self.calls.append(("delete", keys))
         deleted = 0
         for k in keys:
             k = k.decode() if isinstance(k, (bytes, bytearray)) else k
@@ -30,30 +30,30 @@ class _FakeRedis:
 
     # Set ops
     def sadd(self, key, member):
-             self.calls.append(("sadd", key, member))
+        self.calls.append(("sadd", key, member))
         self.sets.setdefault(key, set()).add(member)
 
     def smembers(self, key):
 
-             self.calls.append(("smembers", key))
+        self.calls.append(("smembers", key))
         # Redis returns set of bytes in many clients; emulate strings for simplicity
         return set(self.sets.get(key, set()))
 
     def expire(self, key, ttl):
 
-             self.calls.append(("expire", key, ttl))
+        self.calls.append(("expire", key, ttl))
         return True
 
     # Scan fallback
     def scan(self, cursor=0, match=None, count=None):
-             self.calls.append(("scan", cursor, match, count))
+        self.calls.append(("scan", cursor, match, count))
         # Return no matches by default
         return 0, []
 
 
 @pytest.mark.unit
 def test_cache_index_added_and_invalidated(monkeypatch):
-     from tldw_Server_API.app.api.v1.endpoints import media as media_mod
+    from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 
     fake = _FakeRedis()
     monkeypatch.setattr(media_mod, "cache", fake)
@@ -85,16 +85,16 @@ def test_cache_index_added_and_invalidated(monkeypatch):
 
 @pytest.mark.unit
 def test_invalidate_uses_scan_when_index_missing(monkeypatch):
-     from tldw_Server_API.app.api.v1.endpoints import media as media_mod
+    from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 
     class _ScanOnlyRedis(_FakeRedis):
         def smembers(self, key):
-                     # Simulate missing index set
+            # Simulate missing index set
             return set()
 
         def scan(self, cursor=0, match=None, count=None):
 
-                     # Return one matching key via SCAN on first call, then finish
+            # Return one matching key via SCAN on first call, then finish
             if cursor == 0:
                 # Create the key to be deleted in KV
                 self.kv["cache:/api/v1/media/456:ghi789"] = "v"
@@ -112,7 +112,7 @@ def test_invalidate_uses_scan_when_index_missing(monkeypatch):
 
 @pytest.mark.unit
 def test_cache_index_added_and_invalidated_modular_mode(monkeypatch):
-     """
+    """
     Ensure cache_response / invalidate_cache honour a monkeypatched
     media.cache when legacy media is disabled (modular-only/_DummyCache mode).
     """
@@ -145,7 +145,7 @@ def test_cache_index_added_and_invalidated_modular_mode(monkeypatch):
 
 @pytest.mark.unit
 def test_invalidate_uses_scan_when_index_missing_modular_mode(monkeypatch):
-     """
+    """
     Ensure scan-based invalidation path also uses the patched cache in
     modular-only mode (no legacy media module).
     """
@@ -153,12 +153,12 @@ def test_invalidate_uses_scan_when_index_missing_modular_mode(monkeypatch):
 
     class _ScanOnlyRedis(_FakeRedis):
         def smembers(self, key):
-                     # Simulate missing index set
+            # Simulate missing index set
             return set()
 
         def scan(self, cursor=0, match=None, count=None):
 
-                     # Return one matching key via SCAN on first call, then finish
+            # Return one matching key via SCAN on first call, then finish
             if cursor == 0:
                 self.kv["cache:/api/v1/media/999:ghi999"] = "v"
                 return 0, ["cache:/api/v1/media/999:ghi999"]

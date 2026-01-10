@@ -15,7 +15,7 @@ Security
 - Background execution via FastAPI BackgroundTasks or job queue
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, Request, status
 from typing import List, Optional, Dict, Any
 import uuid
 import json
@@ -145,22 +145,8 @@ async def create_evaluation(
         Created evaluation response
     """
     try:
-        # If metrics provided, return an immediate response echoing metrics (test compatibility)
-        if evaluation.metrics is not None:
-            return EvaluationResponse(
-                id=0,
-                uuid=str(uuid.uuid4()),
-                project_id=evaluation.project_id,
-                prompt_id=evaluation.prompt_id,
-                name=evaluation.name or "Evaluation",
-                description=evaluation.description or "",
-                status="completed",
-                created_at=datetime.now().isoformat(),
-                metrics=evaluation.metrics.model_dump() if hasattr(evaluation.metrics, "model_dump") else dict(evaluation.metrics),
-                config=evaluation.config.model_dump() if hasattr(evaluation.config, "model_dump") and evaluation.config else {},
-            )
-        # Normalize incoming model configuration to a list of dicts for storage
-        # Support both legacy shape (model_configs: List[dict]) and new shape (config: dict)
+        # Normalize incoming model configuration to a list of dicts for storage.
+        # Support both legacy shape (model_configs: List[dict]) and new shape (config: dict).
         incoming_configs = None
         try:
             incoming_configs = getattr(evaluation, "model_configs")
@@ -224,6 +210,21 @@ async def create_evaluation(
                     "error_code": "missing_provider_credentials",
                     "message": f"Provider '{provider_name}' requires an API key.",
                 },
+            )
+
+        # If metrics provided, return an immediate response echoing metrics (test compatibility).
+        if evaluation.metrics is not None:
+            return EvaluationResponse(
+                id=0,
+                uuid=str(uuid.uuid4()),
+                project_id=evaluation.project_id,
+                prompt_id=evaluation.prompt_id,
+                name=evaluation.name or "Evaluation",
+                description=evaluation.description or "",
+                status="completed",
+                created_at=datetime.now().isoformat(),
+                metrics=evaluation.metrics.model_dump() if hasattr(evaluation.metrics, "model_dump") else dict(evaluation.metrics),
+                config=evaluation.config.model_dump() if hasattr(evaluation.config, "model_dump") and evaluation.config else {},
             )
 
         # Use EvaluationManager for sync path; for async we create a record and update later
@@ -349,6 +350,8 @@ async def create_evaluation(
                 metrics=result.get("metrics"),
             )
 
+    except HTTPException:
+        raise
     except Exception as e:
         rid = ensure_request_id(request) if request is not None else None
         tp = ensure_traceparent(request) if request is not None else ""

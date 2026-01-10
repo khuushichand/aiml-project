@@ -12,9 +12,7 @@ from Helper_Scripts.voice_latency_harness.run import (
 
 
 def test_percentiles_basic() -> None:
-
-
-     """_percentiles should compute expected p50/p90 values for a numeric sequence."""
+    """_percentiles should compute expected p50/p90 values for a numeric sequence."""
     values = [0.1, 0.2, 0.3, 0.4]
     result = _percentiles(values, pcts=(50, 90))
     assert set(result.keys()) == {"p50", "p90"}
@@ -23,9 +21,7 @@ def test_percentiles_basic() -> None:
 
 
 def test_extract_histogram_percentiles_from_values_list() -> None:
-
-
-     """_extract_histogram_percentiles should handle plain list and 'values' dict inputs."""
+    """_extract_histogram_percentiles should handle plain list and 'values' dict inputs."""
     metrics: Dict[str, Any] = {
         "stt_final_latency_seconds": [0.1, 0.2, 0.3],
         "tts_ttfb_seconds": {"values": [0.05, 0.15, 0.25]},
@@ -41,9 +37,7 @@ def test_extract_histogram_percentiles_from_values_list() -> None:
 
 
 def test_parse_prometheus_histograms_and_extract() -> None:
-
-
-     """_parse_prometheus_histograms should parse Prom text into bucketed histograms consumable by _extract_histogram_percentiles."""
+    """_parse_prometheus_histograms should parse Prom text into bucketed histograms consumable by _extract_histogram_percentiles."""
     prom_text = """
     # HELP stt_final_latency_seconds STT latency
     # TYPE stt_final_latency_seconds histogram

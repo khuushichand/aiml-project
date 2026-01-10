@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 def test_http_file_size_limit_exceeded(monkeypatch, bypass_api_limits):
 
 
-     """Uploads an oversized file to trigger 413 without invoking ffmpeg."""
+    """Uploads an oversized file to trigger 413 without invoking ffmpeg."""
     # Use helper to bypass ingress limits cleanly for this test
     import tldw_Server_API.app.api.v1.endpoints.audio as audio_ep
     from tldw_Server_API.app.main import app
@@ -39,7 +39,7 @@ def test_http_file_size_limit_exceeded(monkeypatch, bypass_api_limits):
 def test_http_concurrent_jobs_cap(monkeypatch, bypass_api_limits):
 
 
-     """Forces can_start_job to reject to exercise 429 response path."""
+    """Forces can_start_job to reject to exercise 429 response path."""
     # Bypass ingress rate limits to let endpoint-level job cap surface
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     from tldw_Server_API.app.main import app

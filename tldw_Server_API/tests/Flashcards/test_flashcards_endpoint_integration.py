@@ -18,7 +18,7 @@ AUTH_HEADERS = {"X-API-KEY": TestConfig.TEST_API_KEY}
 
 @pytest.fixture(scope="function")
 def flashcards_db(tmp_path):
-     db_path = tmp_path / "flashcards.db"
+    db_path = tmp_path / "flashcards.db"
     db = CharactersRAGDB(str(db_path), client_id=f"test-{uuid.uuid4().hex[:6]}")
     yield db
     db.close_connection()
@@ -29,7 +29,7 @@ def client_with_flashcards_db(flashcards_db: CharactersRAGDB):
     TestConfig.setup_test_environment()
     from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
     def override_get_db():
-             logger.info("[TEST] override get_chacha_db_for_user -> flashcards_db")
+        logger.info("[TEST] override get_chacha_db_for_user -> flashcards_db")
         try:
             yield flashcards_db
         finally:

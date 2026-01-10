@@ -6,7 +6,7 @@ import pytest
 def test_process_emails_endpoint_basic(client_user_only):
 
 
-     # Build a minimal EML file
+    # Build a minimal EML file
     content = (
         b"From: Alice <alice@example.com>\r\n"
         b"To: Bob <bob@example.com>\r\n"
@@ -34,7 +34,7 @@ def test_process_emails_endpoint_basic(client_user_only):
 def _build_zip_of_emls() -> bytes:
 
 
-     # Build two simple EMLs in a zip archive (in-memory)
+    # Build two simple EMLs in a zip archive (in-memory)
     eml1 = (
         b"From: A <a@example.com>\r\n"
         b"To: B <b@example.com>\r\n"
@@ -62,7 +62,7 @@ def _build_zip_of_emls() -> bytes:
 def test_process_emails_endpoint_zip_archive(client_user_only):
 
 
-     zip_bytes = _build_zip_of_emls()
+    zip_bytes = _build_zip_of_emls()
     files = {
         "files": ("emails.zip", BytesIO(zip_bytes), "application/zip"),
     }
@@ -90,7 +90,7 @@ def test_process_emails_endpoint_zip_archive(client_user_only):
 def _build_mbox_two_emails() -> bytes:
 
 
-     # Build a small mbox file with two minimal emails via mailbox
+    # Build a small mbox file with two minimal emails via mailbox
     import mailbox as _mailbox
     import tempfile as _tempfile
     from email.message import EmailMessage
@@ -128,7 +128,7 @@ def _build_mbox_two_emails() -> bytes:
 def test_process_emails_endpoint_mbox_archive(client_user_only):
 
 
-     mbox_bytes = _build_mbox_two_emails()
+    mbox_bytes = _build_mbox_two_emails()
     files = {
         "files": ("emails.mbox", BytesIO(mbox_bytes), "application/mbox"),
     }
@@ -156,7 +156,7 @@ def test_process_emails_endpoint_mbox_archive(client_user_only):
 def test_process_emails_endpoint_mbox_guardrail_too_many_messages(client_user_only):
 
 
-     # Lower guardrail for internal files to a small number, then exceed it
+    # Lower guardrail for internal files to a small number, then exceed it
     import mailbox as _mailbox
     import tempfile as _tempfile
     from email.message import EmailMessage
@@ -215,7 +215,7 @@ def test_process_emails_endpoint_mbox_guardrail_too_many_messages(client_user_on
 def test_process_emails_endpoint_mbox_guardrail_oversized_bytes(client_user_only):
 
 
-     # Lower size guardrail to 1 MB and build a ~1.5 MB mbox to trigger size error
+    # Lower size guardrail to 1 MB and build a ~1.5 MB mbox to trigger size error
     import mailbox as _mailbox
     import tempfile as _tempfile
     from email.message import EmailMessage
@@ -294,7 +294,7 @@ def _build_zip_with_emls(n: int, payload_size: int = 32) -> bytes:
 def test_process_emails_endpoint_zip_guardrail_too_many_files(client_user_only):
 
 
-     from tldw_Server_API.app.core.Ingestion_Media_Processing.Email import Email_Processing_Lib as email_lib
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Email import Email_Processing_Lib as email_lib
     archive_cfg = email_lib.DEFAULT_MEDIA_TYPE_CONFIG.get('archive', {})
     orig_max_files = archive_cfg.get('max_internal_files', 100)
     try:
@@ -324,7 +324,7 @@ def test_process_emails_endpoint_zip_guardrail_too_many_files(client_user_only):
 def test_process_emails_endpoint_zip_guardrail_oversize(client_user_only):
 
 
-     from tldw_Server_API.app.core.Ingestion_Media_Processing.Email import Email_Processing_Lib as email_lib
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.Email import Email_Processing_Lib as email_lib
     archive_cfg = email_lib.DEFAULT_MEDIA_TYPE_CONFIG.get('archive', {})
     orig_max_size_mb = archive_cfg.get('max_internal_uncompressed_size_mb', 200)
     try:
@@ -355,7 +355,7 @@ def test_process_emails_endpoint_zip_guardrail_oversize(client_user_only):
 
 @pytest.mark.performance
 def test_process_emails_endpoint_zip_large_container(client_user_only):
-     # Build 120 small EMLs and ensure the endpoint expands and processes them
+    # Build 120 small EMLs and ensure the endpoint expands and processes them
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Email import Email_Processing_Lib as email_lib
     archive_cfg = email_lib.DEFAULT_MEDIA_TYPE_CONFIG.get('archive', {})
     orig_max_files = archive_cfg.get('max_internal_files', 100)
@@ -384,7 +384,7 @@ def test_process_emails_endpoint_zip_large_container(client_user_only):
 
 @pytest.mark.performance
 def test_process_emails_endpoint_mbox_large_container(client_user_only):
-     # Build an mbox with 120 small messages; ensure expansion handles volume
+    # Build an mbox with 120 small messages; ensure expansion handles volume
     import mailbox as _mailbox
     import tempfile as _tempfile
     from email.message import EmailMessage
@@ -438,7 +438,7 @@ def test_process_emails_endpoint_mbox_large_container(client_user_only):
 @pytest.mark.requires_pypff
 @pytest.mark.skipif(__import__('importlib').util.find_spec('pypff') is None, reason="pypff is not installed")
 def test_process_emails_endpoint_pst_with_pypff_extraction(client_user_only):
-     # This test only runs when pypff is installed on the system.
+    # This test only runs when pypff is installed on the system.
     # Use a tiny fake byte buffer; handler will try to open and likely error as invalid PST.
     # The assertion is focused on exercising the pypff code path under real install conditions.
     pst_bytes = b"!pst"
@@ -466,7 +466,7 @@ def test_process_emails_endpoint_pst_with_pypff_extraction(client_user_only):
 @pytest.mark.skipif(__import__('os').environ.get('PST_FIXTURE_PATH') in (None, ''), reason="No PST_FIXTURE_PATH provided")
 @pytest.mark.skipif(__import__('importlib').util.find_spec('pypff') is None, reason="pypff is not installed")
 def test_process_emails_endpoint_pst_recipients_and_date_strict(client_user_only):
-     # Requires a tiny valid PST fixture at PST_FIXTURE_PATH with at least one message
+    # Requires a tiny valid PST fixture at PST_FIXTURE_PATH with at least one message
     import os
     pst_path = os.environ.get('PST_FIXTURE_PATH')
     assert os.path.isfile(pst_path), f"Fixture not found: {pst_path}"
@@ -507,7 +507,7 @@ def test_process_emails_endpoint_pst_recipients_and_date_strict(client_user_only
 def test_process_emails_endpoint_pst_feature_flag_behavior(client_user_only):
 
 
-     # Without pypff installed, uploading a small .pst with accept_pst=true should return informative error and grouping keyword
+    # Without pypff installed, uploading a small .pst with accept_pst=true should return informative error and grouping keyword
     placeholder = b"!pst placeholder!"  # not a real PST
     files = {
         "files": ("emails.pst", BytesIO(placeholder), "application/octet-stream"),

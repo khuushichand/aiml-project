@@ -131,6 +131,15 @@ def _resolve_model_provider(
         return default_model, resolved_provider
 
 
+def _embeddings_jobs_backend() -> str:
+    raw = (os.getenv("EMBEDDINGS_JOBS_BACKEND") or os.getenv("TLDW_JOBS_BACKEND") or "").strip().lower()
+    if raw in {"jobs", "core"}:
+        return "jobs"
+    if raw in {"redis"}:
+        return "redis"
+    return "redis"
+
+
 class GenerateEmbeddingsRequest(BaseModel):
     """Request model for generating embeddings"""
     embedding_model: Optional[str] = Field(
@@ -637,11 +646,42 @@ async def generate_embeddings(
         )
         collection_name = f"user_{user_id}_media_embeddings"
 
+        adapter = EmbeddingsJobsAdapter()
+        if _embeddings_jobs_backend() == "jobs":
+            media_item = db.get_media_by_id(media_id)
+            if not media_item:
+                raise HTTPException(
+                    status_code=http_status.HTTP_404_NOT_FOUND,
+                    detail=f"Media item {media_id} not found"
+                )
+            job_id = None
+            try:
+                job_row = adapter.create_job(
+                    user_id=user_id,
+                    media_id=media_id,
+                    embedding_model=embedding_model,
+                    embedding_provider=embedding_provider,
+                    chunk_size=request.chunk_size,
+                    chunk_overlap=request.chunk_overlap,
+                    request_source="media",
+                )
+                job_id = str(job_row.get("uuid") or job_row.get("id"))
+            except Exception as e:
+                logger.warning(f"Failed to persist media embedding job: {e}")
+            return GenerateEmbeddingsResponse(
+                media_id=media_id,
+                status="accepted",
+                message="Embedding generation started",
+                embedding_count=None,
+                embedding_model=embedding_model,
+                chunks_processed=None,
+                job_id=job_id
+            )
+
         # Get media content
         media_content = await get_media_content(media_id, db)
 
         # Persist a job record and run generation in the background
-        adapter = EmbeddingsJobsAdapter()
         job_id = None
         try:
             job_row = adapter.create_job(
@@ -649,6 +689,9 @@ async def generate_embeddings(
                 media_id=media_id,
                 embedding_model=embedding_model,
                 embedding_provider=embedding_provider,
+                chunk_size=request.chunk_size,
+                chunk_overlap=request.chunk_overlap,
+                request_source="media",
             )
             job_id = str(job_row.get("uuid") or job_row.get("id"))
         except Exception as e:
@@ -726,11 +769,6 @@ async def generate_embeddings_batch(
         request.embedding_provider,
     )
 
-    # Ensure media exists before launching jobs
-    media_payloads: Dict[int, Dict[str, Any]] = {}
-    for media_id in media_ids:
-        media_payloads[media_id] = await get_media_content(media_id, db)
-
     user_id = resolve_user_id_for_request(
         current_user,
         error_status=http_status.HTTP_400_BAD_REQUEST,
@@ -738,6 +776,40 @@ async def generate_embeddings_batch(
     adapter = EmbeddingsJobsAdapter()
 
     job_ids: List[str] = []
+
+    if _embeddings_jobs_backend() == "jobs":
+        for media_id in media_ids:
+            media_item = db.get_media_by_id(media_id)
+            if not media_item:
+                raise HTTPException(
+                    status_code=http_status.HTTP_404_NOT_FOUND,
+                    detail=f"Media item {media_id} not found"
+                )
+            job_id: Optional[str] = None
+            try:
+                job_row = adapter.create_job(
+                    user_id=user_id,
+                    media_id=media_id,
+                    embedding_model=embedding_model,
+                    embedding_provider=embedding_provider,
+                    chunk_size=request.chunk_size,
+                    chunk_overlap=request.chunk_overlap,
+                    request_source="media_batch",
+                )
+                job_id = str(job_row.get("uuid") or job_row.get("id"))
+                job_ids.append(job_id)
+            except Exception as exc:
+                logger.warning(f"Failed to persist batch job {job_id} for media {media_id}: {exc}")
+        return BatchMediaEmbeddingsResponse(
+            status="accepted",
+            message=f"Launched {len(job_ids)} embedding jobs",
+            jobs=job_ids
+        )
+
+    # Ensure media exists before launching jobs
+    media_payloads: Dict[int, Dict[str, Any]] = {}
+    for media_id in media_ids:
+        media_payloads[media_id] = await get_media_content(media_id, db)
 
     for media_id in media_ids:
         job_id: Optional[str] = None
@@ -747,6 +819,9 @@ async def generate_embeddings_batch(
                 media_id=media_id,
                 embedding_model=embedding_model,
                 embedding_provider=embedding_provider,
+                chunk_size=request.chunk_size,
+                chunk_overlap=request.chunk_overlap,
+                request_source="media_batch",
             )
             job_id = str(job_row.get("uuid") or job_row.get("id"))
             job_ids.append(job_id)

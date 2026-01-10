@@ -16,11 +16,11 @@ from fastapi import status # Use status codes from fastapi
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.main import app as fastapi_app_instance, app
-    # Import specific DB functions used directly in tests/fixtures
+# Import specific DB functions used directly in tests/fixtures
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     MediaDatabase
     )
-    # Import the utility for temporary DB if it's defined elsewhere
+# Import the utility for temporary DB if it's defined elsewhere
 from tldw_Server_API.tests.test_utils import temp_db
 #
 #######################################################################################################################
@@ -29,7 +29,7 @@ from tldw_Server_API.tests.test_utils import temp_db
 
 @pytest.fixture(scope="session")
 def db_instance_session():
-     """
+    """
     Uses the temp_db context manager from test_utils to get an initialized Database instance.
     """
     # temp_db now handles creation and setup (via Database.__init__)
@@ -39,34 +39,34 @@ def db_instance_session():
             # db object provided by temp_db is already initialized with schema
             # Optionally enable foreign keys again here if needed, although Database init might do it
             try:
-                 db.execute_query("PRAGMA foreign_keys=ON;")
+                db.execute_query("PRAGMA foreign_keys=ON;")
             except Exception as fk_e:
-                 print(f"Warning: Could not enable foreign keys on session DB: {fk_e}")
+                print(f"Warning: Could not enable foreign keys on session DB: {fk_e}")
             yield db
         # Cleanup (closing connection) is handled by temp_db's finally block
     finally:
-         if db:
-             if hasattr(db, 'close_all_connections'):
-                 db.close_all_connections()
-             elif hasattr(db, 'close_connection'):
-                 # Fallback if close_all_connections doesn't exist
-                 db.close_connection()
-             else:
-                 print(f"--- Warning: DB instance {db.db_path_str} has no close_all_connections or close_connection method ---")
-         else:
-             print("--- DB instance was not created, skipping close ---")
+        if db:
+            if hasattr(db, 'close_all_connections'):
+                db.close_all_connections()
+            elif hasattr(db, 'close_connection'):
+                # Fallback if close_all_connections doesn't exist
+                db.close_connection()
+            else:
+                print(f"--- Warning: DB instance {db.db_path_str} has no close_all_connections or close_connection method ---")
+        else:
+            print("--- DB instance was not created, skipping close ---")
 
 
 @pytest.fixture(scope="function")
 def db_session(db_instance_session):
-      """
+    """
      Provides access to the session-scoped DB instance for each test function.
      Includes cleanup logic after each test.
      """
-     yield db_instance_session
-     # Explicit cleanup after each test
-     # print("Cleaning up DB after test...") # Debugging
-     try:
+    yield db_instance_session
+    # Explicit cleanup after each test
+    # print("Cleaning up DB after test...") # Debugging
+    try:
         # Delete data from tables in reverse order of dependency using the provided Database instance methods
         with db_instance_session.transaction(): # Use transaction for cleanup
             db_instance_session.execute_query("DELETE FROM MediaKeywords;")
@@ -82,17 +82,17 @@ def db_session(db_instance_session):
             # These need separate commits potentially, or run outside transaction
             db_instance_session.execute_query("DELETE FROM sqlite_sequence WHERE name IN ('Media', 'Keywords', 'DocumentVersions', 'MediaKeywords', 'Transcripts', 'MediaChunks', 'UnvectorizedMediaChunks');", commit=True)
         except Exception as seq_e:
-             print(f"Warning: Could not reset sequences - {seq_e}") # Non-fatal usually
+            print(f"Warning: Could not reset sequences - {seq_e}") # Non-fatal usually
 
-     except Exception as e:
-         print(f"Error during DB cleanup: {e}") # Avoid masking test failures
+    except Exception as e:
+        print(f"Error during DB cleanup: {e}") # Avoid masking test failures
 
 # Global reference for shutdown handler (consider if needed)
 test_db_instance_ref = None
 
 @pytest.fixture(scope="function")
 def client_module(db_instance_session):
-     """
+    """
     Creates a TestClient for the module, overriding the DB dependency to use the session-scoped test DB.
     """
     async def _override_user():
@@ -100,7 +100,7 @@ def client_module(db_instance_session):
 
     def override_get_media_db_for_user():
 
-             # Return a stable instance instead of yielding a generator
+        # Return a stable instance instead of yielding a generator
         # This avoids generator lifecycle/cleanup mismatches across requests
         return db_instance_session
 
@@ -123,7 +123,7 @@ def client_module(db_instance_session):
 # --- Seeding Fixtures ---
 @pytest.fixture(scope="function") # Run for each test function
 def seeded_document_media(db_session):
-     """Creates a Media record (type=document) and an initial DocumentVersion."""
+    """Creates a Media record (type=document) and an initial DocumentVersion."""
     try:
         media_id = None
         media_uuid = str(uuid.uuid4()) # Generate UUID
@@ -167,12 +167,12 @@ def seeded_document_media(db_session):
         # print(f"Seeded media ID: {media_id}, Initial version result: {version_res}") # Debugging
         return media_id
     except Exception as e:
-         pytest.fail(f"Failed to seed document media: {e}")
+        pytest.fail(f"Failed to seed document media: {e}")
 
 
 @pytest.fixture(scope="function")
 def seeded_multi_media(db_session):
-     """Creates multiple media records (doc, video, audio) with keywords for list/detail tests."""
+    """Creates multiple media records (doc, video, audio) with keywords for list/detail tests."""
     media_ids = {}
     try:
         with db_session.transaction():
@@ -290,13 +290,13 @@ def seeded_multi_media(db_session):
         # Transaction commits here
         # Ensure all IDs were captured
         if None in media_ids.values():
-             print(f"Warning: Some media IDs were not captured during seeding: {media_ids}")
-             pytest.fail("Failed to retrieve all media IDs during seeding.")
+            print(f"Warning: Some media IDs were not captured during seeding: {media_ids}")
+            pytest.fail("Failed to retrieve all media IDs during seeding.")
 
         return media_ids
 
     except Exception as e:
-         pytest.fail(f"Failed to seed multi media: {e}")
+        pytest.fail(f"Failed to seed multi media: {e}")
 
 
 # --- Test Classes ---
@@ -307,14 +307,14 @@ class TestMediaVersionEndpoints:
 
     @pytest.fixture(autouse=True)
     def _setup_class(self, client_module, db_session, seeded_document_media):
-             """Setup runs before every test method in this class."""
+        """Setup runs before every test method in this class."""
         self.client = client_module
         self.db = db_session
         self.media_id = seeded_document_media # Gets a fresh media item with 1 version for each test
 
     def _create_version_request(self, media_id, content="Test content", prompt="Test prompt", analysis_content="Test summary"):
 
-             """Helper to make the POST request to create a version."""
+        """Helper to make the POST request to create a version."""
         return self.client.post(
             f"/api/v1/media/{media_id}/versions",
             json={"content": content, "prompt": prompt, "analysis_content": analysis_content}
@@ -324,7 +324,7 @@ class TestMediaVersionEndpoints:
 
     def test_create_valid_version(self):
 
-             """Test creating a second version successfully."""
+        """Test creating a second version successfully."""
         response = self._create_version_request(self.media_id, "Content v2")
         assert response.status_code == status.HTTP_201_CREATED # RESTful creation status
         data = response.json()
@@ -341,7 +341,7 @@ class TestMediaVersionEndpoints:
 
     def test_create_version_nonexistent_media_id(self):
 
-             """Test creating version for a media ID that doesn't exist."""
+        """Test creating version for a media ID that doesn't exist."""
         response = self._create_version_request(self.MEDIA_ID_INVALID)
         # API should check if media_id exists before creating version. Expect 404.
         assert response.status_code == status.HTTP_404_NOT_FOUND
@@ -352,7 +352,7 @@ class TestMediaVersionEndpoints:
     def test_create_version_invalid_payload_type(self):
 
 
-             """Test creating version with incorrect payload type (e.g., int instead of str)."""
+        """Test creating version with incorrect payload type (e.g., int instead of str)."""
         response = self.client.post(
             f"/api/v1/media/{self.media_id}/versions",
             json={"content": 123, "prompt": "p", "analysis_content": "s"} # Invalid content type, corrected key
@@ -362,7 +362,7 @@ class TestMediaVersionEndpoints:
 
     def test_create_version_missing_fields(self):
 
-             """Test creating version with missing required fields."""
+        """Test creating version with missing required fields."""
         response = self.client.post(
             f"/api/v1/media/{self.media_id}/versions",
             json={"content": "Test Content Only"}  # Missing prompt/analysis_content
@@ -389,7 +389,7 @@ class TestMediaVersionEndpoints:
 
     def test_list_versions_single_exists(self):
 
-             """Test listing versions when only the initial seeded version exists."""
+        """Test listing versions when only the initial seeded version exists."""
         response = self.client.get(f"/api/v1/media/{self.media_id}/versions")
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
@@ -400,7 +400,7 @@ class TestMediaVersionEndpoints:
 
     def test_list_versions_multiple_exist(self):
 
-             """Test listing versions after creating more."""
+        """Test listing versions after creating more."""
         self._create_version_request(self.media_id, "Content v2")
         self._create_version_request(self.media_id, "Content v3")
 
@@ -414,7 +414,7 @@ class TestMediaVersionEndpoints:
 
     def test_list_versions_empty(self, db_session):
 
-             """Test listing versions for a media item that exists but has no versions."""
+        """Test listing versions for a media item that exists but has no versions."""
         empty_media_id = None
         try:  # Add try/except for seeding robustness
             media_uuid = str(uuid.uuid4())
@@ -446,7 +446,7 @@ class TestMediaVersionEndpoints:
 
     def test_list_versions_nonexistent_media_id(self):
 
-             """Test listing versions for a non-existent media ID."""
+        """Test listing versions for a non-existent media ID."""
         response = self.client.get(f"/api/v1/media/{self.MEDIA_ID_INVALID}/versions")
         # Should return 404 if the media item itself doesn't exist
         assert response.status_code == status.HTTP_404_NOT_FOUND
@@ -454,7 +454,7 @@ class TestMediaVersionEndpoints:
 
     def test_list_versions_pagination(self):
 
-             """Test pagination (limit and offset) for listing versions."""
+        """Test pagination (limit and offset) for listing versions."""
         self._create_version_request(self.media_id, "Content v2")
         self._create_version_request(self.media_id, "Content v3")
         self._create_version_request(self.media_id, "Content v4") # Now 4 versions
@@ -470,7 +470,7 @@ class TestMediaVersionEndpoints:
 
     def test_list_versions_include_content(self):
 
-             """Test the include_content=true query parameter."""
+        """Test the include_content=true query parameter."""
         self._create_version_request(self.media_id, "Content v2")
         response = self.client.get(f"/api/v1/media/{self.media_id}/versions?include_content=true")
         assert response.status_code == status.HTTP_200_OK
@@ -489,7 +489,7 @@ class TestMediaVersionEndpoints:
 
     def test_get_specific_version_exists(self):
 
-             """Test retrieving a specific, existing version."""
+        """Test retrieving a specific, existing version."""
         response = self.client.get(f"/api/v1/media/{self.media_id}/versions/1") # Get seeded version
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
@@ -499,14 +499,14 @@ class TestMediaVersionEndpoints:
 
     def test_get_specific_version_nonexistent(self):
 
-             """Test retrieving a version number that doesn't exist."""
+        """Test retrieving a version number that doesn't exist."""
         response = self.client.get(f"/api/v1/media/{self.media_id}/versions/99")
         assert response.status_code == status.HTTP_404_NOT_FOUND
         assert "Version not found" in response.json().get("detail", "")
 
     def test_get_specific_version_nonexistent_media_id(self):
 
-             """Test retrieving a version for a media ID that doesn't exist."""
+        """Test retrieving a version for a media ID that doesn't exist."""
         response = self.client.get(f"/api/v1/media/{self.MEDIA_ID_INVALID}/versions/1")
         assert response.status_code == status.HTTP_404_NOT_FOUND
         # Should ideally indicate media not found first
@@ -514,7 +514,7 @@ class TestMediaVersionEndpoints:
 
     def test_get_specific_version_content_toggle_false(self):
 
-             """Test retrieving a version with include_content=false."""
+        """Test retrieving a version with include_content=false."""
         response = self.client.get(f"/api/v1/media/{self.media_id}/versions/1?include_content=false")
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
@@ -526,7 +526,7 @@ class TestMediaVersionEndpoints:
 
     def test_delete_version_success(self):
 
-             """Test deleting a version when multiple exist."""
+        """Test deleting a version when multiple exist."""
         self._create_version_request(self.media_id, "Content v2") # Create v2
         self._create_version_request(self.media_id, "Content v3") # Create v3
 
@@ -553,21 +553,21 @@ class TestMediaVersionEndpoints:
 
     def test_delete_nonexistent_version(self):
 
-             """Test deleting a version number that doesn't exist."""
+        """Test deleting a version number that doesn't exist."""
         response = self.client.delete(f"/api/v1/media/{self.media_id}/versions/99")
         assert response.status_code == status.HTTP_404_NOT_FOUND
         assert "Active media or specific active version not found." in response.json().get("detail", "")
 
     def test_delete_nonexistent_media_id(self):
 
-             """Test deleting a version for a media ID that doesn't exist."""
+        """Test deleting a version for a media ID that doesn't exist."""
         response = self.client.delete(f"/api/v1/media/{self.MEDIA_ID_INVALID}/versions/1")
         assert response.status_code == status.HTTP_404_NOT_FOUND
         assert "Active media or specific active version not found." in response.json().get("detail", "")
 
     def test_delete_last_version_fails(self):
 
-             """Test that deleting the only remaining version is forbidden."""
+        """Test that deleting the only remaining version is forbidden."""
         # self.media_id starts with only version 1
         response = self.client.delete(f"/api/v1/media/{self.media_id}/versions/1")
         # Should be forbidden (e.g., 400 Bad Request or 409 Conflict)
@@ -583,7 +583,7 @@ class TestMediaVersionEndpoints:
 
     def test_rollback_valid_version(self):
 
-             """Test rolling back to a previous version (v1)."""
+        """Test rolling back to a previous version (v1)."""
         v1_response = self.client.get(f"/api/v1/media/{self.media_id}/versions/1?include_content=true")
         assert v1_response.status_code == status.HTTP_200_OK
         v1_data = v1_response.json()
@@ -624,7 +624,7 @@ class TestMediaVersionEndpoints:
 
     def test_rollback_to_current_version_fails(self):
 
-             """Test attempting to rollback to the latest version (should fail or be no-op)."""
+        """Test attempting to rollback to the latest version (should fail or be no-op)."""
         self._create_version_request(self.media_id, "Content v2") # Create v2 (current)
 
         response = self.client.post(
@@ -639,7 +639,7 @@ class TestMediaVersionEndpoints:
     def test_rollback_to_nonexistent_version(self):
 
 
-             """Test rolling back to a version number that doesn't exist."""
+        """Test rolling back to a version number that doesn't exist."""
         self._create_version_request(self.media_id, "Content v2") # Create v2
 
         response = self.client.post(
@@ -654,7 +654,7 @@ class TestMediaVersionEndpoints:
     def test_rollback_nonexistent_media_id(self):
 
 
-             """Test rollback on a media ID that doesn't exist."""
+        """Test rollback on a media ID that doesn't exist."""
         response = self.client.post(
             f"/api/v1/media/{self.MEDIA_ID_INVALID}/versions/rollback",
             json={"version_number": 1}
@@ -670,7 +670,7 @@ class TestMediaListDetailEndpoints:
 
     @pytest.fixture(autouse=True)
     def _setup_class(self, client_module, db_session, seeded_multi_media):
-             """Setup runs before every test method using the multi-media seed."""
+        """Setup runs before every test method using the multi-media seed."""
         self.client = client_module
         self.db = db_session
         self.media_ids = seeded_multi_media # Has document, video, audio IDs
@@ -679,7 +679,7 @@ class TestMediaListDetailEndpoints:
 
     def test_get_all_media_default(self):
 
-             """Test default listing of media items."""
+        """Test default listing of media items."""
         response = self.client.get("/api/v1/media")
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
@@ -695,7 +695,7 @@ class TestMediaListDetailEndpoints:
 
     def test_get_all_media_pagination(self):
 
-             """Test custom pagination for listing media."""
+        """Test custom pagination for listing media."""
         # Get page 1, 2 items per page
         response = self.client.get("/api/v1/media?page=1&results_per_page=2")
         assert response.status_code == status.HTTP_200_OK
@@ -715,12 +715,12 @@ class TestMediaListDetailEndpoints:
         if data["pagination"]["total_items"] > 2:
             # Check if page 2 actually contains items
             if data["pagination"]["total_items"] > data["pagination"]["results_per_page"] * (data["pagination"]["page"] -1 ):
-                 assert len(data_p2["items"]) > 0
-                 item_ids_p1 = {item["id"] for item in data["items"]}
-                 item_ids_p2 = {item["id"] for item in data_p2["items"]}
-                 assert not item_ids_p1.intersection(item_ids_p2) # No overlap
+                assert len(data_p2["items"]) > 0
+                item_ids_p1 = {item["id"] for item in data["items"]}
+                item_ids_p2 = {item["id"] for item in data_p2["items"]}
+                assert not item_ids_p1.intersection(item_ids_p2) # No overlap
             else:
-                 assert len(data_p2["items"]) == 0 # Should be empty if past the last page
+                assert len(data_p2["items"]) == 0 # Should be empty if past the last page
         else:
             assert len(data_p2["items"]) == 0 # Should be empty if only one page
 
@@ -728,7 +728,7 @@ class TestMediaListDetailEndpoints:
     def test_get_all_media_invalid_pagination_params(self):
 
 
-             """Test invalid pagination parameters."""
+        """Test invalid pagination parameters."""
         response = self.client.get("/api/v1/media?page=0&results_per_page=10") # Page must be >= 1
         assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
@@ -737,7 +737,7 @@ class TestMediaListDetailEndpoints:
 
     def test_get_all_media_includes_basic_info(self):
 
-             """Check if list items contain expected basic fields."""
+        """Check if list items contain expected basic fields."""
         response = self.client.get("/api/v1/media?results_per_page=3") # Get all seeded items
         assert response.status_code == status.HTTP_200_OK
         items = response.json()["items"]
@@ -752,7 +752,7 @@ class TestMediaListDetailEndpoints:
 
     def test_get_all_media_with_keywords(self):
 
-             """Test listing media items with keywords included."""
+        """Test listing media items with keywords included."""
         response = self.client.get("/api/v1/media?include_keywords=true")
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
@@ -766,7 +766,7 @@ class TestMediaListDetailEndpoints:
 
     def test_get_all_media_keywords_no_items(self):
 
-             """Test keywords flag when no media items are returned."""
+        """Test keywords flag when no media items are returned."""
         response = self.client.get("/api/v1/media?page=1000&include_keywords=true")
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
@@ -781,7 +781,7 @@ class TestMediaListDetailEndpoints:
 
     def test_get_media_item_document(self):
 
-             """Test retrieving details of a document media item."""
+        """Test retrieving details of a document media item."""
         doc_id = self.media_ids["document"]
         response = self.client.get(f"/api/v1/media/{doc_id}")
         assert response.status_code == status.HTTP_200_OK
@@ -801,7 +801,7 @@ class TestMediaListDetailEndpoints:
 
     def test_get_media_item_video(self):
 
-             """Test retrieving details of a video media item."""
+        """Test retrieving details of a video media item."""
         vid_id = self.media_ids["video"]
         response = self.client.get(f"/api/v1/media/{vid_id}")
         assert response.status_code == status.HTTP_200_OK
@@ -822,7 +822,7 @@ class TestMediaListDetailEndpoints:
 
     def test_get_media_item_audio(self):
 
-             """Test retrieving details of an audio media item."""
+        """Test retrieving details of an audio media item."""
         audio_id = self.media_ids["audio"]
         response = self.client.get(f"/api/v1/media/{audio_id}")
         assert response.status_code == status.HTTP_200_OK
@@ -841,7 +841,7 @@ class TestMediaListDetailEndpoints:
 
     def test_get_nonexistent_media_item(self):
 
-             """Test retrieving a media item with an ID that doesn't exist."""
+        """Test retrieving a media item with an ID that doesn't exist."""
         response = self.client.get(f"/api/v1/media/{self.MEDIA_ID_INVALID}")
         assert response.status_code == status.HTTP_404_NOT_FOUND
         assert "Media not found" in response.json().get("detail", "")
@@ -851,7 +851,7 @@ class TestMediaListDetailEndpoints:
 
     def test_update_media_item_title(self):
 
-             """Test updating the title of a media item."""
+        """Test updating the title of a media item."""
         doc_id = self.media_ids["document"]
         new_title = "Updated Document Title"
         payload = {"title": new_title} # Minimal update payload
@@ -870,7 +870,7 @@ class TestMediaListDetailEndpoints:
 
     def test_update_media_item_nonexistent(self):
 
-             """Test updating a media item that doesn't exist."""
+        """Test updating a media item that doesn't exist."""
         payload = {"title": "Won't Work"}
         response = self.client.put(f"/api/v1/media/{self.MEDIA_ID_INVALID}", json=payload)
         assert response.status_code == status.HTTP_404_NOT_FOUND
@@ -881,7 +881,7 @@ class TestMediaListDetailEndpoints:
     def test_update_media_item_invalid_payload(self):
 
 
-             """Test updating with invalid data type."""
+        """Test updating with invalid data type."""
         doc_id = self.media_ids["document"]
         payload = {"title": 12345} # Invalid type for title
         response = self.client.put(f"/api/v1/media/{doc_id}", json=payload)
@@ -897,7 +897,7 @@ class TestSecurityAndPerformance:
 
     def test_list_media_response_time(self):
 
-             """Check response time for the media list endpoint."""
+        """Check response time for the media list endpoint."""
         start_time = time.perf_counter()
         response = self.client.get("/api/v1/media")
         end_time = time.perf_counter()
@@ -907,7 +907,7 @@ class TestSecurityAndPerformance:
 
     def test_sql_injection_attempt_param(self):
 
-             """Test query parameter for basic SQL injection pattern."""
+        """Test query parameter for basic SQL injection pattern."""
         # FastAPI/Pydantic usually handles type validation preventing basic injection here
         response = self.client.get("/api/v1/media?page=1;DROP TABLE Media;")
         # Expect validation error due to non-integer page
@@ -916,7 +916,7 @@ class TestSecurityAndPerformance:
     # FIXME - test doesn't get skipped?
     @pytest.mark.skipif(sys.platform.startswith("win32"), reason="Skipping on Windows due to PermissionError during teardown (DB file lock issue)")
     def test_content_type_enforcement_json(self, seeded_document_media):
-             """Test that endpoints expecting JSON reject incorrect Content-Type."""
+        """Test that endpoints expecting JSON reject incorrect Content-Type."""
         # Use an endpoint that expects JSON (e.g., create version)
         # Need a valid media ID for the path, even if the payload causes the failure
         # Assume media ID 1 exists from fixtures

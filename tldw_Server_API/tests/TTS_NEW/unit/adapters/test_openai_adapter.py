@@ -36,7 +36,7 @@ class TestOpenAIAdapterInitialization:
 
     @pytest.mark.unit
     def test_adapter_initialization_with_config(self):
-             """Test adapter initialization with configuration."""
+        """Test adapter initialization with configuration."""
         config = {
             "openai_api_key": "test-key-123",
             "openai_base_url": "https://api.openai.com/v1/audio/speech",
@@ -160,7 +160,7 @@ class TestOpenAIAdapterInitialization:
 
     @pytest.mark.unit
     def test_adapter_supported_models(self):
-             """Test adapter supports setting known models via config."""
+        """Test adapter supports setting known models via config."""
         adapter_default = OpenAITTSAdapter({"openai_api_key": "test-key"})
         assert adapter_default.model in ("tts-1", "tts-1-hd")
 
@@ -242,7 +242,7 @@ class TestAudioGeneration:
     """Test audio generation functionality."""
 
     @pytest.mark.unit
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost')
     async def test_generate_basic_audio(self, mock_post):
         """Test basic audio generation."""
         # Mock response
@@ -263,10 +263,11 @@ class TestAudioGeneration:
         # Verify API call
         mock_post.assert_called_once()
         call_args = mock_post.call_args
-        assert "audio/speech" in str(call_args[0][0])
+        called_url = call_args.kwargs.get("url") if call_args.kwargs else (call_args.args[0] if call_args.args else "")
+        assert "audio/speech" in str(called_url)
 
     @pytest.mark.unit
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost')
     async def test_generate_with_hd_model(self, mock_post):
         """Test generation with HD model."""
         mock_response = MagicMock()
@@ -282,7 +283,7 @@ class TestAudioGeneration:
         assert (response.audio_content or response.audio_data) == b"hd_audio_data"
 
     @pytest.mark.unit
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost')
     async def test_generate_with_speed_adjustment(self, mock_post):
         """Test generation with speed adjustment."""
         mock_response = MagicMock()
@@ -306,7 +307,7 @@ class TestAudioGeneration:
         assert call_kwargs['json']['speed'] == 0.75
 
     @pytest.mark.unit
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost')
     async def test_generate_different_formats(self, mock_post):
         """Test generation with different audio formats."""
         mock_response = MagicMock()
@@ -333,7 +334,7 @@ class TestStreamingGeneration:
     """Test streaming audio generation."""
 
     @pytest.mark.unit
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost')
     async def test_streaming_generation(self, mock_post):
         """Test streaming audio generation."""
         # Mock streaming response
@@ -362,7 +363,7 @@ class TestStreamingGeneration:
         assert chunks == [b"chunk1", b"chunk2", b"chunk3"]
 
     @pytest.mark.unit
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost')
     async def test_streaming_with_error(self, mock_post):
         """Test streaming handles errors gracefully."""
         async def mock_error_iter():
@@ -398,7 +399,7 @@ class TestErrorHandling:
     """Test error handling in OpenAI adapter."""
 
     @pytest.mark.unit
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost')
     async def test_handle_rate_limit_error(self, mock_post):
         """Test handling of rate limit errors."""
         mock_response = MagicMock()
@@ -420,7 +421,7 @@ class TestErrorHandling:
         assert getattr(exc_info.value, "retry_after", exc_info.value.details.get("retry_after")) == 60
 
     @pytest.mark.unit
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost')
     async def test_handle_api_error(self, mock_post):
         """Test handling of API errors."""
         mock_response = MagicMock()
@@ -439,7 +440,7 @@ class TestErrorHandling:
             await adapter.generate(request)
 
     @pytest.mark.unit
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost')
     async def test_handle_auth_error_401(self, mock_post):
         """Test handling of 401 maps to TTSAuthenticationError."""
         mock_response = MagicMock()
@@ -458,7 +459,7 @@ class TestErrorHandling:
             await adapter.generate(request)
 
     @pytest.mark.unit
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost')
     async def test_handle_network_error(self, mock_post):
         """Test handling of network errors maps to TTSNetworkError."""
         mock_post.side_effect = httpx.ConnectError("Connection failed")
@@ -470,7 +471,7 @@ class TestErrorHandling:
             await adapter.generate(request)
 
     @pytest.mark.unit
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost')
     async def test_handle_timeout_error(self, mock_post):
         """Test handling of timeout errors maps to TTSTimeoutError."""
         mock_post.side_effect = httpx.TimeoutException("Request timed out")
@@ -507,7 +508,7 @@ class TestMetadataAndInfo:
         assert info["max_characters"] == 4096
 
     @pytest.mark.unit
-    @patch('httpx.AsyncClient.post')
+    @patch('tldw_Server_API.app.core.TTS.adapters.openai_adapter.apost')
     async def test_response_includes_metadata(self, mock_post):
         """Test that response includes proper metadata."""
         mock_response = MagicMock()

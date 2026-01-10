@@ -10,7 +10,7 @@ from loguru import logger
 import httpx
 #
 # Local Imports
-from tldw_Server_API.app.core.http_client import apost
+from tldw_Server_API.app.core.http_client import apost, astream_bytes
 from tldw_Server_API.app.core.exceptions import NetworkError as CoreNetworkError, RetryExhaustedError
 from .base import (
     TTSAdapter,
@@ -560,15 +560,18 @@ class OpenAITTSAdapter(OpenAIAdapter):
             "speed": request.speed
         }
 
-        # Use centralized client to ensure egress/policy; still an httpx.AsyncClient
-        from tldw_Server_API.app.core.http_client import create_async_client
-        client = self.client or create_async_client()
+        client = self.client
         try:
-            async with client.stream("POST", self.base_url, headers=headers, json=payload) as response:
-                async for chunk in response.aiter_bytes():
-                    if chunk:
-                        yield chunk
-        except httpx.HTTPError as e:
+            async for chunk in astream_bytes(
+                method="POST",
+                url=self.base_url,
+                headers=headers,
+                json=payload,
+                client=client,
+            ):
+                if chunk:
+                    yield chunk
+        except (CoreNetworkError, RetryExhaustedError, httpx.HTTPError) as e:
             # Wrap network/API issues as generation errors per tests
             raise TTSGenerationError(str(e), provider=self._provider_simple)
 

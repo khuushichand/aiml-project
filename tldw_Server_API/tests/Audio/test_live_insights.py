@@ -12,7 +12,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_I
 
 class _DummyWebSocket:
     def __init__(self) -> None:
-             self.messages: List[Dict[str, Any]] = []
+        self.messages: List[Dict[str, Any]] = []
 
     async def send_json(self, payload: Dict[str, Any]) -> None:
         self.messages.append(payload)
@@ -20,11 +20,10 @@ class _DummyWebSocket:
 
 class _FakeLLM:
     def __init__(self) -> None:
-             self.calls: List[Dict[str, Any]] = []
+        self.calls: List[Dict[str, Any]] = []
 
     def __call__(self, **kwargs) -> Dict[str, Any]:
-
-             self.calls.append(kwargs)
+        self.calls.append(kwargs)
         content = {
             "summary": ["Discussed roadmap and blockers."],
             "action_items": [{"description": "Follow up with Alex on blockers", "owner": "Alex"}],

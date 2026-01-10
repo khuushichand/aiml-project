@@ -19,7 +19,7 @@ class TestParakeetONNX:
 
     @pytest.fixture
     def sample_audio_data(self):
-             """Generate audio data for testing."""
+        """Generate audio data for testing."""
         sample_rate = 16000
         duration = 2.0
         t = np.linspace(0, duration, int(sample_rate * duration), False)
@@ -28,7 +28,7 @@ class TestParakeetONNX:
 
     @pytest.fixture
     def mock_onnx_session(self):
-             """Create mock ONNX inference session."""
+        """Create mock ONNX inference session."""
         session = MagicMock()
 
         # Mock inputs
@@ -46,7 +46,7 @@ class TestParakeetONNX:
 
         # Mock run method
         def mock_run(output_names, input_dict):
-                     batch_size = input_dict["encoder_outputs"].shape[0]
+            batch_size = input_dict["encoder_outputs"].shape[0]
             seq_len = 50  # Mock sequence length
             vocab_size = 128256
             logits = np.random.randn(batch_size, seq_len, vocab_size).astype(np.float32)
@@ -58,7 +58,7 @@ class TestParakeetONNX:
 
     @pytest.fixture
     def mock_tokenizer(self):
-             """Create mock tokenizer."""
+        """Create mock tokenizer."""
         tokenizer = MagicMock()
         tokenizer.vocab = {f"token_{i}": i for i in range(128256)}
         tokenizer.vocab["<pad>"] = 0
@@ -77,7 +77,7 @@ class TestParakeetONNX:
 
         def decode(token_ids):
 
-                     tokens = [tokenizer.id_to_token.get(tid, "<unk>") for tid in token_ids]
+            tokens = [tokenizer.id_to_token.get(tid, "<unk>") for tid in token_ids]
             text = " ".join(t for t in tokens if t not in ["<pad>", "<s>", "</s>", "<unk>"])
             return text
 
@@ -87,7 +87,7 @@ class TestParakeetONNX:
 
     def test_import_module(self):
 
-             """Test that the ONNX module can be imported."""
+        """Test that the ONNX module can be imported."""
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX import (
                 transcribe_with_parakeet_onnx,
@@ -103,7 +103,7 @@ class TestParakeetONNX:
     @patch('onnxruntime.InferenceSession')
     @patch('huggingface_hub.snapshot_download')
     def test_model_loading(self, mock_download, mock_ort_session, mock_onnx_session):
-             """Test ONNX model loading."""
+        """Test ONNX model loading."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX import (
             load_parakeet_onnx_model,
             unload_onnx_models
@@ -137,7 +137,7 @@ class TestParakeetONNX:
 
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX.load_parakeet_onnx_model')
     def test_transcribe_simple(self, mock_load_model, sample_audio_data, mock_onnx_session, mock_tokenizer):
-             """Test simple transcription without chunking."""
+        """Test simple transcription without chunking."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX import (
             transcribe_with_parakeet_onnx
         )
@@ -161,13 +161,13 @@ class TestParakeetONNX:
 
     def test_preprocessing(self):
 
-             """Test audio preprocessing functions."""
+        """Test audio preprocessing functions."""
         # Skip this test as it tests private functions
         pytest.skip("_preprocess_audio is a private function and not exposed in the API")
 
     def test_tokenizer(self):
 
-             """Test ParakeetONNXTokenizer functionality."""
+        """Test ParakeetONNXTokenizer functionality."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX import (
             ParakeetONNXTokenizer
         )
@@ -196,7 +196,7 @@ class TestParakeetONNX:
 
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX.load_parakeet_onnx_model')
     def test_transcribe_with_chunking(self, mock_load_model, mock_onnx_session, mock_tokenizer):
-             """Test transcription with chunking."""
+        """Test transcription with chunking."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX import (
             transcribe_with_parakeet_onnx
         )
@@ -212,7 +212,7 @@ class TestParakeetONNX:
         # Track chunk callbacks
         chunk_callbacks = []
         def chunk_callback(current, total):
-                     chunk_callbacks.append((current, total))
+            chunk_callbacks.append((current, total))
 
         # Mock ONNX inference
         mock_logits = np.random.randn(1, 100, 100).astype(np.float32)
@@ -237,13 +237,13 @@ class TestParakeetONNX:
 
     def test_merge_algorithms(self):
 
-             """Test different merge algorithms for chunked transcription."""
+        """Test different merge algorithms for chunked transcription."""
         # Skip this test as it tests private functions
         pytest.skip("_merge_chunks_middle and _merge_chunks_lcs are private functions")
 
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX.load_parakeet_onnx_model')
     def test_error_handling(self, mock_load_model, sample_audio_data):
-             """Test error handling during transcription."""
+        """Test error handling during transcription."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX import (
             transcribe_with_parakeet_onnx
         )
@@ -260,7 +260,7 @@ class TestParakeetONNX:
 
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX.load_parakeet_onnx_model')
     def test_custom_model_path(self, mock_load_model, sample_audio_data, mock_onnx_session, mock_tokenizer):
-             """Test using custom model path."""
+        """Test using custom model path."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX import (
             transcribe_with_parakeet_onnx
         )
@@ -286,7 +286,7 @@ class TestParakeetONNX:
 
     def test_device_selection(self):
 
-             """Test device selection for ONNX runtime."""
+        """Test device selection for ONNX runtime."""
         # Skip this test as it tests private functions
         pytest.skip("_get_ort_providers is a private function")
 
@@ -297,7 +297,7 @@ class TestParakeetONNXIntegration:
 
     @patch('tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX.transcribe_with_parakeet_onnx')
     def test_integration_with_nemo_module(self, mock_transcribe):
-             """Test integration with Nemo module."""
+        """Test integration with Nemo module."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
             transcribe_with_parakeet
         )

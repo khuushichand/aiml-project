@@ -9,7 +9,7 @@ pytestmark = pytest.mark.unit
 def test_add_conversation_defaults_to_in_progress(tmp_path):
 
 
-     db_path = tmp_path / "chacha.db"
+    db_path = tmp_path / "chacha.db"
     db = CharactersRAGDB(db_path=str(db_path), client_id="user-1")
 
     conv_id = db.add_conversation(
@@ -24,7 +24,7 @@ def test_add_conversation_defaults_to_in_progress(tmp_path):
 def test_update_conversation_validates_state(tmp_path):
 
 
-     db_path = tmp_path / "chacha.db"
+    db_path = tmp_path / "chacha.db"
     db = CharactersRAGDB(db_path=str(db_path), client_id="user-1")
 
     conv_id = db.add_conversation(

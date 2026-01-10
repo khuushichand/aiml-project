@@ -20,7 +20,7 @@ def _normalize(text: str) -> str:
 
 @pytest.mark.unit
 def test_find_text_span_handles_whitespace_variants():
-     doc_text = "Alpha  Beta\nGamma"
+    doc_text = "Alpha  Beta\nGamma"
     query_text = "Alpha Beta Gamma"
     span = find_text_span(doc_text, query_text)
     assert span is not None
@@ -30,7 +30,7 @@ def test_find_text_span_handles_whitespace_variants():
 
 @pytest.mark.unit
 def test_find_text_span_uses_fallback_window():
-     doc_text = "Intro: " + ("lorem " * 40) + "END."
+    doc_text = "Intro: " + ("lorem " * 40) + "END."
     fallback = "lorem " * 20
     span = find_text_span(doc_text, "missing text", fallback_text=fallback)
     assert span is not None

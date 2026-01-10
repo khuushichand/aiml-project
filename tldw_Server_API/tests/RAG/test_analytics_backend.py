@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -13,7 +12,7 @@ from tldw_Server_API.app.core.RAG.rag_service.analytics_system import UserFeedba
 
 class _StubConnection:
     def __init__(self) -> None:
-             self.statements: List[Tuple[str, Any]] = []
+        self.statements: List[Tuple[str, Any]] = []
 
     def execute(self, statement: str, params: Any = None) -> None:
         self.statements.append((statement, params))
@@ -30,58 +29,55 @@ class _StubChaChaDb:
 
     @property
     def executed(self) -> List[Tuple[str, Any]]:
-             return self._conn.statements
+        return self._conn.statements
 
 
 def test_user_feedback_schema_sqlite_executes_expected_statements() -> None:
 
-
-     db = _StubChaChaDb(BackendType.SQLITE)
+    db = _StubChaChaDb(BackendType.SQLITE)
     UserFeedbackStore(db)
     statements = [stmt for stmt, _ in db.executed]
-    assert any('CREATE TABLE IF NOT EXISTS conversation_feedback' in stmt for stmt in statements)
-    assert any('idx_feedback_conv' in stmt for stmt in statements)
-    assert any('idx_feedback_created' in stmt for stmt in statements)
+    assert any("CREATE TABLE IF NOT EXISTS conversation_feedback" in stmt for stmt in statements)
+    assert any("idx_feedback_conv" in stmt for stmt in statements)
+    assert any("idx_feedback_created" in stmt for stmt in statements)
 
 
 def test_user_feedback_schema_sqlite_includes_required_fields() -> None:
 
-
-     db = _StubChaChaDb(BackendType.SQLITE)
+    db = _StubChaChaDb(BackendType.SQLITE)
     UserFeedbackStore(db)
     statements = [stmt for stmt, _ in db.executed]
-    assert any('helpful INTEGER' in stmt for stmt in statements)
-    assert any('issues' in stmt for stmt in statements)
-    assert all('conversation_feedback' in stmt for stmt in statements)
+    assert any("helpful INTEGER" in stmt for stmt in statements)
+    assert any("issues" in stmt for stmt in statements)
+    assert all("conversation_feedback" in stmt for stmt in statements)
 
 
 def test_user_feedback_schema_postgres_uses_boolean_and_timestamp() -> None:
 
-
-     db = _StubChaChaDb(BackendType.POSTGRESQL)
+    db = _StubChaChaDb(BackendType.POSTGRESQL)
     UserFeedbackStore(db)
     statements = [stmt for stmt, _ in db.executed]
-    assert any('helpful BOOLEAN' in stmt for stmt in statements)
-    assert any('issues' in stmt for stmt in statements)
-    assert any('TIMESTAMPTZ' in stmt for stmt in statements)
+    assert any("helpful BOOLEAN" in stmt for stmt in statements)
+    assert any("issues" in stmt for stmt in statements)
+    assert any("TIMESTAMPTZ" in stmt for stmt in statements)
 
 
 def test_record_search_sqlite_writes_row(tmp_path: Path) -> None:
-    db_path = tmp_path / 'analytics.sqlite'
+    db_path = tmp_path / "analytics.sqlite"
     analytics = AnalyticsDatabase(str(db_path))
     try:
         analytics.record_search(
             {
-                'query': 'backend coverage',
-                'results_count': 3,
-                'response_time_ms': 42,
-                'cache_hit': False,
+                "query": "backend coverage",
+                "results_count": 3,
+                "response_time_ms": 42,
+                "cache_hit": False,
             }
         )
         conn = analytics.backend.connect()
         try:
             cursor = conn.cursor()
-            cursor.execute('SELECT query_hash, results_count FROM search_analytics')
+            cursor.execute("SELECT query_hash, results_count FROM search_analytics")
             row = cursor.fetchone()
             assert row is not None
             assert row[1] == 3
@@ -93,8 +89,7 @@ def test_record_search_sqlite_writes_row(tmp_path: Path) -> None:
 
 def test_record_search_postgres_calls_backend_execute() -> None:
 
-
-     analytics = AnalyticsDatabase.__new__(AnalyticsDatabase)
+    analytics = AnalyticsDatabase.__new__(AnalyticsDatabase)
     analytics.backend_type = BackendType.POSTGRESQL
     analytics.backend = MagicMock()
 
@@ -102,9 +97,10 @@ def test_record_search_postgres_calls_backend_execute() -> None:
 
     def transaction_factory():
 
-             @contextmanager
+        @contextmanager
         def _ctx():
-                     yield object()
+            yield object()
+
         return _ctx()
 
     analytics.transaction = transaction_factory  # type: ignore[assignment]
@@ -117,14 +113,14 @@ def test_record_search_postgres_calls_backend_execute() -> None:
 
     analytics.record_search(
         {
-            'query': 'backend coverage',
-            'results_count': 3,
-            'response_time_ms': 42,
-            'cache_hit': True,
+            "query": "backend coverage",
+            "results_count": 3,
+            "response_time_ms": 42,
+            "cache_hit": True,
         }
     )
 
     analytics._execute.assert_called_once()
     inserted_query = calls[0][0]
-    assert 'INSERT INTO search_analytics' in inserted_query
-    assert '%s' in inserted_query
+    assert "INSERT INTO search_analytics" in inserted_query
+    assert "%s" in inserted_query

@@ -25,7 +25,7 @@ pytestmark = pytest.mark.unit
     ],
 )
 def test_collect_env_vars_skips_placeholders(value, capsys):
-     config = configparser.ConfigParser()
+    config = configparser.ConfigParser()
     config.add_section("API")
     config.set("API", "openai_api_key", value)
 
@@ -40,8 +40,7 @@ def test_collect_env_vars_skips_placeholders(value, capsys):
 
 def test_collect_env_vars_respects_existing_env(capsys):
 
-
-     config = configparser.ConfigParser()
+    config = configparser.ConfigParser()
     config.add_section("API")
     config.set("API", "openai_api_key", "sk-test-value")
 
@@ -61,8 +60,7 @@ def test_collect_env_vars_respects_existing_env(capsys):
 
 def test_collect_env_vars_adds_new_and_hides_value(capsys):
 
-
-     config = configparser.ConfigParser()
+    config = configparser.ConfigParser()
     config.add_section("API")
     config.set("API", "openai_api_key", "sk-test-value")
 
@@ -78,8 +76,7 @@ def test_collect_env_vars_adds_new_and_hides_value(capsys):
 
 def test_build_key_mappings_contains_expected_keys():
 
-
-     mappings = migrate_api_keys._build_key_mappings()
+    mappings = migrate_api_keys._build_key_mappings()
 
     assert mappings[("API", "openai_api_key")] == "OPENAI_API_KEY"
     assert mappings[("Search-Engines", "search_engine_id_google")] == "GOOGLE_SEARCH_ENGINE_ID"

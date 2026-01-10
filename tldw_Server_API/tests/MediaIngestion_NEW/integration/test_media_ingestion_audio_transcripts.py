@@ -24,7 +24,7 @@ def test_audio_ingestion_persists_normalized_transcript_and_chunks(
     media_database,
     test_audio_file,
 ):
-     """
+    """
     Ingest a small audio file via /media/add and verify:
       - A Transcripts row exists for the new media_id.
       - The stored transcription is a normalized STT artifact dict with expected keys.
@@ -141,7 +141,7 @@ def test_transcript_round_trip_matches_normalized_artifact_structure(
     media_database,
     test_audio_file,
 ):
-     """
+    """
     Round-trip contract test:
       - Ingest audio.
       - Load Transcripts.transcription and treat it as the source of truth.

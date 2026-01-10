@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import os
@@ -17,10 +16,12 @@ from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBack
 
 try:
     import psycopg as _psycopg_v3
+
     _PG_DRIVER = "psycopg"
 except Exception:  # pragma: no cover - may be missing locally
     try:
         import psycopg2 as _psycopg2
+
         _PG_DRIVER = "psycopg2"
     except Exception:
         _PG_DRIVER = None
@@ -38,8 +39,8 @@ pytestmark = pytest.mark.skipif(_PG_DRIVER is None, reason="Postgres driver not 
 
 def _base_postgres_config() -> DatabaseConfig:
 
+    from tldw_Server_API.tests.helpers.pg_env import get_pg_env
 
-     from tldw_Server_API.tests.helpers.pg_env import get_pg_env
     _pg = get_pg_env()
     return DatabaseConfig(
         backend_type=BackendType.POSTGRESQL,
@@ -119,7 +120,7 @@ def _drop_postgres_database(config: DatabaseConfig) -> None:
 
 @pytest.fixture()
 def temp_postgres_config() -> DatabaseConfig:
-     base = _base_postgres_config()
+    base = _base_postgres_config()
     cfg = _create_temp_postgres_database(base)
     try:
         return cfg
@@ -382,7 +383,7 @@ def _sqlite_workflow_counts(path: Path) -> tuple[int, int, int, int]:
 @pytest.mark.integration
 def test_migration_cli_transfers_workflow_rows(sqlite_workflows_db: Path, temp_postgres_config: DatabaseConfig) -> None:
     backend = DatabaseBackendFactory.create_backend(temp_postgres_config)
-    wf_db = WorkflowsDatabase(db_path=':memory:', backend=backend)
+    wf_db = WorkflowsDatabase(db_path=":memory:", backend=backend)
     wf_db.close_connection()
 
     migration_tools.migrate_workflows_sqlite_to_postgres(

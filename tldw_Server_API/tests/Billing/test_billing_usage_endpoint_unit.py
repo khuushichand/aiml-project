@@ -3,7 +3,7 @@ Unit tests for the billing usage endpoint wiring.
 
 These tests verify that:
 - The /billing/usage handler maps UsageSummary fields to the
-  current_usage dict passed into SubscriptionService.check_usage.
+    current_usage dict passed into SubscriptionService.check_usage.
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ class _FakeUsageStatus:
 
 class _FakeSubscriptionService:
     def __init__(self) -> None:
-             self.check_usage = AsyncMock()
+        self.check_usage = AsyncMock()
 
 
 class _FakeEnforcer:
@@ -86,7 +86,7 @@ async def test_get_rag_usage_debug_uses_enforcer(monkeypatch) -> None:
 
     class _FakeEnforcerForRag:
         def __init__(self) -> None:
-                     self.get_org_usage = AsyncMock(return_value=summary)
+            self.get_org_usage = AsyncMock(return_value=summary)
             self.get_org_limits = AsyncMock(return_value={"rag_queries_day": 100})
 
     fake_enforcer = _FakeEnforcerForRag()

@@ -7,7 +7,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing import XML_Ingestion_Li
 
 @pytest.mark.unit
 def test_import_xml_handler_reports_malformed_input(monkeypatch):
-     if not xml_lib._DEFUSED_AVAILABLE:
+    if not xml_lib._DEFUSED_AVAILABLE:
         pytest.skip("defusedxml not installed")
 
     monkeypatch.setattr(xml_lib, "create_media_database", lambda client_id: "db_stub")

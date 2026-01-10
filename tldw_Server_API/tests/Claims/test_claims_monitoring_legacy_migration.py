@@ -16,7 +16,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 def _principal_override_admin():
 
 
-     async def _override(request=None):
+    async def _override(request=None):
         principal = AuthPrincipal(
             kind="user",
             user_id=1,
@@ -48,7 +48,7 @@ def _principal_override_admin():
 def _seed_monitoring_db() -> str:
 
 
-     tmpdir = tempfile.mkdtemp(prefix="claims_monitoring_legacy_")
+    tmpdir = tempfile.mkdtemp(prefix="claims_monitoring_legacy_")
     db_path = os.path.join(tmpdir, "media.db")
     db = MediaDatabase(db_path=db_path, client_id="1")
     db.initialize_db()
@@ -59,11 +59,11 @@ def _seed_monitoring_db() -> str:
 def test_claims_alerts_migrate_legacy_configs():
 
 
-     from tldw_Server_API.app.main import app as fastapi_app
+    from tldw_Server_API.app.main import app as fastapi_app
 
     class _User:
         def __init__(self) -> None:
-                     self.id = 1
+            self.id = 1
             self.username = "tester"
             self.is_admin = True
 

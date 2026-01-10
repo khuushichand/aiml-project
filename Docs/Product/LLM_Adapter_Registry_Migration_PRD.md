@@ -27,7 +27,7 @@ Consolidate all LLM chat and summarization flows onto the adapter registry while
 - Backend maintainers: add/update providers by implementing one adapter.
 - Integrators: send supported OpenAI-compatible fields and receive deterministic errors for unsupported params.
 - Evaluations/RAG/Jobs/Services: call a single LLM interface without provider-specific branching.
-- Test authors: patch adapter calls directly without relying on compatibility request shims.
+- Test authors: patch adapters or `perform_chat_api_call` directly without relying on compatibility request shims.
 
 ## User Stories
 - As an integrator, I can send supported OpenAI-compatible fields (e.g., `min_p`, `top_k`, `repetition_penalty`) and get a clear error if a field is unsupported.
@@ -84,28 +84,15 @@ LLM calls are fragmented across compatibility modules (`chat_calls.py`, `local_c
 
 ### Capability Registry Launch Checklist (from legacy handler inventory + strict mode tests)
 **Alias mappings to capture**
-- [ ] bedrock: `topp`/`maxp` -> `maxp`.
-- [ ] openai: `maxp` -> `topp` (legacy alias).
-- [ ] qwen/moonshot/zai: `topp`/`maxp` -> `maxp`.
-- [ ] openrouter: `topp`/`maxp` -> `top_p`; `topk` -> `top_k`; `minp` -> `min_p`.
-- [ ] mistral: `seed` -> `random_seed`; `topk` -> `top_k`.
-- [ ] google: `max_tokens` -> `max_output_tokens`; `stop` -> `stop_sequences`; `n` -> `candidate_count`.
-- [ ] huggingface: `max_tokens` -> `max_new_tokens`.
-- [ ] anthropic/cohere: `system_message` -> `system_prompt`; `stop` -> `stop_sequences`.
-- [ ] llama.cpp: `temp` -> `temperature`; `system_message` -> `system_prompt`; `streaming` -> `stream`; `max_tokens` -> `n_predict`.
-- [ ] kobold: `max_tokens` -> `max_length`; `stop` -> `stop_sequence`.
-- [ ] ooba: `temp` -> `temperature`; `system_message` -> `system_prompt`; `streaming` -> `stream`.
-- [ ] tabbyapi: `temp` -> `temperature`; `streaming` -> `stream`.
-- [ ] vllm: `temp` -> `temperature`; `system_message` -> `system_prompt`; `streaming` -> `stream`.
-- [ ] local-llm: `temp` -> `temperature`; `streaming` -> `stream`.
-- [ ] ollama: `temp` -> `temperature`; `streaming` -> `stream`; `max_tokens` -> `num_predict`; `response_format` -> `format_str`.
-- [ ] aphrodite: `temp` -> `temperature`; `streaming` -> `stream`.
+- [x] global aliases: `temp` -> `temperature`; `streaming` -> `stream`; `topp`/`maxp` -> `top_p`; `topk` -> `top_k`; `minp` -> `min_p`; `system_prompt` -> `system_message`; `user_identifier` -> `user`.
+- [x] google: `max_output_tokens` -> `max_tokens`; `stop_sequences` -> `stop`; `candidate_count` -> `n`.
+- [x] huggingface: `max_new_tokens` -> `max_tokens`.
+- [x] anthropic/cohere: `stop_sequences` -> `stop`.
 
 **Blocked fields to define at launch**
-- [ ] cohere: block `tool_choice` (legacy handler does not accept it).
-- [ ] anthropic: block `tool_choice` until adapter/capability support is explicit.
-- [ ] google: block `tool_choice` until adapter/capability support is explicit.
-- [ ] local providers in `strict_openai_compat`: block non-OpenAI keys (at minimum `top_k`, `min_p`).
+- [x] cohere: block `tool_choice` (legacy handler does not accept it).
+- [x] google: block `tool_choice` until adapter/capability support is explicit.
+- [x] local providers in `strict_openai_compat`: drop non-OpenAI keys (at minimum `top_k`, `min_p`).
 
 ## Functional Requirements
 ### Adapter Payload Validation
@@ -157,7 +144,6 @@ Base URL overrides are allowed only for trusted callers (internal services/admin
 Primary modules to consolidate after parity:
 - `tldw_Server_API/app/core/LLM_Calls/chat_calls.py`
 - `tldw_Server_API/app/core/LLM_Calls/local_chat_calls.py`
-- `tldw_Server_API/app/core/LLM_Calls/adapter_calls.py`
 - `tldw_Server_API/app/core/Chat/provider_config.py` (deprecated stub; dispatch tables removed)
 - `tldw_Server_API/app/core/LLM_Calls/Summarization_General_Lib.py`
 - `tldw_Server_API/app/core/LLM_Calls/Local_Summarization_Lib.py`
@@ -196,11 +182,11 @@ Call sites to converge on the registry:
 
 ### Phase 3: Compatibility Entry Points as Thin Wrappers
 - Route legacy chat functions to adapters without filtering or param maps.
-- Remove `provider_config` dispatch tables and mark `adapter_calls` as a compatibility interface.
+- Remove `provider_config` dispatch tables and route compatibility wrappers through `chat_service.perform_chat_api_call`.
 - Migrate remaining call sites to registry directly.
 
 ### Phase 4: Rename Legacy Modules
-- Rename legacy modules to compatibility names (`chat_calls.py`, `local_chat_calls.py`, `adapter_calls.py`) and remove legacy param maps.
+- Keep `chat_calls.py`/`local_chat_calls.py` as compatibility wrappers and remove legacy param maps.
 - Update docs and tests to reference the registry interface and compatibility module paths.
 
 ## Success Criteria
@@ -232,14 +218,12 @@ Call sites to converge on the registry:
 - **Client regressions from stricter validation**: inventory extension usage and document unsupported fields early.
 
 ## Compatibility Shims (Launch)
-**Must keep (external consumers/tests depend on these surfaces)**
-- `tldw_Server_API/app/core/Chat/Chat_Functions.py`: legacy chat + chat_api_call shim for downstream integrations/tests.
-- `tldw_Server_API/app/core/LLM_Calls/adapter_calls.py`: adapter-backed handlers that preserve legacy signatures.
-  - Removal gated by a published deprecation window and usage metrics showing no external consumers; must be called out in release notes.
+**Removed (Stage 5)**
+- `tldw_Server_API/app/core/Chat/Chat_Functions.py`: removed after call-site migrations to `chat_orchestrator`/`chat_service`.
+- `tldw_Server_API/app/core/LLM_Calls/adapter_calls.py`: removed after compatibility wrappers were migrated to `chat_service.perform_chat_api_call`.
 
-**Deprecation timeline (Phase 4)**
-- Earliest removal: two release trains after registry-default cutover (target: >= v0.1.2 if Stage 4 lands in v0.1.0).
-- Requirements: usage metrics confirm no external consumers, release notes announce removal window, and parity gate tests stay green.
+**Removal timeline**
+- Completed in Stage 5; no runtime toggle remains.
 
 **Rollback plan (Phase 4)**
 - No runtime toggle once the cutover is complete; rollback requires deploying the previous release.
@@ -250,7 +234,6 @@ Call sites to converge on the registry:
 - `tldw_Server_API/app/core/RAG/rag_service/generation.py`: direct `chat_with_*` providers.
 - `tldw_Server_API/app/core/Evaluations/wordbench_runner.py`: direct `chat_with_*` usage.
 - `tldw_Server_API/app/core/Workflows/adapters.py`: direct `chat_with_openai_async` usage.
-- `tldw_Server_API/app/core/Writing/note_title.py`: uses `adapter_calls.openai_chat_handler`.
 
 ## Open Questions
 - None (resolved: nested validation Option A; base URL override Option A).
@@ -284,4 +267,4 @@ Call sites to converge on the registry:
 **Goal**: Remove legacy module naming and finalize docs/tests.
 **Success Criteria**: Legacy module names removed after deprecation window; docs updated; all tests green; no production path depends on deleted code.
 **Tests**: Full test suite with unit/integration coverage for adapter registry and validation.
-**Status**: In Progress
+**Status**: Complete

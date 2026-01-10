@@ -17,7 +17,7 @@ from tldw_Server_API.app.core.DB_Management.backends.base import (
     BackendType,
     BackendFeatures,
     FTSQuery,
-    DatabaseError
+    DatabaseError,
 )
 from tldw_Server_API.app.core.DB_Management.backends.sqlite_backend import SQLiteBackend
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
@@ -29,8 +29,8 @@ class TestDatabaseBackends:
 
     @pytest.fixture
     def temp_db_path(self):
-             """Create a temporary database file."""
-        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:
+        """Create a temporary database file."""
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
             temp_path = f.name
         yield temp_path
         # Cleanup
@@ -41,23 +41,17 @@ class TestDatabaseBackends:
 
     @pytest.fixture
     def sqlite_config(self, temp_db_path):
-             """Create SQLite configuration."""
-        return DatabaseConfig(
-            backend_type=BackendType.SQLITE,
-            sqlite_path=temp_db_path,
-            client_id="test_client"
-        )
+        """Create SQLite configuration."""
+        return DatabaseConfig(backend_type=BackendType.SQLITE, sqlite_path=temp_db_path, client_id="test_client")
 
     def test_sqlite_backend_creation(self, sqlite_config):
-
-             """Test that SQLite backend can be created."""
+        """Test that SQLite backend can be created."""
         backend = SQLiteBackend(sqlite_config)
         assert backend is not None
         assert backend.backend_type == BackendType.SQLITE
 
     def test_sqlite_backend_features(self, sqlite_config):
-
-             """Test that SQLite backend reports correct features."""
+        """Test that SQLite backend reports correct features."""
         backend = SQLiteBackend(sqlite_config)
         features = backend.features
 
@@ -66,8 +60,7 @@ class TestDatabaseBackends:
         assert features.window_functions == True  # Modern SQLite has window functions
 
     def test_sqlite_backend_connection(self, sqlite_config):
-
-             """Test that SQLite backend can connect to database."""
+        """Test that SQLite backend can connect to database."""
         backend = SQLiteBackend(sqlite_config)
 
         # Test connection
@@ -83,8 +76,7 @@ class TestDatabaseBackends:
         conn.close()
 
     def test_sqlite_backend_schema_creation(self, sqlite_config):
-
-             """Test that SQLite backend can create schema via create_tables."""
+        """Test that SQLite backend can create schema via create_tables."""
         backend = SQLiteBackend(sqlite_config)
 
         # Create a minimal test schema using the backend API
@@ -93,20 +85,15 @@ class TestDatabaseBackends:
         # Verify the test table exists
         conn = backend.connect()
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='test_table'"
-        )
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='test_table'")
         result = cursor.fetchone()
         assert result is not None
         conn.close()
 
     def test_sqlite_backend_pragma_returns_rows(self, sqlite_config):
-
-             """Ensure PRAGMA results are returned for table introspection."""
+        """Ensure PRAGMA results are returned for table introspection."""
         backend = SQLiteBackend(sqlite_config)
-        backend.create_tables(
-            "CREATE TABLE IF NOT EXISTS pragma_table (id INTEGER PRIMARY KEY, name TEXT)"
-        )
+        backend.create_tables("CREATE TABLE IF NOT EXISTS pragma_table (id INTEGER PRIMARY KEY, name TEXT)")
 
         pragma_result = backend.execute("PRAGMA table_info(pragma_table)")
         assert pragma_result.rows
@@ -117,12 +104,9 @@ class TestDatabaseBackends:
         assert "name" in columns
 
     def test_sqlite_backend_fts_rank_expression_sanitization(self, sqlite_config):
-
-             """Ensure unsafe FTS rank expressions are ignored and queries remain safe."""
+        """Ensure unsafe FTS rank expressions are ignored and queries remain safe."""
         backend = SQLiteBackend(sqlite_config)
-        backend.create_tables(
-            "CREATE TABLE IF NOT EXISTS docs (id INTEGER PRIMARY KEY, title TEXT, content TEXT)"
-        )
+        backend.create_tables("CREATE TABLE IF NOT EXISTS docs (id INTEGER PRIMARY KEY, title TEXT, content TEXT)")
         backend.execute("INSERT INTO docs (title, content) VALUES (?, ?)", ("hello", "world"))
         backend.create_fts_table("docs_fts", "docs", ["title", "content"])
 
@@ -136,13 +120,8 @@ class TestDatabaseBackends:
         assert safe_res.rows
 
     def test_backend_factory_sqlite(self, temp_db_path):
-
-             """Test that factory can create SQLite backend."""
-        config = DatabaseConfig(
-            backend_type=BackendType.SQLITE,
-            sqlite_path=temp_db_path,
-            client_id="test_factory"
-        )
+        """Test that factory can create SQLite backend."""
+        config = DatabaseConfig(backend_type=BackendType.SQLITE, sqlite_path=temp_db_path, client_id="test_factory")
 
         backend = DatabaseBackendFactory.create_backend(config)
         assert backend is not None
@@ -150,24 +129,17 @@ class TestDatabaseBackends:
         assert backend.backend_type == BackendType.SQLITE
 
     def test_backend_factory_invalid_type(self):
-
-             """Test that factory raises error for invalid backend type."""
-        config = DatabaseConfig(
-            backend_type="invalid_type",  # Invalid
-            client_id="test"
-        )
+        """Test that factory raises error for invalid backend type."""
+        config = DatabaseConfig(backend_type="invalid_type", client_id="test")  # Invalid
 
         with pytest.raises(ValueError):
             BackendFactory.create_backend(config)
 
-    @patch('tldw_Server_API.app.core.DB_Management.backends.postgresql_backend.PSYCOPG2_AVAILABLE', False)
+    @patch("tldw_Server_API.app.core.DB_Management.backends.postgresql_backend.PSYCOPG2_AVAILABLE", False)
     def test_postgresql_backend_unavailable(self):
-             """Test that PostgreSQL backend fails gracefully when psycopg2 not available."""
+        """Test that PostgreSQL backend fails gracefully when psycopg2 not available."""
         config = DatabaseConfig(
-            backend_type=BackendType.POSTGRESQL,
-            pg_host="localhost",
-            pg_database="test",
-            client_id="test"
+            backend_type=BackendType.POSTGRESQL, pg_host="localhost", pg_database="test", client_id="test"
         )
 
         with pytest.raises(DatabaseError) as exc_info:
@@ -177,14 +149,8 @@ class TestDatabaseBackends:
         assert "psycopg2 is not installed" in str(exc_info.value)
 
     def test_fts_query_creation(self):
-
-             """Test FTS query object creation."""
-        query = FTSQuery(
-            query="test search",
-            columns=["title", "content"],
-            limit=10,
-            offset=0
-        )
+        """Test FTS query object creation."""
+        query = FTSQuery(query="test search", columns=["title", "content"], limit=10, offset=0)
 
         assert query.query == "test search"
         assert query.columns == ["title", "content"]
@@ -192,8 +158,7 @@ class TestDatabaseBackends:
         assert query.offset == 0
 
     def test_sqlite_backend_transaction(self, sqlite_config):
-
-             """Test transaction management in SQLite backend."""
+        """Test transaction management in SQLite backend."""
         backend = SQLiteBackend(sqlite_config)
 
         # Test successful transaction
@@ -204,16 +169,13 @@ class TestDatabaseBackends:
         # Verify table was created
         conn = backend.connect()
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='test_table'"
-        )
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='test_table'")
         result = cursor.fetchone()
         assert result is not None
         conn.close()
 
     def test_sqlite_backend_rollback(self, sqlite_config):
-
-             """Test that transactions rollback on error."""
+        """Test that transactions rollback on error."""
         backend = SQLiteBackend(sqlite_config)
 
         # Test failed transaction
@@ -229,9 +191,7 @@ class TestDatabaseBackends:
         # Verify table was NOT created (rolled back)
         conn = backend.connect()
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='test_rollback'"
-        )
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='test_rollback'")
         result = cursor.fetchone()
         assert result is None
         conn.close()
@@ -242,7 +202,7 @@ class TestPostgreSQLBackend:
 
     @pytest.fixture
     def pg_config(self, pg_database_config):
-             """Use unified Postgres fixture to provision a per-test database.
+        """Use unified Postgres fixture to provision a per-test database.
 
         This avoids depending on a pre-existing database specified via env vars
         and ensures the DB exists before tests run.
@@ -252,8 +212,7 @@ class TestPostgreSQLBackend:
         return pg_database_config
 
     def test_postgresql_backend_creation(self, pg_config):
-
-             """Test PostgreSQL backend creation."""
+        """Test PostgreSQL backend creation."""
         from tldw_Server_API.app.core.DB_Management.backends.postgresql_backend import PostgreSQLBackend
 
         backend = PostgreSQLBackend(pg_config)
@@ -261,8 +220,7 @@ class TestPostgreSQLBackend:
         assert backend.backend_type == BackendType.POSTGRESQL
 
     def test_postgresql_features(self, pg_config):
-
-             """Test PostgreSQL feature detection."""
+        """Test PostgreSQL feature detection."""
         from tldw_Server_API.app.core.DB_Management.backends.postgresql_backend import PostgreSQLBackend
 
         backend = PostgreSQLBackend(pg_config)
@@ -274,8 +232,7 @@ class TestPostgreSQLBackend:
         assert features.listen_notify == True
 
     def test_postgresql_failed_statement_rolls_back_before_reuse(self, pg_config):
-
-             """Ensure failed statements do not poison pooled connections."""
+        """Ensure failed statements do not poison pooled connections."""
         from tldw_Server_API.app.core.DB_Management.backends.postgresql_backend import PostgreSQLBackend
 
         backend = PostgreSQLBackend(pg_config)
@@ -295,8 +252,7 @@ class TestPostgreSQLBackend:
             backend.execute(f"DROP TABLE IF EXISTS {table_name}")
 
     def test_postgresql_cte_insert_commits(self, pg_config):
-
-             """CTE bodies with INSERT should be treated as writes and commit automatically."""
+        """CTE bodies with INSERT should be treated as writes and commit automatically."""
         from tldw_Server_API.app.core.DB_Management.backends.postgresql_backend import PostgreSQLBackend
 
         backend = PostgreSQLBackend(pg_config)

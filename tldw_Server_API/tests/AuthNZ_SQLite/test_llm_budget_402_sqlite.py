@@ -7,9 +7,7 @@ from fastapi.testclient import TestClient
 
 
 def _chat_stub_response():
-
-
-     return {
+    return {
         "id": "chatcmpl-budget",
         "object": "chat.completion",
         "created": 1234567890,
@@ -22,9 +20,7 @@ def _chat_stub_response():
 
 
 def _override_chat_deps(app, monkeypatch):
-
-
-     import tldw_Server_API.app.api.v1.endpoints.chat as chat_endpoint
+    import tldw_Server_API.app.api.v1.endpoints.chat as chat_endpoint
     import tldw_Server_API.app.api.v1.schemas.chat_request_schemas as schema_chat
     from tldw_Server_API.app.api.v1.API_Deps import ChaCha_Notes_DB_Deps as chacha_deps
     from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB

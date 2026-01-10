@@ -9,7 +9,7 @@ Version 1.0.0
         ```
             GET /api/v1/media/search - Search across all ingested media content
             GET /api/v1/chats/search - Search across all chat conversations
-            GET /api/v1/prompts/search - Search across all prompts
+            POST /api/v1/prompts/search - Search across all prompts
             GET /api/v1/keywords/search - Search across all keywords
             GET /api/v1/characters/search_convos - Search across all character conversations
             GET /api/v1/characters/search - Search across all characters
@@ -75,6 +75,19 @@ Version 1.0.0
             POST /api/v1/prompts - Create a new prompt
             PUT /api/v1/prompts/{id} - Update an existing prompt
             DELETE /api/v1/prompts/{id} - Delete a prompt
+            POST /api/v1/prompts/search - Search prompts
+            GET /api/v1/prompts/export - Export prompts
+            POST /api/v1/prompts/import - Import prompts
+            GET /api/v1/prompts/{id}/versions - List prompt versions
+            POST /api/v1/prompts/{id}/versions/{version}/restore - Restore prompt version
+            POST /api/v1/prompts/templates/variables - Extract template variables
+            POST /api/v1/prompts/templates/render - Render template
+            POST /api/v1/prompts/bulk/delete - Bulk delete prompts
+            POST /api/v1/prompts/bulk/keywords - Bulk update prompt keywords
+            POST /api/v1/prompts/keywords/ - Create keyword
+            GET /api/v1/prompts/keywords/ - List keywords
+            DELETE /api/v1/prompts/keywords/{keyword_text} - Delete keyword
+            GET /api/v1/prompts/keywords/export-csv - Export keywords
         ```
 - **`/api/v1/audio` endpoint**
     - **TTS**

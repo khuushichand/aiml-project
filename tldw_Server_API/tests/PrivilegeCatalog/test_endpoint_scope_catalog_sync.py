@@ -49,8 +49,7 @@ def load_catalog_scope_ids(catalog_path: Path) -> set[str]:
 
 def test_endpoint_ids_have_catalog_entries():
 
-
-     repo_root = Path(__file__).resolve().parents[3]
+    repo_root = Path(__file__).resolve().parents[3]
     endpoints_dir = repo_root / "tldw_Server_API" / "app" / "api" / "v1" / "endpoints"
     catalog_path = repo_root / "tldw_Server_API" / "Config_Files" / "privilege_catalog.yaml"
 
@@ -58,6 +57,4 @@ def test_endpoint_ids_have_catalog_entries():
     catalog_ids = load_catalog_scope_ids(catalog_path)
 
     missing = sorted([eid for eid in endpoint_ids if eid not in catalog_ids])
-    assert not missing, (
-        "Found endpoint_id values without privilege catalog entries: " + ", ".join(missing)
-    )
+    assert not missing, "Found endpoint_id values without privilege catalog entries: " + ", ".join(missing)

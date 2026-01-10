@@ -8,11 +8,11 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_U
 
 class _StubDiarizationService:
     def __init__(self, *args, **kwargs):
-             self.is_available = True
+        self.is_available = True
 
     def diarize(self, audio_path, transcription_segments=None, num_speakers=None):
 
-             segments = []
+        segments = []
         for idx, seg in enumerate(transcription_segments or []):
             segments.append({
                 **seg,

@@ -1111,7 +1111,7 @@ class TestResponsesIntegration:
 2. **SSE Streaming**: Use unified streaming approach in evaluations_unified.py
 3. **Authentication**: Use pattern from evaluations_unified.py
 4. **RAG Integration**: Direct integration with enhanced_rag_service.py
-5. **LLM Calls**: Use existing Chat_Functions.chat_api_call
+5. **LLM Calls**: Use `chat_service.perform_chat_api_call` (adapter-backed)
 
 ### Simplified Architecture
 ```python

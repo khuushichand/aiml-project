@@ -25,16 +25,17 @@
 ## 2. Technical Details of Features
 
 - Architecture & Data Flow:
-  - Commercial providers: `chat_calls.py` — tldw_Server_API/app/core/LLM_Calls/chat_calls.py:1
-  - Local/compatible providers: `local_chat_calls.py` — tldw_Server_API/app/core/LLM_Calls/local_chat_calls.py:1
-  - Compatibility handlers: `adapter_calls.py` — tldw_Server_API/app/core/LLM_Calls/adapter_calls.py:1
+  - Primary entrypoints: `perform_chat_api_call` / `perform_chat_api_call_async` — tldw_Server_API/app/core/Chat/chat_service.py:668
   - Routing/dispatch: adapter registry maps provider name → adapter — tldw_Server_API/app/core/LLM_Calls/adapter_registry.py:1
+  - Adapters: per-provider implementations under `providers/`
+  - Compatibility wrappers: `chat_calls.py` / `local_chat_calls.py` (thin wrappers around the registry)
   - Streaming: `streaming.py` and `sse.py` normalize lines to SSE — tldw_Server_API/app/core/LLM_Calls/streaming.py:1, tldw_Server_API/app/core/LLM_Calls/sse.py:1
   - Retries: `http_helpers.create_session_with_retries` — tldw_Server_API/app/core/LLM_Calls/http_helpers.py:1
 - Key Functions (entry points):
-  - `chat_with_openai`, `chat_with_anthropic`, `chat_with_cohere`, `chat_with_groq`, `chat_with_openrouter`, `chat_with_deepseek`, `chat_with_mistral`, `chat_with_google`, `chat_with_qwen`, `chat_with_bedrock`, `chat_with_moonshot`, `chat_with_zai` — chat_calls.py
+  - `perform_chat_api_call`, `perform_chat_api_call_async` — chat_service entrypoints used by production call sites.
   - Adapter classes: OpenAI, Groq, Anthropic, Google, Qwen, Mistral, OpenRouter, HuggingFace, Bedrock — under `providers/` and auto-registered via the adapter registry.
-  - `chat_with_local_llm`, `chat_with_llama`, `chat_with_kobold`, `chat_with_oobabooga`, `chat_with_tabbyapi`, `chat_with_vllm`, `chat_with_aphrodite`, `chat_with_ollama`, `chat_with_custom_openai(_2)` — local_chat_calls.py
+  - Compatibility wrappers (legacy call sites/tests only): `chat_with_openai`, `chat_with_anthropic`, `chat_with_cohere`, `chat_with_groq`, `chat_with_openrouter`, `chat_with_deepseek`, `chat_with_mistral`, `chat_with_google`, `chat_with_qwen`, `chat_with_bedrock`, `chat_with_moonshot`, `chat_with_zai` — chat_calls.py
+  - Compatibility wrappers (legacy call sites/tests only): `chat_with_local_llm`, `chat_with_llama`, `chat_with_kobold`, `chat_with_oobabooga`, `chat_with_tabbyapi`, `chat_with_vllm`, `chat_with_aphrodite`, `chat_with_ollama`, `chat_with_custom_openai(_2)` — local_chat_calls.py
   - Async variants available for select providers (OpenAI, Groq, Anthropic, OpenRouter).
 - Dependencies:
   - Internal: Chat error classes (Chat_Deps), adapter registry, config loader, streaming helpers, summarization libs.
@@ -57,9 +58,9 @@
 ## 3. Developer-Related/Relevant Information for Contributors
 
 - Folder Structure:
-  - `chat_calls.py` (commercial), `local_chat_calls.py` (local/gateways), `adapter_calls.py` (compat handlers), `streaming.py`, `sse.py`, `http_helpers.py`, `huggingface_api.py`, summarization libs.
+  - `chat_calls.py` (commercial), `local_chat_calls.py` (local/gateways), `streaming.py`, `sse.py`, `http_helpers.py`, `huggingface_api.py`, summarization libs.
 - Extension Points:
-  - Add a provider adapter in `core/LLM_Calls/providers/` and register it in `adapter_registry.py`.
+  - Add a provider adapter in `core/LLM_Calls/providers/` and register it in `adapter_registry.py` (the registry is the primary call surface).
   - Parameter translation/validation lives in adapter capability registry; compatibility handlers accept provider-native args.
   - For streaming endpoints, ensure provider stream is normalized using `normalize_provider_line()` and finalize via `finalize_stream()`.
 - Coding Patterns:
@@ -85,12 +86,13 @@
 
 ---
 
-Example (OpenAI)
+Example (OpenAI via adapter registry)
 ```python
-from tldw_Server_API.app.core.LLM_Calls.chat_calls import chat_with_openai
+from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
 
-resp = chat_with_openai(
-    input_data=[{"role":"user","content":"Hello"}],
+resp = perform_chat_api_call(
+    provider="openai",
+    messages=[{"role": "user", "content": "Hello"}],
     model="gpt-4o-mini",
 )
 print(resp["choices"][0]["message"]["content"])

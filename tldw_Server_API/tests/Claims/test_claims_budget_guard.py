@@ -10,7 +10,7 @@ from tldw_Server_API.app.core import config
 
 @pytest.mark.unit
 def test_claims_job_budget_reserve_exhausts_cost():
-     budget = ClaimsJobBudget(max_cost_usd=1.0, max_tokens=100, strict=True)
+    budget = ClaimsJobBudget(max_cost_usd=1.0, max_tokens=100, strict=True)
     assert budget.reserve(cost_usd=0.4, tokens=40)
     assert budget.used_cost_usd == pytest.approx(0.4)
     assert budget.used_tokens == 40
@@ -22,7 +22,7 @@ def test_claims_job_budget_reserve_exhausts_cost():
 
 @pytest.mark.unit
 def test_resolve_claims_job_budget_respects_enabled():
-     cfg = {
+    cfg = {
         "CLAIMS_JOB_BUDGET_ENABLED": "false",
         "CLAIMS_JOB_MAX_COST_USD": "1.0",
         "CLAIMS_JOB_MAX_TOKENS": "100",
@@ -37,7 +37,7 @@ def test_resolve_claims_job_budget_respects_enabled():
 
 @pytest.mark.unit
 def test_should_throttle_claims_provider_latency(monkeypatch):
-     monkeypatch.setitem(config.settings, "CLAIMS_ADAPTIVE_THROTTLE_ENABLED", True)
+    monkeypatch.setitem(config.settings, "CLAIMS_ADAPTIVE_THROTTLE_ENABLED", True)
     monkeypatch.setitem(config.settings, "CLAIMS_ADAPTIVE_THROTTLE_LATENCY_MS", 100)
     monkeypatch.setitem(config.settings, "CLAIMS_ADAPTIVE_THROTTLE_ERROR_RATE", 0)
     monkeypatch.setitem(config.settings, "CLAIMS_ADAPTIVE_THROTTLE_BUDGET_RATIO", 0)
@@ -60,7 +60,7 @@ def test_should_throttle_claims_provider_latency(monkeypatch):
 
 @pytest.mark.unit
 def test_suggest_claims_concurrency_budget_ratio(monkeypatch):
-     monkeypatch.setitem(config.settings, "CLAIMS_ADAPTIVE_THROTTLE_ENABLED", True)
+    monkeypatch.setitem(config.settings, "CLAIMS_ADAPTIVE_THROTTLE_ENABLED", True)
     monkeypatch.setitem(config.settings, "CLAIMS_ADAPTIVE_THROTTLE_LATENCY_MS", 0)
     monkeypatch.setitem(config.settings, "CLAIMS_ADAPTIVE_THROTTLE_ERROR_RATE", 0)
     monkeypatch.setitem(config.settings, "CLAIMS_ADAPTIVE_THROTTLE_BUDGET_RATIO", 0.2)

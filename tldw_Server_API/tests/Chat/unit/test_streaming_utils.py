@@ -21,7 +21,7 @@ class TestStreamingResponseHandler:
 
     def test_initialization(self):
 
-             """Test handler initialization."""
+        """Test handler initialization."""
         handler = StreamingResponseHandler(
             conversation_id="conv_123",
             model_name="gpt-4",
@@ -39,7 +39,7 @@ class TestStreamingResponseHandler:
 
     def test_update_activity(self):
 
-             """Test activity timestamp update."""
+        """Test activity timestamp update."""
         handler = StreamingResponseHandler("conv_123", "gpt-4")
         initial_time = handler.last_activity
 
@@ -50,7 +50,7 @@ class TestStreamingResponseHandler:
 
     def test_is_timed_out(self):
 
-             """Test timeout detection."""
+        """Test timeout detection."""
         handler = StreamingResponseHandler(
             "conv_123", "gpt-4", idle_timeout=1
         )
@@ -64,7 +64,7 @@ class TestStreamingResponseHandler:
 
     def test_cancel(self):
 
-             """Test stream cancellation."""
+        """Test stream cancellation."""
         handler = StreamingResponseHandler("conv_123", "gpt-4")
 
         assert handler.is_cancelled is False
@@ -154,7 +154,7 @@ class TestSafeStreamGenerator:
 
         def mock_stream():
 
-                     yield "Sync"
+            yield "Sync"
             yield " "
             yield "Stream"
 
@@ -171,7 +171,7 @@ class TestSafeStreamGenerator:
 
         def blocking_stream():
 
-                     yield "Start"
+            yield "Start"
             time.sleep(0.15)
             yield "End"
 
@@ -344,7 +344,7 @@ class TestSafeStreamGenerator:
 
         def provider_stream():
 
-                     try:
+            try:
                 yield "A"
                 yield "B"
             finally:
@@ -514,12 +514,12 @@ class TestConstants:
 
     def test_default_timeout(self):
 
-             """Test default timeout value."""
+        """Test default timeout value."""
         assert STREAMING_IDLE_TIMEOUT == 300  # 5 minutes
 
     def test_default_heartbeat(self):
 
-             """Test default heartbeat interval."""
+        """Test default heartbeat interval."""
         # Legacy heartbeat is disabled via config (0) to avoid duplicate heartbeats
         # when unified streaming is enabled. Expect 0 in test configuration.
         assert HEARTBEAT_INTERVAL == 0

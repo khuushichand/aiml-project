@@ -10,16 +10,13 @@ class DummyResponse:
         self.status_code = 200
 
     def raise_for_status(self):
-
-             return None
+        return None
 
     def json(self):
-
-             return {}
+        return {}
 
     def close(self):
-
-             return None
+        return None
 
 
 @pytest.mark.unit
@@ -35,7 +32,7 @@ class DummyResponse:
     ],
 )
 def test_local_like_adapters_coerce_numeric_types(provider_name, cfg_section, url_key):
-     fake_settings = {
+    fake_settings = {
         cfg_section: {
             url_key: "http://localhost:1234/v1",  # openai-compatible path ok
             "streaming": False,
@@ -48,17 +45,16 @@ def test_local_like_adapters_coerce_numeric_types(provider_name, cfg_section, ur
     captured_payload = {}
 
     def fake_post(url, headers=None, json=None, timeout=None):
-
-             captured_payload.clear()
+        captured_payload.clear()
         if json:
             captured_payload.update(json)
         return DummyResponse({})
 
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls.load_settings",
+        "tldw_Server_API.app.core.LLM_Calls.providers.local_adapters.load_settings",
         return_value=fake_settings,
     ), patch(
-        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls._hc_create_client"
+        "tldw_Server_API.app.core.LLM_Calls.providers.local_adapters._hc_create_client"
     ) as mock_client_cls:
         mock_client = MagicMock()
         mock_client.post.side_effect = fake_post
@@ -81,7 +77,7 @@ def test_local_like_adapters_coerce_numeric_types(provider_name, cfg_section, ur
 
 @pytest.mark.unit
 def test_kobold_coerces_numeric_types():
-     fake_settings = {
+    fake_settings = {
         "kobold_api": {
             "api_ip": "http://localhost:5000/api/v1/generate",
             "streaming": False,
@@ -95,21 +91,21 @@ def test_kobold_coerces_numeric_types():
 
     class Dummy:
         status_code = 200
+
         def json(self):
-                     return {"results": [{"text": "ok"}]}
+            return {"results": [{"text": "ok"}]}
 
     def fake_fetch(method, url, headers=None, json=None, retry=None):
-
-             captured_payload.clear()
+        captured_payload.clear()
         if json:
             captured_payload.update(json)
         return Dummy()
 
     with patch(
-        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls.load_settings",
+        "tldw_Server_API.app.core.LLM_Calls.providers.local_adapters.load_settings",
         return_value=fake_settings,
     ), patch(
-        "tldw_Server_API.app.core.LLM_Calls.local_chat_calls._hc_fetch",
+        "tldw_Server_API.app.core.LLM_Calls.providers.local_adapters._hc_fetch",
         side_effect=fake_fetch,
     ):
         chat_api_call(

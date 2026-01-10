@@ -42,26 +42,22 @@ class FailingAdapter(TTSAdapter):
 
 class MetricsStub:
     def __init__(self):
-             self.registered = []
+        self.registered = []
         self.gauges = []
         self.increments = []
         self.observations = []
 
     def register_metric(self, *args, **kwargs):
-
-             self.registered.append((args, kwargs))
+        self.registered.append((args, kwargs))
 
     def set_gauge(self, *args, **kwargs):
-
-             self.gauges.append((args, kwargs))
+        self.gauges.append((args, kwargs))
 
     def increment(self, *args, **kwargs):
-
-             self.increments.append((args, kwargs))
+        self.increments.append((args, kwargs))
 
     def observe(self, *args, **kwargs):
-
-             self.observations.append((args, kwargs))
+        self.observations.append((args, kwargs))
 
 
 @pytest.mark.asyncio
@@ -109,7 +105,7 @@ async def test_stream_errors_as_audio_false_raises_exception():
 def test_tts_service_default_stream_errors_as_audio_false(monkeypatch):
 
 
-     """
+    """
     When no environment override or registry config is present,
     TTSServiceV2 should default to _stream_errors_as_audio == False so
     errors propagate as HTTP errors instead of embedded audio bytes.
@@ -200,7 +196,7 @@ async def test_network_error_triggers_fallback_and_metrics_increment():
 
     class DummyRegistry:
         def __init__(self):
-                     # Minimal adapter specs mapping so _get_fallback_adapter can see these providers
+            # Minimal adapter specs mapping so _get_fallback_adapter can see these providers
             self._adapter_specs = {
                 TTSProvider.OPENAI: object(),
                 TTSProvider.ELEVENLABS: object(),
@@ -215,7 +211,7 @@ async def test_network_error_triggers_fallback_and_metrics_increment():
 
     class DummyFactory:
         def __init__(self):
-                     self.registry = DummyRegistry()
+            self.registry = DummyRegistry()
 
         async def get_adapter_by_model(self, model: str) -> TTSAdapter:
             # Always return primary adapter for the initial model
@@ -263,7 +259,7 @@ async def test_timeout_error_triggers_fallback_and_metrics_increment():
 
     class DummyRegistry:
         def __init__(self):
-                     self._adapter_specs = {
+            self._adapter_specs = {
                 TTSProvider.OPENAI: object(),
                 TTSProvider.ELEVENLABS: object(),
             }
@@ -277,7 +273,7 @@ async def test_timeout_error_triggers_fallback_and_metrics_increment():
 
     class DummyFactory:
         def __init__(self):
-                     self.registry = DummyRegistry()
+            self.registry = DummyRegistry()
 
         async def get_adapter_by_model(self, model: str) -> TTSAdapter:
             return primary_adapter

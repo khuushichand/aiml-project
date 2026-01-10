@@ -10,15 +10,13 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_setting
 
 @pytest.fixture(scope="module")
 def client():
-     # Ensure a consistent single-user auth configuration for this module,
+    # Ensure a consistent single-user auth configuration for this module,
     # regardless of prior AuthNZ tests that may have switched modes.
     prev_auth_mode = os.environ.get("AUTH_MODE")
     prev_single_key = os.environ.get("SINGLE_USER_API_KEY")
     try:
         os.environ["AUTH_MODE"] = "single_user"
-        os.environ["SINGLE_USER_API_KEY"] = os.getenv(
-            "SINGLE_USER_TEST_API_KEY", "test-api-key-12345"
-        )
+        os.environ["SINGLE_USER_API_KEY"] = os.getenv("SINGLE_USER_TEST_API_KEY", "test-api-key-12345")
         reset_settings()
         settings = get_settings()
         headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
@@ -40,12 +38,13 @@ def client():
 
 class _FakeProc:
     def __init__(self, captured):
-             self._captured = captured
+        self._captured = captured
         self.returncode = 0
+
     async def communicate(self):
         # Build minimal embeddings array: 1 query + N docs, each 8-dim
         n = self._captured.get("n_docs", 3) + 1
-        arr = [[0.1]*8 for _ in range(n)]
+        arr = [[0.1] * 8 for _ in range(n)]
         payload = json.dumps({"embeddings": arr}).encode()
         return payload, b""
 
@@ -61,6 +60,7 @@ def test_bge_prefix_applied(monkeypatch, client: TestClient):
 
     # Patch the subprocess creator where it is used
     import tldw_Server_API.app.core.RAG.rag_service.advanced_reranking as ar
+
     monkeypatch.setattr(ar.asyncio, "create_subprocess_exec", fake_cpe)
 
     payload = {
@@ -69,10 +69,10 @@ def test_bge_prefix_applied(monkeypatch, client: TestClient):
         "passages": [
             {"id": "a", "text": "Llamas eat bananas"},
             {"id": "b", "text": "Llamas in pyjamas"},
-            {"id": "c", "text": "A bowl of fruit salad"}
+            {"id": "c", "text": "A bowl of fruit salad"},
         ],
         # Include 'bge' in model path to trigger auto prefixes
-        "model": "/models/bge-small-en-v1.5.gguf"
+        "model": "/models/bge-small-en-v1.5.gguf",
     }
     resp = client.post("/api/v1/llamacpp/reranking", json=payload)
     assert resp.status_code == 200, resp.text

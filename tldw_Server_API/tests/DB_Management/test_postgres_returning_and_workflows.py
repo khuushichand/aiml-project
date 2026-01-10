@@ -7,9 +7,7 @@ from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabas
 
 
 def test_prepare_backend_statement_insert_non_id_returning():
-
-
-     """
+    """
     Verify Postgres insert on a table without 'id' uses RETURNING * when requested.
     This guards against failures where a generic helper appends RETURNING id.
     """
@@ -31,9 +29,7 @@ def test_prepare_backend_statement_insert_non_id_returning():
 
 
 def test_workflows_insert_returning_row_id_adapter():
-
-
-     """
+    """
     Simulate an INSERT ... RETURNING * for workflows and ensure the helper can
     read back the 'id' from a QueryResult.
     """
@@ -50,7 +46,7 @@ def test_workflows_insert_returning_row_id_adapter():
     reason="PostgreSQL content backend not configured in this environment",
 )
 def test_validate_postgres_content_backend_smoke():
-     """
+    """
     Smoke test for RLS validation when a Postgres content backend is configured.
     This test is skipped unless TLDW_CONTENT_DB_BACKEND=postgres and a configured
     Postgres instance is available.

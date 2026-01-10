@@ -21,7 +21,7 @@ if 'faster_whisper' not in sys.modules:
 
     class _StubWhisperModel:  # Minimal stub used in tests
         def __init__(self, *args, **kwargs):
-                     pass
+            pass
 
     _fake_fw.WhisperModel = _StubWhisperModel
     _fake_fw.BatchedInferencePipeline = _StubWhisperModel
@@ -33,12 +33,12 @@ if 'transformers' not in sys.modules:
     class _StubProcessor:
         @classmethod
         def from_pretrained(cls, *args, **kwargs):
-                     return cls()
+            return cls()
 
     class _StubModel:
         @classmethod
         def from_pretrained(cls, *args, **kwargs):
-                     return cls()
+            return cls()
 
     _fake_tf.AutoProcessor = _StubProcessor
     _fake_tf.Qwen2AudioForConditionalGeneration = _StubModel
@@ -53,7 +53,7 @@ if 'safetensors.torch' not in sys.modules:
 
     def _noop(*args, **kwargs):
 
-             return None
+        return None
 
     _fake_st_torch.save_file = _noop
     sys.modules['safetensors.torch'] = _fake_st_torch
@@ -62,7 +62,7 @@ if 'safetensors.torch' not in sys.modules:
 def _auth_headers():
 
 
-     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
     key = get_settings().SINGLE_USER_API_KEY or os.getenv("SINGLE_USER_API_KEY", "test-api-key-12345")
     return {"X-API-KEY": key}
@@ -70,43 +70,43 @@ def _auth_headers():
 
 class _FakeConn:
     def execute(self, *args, **kwargs):
-             return None
+        return None
 
     def commit(self):
 
-             return None
+        return None
 
 
 class _FakeDB:
     def __init__(self):
-             self.last_filters = None
+        self.last_filters = None
         self.created_versions = []
         self.add_calls = []
 
     # Context manager for transaction()
     def transaction(self):
-             class _Tx:
+        class _Tx:
             def __enter__(self_inner):
-                             return _FakeConn()
+                return _FakeConn()
 
             def __exit__(self_inner, exc_type, exc, tb):
 
-                             return False
+                return False
 
         return _Tx()
 
     def get_connection(self):
 
-             return _FakeConn()
+        return _FakeConn()
 
     def search_by_safe_metadata(self, filters=None, match_all=True, page=1, per_page=20, group_by_media=True):
 
-             self.last_filters = filters
+        self.last_filters = filters
         return [], 0
 
     def create_document_version(self, media_id, content, prompt, analysis_content, safe_metadata):
 
-             self.created_versions.append({
+        self.created_versions.append({
             "media_id": media_id,
             "content": content,
             "prompt": prompt,
@@ -117,7 +117,7 @@ class _FakeDB:
 
     def add_media_with_keywords(self, **kwargs):
 
-             self.add_calls.append(kwargs)
+        self.add_calls.append(kwargs)
         return 42, "uuid-42", "ok"
 
 
@@ -195,7 +195,7 @@ async def test_patch_metadata_invalid_doi_returns_400(monkeypatch):
 
     def _fake_get_document_version(db_instance, media_id, version_number=None, include_content=True):
 
-             return {"id": 1, "media_id": media_id, "version_number": 1, "content": "x", "prompt": None, "analysis_content": None, "safe_metadata": "{}"}
+        return {"id": 1, "media_id": media_id, "version_number": 1, "content": "x", "prompt": None, "analysis_content": None, "safe_metadata": "{}"}
 
     monkeypatch.setattr(media_ep, "get_document_version", _fake_get_document_version)
 
@@ -232,7 +232,7 @@ async def test_put_version_metadata_invalid_pmcid_returns_400(monkeypatch):
 
     def _fake_get_document_version(db_instance, media_id, version_number=None, include_content=True):
 
-             return {"id": 2, "media_id": media_id, "version_number": 2, "safe_metadata": "{}"}
+        return {"id": 2, "media_id": media_id, "version_number": 2, "safe_metadata": "{}"}
 
     monkeypatch.setattr(media_ep, "get_document_version", _fake_get_document_version)
 
@@ -269,7 +269,7 @@ async def test_advanced_version_upsert_invalid_pmid_returns_400(monkeypatch):
 
     def _fake_get_document_version(db_instance, media_id, version_number=None, include_content=True):
 
-             return {"id": 1, "media_id": media_id, "version_number": 1, "content": "x", "prompt": None, "analysis_content": None, "safe_metadata": "{}"}
+        return {"id": 1, "media_id": media_id, "version_number": 1, "content": "x", "prompt": None, "analysis_content": None, "safe_metadata": "{}"}
 
     monkeypatch.setattr(media_ep, "get_document_version", _fake_get_document_version)
 
@@ -318,7 +318,7 @@ async def test_pubmed_ingest_normalizes_pmcid_in_saved_metadata(monkeypatch):
 
     def _fake_pubmed_by_id(pmid):
 
-             return {
+        return {
             "pmid": pmid,
             "pmcid": "PMC123",
             "title": "Test",
@@ -332,7 +332,7 @@ async def test_pubmed_ingest_normalizes_pmcid_in_saved_metadata(monkeypatch):
 
     def _fake_download_pmc_pdf(pmcid):
 
-             return b"%PDF-1.5\n...", "paper.pdf", None
+        return b"%PDF-1.5\n...", "paper.pdf", None
 
     async def _fake_process_pdf_task(**kwargs):
         return {"status": "Success", "content": "text", "summary": "s"}

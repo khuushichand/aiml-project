@@ -7,7 +7,6 @@ import pytest
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
 from tldw_Server_API.app.core.LLM_Calls.providers import mlx_provider as mp
-from tldw_Server_API.app.core.LLM_Calls import adapter_calls
 
 
 IS_APPLE = platform.system() == "Darwin"
@@ -16,7 +15,7 @@ IS_APPLE = platform.system() == "Darwin"
 def _require_mlx_model_path() -> str:
 
 
-     if not IS_APPLE:
+    if not IS_APPLE:
         pytest.skip("MLX integration tests run only on Apple hosts", allow_module_level=False)
     try:
         import mlx_lm  # type: ignore[import]
@@ -35,7 +34,7 @@ def _require_mlx_model_path() -> str:
 @pytest.mark.integration
 @pytest.mark.local_llm_service
 def test_mlx_chat_and_stream_with_real_model():
-     model_path = _require_mlx_model_path()
+    model_path = _require_mlx_model_path()
     reg = mp.get_mlx_registry()
     try:
         status = reg.load(model_path=model_path, overrides={"max_concurrent": 1, "warmup": False})
@@ -91,8 +90,10 @@ async def test_mlx_async_handler_with_real_model():
     except ChatProviderError as exc:
         pytest.skip(f"MLX model unavailable for integration test: {exc}", allow_module_level=False)
 
-    stream = await adapter_calls.mlx_chat_handler_async(
-        input_data=[{"role": "user", "content": "hi from async test"}],
+    from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
+    stream = await perform_chat_api_call_async(
+        api_provider="mlx",
+        messages=[{"role": "user", "content": "hi from async test"}],
         model=model_path,
         streaming=True,
         max_tokens=16,

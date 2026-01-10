@@ -1045,6 +1045,7 @@ storage root used by `tldw_Server_API/app/core/config.py` and
 directories (for example, `Media_DB_v2.db`, `ChaChaNotes.db`, and chatbook exports/imports). The defaults can vary
 by environment: `Dockerfiles/docker-compose.yml` sets `DATABASE_URL=sqlite:///./Databases/users.db`, while
 `config.py` falls back to `Databases/user_databases/<SINGLE_USER_FIXED_ID>/tldw.db` if `DATABASE_URL` is unset.
+Override `USER_DB_BASE_DIR` via environment variable or `Config_Files/config.txt` as needed.
 
 ### Docker Configuration
 

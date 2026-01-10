@@ -12,9 +12,10 @@ from tldw_Server_API.app.core.PrivilegeMaps.service import PrivilegeMapService
 from tldw_Server_API.app.core.PrivilegeMaps.snapshots import PrivilegeSnapshotStore, get_privilege_snapshot_store
 from tldw_Server_API.app.core.PrivilegeMaps.service import get_privilege_map_service
 
+
 class InMemoryTrendStore:
     def __init__(self) -> None:
-             self.snapshots = []
+        self.snapshots = []
 
     async def record_snapshot(self, *, scope, group_by, catalog_version, generated_at, buckets, team_id=None):  # type: ignore[no-untyped-def]
         self.snapshots.append((scope, group_by, generated_at, buckets, team_id))
@@ -39,7 +40,7 @@ class InMemoryTrendStore:
 
 class FakePrivilegeMapService(PrivilegeMapService):
     def __init__(self) -> None:
-             fake_registry = {
+        fake_registry = {
             "media.ingest": [
                 RouteMetadata(
                     path="/api/v1/media/process",
@@ -154,7 +155,7 @@ class FakePrivilegeMapService(PrivilegeMapService):
 
 @pytest.fixture()
 def privilege_test_client():
-     fake_service = FakePrivilegeMapService()
+    fake_service = FakePrivilegeMapService()
     snapshot_store = PrivilegeSnapshotStore()
     previous_validate_env = os.environ.get("PRIVILEGE_METADATA_VALIDATE_ON_STARTUP")
     os.environ["PRIVILEGE_METADATA_VALIDATE_ON_STARTUP"] = "0"
@@ -254,7 +255,7 @@ def privilege_test_client():
 
     def override_current_user():
 
-             return {"id": "admin-1", "username": "Admin User", "role": "admin", "is_admin": True}
+        return {"id": "admin-1", "username": "Admin User", "role": "admin", "is_admin": True}
 
     fastapi_app.dependency_overrides[get_current_active_user] = override_current_user
     fastapi_app.dependency_overrides[get_privilege_map_service] = lambda: fake_service
@@ -404,9 +405,7 @@ def test_get_snapshot_detail(privilege_test_client: TestClient):
 
 
 def test_export_snapshot_json(privilege_test_client: TestClient):
-    response = privilege_test_client.get(
-        "/api/v1/privileges/snapshots/snap-2025-01-15-001/export.json"
-    )
+    response = privilege_test_client.get("/api/v1/privileges/snapshots/snap-2025-01-15-001/export.json")
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
     assert "attachment; filename=" in response.headers.get("content-disposition", "")
@@ -417,9 +416,7 @@ def test_export_snapshot_json(privilege_test_client: TestClient):
 
 
 def test_export_snapshot_csv(privilege_test_client: TestClient):
-    response = privilege_test_client.get(
-        "/api/v1/privileges/snapshots/snap-2025-01-15-001/export.csv"
-    )
+    response = privilege_test_client.get("/api/v1/privileges/snapshots/snap-2025-01-15-001/export.csv")
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/csv")
     assert "attachment; filename=" in response.headers.get("content-disposition", "")

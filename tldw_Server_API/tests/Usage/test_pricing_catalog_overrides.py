@@ -5,9 +5,7 @@ import pytest
 
 
 def test_pricing_overrides_env(monkeypatch):
-
-
-     """Environment PRICING_OVERRIDES should override default rates and support partial matches.
+    """Environment PRICING_OVERRIDES should override default rates and support partial matches.
 
     Verifies that an override for a provider/model is picked up and that
     requesting a model name with the override as a substring returns the

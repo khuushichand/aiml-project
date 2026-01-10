@@ -13,15 +13,15 @@ which provides:
 Test Groups
 -----------
 1. **Plans endpoint tests**: Verify `/api/v1/billing/plans` returns available
-   subscription plans without authentication.
+    subscription plans without authentication.
 
 2. **Subscription endpoint tests**: Verify `/api/v1/billing/subscription` returns
-   correct subscription status for authenticated users.
+    correct subscription status for authenticated users.
 
 3. **Usage endpoint tests**: Verify `/api/v1/billing/usage` returns usage vs limits.
 
 4. **Billing disabled tests**: Verify endpoints behave correctly when billing
-   is disabled (BILLING_ENABLED=false).
+    is disabled (BILLING_ENABLED=false).
 
 Prerequisites
 -------------
@@ -58,7 +58,7 @@ TEST_DB_PASSWORD = _pg.password
 def _has_postgres_dependencies() -> bool:
 
 
-     """Check if PostgreSQL dependencies are available."""
+    """Check if PostgreSQL dependencies are available."""
     try:
         import psycopg  # noqa: F401
         return True
@@ -83,7 +83,7 @@ class TestBillingPlansEndpoint:
 
     def test_list_plans_no_auth_required(self):
 
-             """Plans endpoint should work without authentication."""
+        """Plans endpoint should work without authentication."""
         response = self.client.get("/api/v1/billing/plans")
 
         # 200 if route available, 404 if router not loaded (acceptable in test env)
@@ -95,7 +95,7 @@ class TestBillingPlansEndpoint:
 
     def test_list_plans_returns_default_tiers(self):
 
-             """Plans endpoint should return default plan tiers."""
+        """Plans endpoint should return default plan tiers."""
         response = self.client.get("/api/v1/billing/plans")
 
         if response.status_code == 404:
@@ -110,7 +110,7 @@ class TestBillingPlansEndpoint:
 
     def test_plans_include_limits(self):
 
-             """Each plan should include limits information."""
+        """Each plan should include limits information."""
         response = self.client.get("/api/v1/billing/plans")
 
         if response.status_code == 404:
@@ -209,7 +209,7 @@ class TestBillingSubscriptionEndpoint:
 
     def _get_auth_token(self):
 
-             """Get auth token for test user."""
+        """Get auth token for test user."""
         response = self.client.post(
             "/api/v1/auth/login",
             data={"username": self.username, "password": self.password}
@@ -220,7 +220,7 @@ class TestBillingSubscriptionEndpoint:
 
     def test_subscription_requires_auth(self):
 
-             """Subscription endpoint should require authentication."""
+        """Subscription endpoint should require authentication."""
         response = self.client.get("/api/v1/billing/subscription")
 
         if response.status_code == 404:
@@ -230,7 +230,7 @@ class TestBillingSubscriptionEndpoint:
 
     def test_subscription_with_auth(self):
 
-             """Subscription endpoint should return data for authenticated user."""
+        """Subscription endpoint should return data for authenticated user."""
         token = self._get_auth_token()
         if not token:
             pytest.skip("Could not get auth token")
@@ -248,7 +248,7 @@ class TestBillingSubscriptionEndpoint:
 
     def test_subscription_with_org_id(self):
 
-             """Subscription endpoint should accept explicit org_id."""
+        """Subscription endpoint should accept explicit org_id."""
         token = self._get_auth_token()
         if not token:
             pytest.skip("Could not get auth token")
@@ -262,7 +262,7 @@ class TestBillingSubscriptionEndpoint:
 
     def test_subscription_rejects_cross_org_access(self):
 
-             """Users should not access subscription data for other organizations."""
+        """Users should not access subscription data for other organizations."""
         token = self._get_auth_token()
         if not token:
             pytest.skip("Could not get auth token")
@@ -364,7 +364,7 @@ class TestBillingUsageEndpoint:
 
     def _get_auth_token(self):
 
-             """Get auth token for test user."""
+        """Get auth token for test user."""
         response = self.client.post(
             "/api/v1/auth/login",
             data={"username": self.username, "password": self.password}
@@ -375,7 +375,7 @@ class TestBillingUsageEndpoint:
 
     def test_usage_requires_auth(self):
 
-             """Usage endpoint should require authentication."""
+        """Usage endpoint should require authentication."""
         response = self.client.get("/api/v1/billing/usage")
 
         if response.status_code == 404:
@@ -384,7 +384,7 @@ class TestBillingUsageEndpoint:
 
     def test_usage_with_auth(self):
 
-             """Usage endpoint should return usage data for authenticated user."""
+        """Usage endpoint should return usage data for authenticated user."""
         token = self._get_auth_token()
         if not token:
             pytest.skip("Could not get auth token")
@@ -402,7 +402,7 @@ class TestBillingUsageEndpoint:
 
     def test_usage_rejects_cross_org_access(self):
 
-             """Users should not access usage data for other organizations."""
+        """Users should not access usage data for other organizations."""
         token = self._get_auth_token()
         if not token:
             pytest.skip("Could not get auth token")
@@ -525,7 +525,7 @@ class TestBillingCheckoutAndPortal:
 
         class _FakeStripeClient:
             def __init__(self) -> None:
-                             self.is_available = True
+                self.is_available = True
 
             async def create_customer(self, *, email: str, name: str | None = None, metadata: dict[str, str] | None = None) -> str:
                 return "cus_int_123"
@@ -578,7 +578,7 @@ class TestBillingCheckoutAndPortal:
 
     def _get_auth_token(self):
 
-             """Get auth token for test user."""
+        """Get auth token for test user."""
         response = self.client.post(
             "/api/v1/auth/login",
             data={"username": self.username, "password": self.password},
@@ -589,7 +589,7 @@ class TestBillingCheckoutAndPortal:
 
     def test_checkout_creates_session_for_owner(self):
 
-             """Owner should be able to create a checkout session."""
+        """Owner should be able to create a checkout session."""
         token = self._get_auth_token()
         if not token:
             pytest.skip("Could not get auth token")
@@ -615,7 +615,7 @@ class TestBillingCheckoutAndPortal:
 
     def test_portal_creates_session_for_owner(self):
 
-             """Owner should be able to create a billing portal session."""
+        """Owner should be able to create a billing portal session."""
         token = self._get_auth_token()
         if not token:
             pytest.skip("Could not get auth token")
@@ -698,7 +698,7 @@ class TestOrgInviteEndpoints:
 
     def _get_auth_token(self):
 
-             """Get auth token for test user."""
+        """Get auth token for test user."""
         response = self.client.post(
             "/api/v1/auth/login",
             data={"username": self.username, "password": self.password}
@@ -709,14 +709,14 @@ class TestOrgInviteEndpoints:
 
     def test_preview_invite_invalid_code(self):
 
-             """Preview endpoint should return 404 for invalid codes."""
+        """Preview endpoint should return 404 for invalid codes."""
         response = self.client.get("/api/v1/invites/preview?code=INVALID123")
 
         assert response.status_code == 404
 
     def test_redeem_invite_requires_auth(self):
 
-             """Redeem endpoint should require authentication."""
+        """Redeem endpoint should require authentication."""
         response = self.client.post(
             "/api/v1/invites/redeem",
             json={"code": "SOMECODE"}
@@ -728,7 +728,7 @@ class TestOrgInviteEndpoints:
 
     def test_list_org_invites_requires_auth(self):
 
-             """Listing org invites should require authentication."""
+        """Listing org invites should require authentication."""
         response = self.client.get(f"/api/v1/orgs/{self.org_id}/invites")
 
         if response.status_code == 404:
@@ -737,7 +737,7 @@ class TestOrgInviteEndpoints:
 
     def test_list_org_invites_with_auth(self):
 
-             """Authenticated owner should be able to list org invites."""
+        """Authenticated owner should be able to list org invites."""
         token = self._get_auth_token()
         if not token:
             pytest.skip("Could not get auth token")
@@ -755,7 +755,7 @@ class TestOrgInviteEndpoints:
 
     def test_create_invite_requires_owner_or_admin(self):
 
-             """Creating invites should require owner/admin role."""
+        """Creating invites should require owner/admin role."""
         token = self._get_auth_token()
         if not token:
             pytest.skip("Could not get auth token")
@@ -824,7 +824,7 @@ class TestSelfServiceOrgEndpoints:
 
     def _get_auth_token(self):
 
-             """Get auth token for test user."""
+        """Get auth token for test user."""
         response = self.client.post(
             "/api/v1/auth/login",
             data={"username": self.username, "password": self.password}
@@ -835,7 +835,7 @@ class TestSelfServiceOrgEndpoints:
 
     def test_list_user_orgs_requires_auth(self):
 
-             """Listing user's orgs should require authentication."""
+        """Listing user's orgs should require authentication."""
         response = self.client.get("/api/v1/orgs")
 
         if response.status_code == 404:
@@ -844,7 +844,7 @@ class TestSelfServiceOrgEndpoints:
 
     def test_list_user_orgs_with_auth(self):
 
-             """Authenticated user should see their orgs (empty initially)."""
+        """Authenticated user should see their orgs (empty initially)."""
         token = self._get_auth_token()
         if not token:
             pytest.skip("Could not get auth token")
@@ -863,7 +863,7 @@ class TestSelfServiceOrgEndpoints:
 
     def test_create_org_requires_auth(self):
 
-             """Creating an org should require authentication."""
+        """Creating an org should require authentication."""
         response = self.client.post(
             "/api/v1/orgs",
             json={"name": "Test Org", "slug": "test-org"}
@@ -875,7 +875,7 @@ class TestSelfServiceOrgEndpoints:
 
     def test_create_org_with_auth(self):
 
-             """Authenticated user should be able to create an org."""
+        """Authenticated user should be able to create an org."""
         token = self._get_auth_token()
         if not token:
             pytest.skip("Could not get auth token")

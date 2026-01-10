@@ -5,7 +5,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_File
 
 @pytest.mark.unit
 def test_format_transcription_with_timestamps_uses_start_seconds():
-     segments = [{"start_seconds": 1.5, "end_seconds": 2.5, "Text": "Hello"}]
+    segments = [{"start_seconds": 1.5, "end_seconds": 2.5, "Text": "Hello"}]
     result = audio_files.format_transcription_with_timestamps(
         segments,
         keep_timestamps=True,
@@ -19,7 +19,7 @@ def test_format_transcription_with_timestamps_uses_start_seconds():
 
 @pytest.mark.unit
 def test_format_transcription_with_timestamps_uses_time_strings():
-     segments = [{"Time_Start": "00:00:05", "Time_End": "00:00:07", "Text": "Hi"}]
+    segments = [{"Time_Start": "00:00:05", "Time_End": "00:00:07", "Text": "Hi"}]
     result = audio_files.format_transcription_with_timestamps(
         segments,
         keep_timestamps=True,
@@ -31,7 +31,7 @@ def test_format_transcription_with_timestamps_uses_time_strings():
 
 @pytest.mark.unit
 def test_format_transcription_with_timestamps_plain_text():
-     segments = [
+    segments = [
         {"Time_Start": 0, "Time_End": 1, "Text": "Hi"},
         {"Time_Start": 1, "Time_End": 2, "Text": "  "},
     ]

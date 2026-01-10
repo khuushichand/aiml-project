@@ -1,14 +1,381 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional, AsyncIterator
+from typing import Any, Dict, Iterable, Optional, AsyncIterator, List
 import asyncio
+import json
 import threading
+import time
 
 from loguru import logger
 
 from .base import ChatProvider
+from tldw_Server_API.app.core.Chat.Chat_Deps import (
+    ChatAPIError,
+    ChatAuthenticationError,
+    ChatBadRequestError,
+    ChatProviderError,
+    ChatRateLimitError,
+)
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
-from tldw_Server_API.app.core.LLM_Calls.chat_calls import legacy_chat_with_cohere
+from tldw_Server_API.app.core.LLM_Calls.chat_calls import (
+    _safe_cast,
+    create_session_with_retries,
+)
+from tldw_Server_API.app.core.LLM_Calls.payload_utils import _sanitize_payload_for_logging
+from tldw_Server_API.app.core.LLM_Calls.error_utils import (
+    get_http_error_text,
+    get_http_status_from_exception,
+    is_chunked_encoding_error,
+    is_http_status_error,
+    is_network_error,
+)
+from tldw_Server_API.app.core.LLM_Calls.sse import (
+    finalize_stream,
+    openai_delta_chunk,
+    sse_data,
+    sse_done,
+)
+from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.Utils.Utils import logging
+
+
+def _cohere_request(
+    input_data: List[Dict[str, Any]],
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    system_prompt: Optional[str] = None,
+    temp: Optional[float] = None,
+    streaming: Optional[bool] = False,
+    topp: Optional[float] = None,
+    topk: Optional[int] = None,
+    max_tokens: Optional[int] = None,
+    stop_sequences: Optional[List[str]] = None,
+    seed: Optional[int] = None,
+    num_generations: Optional[int] = None,
+    frequency_penalty: Optional[float] = None,
+    presence_penalty: Optional[float] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    custom_prompt_arg: Optional[str] = None,
+    app_config: Optional[Dict[str, Any]] = None,
+):
+    logging.debug(f"Cohere Chat: Request process starting for model '{model}' (Streaming: {streaming})")
+    loaded_config_data = app_config or load_and_log_configs()
+    cohere_config = loaded_config_data.get("cohere_api", loaded_config_data.get("API", {}).get("cohere", {}))
+
+    final_api_key = api_key or cohere_config.get("api_key")
+    if not final_api_key:
+        raise ChatAuthenticationError(provider="cohere", message="Cohere API key is missing.")
+    logging.debug("Cohere: Using configured API key")
+
+    final_model = model or cohere_config.get("model", "command-r")
+    resolved_temp_from_cfg = cohere_config.get("temperature")
+    current_temp = temp if temp is not None else _safe_cast(resolved_temp_from_cfg, float, None)
+    resolved_p_cfg = cohere_config.get("top_p")
+    if resolved_p_cfg is None:
+        resolved_p_cfg = cohere_config.get("p")
+    current_p = topp if topp is not None else _safe_cast(resolved_p_cfg, float, None)
+    resolved_k_cfg = cohere_config.get("top_k")
+    if resolved_k_cfg is None:
+        resolved_k_cfg = cohere_config.get("k")
+    current_k = topk if topk is not None else _safe_cast(resolved_k_cfg, int, None)
+    current_max_tokens = max_tokens if max_tokens is not None else _safe_cast(cohere_config.get("max_tokens"), int, None)
+    current_stop_sequences = stop_sequences if stop_sequences is not None else cohere_config.get("stop_sequences")
+    current_seed = seed if seed is not None else _safe_cast(cohere_config.get("seed"), int, None)
+    current_frequency_penalty = frequency_penalty if frequency_penalty is not None else _safe_cast(
+        cohere_config.get("frequency_penalty"), float, None
+    )
+    current_presence_penalty = presence_penalty if presence_penalty is not None else _safe_cast(
+        cohere_config.get("presence_penalty"), float, None
+    )
+    current_tools = tools if tools is not None else cohere_config.get("tools")
+    current_num_generations = num_generations if num_generations is not None else _safe_cast(
+        cohere_config.get("num_generations"), int, None
+    )
+
+    api_base_url = cohere_config.get("api_base_url", "https://api.cohere.ai").rstrip("/")
+    COHERE_CHAT_URL = f"{api_base_url}/v1/chat"
+
+    timeout_seconds = _safe_cast(cohere_config.get("api_timeout"), float, 180.0)
+
+    headers = {
+        "Authorization": f"Bearer {final_api_key}",
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream" if streaming else "application/json",
+    }
+
+    chat_history_for_cohere: list[dict[str, str]] = []
+    current_user_message_str = ""
+    preamble_str = system_prompt or ""
+
+    temp_messages = list(input_data)
+
+    if not preamble_str and temp_messages and temp_messages[0]["role"] == "system":
+        preamble_str = temp_messages.pop(0)["content"]
+        logging.debug(f"Cohere: Using system message from input_data as preamble: '{preamble_str[:100]}...'")
+
+    if not temp_messages:
+        if custom_prompt_arg:
+            current_user_message_str = custom_prompt_arg
+            logging.warning("Cohere: No user/assistant messages in input_data, using custom_prompt_arg as user message.")
+        else:
+            raise ChatBadRequestError(
+                provider="cohere",
+                message="No user/assistant messages found for Cohere chat after processing system message.",
+            )
+    elif temp_messages[-1]["role"] == "user":
+        last_msg_content = temp_messages[-1]["content"]
+        if isinstance(last_msg_content, list):
+            current_user_message_str = next(
+                (part["text"] for part in last_msg_content if part.get("type") == "text"), ""
+            )
+        else:
+            current_user_message_str = str(last_msg_content)
+        chat_history_for_cohere = temp_messages[:-1]
+    else:
+        current_user_message_str = custom_prompt_arg or "Please respond."
+        chat_history_for_cohere = temp_messages
+        logging.warning(
+            f"Cohere: Last message in payload was not 'user'. Using fallback user message: '{current_user_message_str}'."
+        )
+
+    if custom_prompt_arg and current_user_message_str != custom_prompt_arg:
+        current_user_message_str += f"\n{custom_prompt_arg}"
+        logging.debug("Cohere: Appended custom_prompt_arg to current user message.")
+
+    if not current_user_message_str.strip():
+        raise ChatBadRequestError(provider="cohere", message="Current user message for Cohere is empty after processing.")
+
+    transformed_history = []
+    for msg in chat_history_for_cohere:
+        role = msg.get("role", "").lower()
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            content = next((part["text"] for part in content if part.get("type") == "text"), "")
+
+        if role == "user":
+            transformed_history.append({"role": "USER", "message": str(content)})
+        elif role == "assistant":
+            transformed_history.append({"role": "CHATBOT", "message": str(content)})
+
+    payload: Dict[str, Any] = {
+        "model": final_model,
+        "message": current_user_message_str,
+    }
+    if transformed_history:
+        payload["chat_history"] = transformed_history
+    if preamble_str:
+        payload["preamble"] = preamble_str
+    if current_temp is not None:
+        payload["temperature"] = current_temp
+    if current_p is not None:
+        payload["p"] = current_p
+    if current_k is not None:
+        payload["k"] = current_k
+    if current_max_tokens is not None:
+        payload["max_tokens"] = current_max_tokens
+    if current_stop_sequences:
+        payload["stop_sequences"] = current_stop_sequences
+    if current_seed is not None:
+        payload["seed"] = current_seed
+    if current_frequency_penalty is not None:
+        payload["frequency_penalty"] = current_frequency_penalty
+    if current_presence_penalty is not None:
+        payload["presence_penalty"] = current_presence_penalty
+    if current_tools:
+        payload["tools"] = current_tools
+
+    if streaming:
+        payload["stream"] = True
+    else:
+        payload["stream"] = False
+        if current_num_generations is not None:
+            if current_num_generations > 0:
+                payload["num_generations"] = current_num_generations
+            else:
+                logging.warning("Cohere: 'num_generations' must be > 0. Ignoring.")
+
+    cohere_payload_metadata = _sanitize_payload_for_logging(
+        payload,
+        message_keys=("chat_history",),
+        text_keys=("message", "preamble"),
+    )
+    logging.debug(f"Cohere request metadata: {cohere_payload_metadata}")
+    logging.debug(f"Cohere Request URL: {COHERE_CHAT_URL}")
+
+    session = create_session_with_retries(
+        total=_safe_cast(cohere_config.get("api_retries"), int, 3),
+        backoff_factor=_safe_cast(cohere_config.get("api_retry_delay"), float, 1.0),
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["POST"],
+    )
+
+    try:
+        if streaming:
+            response = session.post(COHERE_CHAT_URL, headers=headers, json=payload, stream=True, timeout=timeout_seconds)
+            response.raise_for_status()
+            logging.debug("Cohere: Streaming response connection established.")
+            session_handle = session
+            response_handle = response
+
+            def stream_generator_cohere_text_chunks(response_iterator):
+                stream_properly_closed = False
+                try:
+                    for line_bytes in response_iterator:
+                        if not line_bytes:
+                            continue
+                        decoded_line = (
+                            line_bytes.decode("utf-8", errors="replace")
+                            if isinstance(line_bytes, (bytes, bytearray))
+                            else str(line_bytes)
+                        )
+                        decoded_line = decoded_line.strip()
+                        if not decoded_line:
+                            continue
+
+                        if decoded_line.startswith("data:"):
+                            json_data_str = decoded_line[len("data:") :].strip()
+                            if not json_data_str:
+                                continue
+                            try:
+                                cohere_event = json.loads(json_data_str)
+                            except json.JSONDecodeError:
+                                logging.warning(f"Cohere Stream: JSON decode error for data: '{json_data_str}'")
+                                continue
+
+                            event_type = cohere_event.get("event_type")
+                            if event_type == "text-generation":
+                                text_chunk = cohere_event.get("text")
+                                if text_chunk:
+                                    yield openai_delta_chunk(str(text_chunk))
+                            elif event_type == "stream-end":
+                                stream_properly_closed = True
+                                yield sse_done()
+                                return
+                            else:
+                                continue
+                        else:
+                            yield openai_delta_chunk(decoded_line)
+
+                except Exception as e_stream:
+                    if is_chunked_encoding_error(e_stream):
+                        logging.warning(f"Cohere stream: ChunkedEncodingError: {e_stream}")
+                        yield sse_data(
+                            {"error": {"message": f"Stream connection error: {str(e_stream)}", "type": "cohere_stream_error"}}
+                        )
+                    else:
+                        logging.error(f"Cohere stream: Error during streaming: {e_stream}", exc_info=True)
+                        yield sse_data(
+                            {"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "cohere_stream_error"}}
+                        )
+                finally:
+                    for tail in finalize_stream(response_handle, done_already=stream_properly_closed):
+                        yield tail
+                    try:
+                        session_handle.close()
+                    except Exception:
+                        pass
+
+            session = None
+            return stream_generator_cohere_text_chunks(response_handle.iter_lines())
+
+        response = session.post(COHERE_CHAT_URL, headers=headers, json=payload, stream=False, timeout=timeout_seconds)
+        response.raise_for_status()
+        response_data = response.json()
+        logging.debug(f"Cohere non-streaming response data: {json.dumps(response_data, indent=2)}")
+
+        chat_id = response_data.get("generation_id", f"chatcmpl-cohere-{time.time_ns()}")
+        created_timestamp = int(time.time())
+        choices_payload = []
+        finish_reason = response_data.get("finish_reason", "stop")
+
+        if response_data.get("text"):
+            choices_payload.append(
+                {"message": {"role": "assistant", "content": response_data["text"]}, "finish_reason": finish_reason, "index": 0}
+            )
+        elif response_data.get("tool_calls"):
+            openai_like_tool_calls = []
+            for tc in response_data.get("tool_calls", []):
+                openai_like_tool_calls.append(
+                    {
+                        "id": f"call_{tc.get('name', 'tool')}_{time.time_ns()}",
+                        "type": "function",
+                        "function": {
+                            "name": tc.get("name"),
+                            "arguments": json.dumps(tc.get("parameters", {})),
+                        },
+                    }
+                )
+            choices_payload.append(
+                {
+                    "message": {"role": "assistant", "content": None, "tool_calls": openai_like_tool_calls},
+                    "finish_reason": "tool_calls",
+                    "index": 0,
+                }
+            )
+        else:
+            logging.warning(f"Cohere non-streaming response missing 'text' or 'tool_calls': {response_data}")
+            choices_payload.append(
+                {"message": {"role": "assistant", "content": ""}, "finish_reason": finish_reason, "index": 0}
+            )
+
+        usage_data = None
+        meta = response_data.get("meta")
+        if meta and meta.get("billed_units"):
+            billed_units = meta["billed_units"]
+            prompt_tokens = billed_units.get("input_tokens")
+            completion_tokens = billed_units.get("output_tokens")
+            if prompt_tokens is not None and completion_tokens is not None:
+                usage_data = {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens,
+                }
+
+        openai_compatible_response = {
+            "id": chat_id,
+            "object": "chat.completion",
+            "created": created_timestamp,
+            "model": final_model,
+            "choices": choices_payload,
+        }
+        if usage_data:
+            openai_compatible_response["usage"] = usage_data
+        return openai_compatible_response
+
+    except KeyError as e:
+        raise ChatBadRequestError(
+            provider="cohere",
+            message=f"Key error while preparing or parsing Cohere payload/response: {e}",
+        )
+    except Exception as e:
+        if is_http_status_error(e):
+            status_code = get_http_status_from_exception(e) or 500
+            error_text = get_http_error_text(e)
+            logging.error(
+                f"Cohere API call HTTPError to {COHERE_CHAT_URL} status {status_code}. Details: {repr(error_text[:500])}",
+                exc_info=False,
+            )
+            if status_code == 401:
+                raise ChatAuthenticationError(provider="cohere", message=f"Authentication failed. Detail: {error_text[:200]}")
+            if status_code == 429:
+                raise ChatRateLimitError(provider="cohere", message=f"Rate limit exceeded. Detail: {error_text[:200]}")
+            if 400 <= status_code < 500:
+                raise ChatBadRequestError(provider="cohere", message=f"Bad request (Status {status_code}). Detail: {error_text[:200]}")
+            raise ChatProviderError(
+                provider="cohere",
+                message=f"Server error (Status {status_code}). Detail: {error_text[:200]}",
+                status_code=status_code,
+            )
+        if is_network_error(e):
+            logging.error(f"Cohere API request failed (network error) for {COHERE_CHAT_URL}: {e}", exc_info=True)
+            raise ChatProviderError(provider="cohere", message=f"Network error after retries: {e}", status_code=504)
+        logging.error(f"Cohere API call: Unexpected error: {e}", exc_info=True)
+        if not isinstance(e, ChatAPIError):
+            raise ChatAPIError(provider="cohere", message=f"Unexpected error in Cohere API call: {e}")
+        raise
+    finally:
+        if session:
+            session.close()
 
 
 class CohereAdapter(ChatProvider):
@@ -52,13 +419,13 @@ class CohereAdapter(ChatProvider):
         request = validate_payload(self.name, request or {})
         if timeout is not None:
             logger.debug("Cohere adapter ignoring explicit timeout override.")
-        return legacy_chat_with_cohere(**self._to_handler_args(request, streaming=False))
+        return _cohere_request(**self._to_handler_args(request, streaming=False))
 
     def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
         request = validate_payload(self.name, request or {})
         if timeout is not None:
             logger.debug("Cohere adapter ignoring explicit timeout override.")
-        return legacy_chat_with_cohere(**self._to_handler_args(request, streaming=True))
+        return _cohere_request(**self._to_handler_args(request, streaming=True))
 
     async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
         return await asyncio.to_thread(self.chat, request, timeout=timeout)

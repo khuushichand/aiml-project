@@ -9,13 +9,12 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 def _make_media_db() -> MediaDatabase:
 
-
-     return MediaDatabase(db_path=":memory:", client_id="tests-visual")
+    return MediaDatabase(db_path=":memory:", client_id="tests-visual")
 
 
 @pytest.mark.unit
 def test_visual_documents_insert_list_and_soft_delete():
-     db = _make_media_db()
+    db = _make_media_db()
 
     # Create a dummy media row
     media_id, _, _ = db.add_media_with_keywords(

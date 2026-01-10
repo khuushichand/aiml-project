@@ -145,7 +145,22 @@ Note: This map focuses on the most important, stable routes. Many modules expose
     {"method": "GET",  "path": "/health", "summary": "Prompts health"},
     {"method": "GET",  "path": "/", "summary": "List prompts"},
     {"method": "POST", "path": "/", "summary": "Create prompt"},
-    {"method": "POST", "path": "/execute", "summary": "Execute prompt"}
+    {"method": "GET",  "path": "/{prompt_identifier}", "summary": "Get prompt"},
+    {"method": "PUT",  "path": "/{prompt_identifier}", "summary": "Update prompt"},
+    {"method": "DELETE","path": "/{prompt_identifier}", "summary": "Delete prompt"},
+    {"method": "POST", "path": "/search", "summary": "Search prompts"},
+    {"method": "GET",  "path": "/export", "summary": "Export prompts"},
+    {"method": "POST", "path": "/import", "summary": "Import prompts"},
+    {"method": "GET",  "path": "/{prompt_identifier}/versions", "summary": "List prompt versions"},
+    {"method": "POST", "path": "/{prompt_identifier}/versions/{version}/restore", "summary": "Restore prompt version"},
+    {"method": "POST", "path": "/templates/variables", "summary": "Extract template variables"},
+    {"method": "POST", "path": "/templates/render", "summary": "Render template"},
+    {"method": "POST", "path": "/bulk/delete", "summary": "Bulk delete prompts"},
+    {"method": "POST", "path": "/bulk/keywords", "summary": "Bulk update keywords"},
+    {"method": "POST", "path": "/keywords/", "summary": "Create keyword"},
+    {"method": "GET",  "path": "/keywords/", "summary": "List keywords"},
+    {"method": "DELETE","path": "/keywords/{keyword_text}", "summary": "Delete keyword"},
+    {"method": "GET",  "path": "/keywords/export-csv", "summary": "Export keywords"}
   ],
   "/api/v1/prompt-studio/status": [
     {"method": "GET", "path": "", "summary": "Prompt Studio queue health"}
@@ -340,7 +355,22 @@ Note: This map focuses on the most important, stable routes. Many modules expose
 | /api/v1/notes | POST | /api/v1/notes | Create note |
 | /api/v1/prompts | GET | /api/v1/prompts | List prompts |
 | /api/v1/prompts | POST | /api/v1/prompts | Create prompt |
-| /api/v1/prompts | POST | /api/v1/prompts/execute | Execute prompt |
+| /api/v1/prompts | GET | /api/v1/prompts/{prompt_identifier} | Get prompt |
+| /api/v1/prompts | PUT | /api/v1/prompts/{prompt_identifier} | Update prompt |
+| /api/v1/prompts | DELETE | /api/v1/prompts/{prompt_identifier} | Delete prompt |
+| /api/v1/prompts | POST | /api/v1/prompts/search | Search prompts |
+| /api/v1/prompts | GET | /api/v1/prompts/export | Export prompts |
+| /api/v1/prompts | POST | /api/v1/prompts/import | Import prompts |
+| /api/v1/prompts | GET | /api/v1/prompts/{prompt_identifier}/versions | List prompt versions |
+| /api/v1/prompts | POST | /api/v1/prompts/{prompt_identifier}/versions/{version}/restore | Restore prompt version |
+| /api/v1/prompts | POST | /api/v1/prompts/templates/variables | Extract template variables |
+| /api/v1/prompts | POST | /api/v1/prompts/templates/render | Render template |
+| /api/v1/prompts | POST | /api/v1/prompts/bulk/delete | Bulk delete prompts |
+| /api/v1/prompts | POST | /api/v1/prompts/bulk/keywords | Bulk update keywords |
+| /api/v1/prompts | POST | /api/v1/prompts/keywords/ | Create keyword |
+| /api/v1/prompts | GET | /api/v1/prompts/keywords/ | List keywords |
+| /api/v1/prompts | DELETE | /api/v1/prompts/keywords/{keyword_text} | Delete keyword |
+| /api/v1/prompts | GET | /api/v1/prompts/keywords/export-csv | Export keywords |
 | /api/v1/prompt-studio/status | GET | /api/v1/prompt-studio/status | Prompt Studio status |
 | /api/v1/chatbooks | POST | /api/v1/chatbooks/export | Export chatbook |
 | /api/v1/chatbooks | POST | /api/v1/chatbooks/import | Import chatbook |

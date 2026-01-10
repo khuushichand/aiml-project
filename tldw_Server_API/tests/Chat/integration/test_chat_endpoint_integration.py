@@ -4,6 +4,7 @@
 # NO MOCKING - These are true integration tests
 
 import pytest
+
 pytestmark = pytest.mark.unit
 import asyncio
 import json
@@ -23,9 +24,10 @@ from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
 
 @pytest.fixture
 def test_db():
-     """Create a temporary test database."""
+    """Create a temporary test database."""
     import sqlite3
-    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name
 
     # Initialize database
@@ -39,26 +41,30 @@ def test_db():
     conn.commit()
 
     # Add default character (required by the chat endpoint)
-    db.add_character_card({
-        "name": DEFAULT_CHARACTER_NAME,
-        "description": "A test character",
-        "personality": "Helpful and friendly",
-        "scenario": "Testing",
-        "system_prompt": "You are a helpful test assistant",
-        "first_message": "Hello! I'm here to help test.",
-        "creator_notes": "Created for testing"
-    })
+    db.add_character_card(
+        {
+            "name": DEFAULT_CHARACTER_NAME,
+            "description": "A test character",
+            "personality": "Helpful and friendly",
+            "scenario": "Testing",
+            "system_prompt": "You are a helpful test assistant",
+            "first_message": "Hello! I'm here to help test.",
+            "creator_notes": "Created for testing",
+        }
+    )
 
     # Also add a test character for specific tests
-    db.add_character_card({
-        "name": "TestCharacter",
-        "description": "A test character",
-        "personality": "Helpful and friendly",
-        "scenario": "Testing",
-        "system_prompt": "You are a test assistant for character-specific tests",
-        "first_message": "Hello! I'm TestCharacter.",
-        "creator_notes": "Created for testing"
-    })
+    db.add_character_card(
+        {
+            "name": "TestCharacter",
+            "description": "A test character",
+            "personality": "Helpful and friendly",
+            "scenario": "Testing",
+            "system_prompt": "You are a test assistant for character-specific tests",
+            "first_message": "Hello! I'm TestCharacter.",
+            "creator_notes": "Created for testing",
+        }
+    )
 
     yield db
 
@@ -76,7 +82,7 @@ def test_db():
 
 @pytest.fixture
 def test_client(test_db):
-     """Create test client with database dependency override."""
+    """Create test client with database dependency override."""
     from unittest.mock import patch
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
     from tldw_Server_API.app.core.Chat.rate_limiter import (
@@ -108,12 +114,7 @@ def test_client(test_db):
         pass
 
     # Create a test user for authentication
-    test_user = User(
-        id=1,
-        username="test_user",
-        email="test@example.com",
-        is_active=True
-    )
+    test_user = User(id=1, username="test_user", email="test@example.com", is_active=True)
 
     try:
         # Mock API keys to prevent 503 errors
@@ -124,16 +125,14 @@ def test_client(test_db):
                 "object": "chat.completion",
                 "created": 1234567890,
                 "model": "test-model",
-                "choices": [{
-                    "index": 0,
-                    "message": {"role": "assistant", "content": "This is a test response"},
-                    "finish_reason": "stop"
-                }],
-                "usage": {
-                    "prompt_tokens": 10,
-                    "completion_tokens": 5,
-                    "total_tokens": 15
-                }
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "This is a test response"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
             }
 
             with patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call", return_value=mock_response):
@@ -161,7 +160,11 @@ def test_client(test_db):
             initialize_rate_limiter()
         except Exception:
             pass
+
+
 import pytest_asyncio
+
+
 @pytest_asyncio.fixture
 async def async_test_client():
     """Create async test client for the actual FastAPI app."""
@@ -172,51 +175,46 @@ async def async_test_client():
 # Configuration for tests to use a local LLM or test endpoint
 @pytest.fixture
 def configure_test_llm():
-     """Configure tests to use a test LLM endpoint."""
+    """Configure tests to use a test LLM endpoint."""
     # Set up test configuration
     import os
+
     # Tests should use a local LLM or test endpoint configured in config.txt
     # For CI/CD, use environment variables to configure a test endpoint
-    os.environ['TEST_MODE'] = 'true'
+    os.environ["TEST_MODE"] = "true"
     yield
-    del os.environ['TEST_MODE']
-
-
+    del os.environ["TEST_MODE"]
 
 
 @pytest.fixture
 def auth_headers(test_client):
-     """Provide test authentication headers."""
+    """Provide test authentication headers."""
     # Import settings to get the actual API key used in single-user mode
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
     settings = get_settings()
     # Use X-API-KEY header as expected by the endpoint in single-user mode
     api_key = settings.SINGLE_USER_API_KEY or os.getenv("API_BEARER", "test-api-key-12345")
-    return {
-        "X-API-KEY": api_key,
-        "X-CSRF-Token": getattr(test_client, 'csrf_token', '')
-    }
+    return {"X-API-KEY": api_key, "X-CSRF-Token": getattr(test_client, "csrf_token", "")}
 
 
 class TestChatEndpointIntegration:
     """Integration tests for the chat endpoint using actual components."""
 
     def test_chat_completion_basic(self, test_client, test_db, auth_headers, caplog):
-
-             """Test basic chat completion through the actual endpoint."""
+        """Test basic chat completion through the actual endpoint."""
         import logging
+
         caplog.set_level(logging.DEBUG)
 
         response = test_client.post(
             "/api/v1/chat/completions",
             json={
-                "messages": [
-                    {"role": "user", "content": "Hello, how are you?"}
-                ],
+                "messages": [{"role": "user", "content": "Hello, how are you?"}],
                 "model": "gpt-4",
-                "api_provider": "openai"  # Correct field name from schema
+                "api_provider": "openai",  # Correct field name from schema
             },
-            headers=auth_headers
+            headers=auth_headers,
         )
 
         # With real LLM, accept either success or service unavailable (if LLM not configured)
@@ -237,19 +235,16 @@ class TestChatEndpointIntegration:
             # Don't check content - it's from real LLM
 
     def test_chat_with_character(self, test_client, test_db, auth_headers):
-
-             """Test chat with character context."""
+        """Test chat with character context."""
         response = test_client.post(
             "/api/v1/chat/completions",
             json={
-                "messages": [
-                    {"role": "user", "content": "Tell me about yourself"}
-                ],
+                "messages": [{"role": "user", "content": "Tell me about yourself"}],
                 "model": "gpt-4",
                 "api_provider": "openai",
-                "character_id": "TestCharacter"
+                "character_id": "TestCharacter",
             },
-            headers=auth_headers
+            headers=auth_headers,
         )
 
         # Accept success or service unavailable
@@ -266,20 +261,17 @@ class TestChatEndpointIntegration:
         assert "choices" in data or "error" in data
 
     def test_conversation_persistence(self, test_client, test_db, auth_headers):
-
-             """Test that conversations are persisted in the database."""
+        """Test that conversations are persisted in the database."""
         # First message
         response1 = test_client.post(
             "/api/v1/chat/completions",
             json={
-                "messages": [
-                    {"role": "user", "content": "My name is Alice"}
-                ],
+                "messages": [{"role": "user", "content": "My name is Alice"}],
                 "model": "gpt-4",
                 "api_provider": "openai",  # Fixed field name
-                "save_to_db": True
+                "save_to_db": True,
             },
-            headers=auth_headers
+            headers=auth_headers,
         )
 
         if response1.status_code == 503:
@@ -295,15 +287,13 @@ class TestChatEndpointIntegration:
         response2 = test_client.post(
             "/api/v1/chat/completions",
             json={
-                "messages": [
-                    {"role": "user", "content": "What's my name?"}
-                ],
+                "messages": [{"role": "user", "content": "What's my name?"}],
                 "model": "gpt-4",
                 "api_provider": "openai",  # Fixed field name
                 "conversation_id": conv_id,
-                "save_to_db": True
+                "save_to_db": True,
             },
-            headers=auth_headers
+            headers=auth_headers,
         )
 
         assert response2.status_code in [200, 503]
@@ -317,20 +307,18 @@ class TestChatEndpointIntegration:
 
     @pytest.mark.skip(reason="TestClient doesn't properly handle streaming responses")
     def test_streaming_response(self, test_client, test_db, auth_headers):
-             """Test streaming chat completion request is accepted."""
+        """Test streaming chat completion request is accepted."""
         # Note: TestClient doesn't properly support streaming responses,
         # so we just verify the endpoint accepts streaming requests
         response = test_client.post(
             "/api/v1/chat/completions",
             json={
-                "messages": [
-                    {"role": "user", "content": "Stream a response"}
-                ],
+                "messages": [{"role": "user", "content": "Stream a response"}],
                 "model": "gpt-4",
                 "api_provider": "openai",
-                "stream": True
+                "stream": True,
             },
-            headers=auth_headers
+            headers=auth_headers,
         )
 
         # For streaming, the endpoint returns a StreamingResponse
@@ -341,17 +329,12 @@ class TestChatEndpointIntegration:
         assert response.status_code in [200, 503]
 
     def test_message_validation(self, test_client, test_db, auth_headers):
-
-             """Test message validation and error handling."""
+        """Test message validation and error handling."""
         # Test empty messages
         response = test_client.post(
             "/api/v1/chat/completions",
-            json={
-                "messages": [],
-                "model": "gpt-4",
-                "api_provider": "openai"  # Fixed field name
-            },
-            headers=auth_headers
+            json={"messages": [], "model": "gpt-4", "api_provider": "openai"},  # Fixed field name
+            headers=auth_headers,
         )
 
         # FastAPI returns 422 for validation errors
@@ -367,9 +350,9 @@ class TestChatEndpointIntegration:
                 "messages": [{"role": "user", "content": "Test"}],
                 "model": "gpt-4",
                 "api_provider": "openai",  # Fixed field name
-                "temperature": 3.0  # Too high
+                "temperature": 3.0,  # Too high
             },
-            headers=auth_headers
+            headers=auth_headers,
         )
 
         # FastAPI returns 422 for validation errors
@@ -378,8 +361,7 @@ class TestChatEndpointIntegration:
         assert "temperature" in error_detail
 
     def test_image_handling(self, test_client, test_db, auth_headers):
-
-             """Test handling of image inputs."""
+        """Test handling of image inputs."""
         # Small valid PNG image (1x1 pixel red dot)
         image_data = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
 
@@ -391,14 +373,14 @@ class TestChatEndpointIntegration:
                         "role": "user",
                         "content": [
                             {"type": "text", "text": "What's in this image?"},
-                            {"type": "image_url", "image_url": {"url": image_data}}
-                        ]
+                            {"type": "image_url", "image_url": {"url": image_data}},
+                        ],
                     }
                 ],
                 "model": "gpt-4-vision",
-                "api_provider": "openai"  # Fixed field name
+                "api_provider": "openai",  # Fixed field name
             },
-            headers=auth_headers
+            headers=auth_headers,
         )
 
         if response.status_code == 503:
@@ -415,14 +397,11 @@ class TestChatEndpointIntegration:
             assert any(msg.get("image_data") or msg.get("has_image") for msg in messages)
 
     def test_tool_usage(self, test_client, test_db, auth_headers):
-
-             """Test chat with tool definitions - currently tools validation is strict."""
+        """Test chat with tool definitions - currently tools validation is strict."""
         response = test_client.post(
             "/api/v1/chat/completions",
             json={
-                "messages": [
-                    {"role": "user", "content": "What's the weather?"}
-                ],
+                "messages": [{"role": "user", "content": "What's the weather?"}],
                 "model": "gpt-4",
                 "api_provider": "openai",
                 "tools": [
@@ -431,17 +410,12 @@ class TestChatEndpointIntegration:
                         "function": {
                             "name": "get_weather",
                             "description": "Get current weather",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {
-                                    "location": {"type": "string"}
-                                }
-                            }
-                        }
+                            "parameters": {"type": "object", "properties": {"location": {"type": "string"}}},
+                        },
                     }
-                ]
+                ],
             },
-            headers=auth_headers
+            headers=auth_headers,
         )
 
         # Tools validation is currently strict and may reject this format
@@ -449,21 +423,18 @@ class TestChatEndpointIntegration:
         assert response.status_code in [200, 400]  # Accept either success or validation error
 
     def test_transaction_handling(self, test_client, test_db, auth_headers):
-
-             """Test database transaction handling - messages are persisted correctly."""
+        """Test database transaction handling - messages are persisted correctly."""
         # Test that messages are properly saved to the database
         response = test_client.post(
             "/api/v1/chat/completions",
             json={
-                "messages": [
-                    {"role": "user", "content": "Test transaction"}
-                ],
+                "messages": [{"role": "user", "content": "Test transaction"}],
                 "model": "gpt-4",
                 "api_provider": "openai",  # Fixed field name
-                "save_to_db": True
+                "save_to_db": True,
                 # Removed use_transaction as it's not a valid API parameter
             },
-            headers=auth_headers
+            headers=auth_headers,
         )
 
         if response.status_code == 503:
@@ -480,8 +451,7 @@ class TestChatEndpointIntegration:
         assert len(messages) >= 2  # User and assistant messages
 
     def test_concurrent_requests(self, test_client, test_db, auth_headers):
-
-             """Test handling of concurrent requests."""
+        """Test handling of concurrent requests."""
         import threading
         import time
 
@@ -489,18 +459,15 @@ class TestChatEndpointIntegration:
         errors = []
 
         def make_request(index):
-
-                     try:
+            try:
                 response = test_client.post(
                     "/api/v1/chat/completions",
                     json={
-                        "messages": [
-                            {"role": "user", "content": f"Request {index}"}
-                        ],
+                        "messages": [{"role": "user", "content": f"Request {index}"}],
                         "model": "gpt-4",
-                        "api_provider": "openai"
+                        "api_provider": "openai",
                     },
-                    headers=auth_headers
+                    headers=auth_headers,
                 )
                 results.append(response.status_code)
             except Exception as e:
@@ -523,21 +490,18 @@ class TestChatEndpointIntegration:
         assert len(errors) == 0
 
     def test_rate_limiting(self, test_client, test_db, auth_headers):
-
-             """Test rate limiting functionality."""
+        """Test rate limiting functionality."""
         # Make multiple rapid requests
         responses = []
         for i in range(10):
             response = test_client.post(
                 "/api/v1/chat/completions",
                 json={
-                    "messages": [
-                        {"role": "user", "content": f"Request {i}"}
-                    ],
+                    "messages": [{"role": "user", "content": f"Request {i}"}],
                     "model": "gpt-4",
-                    "api_provider": "openai"
+                    "api_provider": "openai",
                 },
-                headers=auth_headers
+                headers=auth_headers,
             )
             responses.append(response.status_code)
 
@@ -549,19 +513,16 @@ class TestChatEndpointSecurity:
     """Security-focused integration tests."""
 
     def test_sql_injection_prevention(self, test_client, test_db, auth_headers):
-
-             """Test SQL injection prevention."""
+        """Test SQL injection prevention."""
         response = test_client.post(
             "/api/v1/chat/completions",
             json={
-                "messages": [
-                    {"role": "user", "content": "Test"}
-                ],
+                "messages": [{"role": "user", "content": "Test"}],
                 "model": "gpt-4",
                 "api_provider": "openai",
-                "conversation_id": "'; DROP TABLE conversations; --"
+                "conversation_id": "'; DROP TABLE conversations; --",
             },
-            headers=auth_headers
+            headers=auth_headers,
         )
 
         # Should handle safely without SQL execution
@@ -572,18 +533,15 @@ class TestChatEndpointSecurity:
         assert test_db.list_character_cards() is not None
 
     def test_xss_prevention(self, test_client, test_db, auth_headers):
-
-             """Test XSS prevention."""
+        """Test XSS prevention."""
         response = test_client.post(
             "/api/v1/chat/completions",
             json={
-                "messages": [
-                    {"role": "user", "content": "<script>alert('XSS')</script>"}
-                ],
+                "messages": [{"role": "user", "content": "<script>alert('XSS')</script>"}],
                 "model": "gpt-4",
-                "api_provider": "openai"
+                "api_provider": "openai",
             },
-            headers=auth_headers
+            headers=auth_headers,
         )
 
         if response.status_code == 503:
@@ -601,21 +559,18 @@ class TestChatEndpointSecurity:
             assert any("<script>" in msg["content"] for msg in messages)
 
     def test_large_request_dos_prevention(self, test_client, test_db, auth_headers):
-
-             """Test DoS prevention for large requests."""
+        """Test DoS prevention for large requests."""
         # Create a very large message
         large_content = "x" * 500000  # 500KB of text
 
         response = test_client.post(
             "/api/v1/chat/completions",
             json={
-                "messages": [
-                    {"role": "user", "content": large_content}
-                ],
+                "messages": [{"role": "user", "content": large_content}],
                 "model": "gpt-4",
-                "api_provider": "openai"  # Fixed field name
+                "api_provider": "openai",  # Fixed field name
             },
-            headers=auth_headers
+            headers=auth_headers,
         )
 
         # Should reject overly large requests
@@ -629,8 +584,7 @@ class TestChatEndpointSecurity:
             detail = response.json().get("detail")
             if isinstance(detail, list):
                 messages = " ".join(
-                    str(item.get("msg", item)) if isinstance(item, dict) else str(item)
-                    for item in detail
+                    str(item.get("msg", item)) if isinstance(item, dict) else str(item) for item in detail
                 )
                 detail_text = messages.lower()
             else:
@@ -638,31 +592,32 @@ class TestChatEndpointSecurity:
             assert ("too long" in detail_text) or ("too large" in detail_text) or ("maximum length" in detail_text)
 
     def test_authentication_required(self, test_client, test_db):
-
-             """Test authentication behavior based on auth mode."""
+        """Test authentication behavior based on auth mode."""
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
         settings = get_settings()
 
         response = test_client.post(
             "/api/v1/chat/completions",
             json={
-                "messages": [
-                    {"role": "user", "content": "Test without auth"}
-                ],
+                "messages": [{"role": "user", "content": "Test without auth"}],
                 "model": "gpt-4",
-                "api_provider": "openai"
-            }
+                "api_provider": "openai",
+            },
             # No auth headers
         )
 
         if settings.AUTH_MODE == "single_user":
             # In single-user mode, authentication is still required (API key/Bearer).
-            assert response.status_code == 401, (
-                f"In single-user mode, expected 401 for missing auth but got: {response.status_code}"
-            )
+            assert (
+                response.status_code == 401
+            ), f"In single-user mode, expected 401 for missing auth but got: {response.status_code}"
         else:
             # In multi-user mode, should require authentication
-            assert response.status_code in [401, 403], f"In multi-user mode, expected auth error but got: {response.status_code}"
+            assert response.status_code in [
+                401,
+                403,
+            ], f"In multi-user mode, expected auth error but got: {response.status_code}"
 
 
 if __name__ == "__main__":

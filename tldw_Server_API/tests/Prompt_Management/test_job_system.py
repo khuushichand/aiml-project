@@ -8,34 +8,25 @@ from unittest.mock import MagicMock, AsyncMock, patch
 from datetime import datetime, timedelta
 
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
-from tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_manager import (
-    JobManager, JobType, JobStatus
-)
+from tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_manager import JobManager, JobType, JobStatus
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_processor import JobProcessor
-from tldw_Server_API.app.core.Prompt_Management.prompt_studio.event_broadcaster import (
-    EventBroadcaster, EventType
-)
+from tldw_Server_API.app.core.Prompt_Management.prompt_studio.event_broadcaster import EventBroadcaster, EventType
 
 ########################################################################################################################
 # Test JobManager
+
 
 class TestJobManager:
     """Test cases for JobManager."""
 
     @pytest.fixture
     def job_manager(self, prompt_studio_db):
-             """Create JobManager instance."""
+        """Create JobManager instance."""
         return JobManager(prompt_studio_db)
 
     def test_create_job(self, job_manager):
-
-             """Test creating a job."""
-        job = job_manager.create_job(
-            job_type=JobType.GENERATION,
-            entity_id=1,
-            payload={"test": "data"},
-            priority=5
-        )
+        """Test creating a job."""
+        job = job_manager.create_job(job_type=JobType.GENERATION, entity_id=1, payload={"test": "data"}, priority=5)
 
         assert job is not None
         assert job["job_type"] == JobType.GENERATION.value
@@ -45,14 +36,9 @@ class TestJobManager:
         assert json.loads(job["payload"]) == {"test": "data"}
 
     def test_get_job(self, job_manager):
-
-             """Test getting a job by ID."""
+        """Test getting a job by ID."""
         # Create job
-        created = job_manager.create_job(
-            job_type=JobType.EVALUATION,
-            entity_id=2,
-            payload={"eval": "params"}
-        )
+        created = job_manager.create_job(job_type=JobType.EVALUATION, entity_id=2, payload={"eval": "params"})
 
         # Get job
         job = job_manager.get_job(created["id"])
@@ -61,14 +47,9 @@ class TestJobManager:
         assert job["job_type"] == JobType.EVALUATION.value
 
     def test_get_job_by_uuid(self, job_manager):
-
-             """Test getting a job by UUID."""
+        """Test getting a job by UUID."""
         # Create job
-        created = job_manager.create_job(
-            job_type=JobType.OPTIMIZATION,
-            entity_id=3,
-            payload={"opt": "config"}
-        )
+        created = job_manager.create_job(job_type=JobType.OPTIMIZATION, entity_id=3, payload={"opt": "config"})
 
         # Get by UUID
         job = job_manager.get_job_by_uuid(created["uuid"])
@@ -76,8 +57,7 @@ class TestJobManager:
         assert job["uuid"] == created["uuid"]
 
     def test_list_jobs(self, job_manager):
-
-             """Test listing jobs with filters."""
+        """Test listing jobs with filters."""
         # Create multiple jobs
         job_manager.create_job(JobType.GENERATION, 1, {}, priority=1)
         job_manager.create_job(JobType.EVALUATION, 2, {}, priority=5)
@@ -96,16 +76,12 @@ class TestJobManager:
         assert all(j["status"] == JobStatus.QUEUED.value for j in queued_jobs)
 
     def test_update_job_status(self, job_manager):
-
-             """Test updating job status."""
+        """Test updating job status."""
         # Create job
         job = job_manager.create_job(JobType.GENERATION, 1, {})
 
         # Update to processing
-        success = job_manager.update_job_status(
-            job["id"],
-            JobStatus.PROCESSING
-        )
+        success = job_manager.update_job_status(job["id"], JobStatus.PROCESSING)
         assert success
 
         # Verify update
@@ -115,11 +91,7 @@ class TestJobManager:
 
         # Update to completed with result
         result = {"generated": 5}
-        success = job_manager.update_job_status(
-            job["id"],
-            JobStatus.COMPLETED,
-            result=result
-        )
+        success = job_manager.update_job_status(job["id"], JobStatus.COMPLETED, result=result)
         assert success
 
         # Verify completion
@@ -129,8 +101,7 @@ class TestJobManager:
         assert json.loads(completed["result"]) == result
 
     def test_cancel_job(self, job_manager):
-
-             """Test cancelling a job."""
+        """Test cancelling a job."""
         # Create job
         job = job_manager.create_job(JobType.EVALUATION, 1, {})
 
@@ -149,8 +120,7 @@ class TestJobManager:
         assert not success
 
     def test_get_next_job(self, job_manager):
-
-             """Test getting next job from queue."""
+        """Test getting next job from queue."""
         # Create jobs with different priorities
         low = job_manager.create_job(JobType.GENERATION, 1, {}, priority=1)
         high = job_manager.create_job(JobType.GENERATION, 2, {}, priority=10)
@@ -166,22 +136,12 @@ class TestJobManager:
         assert next_job["id"] == med["id"]
 
     def test_retry_job(self, job_manager):
-
-             """Test retrying a failed job."""
+        """Test retrying a failed job."""
         # Create job with max_retries=3
-        job = job_manager.create_job(
-            JobType.OPTIMIZATION,
-            1,
-            {},
-            max_retries=3
-        )
+        job = job_manager.create_job(JobType.OPTIMIZATION, 1, {}, max_retries=3)
 
         # Fail the job
-        job_manager.update_job_status(
-            job["id"],
-            JobStatus.FAILED,
-            error_message="First failure"
-        )
+        job_manager.update_job_status(job["id"], JobStatus.FAILED, error_message="First failure")
 
         # Retry job
         success = job_manager.retry_job(job["id"])
@@ -205,8 +165,7 @@ class TestJobManager:
                 assert not success
 
     def test_job_stats(self, job_manager):
-
-             """Test getting job statistics."""
+        """Test getting job statistics."""
         # Create various jobs
         job_manager.create_job(JobType.GENERATION, 1, {})
         job_manager.create_job(JobType.EVALUATION, 2, {})
@@ -225,8 +184,7 @@ class TestJobManager:
         assert "success_rate" in stats
 
     def test_cleanup_old_jobs(self, job_manager):
-
-             """Test cleaning up old jobs."""
+        """Test cleaning up old jobs."""
         # Create old job (simulate by updating timestamp directly)
         job = job_manager.create_job(JobType.GENERATION, 1, {})
         job_manager.update_job_status(job["id"], JobStatus.COMPLETED)
@@ -235,10 +193,7 @@ class TestJobManager:
         conn = job_manager.db.get_connection()
         cursor = conn.cursor()
         old_date = (datetime.utcnow() - timedelta(days=35)).isoformat()
-        cursor.execute(
-            "UPDATE prompt_studio_job_queue SET completed_at = ? WHERE id = ?",
-            (old_date, job["id"])
-        )
+        cursor.execute("UPDATE prompt_studio_job_queue SET completed_at = ? WHERE id = ?", (old_date, job["id"]))
         conn.commit()
 
         # Clean up jobs older than 30 days
@@ -248,15 +203,17 @@ class TestJobManager:
         # Job should be gone
         assert job_manager.get_job(job["id"]) is None
 
+
 ########################################################################################################################
 # Test JobProcessor
+
 
 class TestJobProcessor:
     """Test cases for JobProcessor."""
 
     @pytest.fixture
     def job_processor(self, prompt_studio_db):
-             """Create JobProcessor instance."""
+        """Create JobProcessor instance."""
         job_manager = JobManager(prompt_studio_db)
         return JobProcessor(prompt_studio_db, job_manager)
 
@@ -266,30 +223,28 @@ class TestJobProcessor:
         # Create signature for generation
         conn = job_processor.db.get_connection()
         cursor = conn.cursor()
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO prompt_studio_signatures (
                 uuid, project_id, name, input_schema, output_schema, client_id
             ) VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            "sig-uuid", test_project["id"], "Test Signature",
-            json.dumps([{"name": "input", "type": "string"}]),
-            json.dumps([{"name": "output", "type": "string"}]),
-            job_processor.db.client_id
-        ))
+        """,
+            (
+                "sig-uuid",
+                test_project["id"],
+                "Test Signature",
+                json.dumps([{"name": "input", "type": "string"}]),
+                json.dumps([{"name": "output", "type": "string"}]),
+                job_processor.db.client_id,
+            ),
+        )
         signature_id = cursor.lastrowid
         conn.commit()
 
         # Process generation job
-        payload = {
-            "type": "diverse",
-            "signature_id": signature_id,
-            "num_cases": 3
-        }
+        payload = {"type": "diverse", "signature_id": signature_id, "num_cases": 3}
 
-        result = await job_processor.process_generation_job(
-            payload,
-            test_project["id"]
-        )
+        result = await job_processor.process_generation_job(payload, test_project["id"])
 
         assert result["generated_count"] == 3
         assert len(result["test_case_ids"]) == 3
@@ -303,7 +258,7 @@ class TestJobProcessor:
             project_id=test_project["id"],
             name="Test Case",
             inputs={"text": "test"},
-            expected_outputs={"result": "expected"}
+            expected_outputs={"result": "expected"},
         )
 
         # Ensure a prompt exists to satisfy FK constraints and use its ID
@@ -315,23 +270,30 @@ class TestJobProcessor:
                 project_id, version_number, name, client_id
             ) VALUES (?, ?, ?, ?)
             """,
-            (test_project["id"], 1, "Test Prompt", job_processor.db.client_id)
+            (test_project["id"], 1, "Test Prompt", job_processor.db.client_id),
         )
         prompt_id = cursor.lastrowid
         conn.commit()
 
         # Create evaluation
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO prompt_studio_evaluations (
                 uuid, project_id, name, prompt_id, test_case_ids,
                 model_configs, status, client_id
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            "eval-uuid", test_project["id"], "Test Eval", prompt_id,
-            json.dumps([test_case["id"]]),
-            json.dumps([{"model": "gpt-3.5-turbo"}]),
-            "pending", job_processor.db.client_id
-        ))
+        """,
+            (
+                "eval-uuid",
+                test_project["id"],
+                "Test Eval",
+                prompt_id,
+                json.dumps([test_case["id"]]),
+                json.dumps([{"model": "gpt-3.5-turbo"}]),
+                "pending",
+                job_processor.db.client_id,
+            ),
+        )
         evaluation_id = cursor.lastrowid
         conn.commit()
 
@@ -339,13 +301,10 @@ class TestJobProcessor:
         payload = {
             "prompt_id": prompt_id,
             "test_case_ids": [test_case["id"]],
-            "model_configs": [{"model": "gpt-3.5-turbo"}]
+            "model_configs": [{"model": "gpt-3.5-turbo"}],
         }
 
-        result = await job_processor.process_evaluation_job(
-            payload,
-            evaluation_id
-        )
+        result = await job_processor.process_evaluation_job(payload, evaluation_id)
 
         assert result["evaluation_id"] == evaluation_id
         assert result["test_runs"] == 1
@@ -364,35 +323,37 @@ class TestJobProcessor:
                 project_id, version_number, name, client_id
             ) VALUES (?, ?, ?, ?)
             """,
-            (test_project["id"], 1, "Initial Prompt", job_processor.db.client_id)
+            (test_project["id"], 1, "Initial Prompt", job_processor.db.client_id),
         )
         initial_prompt_id = cursor.lastrowid
         conn.commit()
 
         # Create optimization referencing the existing prompt
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO prompt_studio_optimizations (
                 uuid, project_id, name, initial_prompt_id,
                 optimizer_type, max_iterations, status, client_id
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            "opt-uuid", test_project["id"], "Test Opt", initial_prompt_id,
-            "basic", 5, "pending", job_processor.db.client_id
-        ))
+        """,
+            (
+                "opt-uuid",
+                test_project["id"],
+                "Test Opt",
+                initial_prompt_id,
+                "basic",
+                5,
+                "pending",
+                job_processor.db.client_id,
+            ),
+        )
         optimization_id = cursor.lastrowid
         conn.commit()
 
         # Process optimization job
-        payload = {
-            "initial_prompt_id": initial_prompt_id,
-            "optimizer_type": "basic",
-            "max_iterations": 5
-        }
+        payload = {"initial_prompt_id": initial_prompt_id, "optimizer_type": "basic", "max_iterations": 5}
 
-        result = await job_processor.process_optimization_job(
-            payload,
-            optimization_id
-        )
+        result = await job_processor.process_optimization_job(payload, optimization_id)
 
         assert result["optimization_id"] == optimization_id
         assert result["iterations_completed"] <= 5
@@ -409,7 +370,7 @@ class TestJobProcessor:
 
             def __init__(self) -> None:
 
-                             self.ensure_prompt_stub = MagicMock()
+                self.ensure_prompt_stub = MagicMock()
                 self.get_optimization = MagicMock(
                     return_value={
                         "id": 42,
@@ -461,15 +422,17 @@ class TestJobProcessor:
         assert result["status"] == "completed"
         assert result["iterations_completed"] == len(iteration_payloads)
 
+
 ########################################################################################################################
 # Test Event Broadcasting
+
 
 class TestEventBroadcaster:
     """Test cases for EventBroadcaster."""
 
     @pytest.fixture
     def mock_connection_manager(self):
-             """Create mock connection manager."""
+        """Create mock connection manager."""
         manager = MagicMock()
         manager.broadcast_to_client = AsyncMock()
         manager.broadcast_to_all = AsyncMock()
@@ -477,17 +440,13 @@ class TestEventBroadcaster:
 
     @pytest.fixture
     def event_broadcaster(self, prompt_studio_db, mock_connection_manager):
-             """Create EventBroadcaster instance."""
+        """Create EventBroadcaster instance."""
         return EventBroadcaster(mock_connection_manager, prompt_studio_db)
 
     @pytest.mark.asyncio
     async def test_broadcast_event(self, event_broadcaster, mock_connection_manager):
         """Test broadcasting an event."""
-        await event_broadcaster.broadcast_event(
-            event_type=EventType.JOB_CREATED,
-            data={"job_id": 1},
-            project_id=1
-        )
+        await event_broadcaster.broadcast_event(event_type=EventType.JOB_CREATED, data={"job_id": 1}, project_id=1)
 
         # Should broadcast to all
         mock_connection_manager.broadcast_to_all.assert_called_once()
@@ -505,17 +464,14 @@ class TestEventBroadcaster:
         client_ids = ["client1", "client2"]
 
         await event_broadcaster.broadcast_event(
-            event_type=EventType.EVALUATION_STARTED,
-            data={"eval_id": 1},
-            client_ids=client_ids
+            event_type=EventType.EVALUATION_STARTED, data={"eval_id": 1}, client_ids=client_ids
         )
 
         # Should broadcast to specific clients
         assert mock_connection_manager.broadcast_to_client.call_count == 2
 
     def test_subscription_management(self, event_broadcaster):
-
-             """Test subscription management."""
+        """Test subscription management."""
         # Subscribe
         event_broadcaster.subscribe("client1", "job", 1)
         event_broadcaster.subscribe("client2", "job", 1)
@@ -542,24 +498,28 @@ class TestEventBroadcaster:
         # Create a mock job
         conn = event_broadcaster.db.get_connection()
         cursor = conn.cursor()
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO prompt_studio_job_queue (
                 uuid, job_type, entity_id, priority, status,
                 payload, client_id
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            "job-uuid", JobType.GENERATION.value, 1, 5,
-            JobStatus.PROCESSING.value, "{}", event_broadcaster.db.client_id
-        ))
+        """,
+            (
+                "job-uuid",
+                JobType.GENERATION.value,
+                1,
+                5,
+                JobStatus.PROCESSING.value,
+                "{}",
+                event_broadcaster.db.client_id,
+            ),
+        )
         job_id = cursor.lastrowid
         conn.commit()
 
         # Broadcast progress
-        await event_broadcaster.broadcast_progress(
-            job_id=job_id,
-            progress=50.0,
-            message="Halfway done"
-        )
+        await event_broadcaster.broadcast_progress(job_id=job_id, progress=50.0, message="Halfway done")
 
         # Check broadcast
         mock_connection_manager.broadcast_to_all.assert_called()
@@ -569,8 +529,10 @@ class TestEventBroadcaster:
         assert message["data"]["progress"] == 50.0
         assert message["data"]["message"] == "Halfway done"
 
+
 ########################################################################################################################
 # Integration Tests
+
 
 class TestJobSystemIntegration:
     """Integration tests for the complete job system."""
@@ -586,11 +548,7 @@ class TestJobSystemIntegration:
         job = job_manager.create_job(
             job_type=JobType.GENERATION,
             entity_id=test_project["id"],
-            payload={
-                "type": "description",
-                "description": "Test generation",
-                "num_cases": 2
-            }
+            payload={"type": "description", "description": "Test generation", "num_cases": 2},
         )
 
         # Process job
@@ -616,11 +574,7 @@ class TestJobSystemIntegration:
             job = job_manager.create_job(
                 job_type=JobType.GENERATION,
                 entity_id=test_project["id"],
-                payload={
-                    "type": "description",
-                    "description": f"Test {i}",
-                    "num_cases": 1
-                }
+                payload={"type": "description", "description": f"Test {i}", "num_cases": 1},
             )
             jobs.append(job)
 

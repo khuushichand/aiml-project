@@ -83,7 +83,7 @@ def _build_app_with_overrides(
 
 @pytest.mark.unit
 def test_workflows_virtual_key_401_when_principal_unavailable(monkeypatch):
-     from tldw_Server_API.app.core.AuthNZ import settings as settings_mod
+    from tldw_Server_API.app.core.AuthNZ import settings as settings_mod
 
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     settings_mod.reset_settings()
@@ -99,7 +99,7 @@ def test_workflows_virtual_key_401_when_principal_unavailable(monkeypatch):
 
 @pytest.mark.unit
 def test_workflows_virtual_key_403_when_missing_admin_permissions(monkeypatch):
-     from tldw_Server_API.app.core.AuthNZ import settings as settings_mod
+    from tldw_Server_API.app.core.AuthNZ import settings as settings_mod
 
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     settings_mod.reset_settings()
@@ -119,7 +119,7 @@ def test_workflows_virtual_key_403_when_missing_admin_permissions(monkeypatch):
 
 @pytest.mark.unit
 def test_workflows_virtual_key_400_when_not_multi_user_mode(monkeypatch):
-     from tldw_Server_API.app.core.AuthNZ import settings as settings_mod
+    from tldw_Server_API.app.core.AuthNZ import settings as settings_mod
 
     monkeypatch.setenv("AUTH_MODE", "single_user")
     settings_mod.reset_settings()
@@ -140,7 +140,7 @@ def test_workflows_virtual_key_400_when_not_multi_user_mode(monkeypatch):
 
 @pytest.mark.unit
 def test_workflows_virtual_key_200_for_admin_with_workflows_admin_permission(monkeypatch):
-     from tldw_Server_API.app.core.AuthNZ import settings as settings_mod
+    from tldw_Server_API.app.core.AuthNZ import settings as settings_mod
 
     monkeypatch.setenv("AUTH_MODE", "multi_user")
     settings_mod.reset_settings()

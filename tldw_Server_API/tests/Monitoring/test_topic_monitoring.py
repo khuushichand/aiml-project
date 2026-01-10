@@ -16,7 +16,7 @@ pytestmark = pytest.mark.unit
 def test_topic_monitoring_alert_creation(tmp_path, monkeypatch):
 
 
-     # Point alerts DB to a temp file
+    # Point alerts DB to a temp file
     db_file = tmp_path / "alerts.db"
     monkeypatch.setenv("MONITORING_ALERTS_DB", str(db_file))
     # Use an in-memory watchlists file to avoid writing to repo
@@ -54,7 +54,7 @@ def test_topic_monitoring_alert_creation(tmp_path, monkeypatch):
 def test_topic_monitoring_regex_pattern_with_flags(tmp_path, monkeypatch):
 
 
-     db_file = tmp_path / "alerts.db"
+    db_file = tmp_path / "alerts.db"
     monkeypatch.setenv("MONITORING_ALERTS_DB", str(db_file))
     wl_file = tmp_path / "watchlists.json"
     wl_file.write_text(json.dumps({"watchlists": []}), encoding="utf-8")
@@ -85,7 +85,7 @@ def test_topic_monitoring_regex_pattern_with_flags(tmp_path, monkeypatch):
 def test_topic_monitoring_skips_empty_pattern(tmp_path, monkeypatch):
 
 
-     db_file = tmp_path / "alerts.db"
+    db_file = tmp_path / "alerts.db"
     monkeypatch.setenv("MONITORING_ALERTS_DB", str(db_file))
     wl_file = tmp_path / "watchlists.json"
     wl_file.write_text(json.dumps({"watchlists": []}), encoding="utf-8")

@@ -89,6 +89,8 @@ def _generate_unique_prompt_name(base_name: str, used_names: set, name_counts: D
     raise InputError(f"Could not generate unique name for '{base_name}' after {_MAX_DUPLICATE_NAME_ITERATIONS} attempts.")
 
 def _is_single_user_auth_mode() -> bool:
+    if settings.get("SINGLE_USER_MODE") is True:
+        return True
     try:
         return get_auth_settings().AUTH_MODE == "single_user"
     except Exception:
@@ -96,6 +98,9 @@ def _is_single_user_auth_mode() -> bool:
 
 
 def _get_single_user_api_key() -> Optional[str]:
+    if "SINGLE_USER_API_KEY" in settings:
+        key = settings.get("SINGLE_USER_API_KEY")
+        return key if key else None
     try:
         key = getattr(get_auth_settings(), "SINGLE_USER_API_KEY", None)
     except Exception:

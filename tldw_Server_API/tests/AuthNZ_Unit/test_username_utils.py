@@ -41,9 +41,7 @@ def test_normalize_admin_username_length_errors(raw: str, expected_message: str)
 
 
 def test_normalize_admin_username_length_boundaries() -> None:
-
-
-     assert normalize_admin_username("abc") == "abc"
+    assert normalize_admin_username("abc") == "abc"
     assert normalize_admin_username("a" * 50) == "a" * 50
 
 

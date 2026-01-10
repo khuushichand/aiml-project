@@ -16,12 +16,12 @@ class _FakeResponse:
 
     def raise_for_status(self) -> None:
 
-             return
+        return
 
 
 @pytest.mark.unit
 def test_download_audio_aborts_when_stream_exceeds_limit(monkeypatch, tmp_path):
-     """Ensure streaming downloads stop once they exceed configured limit."""
+    """Ensure streaming downloads stop once they exceed configured limit."""
     monkeypatch.setattr(audio_files, "MAX_FILE_SIZE", 1024)
     dummy_uuid = SimpleNamespace(hex="1234567890abcdef")
     monkeypatch.setattr(audio_files.uuid, "uuid4", lambda: dummy_uuid)
@@ -43,7 +43,7 @@ def test_download_audio_aborts_when_stream_exceeds_limit(monkeypatch, tmp_path):
 
 @pytest.mark.unit
 def test_download_audio_rejects_when_content_length_exceeds_limit(monkeypatch, tmp_path):
-     """Ensure header-declared oversize files fail fast before streaming."""
+    """Ensure header-declared oversize files fail fast before streaming."""
     monkeypatch.setattr(audio_files, "MAX_FILE_SIZE", 1024)
     dummy_uuid = SimpleNamespace(hex="abcdef1234567890")
     monkeypatch.setattr(audio_files.uuid, "uuid4", lambda: dummy_uuid)
@@ -56,7 +56,7 @@ def test_download_audio_rejects_when_content_length_exceeds_limit(monkeypatch, t
 
 @pytest.mark.unit
 def test_download_audio_rejects_unexpected_content_type(monkeypatch, tmp_path):
-     dummy_uuid = SimpleNamespace(hex="abcdef1234567890")
+    dummy_uuid = SimpleNamespace(hex="abcdef1234567890")
     monkeypatch.setattr(audio_files.uuid, "uuid4", lambda: dummy_uuid)
 
     faux_response = _FakeResponse(headers={"content-type": "text/plain"}, chunks=[b"x"])

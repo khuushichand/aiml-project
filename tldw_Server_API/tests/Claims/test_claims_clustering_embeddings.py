@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 class _StubCollection:
     def __init__(self, embedding_map):
-             self._embedding_map = embedding_map
+        self._embedding_map = embedding_map
 
     def get(self, ids=None, include=None):  # noqa: D401 - stub for chroma
         result_ids = []
@@ -23,7 +23,7 @@ class _StubCollection:
 
 class _StubManager:
     def __init__(self, user_id, user_embedding_config):
-             self._collection = user_embedding_config.get("_test_collection")
+        self._collection = user_embedding_config.get("_test_collection")
 
     def get_or_create_collection(self, name):  # noqa: D401 - stub for chroma
         return self._collection
@@ -32,7 +32,7 @@ class _StubManager:
 def _seed_claims_db():
 
 
-     tmpdir = tempfile.mkdtemp(prefix="claims_cluster_embed_")
+    tmpdir = tempfile.mkdtemp(prefix="claims_cluster_embed_")
     db_path = os.path.join(tmpdir, "media.db")
     db = MediaDatabase(db_path=db_path, client_id="1")
     db.initialize_db()
@@ -87,7 +87,7 @@ def _seed_claims_db():
 def test_rebuild_claim_clusters_embeddings(monkeypatch):
 
 
-     from tldw_Server_API.app.core.config import settings as app_settings
+    from tldw_Server_API.app.core.config import settings as app_settings
     from tldw_Server_API.app.core.Claims_Extraction import claims_clustering
 
     db_path, media_id, claim_rows, tmpdir = _seed_claims_db()
@@ -152,7 +152,7 @@ def test_rebuild_claim_clusters_embeddings(monkeypatch):
 def test_rebuild_claim_clusters_embeddings_without_embeddings(monkeypatch):
 
 
-     from tldw_Server_API.app.core.config import settings as app_settings
+    from tldw_Server_API.app.core.config import settings as app_settings
     from tldw_Server_API.app.core.Claims_Extraction import claims_clustering
 
     db_path, _, _, tmpdir = _seed_claims_db()

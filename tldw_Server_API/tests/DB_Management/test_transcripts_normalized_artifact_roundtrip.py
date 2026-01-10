@@ -36,8 +36,7 @@ def _insert_minimal_media(db: MediaDatabase) -> int:
 
 def test_upsert_transcript_persists_normalized_artifact_roundtrip(tmp_path):
 
-
-     db = MediaDatabase(db_path=str(tmp_path / "media.db"), client_id="normalized-test")
+    db = MediaDatabase(db_path=str(tmp_path / "media.db"), client_id="normalized-test")
     media_id = _insert_minimal_media(db)
 
     artifact = to_normalized_stt_artifact(

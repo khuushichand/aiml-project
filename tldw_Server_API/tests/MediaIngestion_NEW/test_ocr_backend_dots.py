@@ -4,7 +4,7 @@ import pytest
 
 @pytest.mark.unit
 def test_dots_backend_available_flag_safely_imports():
-     from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.dots_ocr import (
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.dots_ocr import (
         DotsOCRBackend,
     )
 
@@ -14,7 +14,7 @@ def test_dots_backend_available_flag_safely_imports():
 
 @pytest.mark.unit
 def test_dots_backend_registry_resolution_when_installed():
-     # Skip unless dots_ocr package is importable
+    # Skip unless dots_ocr package is importable
     pytest.importorskip("dots_ocr")
 
     from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.registry import (

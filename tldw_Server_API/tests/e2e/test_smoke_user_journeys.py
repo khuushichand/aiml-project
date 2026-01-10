@@ -19,6 +19,7 @@ from .fixtures import (
     data_tracker,
     create_test_file,
     cleanup_test_file,
+    require_llm_or_skip,
 )
 
 
@@ -91,24 +92,18 @@ def test_smoke_basic_user_journey(api_client, data_tracker):
 
     # 4) Optional: Chat completion if any LLM providers are configured
     try:
-        providers = api_client.client.get("/api/v1/llm/providers")
-        providers.raise_for_status()
-        pdata = providers.json()
-        total = int(pdata.get("total_configured") or 0)
-        if total > 0:
-            chat_resp = api_client.chat_completion(
-                messages=[
-                    {"role": "system", "content": "You are a concise assistant."},
-                    {"role": "user", "content": "Say hello in one short sentence."},
-                ],
-                model="gpt-3.5-turbo",  # Logical default; server maps per provider
-                temperature=0.0,
-            )
-            assert "choices" in chat_resp
-            msg = chat_resp["choices"][0]["message"]["content"].strip()
-            assert msg, "Empty chat response"
-        else:
-            pytest.skip("No LLM providers configured; skipping chat smoke.")
+        model = require_llm_or_skip(api_client)
+        chat_resp = api_client.chat_completion(
+            messages=[
+                {"role": "system", "content": "You are a concise assistant."},
+                {"role": "user", "content": "Say hello in one short sentence."},
+            ],
+            model=model,
+            temperature=0.0,
+        )
+        assert "choices" in chat_resp
+        msg = chat_resp["choices"][0]["message"]["content"].strip()
+        assert msg, "Empty chat response"
     except httpx.HTTPStatusError as e:
         # If providers endpoint exists but chat fails due to config, skip
         if e.response.status_code in (400, 401, 403, 404, 422, 500):

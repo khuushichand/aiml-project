@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from pathlib import Path
 import os
 import shutil
+
 #
 # Third-party imports
 #
@@ -16,46 +17,49 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 from tldw_Server_API.app.api.v1.API_Deps.Prompts_DB_Deps import (
     get_prompts_db_for_user,
     _get_prompts_db_path_for_user,
-    close_all_cached_prompts_db_instances
+    close_all_cached_prompts_db_instances,
 )
 from tldw_Server_API.app.api.v1.endpoints.prompts import verify_prompts_auth
 from tldw_Server_API.app.core.DB_Management.Prompts_DB import PromptsDatabase
 from tldw_Server_API.app.core.config import settings
+
 # Prompt Studio DB
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
+
 #
 ########################################################################################################################
 #
 # Functions
 
+
 @pytest.fixture(scope="session")
 def test_user():
-     return User(id=1, username="testuser")
+    return User(id=1, username="testuser")
 
 
 @pytest.fixture(scope="session")
 def test_api_token():
-     # This should match what your verify_prompts_auth expects if not mocked away completely
+    # This should match what your verify_prompts_auth expects if not mocked away completely
     return "fixed_test_api_token_for_pytest"
 
 
 @pytest.fixture(scope="module")
 def client(test_user, test_api_token):
-     # --- Override dependencies ---
+    # --- Override dependencies ---
     def override_get_request_user():
-             return test_user
+        return test_user
 
     async def override_verify_prompts_auth():  # Make it async if original is
         return True  # Bypass token check for tests
 
-    fml = ("Fuck_temp_test_user_dbs_prompts_api")
+    fml = "Fuck_temp_test_user_dbs_prompts_api"
     # Store original settings to restore later if necessary
     original_user_db_base_dir = fml
     temp_test_user_db_base_dir = Path("fuck_temp_test_user_dbs_prompts_api")
 
     def setup_test_db_environment():
 
-             settings.USER_DB_BASE_DIR = temp_test_user_db_base_dir
+        settings.USER_DB_BASE_DIR = temp_test_user_db_base_dir
         if temp_test_user_db_base_dir.exists():
             shutil.rmtree(temp_test_user_db_base_dir)
         temp_test_user_db_base_dir.mkdir(parents=True, exist_ok=True)
@@ -74,7 +78,7 @@ def client(test_user, test_api_token):
 
     def teardown_test_db_environment():
 
-             close_all_cached_prompts_db_instances()  # Important
+        close_all_cached_prompts_db_instances()  # Important
         if temp_test_user_db_base_dir.exists():
             shutil.rmtree(temp_test_user_db_base_dir)
 
@@ -88,7 +92,9 @@ def client(test_user, test_api_token):
     fastapi_app.dependency_overrides.clear()
     teardown_test_db_environment()
 
+
 # Additional fixtures for Prompt Studio job system tests
+
 
 @pytest.fixture
 def prompt_studio_db(tmp_path: Path) -> PromptStudioDatabase:
@@ -108,11 +114,13 @@ def prompt_studio_db(tmp_path: Path) -> PromptStudioDatabase:
         except Exception:
             pass
 
+
 @pytest.fixture
 def test_project(prompt_studio_db: PromptStudioDatabase):
     """Create a sample project in the PromptStudioDatabase."""
     project = prompt_studio_db.create_project(name="Test Project", description="For job tests")
     return project
+
 
 #
 # End of conftest.py

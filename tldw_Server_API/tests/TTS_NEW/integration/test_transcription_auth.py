@@ -38,7 +38,7 @@ def _make_wav_bytes(duration_sec: float = 0.1, sr: int = 16000, freq: float = 44
 def test_transcriptions_requires_auth_401(bypass_api_limits):
 
 
-     ctx = bypass_api_limits(app)
+    ctx = bypass_api_limits(app)
     with ctx, TestClient(app) as client:
         wav_bytes = _make_wav_bytes()
         files = {"file": ("test.wav", wav_bytes, "audio/wav")}
@@ -50,7 +50,7 @@ def test_transcriptions_requires_auth_401(bypass_api_limits):
 def test_transcriptions_ok_with_override(monkeypatch, bypass_api_limits):
 
 
-     ctx = bypass_api_limits(app)
+    ctx = bypass_api_limits(app)
     with ctx, TestClient(app) as client:
         async def _override_user():
             return User(id=1, username="tester", email="t@example.com", is_active=True)
@@ -59,7 +59,7 @@ def test_transcriptions_ok_with_override(monkeypatch, bypass_api_limits):
 
         # Patch the production function used by the endpoint (Whisper path)
         def _fake_speech_to_text(*args, **kwargs):
-                     # Endpoint expects a tuple (segments_list, detected_language) when return_language=True
+            # Endpoint expects a tuple (segments_list, detected_language) when return_language=True
             segments = [
                 {"start_seconds": 0.0, "end_seconds": 0.1, "Text": "stubbed transcript"}
             ]
@@ -103,7 +103,7 @@ def test_transcriptions_ok_with_override(monkeypatch, bypass_api_limits):
 def test_translations_requires_auth_401(bypass_api_limits):
 
 
-     ctx = bypass_api_limits(app)
+    ctx = bypass_api_limits(app)
     with ctx, TestClient(app) as client:
         wav_bytes = _make_wav_bytes()
         files = {"file": ("test.wav", wav_bytes, "audio/wav")}
@@ -115,7 +115,7 @@ def test_translations_requires_auth_401(bypass_api_limits):
 def test_translations_ok_with_override(monkeypatch, bypass_api_limits):
 
 
-     ctx = bypass_api_limits(app)
+    ctx = bypass_api_limits(app)
     with ctx, TestClient(app) as client:
         async def _override_user():
             return User(id=1, username="tester", email="t@example.com", is_active=True)
@@ -124,7 +124,7 @@ def test_translations_ok_with_override(monkeypatch, bypass_api_limits):
 
         # Patch the production function used by the endpoint (Whisper path)
         def _fake_speech_to_text(*args, **kwargs):
-                     segments = [
+            segments = [
                 {"start_seconds": 0.0, "end_seconds": 0.1, "Text": "translated transcript"}
             ]
             return (segments, "en")
@@ -167,7 +167,7 @@ def test_translations_ok_with_override(monkeypatch, bypass_api_limits):
 def test_transcriptions_parakeet_variant_routes_to_parakeet(monkeypatch, bypass_api_limits):
 
 
-     """Model strings like 'parakeet-mlx' should route to the Parakeet provider, not Whisper."""
+    """Model strings like 'parakeet-mlx' should route to the Parakeet provider, not Whisper."""
     ctx = bypass_api_limits(app)
     with ctx, TestClient(app) as client:
         async def _override_user():
@@ -184,7 +184,7 @@ def test_transcriptions_parakeet_variant_routes_to_parakeet(monkeypatch, bypass_
 
         # If Whisper path is hit incorrectly, fail fast
         def _fail_speech_to_text(*args, **kwargs):
-                     raise AssertionError("Whisper path should not be used for parakeet-mlx")
+            raise AssertionError("Whisper path should not be used for parakeet-mlx")
 
         monkeypatch.setattr(
             "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.speech_to_text",
@@ -194,7 +194,7 @@ def test_transcriptions_parakeet_variant_routes_to_parakeet(monkeypatch, bypass_
 
         # Parakeet Nemo implementation stub
         def _fake_parakeet(audio_data, sample_rate, variant):
-                     return "parakeet transcript"
+            return "parakeet transcript"
 
         monkeypatch.setattr(
             "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo.transcribe_with_parakeet",
@@ -216,7 +216,7 @@ def test_transcriptions_parakeet_variant_routes_to_parakeet(monkeypatch, bypass_
 def test_transcriptions_qwen2audio_variant_routes_to_qwen2audio(monkeypatch, bypass_api_limits):
 
 
-     """Model strings like 'qwen2audio-test' should route to Qwen2Audio provider, not Whisper."""
+    """Model strings like 'qwen2audio-test' should route to Qwen2Audio provider, not Whisper."""
     ctx = bypass_api_limits(app)
     with ctx, TestClient(app) as client:
         async def _override_user():
@@ -226,7 +226,7 @@ def test_transcriptions_qwen2audio_variant_routes_to_qwen2audio(monkeypatch, byp
 
         # Fail if faster-whisper path is chosen
         def _fail_speech_to_text(*args, **kwargs):
-                     raise AssertionError("Whisper path should not be used for qwen2audio-*")
+            raise AssertionError("Whisper path should not be used for qwen2audio-*")
 
         monkeypatch.setattr(
             "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.speech_to_text",
@@ -239,7 +239,7 @@ def test_transcriptions_qwen2audio_variant_routes_to_qwen2audio(monkeypatch, byp
 
         def _fake_transcribe_audio(audio_data, transcription_provider, sample_rate=16000, speaker_lang=None, whisper_model="distil-large-v3"):
 
-                     # Ensure we are invoked with the expected provider
+            # Ensure we are invoked with the expected provider
             assert transcription_provider == "qwen2audio"
             return "qwen2audio transcript"
 
@@ -259,7 +259,7 @@ def test_transcriptions_qwen2audio_variant_routes_to_qwen2audio(monkeypatch, byp
 def test_transcriptions_whisper_model_unavailable_returns_503(monkeypatch, bypass_api_limits):
 
 
-     """
+    """
     When the underlying faster-whisper model is not available locally,
     /audio/transcriptions should surface a structured 503 instead of
     returning a pseudo-transcript that clients might persist.
@@ -274,7 +274,7 @@ def test_transcriptions_whisper_model_unavailable_returns_503(monkeypatch, bypas
         # Fail if the heavy Whisper STT path is invoked; the preflight
         # should short-circuit before speech_to_text is called.
         def _fail_speech_to_text(*args, **kwargs):
-                     raise AssertionError("speech_to_text should not be called when model is unavailable")
+            raise AssertionError("speech_to_text should not be called when model is unavailable")
 
         monkeypatch.setattr(
             "tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib.speech_to_text",

@@ -18,7 +18,7 @@ from tldw_Server_API.app.services import storage_quota_service
 
 class _FakeStorage:
     def __init__(self) -> None:
-             self.calls: List[Dict[str, Any]] = []
+        self.calls: List[Dict[str, Any]] = []
 
     async def store(
         self,
@@ -43,7 +43,7 @@ class _FakeStorage:
 
 class _FakeDB:
     def __init__(self) -> None:
-             self.db_path_str = ":memory:"
+        self.db_path_str = ":memory:"
         self.client_id = "test-client"
         self.insert_calls: List[Dict[str, Any]] = []
 

@@ -24,7 +24,7 @@ def test_audio_transcriptions_uses_adapter_base_dir(
 ):
 
 
-     monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("SINGLE_USER_API_KEY", TEST_API_KEY)
     monkeypatch.setenv("SINGLE_USER_FIXED_ID", "1")
@@ -54,7 +54,7 @@ def test_audio_transcriptions_uses_adapter_base_dir(
             prompt=None,
             base_dir=None,
         ):
-                     assert base_dir is not None
+            assert base_dir is not None
             assert base_dir == audio_ep.PathLib(audio_path).parent
             return {
                 "text": "stub transcript",
@@ -73,11 +73,10 @@ def test_audio_transcriptions_uses_adapter_base_dir(
 
     class _StubRegistry:
         def resolve_provider_for_model(self, _model):
-                     return "external", "external:stub", None
+            return "external", "external:stub", None
 
         def get_adapter(self, _provider):
-
-                     return _StubAdapter()
+            return _StubAdapter()
 
     monkeypatch.setattr(audio_ep, "can_start_job", _allow_job)
     monkeypatch.setattr(audio_ep, "increment_jobs_started", _noop_async)

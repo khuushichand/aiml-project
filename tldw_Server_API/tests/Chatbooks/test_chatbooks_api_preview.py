@@ -9,7 +9,7 @@ from tldw_Server_API.app.main import app
 
 @pytest.fixture(scope="module")
 def client():
-     with TestClient(app) as c:
+    with TestClient(app) as c:
         yield c
 
 
@@ -33,9 +33,7 @@ def _make_chatbook_bytes(version_str: str = "1.0.0") -> bytes:
 
 
 def test_preview_manifest_version_coercion_legacy(client):
-
-
-     # Legacy version 1.0 in manifest should map to schema 1.0.0
+    # Legacy version 1.0 in manifest should map to schema 1.0.0
     data = _make_chatbook_bytes("1.0")
     files = {"file": ("test.chatbook", data, "application/zip")}
     # No auth for test client path; depends on test app config
@@ -47,9 +45,7 @@ def test_preview_manifest_version_coercion_legacy(client):
 
 
 def test_preview_manifest_version_ok(client):
-
-
-     data = _make_chatbook_bytes("1.0.0")
+    data = _make_chatbook_bytes("1.0.0")
     files = {"file": ("test.chatbook", data, "application/zip")}
     resp = client.post("/api/v1/chatbooks/preview", files=files)
     assert resp.status_code in (200, 422) or True

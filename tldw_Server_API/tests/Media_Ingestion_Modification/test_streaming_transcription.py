@@ -18,7 +18,7 @@ try:
 except Exception:
     class WSConnectionClosed(Exception):
         def __init__(self, *args, **kwargs):
-                     super().__init__("closed")
+            super().__init__("closed")
 
 pytestmark = pytest.mark.unit
 
@@ -54,7 +54,7 @@ class TestStreamingTranscription:
 
     @pytest.fixture
     def audio_chunk(self):
-             """Generate a single audio chunk for streaming."""
+        """Generate a single audio chunk for streaming."""
         sample_rate = 16000
         duration = 0.5  # 500ms chunk
         t = np.linspace(0, duration, int(sample_rate * duration), False)
@@ -63,7 +63,7 @@ class TestStreamingTranscription:
 
     def test_import_module(self):
 
-             """Test that streaming module can be imported."""
+        """Test that streaming module can be imported."""
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Parakeet import (
                 ParakeetStreamingTranscriber,
@@ -78,7 +78,7 @@ class TestStreamingTranscription:
 
     def test_streaming_config(self):
 
-             """Test StreamingConfig creation."""
+        """Test StreamingConfig creation."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Parakeet import (
             StreamingConfig
         )
@@ -98,7 +98,7 @@ class TestStreamingTranscription:
 
     def test_audio_buffer(self):
 
-             """Test AudioBuffer functionality."""
+        """Test AudioBuffer functionality."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Parakeet import (
             AudioBuffer
         )
@@ -127,7 +127,7 @@ class TestStreamingTranscription:
 
     def test_audio_buffer_overflow(self):
 
-             """Test AudioBuffer with overflow."""
+        """Test AudioBuffer with overflow."""
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Parakeet import (
             AudioBuffer
         )
@@ -514,7 +514,7 @@ class TestStreamingIntegration:
         # Patch model loader to avoid real Nemo/MLX dependencies
         class _DummyModel:
             def transcribe(self, audio_chunk):
-                             result = MagicMock()
+                result = MagicMock()
                 result.text = f"chunk_{len(audio_chunk)}"
                 return result
 
@@ -575,12 +575,12 @@ class TestStreamingIntegration:
         # Stub the Parakeet engine to avoid real model dependencies
         class _StubTranscriber:
             def __init__(self, cfg):
-                             self.cfg = cfg
+                self.cfg = cfg
                 self._transcripts = []
 
             def initialize(self):
 
-                             return None
+                return None
 
             async def process_audio_chunk(self, audio_bytes: bytes):
                 text = f"stub-{len(audio_bytes)}"
@@ -589,15 +589,15 @@ class TestStreamingIntegration:
 
             def get_full_transcript(self):
 
-                             return " ".join(self._transcripts)
+                return " ".join(self._transcripts)
 
             def reset(self):
 
-                             self._transcripts.clear()
+                self._transcripts.clear()
 
             def cleanup(self):
 
-                             self._transcripts.clear()
+                self._transcripts.clear()
 
         monkeypatch.setattr(unified, "_ParakeetCoreAdapter", None)
         monkeypatch.setattr(unified, "ParakeetStreamingTranscriber", _StubTranscriber)
@@ -626,11 +626,11 @@ class TestStreamingIntegration:
 
         class _ErrorStubTranscriber:
             def __init__(self, cfg):
-                             self.cfg = cfg
+                self.cfg = cfg
 
             def initialize(self):
 
-                             return None
+                return None
 
             async def process_audio_chunk(self, audio_bytes: bytes):
                 # Simulate provider-level STT sentinel string
@@ -642,15 +642,15 @@ class TestStreamingIntegration:
 
             def get_full_transcript(self):
 
-                             return ""
+                return ""
 
             def reset(self):
 
-                             return None
+                return None
 
             def cleanup(self):
 
-                             return None
+                return None
 
         monkeypatch.setattr(unified, "_ParakeetCoreAdapter", None)
         monkeypatch.setattr(unified, "ParakeetStreamingTranscriber", _ErrorStubTranscriber)
@@ -691,7 +691,7 @@ class TestStreamingPerformance:
 
             def mock_transcribe(*args, **kwargs):
 
-                             # Simulate processing time
+                # Simulate processing time
                 time.sleep(0.01)
                 result = MagicMock()
                 result.text = "Low latency"

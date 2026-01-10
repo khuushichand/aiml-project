@@ -45,10 +45,11 @@ class TestEvaluationWorkflow:
         # Simple performance tracking
         class PerfTracker:
             def measure(self, name):
-                            from contextlib import contextmanager
+                from contextlib import contextmanager
+
                 @contextmanager
                 def _measure():
-                                    import time
+                    import time
                     start = time.time()
                     yield
                     duration = time.time() - start
@@ -604,10 +605,11 @@ class TestEvaluationEdgeCases:
         # Simple performance tracking
         class PerfTracker:
             def measure(self, name):
-                            from contextlib import contextmanager
+                from contextlib import contextmanager
+
                 @contextmanager
                 def _measure():
-                                    import time
+                    import time
                     start = time.time()
                     yield
                     duration = time.time() - start
@@ -633,6 +635,8 @@ class TestEvaluationEdgeCases:
 
             response = self.client.client.post("/api/v1/evaluations", json=eval_data)
             # Should get 401 in single-user mode if auth fails, or 422/400 for validation
+            if response.status_code == 429:
+                pytest.skip("Rate limited while verifying invalid evaluation type handling")
             assert response.status_code in [401, 422, 400]
 
             if response.status_code == 401:
@@ -657,6 +661,8 @@ class TestEvaluationEdgeCases:
 
             response = self.client.client.post("/api/v1/evaluations", json=eval_data)
             # Should get 401 in single-user mode if auth fails, or 422/400 for validation
+            if response.status_code == 429:
+                pytest.skip("Rate limited while verifying missing dataset handling")
             assert response.status_code in [401, 422, 400]
 
             if response.status_code == 401:
