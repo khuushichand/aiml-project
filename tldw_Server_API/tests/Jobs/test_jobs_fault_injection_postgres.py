@@ -70,10 +70,13 @@ def test_acquire_serialization_conflict_then_retry_postgres(monkeypatch, jobs_pg
         return FlakyConn(*a, **k)
 
     monkeypatch.setattr("psycopg.connect", fake_connect)
-    with pytest.raises(pg_errors.SerializationFailure):
-        jm.acquire_next_job(domain="ps", queue="default", lease_seconds=5, worker_id="w")
+    try:
+        with pytest.raises(pg_errors.SerializationFailure):
+            jm.acquire_next_job(domain="ps", queue="default", lease_seconds=5, worker_id="w")
+    finally:
+        # Always restore to avoid leaking flaky connections into teardown.
+        monkeypatch.setattr("psycopg.connect", real_connect)
 
-    # Restore and retry
-    monkeypatch.setattr("psycopg.connect", real_connect)
+    # Retry with restored connection
     acq = jm.acquire_next_job(domain="ps", queue="default", lease_seconds=5, worker_id="w")
     assert acq and str(acq.get("status")) == "processing"

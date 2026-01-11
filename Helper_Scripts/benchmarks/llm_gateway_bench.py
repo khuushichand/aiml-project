@@ -339,7 +339,7 @@ async def run_step(
                 results.append(res)
 
     # Optional metrics scraping loop
-    metrics_client = http_client.create_async_client()
+    metrics_client = http_client.create_async_client() if metrics_url else None
     pre_metrics = {}
     post_metrics = {}
     series_deltas: Dict[Tuple[str, Tuple[Tuple[str, str], ...]], float] = {}

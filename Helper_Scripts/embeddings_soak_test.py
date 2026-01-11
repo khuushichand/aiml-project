@@ -41,7 +41,7 @@ ensure_repo_root()
 
 try:
     from tldw_Server_API.app.core import http_client
-except Exception:
+except ImportError:
     http_client = None  # type: ignore[assignment]
 
 

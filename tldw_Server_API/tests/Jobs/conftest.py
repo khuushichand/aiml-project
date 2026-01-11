@@ -171,7 +171,8 @@ def _pg_jobs_db_url(request, pg_temp_db, monkeypatch):
             return
     except Exception:
         return
-    if os.getenv("JOBS_DB_URL", "").startswith("postgres"):
+    # Default to the per-test temp DB for pg_jobs, unless explicitly overridden.
+    if _truthy(os.getenv("JOBS_PG_USE_ENV_DB")) and os.getenv("JOBS_DB_URL", "").startswith("postgres"):
         return
     dsn = str(pg_temp_db["dsn"])  # type: ignore[index]
     monkeypatch.setenv("JOBS_DB_URL", dsn)

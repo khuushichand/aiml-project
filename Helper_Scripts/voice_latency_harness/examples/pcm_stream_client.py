@@ -128,8 +128,8 @@ def main() -> None:
     finally:
         try:
             asyncio.run(http_client.shutdown_http_client())
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.exception("Error shutting down http client: {}", exc)
 
     print("Done.")
 

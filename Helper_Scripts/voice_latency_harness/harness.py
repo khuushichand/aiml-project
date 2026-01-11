@@ -33,9 +33,12 @@ ensure_repo_root()
 
 try:
     from tldw_Server_API.app.core import http_client
-except Exception:
-    print("tldw_Server_API not available; run from the repo root or set PYTHONPATH.", file=sys.stderr)
-    raise SystemExit(1)
+except ImportError as err:
+    print(
+        f"tldw_Server_API not available; run from the repo root or set PYTHONPATH. ({err})",
+        file=sys.stderr,
+    )
+    raise SystemExit(1) from err
 
 
 def _now() -> float:
@@ -124,7 +127,7 @@ def main() -> None:
     args = ap.parse_args()
 
     if args.mode == "tts":
-    configure_local_egress(args.base)
+        configure_local_egress(args.base)
         try:
             result = asyncio.run(measure_tts_ttfb(args.base, args.token, args.text, args.runs))
         finally:

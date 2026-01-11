@@ -1483,7 +1483,11 @@ async def batch_cancel_endpoint(
                             tuple(params),
                         )
                         c = cur.fetchone()
-                        return BatchCancelResponse(affected=int(c[0] if c else 0))
+                        if isinstance(c, dict):
+                            count = int(c.get("count") or 0)
+                        else:
+                            count = int(c[0] if c else 0)
+                        return BatchCancelResponse(affected=count)
                     # Counters pre-measure per group
                     counters_enabled = str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}
                     grp_ready = []
@@ -1553,6 +1557,10 @@ async def batch_cancel_endpoint(
                                     "UPDATE job_counters SET processing_count = GREATEST(processing_count - %s, 0), updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
                                     (c, d, q, jt),
                                 )
+                    except Exception:
+                        pass
+                    try:
+                        conn.commit()
                     except Exception:
                         pass
                     try:
