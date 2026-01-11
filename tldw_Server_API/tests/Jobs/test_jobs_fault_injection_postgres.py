@@ -26,12 +26,14 @@ def test_acquire_serialization_conflict_then_retry_postgres(monkeypatch, jobs_pg
     class FlakyCursor:
         def __init__(self, cur):
             self._cur = cur
-            self._calls = 0
+            self._raised = False
 
         def execute(self, *a, **k):
-
-            if self._calls == 0:
-                self._calls += 1
+            sql = str(a[0]).strip().upper() if a else ""
+            if sql.startswith("SET LOCAL") or sql.startswith("RESET LOCAL"):
+                return self._cur.execute(*a, **k)
+            if not self._raised:
+                self._raised = True
                 raise pg_errors.SerializationFailure("serialization_failure")
             return self._cur.execute(*a, **k)
 

@@ -1,6 +1,6 @@
 # HTTP Client Unification PRD
 
-Status: Proposal ready for implementation
+Status: Completed (implemented)
 Owner: Core Maintainers
 Target Release: 0.2.x
 
@@ -246,15 +246,21 @@ opts = RequestOptions(
   the initial request.
 - stream_sse is neutral by default; optional `stop_on_done`/`done_sentinels` are opt-in.
 
-## 12. Open Questions
-- Do any modules require transport-specific features not supported by httpx/aiohttp?
-- Rollback plan: if aiohttp has a critical vulnerability, what is the path to
-  temporarily fall back to httpx without reintroducing direct usage?
-- Deprecation comms: how will legacy sync paths be announced and enforced?
-- Performance baselines: what target throughput/latency deltas vs current direct usage
-  are acceptable?
-- Monitoring strategy: where are outbound HTTP metrics aggregated, and what alerts
-  catch retry storms or egress policy violations?
+## 12. Monitoring & Alerting (Resolved)
+Outbound HTTP monitoring rolls into the existing Metrics + logging stack:
+- Metrics: use `http_client_*` counters/histograms already emitted by `http_client`
+  and exported by the existing metrics pipeline (Prometheus/OTel).
+  - `http_client_requests_total{method,host,status}`
+  - `http_client_request_duration_seconds{method,host}`
+  - `http_client_retries_total{method,host}`
+  - `http_client_egress_denials_total{host,reason}`
+- Logs: loguru error logs already include provider + request context; alerting
+  can rely on error-rate metrics plus log aggregation for triage.
+- Suggested alerts (tune thresholds per env):
+  - Egress denials: any `http_client_egress_denials_total` > 0 in 5m (security).
+  - Retry storms: `http_client_retries_total / http_client_requests_total` > 0.2 in 10m.
+  - Error rate: 5xx/transport errors > 2% in 5m.
+  - Latency regression: p95 `http_client_request_duration_seconds` over baseline.
 
 ## 13. Config Reference
 - HTTP client defaults and environment variable mappings live in `tldw_Server_API/Config_Files/README.md`.

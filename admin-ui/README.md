@@ -95,6 +95,15 @@ If the browser needs access, use a secure auth flow (JWT/session) or a
 server-side API route that injects the `X-API-KEY` so the key never ships to
 the client.
 
+Optional JWT local verification (middleware): `admin-ui/middleware.ts` uses
+`verifyJwtLocally` to validate JWTs without a round trip to the backend API.
+It checks `JWT_SECRET_KEY`, optional `JWT_SECONDARY_SECRET`, and
+`JWT_ALGORITHM` (HS256/384/512). If the secrets are missing, the algorithm is
+unsupported, or the token has no `exp` claim, `verifyJwtLocally` returns `null`
+and the middleware falls back to backend API verification. Tokens without an
+`exp` claim cannot be cached locally because the cache TTL is derived from the
+`exp` value.
+
 ### Running Development Server
 
 ```bash

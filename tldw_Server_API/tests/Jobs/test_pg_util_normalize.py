@@ -49,6 +49,9 @@ def test_negotiate_pg_dsn_downgrades_on_unrecognized_parameter(monkeypatch):
 
     fake_psycopg.connect = fake_connect  # type: ignore
     monkeypatch.setitem(sys.modules, "psycopg", fake_psycopg)
+    # Clear cached negotiation results to avoid cross-test leakage
+    from tldw_Server_API.app.core.Jobs import pg_util as _pg_util
+    _pg_util._NEGOTIATED_OPTIONS_CACHE.clear()
 
     base = "postgresql://tldw_user:TestPassword123!@127.0.0.1:5432/tldw_content"
     out = negotiate_pg_dsn(base)

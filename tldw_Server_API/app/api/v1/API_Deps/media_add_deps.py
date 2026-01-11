@@ -13,15 +13,13 @@ from tldw_Server_API.app.api.v1.schemas.media_request_models import (
     MediaType,
     OcrMode,
     PdfEngine,
-    TranscriptionModel,
+    TRANSCRIPTION_MODEL_ENUM,
 )
 
 try:
     HTTP_422_UNPROCESSABLE = status.HTTP_422_UNPROCESSABLE_CONTENT
 except AttributeError:  # Starlette < 0.27
     HTTP_422_UNPROCESSABLE = status.HTTP_422_UNPROCESSABLE_ENTITY
-
-TRANSCRIPTION_MODEL_ENUM = [model.value for model in TranscriptionModel]
 
 
 async def get_add_media_form(
@@ -229,13 +227,18 @@ async def get_add_media_form(
     """
     # Validate transcription_model against TranscriptionModel enum
     if transcription_model:
-        valid_models = [model.value for model in TranscriptionModel]
-        if transcription_model not in valid_models:
-            logger.warning(
-                "Invalid transcription model provided: {}, using default",
-                transcription_model,
+        if transcription_model not in TRANSCRIPTION_MODEL_ENUM:
+            raise HTTPException(
+                status_code=HTTP_422_UNPROCESSABLE,
+                detail=[
+                    {
+                        "loc": ["body", "transcription_model"],
+                        "msg": f"Invalid transcription model: {transcription_model}",
+                        "type": "value_error.enum",
+                        "ctx": {"enum_values": TRANSCRIPTION_MODEL_ENUM},
+                    }
+                ],
             )
-            transcription_model = "whisper-large-v3"
 
     try:
         # Coerce JSON string inputs for urls into a list for robustness

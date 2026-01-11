@@ -111,7 +111,7 @@ async def test_webhooks_signed_and_cursor_resume(monkeypatch, tmp_path):
     # Clear deliveries and run worker again; it should resume from cursor and send only the new event
     delivered.clear()
     stop_event2 = asyncio.Event()
-    task2 = asyncio.create_task(run_jobs_webhooks_worker(stop_event=stop_event2))
+    task2 = asyncio.create_task(svc.run_jobs_webhooks_worker(stop_event=stop_event2))
     try:
         for _ in range(200):
             if delivered:

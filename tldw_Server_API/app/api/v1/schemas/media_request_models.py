@@ -256,6 +256,8 @@ class TranscriptionModel(str, Enum):
     PARAKEET_MLX = "parakeet-mlx"
     PARAKEET_ONNX = "parakeet-onnx"
 
+TRANSCRIPTION_MODEL_ENUM = [m.value for m in TranscriptionModel]
+
 class AudioVideoOptions(BaseModel):
     """Pydantic model for Audio/Video specific options"""
     transcription_model: str = Field("deepdml/faster-distil-whisper-large-v3.5", description="Model ID for audio/video transcription")

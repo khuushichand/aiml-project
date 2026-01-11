@@ -30,20 +30,21 @@ def test_jobs_prune_dry_run_and_filters_postgres(monkeypatch, jobs_pg_dsn):
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
     monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
+    monkeypatch.setenv("JOBS_ADMIN_COMPLETE_QUEUED_ALLOW_DOMAINS", "chatbooks")
 
     ensure_jobs_tables_pg(jobs_pg_dsn)
     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     # Seed: 1 completed (old), 1 failed (old), 1 failed (recent)
     j1 = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1")
-    jm.complete_job(int(j1["id"]))
+    assert jm.complete_job(int(j1["id"]), enforce=False)
     _backdate_pg(jobs_pg_dsn, int(j1["id"]))
 
     j2 = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1")
-    jm.fail_job(int(j2["id"]), error="x", retryable=False)
+    assert jm.fail_job(int(j2["id"]), error="x", retryable=False, enforce=False)
     _backdate_pg(jobs_pg_dsn, int(j2["id"]))
 
     j3 = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1")
-    jm.fail_job(int(j3["id"]), error="x", retryable=False)
+    assert jm.fail_job(int(j3["id"]), error="x", retryable=False, enforce=False)
 
     from fastapi.testclient import TestClient
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
@@ -82,12 +83,13 @@ def test_jobs_prune_filters_scope_postgres(monkeypatch, jobs_pg_dsn):
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
     monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
+    monkeypatch.setenv("JOBS_ADMIN_COMPLETE_QUEUED_ALLOW_DOMAINS", "chatbooks")
 
     ensure_jobs_tables_pg(jobs_pg_dsn)
     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     # Seed a job in a different domain/queue
     jx = jm.create_job(domain="other", queue="low", job_type="export", payload={}, owner_user_id="1")
-    jm.complete_job(int(jx["id"]))
+    assert jm.complete_job(int(jx["id"]), enforce=False)
     _backdate_pg(jobs_pg_dsn, int(jx["id"]))
 
     from fastapi.testclient import TestClient

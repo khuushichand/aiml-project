@@ -66,11 +66,11 @@ You can inspect the current user and roles via the `/profile` page:
 
 ## Linting, Tests & Build
 
-From `tldw-frontend/`:
+From `tldw-frontend/` (npm scripts live in `tldw-frontend/package.json`):
 
 - `npm run lint` – run ESLint against the codebase.
 - `npm run test` – run Vitest unit tests (for example, auth error mapping).
-- `npm run test:integration` – start the backend (optional) and run frontend tests + smoke checks (see `Helper_Scripts/run-frontend-integration.sh` for flags and env).
+- `npm run test:integration` – start the backend (optional) and run frontend tests + smoke checks (runs `Helper_Scripts/run-frontend-integration.sh` for flags and env).
 - `npm run build` – Next.js production build.
 
 ## Integration Test Harness

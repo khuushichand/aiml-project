@@ -4,6 +4,7 @@ from typing import Any, Dict, Iterable, Optional, AsyncIterator, List
 import os
 
 from .base import ChatProvider, apply_tool_choice
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
 from tldw_Server_API.app.core.LLM_Calls.sse import (
     normalize_provider_line,
     is_done_line,
@@ -19,6 +20,11 @@ from tldw_Server_API.app.core.http_client import (
 
 # Patchable client factory (mirrors other adapters)
 http_client_factory = _hc_create_client
+
+_BEDROCK_OPENAI_MODEL_MAP = {
+    "gpt-oss-20b-1": "openai.gpt-oss-20b-1:0",
+}
+_OPENAI_STYLE_PREFIXES = ("gpt-", "gpt_", "o1", "o3", "text-", "chatgpt")
 
 
 class BedrockAdapter(ChatProvider):
@@ -71,6 +77,35 @@ class BedrockAdapter(ChatProvider):
             h["Authorization"] = f"Bearer {key}"
         return h
 
+    def _normalize_model(self, model: Optional[str]) -> Optional[str]:
+        if model is None:
+            return None
+        normalized = model.strip()
+        if not normalized:
+            return normalized
+        mapped = _BEDROCK_OPENAI_MODEL_MAP.get(normalized)
+        if mapped:
+            return mapped
+        lowered = normalized.lower()
+        if lowered.startswith(_OPENAI_STYLE_PREFIXES):
+            raise ChatConfigurationError(
+                provider=self.name,
+                message=(
+                    "Invalid Bedrock model ID. Use a Bedrock model identifier like "
+                    "'anthropic.claude-3-5-sonnet-20241022-v2:0' or "
+                    "'meta.llama3-8b-instruct', not an OpenAI-style ID."
+                ),
+            )
+        if "." not in normalized:
+            raise ChatConfigurationError(
+                provider=self.name,
+                message=(
+                    "Invalid Bedrock model ID. Expected a provider-qualified model "
+                    "like 'anthropic.claude-3-5-sonnet-20241022-v2:0'."
+                ),
+            )
+        return normalized
+
     def _build_payload(self, request: Dict[str, Any]) -> Dict[str, Any]:
         messages: List[Dict[str, Any]] = request.get("messages") or []
         system_message = request.get("system_message")
@@ -78,8 +113,9 @@ class BedrockAdapter(ChatProvider):
         if system_message:
             payload_messages.append({"role": "system", "content": system_message})
         payload_messages.extend(messages)
+        model = self._normalize_model(request.get("model"))
         payload: Dict[str, Any] = {
-            "model": request.get("model"),
+            "model": model,
             "messages": payload_messages,
             "temperature": request.get("temperature"),
             "top_p": request.get("top_p"),

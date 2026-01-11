@@ -996,6 +996,10 @@ async def create_transcription(
                 logger.debug(f"convert_to_wav failed; using original temp file: path={temp_audio_path}, error={e}")
                 canonical_path = temp_audio_path
 
+        if os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
+            source_label = "converted" if canonical_path != temp_audio_path else "original"
+            logger.debug(f"TEST_MODE: canonical audio path resolved: path={canonical_path}, source={source_label}")
+
         # Always recalculate base_dir from the path we'll actually use
         base_dir = PathLib(canonical_path).parent
 
@@ -2969,7 +2973,16 @@ async def websocket_audio_chat_stream(
                 app_config,
             )
             if not provider_api_key:
-                raise ValueError("No API key available for provider")
+                if _outer_stream:
+                    await _outer_stream.send_json(
+                        {
+                            "type": "error",
+                            "error_type": "missing_provider_credentials",
+                            "message": "No API key available for provider",
+                            "provider": llm_provider,
+                        }
+                    )
+                return "", "missing_provider_credentials", None
             messages_payload = list(chat_history)
             messages_payload.append({"role": "user", "content": transcript_text})
             try:

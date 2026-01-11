@@ -11,6 +11,9 @@ def test_illegal_complete_fail_on_queued_postgres(monkeypatch, jobs_pg_dsn):
 
 
     monkeypatch.setenv("JOBS_DB_URL", jobs_pg_dsn)
+    monkeypatch.setenv("JOBS_ENFORCE_LEASE_ACK", "true")
+    monkeypatch.setenv("JOBS_DISABLE_LEASE_ENFORCEMENT", "false")
+    monkeypatch.setenv("JOBS_ADMIN_COMPLETE_QUEUED_ALLOW_DOMAINS", "")
     ensure_jobs_tables_pg(jobs_pg_dsn)
     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
 

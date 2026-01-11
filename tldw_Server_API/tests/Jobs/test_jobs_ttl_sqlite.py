@@ -14,6 +14,8 @@ def _set_env(monkeypatch):
     monkeypatch.delenv("SINGLE_USER_API_KEY", raising=False)
     import os as _os
     monkeypatch.setenv("JOBS_DB_PATH", _os.path.join(_os.getcwd(), "Databases", "jobs.db"))
+    # Ensure chatbooks domain uses DESC priority ordering for these TTL tests
+    monkeypatch.setenv("JOBS_ACQUIRE_PRIORITY_DESC_DOMAINS", "chatbooks")
 
 
 def _backdate_sqlite_fields(job_id: int, *, created_delta_s: int = 0, runtime_delta_s: int = 0):

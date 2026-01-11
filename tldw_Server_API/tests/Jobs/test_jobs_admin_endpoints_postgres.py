@@ -55,10 +55,14 @@ def test_attachments_and_sla_postgres(monkeypatch, jobs_pg_dsn):
     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
     j = jm.create_job(domain="ps", queue="default", job_type="exp", payload={}, owner_user_id="u")
     with TestClient(app, headers=headers) as client:
-        r = client.post(f"/api/v1/jobs/{int(j['id'])}/attachments", json={"kind": "log", "content_text": "hello"})
-        assert r.status_code == 200
-        r2 = client.get(f"/api/v1/jobs/{int(j['id'])}/attachments")
-        assert r2.status_code == 200
+        r = client.post(
+            f"/api/v1/jobs/{int(j['id'])}/attachments",
+            params={"domain": "ps"},
+            json={"kind": "log", "content_text": "hello", "url": "http://example.invalid/log"},
+        )
+        assert r.status_code == 200, r.text
+        r2 = client.get(f"/api/v1/jobs/{int(j['id'])}/attachments", params={"domain": "ps"})
+        assert r2.status_code == 200, r2.text
         r3 = client.post("/api/v1/jobs/sla/policy", json={"domain": "ps", "queue": "default", "job_type": "exp", "max_queue_latency_seconds": 0, "max_duration_seconds": 0, "enabled": True})
         assert r3.status_code == 200
         r4 = client.get("/api/v1/jobs/sla/policies", params={"domain": "ps", "queue": "default", "job_type": "exp"})

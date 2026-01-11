@@ -124,6 +124,16 @@ def _maybe_dump_traceback(reason: str) -> None:
         logger.debug(f"Faulthandler dump failed: {dump_err}")
 
 
+def _track_default_character_future(future: asyncio.Future) -> None:
+    def _cleanup(_future: asyncio.Future) -> None:
+        with _chacha_default_char_futures_lock:
+            _chacha_default_char_futures.discard(_future)
+
+    with _chacha_default_char_futures_lock:
+        _chacha_default_char_futures.add(future)
+    future.add_done_callback(_cleanup)
+
+
 def get_chacha_health_snapshot() -> Dict[str, Any]:
     status = "healthy"
     if _CHACHA_HEALTH.get("init_failures"):
@@ -166,6 +176,8 @@ logger.info(f"Using LRUCache for ChaChaNotes DB instances (maxsize={MAX_CACHED_C
 
 _chacha_db_lock = threading.Lock()
 _chacha_default_char_tasks: Set[asyncio.Task] = set()
+_chacha_default_char_futures: Set[asyncio.Future] = set()
+_chacha_default_char_futures_lock = threading.Lock()
 
 
 #######################################################################################################################
@@ -230,8 +242,10 @@ def _create_and_prepare_db(user_id: int, client_id: str) -> CharactersRAGDB:
 async def _ensure_default_character_async(db_instance: CharactersRAGDB, user_id: int) -> None:
     loop = asyncio.get_running_loop()
     try:
+        future = loop.run_in_executor(_get_chacha_executor(), _ensure_default_character, db_instance)
+        _track_default_character_future(future)
         await asyncio.wait_for(
-            loop.run_in_executor(_get_chacha_executor(), _ensure_default_character, db_instance),
+            asyncio.shield(future),
             timeout=5,
         )
         _record_default_character(True)
@@ -453,11 +467,30 @@ async def _drain_default_character_tasks(timeout: float = 5.0) -> None:
     _chacha_default_char_tasks.difference_update(pending)
 
 
+async def _drain_default_character_futures(timeout: float = 5.0) -> None:
+    with _chacha_default_char_futures_lock:
+        futures = [future for future in list(_chacha_default_char_futures) if not future.done()]
+    if not futures:
+        return
+    done, pending = await asyncio.wait(futures, timeout=timeout)
+    if pending:
+        logger.warning(
+            "ChaChaNotes shutdown: %d default-character futures still running; waiting on executor shutdown.",
+            len(pending),
+        )
+    with _chacha_default_char_futures_lock:
+        for future in done:
+            _chacha_default_char_futures.discard(future)
+
+
 async def shutdown_chacha_resources(wait_timeout: float = 5.0) -> None:
     """Drain ChaChaNotes tasks and close resources without racing active threads."""
     _set_chacha_shutting_down(True)
     await _drain_default_character_tasks(timeout=wait_timeout)
-    await asyncio.to_thread(shutdown_chacha_executor, True)
+    await _drain_default_character_futures(timeout=wait_timeout)
+    # Block the shutdown path until worker threads complete to avoid closing
+    # SQLite connections mid-query during test teardown.
+    shutdown_chacha_executor(wait=True)
     close_all_chacha_db_instances()
 
 

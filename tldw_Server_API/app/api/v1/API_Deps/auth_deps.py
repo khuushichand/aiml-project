@@ -1292,6 +1292,10 @@ async def check_rate_limit(request: Request) -> None:
     if _rg_enabled_for_request(request):
         return
 
+    # In test mode, bypass rate limiting entirely for deterministic tests.
+    if _is_test_mode():
+        return
+
     settings = get_settings()
     if not getattr(settings, "RATE_LIMIT_ENABLED", True):
         return
@@ -1306,7 +1310,10 @@ async def check_rate_limit(request: Request) -> None:
             "Legacy rate limiter unavailable; skipping rate limit check; error={}",
             exc,
         )
-        return
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Rate limiter unavailable.",
+        ) from exc
 
     if not getattr(rate_limiter, "enabled", False):
         return
@@ -1337,7 +1344,10 @@ async def check_rate_limit(request: Request) -> None:
             "Legacy rate limiter check failed; skipping rate limit check; error={}",
             exc,
         )
-        return
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Rate limiter unavailable.",
+        ) from exc
 
     if not allowed:
         detail = meta.get("error") if isinstance(meta, dict) else None
@@ -1351,6 +1361,10 @@ async def check_auth_rate_limit(request: Request) -> None:
     """RG-first auth rate limit dependency with legacy fallback (IP-scoped)."""
     # TODO(Q2-2026): remove legacy fallback after RG enabled in all production environments; track via metrics.record_rate_limit_fallback().
     if _rg_enabled_for_request(request):
+        return
+
+    # In test mode, bypass rate limiting entirely for deterministic tests.
+    if _is_test_mode():
         return
 
     settings = get_settings()
@@ -1367,7 +1381,10 @@ async def check_auth_rate_limit(request: Request) -> None:
             "Legacy rate limiter unavailable; skipping auth rate limit check; error={}",
             exc,
         )
-        return
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Rate limiter unavailable.",
+        ) from exc
 
     if not getattr(rate_limiter, "enabled", False):
         return
@@ -1389,7 +1406,10 @@ async def check_auth_rate_limit(request: Request) -> None:
             "Legacy auth rate limiter check failed; skipping auth rate limit check; error={}",
             exc,
         )
-        return
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Rate limiter unavailable.",
+        ) from exc
 
     if not allowed:
         detail = meta.get("error") if isinstance(meta, dict) else None

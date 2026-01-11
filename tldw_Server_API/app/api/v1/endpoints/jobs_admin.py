@@ -1880,9 +1880,13 @@ async def batch_requeue_quarantined_endpoint(
                 with conn:
                     with jm._pg_cursor(conn) as cur:
                         if req.dry_run:
-                            cur.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where)}", tuple(params))
+                            cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where)}", tuple(params))
                             r = cur.fetchone()
-                            return BatchRequeueQuarantinedResponse(affected=int(r[0] if r else 0))
+                            if isinstance(r, dict):
+                                count = int(r.get("c") or 0)
+                            else:
+                                count = int(r[0] if r else 0)
+                            return BatchRequeueQuarantinedResponse(affected=count)
                         # Compute group counts to adjust counters post-update when enabled
                         counters_enabled = str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}
                         grp_rows: list = []

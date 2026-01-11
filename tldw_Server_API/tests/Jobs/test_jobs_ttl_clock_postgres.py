@@ -40,12 +40,22 @@ def test_jobs_ttl_with_clock_pg(monkeypatch, jobs_pg_dsn):
     ensure_jobs_tables_pg(jobs_pg_dsn)
     jm = JobManager(None, backend="postgres", db_url=jobs_pg_dsn)
 
-    # Seed one queued job aged 2h at test_now, one processing with runtime 3h
-    j1 = jm.create_job(domain="clocktest", queue="default", job_type="export", payload={}, owner_user_id="u1")
+    # Seed one queued job aged 2h at test_now, and a separate processing job aged 3h
+    from datetime import datetime, timedelta, timezone
+    future_available = datetime.now(tz=timezone.utc) + timedelta(hours=10)
+    j1 = jm.create_job(
+        domain="clocktest",
+        queue="default",
+        job_type="export",
+        payload={},
+        owner_user_id="u1",
+        available_at=future_available,
+    )
     _set_pg_times(jobs_pg_dsn, int(j1["id"]), created_epoch=(test_now - 2 * 3600))
 
+    j2 = jm.create_job(domain="clocktest", queue="default", job_type="export", payload={}, owner_user_id="u1")
     got = jm.acquire_next_job(domain="clocktest", queue="default", lease_seconds=30, worker_id="w1")
-    assert got is not None
+    assert got is not None and int(got["id"]) == int(j2["id"])
     _set_pg_times(jobs_pg_dsn, int(got["id"]), started_epoch=(test_now - 3 * 3600))
 
     # TTL with age/runtime 1h should cancel both deterministically under the fixed clock

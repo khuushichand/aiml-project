@@ -4,6 +4,7 @@ from typing import List, Optional
 
 import json
 from fastapi import Form, HTTPException, status
+from loguru import logger
 from pydantic import ValidationError
 
 from tldw_Server_API.app.api.v1.schemas.media_request_models import (
@@ -13,15 +14,13 @@ from tldw_Server_API.app.api.v1.schemas.media_request_models import (
     ProcessPDFsForm,
     ProcessEbooksForm,
     ProcessEmailsForm,
-    TranscriptionModel,
+    TRANSCRIPTION_MODEL_ENUM,
 )
 
 try:
     HTTP_422_UNPROCESSABLE = status.HTTP_422_UNPROCESSABLE_CONTENT
 except AttributeError:  # Starlette < 0.27
     HTTP_422_UNPROCESSABLE = status.HTTP_422_UNPROCESSABLE_ENTITY
-
-TRANSCRIPTION_MODEL_ENUM = [model.value for model in TranscriptionModel]
 
 
 def _coerce_urls(urls: Optional[List[str]]) -> Optional[List[str]]:
@@ -179,6 +178,12 @@ async def get_process_videos_form(
 
     Used by /media/process-videos (no DB persistence).
     """
+    if transcription_model not in TRANSCRIPTION_MODEL_ENUM:
+        logger.warning(
+            "Invalid transcription_model '%s' for process-videos; defaulting to deepdml/faster-distil-whisper-large-v3.5",
+            transcription_model,
+        )
+        transcription_model = "deepdml/faster-distil-whisper-large-v3.5"
     try:
         urls_norm = _coerce_urls(urls)
         title_val = title or titles
@@ -250,6 +255,12 @@ async def get_process_audios_form(
 
     Used by /media/process-audios (no DB persistence).
     """
+    if transcription_model not in TRANSCRIPTION_MODEL_ENUM:
+        logger.warning(
+            "Invalid transcription_model '%s' for process-audios; defaulting to deepdml/faster-distil-whisper-large-v3.5",
+            transcription_model,
+        )
+        transcription_model = "deepdml/faster-distil-whisper-large-v3.5"
     try:
         urls_norm = _coerce_urls(urls)
         title_val = title or titles

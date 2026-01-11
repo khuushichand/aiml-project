@@ -83,8 +83,25 @@ def _get_db_path_for_user(user_id: int) -> Path:
                 )
             # Set env so subsequent calls use the same directory
             os.environ.setdefault("USER_DB_BASE_DIR", base_dir_env)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                "TESTING mode: failed to derive project-root user DB dir; falling back to temp dir. Error: %s",
+                e,
+                exc_info=True,
+            )
+            run_tag = (
+                os.getenv("TLDW_TEST_RUN_ID")
+                or os.getenv("PYTEST_XDIST_WORKER")
+                or "default"
+            )
+            safe_run_tag = "".join(
+                ch if ch.isalnum() or ch in "-_." else "_"
+                for ch in str(run_tag)
+            )
+            base_dir_env = str(
+                Path(tempfile.gettempdir()) / "tldw_user_databases_test" / safe_run_tag
+            )
+            os.environ.setdefault("USER_DB_BASE_DIR", base_dir_env)
     try:
         return DatabasePaths.get_media_db_path(user_id)
     except Exception as e:

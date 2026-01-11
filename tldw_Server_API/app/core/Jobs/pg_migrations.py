@@ -256,6 +256,11 @@ def ensure_jobs_tables_pg(db_url: str) -> str:
             ensure_job_events_pg(db_url)
         except Exception:
             pass
+        # Ensure job_counters exists for counters-enabled deployments
+        try:
+            ensure_job_counters_pg(db_url)
+        except Exception:
+            pass
         # Optional: enable RLS on core tables when requested via env.
         try:
             import psycopg  # noqa: F401

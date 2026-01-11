@@ -20,7 +20,7 @@ def test_endpoint_requeue_quarantined_postgres(monkeypatch, jobs_pg_dsn):
     j = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1")
     acq = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=5, worker_id="w")
     assert acq and acq.get("id") == j["id"]
-    jm.fail_job(int(j["id"]), error="boom", retryable=True, backoff_seconds=0, worker_id="w", lease_id=str(acq.get("lease_id")), error_code="E1")
+    jm.fail_job(int(j["id"]), error="boom", retryable=True, backoff_seconds=1, worker_id="w", lease_id=str(acq.get("lease_id")), error_code="E1")
     row = jm.get_job(int(j["id"]))
     assert row and row.get("status") == "quarantined"
 
@@ -31,7 +31,7 @@ def test_endpoint_requeue_quarantined_postgres(monkeypatch, jobs_pg_dsn):
     with TestClient(app, headers=headers) as client:
         # Dry run
         r = client.post("/api/v1/jobs/batch/requeue_quarantined", json={"domain": "chatbooks", "queue": "default", "job_type": "export", "dry_run": True})
-        assert r.status_code == 200
+        assert r.status_code == 200, r.text
         assert r.json()["affected"] >= 1
         # Real run with confirm header
         r2 = client.post(
@@ -39,7 +39,7 @@ def test_endpoint_requeue_quarantined_postgres(monkeypatch, jobs_pg_dsn):
             headers={**headers, "X-Confirm": "true"},
             json={"domain": "chatbooks", "queue": "default", "job_type": "export", "dry_run": False},
         )
-        assert r2.status_code == 200
+        assert r2.status_code == 200, r2.text
         assert r2.json()["affected"] >= 1
         row2 = jm.get_job(int(j["id"]))
         assert row2 and row2.get("status") == "queued"
@@ -60,7 +60,7 @@ def test_requeue_quarantined_updates_counters_postgres(monkeypatch, jobs_pg_dsn)
     j = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="1")
     acq = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=1, worker_id="w")
     assert acq and acq.get("id") == j["id"]
-    jm.fail_job(int(j["id"]), error="boom", retryable=True, backoff_seconds=0, worker_id="w", lease_id=str(acq.get("lease_id")), error_code="E1")
+    jm.fail_job(int(j["id"]), error="boom", retryable=True, backoff_seconds=1, worker_id="w", lease_id=str(acq.get("lease_id")), error_code="E1")
 
     # Pre-check counters: quarantined_count should be >=1
     conn = jm._connect()
@@ -87,7 +87,7 @@ def test_requeue_quarantined_updates_counters_postgres(monkeypatch, jobs_pg_dsn)
             headers={**headers, "X-Confirm": "true"},
             json={"domain": "chatbooks", "queue": "default", "job_type": "export", "dry_run": False},
         )
-        assert r.status_code == 200
+        assert r.status_code == 200, r.text
         assert r.json()["affected"] >= 1
 
     conn2 = jm._connect()

@@ -936,10 +936,11 @@ def _require_byok_enabled() -> None:
 
 
 def _normalize_credential_fields(
-    provider_norm: str,
+    provider: str,
     fields: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """Normalize credential fields; base_url is allowlisted per provider and egress-validated."""
+    provider_norm = normalize_provider_name(provider)
     credential_fields = validate_credential_fields(
         provider_norm,
         fields,

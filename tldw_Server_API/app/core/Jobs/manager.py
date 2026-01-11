@@ -2487,13 +2487,29 @@ class JobManager:
                             completed_from_processing = cur.rowcount > 0
                             ok = completed_from_processing
                             if not ok:
-                                # Admin-style finalize: allow completing queued without lease when enforcement disabled
-                                cur.execute(
-                                    "UPDATE jobs SET status = 'completed', result = %s::jsonb, completed_at = NOW(), completion_token = COALESCE(completion_token, %s) WHERE id = %s AND status = 'queued' AND (completion_token IS NULL OR completion_token = %s)",
-                                    (json.dumps(res_obj) if res_obj is not None else None, completion_token, int(job_id), completion_token),
-                                )
-                                completed_from_queued = cur.rowcount > 0
-                                ok = completed_from_queued
+                                # Admin-style finalize: optionally allow completing queued without lease when enforcement disabled
+                                try:
+                                    allow = {
+                                        d.strip().lower()
+                                        for d in os.getenv(
+                                            "JOBS_ADMIN_COMPLETE_QUEUED_ALLOW_DOMAINS",
+                                            "chatbooks",
+                                        ).split(",")
+                                        if d.strip()
+                                    }
+                                    cur.execute("SELECT domain FROM jobs WHERE id = %s", (int(job_id),))
+                                    row_dom = cur.fetchone()
+                                    dom_val = str(row_dom.get("domain") or "").lower() if row_dom else ""
+                                except Exception:
+                                    allow = {"chatbooks"}
+                                    dom_val = ""
+                                if dom_val in allow:
+                                    cur.execute(
+                                        "UPDATE jobs SET status = 'completed', result = %s::jsonb, completed_at = NOW(), completion_token = COALESCE(completion_token, %s) WHERE id = %s AND status = 'queued' AND (completion_token IS NULL OR completion_token = %s)",
+                                        (json.dumps(res_obj) if res_obj is not None else None, completion_token, int(job_id), completion_token),
+                                    )
+                                    completed_from_queued = cur.rowcount > 0
+                                    ok = completed_from_queued
                         if _test_mode:
                             try:
                                 cur.execute("SELECT id, status FROM jobs WHERE id = %s", (int(job_id),))
@@ -5112,39 +5128,40 @@ class JobManager:
         try:
             res = {"non_processing_with_lease": 0, "processing_expired": 0, "fixed": 0}
             if self.backend == "postgres":
-                with self._pg_cursor(conn) as cur:
-                    where_np = ["status <> 'processing'", "(lease_id IS NOT NULL OR worker_id IS NOT NULL OR leased_until IS NOT NULL)"]
-                    where_pr = ["status = 'processing'", "(leased_until IS NULL OR leased_until <= NOW())"]
-                    params_np: List[Any] = []
-                    params_pr: List[Any] = []
-                    if domain:
-                        where_np.append("domain = %s"); params_np.append(domain)
-                        where_pr.append("domain = %s"); params_pr.append(domain)
-                    if queue:
-                        where_np.append("queue = %s"); params_np.append(queue)
-                        where_pr.append("queue = %s"); params_pr.append(queue)
-                    if job_type:
-                        where_np.append("job_type = %s"); params_np.append(job_type)
-                        where_pr.append("job_type = %s"); params_pr.append(job_type)
-                    cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where_np)}", tuple(params_np))
-                    _np = cur.fetchone()
-                    res["non_processing_with_lease"] = int((_np.get("c") if isinstance(_np, dict) else 0))
-                    cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where_pr)}", tuple(params_pr))
-                    _pr = cur.fetchone()
-                    res["processing_expired"] = int((_pr.get("c") if isinstance(_pr, dict) else 0))
-                    if fix:
-                        # Clear leases for non-processing
-                        cur.execute(
-                            f"UPDATE jobs SET lease_id = NULL, leased_until = NULL, worker_id = NULL WHERE {' AND '.join(where_np)}",
-                            tuple(params_np),
-                        )
-                        res["fixed"] += cur.rowcount or 0
-                        # Reset expired processing to queued
-                        cur.execute(
-                            f"UPDATE jobs SET status='queued', leased_until = NULL, worker_id = NULL, lease_id = NULL WHERE {' AND '.join(where_pr)}",
-                            tuple(params_pr),
-                        )
-                        res["fixed"] += cur.rowcount or 0
+                with conn:
+                    with self._pg_cursor(conn) as cur:
+                        where_np = ["status <> 'processing'", "(lease_id IS NOT NULL OR worker_id IS NOT NULL OR leased_until IS NOT NULL)"]
+                        where_pr = ["status = 'processing'", "(leased_until IS NULL OR leased_until <= NOW())"]
+                        params_np: List[Any] = []
+                        params_pr: List[Any] = []
+                        if domain:
+                            where_np.append("domain = %s"); params_np.append(domain)
+                            where_pr.append("domain = %s"); params_pr.append(domain)
+                        if queue:
+                            where_np.append("queue = %s"); params_np.append(queue)
+                            where_pr.append("queue = %s"); params_pr.append(queue)
+                        if job_type:
+                            where_np.append("job_type = %s"); params_np.append(job_type)
+                            where_pr.append("job_type = %s"); params_pr.append(job_type)
+                        cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where_np)}", tuple(params_np))
+                        _np = cur.fetchone()
+                        res["non_processing_with_lease"] = int((_np.get("c") if isinstance(_np, dict) else 0))
+                        cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where_pr)}", tuple(params_pr))
+                        _pr = cur.fetchone()
+                        res["processing_expired"] = int((_pr.get("c") if isinstance(_pr, dict) else 0))
+                        if fix:
+                            # Clear leases for non-processing
+                            cur.execute(
+                                f"UPDATE jobs SET lease_id = NULL, leased_until = NULL, worker_id = NULL WHERE {' AND '.join(where_np)}",
+                                tuple(params_np),
+                            )
+                            res["fixed"] += cur.rowcount or 0
+                            # Reset expired processing to queued
+                            cur.execute(
+                                f"UPDATE jobs SET status='queued', leased_until = NULL, worker_id = NULL, lease_id = NULL WHERE {' AND '.join(where_pr)}",
+                                tuple(params_pr),
+                            )
+                            res["fixed"] += cur.rowcount or 0
             else:
                 where_np = ["status <> 'processing'", "(lease_id IS NOT NULL OR worker_id IS NOT NULL OR leased_until IS NOT NULL)"]
                 where_pr = ["status = 'processing'", "(leased_until IS NULL OR leased_until <= DATETIME('now'))"]

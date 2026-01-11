@@ -42,11 +42,21 @@ const pruneExpiredCacheEntries = (): void => {
   }
 };
 
+const touchAuthCacheEntry = (
+  cacheKey: string,
+  entry: { ok: boolean; expiresAt: number }
+): void => {
+  if (authCache.has(cacheKey)) {
+    authCache.delete(cacheKey);
+  }
+  authCache.set(cacheKey, entry);
+};
+
 const enforceCacheSizeLimit = (): void => {
   while (authCache.size > MAX_CACHE_SIZE) {
-    const oldestKey = authCache.keys().next().value;
-    if (oldestKey === undefined) return;
-    authCache.delete(oldestKey);
+    const leastRecentlyUsedKey = authCache.keys().next().value;
+    if (leastRecentlyUsedKey === undefined) return;
+    authCache.delete(leastRecentlyUsedKey);
   }
 };
 
@@ -58,18 +68,14 @@ const getCachedAuth = (cacheKey: string): boolean | null => {
     authCache.delete(cacheKey);
     return null;
   }
-  authCache.delete(cacheKey);
-  authCache.set(cacheKey, cached);
+  touchAuthCacheEntry(cacheKey, cached);
   return cached.ok;
 };
 
 const setCachedAuth = (cacheKey: string, ok: boolean, ttlMs: number): void => {
   if (ttlMs <= 0) return;
   pruneExpiredCacheEntries();
-  if (authCache.has(cacheKey)) {
-    authCache.delete(cacheKey);
-  }
-  authCache.set(cacheKey, { ok, expiresAt: Date.now() + ttlMs });
+  touchAuthCacheEntry(cacheKey, { ok, expiresAt: Date.now() + ttlMs });
   enforceCacheSizeLimit();
 };
 
@@ -252,6 +258,7 @@ const hasAuthCookie = async (request: NextRequest): Promise<boolean> => {
     const token = normalizeToken(rawValue);
     if (!token) continue;
 
+    // Cookie name convention: access_token stores JWTs; x_api_key/x-api-key store API keys.
     const kind: AuthTokenKind = name === 'access_token' ? 'jwt' : 'apiKey';
     if (await verifyAuthToken(token, kind)) {
       return true;
