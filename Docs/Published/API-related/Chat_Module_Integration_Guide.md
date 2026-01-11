@@ -201,21 +201,19 @@ Each module has comprehensive unit tests:
 
 ### Integration Testing
 ```python
-import httpx
-from httpx import ASGITransport
+from fastapi.testclient import TestClient
 
-async def test_chat_completion_with_all_features(app):
-    transport = ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        headers = {"X-API-KEY": "test-key"}
-        payload = {
-            "messages": [{"role": "user", "content": "Hello"}],
-            "model": "openai/gpt-4o-mini",
-            "stream": True
-        }
-        resp = await client.post("/api/v1/chat/completions", json=payload, headers=headers)
-        assert resp.status_code == 200
-        assert resp.headers.get("content-type", "").startswith("text/event-stream")
+def test_chat_completion_with_all_features(app):
+    client = TestClient(app)
+    headers = {"X-API-KEY": "test-key"}
+    payload = {
+        "messages": [{"role": "user", "content": "Hello"}],
+        "model": "openai/gpt-4o-mini",
+        "stream": True
+    }
+    resp = client.post("/api/v1/chat/completions", json=payload, headers=headers)
+    assert resp.status_code == 200
+    assert resp.headers.get("content-type", "").startswith("text/event-stream")
 ```
 
 ## Configuration

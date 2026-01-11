@@ -14,7 +14,20 @@ and this project adheres to Some kind of Versioning
 ### Removed
 
 ### Fixed
+
+## [0.1.15] - 2026-01-10
+
+### Added
+
+### Changed
+- Jobs adapters now ignore legacy read-backend flags; Chatbooks/Prompt Studio are core Jobs only, embeddings read fallback is disabled.
+- Documentation updated to reflect core Jobs defaults and the current embeddings execution modes.
+
+### Removed
+
+### Fixed
 - Legacy AuthNZ rate limiting now bypasses only when an RG policy is attached, and cancellations propagate correctly in rate limit fallbacks.
+- ChaChaNotes shutdown now drains default-character tasks and waits for the executor to prevent SQLite close races (fixes Jobs web UI TTL test segfaults).
 
 
 ## [0.1.14] - 2026-01-06

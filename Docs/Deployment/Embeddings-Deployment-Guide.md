@@ -165,38 +165,26 @@ WantedBy=multi-user.target
 # Required packages (same as single-user)
 pip install -e .
 
-# Redis server (for queues)
-sudo apt-get install -y redis-server
-# OR
-docker run -d --name redis -p 6379:6379 redis:alpine
-
 # Optional: GPU support for HF models
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 ```
 
-### Environment and Orchestrator
+### Environment and Jobs Worker
 ```bash
-export REDIS_URL="redis://localhost:6379"
-export PROMETHEUS_PORT=9090   # optional
+export JOBS_DB_URL="sqlite:///Databases/jobs.db"  # optional; set Postgres URL for shared Jobs DB
 ```
 
-Use the orchestrator config at `tldw_Server_API/app/core/Embeddings/embeddings_config.yaml` to control worker pool sizes, GPU allocation, and queues. Start the orchestrator (it manages worker tasks in-process):
+Use `tldw_Server_API/app/core/Embeddings/embeddings_config.yaml` to control chunking/embedding defaults. Start the core Jobs worker:
 
 ```bash
 python -m tldw_Server_API.app.core.Embeddings.services.jobs_worker
 ```
 
-### Docker Compose (API + Orchestrator)
+### Docker Compose (API + Jobs Worker)
 ```yaml
 version: '3.8'
 
 services:
-  redis:
-    image: redis:alpine
-    ports: ["6379:6379"]
-    volumes: ["redis_data:/data"]
-    command: redis-server --appendonly yes
-
   api:
     build: .
     ports: ["8000:8000"]
@@ -204,27 +192,23 @@ services:
       - AUTH_MODE=single_user
       - SINGLE_USER_API_KEY=${SINGLE_USER_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - REDIS_URL=redis://redis:6379
-    depends_on: [redis]
     volumes:
       - ./Databases/user_databases:/app/Databases/user_databases
       - ./models/embedding_models_data:/app/models/embedding_models_data
 
-  orchestrator:
+  jobs-worker:
     build: .
     command: python -m tldw_Server_API.app.core.Embeddings.services.jobs_worker
     environment:
-      - REDIS_URL=redis://redis:6379
-      - PROMETHEUS_PORT=9090
-    depends_on: [redis]
-    ports: ["9090:9090"]
-
-volumes:
-  redis_data:
+      - JOBS_DB_URL=sqlite:///Databases/jobs.db
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      - ./Databases:/app/Databases
+      - ./models/embedding_models_data:/app/models/embedding_models_data
 ```
 
 ### Kubernetes (example)
-Deploy API and orchestrator as separate Deployments, and a Redis Service. Health probes should use `GET /api/v1/embeddings/health` on the API.
+Deploy API and jobs worker as separate Deployments. Ensure the Jobs DB (SQLite volume or Postgres service) is reachable. Health probes should use `GET /api/v1/embeddings/health` on the API.
 
 ---
 
@@ -328,7 +312,7 @@ curl -X POST -H "X-API-KEY: $SINGLE_USER_API_KEY" \
 Symptom: OOM or slow responses.
 Actions:
 - Prefer smaller models (e.g., `text-embedding-3-small`, `all-MiniLM-L6-v2`)
-- Reduce concurrent load; scale out using orchestrator
+- Reduce concurrent load; scale out using additional Jobs workers
 - For HF models, unload inactive models sooner (see `model_unload_timeout` in YAML)
 
 ### 3) Slow Embeddings

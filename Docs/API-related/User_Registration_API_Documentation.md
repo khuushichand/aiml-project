@@ -892,99 +892,130 @@ CORS_ALLOW_CREDENTIALS=true
 ### Complete Authentication Flow
 
 ```python
-import requests
 import json
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
+def request_json(method: str, url: str, payload=None, headers=None, params=None):
+    if params:
+        url = f"{url}?{urlencode(params)}"
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    hdrs = {"Content-Type": "application/json"}
+    if headers:
+        hdrs.update(headers)
+    req = Request(url, data=data, headers=hdrs, method=method)
+    with urlopen(req) as resp:
+        body = resp.read().decode("utf-8")
+        try:
+            return resp.status, json.loads(body)
+        except json.JSONDecodeError:
+            return resp.status, body
+
+def request_form(method: str, url: str, form, headers=None):
+    data = urlencode(form).encode("utf-8")
+    hdrs = {"Content-Type": "application/x-www-form-urlencoded"}
+    if headers:
+        hdrs.update(headers)
+    req = Request(url, data=data, headers=hdrs, method=method)
+    with urlopen(req) as resp:
+        body = resp.read().decode("utf-8")
+        try:
+            return resp.status, json.loads(body)
+        except json.JSONDecodeError:
+            return resp.status, body
 
 # Base URL
 BASE_URL = "http://localhost:8000/api/v1"
 
 # 1. Register new user
-register_response = requests.post(
+status, _ = request_json(
+    "POST",
     f"{BASE_URL}/auth/register",
-    json={
+    {
         "username": "alice",
         "email": "alice@example.com",
         "password": "AlicePass123!"
-    }
+    },
 )
-print(f"Registration: {register_response.status_code}")
+print(f"Registration: {status}")
 
 # 2. Login
-login_response = requests.post(
+_, tokens = request_form(
+    "POST",
     f"{BASE_URL}/auth/login",
-    data={
+    {
         "username": "alice",
         "password": "AlicePass123!"
-    }
+    },
 )
-tokens = login_response.json()
 access_token = tokens["access_token"]
 refresh_token = tokens["refresh_token"]
 
 # 3. Access protected endpoint
 headers = {"Authorization": f"Bearer {access_token}"}
-profile_response = requests.get(
-    f"{BASE_URL}/users/me",
-    headers=headers
-)
-print(f"Profile: {profile_response.json()}")
+_, profile = request_json("GET", f"{BASE_URL}/users/me", headers=headers)
+print(f"Profile: {profile}")
 
 # 4. Refresh token
-refresh_response = requests.post(
+_, new_tokens = request_json(
+    "POST",
     f"{BASE_URL}/auth/refresh",
-    json={"refresh_token": refresh_token}
+    {"refresh_token": refresh_token},
 )
-new_tokens = refresh_response.json()
 new_access_token = new_tokens["access_token"]
 
 # 5. Logout
-logout_response = requests.post(
+_, logout = request_json(
+    "POST",
     f"{BASE_URL}/auth/logout",
-    headers={"Authorization": f"Bearer {new_access_token}"}
+    headers={"Authorization": f"Bearer {new_access_token}"},
 )
-print(f"Logout: {logout_response.json()}")
+print(f"Logout: {logout}")
 ```
 
 ### Admin User Management
 
 ```python
 # Admin login
-admin_response = requests.post(
+_, admin_tokens = request_form(
+    "POST",
     f"{BASE_URL}/auth/login",
-    data={
+    {
         "username": "admin",
         "password": "AdminPass123!"
-    }
+    },
 )
-admin_token = admin_response.json()["access_token"]
+admin_token = admin_tokens["access_token"]
 admin_headers = {"Authorization": f"Bearer {admin_token}"}
 
 # List users
-users_response = requests.get(
+_, users = request_json(
+    "GET",
     f"{BASE_URL}/admin/users",
     headers=admin_headers,
-    params={"page": 1, "limit": 10}
+    params={"page": 1, "limit": 10},
 )
-users = users_response.json()
 
 # Update user quota
-update_response = requests.put(
+request_json(
+    "PUT",
     f"{BASE_URL}/admin/users/123",
+    {"storage_quota_mb": 10240},
     headers=admin_headers,
-    json={"storage_quota_mb": 10240}
 )
 
 # Create registration code
-code_response = requests.post(
+_, code_payload = request_json(
+    "POST",
     f"{BASE_URL}/admin/registration-codes",
-    headers=admin_headers,
-    json={
+    {
         "max_uses": 10,
         "expiry_days": 30,
         "role_to_grant": "user"
-    }
+    },
+    headers=admin_headers,
 )
-registration_code = code_response.json()["code"]
+registration_code = code_payload["code"]
 print(f"Registration code: {registration_code}")
 ```
 

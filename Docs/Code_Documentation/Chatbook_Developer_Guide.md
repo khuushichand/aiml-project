@@ -69,7 +69,7 @@ tldw_Server_API/app/core/Chatbooks/
 ├── chatbook_models.py        # Data models and enums
 ├── chatbook_validators.py    # Input validation
 ├── quota_manager.py          # User quota management
-├── job_queue_shim.py        # Temporary job queue implementation (global queue via get_job_queue)
+├── jobs_adapter.py          # Core Jobs adapter (queue/status integration)
 └── exceptions.py             # Custom exceptions
 
 tldw_Server_API/app/api/v1/
@@ -85,7 +85,7 @@ tldw_Server_API/app/api/v1/
 - **chatbook_models.py**: Defines ChatbookManifest, ExportJob, ImportJob models
 - **chatbook_validators.py**: Input validation and sanitization
 - **quota_manager.py**: Manages user quotas and rate limiting
-- **job_queue_shim.py**: Temporary implementation of job queue (to be replaced)
+- **jobs_adapter.py**: Core Jobs integration for enqueueing and status mapping
 
 ## Database Schema
 

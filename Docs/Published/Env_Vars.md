@@ -74,7 +74,7 @@ Egress & Outbound Policy (global + Workflows)
   - Common toggles include `JOBS_WEBHOOKS_*`, `JOBS_INTEGRITY_SWEEP_*`, `JOBS_METRICS_*`.
 
 ## Chatbooks
-- `CHATBOOKS_JOBS_BACKEND`: Selects Chatbooks jobs backend (`core` default, `prompt_studio` via adapter).
+- `CHATBOOKS_JOBS_BACKEND`: Core-only; overrides are ignored (kept for compatibility).
 - `CHATBOOKS_CORE_WORKER_ENABLED`: Enable shared Chatbooks worker when backend=core (default `true`).
 - `CHATBOOKS_SIGNED_URLS`: Require HMAC-signed download URLs (`true|false`, default `false`).
 - `CHATBOOKS_SIGNING_SECRET`: Secret key used for download URL signing (required when signed URLs are enabled).

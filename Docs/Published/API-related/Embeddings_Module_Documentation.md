@@ -649,18 +649,24 @@ def create_embedding(
 
 #### Python
 ```python
-import requests
+import json
+from urllib.request import Request, urlopen
 
-response = requests.post(
+payload = {
+    "input": "Hello world",
+    "model": "text-embedding-3-small",
+}
+req = Request(
     "http://localhost:8000/api/v1/embeddings",
-    json={
-        "input": "Hello world",
-        "model": "text-embedding-3-small"
+    data=json.dumps(payload).encode("utf-8"),
+    headers={
+        "Content-Type": "application/json",
+        "Authorization": "Bearer YOUR_API_KEY",
     },
-    headers={"Authorization": "Bearer YOUR_API_KEY"}
+    method="POST",
 )
-
-embedding = response.json()["data"][0]["embedding"]
+with urlopen(req) as resp:
+    embedding = json.loads(resp.read().decode("utf-8"))["data"][0]["embedding"]
 ```
 
 #### JavaScript

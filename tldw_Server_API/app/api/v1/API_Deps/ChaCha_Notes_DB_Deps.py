@@ -50,6 +50,23 @@ _CHACHA_HEALTH: Dict[str, Any] = {
     "default_char_failures": 0,
     "warm_startups": 0,
 }
+_CHACHA_SHUTTING_DOWN = False
+_CHACHA_SHUTDOWN_LOCK = threading.Lock()
+
+
+def _set_chacha_shutting_down(value: bool) -> None:
+    global _CHACHA_SHUTTING_DOWN
+    with _CHACHA_SHUTDOWN_LOCK:
+        _CHACHA_SHUTTING_DOWN = value
+
+
+def _is_chacha_shutting_down() -> bool:
+    with _CHACHA_SHUTDOWN_LOCK:
+        return _CHACHA_SHUTTING_DOWN
+
+
+def reset_chacha_shutdown_state() -> None:
+    _set_chacha_shutting_down(False)
 
 
 def _get_chacha_executor() -> ThreadPoolExecutor:
@@ -347,6 +364,9 @@ async def _get_or_init_db_instance(user_id: int, client_id: str) -> CharactersRA
 
 
 async def warm_chacha_db_for_user(user_id: int, client_id: str | None = None) -> None:
+    if _is_chacha_shutting_down():
+        logger.debug("ChaChaNotes shutdown in progress; skipping warmup for user %s", user_id)
+        return
     try:
         db_instance = await _get_or_init_db_instance(user_id, client_id or str(user_id))
         _CHACHA_HEALTH["warm_startups"] += 1
@@ -395,9 +415,10 @@ async def get_chacha_db_for_user(current_user: User = Depends(get_request_user))
 
     user_id = current_user.id
     db_instance = await _get_or_init_db_instance(user_id, str(current_user.id))
-    task = asyncio.create_task(_ensure_default_character_async(db_instance, user_id))
-    _chacha_default_char_tasks.add(task)
-    task.add_done_callback(_chacha_default_char_tasks.discard)
+    if not _is_chacha_shutting_down():
+        task = asyncio.create_task(_ensure_default_character_async(db_instance, user_id))
+        _chacha_default_char_tasks.add(task)
+        task.add_done_callback(_chacha_default_char_tasks.discard)
     return db_instance
 
 
@@ -413,6 +434,31 @@ def close_all_chacha_db_instances():
                 logger.error(f"Error closing ChaChaNotesDB instance for user {user_id}: {e}", exc_info=True)
         _chacha_db_instances.clear()
         logger.info("All ChaChaNotesDB instances closed and cache cleared.")
+
+
+async def _drain_default_character_tasks(timeout: float = 5.0) -> None:
+    tasks = [task for task in list(_chacha_default_char_tasks) if not task.done()]
+    if not tasks:
+        return
+    done, pending = await asyncio.wait(tasks, timeout=timeout)
+    if pending:
+        logger.warning(
+            "ChaChaNotes shutdown: %d default-character tasks still running; cancelling.",
+            len(pending),
+        )
+        for task in pending:
+            task.cancel()
+        await asyncio.wait(pending, timeout=1.0)
+    _chacha_default_char_tasks.difference_update(done)
+    _chacha_default_char_tasks.difference_update(pending)
+
+
+async def shutdown_chacha_resources(wait_timeout: float = 5.0) -> None:
+    """Drain ChaChaNotes tasks and close resources without racing active threads."""
+    _set_chacha_shutting_down(True)
+    await _drain_default_character_tasks(timeout=wait_timeout)
+    await asyncio.to_thread(shutdown_chacha_executor, True)
+    close_all_chacha_db_instances()
 
 
 def shutdown_chacha_executor(wait: bool = False) -> None:

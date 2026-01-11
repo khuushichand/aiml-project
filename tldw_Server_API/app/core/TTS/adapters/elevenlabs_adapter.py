@@ -6,7 +6,6 @@ import os
 from typing import Optional, Dict, Any, AsyncGenerator, Set, List
 #
 # Third-party Imports
-import httpx
 from loguru import logger
 #
 # Local Imports
@@ -43,6 +42,16 @@ from ..tts_resource_manager import get_resource_manager
 #######################################################################################################################
 #
 # ElevenLabs TTS Adapter Implementation
+
+def _is_httpx_exception(exc: Exception) -> bool:
+    module = getattr(exc.__class__, "__module__", "")
+    return module.startswith("httpx")
+
+
+def _is_http_status_error(exc: Exception) -> bool:
+    if not _is_httpx_exception(exc):
+        return False
+    return exc.__class__.__name__ == "HTTPStatusError"
 
 class ElevenLabsAdapter(TTSAdapter):
     """Adapter for ElevenLabs TTS API"""
@@ -179,7 +188,7 @@ class ElevenLabsAdapter(TTSAdapter):
         self.use_speaker_boost = self.config.get("elevenlabs_speaker_boost", True)
 
         # HTTP client
-        self.client: Optional[httpx.AsyncClient] = None
+        self.client: Optional[Any] = None
 
         # Cache for user voices
         self._user_voices: List[VoiceInfo] = []
@@ -406,10 +415,13 @@ class ElevenLabsAdapter(TTSAdapter):
 
             logger.info(f"{self.provider_name}: Successfully streamed {chunk_count} chunks")
 
-        except httpx.HTTPStatusError as e:
-            logger.error(f"{self.provider_name} HTTP error: {e.response.status_code} - {e.response.text}")
-            self._raise_mapped_http_error(e)
         except Exception as e:
+            if _is_http_status_error(e):
+                response = getattr(e, "response", None)
+                status = getattr(response, "status_code", None)
+                body = getattr(response, "text", "")
+                logger.error(f"{self.provider_name} HTTP error: {status} - {body}")
+                self._raise_mapped_http_error(e)
             logger.error(f"{self.provider_name} streaming error: {e}")
             raise
 
@@ -447,15 +459,17 @@ class ElevenLabsAdapter(TTSAdapter):
             )
             try:
                 response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                self._raise_mapped_http_error(e)
+            except Exception as e:
+                if _is_http_status_error(e):
+                    self._raise_mapped_http_error(e)
+                raise
             return response.content or b""
-        except httpx.HTTPStatusError as e:
-            self._raise_mapped_http_error(e)
         except TTSError:
             # Propagate mapped TTS exceptions without wrapping/logging
             raise
         except Exception as e:
+            if _is_http_status_error(e):
+                self._raise_mapped_http_error(e)
             logger.error(f"{self.provider_name} non-stream error: {e}")
             raise
 
@@ -511,11 +525,12 @@ class ElevenLabsAdapter(TTSAdapter):
         # Default to 44100 for mp3/wav/pcm/ulaw
         return 44100
 
-    def _raise_mapped_http_error(self, e: httpx.HTTPStatusError) -> None:
+    def _raise_mapped_http_error(self, e: Exception) -> None:
         """Map HTTP errors to TTS exceptions for consistent handling upstream."""
-        status = e.response.status_code if e.response is not None else None
+        response = getattr(e, "response", None)
+        status = getattr(response, "status_code", None) if response is not None else None
         try:
-            text = e.response.text if e.response is not None else None
+            text = response.text if response is not None else None
         except Exception:
             text = None
         if status in (401, 403):
@@ -770,16 +785,17 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
             ):
                 if chunk:
                     yield chunk
-        except httpx.HTTPStatusError as e:
-            self._raise_mapped_http_error(e)
-        except Exception:
+        except Exception as e:
+            if _is_http_status_error(e):
+                self._raise_mapped_http_error(e)
             raise
 
     # Override error mapping to align with tests (invalid voice -> validation error, 429 cases)
-    def _raise_mapped_http_error(self, e: httpx.HTTPStatusError) -> None:
-        status = e.response.status_code if e.response is not None else None
+    def _raise_mapped_http_error(self, e: Exception) -> None:
+        response = getattr(e, "response", None)
+        status = getattr(response, "status_code", None) if response is not None else None
         try:
-            data = e.response.json() if e.response is not None else {}
+            data = response.json() if response is not None else {}
         except Exception:
             data = {}
         detail = data.get("detail", {}) if isinstance(data, dict) else {}
@@ -793,7 +809,7 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
                 raise TTSQuotaExceededError("elevenlabs quota exceeded", provider=self._provider_simple)
             retry = None
             try:
-                retry = int((e.response.headers or {}).get("retry-after", "0"))
+                retry = int((response.headers or {}).get("retry-after", "0")) if response is not None else None
             except Exception:
                 retry = None
             err = rate_limit_error(self._provider_simple, retry_after=retry)

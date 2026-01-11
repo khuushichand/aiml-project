@@ -376,14 +376,13 @@ def _record_latest_status(data: Dict[str, Any]) -> None:
 def _is_httpx_network_error(exc: Exception) -> bool:
     """Return True if the exception is an httpx HTTP/network error.
 
-    We import httpx lazily to avoid hard dependency at module import time
-    (the package is typically installed via huggingface_hub).
+    Uses module/name checks to avoid a hard dependency at module import time.
     """
-    try:
-        import httpx  # type: ignore
-    except Exception:  # noqa: BLE001
+    module = getattr(exc.__class__, "__module__", "") or ""
+    if not module.startswith("httpx"):
         return False
-    return isinstance(exc, httpx.HTTPError)
+    name = exc.__class__.__name__
+    return name.endswith("Error") or name.endswith("Exception")
 
 
 def _is_requests_network_error(exc: Exception) -> bool:

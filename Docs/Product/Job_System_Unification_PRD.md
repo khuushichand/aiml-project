@@ -302,21 +302,19 @@ Backpressure behavior:
 
 ### Rollback and Cutover Rules
 - Cutover sequence: stop legacy workers, drain or cancel legacy queues, enable Jobs-backed adapters, then start Jobs workers.
-- If regressions are detected, stop Jobs workers, disable Jobs adapters via flags, and restore legacy workers (dev-only fallback).
+- If regressions are detected, stop Jobs workers and pause new enqueues; legacy backends are removed, so rollback requires restoring legacy code.
 - Avoid dual writers; only one system should enqueue or mutate jobs for a domain at a time.
 
 ### Cutover Flags and In-Flight Handling (Defaults)
 Proposed flags (env):
-- `EMBEDDINGS_JOBS_BACKEND=redis|jobs` (default `redis` until Phase 2 cutover).
-- `PROMPT_STUDIO_JOBS_BACKEND=prompt_studio|core` (default `prompt_studio` until Phase 2 cutover).
-- `CHATBOOKS_JOBS_BACKEND=core|prompt_studio` (default `core`; keep as-is, no cutover required).
-- `JOBS_ADAPTER_READ_LEGACY_{DOMAIN}=true|false` (default `true` during Phase 1-2; `false` after legacy removal).
-- `JOBS_ADAPTER_WRITE_LEGACY=false` (always; no dual writes).
+- `EMBEDDINGS_JOBS_BACKEND=jobs|redis` (core Jobs is the system of record; `redis` keeps in-process background execution for single-instance setups).
+- `PROMPT_STUDIO_JOBS_BACKEND=core` (legacy backends removed; core-only).
+- `CHATBOOKS_JOBS_BACKEND=core` (legacy backends removed; core-only).
 
 In-flight handling:
-- Freeze legacy enqueue first (`*_BACKEND=jobs`, `JOBS_ADAPTER_WRITE_LEGACY=false`).
+- Freeze legacy enqueue first (`*_BACKEND=jobs`).
 - Let legacy workers drain for a fixed window (recommend 24h); after that, cancel remaining legacy jobs with `reason="migration_cutover"`.
-- Read-path fallback during transition: if a job id is not found in Jobs and `JOBS_ADAPTER_READ_LEGACY_{DOMAIN}=true`, consult legacy storage and map status; Jobs always take precedence.
+- Read-path fallback during transition has been removed; jobs are resolved from core Jobs only.
 
 ## 11. Risks & Mitigations
 - Risk: Embeddings throughput regresses without Redis streams.

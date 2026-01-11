@@ -772,11 +772,21 @@ All errors follow a consistent format:
 
 ### Python (requests)
 ```python
-import requests
+import json
+from urllib.request import Request, urlopen
 
 API_KEY = "your-key"
 BASE = "http://localhost:8000/api/v1/evaluations"
 headers = {"X-API-KEY": API_KEY}
+
+def request_json(method, url, payload=None, headers=None):
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    hdrs = {"Content-Type": "application/json"}
+    if headers:
+        hdrs.update(headers)
+    req = Request(url, data=data, headers=hdrs, method=method)
+    with urlopen(req) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 # Create evaluation
 payload = {
@@ -785,13 +795,18 @@ payload = {
   "eval_spec": {"metrics": ["fluency"], "model": "gpt-4"},
   "dataset": [{"input": {"text": "hi"}, "expected": {"text": "hi"}}]
 }
-e = requests.post(BASE, json=payload, headers=headers).json()
+e = request_json("POST", BASE, payload=payload, headers=headers)
 
 # Start a run
-r = requests.post(f"{BASE}/{e['id']}/runs", json={"target_model": "gpt-4"}, headers=headers).json()
+r = request_json(
+    "POST",
+    f"{BASE}/{e['id']}/runs",
+    payload={"target_model": "gpt-4"},
+    headers=headers,
+)
 
 # Poll run status
-status = requests.get(f"{BASE}/runs/{r['id']}", headers=headers).json()
+status = request_json("GET", f"{BASE}/runs/{r['id']}", headers=headers)
 ```
 
 ### Pipeline Presets & Cleanup

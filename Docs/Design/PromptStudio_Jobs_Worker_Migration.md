@@ -1,6 +1,6 @@
 # Prompt Studio Jobs Worker Migration (Phase 2)
 
-Status: Draft
+Status: Complete
 Owner: Core Maintainers
 Target Release: 0.2.x
 
@@ -8,14 +8,13 @@ Target Release: 0.2.x
 Move Prompt Studio background execution onto the core Jobs worker SDK. Jobs become the execution source of truth for optimization/evaluation/generation tasks instead of in-process background tasks or the legacy prompt studio queue.
 
 ## 2. Current State
-- Prompt Studio job records are written to the legacy `prompt_studio_job_queue` via `prompt_studio.job_manager`.
-- Optimization creation spawns `OptimizationEngine.optimize(...)` via FastAPI background tasks.
-- Prompt Studio job views can read from core Jobs via `PromptStudioJobsAdapter`, but no worker runs those jobs yet.
+- Prompt Studio job records are written to core Jobs via `PromptStudioJobsAdapter`.
+- Optimization creation enqueues core Jobs; background-task execution has been removed.
+- Prompt Studio job views read from core Jobs only; legacy queue usage has been removed.
 
 ## 3. Goals
 - Execute Prompt Studio jobs via core Jobs workers.
 - Keep API behavior unchanged (accepted response + job_id) while shifting execution off the API server.
-- Preserve legacy fallback when `PROMPT_STUDIO_JOBS_BACKEND` is not `core`.
 
 ## 4. Non-Goals
 - Removing legacy prompt studio queue tables or endpoints in this phase.
@@ -57,8 +56,8 @@ Add a Jobs worker service `tldw_Server_API/app/core/Prompt_Management/prompt_stu
 5. Update core Jobs status/result on success; mark failure with an error message on exceptions.
 
 ### 5.4 API Behavior
-- When `PROMPT_STUDIO_JOBS_BACKEND=core`, endpoints enqueue core Jobs and do not spawn background tasks.
-- When `PROMPT_STUDIO_JOBS_BACKEND=legacy` (default), endpoints continue using the legacy JobManager and background tasks.
+- Endpoints enqueue core Jobs and do not spawn background tasks.
+- `PROMPT_STUDIO_JOBS_BACKEND` is now ignored; legacy backend removed.
 
 ## 6. Migration Steps
 1. Add the Prompt Studio Jobs worker and document run command.

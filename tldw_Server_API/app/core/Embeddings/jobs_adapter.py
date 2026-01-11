@@ -18,6 +18,11 @@ def _env_bool(key: str, default: bool = False) -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _warn_legacy_flag(key: str) -> None:
+    if _env_bool(key, False):
+        logger.warning("Embeddings jobs legacy fallback flag {} is ignored; core Jobs is the only backend.", key)
+
+
 def _jobs_queue() -> str:
     queue = (os.getenv("EMBEDDINGS_JOBS_QUEUE") or "default").strip()
     return queue or "default"
@@ -76,7 +81,10 @@ class EmbeddingsJobsAdapter:
         *,
         read_legacy: Optional[bool] = None,
     ) -> None:
-        self._read_legacy = _env_bool("JOBS_ADAPTER_READ_LEGACY_EMBEDDINGS", True) if read_legacy is None else bool(read_legacy)
+        if read_legacy:
+            logger.warning("Embeddings jobs legacy fallback removed; read_legacy flag is ignored.")
+        _warn_legacy_flag("JOBS_ADAPTER_READ_LEGACY_EMBEDDINGS")
+        self._read_legacy = False
         self._expose_progress = _env_bool("EMBEDDINGS_JOBS_EXPOSE_PROGRESS", False)
         self._jm = _jobs_manager()
 

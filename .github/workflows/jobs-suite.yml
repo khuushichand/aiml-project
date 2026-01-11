@@ -29,6 +29,7 @@ jobs:
       TEST_MODE: 'true'
       DISABLE_HEAVY_STARTUP: '1'
       RUN_JOBS: '1'
+      WORKFLOWS_EGRESS_ALLOWLIST: "93.184.216.34,does-not-resolve.invalid,example.com"
     steps:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
@@ -116,6 +117,7 @@ jobs:
       TEST_DB_NAME: tldw_test
       TLDW_TEST_POSTGRES_REQUIRED: '1'
       RUN_JOBS: '1'
+      WORKFLOWS_EGRESS_ALLOWLIST: "93.184.216.34,does-not-resolve.invalid,example.com"
     steps:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8

@@ -1,6 +1,6 @@
 # Embeddings Jobs Worker Migration (Phase 2)
 
-Status: Draft
+Status: Complete (Phase 2 shipped; Phase 3 legacy removed)
 Owner: Core Maintainers
 Target Release: 0.2.x
 
@@ -8,9 +8,9 @@ Target Release: 0.2.x
 Move embeddings background execution onto the core Jobs worker SDK. Jobs become the execution source of truth for media embeddings instead of in-process background tasks or Redis queues.
 
 ## 2. Current State
-- `/api/v1/media/{media_id}/embeddings` and `/api/v1/media/embeddings/batch` create a Jobs row but immediately run `generate_embeddings_for_media` via `asyncio.create_task` in-process.
-- Redis-based embeddings pipeline (`EmbeddingJobManager` + `worker_orchestrator.py`) exists for scale-out chunking/embedding/storage, plus a collections enqueue helper (`core/Collections/embedding_queue.py`).
-- Public job status endpoints already read from core Jobs via `EmbeddingsJobsAdapter` with legacy fallback.
+- Embeddings jobs are executed by the core Jobs worker (`core/Embeddings/services/jobs_worker.py`).
+- The Redis-based embeddings pipeline (`EmbeddingJobManager` + `worker_orchestrator.py`) has been removed.
+- Public job status endpoints read from core Jobs via `EmbeddingsJobsAdapter` (legacy fallback removed).
 
 ## 3. Goals
 - Execute media embeddings jobs via core Jobs workers.
@@ -18,7 +18,6 @@ Move embeddings background execution onto the core Jobs worker SDK. Jobs become 
 - Avoid embedding large chunk/embedding payloads in Jobs rows.
 
 ## 4. Non-Goals
-- Removing Redis pipeline in this phase (Phase 3 handles deletions).
 - Full DAG dependency edges (Phase 4 in PRD).
 
 ## 5. Proposed Jobs Execution
@@ -60,7 +59,7 @@ Add a Jobs worker service `tldw_Server_API/app/core/Embeddings/services/jobs_wor
 
 ### 5.4 API Behavior
 - When `EMBEDDINGS_JOBS_BACKEND=jobs`, API endpoints only enqueue Jobs and return 202/accepted.
-- When `EMBEDDINGS_JOBS_BACKEND=redis` (default), keep in-process background tasks.
+- When `EMBEDDINGS_JOBS_BACKEND=redis`, keep in-process background tasks while still recording status in core Jobs (legacy label retained for compatibility).
 
 ### 5.5 Backpressure / Quotas
 - Use Jobs quotas (see PRD defaults). Backpressure should return 429 when Jobs quota limits are reached.

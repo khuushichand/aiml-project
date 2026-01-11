@@ -162,16 +162,15 @@ def _classify_webhook_exception(exc: Exception) -> str:
         if getattr(exc, "errno", None) in {errno.EACCES, errno.EPERM}:
             return "permanent_error"
         return "transient_error"
-    try:
-        import httpx
-        if isinstance(exc, httpx.TimeoutException):
+    module = getattr(exc.__class__, "__module__", "")
+    name = exc.__class__.__name__
+    if module.startswith("httpx"):
+        if "Timeout" in name:
             return "transient_error"
-        if isinstance(exc, httpx.RequestError):
+        if name in {"RequestError", "NetworkError", "ConnectError", "ReadError", "WriteError"}:
             return "transient_error"
-        if isinstance(exc, httpx.InvalidURL):
+        if name == "InvalidURL":
             return "permanent_error"
-    except Exception:
-        pass
     return "unknown_error"
 
 

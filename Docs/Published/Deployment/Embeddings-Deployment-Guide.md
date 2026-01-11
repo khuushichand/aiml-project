@@ -165,44 +165,26 @@ WantedBy=multi-user.target
 # Required packages (same as single-user)
 pip install -e .
 
-# Redis server (for queues)
-sudo apt-get install -y redis-server
-# OR
-docker run -d --name redis -p 6379:6379 redis:alpine
-
 # Optional: GPU support for HF models
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 ```
 
-> **Dev/Test Note**
-> When a Redis server is unavailable the API now falls back to an in-process
-> Redis stub automatically. This keeps local sandboxes and CI runs from failing,
-> but production deployments should still provision a real Redis service for
-> durability and multi-worker coordination.
-
-### Environment and Orchestrator
+### Environment and Jobs Worker
 ```bash
-export REDIS_URL="redis://localhost:6379"
-export PROMETHEUS_PORT=9090   # optional
+export JOBS_DB_URL="sqlite:///Databases/jobs.db"  # optional; set Postgres URL for shared Jobs DB
 ```
 
-Use the orchestrator config at `tldw_Server_API/app/core/Embeddings/embeddings_config.yaml` to control worker pool sizes, GPU allocation, and queues. Start the orchestrator (it manages worker tasks in-process):
+Use `tldw_Server_API/app/core/Embeddings/embeddings_config.yaml` to control chunking/embedding defaults. Start the core Jobs worker:
 
 ```bash
 python -m tldw_Server_API.app.core.Embeddings.services.jobs_worker
 ```
 
-### Docker Compose (API + Orchestrator)
+### Docker Compose (API + Jobs Worker)
 ```yaml
 version: '3.8'
 
 services:
-  redis:
-    image: redis:alpine
-    ports: ["6379:6379"]
-    volumes: ["redis_data:/data"]
-    command: redis-server --appendonly yes
-
   api:
     build: .
     ports: ["8000:8000"]
@@ -210,27 +192,23 @@ services:
       - AUTH_MODE=single_user
       - SINGLE_USER_API_KEY=${SINGLE_USER_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - REDIS_URL=redis://redis:6379
-    depends_on: [redis]
     volumes:
       - ./Databases/user_databases:/app/Databases/user_databases
       - ./models/embedding_models_data:/app/models/embedding_models_data
 
-  orchestrator:
+  jobs-worker:
     build: .
     command: python -m tldw_Server_API.app.core.Embeddings.services.jobs_worker
     environment:
-      - REDIS_URL=redis://redis:6379
-      - PROMETHEUS_PORT=9090
-    depends_on: [redis]
-    ports: ["9090:9090"]
-
-volumes:
-  redis_data:
+      - JOBS_DB_URL=sqlite:///Databases/jobs.db
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      - ./Databases:/app/Databases
+      - ./models/embedding_models_data:/app/models/embedding_models_data
 ```
 
 ### Kubernetes (example)
-Deploy API and orchestrator as separate Deployments, and a Redis Service. Health probes should use `GET /api/v1/embeddings/health` on the API.
+Deploy API and jobs worker as separate Deployments. Ensure the Jobs DB (SQLite volume or Postgres service) is reachable. Health probes should use `GET /api/v1/embeddings/health` on the API.
 
 ---
 
@@ -308,7 +286,7 @@ Notes:
 - Respects HYDE_* configuration (provider, model, temperature, max tokens, language, prompt version).
 - Uses best-effort generation; failures are logged and skipped (no DLQ for HYDE).
 - Use `--dry-run` to preview changes without writing.
-- Prefer running during off-peak hours; set caps via `HYDE_MAX_VECTORS_PER_DOC` and orchestrator backpressure/quotas.
+- Prefer running during off-peak hours; set caps via `HYDE_MAX_VECTORS_PER_DOC` and Jobs backpressure/quotas.
 - The WebUI → Embeddings → Admin view shows a HYDE status badge so operators can confirm the current provider/model at a glance.
 
 - HYDE vector generation itself is feature-flagged separately (see HYDE-Do-1.md). Retrieval flags above affect only the search/merge phase.
@@ -397,48 +375,17 @@ curl -H "X-API-KEY: $SINGLE_USER_API_KEY" \
   http://localhost:8000/api/v1/embeddings/circuit-breakers
 ```
 
-### Orchestrator Summary & SSE
+### Jobs Metrics & Status
 
-The orchestrated embeddings pipeline exposes live operational state for dashboards and automation.
+The embeddings Jobs pipeline uses core Jobs metrics. There is no orchestrator SSE endpoint.
 
-- SSE (live stream, admin-only):
-  - `GET /api/v1/embeddings/orchestrator/events`
-  - Streams a JSON snapshot every few seconds as SSE `data:` frames.
+- Prometheus text metrics: `GET /metrics` or `GET /api/v1/metrics/text`
+- Filter metrics by `domain="embeddings"` (for example, `jobs.queued`, `jobs.processing`, `jobs.duration_seconds`)
 
-- Polling summary (admin-only):
-  - `GET /api/v1/embeddings/orchestrator/summary`
-  - Returns the same snapshot payload as a single JSON object.
-  - Fallback behavior: if Redis is unavailable, returns HTTP 200 with a zeroed payload (all maps empty, stable keys present) so dashboards don’t break.
-
-Snapshot payload keys:
-- `queues`: map of live queue depths by stream (e.g., `embeddings:embedding`)
-- `dlq`: map of DLQ depths by stream (e.g., `embeddings:embedding:dlq`)
-- `ages`: seconds since oldest message per live queue (0.0 when empty)
-- `stages`: aggregated counters `{ processed, failed }` per stage
-- `flags`: stage control flags `{ paused, drain }` per stage
-- `ts`: server timestamp (seconds)
-
-Examples:
+Example:
 ```bash
-# SSE (watch raw events)
 curl -H "X-API-KEY: $SINGLE_USER_API_KEY" \
-  http://localhost:8000/api/v1/embeddings/orchestrator/events
-
-# Polling summary (one-shot JSON)
-curl -s -H "X-API-KEY: $SINGLE_USER_API_KEY" \
-  http://localhost:8000/api/v1/embeddings/orchestrator/summary | jq .
-```
-
-Sample response (polling):
-```json
-{
-  "queues": {"embeddings:embedding": 2},
-  "dlq": {"embeddings:embedding:dlq": 0},
-  "ages": {"embeddings:embedding": 1.2},
-  "stages": {"embedding": {"processed": 120, "failed": 3}},
-  "flags": {"embedding": {"paused": false, "drain": false}},
-  "ts": 1700001000.123
-}
+  http://localhost:8000/api/v1/metrics/text | rg 'jobs\\.' | head -50
 ```
 
 ### Backpressure & Quotas (HTTP 429)
@@ -462,7 +409,7 @@ When the orchestrated embeddings pipeline is overloaded, the API gates selected 
   - `INGEST_TENANT_RPS` (int, default 0): per-tenant RPS for ingestion endpoints (falls back to `EMBEDDINGS_TENANT_RPS` when unset).
 
 - Operator tips
-  - Use the orchestrator summary/SSE to watch `ages` and `queues` while tuning thresholds.
+  - Use core Jobs metrics (`jobs.queue_latency_seconds`, `jobs.queued`) filtered by `domain="embeddings"` while tuning thresholds.
   - Start with higher thresholds and lower them once you have a baseline for normal load.
   - If tenants routinely hit throttle, increase `*_TENANT_RPS` or provision more workers.
 
@@ -525,8 +472,8 @@ export COMPACTOR_USER_ID=42
 ```
 
 Operator notes:
-- Prefer SSE for live dashboards; fall back to polling when SSE/WebSockets are blocked.
-- A zeroed payload indicates Redis is unreachable or snapshot encountered an error; alert if sustained.
+- Prefer `/metrics` and `/api/v1/metrics/text` for dashboards; filter `jobs.*` by `domain="embeddings"`.
+- If metrics are empty, verify the Jobs DB and embeddings Jobs worker are running.
 
 ### Logging
 The service uses Loguru and Prometheus instrumentation. Tune `LOG_LEVEL`, and scrape `/metrics` for Prometheus-formatted metrics.
@@ -538,143 +485,69 @@ Structured JSON logs
   - Workers bind `job_id` and `stage` to aid operator drill-down.
   - Responses include `X-Trace-Id` and `traceparent` headers for easy hop-by-hop correlation.
 
-### Dead-Letter Queues (DLQ)
+### Job Failures & Quarantine
 
-Purpose
-- Persist messages that exceeded max retries for operator inspection and recovery.
-
-How it works
-- Each stage has a DLQ Redis Stream with suffix `:dlq`.
-  - Chunking DLQ: `embeddings:chunking:dlq`
-  - Embedding DLQ: `embeddings:embedding:dlq`
-  - Storage DLQ: `embeddings:storage:dlq`
-- When a worker exhausts `max_retries`, it marks the job `failed` and publishes the original payload and error to the stage DLQ. The worker still `XACK`s the failed message to prevent hot looping.
-
-Security and privacy
-- PII/secret redaction: DLQ payload previews in the API/UI redact common secret fields (api_key, authorization, token, password). Avoid logging sensitive content.
-- Optional encryption at rest: set `EMBEDDINGS_DLQ_ENCRYPTION_KEY` to enable AES-GCM encryption of DLQ payload bodies. The API will decrypt for previews when the key is present. Without the key, previews omit payloads.
-
-RBAC and auditing
-- All DLQ admin endpoints require admin privileges.
-- Admin actions are audit-logged (state changes, (bulk) requeues), including operator, stage, and results.
+Core Jobs records failures directly on the job row (status `failed` or `quarantined`).
 
 Operator tasks
-- Inspect latest DLQ entries:
-```bash
-# Show the most recent 10 entries from the embedding DLQ
-redis-cli XREVRANGE embeddings:embedding:dlq + - COUNT 10
-```
-- Or via admin API (requires admin):
+- List failed jobs (admin):
 ```bash
 curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  "http://localhost:8000/api/v1/embeddings/dlq?stage=embedding&count=10"
+  "http://localhost:8000/api/v1/jobs/admin/list?domain=embeddings&status=failed&limit=50"
 ```
-- Re-enqueue a DLQ entry back to the active stream after correcting the cause:
-```bash
-# Example: requeue a DLQ item back to the embedding stream
-# (Adjust fields to your payload; prefer re-using the original payload JSON)
-redis-cli XADD embeddings:embedding '*' job_id <JOB_ID> user_id <USER_ID> payload '<JSON>'
-```
-- Or via admin API:
+- Retry a job immediately (admin):
 ```bash
 curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"stage":"embedding","entry_id":"1-0","delete_from_dlq":true}' \
-  http://localhost:8000/api/v1/embeddings/dlq/requeue
+  -d '{"job_id": 12345}' \
+  http://localhost:8000/api/v1/jobs/retry-now
 ```
-- Trim DLQs to control growth (approximate):
+- Reschedule a job for later (admin):
 ```bash
-redis-cli XTRIM embeddings:embedding:dlq MAXLEN ~ 5000
-redis-cli XTRIM embeddings:chunking:dlq  MAXLEN ~ 5000
-redis-cli XTRIM embeddings:storage:dlq   MAXLEN ~ 5000
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"job_id": 12345, "available_at": "2026-01-10T12:00:00Z"}' \
+  http://localhost:8000/api/v1/jobs/reschedule
 ```
 
 Recommendations
-- Alert on DLQ growth rate; sustained growth indicates systemic issues.
-- Build a small admin tool to list, filter by `job_id`, and requeue DLQ items safely.
-- Keep DLQ retention sized to your operating posture (e.g., 7-14 days worth of failures).
+- Alert on `jobs.failures_total` and `jobs.queue_latency_seconds` for `domain="embeddings"`.
+- Use `error_message` and `result` fields for root-cause analysis.
 
 ### Prometheus Alerts (examples)
 
-Add alerting rules to detect DLQ issues and pipeline stalls.
+Add alerting rules against core Jobs metrics.
 
 ```yaml
 groups:
   - name: tldw-embeddings
     rules:
-      # DLQ depth too high for too long
-      - alert: EmbeddingsDLQDepthHigh
-        expr: sum(embedding_dlq_queue_depth) > 100
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Embeddings DLQ depth high"
-          description: "DLQ depth is {{ $value }} across queues for >5m"
-
-      # DLQ ingest rate sustained
-      - alert: EmbeddingsDLQIngestRateHigh
-        expr: sum(embedding_dlq_ingest_rate) > 0.5
+      - alert: EmbeddingsJobsBacklogHigh
+        expr: sum(jobs.backlog{domain="embeddings"}) > 200
         for: 10m
         labels:
           severity: warning
         annotations:
-          summary: "Embeddings DLQ ingest rate high"
-          description: "DLQ ingest > 0.5 msg/s for >10m"
+          summary: "Embeddings backlog high"
+          description: "Jobs backlog > 200 for >10m"
 
-      # Pipeline stagnation: high queue depth but near-zero processing
-      - alert: EmbeddingsStageStagnation
-        expr: (sum(embedding_queue_depth) > 100)
-              and (sum(rate(embedding_stage_jobs_processed_total[5m])) < 0.1)
-        for: 10m
-        labels:
-          severity: critical
-        annotations:
-          summary: "Embeddings processing stalled"
-          description: "High queue depth with low processing rate for >10m"
-
-      # Oldest message age by queue (p95 over window)
-      - alert: EmbeddingsQueueAgeHigh
-        expr: max_over_time(embedding_queue_age_seconds[10m]) > 300
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Embeddings queue age high"
-          description: "Oldest message age exceeded 5 minutes for >5m"
-
-      # Stage processing latency outliers
-      - alert: EmbeddingsStageLatencyHigh
-        expr: histogram_quantile(0.95, sum(rate(embedding_stage_processing_latency_seconds_bucket[5m])) by (le, stage)) > 5
+      - alert: EmbeddingsJobsLatencyHigh
+        expr: histogram_quantile(0.95, sum(rate(jobs.queue_latency_seconds_bucket{domain="embeddings"}[5m])) by (le)) > 120
         for: 10m
         labels:
           severity: warning
         annotations:
-          summary: "Embeddings stage latency high (p95)"
-          description: "p95 processing latency > 5s for stage {{ $labels.stage }}"
+          summary: "Embeddings queue latency p95 high"
+          description: "Queue latency p95 > 120s for >10m"
 
-      # Worker liveness: any stalled workers for a sustained period
-      - alert: EmbeddingsWorkersStalled
-        expr: sum(embedding_workers_stalled) > 0
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Embeddings workers stalled"
-          description: "One or more workers have missing/expired heartbeats for >5m"
-
-      # Possible drainer throttling/backlog: queue ages rising while processing is low
-      - alert: EmbeddingsRequeueThrottled
-        expr: (max_over_time(embedding_queue_age_seconds[15m]) - min_over_time(embedding_queue_age_seconds[15m])) > 120
-              and (sum(rate(embedding_stage_jobs_processed_total[5m])) < 0.5)
+      - alert: EmbeddingsJobsFailuresHigh
+        expr: sum(rate(jobs.failures_total{domain="embeddings"}[5m])) > 0.5
         for: 10m
         labels:
           severity: warning
         annotations:
-          summary: "Embeddings requeue possibly throttled/backlogged"
-          description: |
-            Queue ages increased >2m over 15m while processing is low. The delayed drainer uses
-            a token bucket for safety; consider temporarily increasing EMBEDDINGS_REQUEUE_RATE/BURST during recovery.
+          summary: "Embeddings job failures high"
+          description: "Failure rate > 0.5/s for >10m"
 ```
 
 ### SLOs & Error Budgets
@@ -682,15 +555,14 @@ groups:
 Define clear service goals and alert on burn rates to catch problems early while avoiding alert fatigue.
 
 - Suggested SLOs
-  - Availability (job success): <0.5% failed jobs over 1h (pipeline-wide)
-  - Queue time (freshness): P95 queue age < 2 minutes
-  - Latency (processing): p95 stage latency < 5 seconds (per stage)
+  - Availability (job success): <0.5% failed jobs over 1h (domain-wide)
+  - Queue time (freshness): P95 queue latency < 2 minutes
+  - Latency (processing): p95 job duration < 5 seconds
 
 - Supporting metrics
-  - `embedding_stage_jobs_processed_total{stage}` and `embedding_stage_jobs_failed_total{stage}`
-  - `embedding_queue_age_seconds_bucket{queue_name}` (histogram)
-  - `embedding_stage_processing_latency_seconds_bucket{stage}` (histogram)
-  - Newly added: `embedding_stage_batch_size{stage}` and `embedding_stage_payload_bytes_bucket{stage}` (histograms) for tuning batch/payload sizing.
+  - `jobs.completed_total{domain="embeddings"}` and `jobs.failures_total{domain="embeddings"}`
+  - `jobs.queue_latency_seconds_bucket{domain="embeddings"}` (histogram)
+  - `jobs.duration_seconds_bucket{domain="embeddings"}` (histogram)
 
 - Example alert rules
 
@@ -698,39 +570,39 @@ Define clear service goals and alert on burn rates to catch problems early while
 groups:
   - name: tldw-embeddings-slos
     rules:
-      # Error budget burn: failed / (failed + processed) over 1h > 0.5%
+      # Error budget burn: failed / (failed + completed) over 1h > 0.5%
       - alert: EmbeddingsErrorBudgetBurn
         expr: (
-          sum(increase(embedding_stage_jobs_failed_total[1h]))
+          sum(increase(jobs.failures_total{domain="embeddings"}[1h]))
           /
-          (sum(increase(embedding_stage_jobs_failed_total[1h])) + sum(increase(embedding_stage_jobs_processed_total[1h])))
+          (sum(increase(jobs.failures_total{domain="embeddings"}[1h])) + sum(increase(jobs.completed_total{domain="embeddings"}[1h])))
         ) > 0.005
         for: 10m
         labels:
           severity: critical
         annotations:
-          summary: "Embeddings pipeline error budget burn"
+          summary: "Embeddings error budget burn"
           description: "Failed jobs exceeded 0.5% over 1h"
 
-      # Queue age p95 too high for any queue
-      - alert: EmbeddingsQueueAgeP95High
-        expr: histogram_quantile(0.95, sum by (le, queue_name) (rate(embedding_queue_age_seconds_bucket[5m]))) > 120
+      # Queue latency p95 too high
+      - alert: EmbeddingsQueueLatencyP95High
+        expr: histogram_quantile(0.95, sum by (le) (rate(jobs.queue_latency_seconds_bucket{domain="embeddings"}[5m]))) > 120
         for: 10m
         labels:
           severity: warning
         annotations:
-          summary: "Embeddings queue age p95 high"
-          description: "Queue p95 ({{ $labels.queue_name }}) > 2m for >10m"
+          summary: "Embeddings queue latency p95 high"
+          description: "Queue latency p95 > 2m for >10m"
 
-      # Stage processing latency p99 high (optional tighter SLO)
-      - alert: EmbeddingsStageLatencyP99High
-        expr: histogram_quantile(0.99, sum by (le, stage) (rate(embedding_stage_processing_latency_seconds_bucket[5m]))) > 10
+      # Job duration p99 high (optional tighter SLO)
+      - alert: EmbeddingsDurationP99High
+        expr: histogram_quantile(0.99, sum by (le) (rate(jobs.duration_seconds_bucket{domain="embeddings"}[5m]))) > 10
         for: 10m
         labels:
           severity: warning
         annotations:
-          summary: "Embeddings stage latency p99 high"
-          description: "Stage {{ $labels.stage }} p99 > 10s for >10m"
+          summary: "Embeddings job duration p99 high"
+          description: "Job duration p99 > 10s for >10m"
 ```
 
 Notes
@@ -739,45 +611,11 @@ Notes
 
 ## Reliability & Delivery
 
-The embeddings pipeline includes protective mechanisms to deliver reliably and avoid overload during recovery:
+The embeddings pipeline uses core Jobs leasing, retries, and backoff:
 
-- Scheduled retries with backoff and jitter
-  - Workers classify failures as `transient` vs `permanent` and schedule exponential backoff + jitter for transient errors.
-  - After `max_retries`, jobs are marked failed and sent to the stage DLQ with structured fields `error_code` and `failure_type`.
-
-- Token-bucket guard against requeue storms
-  - The orchestrator drains delayed queues via a per-queue token bucket so re-enqueues are smoothed.
-  - Tuning via environment variables:
-    - `EMBEDDINGS_REQUEUE_RATE` (tokens per second; default 50)
-    - `EMBEDDINGS_REQUEUE_BURST` (max tokens; default 200)
-
-- Operator skip for known-poison messages
-  - Mark a job as skipped (admin-only): `POST /api/v1/embeddings/job/skip { job_id, ttl_seconds }`
-  - Check status: `GET /api/v1/embeddings/job/skip/status?job_id=...`
-  - Workers consult the skip registry and will ACK/cancel without processing.
-
-- Stage controls & liveness
-  - Pause/Resume/Drain per stage: `POST /api/v1/embeddings/stage/control`
-  - Orchestrator gauges: `embedding_workers_active{worker_type}`, `embedding_workers_stalled{worker_type}` to monitor worker fleet health.
-
-### Messaging & DLQ Hardening
-
-- Message schema versioning (+ schema URL)
-  - Each message carries `msg_version`, `msg_schema`, and `schema_url` (current: `tldw.embeddings.v1`, URL points to the bundled JSON Schema).
-  - Ingress validation uses a small JSON Schema bundle to validate core envelope fields.
-
-- De-dup window (operation_id)
-  - Workers suppress replays with a short TTL using RedisBloom (if available) or `SET NX` keyed by `operation_id`.
-  - Configure TTL via `EMBEDDINGS_DEDUPE_TTL_SECONDS`.
-
-- DLQ quarantine states
-  - States: `quarantined`, `approved_for_requeue`, `ignored`.
-  - Admin API: `POST /api/v1/embeddings/dlq/state` with `{ stage, entry_id, state, operator_note? }`.
-  - Approval requires an `operator_note`; requeue endpoints enforce `approved_for_requeue` when state exists.
-  - WebUI exposes state, note, and Quarantine/Approve/Ignore actions.
-
-- Optional durability
-  - The pipeline uses Redis Streams and consumer groups. If workload grows, consider adding a dedicated Redis cluster or a lightweight Kafka topic for at-least-once delivery and long-lived retention.
+- Retries/backoff are managed by core Jobs (`max_retries`, exponential backoff, idempotency keys).
+- Quarantined jobs are tracked with `status=quarantined` and can be retried via Jobs admin endpoints.
+- Queue controls (pause/drain) and rescheduling are handled via `/api/v1/jobs/*` admin endpoints.
 
 ---
 
@@ -798,7 +636,7 @@ curl -X POST -H "X-API-KEY: $SINGLE_USER_API_KEY" \
 Symptom: OOM or slow responses.
 Actions:
 - Prefer smaller models (e.g., `text-embedding-3-small`, `all-MiniLM-L6-v2`)
-- Reduce concurrent load; scale out using orchestrator
+- Reduce concurrent load; scale out using additional Jobs workers
 - For HF models, unload inactive models sooner (see `model_unload_timeout` in YAML)
 
 ### 3) Slow Embeddings

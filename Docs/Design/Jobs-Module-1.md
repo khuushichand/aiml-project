@@ -145,9 +145,8 @@ Metric definitions:
 - `JOBS_MAX_CONCURRENCY` (per processor instance)
 - `JOBS_ENABLE_METRICS=true|false`
 - Feature flags for rollout:
-  - `TLDW_JOBS_BACKEND=prompt_studio|core` (module-wide default)
-  - Domain overrides, e.g., `CHATBOOKS_JOBS_BACKEND=prompt_studio|core` (overrides module default)
-  - Precedence: domain override > module default
+  - `TLDW_JOBS_BACKEND=core` (legacy backends removed; overrides ignored by chatbooks/prompt studio).
+  - Domain overrides remain for embeddings execution mode (`EMBEDDINGS_JOBS_BACKEND=jobs|redis`).
 
 ## Security & Multi-Tenant
 

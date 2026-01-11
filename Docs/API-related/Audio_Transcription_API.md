@@ -606,22 +606,54 @@ with open("foreign_audio.wav", "rb") as audio_file:
 ### Using Python (Direct API)
 
 ```python
-import requests
+import json
+import uuid
+from urllib.request import Request, urlopen
 
 # Transcribe with Parakeet
 url = "http://localhost:8000/api/v1/audio/transcriptions"
 headers = {"X-API-KEY": "YOUR_SINGLE_USER_API_KEY"}
 
+def encode_multipart(fields, files):
+    boundary = uuid.uuid4().hex
+    body = bytearray()
+
+    def add_line(line):
+        body.extend(line.encode("utf-8"))
+        body.extend(b"\r\n")
+
+    for name, value in fields.items():
+        add_line(f"--{boundary}")
+        add_line(f'Content-Disposition: form-data; name="{name}"')
+        add_line("")
+        add_line(str(value))
+
+    for name, filename, content, content_type in files:
+        add_line(f"--{boundary}")
+        add_line(f'Content-Disposition: form-data; name="{name}"; filename="{filename}"')
+        add_line(f"Content-Type: {content_type or 'application/octet-stream'}")
+        add_line("")
+        body.extend(content)
+        body.extend(b"\r\n")
+
+    add_line(f"--{boundary}--")
+    return boundary, bytes(body)
+
 with open("audio.wav", "rb") as f:
-    files = {"file": ("audio.wav", f, "audio/wav")}
     data = {
         "model": "parakeet",
         "response_format": "json"
     }
 
-    response = requests.post(url, headers=headers, files=files, data=data)
-    result = response.json()
-    print(result["text"])
+    boundary, body = encode_multipart(
+        data,
+        [("file", "audio.wav", f.read(), "audio/wav")],
+    )
+    upload_headers = {**headers, "Content-Type": f"multipart/form-data; boundary={boundary}"}
+    req = Request(url, data=body, headers=upload_headers, method="POST")
+    with urlopen(req) as resp:
+        result = json.loads(resp.read().decode("utf-8"))
+        print(result["text"])
 ```
 
 ### Live Transcription Example

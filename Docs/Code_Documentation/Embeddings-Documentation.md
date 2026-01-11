@@ -14,7 +14,7 @@
 The tldw_server Embeddings System provides a comprehensive solution for generating text embeddings through multiple providers. The system offers two distinct paths to accommodate different use cases:
 
 1. **Synchronous API** (`embeddings_v5_production_enhanced.py`) - Direct request-response model with circuit breaker, ideal for single-user and small deployments
-2. **Worker Architecture (Orchestrated)** - Distributed, queue-based processing for enterprise/multi-tenant deployments via `core/Embeddings/worker_orchestrator.py` and `core/Embeddings/workers/*` (uses Redis streams)
+2. **Jobs Worker Architecture** - Queue-based processing for enterprise/multi-tenant deployments via the core Jobs worker (`core/Embeddings/services/jobs_worker.py`)
 
 ### Key Features (Production Path)
 - 🌐 Providers: OpenAI and HuggingFace supported today; ONNX and Local API supported by the core engine. Additional providers (Cohere, Google, Mistral, Voyage) are present in configuration but not fully wired in the embedding call path yet.
@@ -52,7 +52,7 @@ graph TB
 
         subgraph "Asynchronous Path"
             JOBS[Job API<br/>embeddings_jobs]
-            REDIS[(Redis Queue)]
+            JOBSDB[(Jobs DB)]
             WORKERS[Worker Pool]
             CACHE2[Distributed Cache]
         end
@@ -177,7 +177,7 @@ graph LR
 
     subgraph "Queue Layer"
         JM[Job Manager]
-        RQ[(Redis Queues)]
+        JQ[(Jobs Queues)]
         PUB[Pub/Sub]
     end
 
@@ -245,7 +245,7 @@ flowchart TD
     Q3 -->|Kubernetes/Docker| JOBS[Use Job-Based System]
 
     Q4 -->|Low Latency<br/>< 200ms| SYNC
-    Q4 -->|High Throughput<br/>Batch Processing| Q5{Redis Available?}
+    Q4 -->|High Throughput<br/>Batch Processing| Q5{Jobs DB Available?}
 
     Q5 -->|No| SYNC
     Q5 -->|Yes| JOBS
@@ -446,7 +446,7 @@ graph TB
 
     subgraph "Docker Compose Deployment"
         DC_API[API Container]
-        DC_REDIS[(Redis)]
+        DC_JOBS[(Jobs DB)]
         DC_WORK[Worker Container]
         DC_DB[(PostgreSQL)]
         DC_PROM[Prometheus]
@@ -470,7 +470,7 @@ graph TB
             K_SW[Storage Workers]
         end
 
-        K_REDIS[(Redis Cluster)]
+        K_JOBS[(Jobs DB Cluster)]
         K_DB[(PostgreSQL HA)]
         K_S3[Object Storage]
 
@@ -580,7 +580,7 @@ stateDiagram-v2
     note right of Unhealthy
         - Database unreachable
         - All providers down
-        - Redis disconnected (if job-based)
+        - Jobs DB unreachable
         - OOM conditions
     end note
 
@@ -650,7 +650,7 @@ graph LR
     subgraph "Optimization Layers"
         subgraph "Caching"
             L1[L1: In-Memory]
-            L2[L2: Redis]
+            L2[L2: Jobs DB]
             L3[L3: CDN]
         end
 

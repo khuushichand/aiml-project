@@ -414,36 +414,40 @@ circuit_breaker_threshold = 5
 ### Python Client
 
 ```python
-import httpx
-import asyncio
+import json
+from urllib.request import Request, urlopen
 
-async def search(query: str):
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "http://localhost:8000/api/v1/rag/search/simple",
-            json={"query": query},
-            headers={"X-API-Key": "your-api-key"}
-        )
-        return response.json()
+def request_json(url, payload):
+    req = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "X-API-Key": "your-api-key"},
+        method="POST",
+    )
+    with urlopen(req) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+def search(query: str):
+    return request_json(
+        "http://localhost:8000/api/v1/rag/search/simple",
+        {"query": query},
+    )
 
 # Simple search
-results = asyncio.run(search("What is RAG?"))
+results = search("What is RAG?")
 
 # Complex search with custom config
-async def complex_search(query: str):
+def complex_search(query: str):
     config = {
         "pipeline": "quality",
         "expansion": {"strategies": ["acronym", "synonym"]},
         "reranking": {"strategy": "cross_encoder"}
     }
 
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "http://localhost:8000/api/v1/rag/search/complex",
-            json={"query": query, "config": config},
-            headers={"X-API-Key": "your-api-key"}
-        )
-        return response.json()
+    return request_json(
+        "http://localhost:8000/api/v1/rag/search/complex",
+        {"query": query, "config": config},
+    )
 ```
 
 ### cURL Examples

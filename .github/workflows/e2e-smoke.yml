@@ -33,6 +33,7 @@ jobs:
       MPLCONFIGDIR: ${{ runner.temp }}/mpl
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       PYTHONUNBUFFERED: "1"
+      WORKFLOWS_EGRESS_ALLOWLIST: "93.184.216.34,does-not-resolve.invalid,example.com"
 
     steps:
       - name: Checkout repository

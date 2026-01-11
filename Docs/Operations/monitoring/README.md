@@ -39,7 +39,7 @@ Import the provided dashboards:
     - SSE Connections, Disconnects, Summary Failures
     - Queue Depth by queue
     - DLQ Depth by queue
-    - Queue Age p95 (10m window; from orchestrator histogram)
+    - Queue latency p95 (10m window; from `jobs.queue_latency_seconds`)
     - Stage processed/s and failed/s
     - Stage flags (paused/drain)
 
@@ -108,5 +108,5 @@ Core Jobs metrics exported by the API process (filter by `domain="embeddings"`):
 
 ## Troubleshooting
 
-- Zeroed summary (all empty maps) indicates Redis/unavailable orchestrator - the WebUI shows a small fallback badge; alert if sustained.
+- If Jobs metrics are empty, verify the Jobs DB is reachable and the embeddings Jobs worker is running.
 - If metrics endpoints return 401/403, use admin credentials (single-user API key or admin JWT role).

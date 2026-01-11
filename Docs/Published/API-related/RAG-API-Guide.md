@@ -521,10 +521,10 @@ for await (const chunk of rag.streamSearch('Explain quantum computing')) {
 ### Python
 
 ```python
-import requests
 import json
 from typing import List, Dict, Optional, Generator
-from requests import Session
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 class RAGClient:
     def __init__(self, base_url: str, api_key: str):
@@ -552,13 +552,14 @@ class RAGClient:
             'keyword_filter': keywords
         }
 
-        response = requests.post(
+        req = Request(
             f'{self.base_url}/search',
+            data=json.dumps(data).encode('utf-8'),
             headers=self.headers,
-            json=data
+            method='POST',
         )
-        response.raise_for_status()
-        return response.json()
+        with urlopen(req) as resp:
+            return json.loads(resp.read().decode('utf-8'))
 
     def ask(self, message: str, databases: List[str] = None) -> Dict:
         """Generate an answer using unified search with generation enabled."""
@@ -567,13 +568,14 @@ class RAGClient:
             'sources': databases or ['media_db'],
             'enable_generation': True
         }
-        response = requests.post(
+        req = Request(
             f'{self.base_url}/search',
+            data=json.dumps(data).encode('utf-8'),
             headers=self.headers,
-            json=data
+            method='POST',
         )
-        response.raise_for_status()
-        return response.json()
+        with urlopen(req) as resp:
+            return json.loads(resp.read().decode('utf-8'))
 
     def stream(self, query: str) -> Generator[str, None, None]:
         """Stream NDJSON answer chunks from unified search."""
@@ -581,34 +583,35 @@ class RAGClient:
             'query': query,
             'enable_generation': True
         }
-        with Session() as s:
-            with s.post(
-                f'{self.base_url}/search/stream',
-                headers=self.headers,
-                data=json.dumps(data),
-                stream=True
-            ) as r:
-                r.raise_for_status()
-                for line in r.iter_lines(decode_unicode=True):
-                    if not line:
-                        continue
-                    evt = json.loads(line)
-                    if evt.get('type') == 'delta':
-                        yield evt.get('text', '')
+        req = Request(
+            f'{self.base_url}/search/stream',
+            data=json.dumps(data).encode('utf-8'),
+            headers=self.headers,
+            method='POST',
+        )
+        with urlopen(req) as resp:
+            for raw in resp:
+                line = raw.decode('utf-8', errors='replace').strip()
+                if not line:
+                    continue
+                evt = json.loads(line)
+                if evt.get('type') == 'delta':
+                    yield evt.get('text', '')
 
     def advanced_search(self, query: str, with_citations: bool = True, with_answer: bool = True) -> Dict:
         """Perform an advanced search with common features enabled."""
-        response = requests.get(
-            f'{self.base_url}/advanced',
+        params = urlencode({
+            'query': query,
+            'with_citations': str(with_citations).lower(),
+            'with_answer': str(with_answer).lower()
+        })
+        req = Request(
+            f'{self.base_url}/advanced?{params}',
             headers=self.headers,
-            params={
-                'query': query,
-                'with_citations': str(with_citations).lower(),
-                'with_answer': str(with_answer).lower()
-            }
+            method='GET',
         )
-        response.raise_for_status()
-        return response.json()
+        with urlopen(req) as resp:
+            return json.loads(resp.read().decode('utf-8'))
 
 
 # Usage example

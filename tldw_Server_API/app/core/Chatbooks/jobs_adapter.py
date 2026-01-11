@@ -19,6 +19,11 @@ def _env_bool(key: str, default: bool = False) -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _warn_legacy_flag(key: str) -> None:
+    if _env_bool(key, False):
+        logger.warning("Chatbooks jobs legacy fallback flag {} is ignored; core Jobs is the only backend.", key)
+
+
 def _jobs_manager() -> JobManager:
     db_url = (os.getenv("JOBS_DB_URL") or "").strip()
     if not db_url:
@@ -76,7 +81,7 @@ class ChatbooksJobsAdapter:
         owner_user_id: Optional[str],
     ) -> None:
         self._owner_user_id = str(owner_user_id) if owner_user_id is not None else None
-        self._read_legacy = _env_bool("JOBS_ADAPTER_READ_LEGACY_CHATBOOKS", True)
+        _warn_legacy_flag("JOBS_ADAPTER_READ_LEGACY_CHATBOOKS")
         self._jm = _jobs_manager()
 
     def apply_export_status(self, job, job_row: Optional[Dict[str, Any]] = None) -> None:

@@ -39,7 +39,9 @@
 **Progress**:
 - Updated core docs to replace httpx/requests examples with stdlib or curl usage.
 - Removed direct requests/httpx usage from Local_Summarization_Lib and http_helpers, consolidating retries and streaming through http_client helpers.
-- Pending final doc sweep and verification of any remaining legacy HTTP usage in business logic.
 - Migrated Helper_Scripts HTTP clients to http_client helpers (streaming, load, benchmarks, and eval harnesses) to avoid direct requests/httpx usage.
 - Updated API-facing examples to use stdlib urllib in config and notes graph docs.
 - Updated developer/product docs to replace httpx/requests examples with http_client or stdlib (LLM adapter guide, Responses API plan, best practices, subscriptions PRDs).
+- Updated API-related guides (Chat Module integration, User Registration, RAG guide) to remove requests/httpx from Python examples.
+- Updated remaining API-related + Published docs to replace requests/httpx examples (embeddings, chatbook, chunking templates, evaluations, audio transcription, TTS, orgs billing, RAG API, character chat).
+**Status**: Complete

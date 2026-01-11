@@ -1516,9 +1516,13 @@ async def lifespan(app: FastAPI):
 
     # Startup: Warm ChaChaNotes to remove request-path blocking for the default user
     try:
-        from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import warm_chacha_db_for_user
+        from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
+            reset_chacha_shutdown_state,
+            warm_chacha_db_for_user,
+        )
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_auth_settings, is_single_user_mode
 
+        reset_chacha_shutdown_state()
         if is_single_user_mode():
             _auth_settings = _get_auth_settings()
             _single_user_id = int(getattr(_auth_settings, "SINGLE_USER_FIXED_ID", 1))
@@ -2833,12 +2837,10 @@ async def lifespan(app: FastAPI):
     # Shutdown ChaChaNotes executor and cached instances
     try:
         from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
-            close_all_chacha_db_instances,
-            shutdown_chacha_executor,
+            shutdown_chacha_resources,
         )
 
-        close_all_chacha_db_instances()
-        shutdown_chacha_executor(wait=False)
+        await shutdown_chacha_resources()
         logger.info("App Shutdown: ChaChaNotes resources cleaned up")
     except Exception as e:
         logger.error(f"App Shutdown: Error shutting down ChaChaNotes resources: {e}")

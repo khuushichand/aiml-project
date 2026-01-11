@@ -1063,65 +1063,72 @@ curl -X GET "http://localhost:8000/api/v1/chats/{chat_id}/export?format=markdown
 ### Python Client Example
 
 ```python
-import requests
 import json
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 class CharacterChatClient:
     def __init__(self, base_url, api_key):
-        self.base_url = base_url
+        self.base_url = base_url.rstrip("/")
         self.headers = {
-            "X-API-KEY": api_key,
-            "Content-Type": "application/json"
+            "X-API-KEY": api_key
         }
 
+    def _request_json(self, method, path, payload=None, params=None):
+        url = f"{self.base_url}{path}"
+        if params:
+            url = f"{url}?{urlencode(params)}"
+        data = json.dumps(payload).encode("utf-8") if payload is not None else None
+        headers = {"Content-Type": "application/json", **self.headers}
+        req = Request(url, data=data, headers=headers, method=method)
+        with urlopen(req) as resp:
+            body = resp.read().decode("utf-8")
+            return json.loads(body) if body else {}
+
     def create_character(self, name, description, personality, first_message):
-        response = requests.post(
-            f"{self.base_url}/api/v1/characters/",
-            headers=self.headers,
-            json={
+        return self._request_json(
+            "POST",
+            "/api/v1/characters/",
+            {
                 "name": name,
                 "description": description,
                 "personality": personality,
-                "first_message": first_message
-            }
+                "first_message": first_message,
+            },
         )
-        return response.json()
 
     def create_chat(self, character_id, title=None):
-        response = requests.post(
-            f"{self.base_url}/api/v1/chats/",
-            headers=self.headers,
-            json={
+        return self._request_json(
+            "POST",
+            "/api/v1/chats/",
+            {
                 "character_id": character_id,
-                "title": title
-            }
+                "title": title,
+            },
         )
-        return response.json()
 
     def send_message(self, chat_id, content, role="user"):
         """Send a message to a chat session."""
-        response = requests.post(
-            f"{self.base_url}/api/v1/chats/{chat_id}/messages",
-            headers=self.headers,
-            json={
+        return self._request_json(
+            "POST",
+            f"/api/v1/chats/{chat_id}/messages",
+            {
                 "role": role,
-                "content": content
-            }
+                "content": content,
+            },
         )
-        return response.json()
 
     def get_messages_for_completions(self, chat_id):
         """Get messages formatted for use with chat completions."""
-        response = requests.get(
-            f"{self.base_url}/api/v1/chats/{chat_id}/messages",
-            headers=self.headers,
+        return self._request_json(
+            "GET",
+            f"/api/v1/chats/{chat_id}/messages",
             params={
                 "format_for_completions": True,
                 "include_character_context": True,
-                "limit": 50
-            }
+                "limit": 50,
+            },
         )
-        return response.json()
 
     def get_completion(self, chat_id, message, max_tokens=500):
         # First get the formatted messages with character context
@@ -1132,19 +1139,18 @@ class CharacterChatClient:
         messages.append({"role": "user", "content": message})
 
         # Call the main chat completions endpoint
-        response = requests.post(
-            f"{self.base_url}/api/v1/chat/completions",
-            headers=self.headers,
-            json={
+        result = self._request_json(
+            "POST",
+            "/api/v1/chat/completions",
+            {
                 "model": "gpt-3.5-turbo",
                 "messages": messages,
                 "max_tokens": max_tokens,
-                "temperature": 0.7
-            }
+                "temperature": 0.7,
+            },
         )
 
         # Extract the response
-        result = response.json()
         if "choices" in result and len(result["choices"]) > 0:
             ai_response = result["choices"][0]["message"]["content"]
 
