@@ -325,7 +325,9 @@ class ResponseRunner:
                         tool_results[tool] = {"error": str(e)}
 
             # 4. Generate response using existing chat infrastructure
-            from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
+            from tldw_Server_API.app.core.Chat.chat_service import ChatService
+
+            chat_service = ChatService()
 
             # Prepare messages with tool results
             messages = request["messages"].copy()
@@ -335,8 +337,8 @@ class ResponseRunner:
                     "content": f"Tool results: {tool_results}"
                 })
 
-            # Call LLM
-            response = await chat_api_call(
+            # Call LLM via adapter
+            response = await chat_service.perform_chat_api_call(
                 provider=request.get("provider", "openai"),
                 model=request["model"],
                 messages=messages,

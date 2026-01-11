@@ -8,6 +8,11 @@ type AuthTokenKind = 'jwt' | 'apiKey';
 const AUTH_CACHE_TTL_MS = 30_000;
 const AUTH_NEGATIVE_CACHE_TTL_MS = 5_000;
 const MAX_CACHE_SIZE = 500;
+const MAX_TOKEN_LENGTH = 4096;
+const MAX_AUTH_HEADER_LENGTH = 8192;
+const MAX_COOKIE_VALUE_LENGTH = 4096;
+// Best-effort cache: per-instance and non-persistent. Revoked tokens may remain accepted
+// until AUTH_CACHE_TTL_MS expires (about 30s) for this process.
 const authCache = new Map<string, { ok: boolean; expiresAt: number }>();
 
 const hashToken = async (token: string): Promise<string> => {
@@ -25,6 +30,9 @@ const buildAuthCacheKey = async (
   kind: AuthTokenKind,
   token: string
 ): Promise<string | null> => {
+  if (token.length > MAX_TOKEN_LENGTH) {
+    return null;
+  }
   try {
     const hashedToken = await hashToken(token);
     return `${kind}:${hashedToken}`;
@@ -80,6 +88,9 @@ const setCachedAuth = (cacheKey: string, ok: boolean, ttlMs: number): void => {
 };
 
 const safeDecodeCookieValue = (value: string): string => {
+  if (!value || value.length > MAX_COOKIE_VALUE_LENGTH) {
+    return '';
+  }
   try {
     return decodeURIComponent(value);
   } catch {
@@ -88,21 +99,28 @@ const safeDecodeCookieValue = (value: string): string => {
 };
 
 const normalizeToken = (value: string): string => {
+  if (!value || value.length > MAX_TOKEN_LENGTH + 7) return '';
   const trimmed = value.trim();
   if (!trimmed) return '';
-  return trimmed.replace(/^Bearer\s+/i, '').trim();
+  const normalized = trimmed.replace(/^Bearer\s+/i, '').trim();
+  if (!normalized || normalized.length > MAX_TOKEN_LENGTH) return '';
+  return normalized;
 };
 
 const BEARER_TOKEN_PATTERN = /^Bearer\s+(\S+)$/i;
 const API_KEY_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 const parseBearerHeader = (authorization: string): string | null => {
+  if (!authorization || authorization.length > MAX_AUTH_HEADER_LENGTH) return null;
   const match = authorization.trim().match(BEARER_TOKEN_PATTERN);
   if (!match) return null;
-  return match[1];
+  const token = match[1];
+  if (token.length > MAX_TOKEN_LENGTH) return null;
+  return token;
 };
 
-const isValidApiKeyFormat = (apiKey: string): boolean => API_KEY_PATTERN.test(apiKey);
+const isValidApiKeyFormat = (apiKey: string): boolean =>
+  apiKey.length <= MAX_TOKEN_LENGTH && API_KEY_PATTERN.test(apiKey);
 
 const base64UrlToUint8Array = (input: string): Uint8Array => {
   const padded = input.replace(/-/g, '+').replace(/_/g, '/');
@@ -260,6 +278,9 @@ const hasAuthCookie = async (request: NextRequest): Promise<boolean> => {
 
     // Cookie name convention: access_token stores JWTs; x_api_key/x-api-key store API keys.
     const kind: AuthTokenKind = name === 'access_token' ? 'jwt' : 'apiKey';
+    if (kind === 'apiKey' && !isValidApiKeyFormat(token)) {
+      continue;
+    }
     if (await verifyAuthToken(token, kind)) {
       return true;
     }

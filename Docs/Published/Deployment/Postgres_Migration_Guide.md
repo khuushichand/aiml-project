@@ -54,14 +54,16 @@ python -m tldw_Server_API.app.core.DB_Management.migration_tools \
       --batch-size 500
 ```
 
-For multi-user deployments, repeat the command for each user directory. To auto-discover user IDs
-from the filesystem:
+For multi-user deployments, repeat the command for each user directory. Run these migrations
+sequentially; do not run multiple instances in parallel because the tool truncates target tables
+before copying data. To auto-discover user IDs from the filesystem safely:
 
 ```bash
-for USER_ID in $(ls -1 "$USER_DB_BASE_DIR"); do
+while IFS= read -r -d '' USER_DIR; do
+  USER_ID=$(basename "$USER_DIR")
   python -m tldw_Server_API.app.core.DB_Management.migration_tools \
-        --content-sqlite <USER_DB_BASE_DIR>/$USER_ID/Media_DB_v2.db \
-        --chacha-sqlite <USER_DB_BASE_DIR>/$USER_ID/ChaChaNotes.db \
+        --content-sqlite "$USER_DIR/Media_DB_v2.db" \
+        --chacha-sqlite "$USER_DIR/ChaChaNotes.db" \
         --analytics-sqlite Analytics.db \
         --workflows-sqlite Databases/workflows.db \
         --pg-host "$PGHOST" \
@@ -70,7 +72,7 @@ for USER_ID in $(ls -1 "$USER_DB_BASE_DIR"); do
         --pg-user "$PGUSER" \
         --pg-password "$PGPASSWORD" \
         --batch-size 500
-done
+done < <(find "$USER_DB_BASE_DIR" -mindepth 1 -maxdepth 1 -type d -print0)
 ```
 
 The script performs the following actions for each supplied database:

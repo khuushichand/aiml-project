@@ -144,8 +144,9 @@ def main() -> None:
         finally:
             try:
                 asyncio.run(http_client.shutdown_http_client())
-            except Exception:
-                pass
+            except Exception as err:
+                # Best-effort cleanup; do not fail the harness on cleanup issues.
+                print(f"Warning: failed to shutdown http client: {err}", file=sys.stderr)
         print(json.dumps(result, indent=2))
         return
 

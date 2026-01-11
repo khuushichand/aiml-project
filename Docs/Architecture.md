@@ -260,7 +260,7 @@ This section gives the quick mental model.
 Note: `<USER_DB_BASE_DIR>` is defined in `tldw_Server_API.app.core.config`, defaults to `Databases/user_databases/` under the project root, and can be overridden via environment variable or `Config_Files/config.txt`.
 
 **AuthNZ DB**
-- Default (single-user): SQLite file configured by `DATABASE_URL` (defaults to `sqlite:///<USER_DB_BASE_DIR>/<SINGLE_USER_FIXED_ID>/tldw.db`).
+- Default (single-user): SQLite file configured by `DATABASE_URL` (defaults to `sqlite:///./Databases/users.db`).
 - Multi-user deployments typically use PostgreSQL.
 - Stores users, credentials, permissions, and related auth data.
 

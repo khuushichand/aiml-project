@@ -605,6 +605,8 @@ with open("foreign_audio.wav", "rb") as audio_file:
 
 ### Using Python (Direct API)
 
+Note: This manual multipart example is minimal and no-deps; for production clients, prefer a well-tested multipart library.
+
 ```python
 import json
 import uuid

@@ -522,7 +522,10 @@ for await (const chunk of rag.streamSearch('Explain quantum computing')) {
 
 ```python
 import json
+import socket
+import sys
 from typing import List, Dict, Optional, Generator
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -558,8 +561,15 @@ class RAGClient:
             headers=self.headers,
             method='POST',
         )
-        with urlopen(req) as resp:
-            return json.loads(resp.read().decode('utf-8'))
+        try:
+            with urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode('utf-8'))
+        except HTTPError as exc:
+            raise RuntimeError(f"RAG search failed with HTTPError: {exc.code} {exc.reason}") from exc
+        except URLError as exc:
+            raise RuntimeError(f"RAG search failed with URLError: {exc.reason}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"RAG search failed with unexpected error: {exc}") from exc
 
     def ask(self, message: str, databases: List[str] = None) -> Dict:
         """Generate an answer using unified search with generation enabled."""
@@ -574,8 +584,15 @@ class RAGClient:
             headers=self.headers,
             method='POST',
         )
-        with urlopen(req) as resp:
-            return json.loads(resp.read().decode('utf-8'))
+        try:
+            with urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode('utf-8'))
+        except HTTPError as exc:
+            raise RuntimeError(f"RAG ask failed with HTTPError: {exc.code} {exc.reason}") from exc
+        except URLError as exc:
+            raise RuntimeError(f"RAG ask failed with URLError: {exc.reason}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"RAG ask failed with unexpected error: {exc}") from exc
 
     def stream(self, query: str) -> Generator[str, None, None]:
         """Stream NDJSON answer chunks from unified search."""
@@ -589,14 +606,38 @@ class RAGClient:
             headers=self.headers,
             method='POST',
         )
-        with urlopen(req) as resp:
-            for raw in resp:
-                line = raw.decode('utf-8', errors='replace').strip()
-                if not line:
-                    continue
-                evt = json.loads(line)
-                if evt.get('type') == 'delta':
-                    yield evt.get('text', '')
+        try:
+            with urlopen(req, timeout=30) as resp:
+                status = resp.status if hasattr(resp, 'status') else resp.getcode()
+                if status < 200 or status >= 300:
+                    error_body = resp.read().decode('utf-8', errors='replace')
+                    raise RuntimeError(f"RAG stream failed with HTTP {status}: {error_body}")
+                buffer = ''
+                for raw in resp:
+                    buffer += raw.decode('utf-8', errors='replace')
+                    while '\n' in buffer:
+                        line, buffer = buffer.split('\n', 1)
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            evt = json.loads(line)
+                        except json.JSONDecodeError:
+                            print(f"Skipping malformed NDJSON line: {line!r}", file=sys.stderr)
+                            continue
+                        if not isinstance(evt, dict):
+                            print(f"Skipping non-object NDJSON event: {evt!r}", file=sys.stderr)
+                            continue
+                        if evt.get('type') == 'delta':
+                            yield evt.get('text', '')
+                if buffer.strip():
+                    print(f"Skipping trailing partial NDJSON fragment: {buffer!r}", file=sys.stderr)
+        except HTTPError as exc:
+            raise RuntimeError(f"RAG stream failed with HTTPError: {exc.code} {exc.reason}") from exc
+        except URLError as exc:
+            raise RuntimeError(f"RAG stream failed with URLError: {exc.reason}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"RAG stream failed with unexpected error: {exc}") from exc
 
     def advanced_search(self, query: str, with_citations: bool = True, with_answer: bool = True) -> Dict:
         """Perform an advanced search with common features enabled."""
@@ -610,8 +651,19 @@ class RAGClient:
             headers=self.headers,
             method='GET',
         )
-        with urlopen(req) as resp:
-            return json.loads(resp.read().decode('utf-8'))
+        try:
+            with urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode('utf-8'))
+        except HTTPError as exc:
+            raise RuntimeError(f"RAG advanced search failed with HTTPError: {exc.code} {exc.reason}") from exc
+        except URLError as exc:
+            raise RuntimeError(f"RAG advanced search failed with URLError: {exc.reason}") from exc
+        except socket.timeout as exc:
+            raise RuntimeError("RAG advanced search timed out after 30s") from exc
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"RAG advanced search failed to parse JSON: {exc}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"RAG advanced search failed with unexpected error: {exc}") from exc
 
 
 # Usage example

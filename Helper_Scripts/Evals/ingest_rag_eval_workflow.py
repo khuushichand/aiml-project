@@ -39,19 +39,22 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
+import httpx
 
 def _ensure_repo_root() -> None:
+    """Search upward from this file and prepend the repo root to sys.path."""
     here = Path(__file__).resolve()
-    for parent in [here] + list(here.parents):
+    for parent in [here, *here.parents]:
         if (parent / "tldw_Server_API").is_dir():
             sys.path.insert(0, str(parent))
             return
 
 
 def _configure_local_egress(url: str) -> None:
+    """Parse the provided URL and, for local hosts, set WORKFLOWS_EGRESS_BLOCK_PRIVATE and WORKFLOWS_EGRESS_ALLOWED_PORTS."""
     try:
         parsed = urlparse(url)
-    except Exception:
+    except (TypeError, ValueError):
         return
     host = (parsed.hostname or "").lower()
     if host in {"localhost", "0.0.0.0"} or host.startswith("127.") or host == "::1":
@@ -105,13 +108,13 @@ class ApiClient:
     def url(self, path: str) -> str:
         return f"{self.base.rstrip('/')}{path}"
 
-    def get(self, path: str, **kw):
+    def get(self, path: str, **kw) -> httpx.Response:
         return http_client.fetch(method="GET", url=self.url(path), headers=self.headers, timeout=self.timeout, **kw)
 
-    def post(self, path: str, **kw):
+    def post(self, path: str, **kw) -> httpx.Response:
         return http_client.fetch(method="POST", url=self.url(path), headers=self.headers, timeout=self.timeout, **kw)
 
-    def delete(self, path: str, **kw):
+    def delete(self, path: str, **kw) -> httpx.Response:
         return http_client.fetch(method="DELETE", url=self.url(path), headers=self.headers, timeout=self.timeout, **kw)
 
 

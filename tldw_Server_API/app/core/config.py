@@ -690,7 +690,19 @@ def load_settings():
 
     # Base directory for all user-specific data (USER_DB_BASE_DIR default): ACTUAL_PROJECT_ROOT/Databases/user_databases/
     default_user_data_base_dir = ACTUAL_PROJECT_ROOT / "Databases" / "user_databases"
-    user_data_base_dir_str = os.getenv("USER_DB_BASE_DIR", str(default_user_data_base_dir.resolve()))
+    config_user_db_base_dir = None
+    try:
+        config_user_db_base_dir = get_config_value("TTS-Settings", "USER_DB_BASE_DIR")
+    except Exception:
+        config_user_db_base_dir = None
+    if config_user_db_base_dir is not None:
+        config_user_db_base_dir = str(config_user_db_base_dir).strip() or None
+    env_user_db_base_dir = os.getenv("USER_DB_BASE_DIR")
+    user_data_base_dir_str = (
+        config_user_db_base_dir
+        or env_user_db_base_dir
+        or str(default_user_data_base_dir.resolve())
+    )
     user_data_base_dir = Path(user_data_base_dir_str)
 
     # Main/central SQLite database: ACTUAL_PROJECT_ROOT/Databases/user_databases/<SINGLE_USER_FIXED_ID>/tldw.db

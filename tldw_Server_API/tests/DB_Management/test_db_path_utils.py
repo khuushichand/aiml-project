@@ -49,15 +49,16 @@ def test_get_user_base_directory_multi_user_none_raises(monkeypatch, tmp_path):
         DatabasePaths.get_user_base_directory(None)
 
 
-def test_user_db_base_dir_env_overrides_settings(monkeypatch, tmp_path):
+def test_user_db_base_dir_settings_override_env_outside_tests(monkeypatch, tmp_path):
     env_base = tmp_path / "env_base"
     settings_base = tmp_path / "settings_base"
     monkeypatch.setenv("USER_DB_BASE_DIR", str(env_base))
     monkeypatch.setitem(settings, "USER_DB_BASE_DIR", str(settings_base))
+    monkeypatch.setattr(db_path_utils, "_is_test_context", lambda: False)
 
     base_dir = DatabasePaths.get_user_db_base_dir()
 
-    assert base_dir == env_base
+    assert base_dir == settings_base
     assert base_dir.exists()
 
 

@@ -63,6 +63,9 @@ https://customsvg.github.io/
 https://designdetails.fm/episodes
 https://blikket.co/ux-vs-cro-how-harmonizing-design-and-strategy-can-skyrocket-your-ecommerce-revenue/
 https://copycoder.ai/
+https://medium.com/@alphadesignglobal/8-tiny-ui-fixes-that-will-make-your-product-feel-10x-smarter-afffb1a61a6b
+https://medium.com/design-bootcamp/the-history-of-radial-menus-in-video-games-e6968bb1bac6
+https://www.smashingmagazine.com/2025/12/how-measure-impact-features-tars/
 https://medium.com/@ryan.almeida86/10-tiny-ui-fixes-that-make-a-big-difference-951b1c98d4ec
 https://www.grug.design/know
 https://uxplanet.org/14-logic-driven-ui-design-tips-145ee08ea5a5?gi=31c1a5e9d721

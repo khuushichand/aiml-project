@@ -15,12 +15,15 @@ import uuid
 from pathlib import Path
 from urllib.parse import urlparse
 
+from loguru import logger
 
 def _ensure_repo_root() -> None:
     here = Path(__file__).resolve()
-    for parent in [here] + list(here.parents):
+    for parent in [here, *here.parents]:
         if (parent / "tldw_Server_API").is_dir():
-            sys.path.insert(0, str(parent))
+            p = str(parent)
+            if p not in sys.path:
+                sys.path.insert(0, p)
             return
 
 
@@ -41,20 +44,31 @@ _ensure_repo_root()
 
 try:
     from tldw_Server_API.app.core import http_client
-except Exception:
+except ImportError as err:
     print("tldw_Server_API not available; run from the repo root or set PYTHONPATH.", file=sys.stderr)
-    raise SystemExit(1)
+    raise SystemExit(1) from err
 
 
 async def _stream_pcm(url: str, headers: dict, payload: dict, out_path: str, rate: int, channels: int) -> None:
     print(f"Streaming PCM → {out_path} (rate={rate}, channels={channels})")
     with open(out_path, "wb") as fout:
         # Optional realtime playback
+        playback_stream = None
+        pending = b""
         try:
             import sounddevice as sd
             import numpy as np
-            use_playback = True
-        except Exception:
+            try:
+                playback_stream = sd.OutputStream(samplerate=rate, channels=channels, dtype="int16")
+                playback_stream.start()
+                use_playback = True
+            except Exception as exc:
+                print(f"PCM playback disabled: {exc}")
+                logger.warning("PCM playback disabled: {}", exc)
+                use_playback = False
+        except Exception as exc:
+            print(f"sounddevice unavailable; skipping playback: {exc}")
+            logger.info("sounddevice unavailable; skipping playback: {}", exc)
             use_playback = False
 
         async for chunk in http_client.astream_bytes(
@@ -68,14 +82,35 @@ async def _stream_pcm(url: str, headers: dict, payload: dict, out_path: str, rat
                 continue
             fout.write(chunk)
             if use_playback:
-                arr = np.frombuffer(chunk, dtype=np.int16)
-                sd.play(arr, samplerate=rate, blocking=False)
+                pending += chunk
+                frame_bytes = 2 * channels
+                aligned_len = len(pending) - (len(pending) % frame_bytes)
+                if aligned_len:
+                    frame_data = pending[:aligned_len]
+                    pending = pending[aligned_len:]
+                    arr = np.frombuffer(frame_data, dtype=np.int16)
+                    if channels > 1:
+                        arr = arr.reshape(-1, channels)
+                    try:
+                        if playback_stream is not None:
+                            playback_stream.write(arr)
+                    except Exception as exc:
+                        logger.warning("PCM playback write failed: {}", exc)
+                        use_playback = False
+                        if playback_stream is not None:
+                            try:
+                                playback_stream.stop()
+                                playback_stream.close()
+                            except Exception as close_exc:
+                                logger.warning("PCM playback shutdown failed: {}", close_exc)
+                            playback_stream = None
 
-        if "sd" in locals():
+        if playback_stream is not None:
             try:
-                sd.stop()
-            except Exception:
-                pass
+                playback_stream.stop()
+                playback_stream.close()
+            except Exception as exc:
+                logger.warning("PCM playback shutdown failed: {}", exc)
 
 
 def main() -> None:

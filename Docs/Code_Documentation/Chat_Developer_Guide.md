@@ -23,7 +23,7 @@ This guide explains the Chat module’s architecture, key components, and how to
 
 ## Directory Map
 
- - `tldw_Server_API/app/core/Chat/`
+- `tldw_Server_API/app/core/Chat/`
   - `chat_orchestrator.py` - Primary dispatcher/utilities (build inputs, assemble context) that delegate to the adapter registry
   - `chat_helpers.py` - Request shaping helpers, conversion from API schemas, dictionary/character hooks
   - `provider_manager.py` - Provider health/fallback management; adapter registry + capability registry are authoritative for handlers/params

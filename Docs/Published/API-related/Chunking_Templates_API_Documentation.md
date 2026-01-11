@@ -645,7 +645,7 @@ curl -X POST "http://localhost:8000/api/v1/chunking/templates" \
   }'
 ```
 
-### Example 2: Processing a Research Paper
+Shared utility for Python examples (used in Examples 2 and 3):
 
 ```python
 import json
@@ -661,7 +661,11 @@ def request_json(method, url, payload):
     )
     with urlopen(req) as resp:
         return json.loads(resp.read().decode("utf-8"))
+```
 
+### Example 2: Processing a Research Paper
+
+```python
 # Apply the academic_paper template
 result = request_json(
     "POST",
@@ -689,20 +693,6 @@ for i, chunk in enumerate(chunks):
 ### Example 3: Batch Processing with Templates
 
 ```python
-import json
-from urllib.request import Request, urlopen
-
-def request_json(method, url, payload):
-    data = json.dumps(payload).encode("utf-8")
-    req = Request(
-        url,
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method=method,
-    )
-    with urlopen(req) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
 documents = [
     {"type": "academic_paper", "text": "..."},
     {"type": "code_documentation", "text": "..."},

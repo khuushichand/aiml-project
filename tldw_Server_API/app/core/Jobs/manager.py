@@ -135,11 +135,13 @@ class JobManager:
                 self.db_url = negotiate_pg_dsn(self.db_url)
             except Exception:
                 pass
-            ensure_jobs_tables_pg(self.db_url)
-            try:
-                ensure_job_counters_pg(self.db_url)
-            except Exception:
-                pass
+            skip_schema = JobManager._is_truthy(os.getenv("JOBS_PG_SKIP_SCHEMA_INIT"))
+            if not skip_schema:
+                ensure_jobs_tables_pg(self.db_url)
+                try:
+                    ensure_job_counters_pg(self.db_url)
+                except Exception:
+                    pass
             self.db_path = Path(":memory:")  # unused
         else:
             # Prefer explicit db_path, then env override for tests (JOBS_DB_PATH), otherwise default
@@ -2536,7 +2538,20 @@ class JobManager:
                                 started_at = d.get("started_at") or d.get("acquired_at")
                                 if isinstance(started_at, str):
                                     started_at = _parse_dt(started_at)
-                                observe_duration({"domain": d.get("domain"), "queue": d.get("queue"), "job_type": d.get("job_type"), "trace_id": d.get("trace_id"), "request_id": d.get("request_id")}, started_at, datetime.utcnow())
+                                try:
+                                    observe_duration(
+                                        {
+                                            "domain": d.get("domain"),
+                                            "queue": d.get("queue"),
+                                            "job_type": d.get("job_type"),
+                                            "trace_id": d.get("trace_id"),
+                                            "request_id": d.get("request_id"),
+                                        },
+                                        started_at,
+                                        self._clock.now_utc(),
+                                    )
+                                except Exception:
+                                    pass
                                 # Update gauges after terminal state
                                 increment_completed({"domain": d.get("domain"), "queue": d.get("queue"), "job_type": d.get("job_type")})
                                 # SLA check: duration
@@ -2581,13 +2596,15 @@ class JobManager:
                                         pass
                                 except Exception:
                                     pass
-                                try:
-                                    ev = {"id": int(job_id), "domain": d.get("domain"), "queue": d.get("queue"), "job_type": d.get("job_type")}
-                                    emit_job_event("job.completed", job=ev)
-                                except Exception:
-                                    pass
                         except Exception:
                             pass
+                        if base and ok:
+                            try:
+                                d_ev = dict(base)
+                                ev = {"id": int(job_id), "domain": d_ev.get("domain"), "queue": d_ev.get("queue"), "job_type": d_ev.get("job_type")}
+                                emit_job_event("job.completed", job=ev)
+                            except Exception:
+                                pass
                         res_ok = ok
                         # fall through to finally and return
             else:
@@ -3305,6 +3322,29 @@ class JobManager:
                                     )
                                     failed_from_queued = cur.rowcount > 0
                         ok = cur.rowcount > 0 or failed_from_queued
+                        if ok and (error_code or error_class or error_stack is not None):
+                            try:
+                                cur.execute(
+                                    (
+                                        "UPDATE jobs SET error_code = COALESCE(%s, error_code), "
+                                        "error_class = COALESCE(%s, error_class), "
+                                        "error_stack = COALESCE(%s::jsonb, error_stack) "
+                                        "WHERE id = %s"
+                                    ),
+                                    (
+                                        error_code,
+                                        error_class,
+                                        (json.dumps(error_stack) if error_stack is not None else None),
+                                        int(job_id),
+                                    ),
+                                )
+                            except Exception:
+                                pass
+                        if ok:
+                            try:
+                                conn.commit()
+                            except Exception:
+                                pass
                         try:
                             if ok and elem:
                                 d = dict(elem)

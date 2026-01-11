@@ -145,7 +145,7 @@ Metric definitions:
 - `JOBS_MAX_CONCURRENCY` (per processor instance)
 - `JOBS_ENABLE_METRICS=true|false`
 - Feature flags for rollout:
-  - `TLDW_JOBS_BACKEND=core` (legacy backends removed; overrides ignored by chatbooks/prompt studio).
+  - `TLDW_JOBS_BACKEND=core` (legacy backends removed; overrides ignored by Chatbooks/Prompt Studio).
   - Domain overrides remain for embeddings execution mode (`EMBEDDINGS_JOBS_BACKEND=jobs|redis`).
 
 ## Security & Multi-Tenant

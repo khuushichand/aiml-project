@@ -14,9 +14,11 @@ from urllib.parse import urlparse
 
 def _ensure_repo_root() -> None:
     here = Path(__file__).resolve()
-    for parent in [here] + list(here.parents):
+    for parent in [here, *here.parents]:
         if (parent / "tldw_Server_API").is_dir():
-            sys.path.insert(0, str(parent))
+            p = str(parent)
+            if p not in sys.path:
+                sys.path.insert(0, p)
             return
 
 
@@ -37,15 +39,22 @@ _ensure_repo_root()
 
 try:
     from tldw_Server_API.app.core import http_client
-except Exception:
+    from tldw_Server_API.app.core.http_client import RetryPolicy
+except ImportError as err:
     print("tldw_Server_API not available; run from the repo root or set PYTHONPATH.", file=sys.stderr)
-    raise SystemExit(1)
+    raise SystemExit(1) from err
 
 
-async def stream_events(base_url: str, test_id: str, api_key: str):
+async def stream_events(base_url: str, test_id: str, api_key: str) -> None:
     url = f"{base_url.rstrip('/')}/api/v1/evaluations/embeddings/abtest/{test_id}/events"
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    async for event in http_client.astream_sse(url=url, headers=headers):
+    retry_policy = RetryPolicy(attempts=3)
+    async for event in http_client.astream_sse(
+        url=url,
+        headers=headers,
+        retry=retry_policy,
+        timeout=30.0,
+    ):
         data = (event.data or "").strip()
         if data:
             print(data)
@@ -63,5 +72,5 @@ if __name__ == "__main__":
     finally:
         try:
             asyncio.run(http_client.shutdown_http_client())
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"Warning: failed to shut down HTTP client: {exc}", file=sys.stderr)

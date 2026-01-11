@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Optional
+from datetime import datetime
 import os
 from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
@@ -452,6 +453,19 @@ class AttachmentItem(BaseModel):
     created_at: str
 
 
+def _normalize_attachment_item(item: dict[str, Any]) -> AttachmentItem:
+    created_at = item.get("created_at")
+    if isinstance(created_at, datetime):
+        created_at = created_at.isoformat()
+    elif created_at is None:
+        created_at = ""
+    else:
+        created_at = str(created_at)
+    payload = dict(item)
+    payload["created_at"] = created_at
+    return AttachmentItem(**payload)
+
+
 @router.post("/jobs/{job_id}/attachments", response_model=AttachmentItem)
 async def add_job_attachment_endpoint(
     job_id: int,
@@ -471,7 +485,7 @@ async def add_job_attachment_endpoint(
         item = next((i for i in items if int(i.get('id')) == int(rid)), None)
         if not item:
             raise HTTPException(status_code=500, detail="Failed to read back attachment")
-        return AttachmentItem(**item)
+        return _normalize_attachment_item(item)
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
 
@@ -489,7 +503,7 @@ async def list_job_attachments_endpoint(
         _set_pg_rls_for_user(admin_user, domain)
     jm = JobManager(backend=backend, db_url=db_url)
     items = jm.list_job_attachments(job_id, limit=500)
-    return [AttachmentItem(**i) for i in items]
+    return [_normalize_attachment_item(i) for i in items]
 
 
 # --- SLA policies ---

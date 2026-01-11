@@ -96,7 +96,7 @@ try:
     from tldw_Server_API.app.core import http_client
 except Exception:
     print("tldw_Server_API not available; run from the repo root or set PYTHONPATH.", file=sys.stderr)
-    raise SystemExit(1)
+    raise SystemExit(1) from None
 
 
 def _headers(api_key: Optional[str]) -> Dict[str, str]:

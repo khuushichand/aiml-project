@@ -435,7 +435,6 @@ Per-user limits enforced at the endpoint level:
 - Download: 20/minute
 
 List/status endpoints may be subject to global API rate limits but have no dedicated per-route limiter. Exceeded limits return HTTP 429.
-Exceeded limits return HTTP 429.
 
 ## Code Examples
 
@@ -554,9 +553,11 @@ with open("my_backup.chatbook", "rb") as f:
         method="POST",
     )
     with urlopen(req) as resp:
-        if resp.status == 200:
+        if resp.status != 200:
+            print(f"Import failed with status {resp.status}")
+        else:
             result = json.loads(resp.read().decode("utf-8"))
-        print(f"Imported: {result['imported_items']}")
+            print(f"Imported: {result['imported_items']}")
 ```
 
 ### JavaScript Example

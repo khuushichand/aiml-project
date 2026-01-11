@@ -72,7 +72,7 @@ Move chatbooks async export/import execution onto the core Jobs worker SDK. Jobs
 - Ensure download URLs are generated on export completion.
 
 ## 7. Run Command
-```
+```bash
 python -m tldw_Server_API.app.core.Chatbooks.services.jobs_worker
 ```
 

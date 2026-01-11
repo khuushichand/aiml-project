@@ -1470,6 +1470,8 @@ results = await asyncio.gather(*[
 ])
 ```
 
+Response ownership note: close responses immediately when you fully consume them in the same scope (like the health check example). If you return the response object itself, do not close it here—the caller that receives the response is responsible for closing it.
+
 **Graceful error handling** in concurrent operations:
 
 ```python

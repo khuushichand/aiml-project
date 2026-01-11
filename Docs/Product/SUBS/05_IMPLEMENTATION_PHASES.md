@@ -183,12 +183,14 @@ class RSSParser(BaseParser):
     """Parser for RSS and Atom feeds"""
 
     async def parse(self, url: str) -> List[ContentItem]:
+        response = None
         response = await afetch(method="GET", url=url)
         try:
             response.raise_for_status()
             feed = feedparser.parse(response.text)
         finally:
-            await response.aclose()
+            if response is not None:
+                await response.aclose()
         items = []
 
         for entry in feed.entries:

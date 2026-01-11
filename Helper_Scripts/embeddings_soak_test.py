@@ -90,7 +90,8 @@ async def _fetch_summary_http(url: str) -> Optional[dict]:
         r = await http_client.afetch(method="GET", url=url, timeout=5)
         if r.status_code == 200:
             return r.json()
-    except Exception:
+    except Exception as e:
+        print(f"summary fetch error for {url}: {e}", file=sys.stderr)
         return None
     return None
 

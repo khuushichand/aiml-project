@@ -436,7 +436,7 @@ def search(query: str):
 # Simple search
 results = search("What is RAG?")
 
-# Complex search with custom config
+# Unified search with custom config
 def complex_search(query: str):
     config = {
         "pipeline": "quality",
@@ -445,7 +445,7 @@ def complex_search(query: str):
     }
 
     return request_json(
-        "http://localhost:8000/api/v1/rag/search/complex",
+        "http://localhost:8000/api/v1/rag/search",
         {"query": query, "config": config},
     )
 ```

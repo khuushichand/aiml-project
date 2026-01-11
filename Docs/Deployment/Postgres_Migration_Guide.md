@@ -41,18 +41,45 @@ same pass.
 
 ```bash
 # Repeat per user_id (single-user installs typically use the fixed default user_id).
-for user_id in $(ls -1 "$USER_DB_BASE_DIR"); do
-  python -m tldw_Server_API.app.core.DB_Management.migration_tools \
-        --content-sqlite "<USER_DB_BASE_DIR>/${user_id}/Media_DB_v2.db" \
-        --chacha-sqlite "<USER_DB_BASE_DIR>/${user_id}/ChaChaNotes.db" \
-        --analytics-sqlite Analytics.db \
-        --workflows-sqlite Databases/workflows.db \
-        --pg-host "$PGHOST" \
-        --pg-port "$PGPORT" \
-        --pg-database "$PGDATABASE" \
-        --pg-user "$PGUSER" \
-        --pg-password "$PGPASSWORD" \
-        --batch-size 500
+if [ -z "${USER_DB_BASE_DIR}" ]; then
+  echo "Error: USER_DB_BASE_DIR is not set." >&2
+  exit 1
+fi
+if [ ! -d "${USER_DB_BASE_DIR}" ]; then
+  echo "Error: USER_DB_BASE_DIR (${USER_DB_BASE_DIR}) is not a directory." >&2
+  exit 1
+fi
+
+for user_path in "${USER_DB_BASE_DIR}"/*; do
+  [ -d "${user_path}" ] || { echo "Skipping non-directory entry: ${user_path}" >&2; continue; }
+  user_id="$(basename "${user_path}")"
+  media_db="${user_path}/Media_DB_v2.db"
+  chacha_db="${user_path}/ChaChaNotes.db"
+
+  if [ ! -r "${media_db}" ]; then
+    echo "Warning: missing or unreadable Media_DB_v2.db for user ${user_id} (${media_db}). Skipping." >&2
+    continue
+  fi
+
+  migration_args=(
+    --content-sqlite "${media_db}"
+    --analytics-sqlite Analytics.db
+    --workflows-sqlite Databases/workflows.db
+    --pg-host "$PGHOST"
+    --pg-port "$PGPORT"
+    --pg-database "$PGDATABASE"
+    --pg-user "$PGUSER"
+    --pg-password "$PGPASSWORD"
+    --batch-size 500
+  )
+  if [ -r "${chacha_db}" ]; then
+    migration_args+=(--chacha-sqlite "${chacha_db}")
+  else
+    echo "Error: missing or unreadable ChaChaNotes.db for user ${user_id} (${chacha_db})." >&2
+    exit 1
+  fi
+
+  python -m tldw_Server_API.app.core.DB_Management.migration_tools "${migration_args[@]}"
 done
 ```
 
@@ -80,7 +107,11 @@ Use `--skip-table <table_name>` to omit auxiliary tables (for example, to skip l
   ```
 
   ```bash
-  sqlite3 <USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db 'SELECT COUNT(*) FROM Media;'
+  for user_id in $(ls -1 "$USER_DB_BASE_DIR"); do
+    [ -d "$USER_DB_BASE_DIR/$user_id" ] || continue
+    echo "User $user_id:"
+    sqlite3 "${USER_DB_BASE_DIR}/${user_id}/Media_DB_v2.db" 'SELECT COUNT(*) FROM media;'
+  done
   sqlite3 Databases/workflows.db 'SELECT COUNT(*) FROM workflow_runs;'
   ```
 

@@ -139,14 +139,18 @@ req = Request(
     method="POST",
 )
 
-with urlopen(req, timeout=30) as resp:
-    payload = json.loads(resp.read().decode("utf-8"))
-    status = resp.status
-
-if status == 201:
+try:
+    with urlopen(req, timeout=30) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+        status = resp.status
     print(f"✅ Created evaluation: {{payload['id']}}")
-else:
-    print(f"❌ Error: {{status}} - {{payload}}")
+except HTTPError as e:
+    error_body = e.read().decode("utf-8", errors="replace")
+    print(f"❌ HTTPError {{e.code}}: {{error_body}}")
+except URLError as e:
+    print(f"❌ URLError: {{e.reason}}")
+except TimeoutError:
+    print("❌ TimeoutError: request timed out")
 ```'''
 
     # cURL example

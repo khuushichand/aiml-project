@@ -470,6 +470,8 @@ with open("foreign_audio.wav", "rb") as audio_file:
 
 ### Using Python (Direct API)
 
+Note: This example reads the entire file into memory and manually builds multipart boundaries. For large files or untrusted filenames, prefer a multipart library and sanitize filenames.
+
 ```python
 import json
 import uuid

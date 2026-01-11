@@ -79,8 +79,8 @@ Streaming variant (Python):
 ```
   Key points for all Python clients:
 
-  - Always check status_code.
-  - Only treat body as audio when status_code == 200.
+  - Use try/except HTTPError to catch non-2xx responses.
+  - Only treat body as audio when the request succeeds (no exception).
   - On non‑200, parse JSON and surface detail to the caller.
 
   ———

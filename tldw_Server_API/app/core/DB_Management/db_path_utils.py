@@ -225,7 +225,10 @@ class DatabasePaths:
     def get_user_db_base_dir(*, allow_legacy_alias: bool = False) -> Path:
         env_user_db_base = os.getenv("USER_DB_BASE_DIR")
         settings_user_db_base = settings.get("USER_DB_BASE_DIR")
-        user_db_base = env_user_db_base or settings_user_db_base
+        if _is_test_context() and env_user_db_base:
+            user_db_base = env_user_db_base
+        else:
+            user_db_base = settings_user_db_base or env_user_db_base
         project_root = Path(get_project_root())
         default_base = (project_root / "Databases" / "user_databases").resolve()
         if _is_test_context() and not env_user_db_base:

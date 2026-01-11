@@ -17,7 +17,7 @@ https://www.reddit.com/r/LocalLLaMA/comments/1n8flne/how_can_i_reduce_the_first_
 
 https://github.com/rsxdalv/chatterbox/tree/faster
 
-
+https://github.com/ekwek1/soprano
 https://github.com/rsxdalv/chatterbox/tree/streaming
 https://github.com/randombk/chatterbox-vllm
 https://generativeai.pub/glm-4-voice-9b-real-time-multilingual-voice-conversation-ai-install-locally-in-minutes-ce2fcd6c8fd8

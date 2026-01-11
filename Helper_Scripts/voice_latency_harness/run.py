@@ -67,10 +67,14 @@ def _configure_local_egress(url: str) -> None:
         return
     host = (parsed.hostname or "").lower()
     if host in {"localhost", "0.0.0.0"} or host.startswith("127.") or host == "::1":
-        os.environ.setdefault("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "false")
+        if "WORKFLOWS_EGRESS_BLOCK_PRIVATE" not in os.environ:
+            os.environ["WORKFLOWS_EGRESS_BLOCK_PRIVATE"] = "false"
+            logger.warning("Local egress override: set WORKFLOWS_EGRESS_BLOCK_PRIVATE=false for %s", host)
         if "WORKFLOWS_EGRESS_ALLOWED_PORTS" not in os.environ:
             port = parsed.port or (443 if parsed.scheme == "https" else 80)
-            os.environ["WORKFLOWS_EGRESS_ALLOWED_PORTS"] = f"{port},80,443"
+            allowed_ports = f"{port},80,443"
+            os.environ["WORKFLOWS_EGRESS_ALLOWED_PORTS"] = allowed_ports
+            logger.warning("Local egress override: set WORKFLOWS_EGRESS_ALLOWED_PORTS=%s", allowed_ports)
 
 
 _ensure_repo_root()

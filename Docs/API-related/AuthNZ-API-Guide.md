@@ -372,11 +372,12 @@ from urllib.request import Request, urlopen
 
 # Set up headers with API key
 headers = {'X-API-KEY': 'your-api-key-here'}
+timeout_seconds = 10  # seconds
 
 # Make request
 params = urlencode({'query': 'test'})
 req = Request(f'http://localhost:8000/api/v1/media/search?{params}', headers=headers, method='GET')
-with urlopen(req) as resp:
+with urlopen(req, timeout=timeout_seconds) as resp:
     data = json.loads(resp.read().decode('utf-8'))
 ```
 
@@ -385,15 +386,28 @@ with urlopen(req) as resp:
 import json
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from datetime import datetime, timedelta
+import socket
 
 class TLDWClient:
-    def __init__(self, base_url='http://localhost:8000'):
+    def __init__(self, base_url='http://localhost:8000', timeout=10):
         self.base_url = base_url
         self.access_token = None
         self.refresh_token = None
         self.token_expires = None
+        self.timeout = timeout  # seconds
+
+    def _parse_auth_response(self, body, required_fields):
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError as err:
+            raise RuntimeError("Auth response was not valid JSON.") from err
+
+        missing = [field for field in required_fields if field not in data]
+        if missing:
+            raise RuntimeError(f"Auth response missing fields: {', '.join(missing)}")
+        return data
 
     def login(self, username, password):
         """Login and store tokens"""
@@ -404,8 +418,16 @@ class TLDWClient:
             headers={'Content-Type': 'application/x-www-form-urlencoded'},
             method='POST',
         )
-        with urlopen(req) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
+        try:
+            with urlopen(req, timeout=self.timeout) as resp:
+                body = resp.read().decode('utf-8')
+        except HTTPError as err:
+            detail = err.read().decode('utf-8')
+            raise RuntimeError(f'Login failed ({err.code}): {detail}') from err
+        except (URLError, socket.timeout) as err:
+            raise RuntimeError(f'Login request failed: {err}') from err
+
+        data = self._parse_auth_response(body, ('access_token', 'refresh_token', 'expires_in'))
         self.access_token = data['access_token']
         self.refresh_token = data['refresh_token']
         self.token_expires = datetime.now() + timedelta(seconds=data['expires_in'])
@@ -414,6 +436,8 @@ class TLDWClient:
 
     def refresh_access_token(self):
         """Refresh the access token"""
+        if not self.refresh_token:
+            raise RuntimeError('No refresh token available; please login again.')
         payload = json.dumps({'refresh_token': self.refresh_token}).encode('utf-8')
         req = Request(
             f'{self.base_url}/api/v1/auth/refresh',
@@ -421,8 +445,16 @@ class TLDWClient:
             headers={'Content-Type': 'application/json'},
             method='POST',
         )
-        with urlopen(req) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
+        try:
+            with urlopen(req, timeout=self.timeout) as resp:
+                body = resp.read().decode('utf-8')
+        except HTTPError as err:
+            detail = err.read().decode('utf-8')
+            raise RuntimeError(f'Refresh failed ({err.code}): {detail}') from err
+        except (URLError, socket.timeout) as err:
+            raise RuntimeError(f'Refresh request failed: {err}') from err
+
+        data = self._parse_auth_response(body, ('access_token', 'expires_in'))
         self.access_token = data['access_token']
         self.token_expires = datetime.now() + timedelta(seconds=data['expires_in'])
 
@@ -430,7 +462,14 @@ class TLDWClient:
         """Make authenticated request with automatic token refresh"""
         # Check if token needs refresh
         if self.token_expires and datetime.now() >= self.token_expires:
-            self.refresh_access_token()
+            try:
+                self.refresh_access_token()
+            except HTTPError as refresh_err:
+                if refresh_err.code == 401:
+                    raise RuntimeError(
+                        'Refresh token expired; please login again.'
+                    ) from refresh_err
+                raise
 
         url = f'{self.base_url}/api/v1{endpoint}'
         params = kwargs.pop('params', None)
@@ -447,14 +486,21 @@ class TLDWClient:
 
         req = Request(url, data=data, headers=headers, method=method)
         try:
-            with urlopen(req) as resp:
+            with urlopen(req, timeout=self.timeout) as resp:
                 return json.loads(resp.read().decode('utf-8'))
         except HTTPError as err:
             if err.code == 401:
-                self.refresh_access_token()
+                try:
+                    self.refresh_access_token()
+                except HTTPError as refresh_err:
+                    if refresh_err.code == 401:
+                        raise RuntimeError(
+                            'Refresh token expired; please login again.'
+                        ) from refresh_err
+                    raise
                 headers['Authorization'] = f'Bearer {self.access_token}'
                 req = Request(url, data=data, headers=headers, method=method)
-                with urlopen(req) as resp:
+                with urlopen(req, timeout=self.timeout) as resp:
                     return json.loads(resp.read().decode('utf-8'))
             raise
 
@@ -486,8 +532,8 @@ curl -X POST \
 ```bash
 # Login and save tokens
 response=$(curl -X POST \
-     -H "Content-Type: application/json" \
-     -d '{"username": "user@example.com", "password": "password"}' \
+     -H "Content-Type: application/x-www-form-urlencoded" \
+     -d 'username=user@example.com&password=password' \
      http://localhost:8000/api/v1/auth/login)
 
 # Extract token (requires jq)

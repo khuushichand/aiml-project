@@ -79,6 +79,8 @@ def _jobs_minimal_env(monkeypatch):
     monkeypatch.setenv("JOBS_DOMAIN_SCOPED_RBAC", "false")
     monkeypatch.setenv("JOBS_REQUIRE_DOMAIN_FILTER", "false")
     monkeypatch.setenv("JOBS_DOMAIN_RBAC_PRINCIPAL", "false")
+    # Disable Postgres RLS unless a test explicitly enables it
+    monkeypatch.setenv("JOBS_PG_RLS_ENABLE", "false")
     # Avoid env leakage that could allow admin finalize on arbitrary domains
     monkeypatch.setenv("JOBS_ADMIN_COMPLETE_QUEUED_ALLOW_DOMAINS", "chatbooks")
     # Keep acquire ordering defaults deterministic across environments
