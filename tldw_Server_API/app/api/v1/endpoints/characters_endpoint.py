@@ -114,6 +114,7 @@ def _validate_file_type(data: bytes, filename: Optional[str]) -> Tuple[bool, str
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import get_character_rate_limiter
+from tldw_Server_API.app.core.Character_Chat.character_limits import get_character_limits
 from tldw_Server_API.app.api.v1.schemas.character_schemas import CharacterResponse, CharacterImportResponse, \
     CharacterCreate, CharacterUpdate, DeletionResponse
 from tldw_Server_API.app.api.v1.schemas.world_book_schemas import (
@@ -219,12 +220,20 @@ async def import_character_endpoint(
     For JSON data, you can upload a .json file or a text file containing JSON.
     """
     try:
+        try:
+            limits = get_character_limits()
+            max_import_size_mb = int(limits.max_import_size_mb)
+            max_import_bytes = max_import_size_mb * 1024 * 1024
+        except Exception:
+            max_import_bytes = MAX_CHARACTER_FILE_SIZE
+            max_import_size_mb = MAX_CHARACTER_FILE_SIZE // (1024 * 1024)
+
         # Pre-size check using content-length header (if available)
         # This prevents loading very large files into memory
-        if character_file.size is not None and character_file.size > MAX_CHARACTER_FILE_SIZE:
+        if character_file.size is not None and character_file.size > max_import_bytes:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"File too large. Maximum allowed size is {MAX_CHARACTER_FILE_SIZE // (1024 * 1024)}MB"
+                detail=f"File too large. Maximum allowed size is {max_import_size_mb}MB"
             )
 
         # Read file with size limit
@@ -236,10 +245,10 @@ async def import_character_endpoint(
             )
 
         # Post-read size check (in case content-length was not accurate)
-        if len(file_content_bytes) > MAX_CHARACTER_FILE_SIZE:
+        if len(file_content_bytes) > max_import_bytes:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"File too large. Maximum allowed size is {MAX_CHARACTER_FILE_SIZE // (1024 * 1024)}MB"
+                detail=f"File too large. Maximum allowed size is {max_import_size_mb}MB"
             )
 
         # Validate file type via magic bytes and extension

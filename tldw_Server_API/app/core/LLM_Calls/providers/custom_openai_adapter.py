@@ -255,6 +255,8 @@ class CustomOpenAIAdapter2(CustomOpenAIAdapter):
                 url = f"{base}/v1/chat/completions"
             payload = self._build_payload(request)
             payload["stream"] = False
+            payload = merge_extra_body(payload, request)
+            headers = merge_extra_headers(headers, request)
             try:
                 with http_client_factory(timeout=timeout or 120.0) as client:
                     resp = client.post(url, headers=headers, json=payload)
@@ -279,6 +281,8 @@ class CustomOpenAIAdapter2(CustomOpenAIAdapter):
                 url = f"{base}/v1/chat/completions"
             payload = self._build_payload(request)
             payload["stream"] = True
+            payload = merge_extra_body(payload, request)
+            headers = merge_extra_headers(headers, request)
             try:
                 with http_client_factory(timeout=timeout or 120.0) as client:
                     with client.stream("POST", url, headers=headers, json=payload) as resp:

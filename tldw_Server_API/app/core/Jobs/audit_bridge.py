@@ -42,6 +42,40 @@ def _audit_enabled() -> bool:
     except Exception:
         return False
 
+
+def _parse_int_env(name: str, default: int, *, min_value: Optional[int] = None, max_value: Optional[int] = None) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        value = default
+    else:
+        try:
+            value = int(str(raw).strip())
+        except Exception:
+            logger.warning(f"Invalid {name}={raw!r}; using default {default}")
+            value = default
+    if min_value is not None:
+        value = max(min_value, value)
+    if max_value is not None:
+        value = min(max_value, value)
+    return value
+
+
+def _parse_float_env(name: str, default: float, *, min_value: Optional[float] = None, max_value: Optional[float] = None) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        value = default
+    else:
+        try:
+            value = float(str(raw).strip())
+        except Exception:
+            logger.warning(f"Invalid {name}={raw!r}; using default {default}")
+            value = default
+    if min_value is not None:
+        value = max(min_value, value)
+    if max_value is not None:
+        value = min(max_value, value)
+    return value
+
 _EVENT_QUEUE: "Queue[Tuple[str, Dict[str, Any] | None, Dict[str, Any] | None]]" = Queue()
 _WORKER_THREAD: Optional[threading.Thread] = None
 _WORKER_LOCK = threading.Lock()
@@ -137,14 +171,16 @@ def _audit_worker_loop() -> None:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     db_path = os.getenv("JOBS_AUDIT_DB_PATH", "Databases/jobs_audit.db")
-    retention_days = int(os.getenv("JOBS_AUDIT_RETENTION_DAYS", "30") or "30")
+    retention_days = _parse_int_env("JOBS_AUDIT_RETENTION_DAYS", 30, min_value=1, max_value=3650)
+    buffer_size = _parse_int_env("JOBS_AUDIT_BUFFER_SIZE", 100, min_value=1, max_value=100000)
+    flush_interval = _parse_float_env("JOBS_AUDIT_FLUSH_SECONDS", 10.0, min_value=0.1, max_value=3600.0)
     service = UnifiedAuditService(
         db_path=db_path,
         retention_days=retention_days,
         enable_pii_detection=False,
         enable_risk_scoring=False,
-        buffer_size=int(os.getenv("JOBS_AUDIT_BUFFER_SIZE", "100") or "100"),
-        flush_interval=float(os.getenv("JOBS_AUDIT_FLUSH_SECONDS", "10.0") or "10.0"),
+        buffer_size=buffer_size,
+        flush_interval=flush_interval,
     )
     try:
         loop.run_until_complete(service.initialize())

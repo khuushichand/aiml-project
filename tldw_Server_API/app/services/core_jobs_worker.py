@@ -213,82 +213,105 @@ async def run_chatbooks_core_jobs_worker(stop_event: Optional[asyncio.Event] = N
                     except Exception:
                         logger.debug("metrics increment failed for renew_task_cancel_failed")
             elif action == "import":
-                ij = svc._get_import_job(chatbooks_job_id)
-                if ij:
-                    ij.status = ImportStatus.IN_PROGRESS
-                    ij.started_at = datetime.utcnow()
-                    svc._save_import_job(ij)
-                # Pre-flight cancel check
-                cur = jm.get_job(int(job["id"])) or {}
-                if cur.get("cancel_requested_at"):
-                    if ij:
-                        ij.status = ImportStatus.CANCELLED
-                        ij.completed_at = datetime.utcnow()
-                        svc._save_import_job(ij)
-                    jm.finalize_cancelled(int(job["id"]), reason="cancel requested before start")
-                    continue
-                cs = {}
-                for k, v in (payload.get("content_selections") or {}).items():
-                    try:
-                        cs[ContentType(k)] = v
-                    except Exception as e:
-                        logger.debug(f"Core Jobs Worker: invalid content type {k}: {e}")
-                        try:
-                            get_metrics_registry().increment(
-                                "app_warning_events_total",
-                                labels={"component": "core_jobs_worker", "event": "invalid_content_type"},
-                            )
-                        except Exception:
-                            logger.debug("metrics increment failed for invalid_content_type")
-                conf_val = payload.get("conflict_resolution", "skip")
+                file_path = payload.get("file_path")
+                _renew_task = None
                 try:
-                    conf = ConflictResolution(conf_val)
-                except Exception as e:
-                    logger.debug(f"Core Jobs Worker: invalid conflict_resolution {conf_val}: {e}; defaulting to SKIP")
-                    conf = ConflictResolution.SKIP
-                _renew_task = await _start_renewal(int(job["id"]))
-                ok, msg, _ = await asyncio.to_thread(
-                    svc._import_chatbook_sync,
-                    payload.get("file_path"), cs,
-                    conf,
-                    bool(payload.get("prefix_imported", False)),
-                    bool(payload.get("import_media", True)),
-                    bool(payload.get("import_embeddings", False)),
-                )
-                ij = svc._get_import_job(chatbooks_job_id)
-                if ok:
-                    # Mid-flight cancel check (honor cancellation request or terminal state)
+                    ij = svc._get_import_job(chatbooks_job_id)
+                    if ij:
+                        ij.status = ImportStatus.IN_PROGRESS
+                        ij.started_at = datetime.utcnow()
+                        svc._save_import_job(ij)
+                    # Pre-flight cancel check
                     cur = jm.get_job(int(job["id"])) or {}
-                    if cur.get("cancel_requested_at") or (cur.get("status") and str(cur.get("status")).lower() != "processing"):
+                    if cur.get("cancel_requested_at"):
                         if ij:
                             ij.status = ImportStatus.CANCELLED
                             ij.completed_at = datetime.utcnow()
                             svc._save_import_job(ij)
-                        jm.finalize_cancelled(int(job["id"]), reason="cancel requested during processing")
+                        jm.finalize_cancelled(int(job["id"]), reason="cancel requested before start")
                         continue
-                    if ij and ij.status != ImportStatus.CANCELLED:
-                        ij.status = ImportStatus.COMPLETED
-                        ij.completed_at = datetime.utcnow()
-                        svc._save_import_job(ij)
-                    jm.complete_job(int(job["id"]), worker_id=worker_id, lease_id=str(lease_id), completion_token=str(lease_id))
-                else:
-                    if ij:
-                        ij.status = ImportStatus.FAILED
-                        ij.completed_at = datetime.utcnow()
-                        ij.error_message = msg
-                        svc._save_import_job(ij)
-                    jm.fail_job(int(job["id"]), error=str(msg), retryable=False, worker_id=worker_id, lease_id=str(lease_id), completion_token=str(lease_id))
-                try:
-                    _renew_task.cancel()
-                except Exception as e:
-                    logger.debug(f"Core Jobs Worker: failed to cancel renew task (import): {e}")
+                    cs = {}
+                    for k, v in (payload.get("content_selections") or {}).items():
+                        try:
+                            cs[ContentType(k)] = v
+                        except Exception as e:
+                            logger.debug(f"Core Jobs Worker: invalid content type {k}: {e}")
+                            try:
+                                get_metrics_registry().increment(
+                                    "app_warning_events_total",
+                                    labels={"component": "core_jobs_worker", "event": "invalid_content_type"},
+                                )
+                            except Exception:
+                                logger.debug("metrics increment failed for invalid_content_type")
+                    conf_val = payload.get("conflict_resolution", "skip")
                     try:
-                        get_metrics_registry().increment(
-                            "app_warning_events_total",
-                            labels={"component": "core_jobs_worker", "event": "renew_task_cancel_failed"},
-                        )
-                    except Exception:
-                        logger.debug("metrics increment failed for renew_task_cancel_failed")
+                        conf = ConflictResolution(conf_val)
+                    except Exception as e:
+                        logger.debug(f"Core Jobs Worker: invalid conflict_resolution {conf_val}: {e}; defaulting to SKIP")
+                        conf = ConflictResolution.SKIP
+                    _renew_task = await _start_renewal(int(job["id"]))
+                    ok, msg, _ = await asyncio.to_thread(
+                        svc._import_chatbook_sync,
+                        file_path, cs,
+                        conf,
+                        bool(payload.get("prefix_imported", False)),
+                        bool(payload.get("import_media", True)),
+                        bool(payload.get("import_embeddings", False)),
+                    )
+                    ij = svc._get_import_job(chatbooks_job_id)
+                    if ok:
+                        # Mid-flight cancel check (honor cancellation request or terminal state)
+                        cur = jm.get_job(int(job["id"])) or {}
+                        if cur.get("cancel_requested_at") or (cur.get("status") and str(cur.get("status")).lower() != "processing"):
+                            if ij:
+                                ij.status = ImportStatus.CANCELLED
+                                ij.completed_at = datetime.utcnow()
+                                svc._save_import_job(ij)
+                            jm.finalize_cancelled(int(job["id"]), reason="cancel requested during processing")
+                            continue
+                        if ij and ij.status != ImportStatus.CANCELLED:
+                            ij.status = ImportStatus.COMPLETED
+                            ij.completed_at = datetime.utcnow()
+                            svc._save_import_job(ij)
+                        jm.complete_job(int(job["id"]), worker_id=worker_id, lease_id=str(lease_id), completion_token=str(lease_id))
+                    else:
+                        if ij:
+                            ij.status = ImportStatus.FAILED
+                            ij.completed_at = datetime.utcnow()
+                            ij.error_message = msg
+                            svc._save_import_job(ij)
+                        jm.fail_job(int(job["id"]), error=str(msg), retryable=False, worker_id=worker_id, lease_id=str(lease_id), completion_token=str(lease_id))
+                finally:
+                    if _renew_task is not None:
+                        try:
+                            _renew_task.cancel()
+                        except Exception as e:
+                            logger.debug(f"Core Jobs Worker: failed to cancel renew task (import): {e}")
+                            try:
+                                get_metrics_registry().increment(
+                                    "app_warning_events_total",
+                                    labels={"component": "core_jobs_worker", "event": "renew_task_cancel_failed"},
+                                )
+                            except Exception:
+                                logger.debug("metrics increment failed for renew_task_cancel_failed")
+                    if file_path:
+                        try:
+                            cleanup_path = Path(file_path)
+                            if cleanup_path.exists() and cleanup_path.is_file():
+                                base_dir = DatabasePaths.get_user_chatbooks_temp_dir(owner).resolve()
+                                cleanup_path = cleanup_path.resolve()
+                                try:
+                                    common = os.path.commonpath([str(cleanup_path), str(base_dir)])
+                                except ValueError:
+                                    common = ""
+                                if common != str(base_dir):
+                                    logger.warning(
+                                        f"Core Jobs Worker: skip deleting import archive outside temp dir: {cleanup_path}"
+                                    )
+                                else:
+                                    cleanup_path.unlink()
+                        except Exception as cleanup_err:
+                            logger.debug(f"Core Jobs Worker: failed to remove import archive {file_path}: {cleanup_err}")
             else:
                 jm.fail_job(int(job["id"]), error="unknown action", retryable=False, worker_id=worker_id, lease_id=str(lease_id), completion_token=str(lease_id))
         except Exception as e:

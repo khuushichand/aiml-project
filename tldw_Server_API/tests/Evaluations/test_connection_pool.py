@@ -208,6 +208,16 @@ class TestConnectionPool:
             count = cursor.fetchone()[0]
             assert count == 4
 
+    @pytest.mark.asyncio
+    async def test_async_connection_in_use_flag(self, connection_pool):
+        """Ensure async checkout keeps the connection marked in use."""
+        async with await connection_pool.get_connection_async() as conn:
+            assert conn.in_use is True
+            cursor = conn.execute("SELECT 1")
+            result = cursor.fetchone()
+            assert result[0] == 1
+        assert conn.in_use is False
+
     def test_transaction_rollback(self, connection_pool):
 
         """Test transaction rollback functionality."""

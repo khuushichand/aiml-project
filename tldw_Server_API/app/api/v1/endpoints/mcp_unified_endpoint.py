@@ -112,6 +112,27 @@ def _get_derived_user_id(user: Optional[TokenData]) -> Optional[str]:
     return user.sub if user else None
 
 
+def _extract_api_key_permissions(info: Optional[Dict[str, Any]]) -> List[str]:
+    """Normalize API key scopes into MCP permissions."""
+    if not info:
+        return []
+    try:
+        from tldw_Server_API.app.core.AuthNZ.api_key_manager import normalize_scope
+    except Exception:
+        return []
+
+    raw_scopes = info.get("scopes")
+    if raw_scopes is None:
+        raw_scopes = info.get("scope")
+
+    try:
+        scopes = normalize_scope(raw_scopes)
+    except Exception:
+        scopes = set()
+
+    return sorted(scopes) if scopes else []
+
+
 def _should_use_single_user_api_key_compat() -> bool:
     """
     Decide whether to use the single-user API key compatibility shim.
@@ -327,7 +348,7 @@ async def get_current_user(
                     sub=str(info["user_id"]),
                     username=None,
                     roles=["api_client"],
-                    permissions=[],
+                    permissions=_extract_api_key_permissions(info),
                     token_type="access",
                 )
     except Exception:
@@ -409,6 +430,17 @@ async def _attach_api_key_metadata(
             metadata["org_id"] = api_key_info.get("org_id")
         if api_key_info.get("team_id") is not None:
             metadata["team_id"] = api_key_info.get("team_id")
+        try:
+            from tldw_Server_API.app.core.AuthNZ.api_key_manager import normalize_scope
+            raw_scopes = api_key_info.get("scopes")
+            if raw_scopes is None:
+                raw_scopes = api_key_info.get("scope")
+            scopes = normalize_scope(raw_scopes)
+            if scopes:
+                metadata["api_key_scopes"] = sorted(scopes)
+                metadata["auth_via"] = "api_key"
+        except Exception:
+            pass
 
     _attach_rg_ingress_metadata(metadata, http_request)
     return metadata
@@ -654,6 +686,8 @@ async def mcp_request_batch(
     # If only notifications were sent, return empty list
     if resp is None:
         return []
+    if isinstance(resp, MCPResponse):
+        return [resp]
     return resp
 
 

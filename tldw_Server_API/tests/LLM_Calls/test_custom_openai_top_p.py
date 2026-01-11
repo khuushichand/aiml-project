@@ -5,6 +5,7 @@ from tldw_Server_API.app.core.LLM_Calls.local_chat_calls import (
     chat_with_custom_openai,
     chat_with_custom_openai_2,
 )
+from tldw_Server_API.app.core.LLM_Calls.providers.custom_openai_adapter import CustomOpenAIAdapter2
 
 
 @pytest.mark.unit
@@ -120,3 +121,47 @@ def test_custom_openai_2_handler_accepts_topp(monkeypatch):
         )
 
     assert captured["json"]["top_p"] == 0.27
+
+
+@pytest.mark.unit
+def test_custom_openai_2_merges_extra_body_and_headers():
+    captured = {}
+
+    class FakeResp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": []}
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["headers"] = headers
+            captured["json"] = json
+            return FakeResp()
+
+    with patch(
+        "tldw_Server_API.app.core.LLM_Calls.providers.custom_openai_adapter.http_client_factory",
+        lambda *a, **k: FakeClient(),
+    ):
+        adapter = CustomOpenAIAdapter2()
+        adapter.chat(
+            {
+                "messages": [{"role": "user", "content": "ping"}],
+                "model": "model-2",
+                "extra_headers": {"X-Test": "1"},
+                "extra_body": {"custom_flag": True, "model": "override"},
+            }
+        )
+
+    assert captured["headers"]["X-Test"] == "1"
+    assert captured["json"]["custom_flag"] is True
+    assert captured["json"]["model"] == "model-2"

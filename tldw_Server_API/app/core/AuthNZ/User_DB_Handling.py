@@ -20,8 +20,12 @@ from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
 from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
-from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
+from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
+    list_memberships_for_user,
+    list_org_memberships_for_user,
+)
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.rbac_repo import AuthnzRbacRepo
 from tldw_Server_API.app.core.exceptions import InactiveUserError
@@ -280,6 +284,12 @@ def _is_test_context() -> bool:
         if os.getenv(flag, "").lower() in {"1", "true", "yes", "on"}:
             return True
     return False
+
+
+def _looks_like_jwt(token: Optional[str]) -> bool:
+    if not isinstance(token, str):
+        return False
+    return token.count(".") == 2
 
 
 def _raise_user_id_error(detail: str, *, status_code: int, raise_http: bool) -> None:
@@ -924,6 +934,29 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
         user_data["permissions"] = perms
         user_data["is_admin"] = bool(is_admin_flag)
 
+        def _coerce_int(value: Any) -> Optional[int]:
+            try:
+                if value is None:
+                    return None
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        key_org_id = _coerce_int(key_info.get("org_id"))
+        key_team_id = _coerce_int(key_info.get("team_id"))
+        if key_org_id is None and key_team_id is None and key_info.get("id") is not None:
+            try:
+                db_pool = await get_db_pool()
+                row = await db_pool.fetchone(
+                    "SELECT org_id, team_id FROM api_keys WHERE id = ?",
+                    int(key_info["id"]),
+                )
+                if row:
+                    key_org_id = _coerce_int(row.get("org_id"))
+                    key_team_id = _coerce_int(row.get("team_id"))
+            except Exception as exc:
+                logger.debug("API key scope fallback lookup failed: {}", exc)
+
         # Attach context for downstream consumers
         try:
             request.state.user_id = user_id
@@ -932,10 +965,10 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
             request.state._api_key_scope = key_info.get("scope", "read")
             # Attach org/team context if present (virtual keys)
             try:
-                if key_info.get("org_id") is not None:
-                    request.state.org_id = key_info.get("org_id")
-                if key_info.get("team_id") is not None:
-                    request.state.team_id = key_info.get("team_id")
+                if key_org_id is not None:
+                    request.state.org_id = key_org_id
+                if key_team_id is not None:
+                    request.state.team_id = key_team_id
             except Exception as e:
                 logger.debug(f"Unable to attach org/team context: {e}")
         except Exception as ctx_state_exc:
@@ -947,34 +980,86 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
         org_ids: List[int] = []
         active_team_id: Optional[int] = None
         active_org_id: Optional[int] = None
+        memberships: List[Dict[str, Any]] = []
         try:
             memberships = await list_memberships_for_user(int(user_id))
-            team_ids = [
-                m.get("team_id")
-                for m in memberships
-                if m.get("team_id") is not None
-            ]
-            org_ids = sorted(
-                {m.get("org_id") for m in memberships if m.get("org_id") is not None}
-            )
-            active_team_id = _normalize_active_id(None, team_ids)
-            active_org_id = _normalize_active_id(None, org_ids)
-            try:
-                request.state.team_ids = team_ids
-                request.state.org_ids = org_ids
-                if active_team_id is not None:
-                    request.state.active_team_id = active_team_id
-                if active_org_id is not None:
-                    request.state.active_org_id = active_org_id
-            except Exception as team_ctx_exc:
-                logger.debug(f"Unable to attach team/org ids to request.state: {team_ctx_exc}")
         except Exception as memberships_exc:
             logger.debug(f"Membership lookup failed for user {user_id}: {memberships_exc}")
-            try:
-                request.state.team_ids = []
-                request.state.org_ids = []
-            except Exception as empty_ctx_exc:
-                logger.debug(f"Unable to set empty team/org ids on request.state: {empty_ctx_exc}")
+
+        member_team_ids = [
+            m.get("team_id")
+            for m in memberships
+            if m.get("team_id") is not None
+        ]
+        member_org_ids = sorted(
+            {m.get("org_id") for m in memberships if m.get("org_id") is not None}
+        )
+        team_to_org = {
+            int(m["team_id"]): int(m["org_id"])
+            for m in memberships
+            if m.get("team_id") is not None and m.get("org_id") is not None
+        }
+
+        if key_team_id is not None:
+            if key_team_id not in [int(t) for t in member_team_ids if t is not None]:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="API key team scope is not permitted",
+                )
+            team_ids = [key_team_id]
+            org_for_team = team_to_org.get(key_team_id)
+            if org_for_team is None:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="API key team scope could not be resolved",
+                )
+            if key_org_id is not None and key_org_id != org_for_team:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="API key org scope does not match team scope",
+                )
+            org_ids = [org_for_team]
+        elif key_org_id is not None:
+            if key_org_id not in [int(o) for o in member_org_ids if o is not None]:
+                try:
+                    org_memberships = await list_org_memberships_for_user(int(user_id))
+                    org_membership_ids = {
+                        int(m.get("org_id"))
+                        for m in org_memberships
+                        if m.get("org_id") is not None
+                    }
+                except Exception:
+                    org_membership_ids = set()
+                if key_org_id not in org_membership_ids:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="API key org scope is not permitted",
+                    )
+            org_ids = [key_org_id]
+            team_ids = [
+                int(tid)
+                for tid in member_team_ids
+                if tid is not None and team_to_org.get(int(tid)) == key_org_id
+            ]
+        else:
+            team_ids = [int(tid) for tid in member_team_ids if tid is not None]
+            org_ids = [int(oid) for oid in member_org_ids if oid is not None]
+
+        active_team_id = _normalize_active_id(None, team_ids)
+        active_org_id = _normalize_active_id(None, org_ids)
+        try:
+            request.state.team_ids = team_ids
+            request.state.org_ids = org_ids
+            if active_team_id is not None:
+                request.state.active_team_id = active_team_id
+            if active_org_id is not None:
+                request.state.active_org_id = active_org_id
+            if org_ids:
+                request.state.org_id = org_ids[0]
+            if team_ids:
+                request.state.team_id = team_ids[0]
+        except Exception as team_ctx_exc:
+            logger.debug(f"Unable to attach team/org ids to request.state: {team_ctx_exc}")
 
         try:
             set_scope(
@@ -1084,6 +1169,7 @@ async def get_request_user(
     - Does not branch on AUTH_MODE; single-user deployments authenticate
       via the same AuthNZ tables and RBAC as multi-user, with the
       bootstrapped admin treated as a normal user with roles/permissions.
+    - Treats non-JWT Bearer tokens as API keys for compatibility.
     """
     # Test-mode bypasses are disabled in production for safety
     try:
@@ -1157,8 +1243,12 @@ async def get_request_user(
             settings = get_settings()
         except Exception:
             settings = None
+        token_is_jwt = _looks_like_jwt(token)
         if settings is not None and getattr(settings, "AUTH_MODE", None) == "single_user":
             logger.debug("get_request_user: Treating Bearer token as API key in single-user mode.")
+            return await authenticate_api_key_user(request, token)
+        if not token_is_jwt:
+            logger.debug("get_request_user: Treating Bearer token as API key (non-JWT token).")
             return await authenticate_api_key_user(request, token)
         logger.debug("get_request_user: Attempting JWT-based authentication.")
         try:

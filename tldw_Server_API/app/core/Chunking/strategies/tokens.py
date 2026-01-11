@@ -383,9 +383,6 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
                 else:
                     raise AttributeError('No decode() available on tokenizer or underlying implementation')
 
-                # Trim trailing newline artifacts without disturbing leading indentation
-                chunk_text = chunk_text.rstrip("\r\n")
-
                 if chunk_text:
                     chunks.append(chunk_text)
 

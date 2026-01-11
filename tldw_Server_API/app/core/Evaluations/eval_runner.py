@@ -646,11 +646,23 @@ class EvaluationRunner:
                     )
                     # Extract normalized metric scores
                     scores = {}
-                    for mname, mdata in rag_metrics.get("metrics", {}).items():
+                    def _extract_score(value: Any) -> Optional[float]:
+                        raw_val = value
+                        if isinstance(value, dict):
+                            raw_val = value.get("score")
+                            if raw_val is None:
+                                raw_val = value.get("raw_score")
+                        else:
+                            raw_val = getattr(value, "score", value)
                         try:
-                            scores[mname] = float(getattr(mdata, "score", 0.0))
-                        except Exception:
-                            pass
+                            return float(raw_val)
+                        except (TypeError, ValueError):
+                            return None
+
+                    for mname, mdata in rag_metrics.get("metrics", {}).items():
+                        score_val = _extract_score(mdata)
+                        if score_val is not None:
+                            scores[mname] = score_val
                     overall = float(rag_metrics.get("overall_score", 0.0))
                 except Exception as e:
                     logger.error(f"RAG metrics failed for {cfg_id} sample {s_idx}: {e}")
@@ -678,9 +690,13 @@ class EvaluationRunner:
 
                     try:
                         if cov is not None:
-                            scores["retrieval_coverage"] = float(getattr(cov, "score", 0.0))
+                            cov_score = _extract_score(cov)
+                            if cov_score is not None:
+                                scores["retrieval_coverage"] = cov_score
                         if div is not None:
-                            scores["retrieval_diversity"] = float(getattr(div, "score", 0.0))
+                            div_score = _extract_score(div)
+                            if div_score is not None:
+                                scores["retrieval_diversity"] = div_score
                     except Exception:
                         pass
 
@@ -1231,7 +1247,7 @@ class EvaluationRunner:
                     except (TypeError, ValueError):
                         continue
                     max_score = 3.0 if metric == "fluency" else 5.0
-                    scores[metric] = raw / max_score if raw > 1.0 else raw
+                    scores[metric] = raw / max_score if raw >= 1.0 else raw
             else:
                 # Legacy string output fallback
                 import re
@@ -1239,7 +1255,8 @@ class EvaluationRunner:
                     pattern = f"{metric}.*?([0-9.]+)"
                     match = re.search(pattern, str(result), re.IGNORECASE)
                     if match:
-                        scores[metric] = float(match.group(1)) / 5.0  # Normalize to 0-1
+                        max_score = 3.0 if metric == "fluency" else 5.0
+                        scores[metric] = float(match.group(1)) / max_score  # Normalize to 0-1
 
             # Calculate pass/fail
             avg_score = statistics.mean(scores.values()) if scores else 0
@@ -1269,7 +1286,13 @@ class EvaluationRunner:
             query = sample["input"].get("query", "")
             contexts = sample["input"].get("contexts", [])
             response = sample["input"].get("response", "")
-            ground_truth = sample.get("expected", {}).get("answer", "")
+            expected = sample.get("expected")
+            if isinstance(expected, dict):
+                ground_truth = expected.get("answer", "")
+            elif isinstance(expected, str):
+                ground_truth = expected
+            else:
+                ground_truth = ""
 
             # Run RAG evaluation
             result = await self.rag_evaluator.evaluate(

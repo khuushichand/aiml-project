@@ -33,6 +33,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field, is_dataclass
@@ -66,15 +67,87 @@ except Exception:
     DEFAULT_NON_STREAM_MAX_ROWS = 10000
 
 
+_HASH_PREFIX = "sha256:"
+
+try:
+    import fcntl  # type: ignore
+    _HAS_FCNTL = True
+except Exception:
+    _HAS_FCNTL = False
+
+_FALLBACK_LOCKS: Dict[str, threading.Lock] = {}
+_FALLBACK_LOCKS_LOCK = threading.Lock()
+
+
+def _fallback_lock_path(path: Path) -> Path:
+    """Return a lock-file path for a fallback queue file."""
+    suffix = path.suffix + ".lock" if path.suffix else ".lock"
+    return path.with_suffix(suffix)
+
+
+def _get_fallback_thread_lock(path: Path) -> threading.Lock:
+    key = str(path.resolve())
+    with _FALLBACK_LOCKS_LOCK:
+        lock = _FALLBACK_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _FALLBACK_LOCKS[key] = lock
+    return lock
+
+
+@asynccontextmanager
+async def _fallback_queue_lock(path: Path) -> AsyncGenerator[None, None]:
+    """Cross-instance lock for fallback queue operations.
+
+    Uses a file lock when available; otherwise falls back to a process-wide lock.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = _fallback_lock_path(path)
+
+    if _HAS_FCNTL:
+        def _open_and_lock() -> Any:
+            fh = lock_path.open("a", encoding="utf-8")
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            return fh
+
+        handle = await asyncio.to_thread(_open_and_lock)
+        try:
+            yield
+        finally:
+            try:
+                await asyncio.to_thread(fcntl.flock, handle.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            try:
+                await asyncio.to_thread(handle.close)
+            except Exception:
+                pass
+    else:
+        lock = _get_fallback_thread_lock(lock_path)
+        await asyncio.to_thread(lock.acquire)
+        try:
+            yield
+        finally:
+            try:
+                lock.release()
+            except Exception:
+                pass
+
+
 def _hash_api_key(value: Optional[str]) -> Optional[str]:
     """Return a stable hash for API keys; avoid storing raw secrets."""
-    if not value:
-        return value
+    if value is None:
+        return None
     val = str(value).strip()
-    # Heuristic: if already a 64-char hex string, assume hashed.
-    if len(val) == 64 and all(c in "0123456789abcdef" for c in val.lower()):
-        return val
-    return hashlib.sha256(val.encode("utf-8")).hexdigest()
+    if not val:
+        return None
+    lower = val.lower()
+    if lower.startswith(_HASH_PREFIX):
+        digest = val[len(_HASH_PREFIX):].strip()
+        if len(digest) == 64 and all(c in "0123456789abcdef" for c in digest.lower()):
+            return f"{_HASH_PREFIX}{digest.lower()}"
+    digest = hashlib.sha256(val.encode("utf-8")).hexdigest()
+    return f"{_HASH_PREFIX}{digest}"
 
 
 def _normalize_json_value(value: Any) -> Any:
@@ -130,6 +203,26 @@ def _normalize_json_value(value: Any) -> Any:
         pass
 
     return str(value)
+
+
+def _normalize_timestamp(value: datetime) -> datetime:
+    """Normalize timestamps to UTC for consistent storage and ordering."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _normalize_datetime_filter(value: Optional[datetime]) -> Optional[str]:
+    """Normalize filter datetimes to UTC ISO strings for lexicographic queries."""
+    if value is None:
+        return None
+    try:
+        return _normalize_timestamp(value).isoformat()
+    except Exception:
+        try:
+            return value.isoformat()
+        except Exception:
+            return None
 
 
 # ============================================================================
@@ -277,10 +370,11 @@ class AuditEvent:
         """Convert to dictionary for storage"""
         normalized_metadata = _normalize_json_value(self.metadata)
         normalized_flags = _normalize_json_value(self.compliance_flags)
+        ts = _normalize_timestamp(self.timestamp)
 
         data = {
             "event_id": self.event_id,
-            "timestamp": self.timestamp.isoformat(),
+            "timestamp": ts.isoformat(),
             "category": self.category.value,
             "event_type": self.event_type.value,
             "severity": self.severity.value,
@@ -781,8 +875,6 @@ class UnifiedAuditService:
         # Event buffer
         self.event_buffer: List[AuditEvent] = []
         self.buffer_lock = asyncio.Lock()
-        # Protect fallback queue file from concurrent read/write/unlink races
-        self._fallback_lock = asyncio.Lock()
 
         # Background tasks
         self._flush_task: Optional[asyncio.Task] = None
@@ -846,48 +938,8 @@ class UnifiedAuditService:
                     pass
             except Exception as e:
                 logger.warning(f"Failed to apply SQLite PRAGMAs on audit DB: {e}")
-            # Main audit table with all fields
-            await db.execute("""
-                CREATE TABLE IF NOT EXISTS audit_events (
-                    event_id TEXT PRIMARY KEY,
-                    timestamp TIMESTAMP NOT NULL,
-                    category TEXT NOT NULL,
-                    event_type TEXT NOT NULL,
-                    severity TEXT NOT NULL,
-
-                    -- Context fields
-                    context_request_id TEXT,
-                    context_correlation_id TEXT,
-                    context_session_id TEXT,
-                    context_user_id TEXT,
-                    context_api_key_hash TEXT,
-                    context_ip_address TEXT,
-                    context_user_agent TEXT,
-                    context_endpoint TEXT,
-                    context_method TEXT,
-
-                    -- Event details
-                    resource_type TEXT,
-                    resource_id TEXT,
-                    action TEXT,
-                    result TEXT,
-                    error_message TEXT,
-
-                    -- Metrics
-                    duration_ms REAL,
-                    tokens_used INTEGER,
-                    estimated_cost REAL,
-                    result_count INTEGER,
-
-                    -- Risk and compliance
-                    risk_score INTEGER,
-                    pii_detected BOOLEAN,
-                    compliance_flags TEXT,
-
-                    -- Metadata
-                    metadata TEXT
-                )
-            """)
+            db.row_factory = aiosqlite.Row
+            await self._ensure_audit_events_schema(db)
 
             # Create indexes for common queries
             await db.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON audit_events(timestamp)")
@@ -931,6 +983,292 @@ class UnifiedAuditService:
                 pass
 
             await db.commit()
+
+    async def _ensure_audit_events_schema(self, db: aiosqlite.Connection) -> None:
+        """Ensure the audit_events table matches the unified schema."""
+        create_sql = """
+            CREATE TABLE IF NOT EXISTS audit_events (
+                event_id TEXT PRIMARY KEY,
+                timestamp TIMESTAMP NOT NULL,
+                category TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+
+                -- Context fields
+                context_request_id TEXT,
+                context_correlation_id TEXT,
+                context_session_id TEXT,
+                context_user_id TEXT,
+                context_api_key_hash TEXT,
+                context_ip_address TEXT,
+                context_user_agent TEXT,
+                context_endpoint TEXT,
+                context_method TEXT,
+
+                -- Event details
+                resource_type TEXT,
+                resource_id TEXT,
+                action TEXT,
+                result TEXT,
+                error_message TEXT,
+
+                -- Metrics
+                duration_ms REAL,
+                tokens_used INTEGER,
+                estimated_cost REAL,
+                result_count INTEGER,
+
+                -- Risk and compliance
+                risk_score INTEGER,
+                pii_detected BOOLEAN,
+                compliance_flags TEXT,
+
+                -- Metadata
+                metadata TEXT
+            )
+        """
+        expected_types = {
+            "event_id": "TEXT",
+            "timestamp": "TIMESTAMP",
+            "category": "TEXT",
+            "event_type": "TEXT",
+            "severity": "TEXT",
+            "context_request_id": "TEXT",
+            "context_correlation_id": "TEXT",
+            "context_session_id": "TEXT",
+            "context_user_id": "TEXT",
+            "context_api_key_hash": "TEXT",
+            "context_ip_address": "TEXT",
+            "context_user_agent": "TEXT",
+            "context_endpoint": "TEXT",
+            "context_method": "TEXT",
+            "resource_type": "TEXT",
+            "resource_id": "TEXT",
+            "action": "TEXT",
+            "result": "TEXT",
+            "error_message": "TEXT",
+            "duration_ms": "REAL",
+            "tokens_used": "INTEGER",
+            "estimated_cost": "REAL",
+            "result_count": "INTEGER",
+            "risk_score": "INTEGER",
+            "pii_detected": "BOOLEAN",
+            "compliance_flags": "TEXT",
+            "metadata": "TEXT",
+        }
+
+        async with db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='audit_events'"
+        ) as cur:
+            table_row = await cur.fetchone()
+        if not table_row:
+            await db.execute(create_sql)
+            return
+
+        async with db.execute("PRAGMA table_info(audit_events)") as cur:
+            cols = await cur.fetchall()
+        if not cols:
+            await db.execute(create_sql)
+            return
+
+        existing = {row["name"]: row for row in cols}
+        expected = set(expected_types.keys())
+        missing = [name for name in expected if name not in existing]
+        core_missing = {name for name in ("event_id", "timestamp", "event_type", "severity", "category") if name not in existing}
+        incompatible = [
+            name
+            for name, info in existing.items()
+            if name not in expected and info["notnull"] and info["dflt_value"] is None
+        ]
+
+        if core_missing or "outcome" in existing or incompatible:
+            await self._migrate_legacy_audit_events(db)
+            return
+
+        for col in missing:
+            try:
+                await db.execute(f"ALTER TABLE audit_events ADD COLUMN {col} {expected_types[col]}")
+            except Exception as e:
+                logger.warning(f"Failed to add audit_events column {col}: {e}")
+
+    async def _migrate_legacy_audit_events(self, db: aiosqlite.Connection) -> None:
+        """Migrate legacy audit_events tables to the unified schema."""
+        logger.warning("Legacy audit_events schema detected; migrating to unified schema.")
+
+        await db.execute("ALTER TABLE audit_events RENAME TO audit_events_legacy")
+        await db.execute(
+            """
+            CREATE TABLE audit_events (
+                event_id TEXT PRIMARY KEY,
+                timestamp TIMESTAMP NOT NULL,
+                category TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                context_request_id TEXT,
+                context_correlation_id TEXT,
+                context_session_id TEXT,
+                context_user_id TEXT,
+                context_api_key_hash TEXT,
+                context_ip_address TEXT,
+                context_user_agent TEXT,
+                context_endpoint TEXT,
+                context_method TEXT,
+                resource_type TEXT,
+                resource_id TEXT,
+                action TEXT,
+                result TEXT,
+                error_message TEXT,
+                duration_ms REAL,
+                tokens_used INTEGER,
+                estimated_cost REAL,
+                result_count INTEGER,
+                risk_score INTEGER,
+                pii_detected BOOLEAN,
+                compliance_flags TEXT,
+                metadata TEXT
+            )
+            """
+        )
+
+        insert_sql = """
+            INSERT OR IGNORE INTO audit_events (
+                event_id, timestamp, category, event_type, severity,
+                context_request_id, context_correlation_id, context_session_id,
+                context_user_id, context_api_key_hash, context_ip_address,
+                context_user_agent, context_endpoint, context_method,
+                resource_type, resource_id, action, result, error_message,
+                duration_ms, tokens_used, estimated_cost, result_count,
+                risk_score, pii_detected, compliance_flags, metadata
+            ) VALUES (
+                :event_id, :timestamp, :category, :event_type, :severity,
+                :context_request_id, :context_correlation_id, :context_session_id,
+                :context_user_id, :context_api_key_hash, :context_ip_address,
+                :context_user_agent, :context_endpoint, :context_method,
+                :resource_type, :resource_id, :action, :result, :error_message,
+                :duration_ms, :tokens_used, :estimated_cost, :result_count,
+                :risk_score, :pii_detected, :compliance_flags, :metadata
+            )
+        """
+
+        def _infer_category(value: Optional[str]) -> str:
+            if not value:
+                return AuditEventCategory.SYSTEM.value
+            val = str(value).strip().lower()
+            if val.startswith("auth") or val.startswith("auth."):
+                return AuditEventCategory.AUTHENTICATION.value
+            if val.startswith("user") or val.startswith("user."):
+                return AuditEventCategory.AUTHORIZATION.value
+            if val.startswith("data") or val.startswith("data."):
+                if any(val.endswith(suffix) for suffix in ("write", "update", "delete", "import", "export")):
+                    return AuditEventCategory.DATA_MODIFICATION.value
+                return AuditEventCategory.DATA_ACCESS.value
+            if val.startswith("rag") or val.startswith("rag."):
+                return AuditEventCategory.RAG.value
+            if val.startswith("eval") or val.startswith("eval."):
+                return AuditEventCategory.EVALUATION.value
+            if val.startswith("api") or val.startswith("api."):
+                return AuditEventCategory.API_CALL.value
+            if val.startswith("security") or val.startswith("security."):
+                return AuditEventCategory.SECURITY.value
+            if val.startswith("system") or val.startswith("system."):
+                return AuditEventCategory.SYSTEM.value
+            return AuditEventCategory.SYSTEM.value
+
+        def _normalize_severity(value: Optional[str]) -> str:
+            if not value:
+                return AuditSeverity.INFO.value
+            val = str(value).strip().lower()
+            if val in {s.value for s in AuditSeverity}:
+                return val
+            mapping = {
+                "low": AuditSeverity.INFO.value,
+                "medium": AuditSeverity.WARNING.value,
+                "high": AuditSeverity.ERROR.value,
+                "critical": AuditSeverity.CRITICAL.value,
+            }
+            return mapping.get(val, AuditSeverity.INFO.value)
+
+        def _coerce_timestamp(value: Any) -> str:
+            if isinstance(value, datetime):
+                return _normalize_timestamp(value).isoformat()
+            if value is None:
+                return datetime.now(timezone.utc).isoformat()
+            try:
+                s = str(value).strip()
+                if not s:
+                    return datetime.now(timezone.utc).isoformat()
+                if s.endswith("Z"):
+                    s = s[:-1] + "+00:00"
+                dt_val = datetime.fromisoformat(s)
+                return _normalize_timestamp(dt_val).isoformat()
+            except Exception:
+                return str(value)
+
+        def _json_text(value: Any, *, default: str) -> str:
+            if value is None:
+                return default
+            if isinstance(value, str):
+                return value
+            try:
+                return json.dumps(value, ensure_ascii=False)
+            except Exception:
+                return str(value)
+
+        async def _copy_rows() -> None:
+            async with db.execute("SELECT * FROM audit_events_legacy") as cur:
+                while True:
+                    rows = await cur.fetchmany(1000)
+                    if not rows:
+                        break
+                    records: List[Dict[str, Any]] = []
+                    for row in rows:
+                        data = dict(row)
+                        event_type_val = data.get("event_type") or AuditEventType.SYSTEM_START.value
+                        record = {
+                            "event_id": str(data.get("event_id") or uuid4()),
+                            "timestamp": _coerce_timestamp(data.get("timestamp")),
+                            "category": _infer_category(event_type_val),
+                            "event_type": str(event_type_val),
+                            "severity": _normalize_severity(data.get("severity")),
+                            "context_request_id": data.get("context_request_id"),
+                            "context_correlation_id": data.get("context_correlation_id"),
+                            "context_session_id": data.get("context_session_id") or data.get("session_id"),
+                            "context_user_id": data.get("context_user_id") or data.get("user_id"),
+                            "context_api_key_hash": data.get("context_api_key_hash"),
+                            "context_ip_address": data.get("context_ip_address") or data.get("ip_address"),
+                            "context_user_agent": data.get("context_user_agent") or data.get("user_agent"),
+                            "context_endpoint": data.get("context_endpoint") or data.get("endpoint"),
+                            "context_method": data.get("context_method") or data.get("method"),
+                            "resource_type": data.get("resource_type"),
+                            "resource_id": data.get("resource_id"),
+                            "action": data.get("action"),
+                            "result": data.get("result") or data.get("outcome") or "success",
+                            "error_message": data.get("error_message") or data.get("details"),
+                            "duration_ms": data.get("duration_ms"),
+                            "tokens_used": data.get("tokens_used"),
+                            "estimated_cost": data.get("estimated_cost"),
+                            "result_count": data.get("result_count"),
+                            "risk_score": data.get("risk_score") or 0,
+                            "pii_detected": bool(data.get("pii_detected") or False),
+                            "compliance_flags": _json_text(data.get("compliance_flags"), default="[]"),
+                            "metadata": _json_text(data.get("metadata"), default="{}"),
+                        }
+                        records.append(record)
+                    if records:
+                        await db.executemany(insert_sql, records)
+
+        try:
+            await _copy_rows()
+            await db.execute("DROP TABLE audit_events_legacy")
+        except Exception as exc:
+            logger.error(f"Failed to migrate legacy audit_events schema: {exc}")
+            # Attempt to roll back to the legacy table if possible.
+            try:
+                await db.execute("DROP TABLE IF EXISTS audit_events")
+                await db.execute("ALTER TABLE audit_events_legacy RENAME TO audit_events")
+            except Exception as rollback_exc:
+                logger.error(f"Failed to restore legacy audit_events table: {rollback_exc}")
+            raise
 
     async def _ensure_db_pool(self) -> aiosqlite.Connection:
         """Ensure a persistent aiosqlite connection is available."""
@@ -1280,6 +1618,46 @@ class UnifiedAuditService:
                 if task is not None:
                     self._flush_futures.discard(task)
 
+    async def _fetch_existing_event_ids(
+        self,
+        db: aiosqlite.Connection,
+        event_ids: List[str],
+        *,
+        chunk_size: int = 500,
+    ) -> Set[str]:
+        """Return existing event_ids in the DB for the supplied list."""
+        if not event_ids:
+            return set()
+        existing: Set[str] = set()
+        for i in range(0, len(event_ids), chunk_size):
+            chunk = event_ids[i:i + chunk_size]
+            placeholders = ",".join("?" * len(chunk))
+            query = f"SELECT event_id FROM audit_events WHERE event_id IN ({placeholders})"
+            async with db.execute(query, chunk) as cursor:
+                rows = await cursor.fetchall()
+                existing.update(str(row[0]) for row in rows if row and row[0])
+        return existing
+
+    async def _filter_new_events(
+        self,
+        db: aiosqlite.Connection,
+        events: List[AuditEvent],
+    ) -> List[AuditEvent]:
+        """Filter events to those not already persisted (de-duplicated by event_id)."""
+        if not events:
+            return []
+        seen: Set[str] = set()
+        deduped: List[AuditEvent] = []
+        for event in events:
+            if not event.event_id or event.event_id in seen:
+                continue
+            seen.add(event.event_id)
+            deduped.append(event)
+        existing_ids = await self._fetch_existing_event_ids(db, [e.event_id for e in deduped])
+        if not existing_ids:
+            return deduped
+        return [event for event in deduped if event.event_id not in existing_ids]
+
     async def flush(self):
         """Flush buffered events to database"""
         async with self.buffer_lock:
@@ -1307,8 +1685,11 @@ class UnifiedAuditService:
                                 db.row_factory = aiosqlite.Row
                             except Exception:
                                 pass
+                            new_events = await self._filter_new_events(db, events)
+                            if not new_events:
+                                return
                             # Prepare batch data
-                            records = [event.to_dict() for event in events]
+                            records = [event.to_dict() for event in new_events]
                             await db.executemany(
                                 """
                                 INSERT OR IGNORE INTO audit_events (
@@ -1331,13 +1712,16 @@ class UnifiedAuditService:
                                 """,
                                 records,
                             )
-                            await self._update_daily_stats(db, events)
+                            await self._update_daily_stats(db, new_events)
                             await db.commit()
                     else:
                         db = await self._ensure_db_pool()
                         async with self._db_lock:
+                            new_events = await self._filter_new_events(db, events)
+                            if not new_events:
+                                return
                             # Prepare batch data
-                            records = [event.to_dict() for event in events]
+                            records = [event.to_dict() for event in new_events]
 
                             # Batch insert
                             await db.executemany(
@@ -1364,12 +1748,12 @@ class UnifiedAuditService:
                             )
 
                             # Update daily statistics
-                            await self._update_daily_stats(db, events)
+                            await self._update_daily_stats(db, new_events)
                             await db.commit()
 
                     # Success
-                    self.stats["events_flushed"] += len(events)
-                    logger.debug(f"Flushed {len(events)} audit events to database")
+                    self.stats["events_flushed"] += len(new_events)
+                    logger.debug(f"Flushed {len(new_events)} audit events to database")
                     last_error = None
                     break
                 except aiosqlite.OperationalError as oe:  # type: ignore[attr-defined]
@@ -1395,8 +1779,7 @@ class UnifiedAuditService:
                     # Persist dropped events to a fallback JSONL queue for durability
                     try:
                         fb_path = self.db_path.parent / "audit_fallback_queue.jsonl"
-                        async with self._fallback_lock:
-                            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+                        async with _fallback_queue_lock(fb_path):
                             await asyncio.to_thread(
                                 self._append_events_to_fallback, fb_path, combined[max_buffer:]
                             )
@@ -1548,7 +1931,7 @@ class UnifiedAuditService:
     async def replay_fallback_queue(self, max_batch: int = 5000) -> int:
         """Replay events from the fallback queue back into the main audit table."""
         fb_path = self.db_path.parent / "audit_fallback_queue.jsonl"
-        async with self._fallback_lock:
+        async with _fallback_queue_lock(fb_path):
             if not fb_path.exists():
                 return 0
 
@@ -1632,6 +2015,9 @@ class UnifiedAuditService:
                 ts = _parse_timestamp(record.get("timestamp"))
                 if ts is None:
                     return None
+                ts = _normalize_timestamp(ts)
+                # Normalize stored timestamp to UTC for lexicographic ordering.
+                record["timestamp"] = ts.isoformat()
 
                 # Parse compliance_flags from JSON string (fix for data loss)
                 flags_raw = record.get("compliance_flags")
@@ -1691,7 +2077,24 @@ class UnifiedAuditService:
                 if not records_chunk:
                     return 0
 
-                async def _do_write() -> None:
+                async def _do_write() -> int:
+                    record_ids = [str(r.get("event_id")) for r in records_chunk if r.get("event_id")]
+                    existing_ids = await self._fetch_existing_event_ids(db, record_ids)
+                    seen: Set[str] = set()
+                    filtered_records: List[Dict[str, Any]] = []
+                    for record in records_chunk:
+                        event_id = record.get("event_id")
+                        if not event_id:
+                            continue
+                        event_id = str(event_id)
+                        if event_id in existing_ids or event_id in seen:
+                            continue
+                        seen.add(event_id)
+                        filtered_records.append(record)
+
+                    if not filtered_records:
+                        return 0
+
                     await db.executemany(
                         """
                         INSERT OR IGNORE INTO audit_events (
@@ -1712,18 +2115,30 @@ class UnifiedAuditService:
                             :risk_score, :pii_detected, :compliance_flags, :metadata
                         )
                         """,
-                        records_chunk,
+                        filtered_records,
                     )
                     if stats_events:
-                        await self._update_daily_stats(db, stats_events)
+                        filtered_stats: List[AuditEvent] = []
+                        stats_seen: Set[str] = set()
+                        for ev in stats_events:
+                            if not ev.event_id:
+                                continue
+                            if ev.event_id in existing_ids or ev.event_id not in seen:
+                                continue
+                            if ev.event_id in stats_seen:
+                                continue
+                            stats_seen.add(ev.event_id)
+                            filtered_stats.append(ev)
+                        if filtered_stats:
+                            await self._update_daily_stats(db, filtered_stats)
                     await db.commit()
+                    return len(filtered_records)
 
                 if use_db_lock:
                     async with self._db_lock:
-                        await _do_write()
+                        return await _do_write()
                 else:
-                    await _do_write()
-                return len(records_chunk)
+                    return await _do_write()
 
             temp_path = fb_path.with_suffix(".tmp")
             inserted = 0
@@ -1858,13 +2273,15 @@ class UnifiedAuditService:
         query = "SELECT * FROM audit_events WHERE 1=1"
         params = []
 
-        if start_time:
+        start_iso = _normalize_datetime_filter(start_time)
+        if start_iso:
             query += " AND timestamp >= ?"
-            params.append(start_time.isoformat())
+            params.append(start_iso)
 
-        if end_time:
+        end_iso = _normalize_datetime_filter(end_time)
+        if end_iso:
             query += " AND timestamp <= ?"
-            params.append(end_time.isoformat())
+            params.append(end_iso)
 
         if event_types:
             placeholders = ",".join("?" * len(event_types))
@@ -1942,12 +2359,14 @@ class UnifiedAuditService:
         """Count audit events with filters."""
         query = "SELECT COUNT(*) as cnt FROM audit_events WHERE 1=1"
         params: List[Any] = []
-        if start_time:
+        start_iso = _normalize_datetime_filter(start_time)
+        if start_iso:
             query += " AND timestamp >= ?"
-            params.append(start_time.isoformat())
-        if end_time:
+            params.append(start_iso)
+        end_iso = _normalize_datetime_filter(end_time)
+        if end_iso:
             query += " AND timestamp <= ?"
-            params.append(end_time.isoformat())
+            params.append(end_iso)
         if event_types:
             placeholders = ",".join("?" * len(event_types))
             query += f" AND event_type IN ({placeholders})"
@@ -2408,17 +2827,17 @@ class UnifiedAuditService:
 
     def _determine_severity(self, event_type: AuditEventType, result: str) -> AuditSeverity:
         """Auto-determine severity from event type and result"""
-        if result == "error":
-            return AuditSeverity.ERROR
-        elif result == "failure":
-            return AuditSeverity.WARNING
-
         # Critical events
         if event_type in [
             AuditEventType.SECURITY_VIOLATION,
             AuditEventType.SUSPICIOUS_ACTIVITY
         ]:
             return AuditSeverity.CRITICAL
+
+        if result == "error":
+            return AuditSeverity.ERROR
+        elif result == "failure":
+            return AuditSeverity.WARNING
 
         # Warning events
         elif event_type in [

@@ -23,6 +23,7 @@ from pathlib import Path
 from tldw_Server_API.app.core.Chatbooks.chatbook_service import ChatbookService
 from tldw_Server_API.app.core.Chatbooks.chatbook_models import (
     ChatbookManifest,
+    ChatbookContent,
     ContentItem,
     ExportJob,
     ImportJob,
@@ -510,6 +511,87 @@ class TestChatbookService:
         assert not any(temp_dir.glob("preview_*"))
 
     @pytest.mark.asyncio
+    async def test_export_manifest_total_size_bytes_matches_archive(self, service):
+        """Exported manifest should report the final archive size."""
+        success, _message, export_path = await service.create_chatbook(
+            name="Size Check",
+            description="Ensure manifest size is accurate",
+            content_selections={},
+            async_mode=False
+        )
+        assert success is True
+        assert export_path is not None
+
+        archive_path = Path(export_path)
+        archive_size = archive_path.stat().st_size
+        with zipfile.ZipFile(archive_path, "r") as zf:
+            manifest_data = json.loads(zf.read("manifest.json"))
+
+        total_size = (manifest_data.get("statistics") or {}).get("total_size_bytes", 0)
+        assert total_size == archive_size
+
+    def test_collect_conversations_paginates_messages(self, service, mock_db, tmp_path, monkeypatch):
+        """Conversation exports should page through all messages."""
+        monkeypatch.setenv("CHATBOOKS_CONVERSATION_EXPORT_PAGE_SIZE", "2")
+
+        conv_id = "conv1"
+        mock_db.get_conversation_by_id.return_value = {
+            "id": conv_id,
+            "title": "Test Conversation",
+            "created_at": datetime(2024, 1, 1, 0, 0, 0),
+            "character_id": 1,
+        }
+
+        msg1 = {"id": "m1", "sender": "user", "content": "hi", "timestamp": datetime(2024, 1, 1, 0, 0, 1), "images": []}
+        msg2 = {"id": "m2", "sender": "assistant", "content": "hello", "timestamp": datetime(2024, 1, 1, 0, 0, 2), "images": []}
+        msg3 = {"id": "m3", "sender": "user", "content": "more", "timestamp": datetime(2024, 1, 1, 0, 0, 3), "images": []}
+        msg4 = {"id": "m4", "sender": "assistant", "content": "done", "timestamp": datetime(2024, 1, 1, 0, 0, 4), "images": []}
+
+        mock_db.get_messages_for_conversation.side_effect = [
+            [msg1, msg2],
+            [msg3, msg4],
+            [],
+        ]
+
+        manifest = ChatbookManifest(
+            version=ChatbookVersion.V1,
+            name="Test",
+            description="Desc",
+        )
+        content = ChatbookContent()
+
+        service._collect_conversations([conv_id], tmp_path, manifest, content)
+
+        calls = mock_db.get_messages_for_conversation.call_args_list
+        assert len(calls) == 3
+        assert calls[0].kwargs["limit"] == 2
+        assert calls[0].kwargs["offset"] == 0
+        assert calls[1].kwargs["offset"] == 2
+
+        conv_file = tmp_path / "content" / "conversations" / f"conversation_{conv_id}.json"
+        assert conv_file.exists()
+        payload = json.loads(conv_file.read_text(encoding="utf-8"))
+        assert len(payload["messages"]) == 4
+        assert "conversations" not in (manifest.truncation or {})
+
+    @pytest.mark.asyncio
+    async def test_export_filename_truncates_long_names(self, service):
+        """Export filenames should stay within filesystem limits for long names."""
+        long_name = "a" * 300
+        success, _message, export_path = await service.create_chatbook(
+            name=long_name,
+            description="Long name export",
+            content_selections={},
+            async_mode=False,
+        )
+        assert success is True
+        assert export_path is not None
+
+        filename = Path(export_path).name
+        assert filename.endswith(".zip")
+        assert len(filename) <= 255
+
+    @pytest.mark.asyncio
     async def test_export_chatbook_async_job(self, service, mock_db):
         """Test asynchronous chatbook export with job management."""
         mock_db.execute_query.return_value = []
@@ -538,6 +620,87 @@ class TestChatbookService:
             "status": "pending",
             "content_summary": {},
         }
+
+    def test_import_skips_unsupported_content_types(self, service, tmp_path):
+        """Unsupported content types should be skipped with warnings."""
+        manifest = ChatbookManifest(
+            version=ChatbookVersion.V1,
+            name="Unsupported Types",
+            description="Media and prompts are skipped",
+            content_items=[
+                ContentItem(id="m1", type=ContentType.MEDIA, title="Media 1"),
+                ContentItem(id="p1", type=ContentType.PROMPT, title="Prompt 1"),
+            ],
+        )
+
+        archive_path = tmp_path / "unsupported.chatbook"
+        with zipfile.ZipFile(archive_path, "w") as zf:
+            zf.writestr("manifest.json", json.dumps(manifest.to_dict()))
+
+        success, message, warnings = service._import_chatbook_sync(
+            file_path=str(archive_path),
+            content_selections=None,
+            conflict_resolution=ConflictResolution.SKIP,
+            prefix_imported=False,
+            import_media=True,
+            import_embeddings=False,
+        )
+
+        assert success is True
+        assert "skipped" in message.lower()
+        assert warnings is not None
+        assert any("unsupported content type" in warning.lower() for warning in warnings)
+
+    def test_import_conversation_missing_character_falls_back(self, service, mock_db, tmp_path):
+        """Missing character_id should fall back to default with a warning."""
+        conv_id = "conv-missing-char"
+        content_root = tmp_path / "content" / "conversations"
+        content_root.mkdir(parents=True, exist_ok=True)
+
+        conversation_payload = {
+            "id": conv_id,
+            "name": "Conversation Missing Character",
+            "created_at": "2024-01-01T00:00:00",
+            "character_id": None,
+            "messages": [],
+        }
+
+        conversation_file = content_root / f"conversation_{conv_id}.json"
+        conversation_file.write_text(json.dumps(conversation_payload), encoding="utf-8")
+
+        def _char_lookup(char_id):
+            if char_id == 1:
+                return {"id": 1}
+            return None
+
+        mock_db.get_character_card_by_id.side_effect = _char_lookup
+        mock_db.add_conversation.return_value = "new-conv-id"
+
+        manifest = ChatbookManifest(
+            version=ChatbookVersion.V1,
+            name="Test",
+            description="Desc",
+        )
+        status = ImportJob(
+            job_id="job",
+            user_id="test_user",
+            status=ImportStatus.PENDING,
+            chatbook_path="dummy",
+        )
+
+        with patch.object(service, "_get_conversation_by_name", return_value=None):
+            service._import_conversations(
+                tmp_path,
+                manifest,
+                [conv_id],
+                ConflictResolution.SKIP,
+                prefix_imported=False,
+                status=status,
+            )
+
+        conv_payload = mock_db.add_conversation.call_args[0][0]
+        assert conv_payload["character_id"] == 1
+        assert any("default character" in warning.lower() for warning in status.warnings)
 
     def test_preview_export(self, service, mock_db):
         """Test previewing export content."""
@@ -578,7 +741,30 @@ class TestChatbookService:
         new_name = service._generate_unique_name("Existing", "world_book")
 
         assert new_name == "Existing (2)"
-        assert responses == []
+
+    def test_generate_unique_name_conversation_conflict(self, service):
+        """Ensure rename helper uses conversation lookup helper."""
+        with patch.object(
+            service,
+            "_get_conversation_by_name",
+            side_effect=[{"id": "conv-1"}, None],
+        ) as mock_lookup:
+            new_name = service._generate_unique_name("Existing", "conversation")
+
+        assert new_name == "Existing (2)"
+        assert mock_lookup.call_count == 2
+
+    def test_generate_unique_name_note_conflict(self, service):
+        """Ensure rename helper uses note lookup helper."""
+        with patch.object(
+            service,
+            "_get_note_by_title",
+            side_effect=[{"id": "note-1"}, None],
+        ) as mock_lookup:
+            new_name = service._generate_unique_name("Existing", "note")
+
+        assert new_name == "Existing (2)"
+        assert mock_lookup.call_count == 2
 
     def test_get_export_job_status(self, service, mock_db):
         """Test retrieving export job status."""
@@ -628,23 +814,20 @@ class TestChatbookService:
         assert result == True
 
     @pytest.mark.asyncio
-    async def test_import_chatbook_passes_conflict_resolution_enum(self, service):
-        """Ensure string conflict_resolution values map to the enum."""
+    async def test_import_chatbook_rejects_unsupported_conflict_resolution(self, service):
+        """Unsupported conflict_resolution values should fail fast."""
         with patch(
             "tldw_Server_API.app.core.Chatbooks.chatbook_service.asyncio.to_thread",
             new_callable=AsyncMock,
         ) as mock_to_thread:
-            mock_to_thread.return_value = (True, "ok", None)
-
             result = await service.import_chatbook(
                 file_path="sample.chatbook",
                 conflict_resolution="overwrite",
             )
 
-        mock_to_thread.assert_awaited_once()
-        call_args = mock_to_thread.await_args.args
-        assert call_args[3] is ConflictResolution.OVERWRITE
-        assert result == (True, "ok", None)
+        mock_to_thread.assert_not_awaited()
+        assert result[0] is False
+        assert "not supported" in result[1].lower()
 
     @pytest.mark.asyncio
     async def test_import_chatbook_conflict_strategy_alias(self, service):

@@ -24,11 +24,51 @@ if TYPE_CHECKING:
 # Unified denylist of CLI arguments that should not be passed directly
 # (secrets should be passed via environment variables instead)
 DEFAULT_SECRET_DENYLIST: Set[str] = {
+    "api_key",
     "hf_token",
     "token",
     "openai_api_key",
     "anthropic_api_key",
 }
+
+WILDCARD_HOSTS: Set[str] = {
+    "0.0.0.0",
+    "::",
+    "0:0:0:0:0:0:0:0",
+}
+
+
+def strip_host_brackets(host: str) -> str:
+    """Remove IPv6 brackets if present."""
+    h = str(host).strip()
+    if h.startswith("[") and h.endswith("]"):
+        return h[1:-1]
+    return h
+
+
+def resolve_client_host(host: Optional[str]) -> str:
+    """Resolve a bind host to a usable client connect host.
+
+    Wildcard bind hosts map to loopback for readiness/inference calls.
+    """
+    if host is None or str(host).strip() == "":
+        return "127.0.0.1"
+    h = strip_host_brackets(str(host))
+    if h in WILDCARD_HOSTS:
+        return "::1" if ":" in h else "127.0.0.1"
+    return h
+
+
+def format_host_for_url(host: str) -> str:
+    """Format a host for use in a URL (adds IPv6 brackets when needed)."""
+    if ":" in host and not host.startswith("["):
+        return f"[{host}]"
+    return host
+
+
+def build_base_url(host: str, port: int) -> str:
+    """Build an http:// base URL for the given host and port."""
+    return f"http://{format_host_for_url(host)}:{int(port)}"
 
 
 def env_bool(name: str) -> Optional[bool]:

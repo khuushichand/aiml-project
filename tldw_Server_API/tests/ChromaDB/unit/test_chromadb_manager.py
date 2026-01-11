@@ -77,6 +77,54 @@ class TestChromaDBManagerInit:
         resolved_user_path = str(pathlib.Path(str(manager.user_chroma_path)).resolve())
         assert resolved_user_path.startswith(resolved_base)
 
+    def test_init_with_stub_backend_records_cache_key(self):
+
+        """Test stub backend init uses base dir in stub cache key."""
+        import tempfile
+        from tldw_Server_API.app.core.Embeddings import ChromaDB_Library as cdl
+
+        base_dir = tempfile.mkdtemp(prefix="chroma_user_base_")
+        with cdl._TEST_STUB_CLIENTS_LOCK:
+            cdl._TEST_STUB_CLIENTS.clear()
+
+        ChromaDBManager(
+            user_id="stub_user",
+            user_embedding_config={
+                "USER_DB_BASE_DIR": base_dir,
+                "chroma_client_settings": {"backend": "stub"},
+            },
+        )
+
+        expected_key = f"stub_user::{base_dir}"
+        with cdl._TEST_STUB_CLIENTS_LOCK:
+            assert expected_key in cdl._TEST_STUB_CLIENTS
+
+    def test_init_fallback_to_stub_records_cache_key(self):
+
+        """Test stub fallback init uses base dir in stub cache key."""
+        import tempfile
+        from tldw_Server_API.app.core.Embeddings import ChromaDB_Library as cdl
+
+        base_dir = tempfile.mkdtemp(prefix="chroma_user_base_")
+        with cdl._TEST_STUB_CLIENTS_LOCK:
+            cdl._TEST_STUB_CLIENTS.clear()
+
+        with patch(
+            "tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chromadb.PersistentClient",
+            side_effect=RuntimeError("boom"),
+        ):
+            ChromaDBManager(
+                user_id="fallback_user",
+                user_embedding_config={
+                    "USER_DB_BASE_DIR": base_dir,
+                    "chroma_client_settings": {"backend": "persistent", "allow_stub_fallback": True},
+                },
+            )
+
+        expected_key = f"fallback_user::{base_dir}"
+        with cdl._TEST_STUB_CLIENTS_LOCK:
+            assert expected_key in cdl._TEST_STUB_CLIENTS
+
 
 @pytest.mark.unit
 class TestCollectionManagement:

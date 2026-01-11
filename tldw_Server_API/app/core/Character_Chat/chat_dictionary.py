@@ -282,7 +282,11 @@ class ChatDictionaryEntry:
                 logger.warning(f"Regex match timed out for pattern '{preview}'")
                 return False
         elif not self.is_regex and isinstance(self.key, str):
-            return self.key in text
+            if not self.key:
+                return False
+            if self.case_sensitive:
+                return self.key in text
+            return self.key.casefold() in text.casefold()
         return False
 
     def should_apply(self) -> bool:

@@ -8,7 +8,7 @@ import weakref
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional, Set
+from typing import Any, Callable, Dict, Optional, Set, Union
 
 from fastapi import Depends, HTTPException, status
 from loguru import logger
@@ -101,7 +101,7 @@ def _settings_bool(key: str, default: bool) -> bool:
     return default
 
 
-def _schedule_service_stop(user_id: int, service: UnifiedAuditService, reason: str) -> None:
+def _schedule_service_stop(user_id: Optional[int], service: UnifiedAuditService, reason: str) -> None:
     """Schedule graceful shutdown of an audit service instance."""
     if service is None:
         return
@@ -176,7 +176,7 @@ _services_stopping: Set[int] = set()
 _services_stopping_lock = threading.Lock()  # Protects _services_stopping service-id set
 
 
-def _handle_cache_eviction(user_id: int, service: UnifiedAuditService, reason: str) -> None:
+def _handle_cache_eviction(user_id: Optional[int], service: UnifiedAuditService, reason: str) -> None:
     """Handle cache eviction/removal by scheduling a stop unless manually managed."""
     if service is None:
         return
@@ -190,19 +190,19 @@ class _SmallLRUCache:
     def __init__(
         self,
         maxsize: int,
-        on_evict: Callable[[int, UnifiedAuditService, str], None],
+        on_evict: Callable[[Optional[int], UnifiedAuditService, str], None],
     ):
         self.maxsize = maxsize
         self._on_evict = on_evict
-        self._data: OrderedDict[int, UnifiedAuditService] = OrderedDict()
+        self._data: OrderedDict[Optional[int], UnifiedAuditService] = OrderedDict()
 
-    def get(self, key: int) -> Optional[UnifiedAuditService]:
+    def get(self, key: Optional[int]) -> Optional[UnifiedAuditService]:
         if key in self._data:
             self._data.move_to_end(key)
             return self._data[key]
         return None
 
-    def __setitem__(self, key: int, value: UnifiedAuditService) -> None:
+    def __setitem__(self, key: Optional[int], value: UnifiedAuditService) -> None:
         self._data[key] = value
         self._data.move_to_end(key)
         while len(self._data) > self.maxsize:
@@ -211,7 +211,7 @@ class _SmallLRUCache:
 
     def pop(
         self,
-        key: int,
+        key: Optional[int],
         default: Optional[UnifiedAuditService] = None,
     ) -> Optional[UnifiedAuditService]:
         if key in self._data:
@@ -222,7 +222,7 @@ class _SmallLRUCache:
 
     def pop_no_callback(
         self,
-        key: int,
+        key: Optional[int],
         default: Optional[UnifiedAuditService] = None,
     ) -> Optional[UnifiedAuditService]:
         """Pop without triggering eviction callback (for manual shutdown)."""
@@ -242,7 +242,7 @@ if _HAS_CACHETOOLS:
         def __init__(
             self,
             maxsize: int,
-            on_evict: Callable[[int, UnifiedAuditService, str], None],
+            on_evict: Callable[[Optional[int], UnifiedAuditService, str], None],
         ):
             super().__init__(maxsize=maxsize)
             self._on_evict = on_evict
@@ -301,8 +301,8 @@ class _LoopState:
     cache: Any
     cache_lock: threading.Lock = field(default_factory=threading.Lock)
     init_lock: threading.Lock = field(default_factory=threading.Lock)
-    initializing_users: Set[int] = field(default_factory=set)
-    initializing_events: Dict[int, asyncio.Event] = field(default_factory=dict)
+    initializing_users: Set[Optional[int]] = field(default_factory=set)
+    initializing_events: Dict[Optional[int], asyncio.Event] = field(default_factory=dict)
 
 
 _STATE_LOCK = threading.Lock()
@@ -361,16 +361,24 @@ async def _create_audit_service_for_user(user_id: int) -> UnifiedAuditService:
     return service
 
 
-async def get_or_create_audit_service_for_user_id(user_id: int) -> UnifiedAuditService:
-    """Get (or create) a cached UnifiedAuditService for a concrete user_id.
+async def _create_default_audit_service() -> UnifiedAuditService:
+    """Create a shared default audit service (no user-specific DB path)."""
+    logger.info("Creating default audit service (shared).")
+    service = UnifiedAuditService(
+        db_path=None,
+        retention_days=_settings_int("AUDIT_RETENTION_DAYS", 30, min_value=1, max_value=3650),
+        enable_pii_detection=_settings_bool("AUDIT_ENABLE_PII_DETECTION", True),
+        enable_risk_scoring=_settings_bool("AUDIT_ENABLE_RISK_SCORING", True),
+        buffer_size=_settings_int("AUDIT_BUFFER_SIZE", 100, min_value=1, max_value=100000),
+        flush_interval=_settings_float("AUDIT_FLUSH_INTERVAL", 5.0, min_value=0.1, max_value=3600.0),
+    )
+    await service.initialize()
+    logger.info("Default audit service initialized successfully.")
+    return service
 
-    This is the core implementation behind the FastAPI dependency
-    `get_audit_service_for_user`, but is also usable from non-DI code paths
-    where you already have a user id (e.g., post-authentication flows).
-    """
-    if not isinstance(user_id, int):
-        raise TypeError("user_id must be an int")
 
+async def _get_or_create_audit_service_for_key(user_id: Optional[int]) -> UnifiedAuditService:
+    """Internal helper to get or create a cached audit service for a cache key."""
     state = _state_for_loop()
     service_instance: Optional[UnifiedAuditService] = None
 
@@ -382,12 +390,13 @@ async def get_or_create_audit_service_for_user_id(user_id: int) -> UnifiedAuditS
         logger.debug(f"Using cached audit service instance for user_id: {user_id}")
         return service_instance
 
-    logger.info(f"No cached audit service found for user_id: {user_id}. Initializing.")
+    key_label = "default" if user_id is None else f"user_id {user_id}"
+    logger.info(f"No cached audit service found for {key_label}. Initializing.")
 
     init_timeout_s = _settings_float("AUDIT_INIT_TIMEOUT_SECONDS", 30.0, min_value=0.1, max_value=300.0)
     deadline = time.monotonic() + init_timeout_s
 
-    # Check if another task is already initializing this user's service
+    # Check if another task is already initializing this service
     wait_event: Optional[asyncio.Event] = None
     should_initialize = False
 
@@ -439,7 +448,10 @@ async def get_or_create_audit_service_for_user_id(user_id: int) -> UnifiedAuditS
                     logger.debug(f"Audit service for user {user_id} created concurrently.")
                     return service_instance
 
-            service_instance = await _create_audit_service_for_user(user_id)
+            if user_id is None:
+                service_instance = await _create_default_audit_service()
+            else:
+                service_instance = await _create_audit_service_for_user(user_id)
 
             # Store in cache
             with state.cache_lock:
@@ -463,6 +475,37 @@ async def get_or_create_audit_service_for_user_id(user_id: int) -> UnifiedAuditS
         raise ServiceInitializationError(f"Could not initialize audit service for user {user_id}")
 
     return service_instance
+
+
+async def get_or_create_audit_service_for_user_id(user_id: int) -> UnifiedAuditService:
+    """Get (or create) a cached UnifiedAuditService for a concrete user_id.
+
+    This is the core implementation behind the FastAPI dependency
+    `get_audit_service_for_user`, but is also usable from non-DI code paths
+    where you already have a user id (e.g., post-authentication flows).
+    """
+    if not isinstance(user_id, int):
+        raise TypeError("user_id must be an int")
+    return await _get_or_create_audit_service_for_key(user_id)
+
+
+async def get_or_create_default_audit_service() -> UnifiedAuditService:
+    """Return a shared default audit service (used when no user_id is available)."""
+    return await _get_or_create_audit_service_for_key(None)
+
+
+async def get_or_create_audit_service_for_user_id_optional(
+    user_id: Optional[Union[int, str]]
+) -> UnifiedAuditService:
+    """Get an audit service for a user id or fall back to the default service."""
+    if user_id is None:
+        return await get_or_create_default_audit_service()
+    try:
+        uid_int = int(user_id)
+    except Exception:
+        logger.debug(f"Invalid user_id {user_id!r}; using default audit service")
+        return await get_or_create_default_audit_service()
+    return await get_or_create_audit_service_for_user_id(uid_int)
 
 # --- Main Dependency Function ---
 

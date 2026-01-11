@@ -54,6 +54,9 @@ class MetricConfig:
     include_result: bool = False
 
 
+_DEFAULT_DURATION_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10]
+
+
 def track_metrics(
     name: Optional[str] = None,
     labels: Optional[Dict[str, str]] = None,
@@ -105,7 +108,8 @@ def track_metrics(
                     type=MetricType.HISTOGRAM,
                     description=f"Execution duration for {base_name}",
                     unit="s",
-                    labels=list((labels or {}).keys())
+                    labels=list((labels or {}).keys()),
+                    buckets=_DEFAULT_DURATION_BUCKETS
                 ))
             if track_errors and error_metric_name not in registry.metrics:
                 registry.register_metric(MetricDefinition(
@@ -135,13 +139,13 @@ def track_metrics(
                 if track_calls:
                     increment_counter(call_metric_name, labels=metric_labels)
 
-                start_time = time.time()
+                start_time = time.monotonic()
                 try:
                     result = await func(*args, **kwargs)
 
                     # Track duration
                     if track_duration:
-                        duration = time.time() - start_time
+                        duration = time.monotonic() - start_time
                         observe_histogram(duration_metric_name, duration, labels=metric_labels)
 
                     return result
@@ -155,7 +159,7 @@ def track_metrics(
 
                     # Still track duration for failed calls
                     if track_duration:
-                        duration = time.time() - start_time
+                        duration = time.monotonic() - start_time
                         failed_labels = dict(metric_labels)
                         failed_labels["status"] = "error"
                         observe_histogram(duration_metric_name, duration, labels=failed_labels)
@@ -181,13 +185,13 @@ def track_metrics(
                 if track_calls:
                     increment_counter(call_metric_name, labels=metric_labels)
 
-                start_time = time.time()
+                start_time = time.monotonic()
                 try:
                     result = func(*args, **kwargs)
 
                     # Track duration
                     if track_duration:
-                        duration = time.time() - start_time
+                        duration = time.monotonic() - start_time
                         observe_histogram(duration_metric_name, duration, labels=metric_labels)
 
                     return result
@@ -201,7 +205,7 @@ def track_metrics(
 
                     # Still track duration for failed calls
                     if track_duration:
-                        duration = time.time() - start_time
+                        duration = time.monotonic() - start_time
                         failed_labels = dict(metric_labels)
                         failed_labels["status"] = "error"
                         observe_histogram(duration_metric_name, duration, labels=failed_labels)
@@ -231,6 +235,7 @@ def measure_latency(
     """
     def decorator(func: F) -> F:
         histogram_name = metric_name or f"{func.__module__}.{func.__name__}_latency_seconds"
+        resolved_buckets = buckets if buckets is not None else _DEFAULT_DURATION_BUCKETS
         # Register histogram if missing
         try:
             registry = get_metrics_registry()
@@ -240,7 +245,7 @@ def measure_latency(
                     type=MetricType.HISTOGRAM,
                     description=f"Latency for {func.__module__}.{func.__name__}",
                     unit="s",
-                    buckets=buckets
+                    buckets=resolved_buckets
                 ))
         except Exception:
             pass
@@ -248,22 +253,22 @@ def measure_latency(
         if asyncio.iscoroutinefunction(func):
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
-                start_time = time.time()
+                start_time = time.monotonic()
                 try:
                     return await func(*args, **kwargs)
                 finally:
-                    latency = time.time() - start_time
+                    latency = time.monotonic() - start_time
                     observe_histogram(histogram_name, latency, labels=labels)
 
             return async_wrapper
         else:
             @functools.wraps(func)
             def sync_wrapper(*args, **kwargs):
-                start_time = time.time()
+                start_time = time.monotonic()
                 try:
                     return func(*args, **kwargs)
                 finally:
-                    latency = time.time() - start_time
+                    latency = time.monotonic() - start_time
                     observe_histogram(histogram_name, latency, labels=labels)
 
             return sync_wrapper
@@ -468,7 +473,7 @@ def monitor_resource(
                     active_count += 1
                     set_gauge(count_metric, float(active_count), labels={"resource": resource_name})
 
-                start_time = time.time() if track_usage else None
+                start_time = time.monotonic() if track_usage else None
 
                 try:
                     return await func(*args, **kwargs)
@@ -478,7 +483,7 @@ def monitor_resource(
                         set_gauge(count_metric, float(active_count), labels={"resource": resource_name})
 
                     if track_usage and start_time:
-                        usage = time.time() - start_time
+                        usage = time.monotonic() - start_time
                         observe_histogram(usage_metric, usage, labels={"resource": resource_name})
 
             return async_wrapper
@@ -490,7 +495,7 @@ def monitor_resource(
                     active_count += 1
                     set_gauge(count_metric, float(active_count), labels={"resource": resource_name})
 
-                start_time = time.time() if track_usage else None
+                start_time = time.monotonic() if track_usage else None
 
                 try:
                     return func(*args, **kwargs)
@@ -500,7 +505,7 @@ def monitor_resource(
                         set_gauge(count_metric, float(active_count), labels={"resource": resource_name})
 
                     if track_usage and start_time:
-                        usage = time.time() - start_time
+                        usage = time.monotonic() - start_time
                         observe_histogram(usage_metric, usage, labels={"resource": resource_name})
 
             return sync_wrapper
@@ -542,7 +547,7 @@ def track_llm_usage(
                 # Track request
                 increment_counter("llm_requests_total", labels={**labels, "status": "started"})
 
-                start_time = time.time()
+                start_time = time.monotonic()
                 try:
                     result = await func(*args, **kwargs)
 
@@ -550,7 +555,7 @@ def track_llm_usage(
                     increment_counter("llm_requests_total", labels={**labels, "status": "success"})
 
                     # Track duration
-                    duration = time.time() - start_time
+                    duration = time.monotonic() - start_time
                     observe_histogram("llm_request_duration_seconds", duration, labels=labels)
 
                     # Extract token counts if available
@@ -598,7 +603,7 @@ def track_llm_usage(
                 # Track request
                 increment_counter("llm_requests_total", labels={**labels, "status": "started"})
 
-                start_time = time.time()
+                start_time = time.monotonic()
                 try:
                     result = func(*args, **kwargs)
 
@@ -606,7 +611,7 @@ def track_llm_usage(
                     increment_counter("llm_requests_total", labels={**labels, "status": "success"})
 
                     # Track duration
-                    duration = time.time() - start_time
+                    duration = time.monotonic() - start_time
                     observe_histogram("llm_request_duration_seconds", duration, labels=labels)
 
                     # Extract token counts if available

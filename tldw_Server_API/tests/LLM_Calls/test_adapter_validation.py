@@ -3,6 +3,8 @@ from __future__ import annotations
 import pytest
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatBadRequestError
+from tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter import AnthropicAdapter
+from tldw_Server_API.app.core.LLM_Calls.providers.google_adapter import GoogleAdapter
 from tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter import OpenAIAdapter
 from tldw_Server_API.app.core.LLM_Calls.providers.openrouter_adapter import OpenRouterAdapter
 from tldw_Server_API.app.core.LLM_Calls.providers.mistral_adapter import MistralAdapter
@@ -96,3 +98,110 @@ def test_cohere_adapter_rejects_tool_choice(monkeypatch):
     with pytest.raises(ChatBadRequestError) as exc:
         adapter.chat({"messages": [], "model": "command-r", "tool_choice": "auto"})
     assert "tool_choice" in str(exc.value)
+
+
+def test_anthropic_adapter_normalizes_stop_sequences(monkeypatch):
+    captured = {}
+
+    class FakeResp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"type": "message", "content": []}
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["json"] = json
+            return FakeResp()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.http_client_factory",
+        lambda *a, **k: FakeClient(),
+    )
+
+    adapter = AnthropicAdapter()
+    adapter.chat(
+        {
+            "messages": [{"role": "user", "content": "hi"}],
+            "model": "claude-test",
+            "api_key": "test-key",
+            "stop": "END",
+        }
+    )
+
+    assert captured["json"]["stop_sequences"] == ["END"]
+
+
+def test_google_adapter_normalizes_stop_sequences(monkeypatch):
+    captured = {}
+
+    class FakeResp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"candidates": []}
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["json"] = json
+            return FakeResp()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.LLM_Calls.providers.google_adapter.http_client_factory",
+        lambda *a, **k: FakeClient(),
+    )
+
+    adapter = GoogleAdapter()
+    adapter.chat(
+        {
+            "messages": [{"role": "user", "content": "hi"}],
+            "model": "gemini-test",
+            "api_key": "test-key",
+            "stop": "END",
+        }
+    )
+
+    payload = captured["json"]
+    assert payload["generationConfig"]["stopSequences"] == ["END"]
+
+
+def test_google_adapter_rejects_tools_without_mapping(monkeypatch):
+    def _fail_factory(*_args, **_kwargs):
+        raise AssertionError("http_client_factory should not be called on validation errors")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.LLM_Calls.providers.google_adapter.http_client_factory",
+        _fail_factory,
+    )
+    monkeypatch.delenv("LLM_ADAPTERS_GEMINI_TOOLS_BETA", raising=False)
+
+    adapter = GoogleAdapter()
+    tools = [{"type": "function", "function": {"name": "lookup", "parameters": {}}}]
+    with pytest.raises(ChatBadRequestError) as exc:
+        adapter.chat(
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "model": "gemini-test",
+                "api_key": "test-key",
+                "tools": tools,
+            }
+        )
+    assert "Gemini tools" in str(exc.value)

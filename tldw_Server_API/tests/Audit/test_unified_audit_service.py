@@ -6,6 +6,7 @@ testing the new unified audit service without references to deprecated modules.
 """
 
 import asyncio
+import hashlib
 import json
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -358,6 +359,34 @@ class TestUnifiedAuditService:
         assert audit_service.stats["events_logged"] == 1
 
     @pytest.mark.asyncio
+    async def test_api_key_hashing_prefix(self, audit_service):
+        """API keys should always be stored as hashed, prefixed values."""
+        raw_hex = "a" * 64
+        expected = f"sha256:{hashlib.sha256(raw_hex.encode('utf-8')).hexdigest()}"
+        ctx = AuditContext(user_id="hash_user", api_key_hash=raw_hex)
+        await audit_service.log_event(
+            event_type=AuditEventType.API_REQUEST,
+            context=ctx,
+        )
+        await audit_service.flush()
+
+        events = await audit_service.query_events(user_id="hash_user")
+        assert events
+        stored = events[0].get("context_api_key_hash")
+        assert stored == expected
+        assert stored != raw_hex
+
+        ctx2 = AuditContext(user_id="hash_user2", api_key_hash=expected)
+        await audit_service.log_event(
+            event_type=AuditEventType.API_REQUEST,
+            context=ctx2,
+        )
+        await audit_service.flush()
+        events2 = await audit_service.query_events(user_id="hash_user2")
+        assert events2
+        assert events2[0].get("context_api_key_hash") == expected
+
+    @pytest.mark.asyncio
     async def test_event_buffering_and_flush(self, audit_service):
         """Test event buffering and flushing"""
         # Log multiple events
@@ -374,6 +403,32 @@ class TestUnifiedAuditService:
 
         assert len(audit_service.event_buffer) == 0
         assert audit_service.stats["events_flushed"] == 5
+
+    @pytest.mark.asyncio
+    async def test_timestamp_normalization_and_filters(self, audit_service):
+        """Timestamps should be normalized to UTC and filters should handle offsets."""
+        tz_offset = timezone(timedelta(hours=5))
+        local_ts = datetime(2024, 1, 1, 12, 0, tzinfo=tz_offset)
+        event = AuditEvent(
+            event_id="tz-event",
+            timestamp=local_ts,
+            category=AuditEventCategory.SYSTEM,
+            event_type=AuditEventType.SYSTEM_START,
+            severity=AuditSeverity.INFO,
+        )
+        async with audit_service.buffer_lock:
+            audit_service.event_buffer.append(event)
+        await audit_service.flush()
+
+        events = await audit_service.query_events()
+        match = next(e for e in events if e.get("event_id") == "tz-event")
+        stored_ts = datetime.fromisoformat(match["timestamp"])
+        assert stored_ts.utcoffset() == timedelta(0)
+        assert stored_ts == local_ts.astimezone(timezone.utc)
+
+        start_filter = datetime(2024, 1, 1, 8, 0, tzinfo=timezone(timedelta(hours=1)))
+        filtered = await audit_service.query_events(start_time=start_filter)
+        assert any(e.get("event_id") == "tz-event" for e in filtered)
 
     @pytest.mark.asyncio
     async def test_auto_flush_on_buffer_full(self, audit_service):
@@ -788,7 +843,8 @@ class TestUnifiedAuditService:
     async def test_auto_severity_determination(self, audit_service):
         """Test automatic severity determination"""
         test_cases = [
-            (AuditEventType.SECURITY_VIOLATION, "success", AuditSeverity.CRITICAL),
+            (AuditEventType.SECURITY_VIOLATION, "failure", AuditSeverity.CRITICAL),
+            (AuditEventType.SUSPICIOUS_ACTIVITY, "success", AuditSeverity.CRITICAL),
             (AuditEventType.AUTH_LOGIN_FAILURE, "failure", AuditSeverity.WARNING),
             (AuditEventType.SYSTEM_START, "success", AuditSeverity.DEBUG),
             (AuditEventType.DATA_READ, "error", AuditSeverity.ERROR),
@@ -1446,6 +1502,62 @@ class TestFallbackQueueAtomicity:
         assert len(events) == 10
 
         await service.stop()
+
+    @pytest.mark.asyncio
+    async def test_fallback_replay_does_not_double_count_stats(self, tmp_path):
+        """Replaying duplicate fallback events should not inflate daily stats."""
+        db_path = tmp_path / "audit.db"
+        service = UnifiedAuditService(
+            db_path=str(db_path),
+            retention_days=7,
+            enable_pii_detection=False,
+            enable_risk_scoring=False,
+            buffer_size=100,
+            flush_interval=60.0,
+        )
+        await service.initialize()
+        ts = datetime(2024, 1, 2, 12, 0, tzinfo=timezone.utc)
+        try:
+            fb_path = db_path.parent / "audit_fallback_queue.jsonl"
+            payload_lines = []
+            for i in range(3):
+                event = AuditEvent(
+                    event_id=f"dup-{i}",
+                    timestamp=ts,
+                    category=AuditEventCategory.DATA_ACCESS,
+                    event_type=AuditEventType.DATA_READ,
+                    severity=AuditSeverity.INFO,
+                )
+                payload_lines.append(json.dumps(event.to_dict()) + "\n")
+
+            fb_path.write_text("".join(payload_lines), encoding="utf-8")
+            inserted = await service.replay_fallback_queue()
+            assert inserted == 3
+
+            async with aiosqlite.connect(db_path) as db:
+                row = await db.execute(
+                    "SELECT total_events FROM audit_daily_stats WHERE date = ? AND category = ?",
+                    (ts.date(), AuditEventCategory.DATA_ACCESS.value),
+                )
+                first = await row.fetchone()
+                first_total = int(first[0]) if first else 0
+
+            fb_path.write_text("".join(payload_lines), encoding="utf-8")
+            inserted_again = await service.replay_fallback_queue()
+            assert inserted_again == 0
+
+            async with aiosqlite.connect(db_path) as db:
+                row = await db.execute(
+                    "SELECT total_events FROM audit_daily_stats WHERE date = ? AND category = ?",
+                    (ts.date(), AuditEventCategory.DATA_ACCESS.value),
+                )
+                second = await row.fetchone()
+                second_total = int(second[0]) if second else 0
+
+            assert first_total == 3
+            assert second_total == first_total
+        finally:
+            await service.stop()
 
     @pytest.mark.asyncio
     async def test_duration_count_tracked_correctly(self, temp_db_path):

@@ -71,9 +71,9 @@ def timeit(func):
     """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        start = time.time()
+        start = time.monotonic()
         result = func(*args, **kwargs)
-        elapsed = time.time() - start
+        elapsed = time.monotonic() - start
 
         # Print to console (optional)
         print(f"{func.__name__} executed in {elapsed:.2f} seconds.")

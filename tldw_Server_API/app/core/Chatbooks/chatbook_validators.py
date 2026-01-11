@@ -192,13 +192,10 @@ class ChatbookValidator:
 
             # Open and validate ZIP contents
             with zipfile.ZipFile(file_path, 'r') as zf:
-                # Test ZIP integrity
-                result = zf.testzip()
-                if result is not None:
-                    return False, f"Corrupted ZIP file: {result}"
+                filelist = zf.filelist
 
                 # Check total uncompressed size
-                total_uncompressed = sum(info.file_size for info in zf.filelist)
+                total_uncompressed = sum(info.file_size for info in filelist)
                 valid, error = cls.validate_file_size(total_uncompressed, compressed=False)
                 if not valid:
                     return False, error
@@ -206,7 +203,7 @@ class ChatbookValidator:
                 # Check for zip bomb - excessive compression ratio
                 # Use total compressed size from archive (sum of compress_size) for consistency
                 # Threshold is configurable via CHATBOOKS_MAX_COMPRESSION_RATIO env var
-                total_compressed = sum(info.compress_size for info in zf.filelist)
+                total_compressed = sum(info.compress_size for info in filelist)
                 if total_compressed > 0 and total_uncompressed > 0:
                     compression_ratio = total_uncompressed / total_compressed
                     if compression_ratio > cls.MAX_COMPRESSION_RATIO:
@@ -216,7 +213,7 @@ class ChatbookValidator:
                     return False, "Invalid archive: uncompressed data with zero compressed size"
 
                 # Validate each file in archive
-                for info in zf.filelist:
+                for info in filelist:
                     # Check for null bytes in filename (can cause issues)
                     if '\x00' in info.filename:
                         return False, "Archive contains files with invalid characters"
@@ -246,7 +243,7 @@ class ChatbookValidator:
                     # Check for suspicious compression ratio per file (consistent with overall check)
                     if info.compress_size > 0 and info.file_size > 0:
                         per_file_ratio = info.file_size / info.compress_size
-                        if per_file_ratio > 100:
+                        if per_file_ratio > cls.MAX_COMPRESSION_RATIO:
                             return False, "Archive contains files with suspicious compression ratios"
 
                     # Check for suspicious file types
@@ -262,6 +259,11 @@ class ChatbookValidator:
                 if manifest_info.file_size > cls.MAX_MANIFEST_SIZE:
                     max_mb = cls.MAX_MANIFEST_SIZE / (1024 * 1024)
                     return False, f"Manifest file too large (max {max_mb:.0f}MB)"
+
+                # Test ZIP integrity after size/structure checks (avoids zip-bomb decompression)
+                result = zf.testzip()
+                if result is not None:
+                    return False, f"Corrupted ZIP file: {result}"
 
             return True, None
 

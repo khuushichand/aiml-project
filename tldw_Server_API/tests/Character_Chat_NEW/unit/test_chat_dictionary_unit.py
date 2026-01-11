@@ -323,6 +323,28 @@ class TestTextProcessing:
         assert "Ai" in processed  # Different case not replaced
 
     @pytest.mark.unit
+    def test_case_insensitive_literal_replacement(self, chat_dictionary_service):
+        """Ensure case-insensitive literals match before replacement."""
+        service = chat_dictionary_service
+
+        dict_id = service.create_dictionary(name="Case Insensitive Test")
+        service.add_entry(
+            dictionary_id=dict_id,
+            pattern="AI",
+            replacement="ZED",
+            type="literal",
+            case_sensitive=False,
+        )
+
+        text = "AI and ai and Ai should all change."
+        processed = service.process_text(text, dict_id)
+
+        assert processed.count("ZED") == 3
+        assert "AI" not in processed
+        assert "ai" not in processed
+        assert "Ai" not in processed
+
+    @pytest.mark.unit
     def test_probability_replacement(self, chat_dictionary_service):
         """Test probabilistic replacement."""
         service = chat_dictionary_service

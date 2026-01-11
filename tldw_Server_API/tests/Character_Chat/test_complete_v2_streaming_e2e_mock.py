@@ -178,3 +178,56 @@ async def test_complete_v2_streaming_e2e_monkeypatched(monkeypatch):
             assert collected == expected_lines
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_complete_v2_streaming_non_iterable_fallback(monkeypatch):
+    tmpdir = tempfile.mkdtemp(prefix="chacha_stream_non_iterable_")
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.delenv("STREAMS_UNIFIED", raising=False)
+
+    import tldw_Server_API.app.api.v1.endpoints.character_chat_sessions as chat_sessions_mod
+
+    def _fake_perform_chat_api_call(*args, **kwargs):
+        return {
+            "choices": [{"message": {"role": "assistant", "content": "Fallback content"}}]
+        }
+
+    monkeypatch.setattr(chat_sessions_mod, "perform_chat_api_call", _fake_perform_chat_api_call)
+    try:
+        from tldw_Server_API.app.main import app
+
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get("/api/v1/characters/", headers=headers)
+            assert r.status_code == 200
+            character_id = r.json()[0]["id"]
+            r = await client.post("/api/v1/chats/", headers=headers, json={"character_id": character_id})
+            assert r.status_code == 201
+            chat_id = r.json()["id"]
+
+            async with client.stream(
+                "POST",
+                f"/api/v1/chats/{chat_id}/complete-v2",
+                headers=headers,
+                json={
+                    "provider": "openai",
+                    "model": "gpt-4o-mini",
+                    "append_user_message": "ping",
+                    "save_to_db": False,
+                    "stream": True,
+                },
+            ) as response:
+                assert response.status_code == 200
+                ct = response.headers.get("content-type", "")
+                assert ct.lower().startswith("text/event-stream")
+                lines = [ln async for ln in response.aiter_lines() if ln]
+
+        combined = "\n".join(lines)
+        assert "Fallback content" in combined
+        assert lines[-1].strip().lower() == "data: [done]"
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)

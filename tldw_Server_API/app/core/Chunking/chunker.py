@@ -482,6 +482,16 @@ class Chunker:
         overlap = overlap if overlap is not None else self.config.default_overlap
         language = language or self.config.language
         method = self._resolve_method(method, language, method_opts)
+        rewrite_methods = {
+            ChunkingMethod.SEMANTIC.value,
+            ChunkingMethod.PROPOSITIONS.value,
+            ChunkingMethod.JSON.value,
+            ChunkingMethod.XML.value,
+            ChunkingMethod.EBOOK_CHAPTERS.value,
+            ChunkingMethod.ROLLING_SUMMARIZE.value,
+            ChunkingMethod.CODE.value,
+            'code_ast',
+        }
 
         # Build blocks from spans
         spans = self._compute_paragraph_spans(text, template)
@@ -507,6 +517,29 @@ class Chunker:
                 **method_opts,
             )
             out_chunks: List[Dict[str, Any]] = []
+            if method in rewrite_methods:
+                for ch in chunks:
+                    ch_text = ch if isinstance(ch, str) else str(ch)
+                    out_chunks.append({
+                        'type': 'text',
+                        'text': ch_text,
+                        'metadata': {
+                            'method': method,
+                            'start_offset': None,
+                            'end_offset': None,
+                            'language': language,
+                            'paragraph_kind': kind,
+                            'offsets_valid': False,
+                        }
+                    })
+                parent.setdefault('children', []).append({
+                    'kind': kind,
+                    'start_offset': start,
+                    'end_offset': end,
+                    'chunks': out_chunks,
+                    'children': []
+                })
+                return
 
             # Method-aware offset mapping to avoid misplacing spans on repeated content
             try:
@@ -1340,18 +1373,14 @@ class Chunker:
 
         # Use defaults if not specified
         options_raw: Dict[str, Any] = dict(options)
-        # Configuration-only flags (removed before invoking strategy)
-        tokenizer_override = options_raw.get("tokenizer_name")
-        if tokenizer_override is None:
-            tokenizer_override = options_raw.get("tokenizer_name_or_path")
-        strategy_options: Dict[str, Any] = dict(options_raw)
-        strategy_options.pop("code_mode", None)
-        strategy_options.pop("tokenizer_name", None)
-        strategy_options.pop("tokenizer_name_or_path", None)
         method = self._normalize_method_argument(method) or self.config.default_method.value
         max_size = max_size if max_size is not None else self.config.default_max_size
         overlap = overlap if overlap is not None else self.config.default_overlap
         # Harden overlap to avoid non-progressing loops in strategies
+        language = language or self.config.language
+        method = self._resolve_method(method, language, options_raw)
+        options_raw = self._apply_option_aliases(method, options_raw)
+        overlap = self._override_overlap_for_method(method, overlap, options_raw)
         try:
             if isinstance(max_size, int) and isinstance(overlap, int):
                 if overlap < 0:
@@ -1365,8 +1394,15 @@ class Chunker:
                     overlap = max_size - 1
         except Exception as e:
             logger.debug(f"Overlap adjustment check failed: {e}")
-        language = language or self.config.language
-        method = self._resolve_method(method, language, options_raw)
+
+        # Configuration-only flags (removed before invoking strategy)
+        tokenizer_override = options_raw.get("tokenizer_name")
+        if tokenizer_override is None:
+            tokenizer_override = options_raw.get("tokenizer_name_or_path")
+        strategy_options: Dict[str, Any] = dict(options_raw)
+        strategy_options.pop("code_mode", None)
+        strategy_options.pop("tokenizer_name", None)
+        strategy_options.pop("tokenizer_name_or_path", None)
 
         # Check cache if enabled
         cache_key = None
@@ -1428,6 +1464,8 @@ class Chunker:
                     setattr(strategy, "tokenizer_name", tokenizer_override)
                     if hasattr(strategy, "_tokenizer"):
                         setattr(strategy, "_tokenizer", None)
+                    if hasattr(strategy, "_tokenizer_init_attempted"):
+                        setattr(strategy, "_tokenizer_init_attempted", False)
             except Exception:
                 logger.debug("Failed to update tokenizer override", exc_info=True)
 
@@ -1510,16 +1548,13 @@ class Chunker:
 
         # Use defaults if not specified
         options_raw: Dict[str, Any] = dict(options)
-        tokenizer_override = options_raw.get("tokenizer_name")
-        if tokenizer_override is None:
-            tokenizer_override = options_raw.get("tokenizer_name_or_path")
-        strategy_options: Dict[str, Any] = dict(options_raw)
-        strategy_options.pop("code_mode", None)
-        strategy_options.pop("tokenizer_name", None)
-        strategy_options.pop("tokenizer_name_or_path", None)
         method = self._normalize_method_argument(method) or self.config.default_method.value
         max_size = max_size if max_size is not None else self.config.default_max_size
         overlap = overlap if overlap is not None else self.config.default_overlap
+        language = language or self.config.language
+        method = self._resolve_method(method, language, options_raw)
+        options_raw = self._apply_option_aliases(method, options_raw)
+        overlap = self._override_overlap_for_method(method, overlap, options_raw)
         # Harden overlap to avoid non-progressing loops in strategies
         try:
             if isinstance(max_size, int) and isinstance(overlap, int):
@@ -1534,8 +1569,14 @@ class Chunker:
                     overlap = max_size - 1
         except Exception:
             pass
-        language = language or self.config.language
-        method = self._resolve_method(method, language, options_raw)
+
+        tokenizer_override = options_raw.get("tokenizer_name")
+        if tokenizer_override is None:
+            tokenizer_override = options_raw.get("tokenizer_name_or_path")
+        strategy_options: Dict[str, Any] = dict(options_raw)
+        strategy_options.pop("code_mode", None)
+        strategy_options.pop("tokenizer_name", None)
+        strategy_options.pop("tokenizer_name_or_path", None)
 
         # Get strategy lazily (supports factory registration)
         strategy = self.get_strategy(method)
@@ -1546,6 +1587,8 @@ class Chunker:
                     setattr(strategy, "tokenizer_name", tokenizer_override)
                     if hasattr(strategy, "_tokenizer"):
                         setattr(strategy, "_tokenizer", None)
+                    if hasattr(strategy, "_tokenizer_init_attempted"):
+                        setattr(strategy, "_tokenizer_init_attempted", False)
             except Exception:
                 logger.debug("Failed to update tokenizer override", exc_info=True)
 
@@ -1612,16 +1655,13 @@ class Chunker:
 
         # Use defaults if not specified
         options_raw: Dict[str, Any] = dict(options)
-        tokenizer_override = options_raw.get("tokenizer_name")
-        if tokenizer_override is None:
-            tokenizer_override = options_raw.get("tokenizer_name_or_path")
-        strategy_options: Dict[str, Any] = dict(options_raw)
-        strategy_options.pop("code_mode", None)
-        strategy_options.pop("tokenizer_name", None)
-        strategy_options.pop("tokenizer_name_or_path", None)
         method = self._normalize_method_argument(method) or self.config.default_method.value
         max_size = max_size if max_size is not None else self.config.default_max_size
         overlap = overlap if overlap is not None else self.config.default_overlap
+        language = language or self.config.language
+        method = self._resolve_method(method, language, options_raw)
+        options_raw = self._apply_option_aliases(method, options_raw)
+        overlap = self._override_overlap_for_method(method, overlap, options_raw)
         # Align overlap handling with primary chunk_text path
         try:
             if isinstance(max_size, int) and isinstance(overlap, int):
@@ -1635,8 +1675,14 @@ class Chunker:
                     overlap = max_size - 1
         except Exception:
             pass
-        language = language or self.config.language
-        method = self._resolve_method(method, language, options_raw)
+
+        tokenizer_override = options_raw.get("tokenizer_name")
+        if tokenizer_override is None:
+            tokenizer_override = options_raw.get("tokenizer_name_or_path")
+        strategy_options: Dict[str, Any] = dict(options_raw)
+        strategy_options.pop("code_mode", None)
+        strategy_options.pop("tokenizer_name", None)
+        strategy_options.pop("tokenizer_name_or_path", None)
 
         # Get strategy lazily (supports factory registration)
         strategy = self.get_strategy(method)
@@ -1647,6 +1693,8 @@ class Chunker:
                     setattr(strategy, "tokenizer_name", tokenizer_override)
                     if hasattr(strategy, "_tokenizer"):
                         setattr(strategy, "_tokenizer", None)
+                    if hasattr(strategy, "_tokenizer_init_attempted"):
+                        setattr(strategy, "_tokenizer_init_attempted", False)
             except Exception:
                 logger.debug("Failed to update tokenizer override", exc_info=True)
 
@@ -1753,6 +1801,33 @@ class Chunker:
             if code_mode in ('auto', None) and lang_hint.startswith('py'):
                 return 'code_ast'
         return normalized
+
+    def _apply_option_aliases(self, method: str, options: Dict[str, Any]) -> Dict[str, Any]:
+        """Translate legacy/public option names into strategy-native keys."""
+        mapped = dict(options or {})
+        method_norm = str(method or "").lower()
+        if method_norm == ChunkingMethod.SEMANTIC.value:
+            if "semantic_similarity_threshold" in mapped and "similarity_threshold" not in mapped:
+                mapped["similarity_threshold"] = mapped.get("semantic_similarity_threshold")
+        if method_norm == ChunkingMethod.JSON.value:
+            if "json_chunkable_data_key" in mapped and "chunkable_key" not in mapped:
+                mapped["chunkable_key"] = mapped.get("json_chunkable_data_key")
+        if method_norm == ChunkingMethod.PROPOSITIONS.value:
+            if "proposition_min_proposition_length" in mapped and "min_proposition_length" not in mapped:
+                mapped["min_proposition_length"] = mapped.get("proposition_min_proposition_length")
+        return mapped
+
+    def _override_overlap_for_method(self, method: str, overlap: Any, options: Dict[str, Any]) -> Any:
+        """Override overlap with method-specific aliases when provided."""
+        method_norm = str(method or "").lower()
+        if method_norm == ChunkingMethod.SEMANTIC.value:
+            value = options.get("semantic_overlap_sentences")
+            if value is not None:
+                try:
+                    return int(value)
+                except Exception:
+                    logger.debug("Invalid semantic_overlap_sentences; using default overlap", exc_info=True)
+        return overlap
 
     @staticmethod
     def _normalize_method_argument(method: Optional[Any]) -> Optional[str]:
@@ -2101,10 +2176,10 @@ class Chunker:
         if (not language) or (isinstance(language, str) and language.strip().lower() in {"auto", "detect"}):
             # Lightweight language detection by Unicode script ranges
             try:
-                if re.search(r'[\u4e00-\u9fff]', processed_text):
-                    language = 'zh'       # CJK Unified Ideographs (Chinese)
-                elif re.search(r'[\u3040-\u309f\u30a0-\u30ff]', processed_text):
+                if re.search(r'[\u3040-\u309f\u30a0-\u30ff]', processed_text):
                     language = 'ja'       # Hiragana/Katakana (Japanese)
+                elif re.search(r'[\u4e00-\u9fff]', processed_text):
+                    language = 'zh'       # CJK Unified Ideographs (Chinese)
                 elif re.search(r'[\u0e00-\u0e7f]', processed_text):
                     language = 'th'       # Thai
                 elif re.search(r'[\u0900-\u097f]', processed_text):

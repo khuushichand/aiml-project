@@ -183,6 +183,7 @@ Add a simple classifier (top-level or under `chunking.config`) for `/chunking/te
 - Offsets: When returning `ChunkResult`, prefer exact `start_char`/`end_char` spans taken from the source text; avoid naïve `.find()` when feasible.
   - Paragraphs strategy uses paragraph separators to compute per-paragraph spans directly from the source; chunk windows union these spans to produce precise `start_char`/`end_char` values.
   - In hierarchical mode, the `tokens` method uses strategy metadata to map local spans to global offsets; if metadata is unavailable, a bounded fallback is used.
+  - In hierarchical mode, rewrite-style methods (`semantic`, `propositions`, `json`, `xml`, `ebook_chapters`, `rolling_summarize`, `code`, `code_ast`) emit chunk text without reliable source spans; metadata sets `offsets_valid = false` and leaves `start_offset`/`end_offset` as `None`.
   - Grapheme safety: All strategies clamp `end_char` to a grapheme boundary. In non-strict mode, only non-visible trailing marks/selectors are absorbed. In strict mode (`strict_grapheme_end_expansion = true`), ZWJ sequences and emoji modifiers are also absorbed to preserve visual stability at chunk boundaries.
 
 ### Tokens Strategy Notes

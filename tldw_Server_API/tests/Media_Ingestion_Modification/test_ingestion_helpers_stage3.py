@@ -96,6 +96,28 @@ async def test_save_uploaded_files_blocks_dangerous_extensions(tmp_path: Path, m
 
 
 @pytest.mark.asyncio
+async def test_save_uploaded_files_enforces_fractional_size_limit(tmp_path: Path) -> None:
+    class _SizeLimitValidator(_DummyValidator):
+        def get_media_config(self, media_key: Optional[str]) -> Dict[str, Any]:
+            return {"max_size_mb": 0.5} if media_key else {}
+
+    payload = b"x" * (1024 * 1024 + 1)
+    files: List[_DummyUploadFile] = [
+        _DummyUploadFile("oversize.txt", payload),
+    ]
+
+    processed, errors = await save_uploaded_files(
+        files=files,
+        temp_dir=tmp_path,
+        validator=_SizeLimitValidator(),
+    )
+
+    assert processed == []
+    assert len(errors) == 1
+    assert "exceeds maximum allowed size" in errors[0]["error"]
+
+
+@pytest.mark.asyncio
 async def test_run_batch_processor_counts_and_orders(tmp_path: Path) -> None:
     items = [
         ProcessItem(

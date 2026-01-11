@@ -8,7 +8,7 @@ supporting both OpenTelemetry and fallback implementations.
 import time
 import asyncio
 import os
-from typing import Dict, Any, Optional, List, Callable, Union
+from typing import Dict, Any, Optional, List, Callable, Union, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
@@ -68,6 +68,9 @@ class MetricsRegistry:
         self.instruments: Dict[str, Any] = {}
         # Rolling window of metric samples; size configurable via METRICS_RING_BUFFER_MAXLEN.
         self.values: Dict[str, deque] = defaultdict(lambda: deque(maxlen=buffer_maxlen))
+        # Cumulative aggregates for Prometheus export (monotonic counters, full histograms).
+        self._cumulative_counters: Dict[str, Dict[Tuple[Tuple[str, str], ...], float]] = defaultdict(dict)
+        self._cumulative_histograms: Dict[str, Dict[Tuple[Tuple[str, str], ...], Dict[str, Any]]] = defaultdict(dict)
         self.callbacks: Dict[str, List[Callable]] = defaultdict(list)
         self._legacy_cb_alias_metrics = {
             "circuit_breaker_state",
@@ -83,6 +86,29 @@ class MetricsRegistry:
 
         # Register standard metrics
         self._register_standard_metrics()
+
+    @staticmethod
+    def _normalize_label_key(labels: Dict[str, str]) -> Tuple[Tuple[str, str], ...]:
+        """Return a stable, sortable label key from the label dict."""
+        if not labels:
+            return tuple()
+        return tuple(sorted((str(k), str(v)) for k, v in labels.items()))
+
+    @staticmethod
+    def _escape_label_value(value: str) -> str:
+        """Escape label values for Prometheus text exposition."""
+        return str(value).replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+
+    @classmethod
+    def _format_label_str(cls, labels: Dict[str, str]) -> str:
+        """Format labels for Prometheus exposition with proper escaping."""
+        if not labels:
+            return ""
+        parts = []
+        for key, value in sorted(labels.items()):
+            escaped = cls._escape_label_value(value)
+            parts.append(f'{key}="{escaped}"')
+        return ",".join(parts)
 
     def _register_standard_metrics(self):
         """Register standard application metrics."""
@@ -1348,6 +1374,22 @@ class MetricsRegistry:
         metric_value = MetricValue(value=value, labels=labels)
         self.values[metric_name].append(metric_value)
 
+        label_key = self._normalize_label_key(labels)
+        if definition.type in (MetricType.COUNTER, MetricType.UP_DOWN_COUNTER):
+            current = self._cumulative_counters[metric_name].get(label_key, 0.0)
+            self._cumulative_counters[metric_name][label_key] = current + value
+        elif definition.type == MetricType.HISTOGRAM:
+            hist = self._cumulative_histograms[metric_name].get(label_key)
+            if not hist:
+                hist = {"count": 0, "sum": 0.0, "buckets": defaultdict(int)}
+                self._cumulative_histograms[metric_name][label_key] = hist
+            hist["count"] += 1
+            hist["sum"] += value
+            if definition.buckets:
+                for bucket in definition.buckets:
+                    if value <= bucket:
+                        hist["buckets"][bucket] += 1
+
         # Record in OpenTelemetry
         if metric_name in self.instruments:
             instrument = self.instruments[metric_name]
@@ -1435,11 +1477,11 @@ class MetricsRegistry:
         Yields:
             Timer context
         """
-        start_time = time.time()
+        start_time = time.monotonic()
         try:
             yield
         finally:
-            duration = time.time() - start_time
+            duration = time.monotonic() - start_time
             self.observe(metric_name, duration, labels)
 
     def add_callback(self, metric_name: str, callback: Callable):
@@ -1522,97 +1564,107 @@ class MetricsRegistry:
         lines = []
 
         for metric_name, definition in self.metrics.items():
-            if metric_name not in self.values:
-                continue
-
-            # Add HELP and TYPE lines
-            lines.append(f"# HELP {metric_name} {definition.description}")
-            # Map internal metric types to Prometheus types
             prom_type = (
                 "counter" if definition.type == MetricType.COUNTER else
                 "gauge" if definition.type in (MetricType.GAUGE, MetricType.UP_DOWN_COUNTER) else
                 "histogram" if definition.type == MetricType.HISTOGRAM else
                 definition.type.value
             )
-            lines.append(f"# TYPE {metric_name} {prom_type}")
 
-            # Group values by labels
-            label_groups = defaultdict(list)
-            for value in self.values[metric_name]:
-                label_key = ",".join(f'{k}="{v}"' for k, v in sorted(value.labels.items()))
-                label_groups[label_key].append(value)
+            if definition.type in (MetricType.COUNTER, MetricType.UP_DOWN_COUNTER):
+                series = self._cumulative_counters.get(metric_name)
+                if not series:
+                    continue
 
-            # Export values
-            for label_str, values in label_groups.items():
-                if definition.type == MetricType.GAUGE:
-                    # For gauges, use the latest value
-                    latest = values[-1]
-                    if label_str:
-                        lines.append(f"{metric_name}{{{label_str}}} {latest.value}")
-                    else:
-                        lines.append(f"{metric_name} {latest.value}")
+                lines.append(f"# HELP {metric_name} {definition.description}")
+                lines.append(f"# TYPE {metric_name} {prom_type}")
 
-                elif definition.type in [MetricType.COUNTER, MetricType.UP_DOWN_COUNTER]:
-                    # For counters, use the sum
-                    total = sum(v.value for v in values)
+                for label_key, total in series.items():
+                    label_dict = dict(label_key)
+                    label_str = self._format_label_str(label_dict)
                     if label_str:
                         lines.append(f"{metric_name}{{{label_str}}} {total}")
                     else:
                         lines.append(f"{metric_name} {total}")
 
-                elif definition.type == MetricType.HISTOGRAM:
-                    # For histograms, calculate buckets
-                    numeric_values = [v.value for v in values]
+                # Emit alias series for cache_* metrics to rag_cache_* for consistency
+                if metric_name in {"cache_hits_total", "cache_misses_total"}:
+                    alias_name = (
+                        "rag_cache_hits_total" if metric_name == "cache_hits_total" else "rag_cache_misses_total"
+                    )
+                    alias_series = self._cumulative_counters.get(alias_name)
+                    if not alias_series:
+                        lines.append(f"# HELP {alias_name} Aliased from {metric_name} for RAG cache consistency")
+                        lines.append(f"# TYPE {alias_name} counter")
+                        for label_key, total in series.items():
+                            label_dict = dict(label_key)
+                            if "cache" in label_dict:
+                                label_dict["cache_type"] = label_dict.pop("cache")
+                            alias_labels = self._format_label_str(label_dict)
+                            if alias_labels:
+                                lines.append(f"{alias_name}{{{alias_labels}}} {total}")
+                            else:
+                                lines.append(f"{alias_name} {total}")
+
+            elif definition.type == MetricType.HISTOGRAM:
+                series = self._cumulative_histograms.get(metric_name)
+                if not series:
+                    continue
+
+                lines.append(f"# HELP {metric_name} {definition.description}")
+                lines.append(f"# TYPE {metric_name} {prom_type}")
+
+                for label_key, hist in series.items():
+                    label_dict = dict(label_key)
                     if definition.buckets:
                         for bucket in definition.buckets:
-                            count = sum(1 for v in numeric_values if v <= bucket)
-                            bucket_label = f'le="{bucket}"'
-                            if label_str:
-                                lines.append(f"{metric_name}_bucket{{{label_str},{bucket_label}}} {count}")
-                            else:
-                                lines.append(f"{metric_name}_bucket{{{bucket_label}}} {count}")
+                            count = hist["buckets"].get(bucket, 0)
+                            bucket_labels = dict(label_dict)
+                            bucket_labels["le"] = str(bucket)
+                            label_str = self._format_label_str(bucket_labels)
+                            lines.append(f"{metric_name}_bucket{{{label_str}}} {count}")
 
-                    # Add +Inf bucket, sum, and count
+                    bucket_labels = dict(label_dict)
+                    bucket_labels["le"] = "+Inf"
+                    label_str = self._format_label_str(bucket_labels)
+                    lines.append(f"{metric_name}_bucket{{{label_str}}} {hist['count']}")
+
+                    label_str = self._format_label_str(label_dict)
                     if label_str:
-                        lines.append(f"{metric_name}_bucket{{{label_str},le=\"+Inf\"}} {len(numeric_values)}")
-                        lines.append(f"{metric_name}_sum{{{label_str}}} {sum(numeric_values)}")
-                        lines.append(f"{metric_name}_count{{{label_str}}} {len(numeric_values)}")
+                        lines.append(f"{metric_name}_sum{{{label_str}}} {hist['sum']}")
+                        lines.append(f"{metric_name}_count{{{label_str}}} {hist['count']}")
                     else:
-                        lines.append(f"{metric_name}_bucket{{le=\"+Inf\"}} {len(numeric_values)}")
-                        lines.append(f"{metric_name}_sum {sum(numeric_values)}")
-                        lines.append(f"{metric_name}_count {len(numeric_values)}")
+                        lines.append(f"{metric_name}_sum {hist['sum']}")
+                        lines.append(f"{metric_name}_count {hist['count']}")
 
-            # Emit alias series for cache_* metrics to rag_cache_* for consistency
-            if metric_name in {"cache_hits_total", "cache_misses_total"}:
-                alias_name = (
-                    "rag_cache_hits_total" if metric_name == "cache_hits_total" else "rag_cache_misses_total"
-                )
-                # Only emit alias if rag_* has no own values recorded
-                if alias_name not in self.values:
-                    # HELP/TYPE for alias
-                    lines.append(f"# HELP {alias_name} Aliased from {metric_name} for RAG cache consistency")
-                    lines.append(f"# TYPE {alias_name} counter")
-                    # Build alias series with label key remapped: cache -> cache_type
-                    for label_str, values in label_groups.items():
-                        # Rebuild labels mapping and rename key
-                        # label_str format: key="val",key2="val2" ...
-                        # Convert back to dict to manipulate keys
-                        if label_str:
-                            pairs = [s.split("=", 1) for s in label_str.split(",") if "=" in s]
-                            label_dict = {k: v.strip('"') for k, v in pairs}
-                        else:
-                            label_dict = {}
-                        if "cache" in label_dict:
-                            label_dict["cache_type"] = label_dict.pop("cache")
-                        # Serialize
-                        alias_labels = ",".join(f"{k}=\"{v}\"" for k, v in sorted(label_dict.items()))
-                        total = sum(v.value for v in values)
-                        if alias_labels:
-                            lines.append(f"{alias_name}{{{alias_labels}}} {total}")
-                        else:
-                            lines.append(f"{alias_name} {total}")
+            else:
+                if metric_name not in self.values:
+                    continue
+
+                lines.append(f"# HELP {metric_name} {definition.description}")
+                lines.append(f"# TYPE {metric_name} {prom_type}")
+
+                label_groups = defaultdict(list)
+                for value in self.values[metric_name]:
+                    label_key = self._normalize_label_key(value.labels)
+                    label_groups[label_key].append(value)
+
+                for label_key, values in label_groups.items():
+                    latest = values[-1]
+                    label_dict = dict(label_key)
+                    label_str = self._format_label_str(label_dict)
+                    if label_str:
+                        lines.append(f"{metric_name}{{{label_str}}} {latest.value}")
+                    else:
+                        lines.append(f"{metric_name} {latest.value}")
 
         return "\n".join(lines) + "\n"
+
+    def reset(self) -> None:
+        """Reset stored metric values and cumulative aggregates."""
+        self.values.clear()
+        self._cumulative_counters.clear()
+        self._cumulative_histograms.clear()
 
 
 # Global metrics registry instance

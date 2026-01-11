@@ -76,6 +76,69 @@ class _DummyModeration:
 
 
 @pytest.mark.asyncio
+async def test_execute_non_stream_call_normalizes_raw_string(monkeypatch):
+    monkeypatch.setenv("CHAT_FORCE_NORMALIZE_STRING_RESPONSES", "1")
+
+    async def fake_log_llm_usage(**_kwargs):
+        return None
+
+    monkeypatch.setattr(chat_service, "log_llm_usage", fake_log_llm_usage)
+    monkeypatch.setattr(chat_service, "get_topic_monitoring_service", lambda: None)
+
+    metrics = _DummyMetrics()
+    provider_manager = _DummyProviderManager()
+
+    def llm_call_func():
+        return "plain response"
+
+    async def save_message_fn(*_args, **_kwargs):
+        return None
+
+    request = SimpleNamespace(
+        method="POST",
+        url=SimpleNamespace(path="/api/v1/chat/completions"),
+        headers={},
+        state=SimpleNamespace(user_id=None, api_key_id=None),
+    )
+
+    response = await execute_non_stream_call(
+        current_loop=asyncio.get_running_loop(),
+        cleaned_args={
+            "api_endpoint": "openai",
+            "api_key": "test-key",
+            "messages_payload": [{"role": "user", "content": "hi"}],
+            "model": "gpt-4o-mini",
+            "streaming": False,
+        },
+        selected_provider="openai",
+        provider="openai",
+        model="gpt-4o-mini",
+        request_json="{}",
+        request=request,
+        metrics=metrics,
+        provider_manager=provider_manager,
+        templated_llm_payload=[{"role": "user", "content": "hi"}],
+        should_persist=False,
+        final_conversation_id="conv-123",
+        character_card_for_context={"name": "Test"},
+        chat_db=None,
+        save_message_fn=save_message_fn,
+        audit_service=None,
+        audit_context=None,
+        client_id="client",
+        queue_execution_enabled=False,
+        enable_provider_fallback=False,
+        llm_call_func=llm_call_func,
+        refresh_provider_params=lambda *_args, **_kwargs: None,
+        moderation_getter=lambda: _DummyModeration(),
+    )
+
+    assert isinstance(response, dict)
+    assert response["choices"][0]["message"]["content"] == "plain response"
+    assert response["tldw_conversation_id"] == "conv-123"
+
+
+@pytest.mark.asyncio
 async def test_execute_non_stream_call_refreshes_credentials(monkeypatch):
     captured_kwargs = {}
 

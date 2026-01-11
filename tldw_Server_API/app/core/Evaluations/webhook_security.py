@@ -668,16 +668,14 @@ class WebhookPermissionManager:
             with self.db_adapter.transaction():
                 if webhook_id:
                     # Check by webhook ID
-                    cursor = conn.execute("""
+                    row = self.db_adapter.fetch_one("""
                         SELECT user_id FROM webhook_registrations
                         WHERE id = ? AND active = 1
                     """, (webhook_id,))
-
-                    row = cursor.fetchone()
-                    if not row:
+                    if row is None:
                         return False, "Webhook not found"
 
-                    webhook_owner = row[0]
+                    webhook_owner = row.get("user_id") if isinstance(row, dict) else row[0]
                     if webhook_owner != user_id:
                         # (Optional) Could emit a unified audit SECURITY_VIOLATION here
                         return False, "Access denied: not webhook owner"

@@ -28,3 +28,19 @@ def test_idempotency_lookup_scoped_by_user_postgres(prompt_studio_dual_backend_d
     db.record_idempotency("project", key, 999999, "userB")
     got_b2 = db.lookup_idempotency("project", key, "userB")
     assert got_b2 == 999999
+
+
+def test_idempotency_persists_after_close_postgres(prompt_studio_dual_backend_db):
+    label, db = prompt_studio_dual_backend_db
+    if label != "postgres":
+        pytest.skip("Postgres-specific idempotency test")
+
+    proj = db.create_project(name=f"PGPersist-{uuid.uuid4().hex[:6]}", status="active")
+    key = f"pgpersist-{uuid.uuid4().hex}"
+
+    db.record_idempotency("project", key, int(proj["id"]), "userA")
+    # Simulate request lifecycle by closing the thread-local connection.
+    db.close_connection()
+
+    got = db.lookup_idempotency("project", key, "userA")
+    assert got == int(proj["id"])

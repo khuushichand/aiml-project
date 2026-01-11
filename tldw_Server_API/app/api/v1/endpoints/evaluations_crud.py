@@ -16,7 +16,6 @@ from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import (
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
-    get_auth_principal,
     rbac_rate_limit,
     require_token_scope,
 )
@@ -69,10 +68,11 @@ async def create_evaluation(
     response: Response = None,
 ):
     try:
+        stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
         svc = get_unified_evaluation_service_for_user(current_user.id)
         if idempotency_key:
             try:
-                existing_id = svc.db.lookup_idempotency("evaluation", idempotency_key, user_id)
+                existing_id = svc.db.lookup_idempotency("evaluation", idempotency_key, stable_user_id)
                 if existing_id:
                     existing = await svc.get_evaluation(existing_id)
                     if existing:
@@ -93,11 +93,11 @@ async def create_evaluation(
             dataset_id=eval_request.dataset_id,
             dataset=[model_dump_compat(s) for s in eval_request.dataset] if eval_request.dataset else None,
             metadata=model_dump_compat(eval_request.metadata) if eval_request.metadata else None,
-            created_by=user_id,
+            created_by=stable_user_id,
         )
         try:
             if idempotency_key and evaluation.get("id"):
-                svc.db.record_idempotency("evaluation", idempotency_key, evaluation["id"], user_id)
+                svc.db.record_idempotency("evaluation", idempotency_key, evaluation["id"], stable_user_id)
         except Exception as e:
             logger.debug(
                 f"evaluations_crud: failed to record idempotency for evaluation {evaluation.get('id')}: {e}"
@@ -116,7 +116,6 @@ async def create_evaluation(
     "/",
     response_model=EvaluationListResponse,
     dependencies=[
-        Depends(get_auth_principal),
         Depends(require_eval_permissions(EVALS_READ)),
     ],
 )
@@ -127,12 +126,13 @@ async def list_evaluations(
     current_user: User = Depends(get_eval_request_user),
 ):
     try:
+        stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
         svc = get_unified_evaluation_service_for_user(current_user.id)
         evaluations, has_more = await svc.list_evaluations(
             limit=limit,
             after=after,
             eval_type=eval_type,
-            created_by=current_user.id,
+            created_by=stable_user_id,
         )
         first_id = evaluations[0]["id"] if evaluations else None
         last_id = evaluations[-1]["id"] if evaluations else None
@@ -271,10 +271,11 @@ async def create_run(
     response: Response = None,
 ):
     try:
+        stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
         svc = get_unified_evaluation_service_for_user(current_user.id)
         if idempotency_key:
             try:
-                existing_id = svc.db.lookup_idempotency("run", idempotency_key, user_id)
+                existing_id = svc.db.lookup_idempotency("run", idempotency_key, stable_user_id)
                 if existing_id:
                     existing = await svc.get_run(existing_id)
                     if existing:
@@ -300,11 +301,11 @@ async def create_run(
             config=config,
             dataset_override=dataset_override,
             webhook_url=webhook_url,
-            created_by=user_id,
+            created_by=stable_user_id,
         )
         try:
             if idempotency_key and run.get("id"):
-                svc.db.record_idempotency("run", idempotency_key, run["id"], user_id)
+                svc.db.record_idempotency("run", idempotency_key, run["id"], stable_user_id)
         except Exception as e:
             logger.debug(f"evaluations_crud: failed to record idempotency for run {run.get('id')}: {e}")
         return RunResponse(**run)

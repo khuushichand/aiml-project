@@ -388,7 +388,7 @@ This guide is maintained to help coding agents understand the project structure,
 
 ### 1. Planning & Staging
 
-Break complex work into 3-5 stages. Document in `IMPLEMENTATION_PLAN.md`:
+Break complex work into 3-5 stages. Document in a uniquely named plan file for the specific task (avoid generic names like `IMPLEMENTATION.md` or `IMPLEMENTATION_PLAN.md`), for example `IMPLEMENTATION_PLAN_<short_task_slug>.md`:
 
 ```markdown
 ## Stage N: [Name]
@@ -398,7 +398,7 @@ Break complex work into 3-5 stages. Document in `IMPLEMENTATION_PLAN.md`:
 **Status**: [Not Started|In Progress|Complete]
 ```
 - Update status as you progress
-- Remove file when all stages are done
+- Remove only your own plan file when all stages are done; never delete other agents' plans
 
 ### 2. Implementation Flow
 

@@ -114,8 +114,8 @@ async def list_webhooks(
     current_user: User = Depends(get_eval_request_user),
 ):
     try:
-        _get_webhook_manager_for_user(current_user.id)
-        _res = webhook_manager.get_webhook_status(user_id=user_id)
+        wm = _get_webhook_manager_for_user(current_user.id)
+        _res = wm.get_webhook_status(user_id=user_id)
         try:
             records = await _res if inspect.isawaitable(_res) else _res
         except Exception:
@@ -132,19 +132,19 @@ async def list_webhooks(
 
 @webhooks_router.delete("/webhooks")
 async def unregister_webhook(
-    webhook_id: str,
+    url: str,
     user_id: str = Depends(verify_api_key),
     current_user: User = Depends(get_eval_request_user),
 ):
     try:
         wm = _get_webhook_manager_for_user(current_user.id)
-        _res = wm.unregister_webhook(user_id, webhook_id)
+        _res = wm.unregister_webhook(user_id, url)
         try:
             if inspect.isawaitable(_res):
                 await _res
         except Exception:
             pass
-        return {"status": "unregistered", "webhook_id": webhook_id}
+        return {"status": "unregistered", "url": url}
     except Exception as e:
         logger.error(f"Failed to unregister webhook: {e}")
         raise HTTPException(
@@ -160,8 +160,8 @@ async def test_webhook(
     current_user: User = Depends(get_eval_request_user),
 ):
     try:
-        _get_webhook_manager_for_user(current_user.id)
-        _res = webhook_manager.test_webhook(user_id=user_id, url=str(payload.url))
+        wm = _get_webhook_manager_for_user(current_user.id)
+        _res = wm.test_webhook(user_id=user_id, url=str(payload.url))
         try:
             result = await _res if inspect.isawaitable(_res) else _res
         except Exception:

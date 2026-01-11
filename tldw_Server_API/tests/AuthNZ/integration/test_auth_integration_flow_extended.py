@@ -13,7 +13,7 @@ pytestmark = pytest.mark.integration
 async def test_reset_password_integration_success(monkeypatch):
     """End-to-end reset-password via dependency overrides of JWT and DB.
 
-    - Overrides get_jwt_service_dep to return a stub verifying the token
+    - Uses the real JWTService to mint/verify a reset token
     - Overrides DB transaction to accept queries
     - Forces Postgres code path in the endpoint for simpler branches
     - Overrides password service to accept and hash new password
@@ -26,6 +26,13 @@ async def test_reset_password_integration_success(monkeypatch):
     mfa_stub_mod = types.ModuleType("mfa_service")
     setattr(mfa_stub_mod, "get_mfa_service", lambda: _StubMFA())
     sys.modules['tldw_Server_API.app.core.AuthNZ.mfa_service'] = mfa_stub_mod
+
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key-for-testing-only-needs-32-chars-minimum")
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.core.AuthNZ.jwt_service import reset_jwt_service
+    reset_settings()
+    reset_jwt_service()
 
     # Reload a fresh app instance (router mounts use the stubbed module)
     import tldw_Server_API.app.main as _main
@@ -67,20 +74,13 @@ async def test_reset_password_integration_success(monkeypatch):
 
     app.dependency_overrides[get_db_transaction] = _override_db_tx
 
-    # Override JWT service dep to accept provided token
-    class _StubJWT:
-        def verify_token(self, token: str, token_type: str | None = None):
-            return {"sub": 777, "type": "password_reset"}
-
-        def hash_token_candidates(self, token: str) -> list[str]:
-            return ["htok"]
-
-        def hash_token(self, token: str) -> str:
-            return "htok"
-
-    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_jwt_service_dep
-
-    app.dependency_overrides[get_jwt_service_dep] = lambda: _StubJWT()
+    # Build a real password reset token
+    from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
+    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+    reset_token = JWTService(get_settings()).create_password_reset_token(
+        user_id=777,
+        email="user@example.com",
+    )
 
     # Override password service dep to validate/hash
     class _StubPwd:
@@ -97,12 +97,14 @@ async def test_reset_password_integration_success(monkeypatch):
     with TestClient(app) as client:
         r = client.post(
             "/api/v1/auth/reset-password",
-            json={"token": "dummy-token", "new_password": "Strong@12345"},
+            json={"token": reset_token, "new_password": "Strong@12345"},
         )
         assert r.status_code == 200, r.text
         assert "reset" in r.json().get("message", "").lower()
 
     app.dependency_overrides.clear()
+    reset_settings()
+    reset_jwt_service()
 
 
 @pytest.mark.asyncio

@@ -172,8 +172,12 @@ class AnthropicAdapter(ChatProvider):
             payload["top_p"] = request.get("top_p")
         if request.get("top_k") is not None:
             payload["top_k"] = request.get("top_k")
-        if request.get("stop") is not None:
-            payload["stop_sequences"] = request.get("stop")
+        stop_val = request.get("stop")
+        if stop_val is not None:
+            if isinstance(stop_val, (list, tuple)):
+                payload["stop_sequences"] = list(stop_val)
+            else:
+                payload["stop_sequences"] = [stop_val]
         # Tools mapping (OpenAI-style → Anthropic)
         tool_choice = request.get("tool_choice")
         tools = request.get("tools")

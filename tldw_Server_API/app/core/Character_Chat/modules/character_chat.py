@@ -8,6 +8,7 @@ facade.
 
 import base64
 import random
+import re
 import time
 from collections import Counter
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
@@ -32,6 +33,7 @@ from tldw_Server_API.app.core.config import settings
 
 
 # Aliases are sourced from character_utils for consistency across modules.
+_DEFAULT_FIRST_MESSAGE_TEMPLATE = "Hello, I am {{char}}. How can I help you, {{user}}?"
 
 
 def _extract_message_attachments(msg_data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -518,7 +520,10 @@ def process_db_messages_to_rich_ui_history(
         except Exception:
             _len = 0
         # Hash sender name for traceability without exposing PII
-        sender_hash = hash(sender) & 0xFFFFFFFF  # 32-bit positive hash for log reference
+        try:
+            sender_hash = hash(sender) & 0xFFFFFFFF  # 32-bit positive hash for log reference
+        except Exception:
+            sender_hash = hash(str(sender)) & 0xFFFFFFFF
         logger.warning("Message from unknown sender (hash={:08x}, content_length={})", sender_hash, _len)
         formatted_content = f"[{sender}] {processed_content}"
         detail = {
@@ -758,6 +763,24 @@ def start_new_chat_session(
             char_name,
         )
 
+        def _restore_first_message_template(text: str) -> str:
+            restored = text
+            user_token = str(user_name).strip() if user_name is not None else ""
+            if user_token:
+                restored = re.sub(
+                    rf"(?<!\w){re.escape(user_token)}(?!\w)",
+                    "{{user}}",
+                    restored,
+                )
+            char_token = str(char_name).strip() if char_name is not None else ""
+            if char_token:
+                restored = re.sub(
+                    rf"(?<!\w){re.escape(char_token)}(?!\w)",
+                    "{{char}}",
+                    restored,
+                )
+            return restored
+
         message_to_store_in_db: Optional[str] = original_first_message_content
 
         # Apply optional greeting strategy selection using raw (unprocessed) fields
@@ -777,20 +800,32 @@ def start_new_chat_session(
             message_to_store_in_db = selected_alt
 
         if message_to_store_in_db is None:
+            fallback_processed: Optional[str] = None
             if initial_ui_history and initial_ui_history[0] and initial_ui_history[0][1]:
-                message_to_store_in_db = initial_ui_history[0][1]
-                logger.warning(
-                    "Storing processed first message for char %s in new conversation %s as raw version was not available.",
-                    char_name,
-                    conversation_id_val,
-                )
+                fallback_processed = initial_ui_history[0][1]
             elif char_data.get("first_message"):
-                message_to_store_in_db = char_data["first_message"]
-                logger.warning(
-                    "Storing processed first_message from char_data for char %s in new conversation %s.",
+                fallback_processed = char_data["first_message"]
+
+            if isinstance(fallback_processed, str) and fallback_processed.strip():
+                processed_default = replace_placeholders(
+                    _DEFAULT_FIRST_MESSAGE_TEMPLATE,
                     char_name,
-                    conversation_id_val,
-                )
+                    user_name,
+                ).strip()
+                if fallback_processed.strip() == processed_default:
+                    message_to_store_in_db = _DEFAULT_FIRST_MESSAGE_TEMPLATE
+                    logger.warning(
+                        "Storing default first_message template for char %s in new conversation %s as raw version was not available.",
+                        char_name,
+                        conversation_id_val,
+                    )
+                else:
+                    message_to_store_in_db = _restore_first_message_template(fallback_processed)
+                    logger.warning(
+                        "Storing reconstructed first_message template for char %s in new conversation %s as raw version was not available.",
+                        char_name,
+                        conversation_id_val,
+                    )
 
         if message_to_store_in_db:
             db.add_message(
@@ -985,6 +1020,51 @@ def search_conversations_by_title_query(
         return []
 
 
+def _bump_conversation_metadata(
+    db: CharactersRAGDB,
+    conversation_id: str,
+    max_attempts: int = 3,
+) -> None:
+    """Best-effort metadata bump with retry to handle concurrent updates."""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            conversation_meta = db.get_conversation_by_id(conversation_id)
+        except CharactersRAGDBError as meta_exc:
+            logger.warning(
+                "Non-fatal: unable to fetch conversation %s for metadata update: %s",
+                conversation_id,
+                meta_exc,
+            )
+            return
+
+        if not conversation_meta:
+            return
+
+        expected_version = conversation_meta.get("version")
+        if not isinstance(expected_version, int):
+            return
+
+        try:
+            db.update_conversation(conversation_id, {}, expected_version)
+            return
+        except ConflictError as conv_exc:
+            if attempt >= max_attempts:
+                logger.debug(
+                    "Non-fatal: failed to bump conversation metadata for %s after %s attempts: %s",
+                    conversation_id,
+                    attempt,
+                    conv_exc,
+                )
+                return
+        except CharactersRAGDBError as conv_exc:
+            logger.debug(
+                "Non-fatal: failed to bump conversation metadata for %s: %s",
+                conversation_id,
+                conv_exc,
+            )
+            return
+
+
 def post_message_to_conversation(
     db: CharactersRAGDB,
     conversation_id: str,
@@ -1044,29 +1124,7 @@ def post_message_to_conversation(
                 sender_name,
                 conversation_id,
             )
-            try:
-                conversation_meta = db.get_conversation_by_id(conversation_id)
-            except CharactersRAGDBError as meta_exc:
-                logger.warning(
-                    "Non-fatal: unable to fetch conversation %s for metadata update after message %s: %s",
-                    conversation_id,
-                    message_id,
-                    meta_exc,
-                )
-                conversation_meta = None
-
-            if conversation_meta:
-                expected_version = conversation_meta.get("version")
-                if isinstance(expected_version, int):
-                    try:
-                        db.update_conversation(conversation_id, {}, expected_version)
-                    except (ConflictError, CharactersRAGDBError) as conv_exc:
-                        logger.debug(
-                            "Non-fatal: failed to bump conversation metadata for %s after message %s: %s",
-                            conversation_id,
-                            message_id,
-                            conv_exc,
-                        )
+            _bump_conversation_metadata(db, conversation_id)
         else:
             logger.error(
                 "Failed to post message from '%s' to conversation %s (DB returned no ID without error).",

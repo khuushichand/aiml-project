@@ -33,3 +33,14 @@ def test_http_batch_initialize_and_ping():
     for item in data:
         assert item.get("jsonrpc") == "2.0"
         assert item.get("error") is None
+
+
+def test_http_batch_empty_returns_invalid_request():
+    resp = client.post("/api/v1/mcp/request/batch", json=[])
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data, list)
+    assert len(data) == 1
+    error = data[0].get("error")
+    assert error is not None
+    assert error.get("code") == -32600

@@ -221,7 +221,7 @@ class ChromaDBManager:
 
             if use_stub:
                 # Scope the stub client key by user and base dir to avoid cross-config leakage
-                stub_key = f"{self.user_id}::{str(user_db_base_path)}"
+                stub_key = f"{self.user_id}::{str(user_db_base_dir_str)}"
                 with _TEST_STUB_CLIENTS_LOCK:
                     cli = _TEST_STUB_CLIENTS.get(stub_key)
                     if cli is None:
@@ -249,7 +249,7 @@ class ChromaDBManager:
                         exc_info=True,
                     )
                     if allow_stub_fallback:
-                        stub_key = f"{self.user_id}::{str(user_db_base_path)}"
+                        stub_key = f"{self.user_id}::{str(user_db_base_dir_str)}"
                         with _TEST_STUB_CLIENTS_LOCK:
                             cli = _TEST_STUB_CLIENTS.get(stub_key)
                             if cli is None:

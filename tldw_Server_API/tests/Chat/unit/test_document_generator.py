@@ -219,6 +219,27 @@ class TestDocumentGeneratorService:
         assert result is not None
         mock_llm.assert_called_once()
 
+    def test_generate_summary_extracts_openai_content(self, service, real_db):
+
+        """Ensure OpenAI-style responses are reduced to message content."""
+        conv_id = real_db.test_conversation_id
+
+        with patch('tldw_Server_API.app.core.Chat.document_generator.chat_api_call') as mock_llm:
+            mock_llm.return_value = {
+                "choices": [{"message": {"content": "Summary content"}}]
+            }
+
+            result = service.generate_document(
+                conversation_id=conv_id,
+                document_type=DocumentType.SUMMARY,
+                provider="openai",
+                model="gpt-3.5-turbo",
+                api_key="test_key"
+            )
+
+        assert result == "Summary content"
+        mock_llm.assert_called_once()
+
     def test_generate_qa_pairs(self, service, real_db):
 
         """Test Q&A pairs document generation."""

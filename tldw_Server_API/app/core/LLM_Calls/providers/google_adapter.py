@@ -10,6 +10,7 @@ from loguru import logger
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
 )
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatBadRequestError
 from tldw_Server_API.app.core.LLM_Calls.sse import (
     normalize_provider_line,
     is_done_line,
@@ -206,18 +207,45 @@ class GoogleAdapter(ChatProvider):
         if request.get("n") is not None:
             gc["candidateCount"] = request.get("n")
         # Stop sequences belong to generationConfig for the models API
-        if request.get("stop") is not None:
-            gc["stopSequences"] = request.get("stop")
+        stop_val = request.get("stop")
+        if stop_val is not None:
+            if isinstance(stop_val, (list, tuple)):
+                gc["stopSequences"] = list(stop_val)
+            else:
+                gc["stopSequences"] = [stop_val]
         response_format = request.get("response_format")
         if isinstance(response_format, dict) and response_format.get("type") == "json_object":
             gc["responseMimeType"] = "application/json"
         # Best-effort system instruction
         if system_message:
             payload["systemInstruction"] = {"parts": [{"text": system_message}]}
+        tools = request.get("tools")
+        tools_enabled = bool(os.getenv("LLM_ADAPTERS_GEMINI_TOOLS_BETA"))
+
+        def _is_openai_tools(value: Any) -> bool:
+            if not isinstance(value, list):
+                return False
+            for item in value:
+                if (
+                    isinstance(item, dict)
+                    and item.get("type") == "function"
+                    and isinstance(item.get("function"), dict)
+                ):
+                    return True
+            return False
+
+        openai_tools = _is_openai_tools(tools)
+        if tools and openai_tools and not tools_enabled:
+            raise ChatBadRequestError(
+                provider=self.name,
+                message=(
+                    "Gemini tools require LLM_ADAPTERS_GEMINI_TOOLS_BETA or passing "
+                    "Gemini-native tools via extra_body."
+                ),
+            )
         # Optional: map OpenAI-style tools to Gemini functionDeclarations behind a flag
-        try:
-            if os.getenv("LLM_ADAPTERS_GEMINI_TOOLS_BETA"):
-                tools = request.get("tools") or []
+        if tools and openai_tools and tools_enabled:
+            try:
                 fdecls: List[Dict[str, Any]] = []
                 for t in tools:
                     if isinstance(t, dict) and t.get("type") == "function" and isinstance(t.get("function"), dict):
@@ -235,11 +263,12 @@ class GoogleAdapter(ChatProvider):
                         fdecls.append(fdecl)
                 if fdecls:
                     payload["tools"] = [{"functionDeclarations": fdecls}]
-        except Exception:
-            # tools mapping is best-effort and optional
-            pass
-        if "tools" not in payload and request.get("tools") is not None:
-            payload["tools"] = request.get("tools")
+            except Exception:
+                # tools mapping is best-effort and optional
+                pass
+        elif tools and not openai_tools:
+            # Assume tools are already Gemini-native; pass through as-is.
+            payload["tools"] = tools
         return payload
 
     @staticmethod

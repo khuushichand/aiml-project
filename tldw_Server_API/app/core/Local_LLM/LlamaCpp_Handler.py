@@ -138,6 +138,8 @@ class LlamaCppHandler(BaseLLMHandler):
             raise ServerError(f"Llama.cpp server executable not found at {self.config.executable_path}")
 
         model_path = self.models_dir / model_filename
+        if not self._is_path_allowed(model_path):
+            raise ServerError("Model path must be under allowed directories.")
         if not model_path.is_file():
             raise ModelNotFoundError(f"Model file {model_filename} not found in {self.models_dir}.")
 
@@ -307,9 +309,21 @@ class LlamaCppHandler(BaseLLMHandler):
             "prompt": lambda v: ["-p", str(v)],
         }
 
+        def _coerce_port(value: Any, fallback: Any) -> int:
+            if value is None or value == "":
+                return int(fallback)
+            try:
+                return int(value)
+            except (TypeError, ValueError) as exc:
+                raise ServerError(f"Invalid port value: {value!r}") from exc
+
+        host_value = args.get("host", self.config.default_host)
+        if not host_value:
+            host_value = self.config.default_host or "127.0.0.1"
+        host = handler_utils.strip_host_brackets(str(host_value))
+        client_host = handler_utils.resolve_client_host(host)
         # Required defaults
-        raw_port = int(args.get("port", self.config.default_port))
-        host = str(args.get("host", self.config.default_host))
+        raw_port = _coerce_port(args.get("port"), self.config.default_port)
         port = self._pick_port(host, raw_port)
         n_gpu_layers = int(
             args.get("n_gpu_layers", args.get("ngl", args.get("gpu_layers", self.config.default_n_gpu_layers)))
@@ -388,7 +402,7 @@ class LlamaCppHandler(BaseLLMHandler):
                 **cpe_kwargs
             )
             # Poll HTTP health instead of fixed sleep
-            base_url = f"http://{host}:{port}"
+            base_url = handler_utils.build_base_url(client_host, port)
             t0 = time.perf_counter()
             is_ready = await wait_for_http_ready(base_url, timeout_total=30.0, interval=0.5)
 
@@ -555,12 +569,17 @@ class LlamaCppHandler(BaseLLMHandler):
         if not self._active_server_process or self._active_server_process.returncode is not None:
             raise ServerError("Llama.cpp server is not running or not managed by this handler.")
 
-        base_url = f"http://{self._active_server_host}:{self._active_server_port}"
+        active_host = self._active_server_host or self.config.default_host or "127.0.0.1"
+        active_port = self._active_server_port or self.config.default_port
+        client_host = handler_utils.resolve_client_host(active_host)
+        base_url = handler_utils.build_base_url(client_host, active_port)
         # Ensure exactly one slash between base and path
         target_url = f"{base_url}/{api_endpoint.lstrip('/')}"
 
         # Prepare payload (OpenAI compatible)
         payload = kwargs.copy()  # n_predict, temperature, top_k, top_p, stop, etc.
+        if "stream" in payload:
+            payload.pop("stream", None)
         if messages:
             payload["messages"] = messages
         elif prompt:  # Convert simple prompt to messages for chat completions endpoint
@@ -568,8 +587,7 @@ class LlamaCppHandler(BaseLLMHandler):
         else:
             raise InferenceError("Either 'prompt' or 'messages' must be provided for inference.")
 
-        if "stream" not in payload:  # Default to non-streaming for this method
-            payload["stream"] = False
+        payload["stream"] = False
 
         self.logger.debug(f"Sending Llama.cpp inference request to {target_url} with payload: {payload}")
 
@@ -611,7 +629,10 @@ class LlamaCppHandler(BaseLLMHandler):
                                api_endpoint: str = "/v1/chat/completions", **kwargs):
         if not self._active_server_process or self._active_server_process.returncode is not None:
             raise ServerError("Llama.cpp server is not running or not managed by this handler.")
-        base_url = f"http://{self._active_server_host}:{self._active_server_port}"
+        active_host = self._active_server_host or self.config.default_host or "127.0.0.1"
+        active_port = self._active_server_port or self.config.default_port
+        client_host = handler_utils.resolve_client_host(active_host)
+        base_url = handler_utils.build_base_url(client_host, active_port)
         target_url = f"{base_url}/{api_endpoint.lstrip('/')}"
         payload = kwargs.copy()
         if messages:

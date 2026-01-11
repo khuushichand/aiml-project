@@ -255,6 +255,23 @@ embedding_models: Dict[str, Any] = {}
 embedding_models_lock = threading.RLock()  # Global reentrant lock for the embedding_models dictionary
 model_last_used: Dict[str, float] = {}  # Track last usage time for LRU eviction
 model_memory_usage: Dict[str, float] = {}  # Track estimated memory per model
+model_in_use_counts: Dict[str, int] = {}  # Track active users of cached models
+
+
+def _mark_model_in_use(model_id: str) -> None:
+    """Increment the in-use counter for a cached model."""
+    with embedding_models_lock:
+        model_in_use_counts[model_id] = model_in_use_counts.get(model_id, 0) + 1
+
+
+def _release_model_in_use(model_id: str) -> None:
+    """Decrement the in-use counter for a cached model."""
+    with embedding_models_lock:
+        current = model_in_use_counts.get(model_id, 0)
+        if current <= 1:
+            model_in_use_counts.pop(model_id, None)
+        else:
+            model_in_use_counts[model_id] = current - 1
 
 # Prometheus Metrics (Ensure these are correctly defined and registered in your application)
 ACTIVE_EMBEDDERS = Gauge("active_embedder_instances", "Number of active embedder instances",
@@ -750,6 +767,8 @@ def evict_lru_models(keep_model_id: Optional[str] = None) -> None:
         models_to_remove = []
         for model_id, last_used in model_last_used.items():
             if model_id != keep_model_id and (current_time - last_used) > MODEL_LRU_TTL_SECONDS:
+                if model_in_use_counts.get(model_id, 0) > 0:
+                    continue
                 models_to_remove.append(model_id)
 
         for model_id in models_to_remove:
@@ -765,7 +784,11 @@ def evict_lru_models(keep_model_id: Optional[str] = None) -> None:
             oldest_time = current_time
 
             for model_id, last_used in model_last_used.items():
-                if model_id != keep_model_id and last_used < oldest_time:
+                if model_id == keep_model_id:
+                    continue
+                if model_in_use_counts.get(model_id, 0) > 0:
+                    continue
+                if last_used < oldest_time:
                     oldest_time = last_used
                     lru_model_id = model_id
 
@@ -780,15 +803,21 @@ def evict_lru_models(keep_model_id: Optional[str] = None) -> None:
                     )
                 except Exception:
                     pass
-                _remove_model(lru_model_id)
+                removed = _remove_model(lru_model_id)
+                if not removed:
+                    logger.debug(f"Unable to evict model '{lru_model_id}' because it is in use.")
+                    break
             else:
                 break
 
 
-def _remove_model(model_id: str) -> None:
+def _remove_model(model_id: str) -> bool:
     """Remove a model from memory and clean up resources."""
     if model_id not in embedding_models:
-        return
+        return False
+
+    if model_in_use_counts.get(model_id, 0) > 0:
+        return False
 
     model = embedding_models.get(model_id)
     provider_label = ""
@@ -818,12 +847,14 @@ def _remove_model(model_id: str) -> None:
         del embedding_models[model_id]
         model_last_used.pop(model_id, None)
         model_memory_usage.pop(model_id, None)
+        model_in_use_counts.pop(model_id, None)
         if provider_label:
             try:
                 ACTIVE_EMBEDDERS.labels(provider=provider_label, model_id=model_id).set(0)
             except Exception:
                 pass
         logger.info(f"Removed model {model_id} from memory")
+    return True
 
 
 def check_memory_limit(estimated_size_gb: float = 1.0) -> bool:
@@ -1519,6 +1550,7 @@ def create_embeddings_batch(
             if not isinstance(model_spec, HFModelCfg):
                 raise ValueError(f"Model spec for {model_id_to_use} is not HFModelCfg.")
 
+            model_id_in_use: Optional[str] = None
             with embedding_models_lock:  # Protect access to the global embedding_models cache
                 if model_id_to_use not in embedding_models:
                     logger.info(f"HuggingFace model ID {model_id_to_use} not in cache. Initializing.")
@@ -1564,15 +1596,22 @@ def create_embeddings_batch(
                     MODEL_CACHE_HITS.labels(model_id=model_id_to_use).inc()
                     model_last_used[model_id_to_use] = time.time()
                 embedder_instance = embedding_models[model_id_to_use]
+                _mark_model_in_use(model_id_to_use)
+                model_id_in_use = model_id_to_use
 
             if embedder_instance:
-                embeddings_np = embedder_instance.create_embeddings(texts)
-                embeddings_list = embeddings_np.tolist()
+                try:
+                    embeddings_np = embedder_instance.create_embeddings(texts)
+                    embeddings_list = embeddings_np.tolist()
+                finally:
+                    if model_id_in_use:
+                        _release_model_in_use(model_id_in_use)
 
         elif provider.lower() == "onnx":
             if not isinstance(model_spec, ONNXModelCfg):
                 raise ValueError(f"Model spec for {model_id_to_use} is not ONNXModelCfg.")
 
+            model_id_in_use = None
             with embedding_models_lock:
                 if model_id_to_use not in embedding_models:
                     logger.info(f"ONNX model ID {model_id_to_use} not in cache. Initializing.")
@@ -1616,10 +1655,16 @@ def create_embeddings_batch(
                     MODEL_CACHE_HITS.labels(model_id=model_id_to_use).inc()
                     model_last_used[model_id_to_use] = time.time()
                 embedder_instance = embedding_models[model_id_to_use]
+                _mark_model_in_use(model_id_to_use)
+                model_id_in_use = model_id_to_use
 
             if embedder_instance:
-                embeddings_np = embedder_instance.create_embeddings(texts)
-                embeddings_list = embeddings_np.tolist()
+                try:
+                    embeddings_np = embedder_instance.create_embeddings(texts)
+                    embeddings_list = embeddings_np.tolist()
+                finally:
+                    if model_id_in_use:
+                        _release_model_in_use(model_id_in_use)
 
         elif provider.lower() == "openai":
             if not isinstance(model_spec, OpenAIModelCfg):

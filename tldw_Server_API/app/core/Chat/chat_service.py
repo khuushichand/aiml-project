@@ -19,6 +19,7 @@ import time
 import json as _json
 import os
 import inspect
+import re
 from pathlib import Path
 from functools import lru_cache
 
@@ -119,6 +120,20 @@ _env_inject_assistant_name = os.getenv("CHAT_INJECT_ASSISTANT_NAME")
 if _env_inject_assistant_name is not None:
     _inject_assistant_name = _coerce_bool(_env_inject_assistant_name, _inject_assistant_name)
 INJECT_ASSISTANT_NAME = _inject_assistant_name
+
+_force_normalize_strings = _coerce_bool(_chat_config.get("force_normalize_string_responses"), False)
+_env_force_normalize = os.getenv("CHAT_FORCE_NORMALIZE_STRING_RESPONSES")
+if _env_force_normalize is not None:
+    _force_normalize_strings = _coerce_bool(_env_force_normalize, _force_normalize_strings)
+FORCE_NORMALIZE_STRING_RESPONSES = _force_normalize_strings
+
+
+def should_force_normalize_string_responses() -> bool:
+    """Return True when raw-string LLM responses should be wrapped in OpenAI format."""
+    raw = os.getenv("CHAT_FORCE_NORMALIZE_STRING_RESPONSES")
+    if raw is not None:
+        return _coerce_bool(raw, FORCE_NORMALIZE_STRING_RESPONSES)
+    return FORCE_NORMALIZE_STRING_RESPONSES
 
 
 # --- Cached helpers (module scope) -------------------------------------------
@@ -816,9 +831,79 @@ def estimate_tokens_from_json(request_json: str) -> int:
     This matches the existing heuristic in the endpoint.
     """
     try:
-        return max(1, len(request_json) // 4)
+        sanitized = _sanitize_data_uris(request_json)
+        return max(1, len(sanitized) // 4)
     except Exception:
         return 1
+
+
+_DATA_URI_RE = re.compile(r"(data:image[^,]*,)[^\"\\s]+", re.IGNORECASE)
+
+
+def _sanitize_data_uris(text: str) -> str:
+    """Redact data URI payloads to avoid inflating token estimates."""
+    try:
+        return _DATA_URI_RE.sub(r"\1<omitted>", text)
+    except Exception:
+        return text
+
+
+def _sanitize_messages_for_token_estimate(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return a copy of messages with base64 image payloads replaced."""
+    sanitized: List[Dict[str, Any]] = []
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            continue
+        msg_copy = msg.copy()
+        content = msg_copy.get("content")
+        if isinstance(content, list):
+            new_parts: List[Any] = []
+            for part in content:
+                if not isinstance(part, dict):
+                    new_parts.append(part)
+                    continue
+                if part.get("type") == "image_url":
+                    image_url = part.get("image_url") or {}
+                    if isinstance(image_url, dict):
+                        url_val = image_url.get("url")
+                        if isinstance(url_val, str) and url_val.startswith("data:image"):
+                            new_image_url = dict(image_url)
+                            new_image_url["url"] = "data:image/omitted"
+                            new_parts.append({**part, "image_url": new_image_url})
+                            continue
+                new_parts.append(part)
+            msg_copy["content"] = new_parts
+        elif isinstance(content, str):
+            msg_copy["content"] = _sanitize_data_uris(content)
+        sanitized.append(msg_copy)
+    return sanitized
+
+
+def _estimate_tokens_from_messages(messages: List[Dict[str, Any]]) -> int:
+    """Estimate tokens from message payloads with base64 redaction."""
+    try:
+        sanitized = _sanitize_messages_for_token_estimate(messages)
+        return max(1, len(_json.dumps(sanitized)) // 4)
+    except Exception:
+        return 1
+
+
+def _wrap_raw_string_response(content: str, model: Optional[str]) -> Dict[str, Any]:
+    """Wrap raw string responses in an OpenAI-compatible payload."""
+    model_name = model or "unknown"
+    return {
+        "id": f"chatcmpl-{_uuid.uuid4().hex[:12]}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": model_name,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "stop",
+            }
+        ],
+    }
 
 
 async def moderate_input_messages(
@@ -1211,6 +1296,35 @@ async def build_context_and_messages(
     return character_card, character_db_id, conv_id, conversation_created, llm_payload_messages, should_persist
 
 
+def _extract_system_messages(messages: List[Dict[str, Any]]) -> List[str]:
+    """Extract system message text content from OpenAI-style message payloads."""
+    system_messages: List[str] = []
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("role") != "system":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            text_val = content.strip()
+            if text_val:
+                system_messages.append(text_val)
+            continue
+        if isinstance(content, list):
+            text_parts: List[str] = []
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "text":
+                    text_val = part.get("text")
+                    if isinstance(text_val, str) and text_val.strip():
+                        text_parts.append(text_val)
+            combined = "\n".join(text_parts).strip()
+            if combined:
+                system_messages.append(combined)
+    return system_messages
+
+
 def apply_prompt_templating(
     request_data: Any,
     character_card: Dict[str, Any],
@@ -1227,8 +1341,13 @@ def apply_prompt_templating(
         template_data["char_name"] = character_card.get("name", "Character")
         template_data["character_system_prompt"] = character_card.get("system_prompt", "")
 
-    sys_msg_from_req = next((m.content for m in request_data.messages if m.role == "system" and isinstance(m.content, str)), None)
+    sys_msg_from_req = next(
+        (m.content for m in request_data.messages if m.role == "system" and isinstance(m.content, str)),
+        None,
+    )
     template_data["original_system_message_from_request"] = sys_msg_from_req or ""
+    system_msgs_from_payload = _extract_system_messages(llm_payload_messages)
+    payload_system_message = system_msgs_from_payload[-1] if system_msgs_from_payload else None
 
     final_system_message: Optional[str] = None
     logger.debug(
@@ -1236,18 +1355,27 @@ def apply_prompt_templating(
     )
     if active_template and active_template.system_message_template:
         final_system_message = apply_template_to_string(active_template.system_message_template, template_data)
+        if not final_system_message and payload_system_message:
+            final_system_message = payload_system_message
+            system_prompt_preview = final_system_message[:50] if final_system_message else ""
+            logger.debug(f"Template empty, using payload system message: {repr(system_prompt_preview)}...")
         if not final_system_message and character_card and character_card.get("system_prompt"):
             final_system_message = character_card.get("system_prompt")
             system_prompt_preview = final_system_message[:50] if final_system_message else ""
             logger.debug(f"Template empty, using character system prompt: {repr(system_prompt_preview)}...")
     elif sys_msg_from_req:
         final_system_message = sys_msg_from_req
+    elif payload_system_message:
+        final_system_message = payload_system_message
     elif character_card and character_card.get("system_prompt"):
         final_system_message = character_card.get("system_prompt")
         system_prompt_preview = final_system_message[:50] if final_system_message else ""
         logger.debug(f"Using character system prompt: {repr(system_prompt_preview)}...")
 
     logger.debug(f"Final system message: {repr(final_system_message)}")
+
+    if final_system_message:
+        llm_payload_messages = [m for m in llm_payload_messages if m.get("role") != "system"]
 
     templated_llm_payload: List[Dict[str, Any]] = []
     if active_template:
@@ -1281,6 +1409,23 @@ def apply_prompt_templating(
         templated_llm_payload = llm_payload_messages
 
     return final_system_message, templated_llm_payload
+
+
+async def _maybe_refund_streaming_rg(
+    rg_refund_cb: Optional[Callable[..., Any]],
+    *,
+    cancelled: bool = False,
+    error: bool = True,
+) -> None:
+    """Best-effort RG refund hook for streaming failures before stream setup."""
+    if not callable(rg_refund_cb):
+        return
+    try:
+        res = rg_refund_cb(cancelled=cancelled, error=error)
+        if hasattr(res, "__await__"):
+            await res  # type: ignore[misc]
+    except Exception:
+        pass
 
 
 async def execute_streaming_call(
@@ -1477,6 +1622,7 @@ async def execute_streaming_call(
                 # Fallback string serialization
                 yield f"data: {{\"error\":{{\"message\":\"{msg}\",\"type\":\"{typ}\"}}}}\n\n"
             yield "data: [DONE]\n\n"
+        await _maybe_refund_streaming_rg(rg_refund_cb, cancelled=False, error=True)
         return StreamingResponse(
             _err_gen(),
             media_type="text/event-stream",
@@ -1569,6 +1715,7 @@ async def execute_streaming_call(
                 yield f"data: {{\"error\":{{\"message\":\"{_err_message}\",\"type\":\"{_err_type}\"}}}}\n\n"
             yield "data: [DONE]\n\n"
 
+        await _maybe_refund_streaming_rg(rg_refund_cb, cancelled=False, error=True)
         return StreamingResponse(
             _safe_err_stream(),
             media_type="text/event-stream",
@@ -1713,7 +1860,7 @@ async def execute_streaming_call(
         try:
             pt_est = 0
             try:
-                pt_est = max(0, len(_json.dumps(templated_llm_payload)) // 4)
+                pt_est = _estimate_tokens_from_messages(templated_llm_payload)
             except Exception:
                 pt_est = 0
             ct_est = max(0, len(full_reply or "") // 4)
@@ -2220,6 +2367,9 @@ async def execute_non_stream_call(
         else:
             raise
 
+    if isinstance(llm_response, str) and should_force_normalize_string_responses():
+        llm_response = _wrap_raw_string_response(llm_response, model)
+
     content_to_save: Optional[str] = None
     tool_calls_to_save: Optional[Any] = None
     function_call_to_save: Optional[Any] = None
@@ -2271,7 +2421,7 @@ async def execute_non_stream_call(
             try:
                 pt_est = 0
                 try:
-                    pt_est = max(0, len(_json.dumps(templated_llm_payload)) // 4)
+                    pt_est = _estimate_tokens_from_messages(templated_llm_payload)
                 except Exception:
                     pt_est = 0
                 ct_est = max(0, len((content_to_save or "")) // 4)

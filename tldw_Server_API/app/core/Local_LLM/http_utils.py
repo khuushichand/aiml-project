@@ -204,7 +204,8 @@ async def request_json(
                 raise
 
     # Map legacy semantics (attempts = 1 + retries) for real httpx clients
-    attempts = max(1, int(retries)) + 1
+    retry_count = max(0, int(retries))
+    attempts = max(1, retry_count + 1)
     # Convert legacy backoff seconds to ms base with a reasonable cap
     backoff_ms = max(50, int(backoff * 1000))
     policy = RetryPolicy(attempts=attempts, backoff_base_ms=backoff_ms)
@@ -283,7 +284,8 @@ async def async_stream_download(
     Uses atomic rename and optional resume (disabled). On failure, partial
     files are removed by the downloader.
     """
-    attempts = max(1, int(retries)) + 1
+    retry_count = max(0, int(retries))
+    attempts = max(1, retry_count + 1)
     backoff_ms = max(50, int(backoff * 1000))
     policy = RetryPolicy(attempts=attempts, backoff_base_ms=backoff_ms)
     try:

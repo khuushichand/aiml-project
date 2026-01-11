@@ -12,6 +12,7 @@
 #
 ####################
 # Import necessary libraries
+import asyncio
 import gc
 from datetime import datetime
 import re
@@ -1043,8 +1044,9 @@ async def process_pdf_task(
 
         # Call the synchronous core processing function
         # process_pdf now handles the byte input correctly by creating a temp file
-        result_dict = process_pdf(
-            file_input=file_bytes, # Pass bytes directly
+        result_dict = await asyncio.to_thread(
+            process_pdf,
+            file_input=file_bytes,  # Pass bytes directly
             filename=filename,
             parser=parser,
             title_override=title_override,

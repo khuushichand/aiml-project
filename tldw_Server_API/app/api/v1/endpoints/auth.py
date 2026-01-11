@@ -1231,12 +1231,16 @@ async def reset_password(
             )
 
         user_id = int(payload["sub"])
-        if hasattr(jwt_service, "hash_token_candidates"):
-            hash_candidates = jwt_service.hash_token_candidates(data.token)
-        else:
-            # Backwards compatibility for older JWT service stubs
+        if hasattr(jwt_service, "hash_password_reset_token_candidates"):
+            hash_candidates = jwt_service.hash_password_reset_token_candidates(data.token)
+        elif hasattr(jwt_service, "hash_password_reset_token"):
             hashed = jwt_service.hash_password_reset_token(data.token)
             hash_candidates = [hashed] if hashed else []
+        elif hasattr(jwt_service, "hash_token_candidates"):
+            # Backwards compatibility for older JWT service stubs
+            hash_candidates = jwt_service.hash_token_candidates(data.token)
+        else:
+            hash_candidates = []
         if not hash_candidates:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
