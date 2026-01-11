@@ -847,6 +847,8 @@ async def character_chat_completion(
                 return ""
             if isinstance(resp, str):
                 return resp
+            if isinstance(resp, (bytes, bytearray)):
+                return resp.decode("utf-8", errors="replace")
             if isinstance(resp, dict):
                 # OpenAI-style
                 try:

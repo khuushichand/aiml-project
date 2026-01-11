@@ -50,11 +50,13 @@ Introduce a shared audit storage mode alongside the current per-user mode. The s
    - Add `AUDIT_SHARED_DB_PATH` (default `Databases/audit_shared.db`).
    - Add rollback flag `AUDIT_STORAGE_ROLLBACK=true` that forces `per_user` behavior even when shared mode is configured.
    - Rollback flag takes precedence over `AUDIT_STORAGE_MODE`.
+   - ETL discovery must respect `USER_DB_BASE_DIR` (or configured base directory) instead of hard-coded paths.
 2. **Shared Schema**
    - Shared DB must include required `tenant_user_id` column.
    - All writes must populate tenant id in shared mode.
    - All queries must filter by tenant id unless caller has admin permission.
    - System or anonymous events must map to a reserved tenant id (`system`).
+   - Reserved tenant id (`system`) is admin-only and cannot be assigned to real users.
 3. **Migration / ETL Utility**
    - Provide a tool to merge all per-user audit DBs plus `Databases/unified_audit.db` into the shared DB.
    - Dedupe by `event_id` with idempotent re-runs.
@@ -82,6 +84,7 @@ Introduce a shared audit storage mode alongside the current per-user mode. The s
 
 ### 4.1 Shared Audit Events Table
 - Add `tenant_user_id TEXT NOT NULL` to the shared schema (reserved `system` tenant for anonymous/system events).
+- Add a unique constraint on `event_id`.
 - Create index on `tenant_user_id`, plus composite indexes for common filters:
   - `(tenant_user_id, timestamp)`
   - `(tenant_user_id, event_type)`
@@ -99,7 +102,7 @@ Introduce a shared audit storage mode alongside the current per-user mode. The s
 ## 5. Migration / ETL Plan
 
 1. **Discovery**
-   - Scan `Databases/user_databases/*/audit/unified_audit.db` plus `Databases/unified_audit.db`.
+   - Scan `{USER_DB_BASE_DIR}/user_databases/*/audit/unified_audit.db` plus `Databases/unified_audit.db`.
 2. **Load**
    - For each DB, stream rows in chunks (e.g., 5k) to the shared DB.
 3. **Dedupe**
@@ -107,6 +110,8 @@ Introduce a shared audit storage mode alongside the current per-user mode. The s
 4. **Tenant Mapping**
    - Derive `tenant_user_id` from the per-user directory name or user metadata.
    - Map system or anonymous events to the reserved tenant id (`system`).
+5. **Daily Stats Migration**
+   - Migrate existing per-user `audit_daily_stats` into the shared table with `tenant_user_id` populated.
 5. **Verification**
    - Write a summary report and optional per-user counts.
 6. **Idempotency**
@@ -120,6 +125,7 @@ Introduce a shared audit storage mode alongside the current per-user mode. The s
 - Non-admin calls always include `tenant_user_id = current_user.id`.
 - Admin calls may omit `tenant_user_id` or specify `user_id` filters.
 - `system.logs` permission is required for cross-user queries.
+- `tenant_user_id=system` events are visible only to admins.
 
 ---
 
@@ -152,6 +158,7 @@ Introduce a shared audit storage mode alongside the current per-user mode. The s
 8. Existing per-user DBs remain intact after migration.
 9. System or anonymous events in shared mode are stored with `tenant_user_id=system`.
 10. `audit_daily_stats` is tenant-scoped in shared mode.
+11. `tenant_user_id=system` events are not visible to non-admin users.
 
 ---
 
@@ -169,6 +176,7 @@ Introduce a shared audit storage mode alongside the current per-user mode. The s
    - Indexes exist for `(tenant_user_id, timestamp)`.
 4. **System Tenant Mapping**
    - Events without a user context are stored with `tenant_user_id=system`.
+   - `tenant_user_id=system` cannot be assigned to real users.
 
 ### 10.2 Integration Tests
 1. **Export/Count**
@@ -178,6 +186,7 @@ Introduce a shared audit storage mode alongside the current per-user mode. The s
    - With rollback flag enabled, shared mode configuration is ignored.
 3. **Audit Daily Stats**
    - Tenant-scoped stats only include events from the requesting user unless admin.
+   - `tenant_user_id=system` stats are visible only to admins.
 
 ### 10.3 Migration Tests
 1. **ETL Dedupe**
@@ -188,6 +197,8 @@ Introduce a shared audit storage mode alongside the current per-user mode. The s
    - Migrated rows have correct `tenant_user_id` based on source DB path.
 4. **Default DB Migration**
    - Rows from `Databases/unified_audit.db` are present in the shared DB after migration.
+5. **Audit Daily Stats Migration**
+   - Per-user `audit_daily_stats` rows are migrated into the shared table with tenant ids.
 
 ---
 

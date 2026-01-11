@@ -14,7 +14,6 @@ from tldw_Server_API.app.core.AuthNZ.repos.rate_limits_repo import (
 from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
 
-@pytest.mark.asyncio
 @pytest_asyncio.fixture
 async def sqlite_rate_limits_repo(tmp_path, monkeypatch) -> AuthnzRateLimitsRepo:
     """Provide an AuthnzRateLimitsRepo wired to a fresh SQLite AuthNZ database."""
