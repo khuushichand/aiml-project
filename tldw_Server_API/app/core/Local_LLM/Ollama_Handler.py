@@ -27,6 +27,7 @@ from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import (
 )
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import OllamaConfig
 from tldw_Server_API.app.core.Local_LLM import http_utils
+from tldw_Server_API.app.core.Local_LLM import handler_utils
 
 
 def create_async_client(*args, **kwargs):
@@ -142,6 +143,7 @@ class OllamaHandler(BaseLLMHandler):
             raise ServerError(msg)
 
         port = port or self.config.default_port
+        client_host = handler_utils.resolve_client_host(host)
         ollama_env = os.environ.copy()
         ollama_env["OLLAMA_HOST"] = f"{host}:{port}"
 
@@ -195,7 +197,11 @@ class OllamaHandler(BaseLLMHandler):
                 stderr=asyncio.subprocess.PIPE
             )
             # Confirm server is up by polling common Ollama endpoints
-            ready = await wait_for_http_ready(f"http://{host}:{port}", timeout_total=30.0, interval=0.5)
+            ready = await wait_for_http_ready(
+                handler_utils.build_base_url(client_host, port),
+                timeout_total=30.0,
+                interval=0.5,
+            )
 
             if process.returncode is not None and process.returncode != 0:
                 stderr_output = (await process.stderr.read()).decode() if process.stderr else "Unknown error"
@@ -324,7 +330,8 @@ class OllamaHandler(BaseLLMHandler):
         Uses the Ollama REST API.
         """
         port = port or self.config.default_port
-        api_url = f"http://{host}:{port}/api/generate"
+        client_host = handler_utils.resolve_client_host(host)
+        api_url = f"{handler_utils.build_base_url(client_host, port)}/api/generate"
 
         # Pull model if not available, with configurable retry logic
         if not await self.is_model_available(model_name):
@@ -382,7 +389,11 @@ class OllamaHandler(BaseLLMHandler):
                 self.logger.info("Attempting to start Ollama server...")
                 try:
                     await self.serve_model(model_name, port=port, host=host)
-                    ready = await wait_for_http_ready(f"http://{host}:{port}", timeout_total=30.0, interval=0.5)
+                    ready = await wait_for_http_ready(
+                        handler_utils.build_base_url(client_host, port),
+                        timeout_total=30.0,
+                        interval=0.5,
+                    )
                     if not ready:
                         raise InferenceError("Ollama server did not become ready in time")
                     return await request_json(client, "POST", api_url, json=payload)

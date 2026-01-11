@@ -667,6 +667,15 @@ def test_prepare_character_data_uses_lossless_for_alpha():
     assert pixel[3] == 128, f"Alpha value should be preserved as 128, got {pixel[3]}"
 
 
+@pytest.mark.parametrize("empty_value", ["", "   ", "\n\t"])
+def test_prepare_character_data_update_ignores_empty_image_base64(empty_value):
+    payload = {"name": "NoOpImageUpdate", "image_base64": empty_value}
+    db_ready = _prepare_character_data_for_db_storage(payload, is_update=True)
+
+    assert db_ready["name"] == "NoOpImageUpdate"
+    assert "image" not in db_ready
+
+
 def test_parse_character_book_unit():
 
     # Valid book
@@ -1349,6 +1358,33 @@ def test_import_and_save_character_from_file_integration(MockPILImageModule, moc
     assert retrieved_png["name"] == "PNG Chara" and retrieved_png["image"] == dummy_png_bytes
 
 
+@mock.patch(f"{MODULE_PATH_PREFIX}.character_io.Image", new_callable=mock.MagicMock)
+def test_import_png_invalid_image_base64_uses_file_bytes(MockPILImageModule, db, tmp_path):
+    mock_img_instance = MockPILImageObject()
+    MockPILImageModule.open.return_value = mock_img_instance
+
+    payload = {
+        **MINIMAL_V1_CARD_UNIT,
+        "name": "PNG Bad Base64",
+        "char_image": "not-a-valid-base64",
+    }
+    payload_json = json.dumps(payload)
+    mock_img_instance.info = {
+        "chara": base64.b64encode(payload_json.encode("utf-8")).decode("utf-8")
+    }
+    mock_img_instance.format = "PNG"
+
+    dummy_png_bytes = create_dummy_png_bytes()
+    png_file = tmp_path / "bad_base64.png"
+    png_file.write_bytes(dummy_png_bytes)
+
+    success_png, message_png, char_id_png = import_and_save_character_from_file(db, str(png_file))
+    assert success_png and char_id_png is not None
+    retrieved_png = db.get_character_card_by_id(char_id_png)
+    assert retrieved_png["name"] == "PNG Bad Base64"
+    assert retrieved_png["image"] == dummy_png_bytes
+
+
 @mock.patch(f"{MODULE_PATH_PREFIX}.character_io.time.strftime", return_value=MOCK_TIME_STRFTIME)
 def test_load_chat_history_from_file_and_save_to_db_integration(
     mock_strftime, db, tmp_path, caplog_handler
@@ -1616,6 +1652,33 @@ def test_retrieve_conversation_messages_for_ui_rich_output(db):
     assert turn["character"]["id"] == msg_id
     assert turn["character"]["content"] == "Hi there, Alice"
     assert turn["character"]["attachments"]
+
+
+def test_retrieve_conversation_messages_for_ui_rich_output_drops_trailing_user(db):
+    char_id = db.add_character_card({"name": "Chrony"})
+    conv_id = db.add_conversation({"character_id": char_id, "title": "Chrony Chat"})
+
+    db.add_message({"conversation_id": conv_id, "sender": "User", "content": "Hello"})
+    db.add_message({"conversation_id": conv_id, "sender": "Chrony", "content": "Hi"})
+    db.add_message({"conversation_id": conv_id, "sender": "User", "content": "Trailing"})
+
+    history = retrieve_conversation_messages_for_ui(
+        db,
+        conversation_id=conv_id,
+        character_name="Chrony",
+        user_name="Alice",
+        rich_output=True,
+    )
+
+    assert len(history) == 1
+    assert history[0]["user"]["content"] == "Hello"
+    assert history[0]["character"]["content"] == "Hi"
+    all_contents = []
+    for turn in history:
+        for role in ("user", "character", "non_character"):
+            if turn.get(role) and turn[role].get("content"):
+                all_contents.append(turn[role]["content"])
+    assert "Trailing" not in all_contents
 
 
 def test_sender_override_is_treated_as_user(db):

@@ -34,6 +34,7 @@ from .query_utils import (
     prepare_backend_statement,
     prepare_backend_many_statement,
 )
+from tldw_Server_API.app.core.DB_Management.sql_utils import split_sql_statements
 
 
 # Try to import psycopg v3. Keep the legacy flag name for test compatibility.
@@ -864,8 +865,8 @@ class PostgreSQLBackend(DatabaseBackend):
     def create_tables(self, schema: str, connection: Optional[Any] = None) -> None:
         """Create tables from a schema definition."""
         # PostgreSQL doesn't support multiple statements in execute()
-        # Need to split and execute separately
-        statements = [s.strip() for s in schema.split(';') if s.strip()]
+        # Split safely to handle dollar-quoted bodies.
+        statements = split_sql_statements(schema)
 
         if connection:
             conn = connection

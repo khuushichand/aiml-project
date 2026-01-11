@@ -244,10 +244,6 @@ class WebhookManager:
                     log_webhook_registration(user_id=user_id, webhook_id=None, url=url, events=[e.value for e in events], success=False, error="; ".join(error_messages))
                     raise ValueError(f"URL validation failed: {'; '.join(error_messages)}")
 
-            # Generate secret if not provided
-            if not secret:
-                secret = secrets.token_hex(32)
-
             # Convert events to JSON
             events_json = json.dumps([e.value for e in events])
 
@@ -268,20 +264,27 @@ class WebhookManager:
                     existing_secret = existing['secret']
                     existing_events = existing['events']
 
+                    # Preserve secret unless explicitly rotated
+                    if secret:
+                        secret_to_store = secret
+                    else:
+                        secret_to_store = existing_secret
+
                     # Update existing webhook
                     self.db_adapter.update("""
                         UPDATE webhook_registrations
-                        SET events = ?, active = 1, retry_count = ?, timeout_seconds = ?, updated_at = CURRENT_TIMESTAMP
+                        SET events = ?, active = 1, retry_count = ?, timeout_seconds = ?, secret = ?, updated_at = CURRENT_TIMESTAMP
                         WHERE id = ?
-                    """, (events_json, effective_retries, effective_timeout, webhook_id))
+                    """, (events_json, effective_retries, effective_timeout, secret_to_store, webhook_id))
 
-                    # Use existing secret if not provided
-                    if not secret:
-                        secret = existing_secret
+                    secret = secret_to_store
 
                     action = "Updated"
                     logger.info(f"Updated webhook {webhook_id} for user {user_id}")
                 else:
+                    # Generate secret if not provided for new registrations
+                    if not secret:
+                        secret = secrets.token_hex(32)
                     # Create new webhook
                     webhook_id = self.db_adapter.insert("""
                         INSERT INTO webhook_registrations (

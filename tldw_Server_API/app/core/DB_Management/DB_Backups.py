@@ -212,8 +212,9 @@ def restore_single_db_backup(db_path: str, backup_dir: str, db_name: str, backup
         if os.path.exists(db_path):
             # Create a timestamp for the current db
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_db_name = _sanitize_backup_label(db_name, "db")
             current_backup = os.path.join(
-                backup_dir, f"{db_name}_pre_restore_{timestamp}.db"
+                backup_dir, f"{safe_db_name}_pre_restore_{timestamp}.db"
             )
 
             # Backup current database before restore

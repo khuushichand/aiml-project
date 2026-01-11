@@ -591,8 +591,55 @@ async def add_media_orchestrate(
                     )
                     for source in all_valid_input_sources
                 ]
-                individual_results = await asyncio.gather(*tasks)
-                results.extend(individual_results)
+                individual_results = await asyncio.gather(
+                    *tasks,
+                    return_exceptions=True,
+                )
+                for source, result in zip(all_valid_input_sources, individual_results):
+                    if isinstance(result, Exception):
+                        ref_info = source_to_ref_map.get(source, source)
+                        input_ref = ref_info[0] if isinstance(ref_info, tuple) else ref_info
+                        detail = getattr(result, "detail", None)
+                        status_code = getattr(result, "status_code", None)
+                        detail_text = str(detail) if detail else str(result)
+                        if status_code:
+                            error_msg = (
+                                f"Processing failed (HTTP {status_code}): {detail_text}"
+                            )
+                        else:
+                            error_msg = (
+                                f"Processing failed: {type(result).__name__}: {detail_text}"
+                            )
+                        logger.error(
+                            "Document-like processing failed for %s: %s",
+                            source,
+                            error_msg,
+                            exc_info=True,
+                        )
+                        results.append(
+                            {
+                                "status": "Error",
+                                "input_ref": input_ref,
+                                "processing_source": source,
+                                "media_type": form_data.media_type,
+                                "metadata": {},
+                                "content": None,
+                                "transcript": None,
+                                "segments": None,
+                                "chunks": None,
+                                "analysis": None,
+                                "summary": None,
+                                "analysis_details": None,
+                                "error": error_msg,
+                                "warnings": None,
+                                "db_id": None,
+                                "db_message": "DB operation skipped (processing failed).",
+                                "message": None,
+                                "media_uuid": None,
+                            }
+                        )
+                    else:
+                        results.append(result)
 
             # --- 6a. Store Original Files if Requested ---
             # For PDFs and documents, save originals to permanent storage when keep_original_file=True
@@ -2164,33 +2211,17 @@ async def process_document_like_item(
             final_result["processing_source"] = processing_source
 
     except Exception as prep_err:
-        if isinstance(prep_err, HTTPException):
-            raise
-        if not (
-            isinstance(
-                prep_err,
-                (
-                    IOError,
-                    OSError,
-                    FileNotFoundError,
-                    NetworkError,
-                    RetryExhaustedError,
-                    DownloadError,
-                ),
-            )
-            or _is_httpx_request_error(prep_err)
-        ):
-            raise
+        error_detail = str(getattr(prep_err, "detail", prep_err))
         logging.error(
             "File preparation/download error for %s: %s",
             item_input_ref,
-            prep_err,
+            error_detail,
             exc_info=True,
         )
         final_result.update(
             {
                 "status": "Error",
-                "error": f"File preparation/download failed: {prep_err}",
+                "error": f"File preparation/download failed: {error_detail}",
             },
         )
         if not final_result.get("warnings"):
@@ -2566,11 +2597,22 @@ async def process_document_like_item(
     final_result["media_type"] = media_type
 
     if final_result.get("status") in ["Success", "Warning"]:
-        claims_context = await extract_claims_if_requested(
-            final_result,
-            form_data,
-            loop,
-        )
+        try:
+            claims_context = await extract_claims_if_requested(
+                final_result,
+                form_data,
+                loop,
+            )
+        except Exception as claims_err:
+            logger.debug(
+                "Claim extraction failed for %s: %s",
+                item_input_ref,
+                claims_err,
+            )
+            _ensure_warnings_list(final_result).append(
+                f"Claim extraction failed: {claims_err}",
+            )
+            claims_context = None
         await persist_doc_item_and_children(
             final_result=final_result,
             form_data=form_data,

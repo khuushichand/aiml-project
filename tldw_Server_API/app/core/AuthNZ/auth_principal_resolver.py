@@ -78,6 +78,12 @@ def _extract_api_key(request: Request) -> Optional[str]:
         return None
 
 
+def _looks_like_jwt(token: Optional[str]) -> bool:
+    if not isinstance(token, str):
+        return False
+    return token.count(".") == 2
+
+
 def _build_principal_from_user(
     user: User,
     *,
@@ -206,7 +212,7 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
 
     Behavior:
     - If request.state.auth is already populated with an AuthContext, reuse it.
-    - Prefer Bearer JWT tokens; fall back to X-API-KEY when no token is present.
+    - Prefer Bearer JWT tokens; fall back to API keys via X-API-KEY or non-JWT Bearer tokens.
     - On missing or invalid credentials, raise HTTP 401 with stable semantics.
     """
     # Fast-path: reuse existing AuthContext if present
@@ -217,15 +223,17 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
     token = _extract_bearer_token(request)
     api_key = _extract_api_key(request)
 
-    # In single-user mode, treat Authorization Bearer as an API key for compatibility.
+    # In single-user mode or when the bearer token isn't a JWT, treat it as an API key.
     if token and not api_key:
         try:
             settings = get_settings()
-            if getattr(settings, "AUTH_MODE", None) == "single_user":
+            if getattr(settings, "AUTH_MODE", None) == "single_user" or not _looks_like_jwt(token):
                 api_key = token
                 token = None
         except Exception:
-            pass
+            if not _looks_like_jwt(token):
+                api_key = token
+                token = None
 
     if not token and not api_key:
         # Align with existing 401 semantics when no credentials are provided

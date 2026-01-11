@@ -31,6 +31,24 @@ class BackendType(Enum):
     MYSQL = "mysql"  # Future support
 
 
+_BACKEND_ALIASES = {
+    "postgres": "postgresql",
+    "postgresql": "postgresql",
+    "sqlite3": "sqlite",
+    "sqlite": "sqlite",
+}
+
+
+def normalize_backend_name(value: Optional[str]) -> Optional[str]:
+    """Normalize backend identifiers (accept common aliases)."""
+    if value is None:
+        return None
+    cleaned = str(value).strip().lower()
+    if not cleaned:
+        return cleaned
+    return _BACKEND_ALIASES.get(cleaned, cleaned)
+
+
 @dataclass
 class BackendFeatures:
     """Features supported by a database backend."""
@@ -99,8 +117,8 @@ class DatabaseConfig:
         Build a DatabaseConfig from common environment variables.
 
         Supports:
-          - DATABASE_URL (postgresql://..., postgres://..., sqlite:///path)
-          - TLDW_DB_BACKEND ("sqlite" | "postgresql") and related TLDW_* vars
+          - DATABASE_URL (postgresql://..., postgres://..., sqlite:///path, sqlite:///:memory:)
+          - TLDW_DB_BACKEND ("sqlite" | "postgresql" | "postgres") and related TLDW_* vars
           - PG* variables (PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD)
         """
         import os
@@ -110,8 +128,9 @@ class DatabaseConfig:
         if db_url:
             parsed = _url.urlparse(db_url)
             scheme = (parsed.scheme or "").lower()
+            base_scheme = scheme.split("+", 1)[0]
             # Normalize common aliases
-            if scheme in {"postgres", "postgresql"}:
+            if base_scheme in {"postgres", "postgresql"}:
                 cfg = cls(backend_type=BackendType.POSTGRESQL)
                 cfg.connection_string = db_url
                 cfg.pg_host = parsed.hostname or "localhost"
@@ -127,20 +146,36 @@ class DatabaseConfig:
                 if "sslmode" in q and q["sslmode"]:
                     cfg.pg_sslmode = q["sslmode"][0]
                 return cfg
-            elif scheme.startswith("sqlite"):
-                # sqlite:///absolute/path or sqlite:///:memory:
+            elif base_scheme in {"sqlite", "file"}:
+                # sqlite:///absolute/path, sqlite:///:memory:, or file: URIs
                 cfg = cls(backend_type=BackendType.SQLITE)
                 cfg.connection_string = db_url
-                # urlparse returns path with leading '/', handle windows drive too
-                raw_path = parsed.path or ""
-                # Treat sqlite:///./relative/path as relative './relative/path'
-                if raw_path.startswith("/./"):
-                    cfg.sqlite_path = raw_path[1:]
-                elif raw_path.startswith("/") and raw_path != "/:memory:":
-                    cfg.sqlite_path = raw_path
+                raw_path = (parsed.path or "")
+                netloc = parsed.netloc or ""
+                combined = f"{netloc}{raw_path}" if netloc else raw_path
+                combined = _url.unquote(combined or "")
+                query = parsed.query or ""
+                if combined in {":memory:", "/:memory:"}:
+                    if query:
+                        cfg.sqlite_path = f"file::memory:?{query}"
+                    else:
+                        cfg.sqlite_path = ":memory:"
+                elif combined.startswith("/./"):
+                    cfg.sqlite_path = combined[1:]
                 else:
-                    if raw_path:
-                        cfg.sqlite_path = raw_path
+                    # Normalize file: URIs (sqlite:///file:... or file:...)
+                    if combined.startswith("/file:"):
+                        combined = combined[1:]
+                    if combined.startswith("file:"):
+                        cfg.sqlite_path = combined + (f"?{query}" if query else "")
+                    elif query:
+                        # Preserve URI query args via file: prefix for sqlite3.connect(uri=True)
+                        normalized = combined
+                        if normalized.startswith("//"):
+                            normalized = "/" + normalized.lstrip("/")
+                        cfg.sqlite_path = f"file:{normalized}?{query}"
+                    elif combined:
+                        cfg.sqlite_path = combined
                     else:
                         try:
                             from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
@@ -151,7 +186,8 @@ class DatabaseConfig:
             # Fallback to TLDW_* handling if unknown scheme
 
         # TLDW_* environment style
-        backend_env = os.getenv("TLDW_DB_BACKEND", "sqlite").lower()
+        backend_env = normalize_backend_name(os.getenv("TLDW_DB_BACKEND", "sqlite"))
+        backend_env = (backend_env or "sqlite").lower()
         try:
             backend_type = BackendType(backend_env)
         except ValueError:

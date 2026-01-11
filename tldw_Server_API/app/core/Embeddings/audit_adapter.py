@@ -10,9 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import threading
-import weakref
-from collections import OrderedDict
-from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 import os
 import atexit
@@ -25,24 +22,27 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import (
     AuditEventType as UEvent,
     AuditContext,
 )
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+    get_or_create_audit_service_for_user_id_optional,
+    shutdown_all_audit_services,
+)
 
 
-# LRU cache for audit services with configurable max size
-_MAX_CACHED_SERVICES = int(os.getenv("EMBEDDINGS_AUDIT_MAX_CACHED_SERVICES", "20"))
+_TRUTHY = {"1", "true", "yes", "y", "on"}
 
 
-@dataclass
-class _LoopState:
-    """Per-event-loop cache state to avoid cross-loop asyncio primitive issues."""
+def _parse_cache_size(env_key: str, default: int) -> int:
+    raw = os.getenv(env_key, str(default))
+    try:
+        value = int(str(raw).strip())
+    except Exception:
+        logger.warning(f"Invalid {env_key}={raw!r}; using default {default}")
+        return default
+    if value < 1:
+        logger.warning(f"{env_key} must be >= 1; using 1")
+        return 1
+    return value
 
-    cache: "OrderedDict[str, UnifiedAuditService]" = field(default_factory=OrderedDict)
-    services_stopping: set[str] = field(default_factory=set)
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-
-
-_STATE_LOCK = threading.Lock()
-_STATE_BY_LOOP: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, _LoopState]" = weakref.WeakKeyDictionary()
 
 _SYNC_LOOP: Optional[asyncio.AbstractEventLoop] = None
 _SYNC_LOOP_THREAD: Optional[threading.Thread] = None
@@ -50,23 +50,18 @@ _SYNC_LOOP_LOCK = threading.Lock()
 _SYNC_LOOP_READY = threading.Event()
 
 
-def _state_for_loop() -> _LoopState:
-    """Return per-loop adapter state (creates it lazily on first use)."""
-    loop = asyncio.get_running_loop()
-    with _STATE_LOCK:
-        state = _STATE_BY_LOOP.get(loop)
-        if state is None:
-            state = _LoopState()
-            _STATE_BY_LOOP[loop] = state
-        return state
-
-
-def _key_for_user(user_id: Optional[str]) -> str:
-    return str(user_id) if user_id is not None else "__default__"
+def _env_truthy(key: str) -> bool:
+    raw = os.getenv(key)
+    if raw is None:
+        return False
+    val = str(raw).strip().lower()
+    return val in _TRUTHY
 
 
 def _in_test_mode() -> bool:
-    return bool(os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TEST_MODE") or os.getenv("TLDW_TEST_MODE"))
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return True
+    return _env_truthy("TEST_MODE") or _env_truthy("TLDW_TEST_MODE")
 
 
 def _ensure_sync_loop() -> Optional[asyncio.AbstractEventLoop]:
@@ -125,62 +120,9 @@ def _stop_sync_loop() -> None:
     _SYNC_LOOP_READY.clear()
 
 
-async def _evict_oldest_service(state: _LoopState) -> None:
-    """Evict the oldest (least recently used) service from cache.
-
-    Must be called while holding state.lock.
-    """
-    if not state.cache:
-        return
-
-    # Pop oldest item (first in OrderedDict)
-    oldest_key, oldest_svc = state.cache.popitem(last=False)
-    state.services_stopping.add(oldest_key)
-
-    try:
-        await oldest_svc.stop()
-    except Exception as e:
-        logger.debug(f"Error stopping evicted audit service for {oldest_key}: {e}")
-    finally:
-        state.services_stopping.discard(oldest_key)
-
-
 async def _get_service_for_user(user_id: Optional[str]) -> UnifiedAuditService:
-    """Get or initialize a cached unified audit service with LRU eviction.
-
-    If a numeric user_id is provided, use the per-user audit DB path; otherwise,
-    fallback to the default unified audit DB file.
-    """
-    key = _key_for_user(user_id)
-    state = _state_for_loop()
-    async with state.lock:
-        # Check if this key is being stopped; wait briefly if so
-        if key in state.services_stopping:
-            # Rare edge case: service being evicted, return new one after lock release
-            pass
-        elif key in state.cache:
-            # Move to end (most recently used)
-            state.cache.move_to_end(key)
-            return state.cache[key]
-
-        # Evict oldest if at capacity
-        while len(state.cache) >= _MAX_CACHED_SERVICES:
-            await _evict_oldest_service(state)
-
-        # Determine DB path
-        db_path: Optional[str] = None
-        if user_id is not None:
-            try:
-                uid_int = int(user_id)
-                db_path = str(DatabasePaths.get_audit_db_path(uid_int))
-            except Exception:
-                # Non-numeric user; use default path
-                db_path = None
-
-        svc = UnifiedAuditService(db_path=db_path)
-        await svc.initialize()
-        state.cache[key] = svc
-        return svc
+    """Resolve the shared audit service via the central cache."""
+    return await get_or_create_audit_service_for_user_id_optional(user_id)
 
 
 async def _emit(
@@ -311,49 +253,11 @@ async def emit_memory_limit_exceeded_async(
 
 
 async def shutdown_audit_adapter_services() -> None:
-    """Shutdown and clear cached UnifiedAuditService instances used by this adapter.
-
-    Ensures pooled connections are closed and background tasks are stopped.
-    Safe to call multiple times.
-    """
-    # Snapshot and clear caches across all known event loops.
-    services: list[UnifiedAuditService] = []
-    with _STATE_LOCK:
-        for state in list(_STATE_BY_LOOP.values()):
-            services.extend(list(state.cache.values()))
-            state.cache.clear()
-            state.services_stopping.clear()
-
-    if not services:
-        _stop_sync_loop()
-        return
-
-    async def _stop_service(service: UnifiedAuditService) -> None:
-        owner_loop = getattr(service, "owner_loop", None)
-        try:
-            current_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            current_loop = None
-
-        if owner_loop and not owner_loop.is_closed() and current_loop is not owner_loop:
-            try:
-                fut = asyncio.run_coroutine_threadsafe(service.stop(), owner_loop)
-                await asyncio.wrap_future(fut)
-                return
-            except Exception:
-                # Fall back to direct stop attempt.
-                pass
-        try:
-            await service.stop()
-        except Exception:
-            pass
-
+    """Shutdown shared audit services used by this adapter."""
     try:
-        await asyncio.gather(*[_stop_service(s) for s in services], return_exceptions=True)
-    except Exception:
-        # Best-effort shutdown; ignore errors
-        pass
-    _stop_sync_loop()
+        await shutdown_all_audit_services()
+    finally:
+        _stop_sync_loop()
 
 
 # Ensure services are shutdown at interpreter exit to avoid hanging tests

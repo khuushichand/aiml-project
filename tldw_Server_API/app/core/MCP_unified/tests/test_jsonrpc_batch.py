@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.core.MCP_unified import get_mcp_server
-from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol, RequestContext
+from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol, RequestContext, MCPResponse
 from tldw_Server_API.app.main import app
 
 
@@ -70,3 +70,13 @@ async def test_protocol_notification_returns_none():
     ctx = RequestContext(request_id="notif-1", client_id="unit-test")
     resp = await protocol.process_request(req, ctx)
     assert resp is None
+
+
+@pytest.mark.asyncio
+async def test_protocol_empty_batch_returns_invalid_request():
+    protocol = MCPProtocol()
+    ctx = RequestContext(request_id="batch-empty", client_id="unit-test")
+    resp = await protocol.process_request([], ctx)
+    assert isinstance(resp, MCPResponse)
+    assert resp.error is not None
+    assert resp.error.code == -32600

@@ -96,7 +96,7 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
                 return None
         return None
 
-    def _try_base64_json(raw_value: Union[str, bytes]) -> Optional[str]:
+    def _try_base64_json(raw_value: Union[str, bytes], context_label: Optional[str] = None) -> Optional[str]:
         if isinstance(raw_value, str):
             normalized = "".join(raw_value.split())
             if normalized.startswith("data:") and "base64," in normalized:
@@ -104,37 +104,49 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
             if not normalized:
                 return None
             padded = normalized + ("=" * (-len(normalized) % 4))
-            raw_bytes = padded.encode('utf-8')
+            raw_bytes = padded
         else:
             raw_bytes = raw_value
         try:
             decoded = base64.b64decode(raw_bytes)
-        except binascii.Error:
+        except binascii.Error as exc:
+            if context_label:
+                logger.error(
+                    f"Error decoding '{context_label}' metadata from '{file_name_for_log}': {exc}"
+                )
             return None
         try:
             decoded_text = decoded.decode('utf-8').lstrip("\ufeff").strip()
-        except UnicodeDecodeError:
+        except UnicodeDecodeError as exc:
+            if context_label:
+                logger.error(
+                    f"Error decoding '{context_label}' metadata from '{file_name_for_log}': {exc}"
+                )
             return None
         if not decoded_text:
             return None
         try:
             json.loads(decoded_text)
             return decoded_text
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
+            if context_label:
+                logger.error(
+                    f"Error decoding '{context_label}' metadata from '{file_name_for_log}': {exc}"
+                )
             return None
 
-    def _decode_candidate_value(raw_value: Any) -> Optional[str]:
+    def _decode_candidate_value(raw_value: Any, context_label: Optional[str] = None) -> Optional[str]:
         if raw_value is None:
             return None
         if isinstance(raw_value, dict):
             for sub_value in raw_value.values():
-                decoded = _decode_candidate_value(sub_value)
+                decoded = _decode_candidate_value(sub_value, context_label=context_label)
                 if decoded:
                     return decoded
             return None
         if isinstance(raw_value, (list, tuple)):
             for entry in raw_value:
-                decoded = _decode_candidate_value(entry)
+                decoded = _decode_candidate_value(entry, context_label=context_label)
                 if decoded:
                     return decoded
             return None
@@ -146,12 +158,12 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
                     return decoded
             except UnicodeDecodeError:
                 pass
-            return _try_base64_json(raw_value)
+            return _try_base64_json(raw_value, context_label=context_label)
         if isinstance(raw_value, str):
             decoded = _try_parse_json_text(raw_value)
             if decoded:
                 return decoded
-            return _try_base64_json(raw_value)
+            return _try_base64_json(raw_value, context_label=context_label)
         return None
 
     def _iter_metadata_items(metadata: Dict[str, Any]) -> List[Tuple[Any, Any]]:
@@ -167,16 +179,21 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
         if not items:
             return None
         preferred_keys = {"chara", "character"}
+        attempted_keys: Set[str] = set()
         for key, value in items:
-            if _normalize_key(key) not in preferred_keys:
+            normalized_key = _normalize_key(key)
+            if normalized_key not in preferred_keys:
                 continue
-            decoded = _decode_candidate_value(value)
+            attempted_keys.add(normalized_key)
+            decoded = _decode_candidate_value(value, context_label=normalized_key)
             if decoded:
                 logger.info(
                     f"Successfully extracted 'chara' JSON from '{file_name_for_log}' (key: {key}, source: {source_label})."
                 )
                 return decoded
         for key, value in items:
+            if _normalize_key(key) in attempted_keys:
+                continue
             decoded = _decode_candidate_value(value)
             if decoded:
                 logger.info(
@@ -609,10 +626,8 @@ def import_and_save_character_from_file(
             if json_str:
                 parsed_card = import_character_card_from_json_string(json_str)
                 if parsed_card is not None and original_image_bytes:
-                    if not parsed_card.get("image"):
-                        parsed_card["image"] = original_image_bytes
-                    if parsed_card.get("image_base64") in (None, "", []):
-                        parsed_card.pop("image_base64", None)
+                    parsed_card["image"] = original_image_bytes
+                    parsed_card.pop("image_base64", None)
             else:
                 if original_image_bytes:
                     if allow_image_only:

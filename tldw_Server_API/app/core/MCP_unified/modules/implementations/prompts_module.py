@@ -4,6 +4,7 @@ Prompts Module for Unified MCP
 Search/get prompts via PromptsDatabase (per-user prompts DB path).
 """
 
+import asyncio
 from typing import Dict, Any, List, Optional
 from loguru import logger
 
@@ -105,6 +106,29 @@ class PromptsModule(BaseModule):
         limit: int = int(args.get("limit", 10))
         offset: int = int(args.get("offset", 0))
         snippet_len: int = int(args.get("snippet_length", 300))
+        return await asyncio.to_thread(
+            self._search_sync,
+            context,
+            query,
+            fields,
+            limit,
+            offset,
+            snippet_len,
+        )
+
+    async def _get(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+        ident: str = args.get("prompt_id_or_name")
+        return await asyncio.to_thread(self._get_sync, context, ident)
+
+    def _search_sync(
+        self,
+        context: Any | None,
+        query: str,
+        fields: List[str],
+        limit: int,
+        offset: int,
+        snippet_len: int,
+    ) -> Dict[str, Any]:
         db = self._open_db(context)
         try:
             page_size = max(1, limit)
@@ -156,8 +180,7 @@ class PromptsModule(BaseModule):
             except Exception as exc:
                 logger.debug("Failed to close Prompts DB connections after prompts search: {}", exc)
 
-    async def _get(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
-        ident: str = args.get("prompt_id_or_name")
+    def _get_sync(self, context: Any | None, ident: str) -> Dict[str, Any]:
         db = self._open_db(context)
         try:
             row = None

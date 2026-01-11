@@ -553,6 +553,23 @@ class AsyncRateLimiter:
             os.getenv("RG_SHADOW_EMBEDDINGS", "0").lower() in {"1", "true", "yes", "on"}
         )
 
+    async def _legacy_check_rate_limit(
+        self,
+        user_id: str,
+        cost: int,
+        ip_address: Optional[str],
+    ) -> tuple[bool, Optional[int]]:
+        if self.rate_limiter is None:
+            self.rate_limiter = get_rate_limiter()
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            self.executor,
+            self.rate_limiter.check_rate_limit,
+            user_id,
+            cost,
+            ip_address,
+        )
+
     async def check_rate_limit_async(
         self,
         user_id: str,
@@ -575,14 +592,7 @@ class AsyncRateLimiter:
             if self.rate_limiter is None:
                 self.rate_limiter = get_rate_limiter()
             # RG disabled: fall back to legacy limiter behavior.
-            loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(
-                self.executor,
-                self.rate_limiter.check_rate_limit,
-                user_id,
-                cost,
-                ip_address,
-            )
+            return await self._legacy_check_rate_limit(user_id, cost, ip_address)
 
         # Prefer Resource Governor when configured; use the legacy limiter only
         # as a fallback when RG is unavailable.
@@ -632,7 +642,7 @@ class AsyncRateLimiter:
             return rg_allowed, rg_decision.get("retry_after")
 
         _log_rg_embeddings_fallback("rg_decision_unavailable")
-        return True, None
+        return await self._legacy_check_rate_limit(user_id, cost, ip_address)
 
     async def record_usage_async(self, user_id: str, cost: int = 1):
         """Record usage asynchronously (for post-processing)"""

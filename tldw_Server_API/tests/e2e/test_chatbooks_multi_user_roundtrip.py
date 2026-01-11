@@ -152,7 +152,7 @@ def test_chatbooks_export_import_two_users_subset_scoping_counts(api_client):
     form = {
         "conflict_resolution": "skip",
         "prefix_imported": "false",
-        "import_media": "true",
+        "import_media": "false",
         "import_embeddings": "false",
         "async_mode": "false",
     }

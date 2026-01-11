@@ -572,6 +572,26 @@ class JWTService:
         )
         return dk.hex()
 
+    def hash_password_reset_token_candidates(self, token: str) -> list[str]:
+        """Return ordered PBKDF2-HMAC hashes for a password reset token."""
+        hashes: list[str] = []
+        try:
+            key_candidates = derive_hmac_key_candidates(self.settings)
+        except Exception:
+            key_candidates = [derive_hmac_key(self.settings)]
+        for key in key_candidates:
+            salt = hmac.new(key, b"password-reset-token-salt", hashlib.sha256).digest()
+            dk = hashlib.pbkdf2_hmac(
+                "sha256",
+                token.encode("utf-8"),
+                salt,
+                200_000,
+            )
+            digest = dk.hex()
+            if digest not in hashes:
+                hashes.append(digest)
+        return hashes
+
     def extract_jti(self, token: str) -> Optional[str]:
         """
         Extract the JTI (JWT ID) from a token without full verification

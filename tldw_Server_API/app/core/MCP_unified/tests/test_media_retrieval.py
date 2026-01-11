@@ -9,6 +9,16 @@ import pytest
 from tldw_Server_API.app.core.MCP_unified.modules.implementations import media_module as media_module_impl
 from tldw_Server_API.app.core.MCP_unified.modules.implementations.media_module import MediaModule
 from tldw_Server_API.app.core.MCP_unified.modules.base import ModuleConfig
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+
+@pytest.fixture(autouse=True)
+def _single_user_test_key(monkeypatch):
+    monkeypatch.setenv("SINGLE_USER_TEST_API_KEY", "test-api-key-1234567890")
+    reset_settings()
+    yield
+    reset_settings()
 
 
 class FakeMediaDB:
@@ -60,6 +70,7 @@ async def test_media_get_chunk_with_siblings_budget():
 
     # Monkeypatch per-user DB open to our fake
     mod._open_media_db = lambda ctx: FakeMediaDB()  # type: ignore[attr-defined]
+    context = SimpleNamespace(user_id="1", metadata={})
 
     # Anchor around approx_offset=12 → chunk_index 1, cpt=1 → 10 tokens per chunk
     out = await mod.execute_tool(
@@ -73,7 +84,7 @@ async def test_media_get_chunk_with_siblings_budget():
                 "loc": {"approx_offset": 12},
             },
         },
-        context=None,
+        context=context,
     )
 
     assert isinstance(out, dict)
@@ -199,6 +210,37 @@ async def test_search_media_semantic_path(monkeypatch):
     assert result["results"][0]["semantic_score"] == pytest.approx(0.9)
 
 
+def test_media_open_db_requires_context():
+    mod = MediaModule(ModuleConfig(name="media"))
+    mod.db = MediaDatabase(db_path=":memory:", client_id="test")
+    try:
+        with pytest.raises(PermissionError):
+            mod._open_media_db(context=None)
+    finally:
+        mod.db.close_connection()
+
+
+@pytest.mark.asyncio
+async def test_get_transcript_srt_vtt_fallback(monkeypatch):
+    mod = MediaModule(ModuleConfig(name="media"))
+
+    class DummyDB:
+        def get_media_by_id(self, media_id: int, include_deleted: bool = False, include_trash: bool = False):
+            return {"owner_user_id": "1"}
+
+    mod.db = DummyDB()
+    context = SimpleNamespace(user_id="1", metadata={})
+    monkeypatch.setattr(media_module_impl, "get_latest_transcription", lambda _db, _media_id: "Hello world")
+
+    srt = await mod.execute_tool("get_transcript", {"media_id": 1, "format": "srt"}, context=context)
+    assert "Hello world" in srt["transcript"]
+    assert "-->" in srt["transcript"]
+
+    vtt = await mod.execute_tool("get_transcript", {"media_id": 1, "format": "vtt"}, context=context)
+    assert "WEBVTT" in vtt["transcript"]
+    assert "Hello world" in vtt["transcript"]
+
+
 def test_media_access_enforces_owner_user_id():
     mod = MediaModule(ModuleConfig(name="media"))
 
@@ -209,6 +251,51 @@ def test_media_access_enforces_owner_user_id():
     ctx = SimpleNamespace(user_id="99", metadata={})
     with pytest.raises(PermissionError):
         mod._assert_media_access(1, ctx, StubDB())
+
+
+@pytest.mark.asyncio
+async def test_queue_media_job_requires_backend():
+    mod = MediaModule(ModuleConfig(name="media"))
+    with pytest.raises(RuntimeError):
+        await mod._queue_media_job("job-1")
+
+
+def test_media_access_missing_owner_fails_closed_multi_user(monkeypatch):
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    reset_settings()
+    try:
+        mod = MediaModule(ModuleConfig(name="media"))
+
+        class StubDB:
+            def get_media_by_id(self, media_id: int, include_deleted: bool = False, include_trash: bool = False) -> Dict[str, Any]:
+                return {"id": media_id, "title": "no-owner"}
+
+        ctx = SimpleNamespace(user_id="99", metadata={})
+        with pytest.raises(PermissionError):
+            mod._assert_media_access(1, ctx, StubDB())
+    finally:
+        reset_settings()
+
+
+def test_media_access_lookup_error_fails_closed_multi_user(monkeypatch):
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    reset_settings()
+    try:
+        mod = MediaModule(ModuleConfig(name="media"))
+
+        class StubDB:
+            def get_media_by_id(self, media_id: int, include_deleted: bool = False, include_trash: bool = False) -> Dict[str, Any]:
+                raise RuntimeError("db error")
+
+        ctx = SimpleNamespace(user_id="99", metadata={})
+        with pytest.raises(PermissionError):
+            mod._assert_media_access(1, ctx, StubDB())
+    finally:
+        reset_settings()
 
 
 @pytest.mark.asyncio
@@ -232,7 +319,8 @@ async def test_get_media_metadata_sanitizes_and_adds_description(monkeypatch):
         lambda db_instance, media_id, version_number=None, include_content=False: {"analysis_content": "desc"},
     )
 
-    result = await mod._get_media_metadata(media_id=1, include_stats=False, context=None)
+    ctx = SimpleNamespace(user_id="1", metadata={})
+    result = await mod._get_media_metadata(media_id=1, include_stats=False, context=ctx)
     assert result["description"] == "desc"
     assert "content" not in result
     assert "client_id" not in result
@@ -263,7 +351,8 @@ async def test_media_get_includes_description(monkeypatch):
         lambda db_instance, media_id, version_number=None, include_content=False: {"analysis_content": "desc"},
     )
 
-    result = await mod._media_get_normalized(media_id=1, retrieval=None, context=None)
+    ctx = SimpleNamespace(user_id="1", metadata={})
+    result = await mod._media_get_normalized(media_id=1, retrieval=None, context=ctx)
     assert result["meta"]["description"] == "desc"
 
 

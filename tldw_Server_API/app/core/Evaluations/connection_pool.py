@@ -238,14 +238,8 @@ class ConnectionPool:
             logger.error(f"Failed to create database connection: {e}")
             raise
 
-    @contextmanager
-    def get_connection(self) -> PooledConnection:
-        """
-        Get a connection from the pool (synchronous).
-
-        Returns:
-            PooledConnection: Connection wrapper
-        """
+    def _checkout_connection(self) -> PooledConnection:
+        """Check out a connection without returning it to the pool."""
         start_time = time.time()
         connection = None
 
@@ -285,15 +279,27 @@ class ConnectionPool:
                 self._metrics.record_database_query("connection_checkout", "pool", checkout_time)
 
             logger.debug(f"Checked out connection {connection.connection_id} in {checkout_time:.3f}s")
-
-            yield connection
+            return connection
 
         except Exception as e:
             logger.error(f"Error getting database connection: {e}")
             if self._metrics:
                 self._metrics.record_database_query("connection_checkout_error", "pool", 0.0, False, str(e))
+            if connection:
+                self._return_connection(connection)
             raise
 
+    @contextmanager
+    def get_connection(self) -> PooledConnection:
+        """
+        Get a connection from the pool (synchronous).
+
+        Returns:
+            PooledConnection: Connection wrapper
+        """
+        connection = self._checkout_connection()
+        try:
+            yield connection
         finally:
             if connection:
                 self._return_connection(connection)
@@ -324,8 +330,7 @@ class ConnectionPool:
 
     def _get_connection_sync(self) -> PooledConnection:
         """Synchronous connection getter for async wrapper."""
-        with self.get_connection() as conn:
-            return conn
+        return self._checkout_connection()
 
     def _return_connection(self, connection: PooledConnection):
         """Return a connection to the pool."""

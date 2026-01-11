@@ -183,6 +183,36 @@ class TestPathTraversalSecurity:
         finally:
             os.unlink(tmp_path)
 
+    def test_validate_zip_skips_integrity_check_on_size_violation(self, monkeypatch):
+        """Size violations should short-circuit before integrity checks run."""
+        monkeypatch.setattr(ChatbookValidator, "MAX_UNCOMPRESSED_SIZE", 1024)
+        monkeypatch.setattr(ChatbookValidator, "MAX_UPLOAD_SIZE", 10 * 1024 * 1024)
+
+        called = {"testzip": False}
+
+        def _boom(_self):
+            called["testzip"] = True
+            raise RuntimeError("testzip called")
+
+        monkeypatch.setattr(zipfile.ZipFile, "testzip", _boom, raising=True)
+
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("manifest.json", '{"version": "1.0"}')
+            zf.writestr("big.txt", b"x" * 2048)
+
+        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
+            tmp.write(zip_buffer.getvalue())
+            tmp_path = tmp.name
+
+        try:
+            valid, error = ChatbookValidator.validate_zip_file(tmp_path)
+            assert valid is False
+            assert "maximum" in error.lower() or "too large" in error.lower()
+            assert called["testzip"] is False
+        finally:
+            os.unlink(tmp_path)
+
     def test_validate_zip_with_null_bytes(self):
         """Test ZIP validation rejects filenames with null bytes."""
         zip_buffer = io.BytesIO()

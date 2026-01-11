@@ -181,6 +181,33 @@ def test_single_user_get_current_and_request_user_align_with_principal(
     assert principal["permissions"] == current_user["permissions"] == request_user["permissions"]
 
 
+def test_single_user_bearer_api_key_accepted(single_user_app: TestClient):
+    token = os.getenv("SINGLE_USER_API_KEY", "test-api-key-12345")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    resp = single_user_app.get("/api/v1/whoami/current_user", headers=headers)
+    assert resp.status_code == 200
+    user = resp.json()
+    assert user["id"] is not None
+
+    resp_combo = single_user_app.get(
+        "/api/v1/whoami/current_user_and_request_user",
+        headers=headers,
+    )
+    assert resp_combo.status_code == 200
+    payload = resp_combo.json()
+
+    principal = payload["principal"]
+    current_user = payload["current_user"]
+    request_user = payload["request_user"]
+
+    assert principal["kind"] == "user"
+    assert str(principal["user_id"]) == str(current_user["id"])
+    assert str(principal["user_id"]) == str(request_user["id"])
+    assert principal["roles"] == current_user["roles"] == request_user["roles"]
+    assert principal["permissions"] == current_user["permissions"] == request_user["permissions"]
+
+
 @pytest.mark.asyncio
 async def test_multi_user_jwt_and_api_key_status_codes(monkeypatch):
     """

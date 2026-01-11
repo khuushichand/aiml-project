@@ -130,6 +130,25 @@ async def test_path_prefix_bypass_rejected(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_model_path_traversal_rejected(tmp_path: Path):
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+    (model_dir / "m.gguf").write_text("x")
+    cfg = LlamaCppConfig(executable_path=exe, models_dir=model_dir)
+    handler = LlamaCppHandler(cfg, global_app_config={})
+
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    outside_model = outside_dir / "bad.gguf"
+    outside_model.write_text("x")
+
+    with pytest.raises(ServerError):
+        await handler.start_server(str(outside_model))
+
+
+@pytest.mark.asyncio
 async def test_port_autoselect(monkeypatch, tmp_path: Path):
     exe = tmp_path / "llama_server"
     exe.write_text("#!/bin/sh\n")

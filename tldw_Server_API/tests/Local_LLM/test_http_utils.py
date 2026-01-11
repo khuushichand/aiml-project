@@ -7,6 +7,7 @@ from tldw_Server_API.app.core.Local_LLM.http_utils import (
     request_json,
     redact_cmd_args,
     wait_for_http_ready,
+    LocalHTTPStatusError,
 )
 
 
@@ -33,6 +34,16 @@ async def test_request_json_retries_on_5xx():
         data = await request_json(client, "GET", "http://x/y", retries=1, backoff=0)
     assert data["ok"] is True
     assert client.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_request_json_retries_zero_makes_single_attempt():
+    client = FakeClient()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        with pytest.raises(LocalHTTPStatusError):
+            await request_json(client, "GET", "http://x/y", retries=0, backoff=0)
+    assert client.calls == 1
 
 
 # --- Tests for redact_cmd_args improvements ---

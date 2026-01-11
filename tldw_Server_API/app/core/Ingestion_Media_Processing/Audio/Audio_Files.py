@@ -197,6 +197,19 @@ def _validate_outbound_url(url: str) -> Optional[str]:
         return result.reason or "URL blocked by security policy"
     return None
 
+
+def _unique_path(target_path: Path) -> Path:
+    if not target_path.exists():
+        return target_path
+    stem = target_path.stem
+    suffix = target_path.suffix
+    for counter in range(1, 1000):
+        candidate = target_path.with_name(f"{stem}_{counter}{suffix}")
+        if not candidate.exists():
+            return candidate
+    unique_suffix = uuid.uuid4().hex[:UUID_LENGTH]
+    return target_path.with_name(f"{stem}_{unique_suffix}{suffix}")
+
 def download_audio_file(
     url: str,
     target_temp_dir: str,
@@ -636,6 +649,7 @@ def process_audio_files(
                                 input_item,
                                 use_cookies=use_cookies,
                                 cookies=cookies,
+                                output_dir=processing_temp_dir_path,
                             )
                             if not downloaded_path:
                                 raise RuntimeError(f"YouTube download failed: {download_message}")
@@ -645,6 +659,7 @@ def process_audio_files(
                             target_path = processing_temp_dir_path / source_path.name
                             if source_path.parent != processing_temp_dir_path:
                                 import shutil
+                                target_path = _unique_path(target_path)
                                 shutil.move(str(source_path), str(target_path))
                                 current_audio_path = str(target_path)
                             else:
@@ -1171,14 +1186,20 @@ def _cookies_to_header_value(cookies) -> Optional[str]:
         return None
 
 
-def download_youtube_audio(url: str, *, use_cookies: bool = False, cookies: Optional[str | Dict[str, Any]] = None) -> tuple[Optional[str], str]:
+def download_youtube_audio(
+    url: str,
+    *,
+    use_cookies: bool = False,
+    cookies: Optional[str | Dict[str, Any]] = None,
+    output_dir: Optional[str | Path] = None,
+) -> tuple[Optional[str], str]:
     """
     Downloads audio from a YouTube URL using yt-dlp.
 
     It attempts to download the best M4A audio stream or, failing that, the best
     video stream up to 480p, and then extracts the audio as an MP3 file.
-    The downloaded MP3 is saved to a "downloads" subdirectory in the current
-    working directory.
+        The downloaded MP3 is saved to a configured downloads directory unless
+        `output_dir` is provided, in which case the file is placed there.
 
     Args:
         url: The YouTube video URL.
@@ -1193,7 +1214,7 @@ def download_youtube_audio(url: str, *, use_cookies: bool = False, cookies: Opti
         This function requires `ffmpeg` to be installed and accessible in the
         system's PATH (or `ffmpeg.exe` in `./Bin/` on Windows).
         Downloaded files are stored in a `downloads/` directory created in the
-        current working directory.
+        current working directory unless an explicit `output_dir` is supplied.
     """
     try:
         block_reason = _validate_outbound_url(url)
@@ -1220,16 +1241,20 @@ def download_youtube_audio(url: str, *, use_cookies: bool = False, cookies: Opti
             # Extract information about the video
             with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
                 info_dict = ydl.extract_info(url, download=False)
-                sanitized_title = sanitize_filename(info_dict['title'])
+                raw_title = info_dict.get('title') or "youtube_audio"
+                sanitized_title = sanitize_filename(raw_title) or "youtube_audio"
+                video_id = sanitize_filename(info_dict.get("id") or "") or uuid.uuid4().hex[:UUID_LENGTH]
+                unique_token = uuid.uuid4().hex[:UUID_LENGTH]
+                filename_stem = f"{sanitized_title}_{video_id}_{unique_token}"
 
             # Setup the temporary filename (yt-dlp will create .mp3 directly with postprocessor)
-            temp_audio_path = Path(temp_dir) / f"{sanitized_title}.mp3"
+            temp_audio_path = Path(temp_dir) / f"{filename_stem}.mp3"
 
             # Initialize yt-dlp with options for downloading and extracting audio
             ydl_opts = {
                 'format': 'bestaudio/best',  # Prefer best audio quality
                 'ffmpeg_location': ffmpeg_path,
-                'outtmpl': str(Path(temp_dir) / f"{sanitized_title}.%(ext)s"),
+                'outtmpl': str(Path(temp_dir) / f"{filename_stem}.%(ext)s"),
                 'noplaylist': True,
                 'postprocessors': [{
                     'key': 'FFmpegExtractAudio',
@@ -1254,26 +1279,33 @@ def download_youtube_audio(url: str, *, use_cookies: bool = False, cookies: Opti
             if not temp_audio_path.exists():
                 raise FileNotFoundError(f"Expected audio file was not found: {temp_audio_path}")
 
-            # Create a persistent directory for the download using configured path if available
-            try:
-                media_cfg = loaded_config_data.get('media_processing', {}) if loaded_config_data else {}
-                downloads_root = media_cfg.get('audio_downloads_dir')
-                if downloads_root:
-                    persistent_dir = Path(downloads_root)
-                else:
-                    persistent_dir = Path(get_project_root()) / 'Databases' / 'downloads' / 'audio'
-            except Exception:
-                persistent_dir = Path("downloads")
-            persistent_dir.mkdir(parents=True, exist_ok=True)
+            destination_dir: Optional[Path] = None
+            if output_dir is not None:
+                destination_dir = Path(output_dir)
+            else:
+                # Create a persistent directory for the download using configured path if available
+                try:
+                    media_cfg = loaded_config_data.get('media_processing', {}) if loaded_config_data else {}
+                    downloads_root = media_cfg.get('audio_downloads_dir')
+                    if downloads_root:
+                        destination_dir = Path(downloads_root)
+                    else:
+                        destination_dir = Path(get_project_root()) / 'Databases' / 'downloads' / 'audio'
+                except Exception:
+                    destination_dir = Path("downloads")
 
-            # Move the file from the temporary directory to the persistent directory
-            persistent_file_path = persistent_dir / f"{sanitized_title}.mp3"
-            os.replace(str(temp_audio_path), str(persistent_file_path))
+            destination_dir.mkdir(parents=True, exist_ok=True)
 
-            # Add the file to the list of downloaded files
-            downloaded_files.append(str(persistent_file_path))
+            # Move the file from the temporary directory to the destination directory.
+            destination_path = _unique_path(destination_dir / f"{filename_stem}.mp3")
+            import shutil
+            shutil.move(str(temp_audio_path), str(destination_path))
 
-            return str(persistent_file_path), f"Audio downloaded successfully: {sanitized_title}.mp3"
+            # Track only persistent downloads for cleanup at shutdown.
+            if output_dir is None:
+                downloaded_files.append(str(destination_path))
+
+            return str(destination_path), f"Audio downloaded successfully: {destination_path.name}"
     except Exception as e:
         return None, f"Error downloading audio: {str(e)}"
 

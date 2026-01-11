@@ -37,8 +37,9 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDBError,
     InputError
 )
-from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError, ChatConfigurationError
-from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
+from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
+from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call as chat_api_call
 
 
 class DocumentType(Enum):
@@ -623,24 +624,23 @@ class DocumentGeneratorService:
             {"role": "user", "content": user_prompt}
         ]
 
-        adapter = get_registry().get_adapter(provider.lower())
-        if adapter is None:
-            raise ChatConfigurationError(provider=provider, message="LLM adapter unavailable.")
-
-        request = {
-            "messages": messages,
-            "system_message": system_prompt,
-            "api_key": api_key,
-            "model": model,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": stream,
-            "app_config": app_config,
-        }
-
+        response = chat_api_call(
+            api_endpoint=provider,
+            messages_payload=messages,
+            system_message=system_prompt,
+            api_key=api_key,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=stream,
+            app_config=app_config,
+        )
         if stream:
-            return adapter.stream(request)
-        return adapter.chat(request)
+            return response
+        content = extract_response_content(response)
+        if content is None:
+            raise ChatAPIError("LLM returned empty document content.")
+        return content
 
     def _save_generated_document(
         self,

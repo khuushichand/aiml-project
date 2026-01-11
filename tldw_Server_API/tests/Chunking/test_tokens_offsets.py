@@ -1,17 +1,34 @@
+import hashlib
+import os
 import sys
+import tempfile
 import types
 
 import pytest
 
 
 def _has_tiktoken():
-
     try:
         import tiktoken  # noqa: F401
-
-        return True
     except Exception:
         return False
+
+    network_enabled = os.getenv("ENABLE_NETWORK_TESTS", "").lower() in {"1", "true", "yes", "on"}
+    if network_enabled:
+        return True
+
+    cache_dir = os.getenv("TIKTOKEN_CACHE_DIR")
+    if cache_dir is None:
+        cache_dir = os.getenv("DATA_GYM_CACHE_DIR")
+    if cache_dir is None:
+        cache_dir = os.path.join(tempfile.gettempdir(), "data-gym-cache")
+    if cache_dir == "":
+        return False
+
+    blob_url = "https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken"
+    cache_key = hashlib.sha1(blob_url.encode()).hexdigest()
+    cache_path = os.path.join(cache_dir, cache_key)
+    return os.path.exists(cache_path)
 
 
 def test_tokens_offsets_tiktoken_monotonic_and_slice_match():
@@ -183,3 +200,62 @@ def test_tokens_offsets_fallback_path():
         assert r.metadata.token_count == expected
         assert r.metadata.options.get("approximate") is True
         prev_start, prev_end = s, e
+
+
+def test_tokenizer_override_resets_between_calls(monkeypatch):
+    """Switching tokenizer names should re-attempt tokenizer initialization."""
+    from tldw_Server_API.app.core.Chunking import Chunker
+    from tldw_Server_API.app.core.Chunking.strategies import tokens as tokens_mod
+
+    created = []
+
+    class StubTokenizer:
+        def __init__(self, model_name: str):
+            self.model_name = model_name
+            self.available = True
+            self._last_text = ""
+            created.append(model_name)
+
+        def encode(self, text: str):
+            self._last_text = text
+            return list(range(len(text)))
+
+        def decode(self, token_ids, skip_special_tokens: bool = True):
+            return "".join(self._last_text[i] for i in token_ids if i < len(self._last_text))
+
+    monkeypatch.setattr(tokens_mod, "TiktokenTokenizer", StubTokenizer)
+
+    chunker = Chunker()
+    text = "abcde"
+    chunker.chunk_text(text, method="tokens", max_size=2, overlap=0, tokenizer_name="tok-a")
+    chunker.chunk_text(text, method="tokens", max_size=2, overlap=0, tokenizer_name="tok-b")
+
+    assert created == ["tok-a", "tok-b"]
+
+
+def test_tokens_chunk_preserves_trailing_newlines(monkeypatch):
+    """Token chunking should not drop trailing newlines from decoded output."""
+    from tldw_Server_API.app.core.Chunking.strategies import tokens as tokens_mod
+    from tldw_Server_API.app.core.Chunking.strategies.tokens import TokenChunkingStrategy
+
+    class StubTokenizer:
+        def __init__(self, model_name: str):
+            self.model_name = model_name
+            self.available = True
+            self._last_text = ""
+
+        def encode(self, text: str):
+            self._last_text = text
+            return list(range(len(text)))
+
+        def decode(self, token_ids, skip_special_tokens: bool = True):
+            return "".join(self._last_text[i] for i in token_ids if i < len(self._last_text))
+
+    monkeypatch.setattr(tokens_mod, "TiktokenTokenizer", StubTokenizer)
+
+    text = "line1\nline2\n"
+    strat = TokenChunkingStrategy(tokenizer_name="tok-newline")
+    chunks = strat.chunk(text, max_size=5, overlap=0)
+
+    assert "".join(chunks) == text
+    assert chunks[-1].endswith("\n")

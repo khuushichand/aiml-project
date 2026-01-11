@@ -171,6 +171,38 @@ async def test_get_org_policy_from_principal_flag_enabled_principal_controls_fal
 
 
 @pytest.mark.asyncio
+async def test_get_user_org_policy_delegates_to_principal(monkeypatch):
+    sentinel = {"org_id": 99, "source": "delegate"}
+
+    async def _fake_get_org_policy_from_principal(db=None, principal=None, current_user=None):
+        return sentinel
+
+    monkeypatch.setattr(auth_deps, "get_org_policy_from_principal", _fake_get_org_policy_from_principal)
+
+    principal = AuthPrincipal(
+        kind="user",
+        user_id=1,
+        api_key_id=None,
+        subject=None,
+        token_type="access",
+        jti=None,
+        roles=[],
+        permissions=[],
+        is_admin=False,
+        org_ids=[],
+        team_ids=[],
+    )
+    current_user = {"id": 1, "is_active": True, "is_verified": True}
+
+    result = await auth_deps.get_user_org_policy(
+        db=None,
+        principal=principal,
+        current_user=current_user,
+    )
+    assert result == sentinel
+
+
+@pytest.mark.asyncio
 async def test_get_org_policy_from_principal_flag_enabled_non_single_user_principal_raises(monkeypatch):
     """When ORG_POLICY_SINGLE_USER_PRINCIPAL=1 and profile is single-user, non-single-user principals should not get org_id=1."""
 

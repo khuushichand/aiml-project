@@ -211,8 +211,6 @@ class KnowledgeModule(BaseModule):
             seen.add(uri)
             new_uris.append(uri)
             out.append(item)
-            if len(out) >= (offset + limit):
-                break
 
         # Apply offset/limit across combined results
         sliced = out[offset: offset + limit]

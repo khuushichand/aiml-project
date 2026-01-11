@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union, Generator
 import json
+import urllib.parse as _url
 from loguru import logger as _loguru_logger
 from queue import Queue, Empty
 
@@ -35,6 +36,38 @@ _NUMERIC_RE = re.compile(r"^-?\d+(?:\.\d+)?$")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _QUOTED_IDENTIFIER_RE = re.compile(r'^"[^"]+"$')
 
+
+def _classify_sqlite_path(db_path: str) -> Tuple[bool, bool]:
+    """Return (is_memory, use_uri) for a SQLite path/URI."""
+    raw = (db_path or "").strip()
+    lowered = raw.lower()
+    use_uri = lowered.startswith("file:")
+    if raw == ":memory:":
+        return True, False
+    if use_uri and (":memory:" in lowered or "mode=memory" in lowered):
+        return True, True
+    return False, use_uri
+
+
+def _sqlite_file_path_from_uri(db_uri: str) -> Optional[Path]:
+    """Extract a filesystem path from a file: URI, if present."""
+    try:
+        parsed = _url.urlparse(db_uri)
+    except Exception:
+        return None
+    if parsed.scheme != "file":
+        return None
+    path = _url.unquote(parsed.path or "")
+    if not path or path in {":memory:", "/:memory:"}:
+        return None
+    candidate = Path(path).expanduser()
+    try:
+        if not candidate.is_absolute():
+            return (Path.cwd() / candidate).resolve()
+        return candidate.resolve()
+    except Exception:
+        return candidate
+
 class SQLiteConnectionPool(ConnectionPool):
     """SQLite-specific connection pool using thread-local storage."""
 
@@ -46,11 +79,14 @@ class SQLiteConnectionPool(ConnectionPool):
             db_path: Path to SQLite database file
             config: Database configuration
         """
-        # Normalize to absolute path to avoid CWD-related open errors under tests
-        # Detect in-memory databases and avoid path resolution
-        self._is_memory = db_path == ':memory:'
+        # Normalize to absolute path to avoid CWD-related open errors under tests.
+        # Detect in-memory/URI databases and avoid path resolution.
+        self._is_memory, self._use_uri = _classify_sqlite_path(db_path)
         try:
-            self.db_path = db_path if self._is_memory else str(Path(db_path).resolve())
+            if self._is_memory or self._use_uri:
+                self.db_path = db_path
+            else:
+                self.db_path = str(Path(db_path).resolve())
         except Exception:
             self.db_path = db_path
         self.config = config
@@ -80,8 +116,11 @@ class SQLiteConnectionPool(ConnectionPool):
         # Ensure database directory exists for file-backed DBs
         if not self._is_memory:
             try:
-                dbp = Path(self.db_path)
-                if dbp.parent and not dbp.parent.exists():
+                if self._use_uri:
+                    dbp = _sqlite_file_path_from_uri(self.db_path)
+                else:
+                    dbp = Path(self.db_path)
+                if dbp and dbp.parent and not dbp.parent.exists():
                     dbp.parent.mkdir(parents=True, exist_ok=True)
             except Exception:
                 pass
@@ -89,7 +128,8 @@ class SQLiteConnectionPool(ConnectionPool):
         conn = sqlite3.connect(
             self.db_path,
             check_same_thread=False,
-            isolation_level=None  # Autocommit mode
+            isolation_level=None,  # Autocommit mode
+            uri=self._use_uri,
         )
 
         # Set row factory for dict-like access
@@ -204,18 +244,25 @@ class SQLiteBackend(DatabaseBackend):
         """Create a new SQLite connection."""
         if not self.config.sqlite_path:
             raise DatabaseError("SQLite path not configured")
-        # Handle in-memory DB distinctly
-        is_memory = self.config.sqlite_path == ':memory:'
+        raw_path = self.config.sqlite_path
+        # Handle in-memory/URI DB distinctly
+        is_memory, use_uri = _classify_sqlite_path(raw_path)
 
         # Ensure database directory exists for file-backed DBs
         if not is_memory:
-            db_path = Path(self.config.sqlite_path)
-            db_path.parent.mkdir(parents=True, exist_ok=True)
+            if use_uri:
+                db_path = _sqlite_file_path_from_uri(raw_path)
+                if db_path is not None:
+                    db_path.parent.mkdir(parents=True, exist_ok=True)
+            else:
+                db_path = Path(raw_path)
+                db_path.parent.mkdir(parents=True, exist_ok=True)
 
         conn = sqlite3.connect(
-            self.config.sqlite_path if is_memory else str(db_path),
+            raw_path if use_uri or is_memory else str(db_path),
             check_same_thread=False,
-            isolation_level=None
+            isolation_level=None,
+            uri=use_uri,
         )
 
         conn.row_factory = sqlite3.Row
@@ -413,17 +460,75 @@ class SQLiteBackend(DatabaseBackend):
         try:
             self.execute(query, connection=connection)
 
-            # Populate FTS table with existing data
-            columns_select = ", ".join([self.escape_identifier(col) for col in columns])
-            populate_query = f"""
-                INSERT INTO {self.escape_identifier(table_name)} (rowid, {columns_str})
-                SELECT rowid, {columns_select} FROM {self.escape_identifier(source_table)}
-            """
-            self.execute(populate_query, connection=connection)
+            self._ensure_fts_triggers(
+                table_name=table_name,
+                source_table=source_table,
+                columns=columns,
+                connection=connection,
+            )
+            # Rebuild index from content table to avoid duplicate rowids on re-init.
+            rebuild_query = (
+                f"INSERT INTO {self.escape_identifier(table_name)}"
+                f"({self.escape_identifier(table_name)}) VALUES('rebuild')"
+            )
+            self.execute(rebuild_query, connection=connection)
 
         except sqlite3.Error as e:
             logger.error(f"FTS table creation failed: {e}")
             raise DatabaseError(f"Failed to create FTS table: {e}")
+
+    def _ensure_fts_triggers(
+        self,
+        *,
+        table_name: str,
+        source_table: str,
+        columns: List[str],
+        connection: Optional[sqlite3.Connection] = None,
+    ) -> None:
+        """Create FTS sync triggers for external-content tables (SQLite)."""
+        if not columns:
+            return
+
+        fts_table_ident = self.escape_identifier(table_name)
+        source_table_ident = self.escape_identifier(source_table)
+        columns_ident = [self.escape_identifier(col) for col in columns]
+        columns_str = ", ".join(columns_ident)
+        new_values = ", ".join([f"new.{self.escape_identifier(col)}" for col in columns])
+        old_values = ", ".join([f"old.{self.escape_identifier(col)}" for col in columns])
+
+        trigger_base = f"{table_name}_fts_sync"
+        insert_trigger = self.escape_identifier(f"{trigger_base}_ai")
+        update_trigger = self.escape_identifier(f"{trigger_base}_au")
+        delete_trigger = self.escape_identifier(f"{trigger_base}_ad")
+        fts_column_ident = self.escape_identifier(table_name)
+
+        insert_sql = f"""
+        CREATE TRIGGER IF NOT EXISTS {insert_trigger}
+        AFTER INSERT ON {source_table_ident} BEGIN
+            INSERT INTO {fts_table_ident}(rowid, {columns_str})
+            VALUES (new.rowid, {new_values});
+        END;
+        """
+        delete_sql = f"""
+        CREATE TRIGGER IF NOT EXISTS {delete_trigger}
+        AFTER DELETE ON {source_table_ident} BEGIN
+            INSERT INTO {fts_table_ident}({fts_column_ident}, rowid, {columns_str})
+            VALUES ('delete', old.rowid, {old_values});
+        END;
+        """
+        update_sql = f"""
+        CREATE TRIGGER IF NOT EXISTS {update_trigger}
+        AFTER UPDATE ON {source_table_ident} BEGIN
+            INSERT INTO {fts_table_ident}({fts_column_ident}, rowid, {columns_str})
+            VALUES ('delete', old.rowid, {old_values});
+            INSERT INTO {fts_table_ident}(rowid, {columns_str})
+            VALUES (new.rowid, {new_values});
+        END;
+        """
+
+        self.execute(insert_sql, connection=connection)
+        self.execute(delete_sql, connection=connection)
+        self.execute(update_sql, connection=connection)
 
     def fts_search(
         self,
@@ -545,8 +650,14 @@ class SQLiteBackend(DatabaseBackend):
         if not self.config.sqlite_path:
             return 0
 
-        db_path = Path(self.config.sqlite_path)
-        if db_path.exists():
+        is_memory, use_uri = _classify_sqlite_path(self.config.sqlite_path)
+        if is_memory:
+            return 0
+        if use_uri:
+            db_path = _sqlite_file_path_from_uri(self.config.sqlite_path)
+        else:
+            db_path = Path(self.config.sqlite_path)
+        if db_path and db_path.exists():
             return db_path.stat().st_size
         return 0
 

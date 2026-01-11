@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List
 
 import pytest
 from fastapi import BackgroundTasks
+from fastapi import status
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing import (
     input_sourcing,
@@ -131,3 +133,73 @@ async def test_original_storage_uses_processing_source(monkeypatch):
     stored_payloads = {call["data"] for call in storage.calls}
     assert stored_payloads == {b"file-one", b"file-two"}
     assert len(db.insert_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_add_media_orchestrate_handles_document_exceptions(monkeypatch, tmp_path):
+    db = _FakeDB()
+
+    async def fake_save_uploaded_files(_files, temp_dir, **_kwargs):
+        ok_path = Path(temp_dir) / "ok.txt"
+        ok_path.write_text("ok")
+        return [{"path": ok_path, "original_filename": "ok.txt"}], []
+
+    async def fake_process_doc_item_fn(
+        *,
+        item_input_ref: str,
+        processing_source: str,
+        media_type: Any,
+        **_kwargs: Any,
+    ) -> Dict[str, Any]:
+        if str(processing_source).startswith("https://fail.test"):
+            raise RuntimeError("boom")
+        return {
+            "status": "Success",
+            "input_ref": item_input_ref,
+            "processing_source": str(processing_source),
+            "media_type": media_type,
+            "metadata": {},
+            "content": "content",
+            "analysis": None,
+            "summary": None,
+            "analysis_details": None,
+            "db_id": 1,
+            "db_message": "ok",
+        }
+
+    monkeypatch.setattr(media_endpoints, "_save_uploaded_files", fake_save_uploaded_files)
+    monkeypatch.setattr(media_endpoints, "_process_document_like_item", fake_process_doc_item_fn)
+    monkeypatch.setattr(input_sourcing, "save_uploaded_files", fake_save_uploaded_files)
+    monkeypatch.setattr(ingestion_persistence, "process_document_like_item", fake_process_doc_item_fn)
+
+    form_data = SimpleNamespace(
+        media_type="document",
+        urls=["https://fail.test/doc"],
+        keep_original_file=False,
+        perform_chunking=False,
+        perform_analysis=False,
+        generate_embeddings=False,
+    )
+
+    response = await ingestion_persistence.add_media_orchestrate(
+        background_tasks=BackgroundTasks(),
+        form_data=form_data,
+        files=[object()],
+        db=db,
+        current_user=SimpleNamespace(id=1),
+        usage_log=SimpleNamespace(log_event=lambda *_args, **_kwargs: None),
+    )
+
+    assert response.status_code == status.HTTP_207_MULTI_STATUS
+    body = json.loads(response.body)
+    results = body.get("results") or []
+
+    assert any(
+        result.get("status") == "Error"
+        and result.get("input_ref") == "https://fail.test/doc"
+        for result in results
+    )
+    assert any(
+        result.get("status") == "Success" and result.get("input_ref") == "ok.txt"
+        for result in results
+    )

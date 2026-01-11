@@ -102,3 +102,32 @@ async def test_download_url_async_reject_non_pdf(tmp_path, monkeypatch):
                 allowed_extensions={".pdf"},
                 check_extension=True,
             )
+
+
+@pytest.mark.asyncio
+async def test_download_url_async_rejects_oversize(tmp_path, monkeypatch):
+    url = "http://example.com/file.pdf"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method.upper() == "GET":
+            body = b"x" * 20
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/pdf", "content-length": str(len(body))},
+                content=body,
+            )
+        return httpx.Response(405)
+
+    transport = _MockTransport(handler)
+
+    monkeypatch.setenv("EGRESS_ALLOWLIST", "example.com")
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(ValueError):
+            await _download_url_async(
+                client=client,
+                url=url,
+                target_dir=Path(tmp_path),
+                allowed_extensions={".pdf"},
+                check_extension=True,
+                max_bytes=10,
+            )

@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import hashlib
+from uuid import uuid4
 from datetime import datetime, timezone
 from typing import Optional
 from pathlib import Path
@@ -372,6 +373,28 @@ async def import_chatbook(
         if not allowed:
             raise HTTPException(status_code=429, detail=message)
 
+        # Reject unsupported import options until implemented
+        if import_request.import_media or import_request.import_embeddings:
+            raise HTTPException(
+                status_code=400,
+                detail="Media/embedding imports are not supported yet. Set import_media=false and import_embeddings=false.",
+            )
+        if import_request.content_selections:
+            unsupported = {"media", "embedding", "prompt", "evaluation", "generated_document"}
+            requested = []
+            for content_type in import_request.content_selections.keys():
+                ct_val = content_type.value if hasattr(content_type, "value") else str(content_type)
+                if ct_val in unsupported:
+                    requested.append(ct_val)
+            if requested:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Import for content types is not supported yet: "
+                        + ", ".join(sorted(set(requested)))
+                    ),
+                )
+
         # Validate file
         if not file.filename:
             raise HTTPException(status_code=400, detail="No filename provided")
@@ -395,7 +418,7 @@ async def import_chatbook(
         temp_dir = _setup_secure_temp_directory(str(user.id))
 
         # Build the destination file path
-        temp_file = temp_dir / f"import_{safe_filename}"
+        temp_file = temp_dir / f"import_{uuid4().hex}_{safe_filename}"
         if temp_file.parent != temp_dir:
             raise HTTPException(status_code=400, detail="Invalid file path")
 
@@ -566,7 +589,7 @@ async def preview_chatbook(
         temp_dir = _setup_secure_temp_directory(str(user.id))
 
         # Build the preview file path
-        temp_file = temp_dir / f"preview_{safe_filename}"
+        temp_file = temp_dir / f"preview_{uuid4().hex}_{safe_filename}"
         if temp_file.parent != temp_dir:
             raise HTTPException(status_code=400, detail="Invalid file path")
 

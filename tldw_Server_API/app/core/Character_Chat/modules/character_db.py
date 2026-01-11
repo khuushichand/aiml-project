@@ -67,61 +67,71 @@ def _prepare_character_data_for_db_storage(
 
     if "image_base64" in db_data:
         base64_str = db_data.pop("image_base64")
-        if base64_str and isinstance(base64_str, str):
-            try:
-                if "," in base64_str and base64_str.startswith("data:image"):
-                    base64_str = base64_str.split(",", 1)[1]
-                base64_str_clean = "".join(str(base64_str).split())
-                if not base64_str_clean:
-                    raise ValueError("image_base64 data is empty after removing whitespace.")
-                image_bytes = base64.b64decode(base64_str_clean, validate=True)
-
+        if base64_str is None:
+            db_data["image"] = None
+        elif isinstance(base64_str, str):
+            if "," in base64_str and base64_str.startswith("data:image"):
+                base64_str = base64_str.split(",", 1)[1]
+            base64_str_clean = "".join(str(base64_str).split())
+            if not base64_str_clean:
+                if not is_update:
+                    db_data["image"] = None
+            else:
                 try:
-                    img = Image.open(io.BytesIO(image_bytes))
-                    has_alpha = "A" in img.getbands()
-                    if has_alpha and img.mode != "RGBA":
-                        img = img.convert("RGBA")
-                    elif not has_alpha and img.mode not in ["RGB", "L"]:
-                        img = img.convert("RGB")
+                    image_bytes = base64.b64decode(base64_str_clean, validate=True)
 
-                    max_size = (512, 768)
-                    if img.size[0] > max_size[0] or img.size[1] > max_size[1]:
-                        img.thumbnail(max_size, Image.Resampling.LANCZOS)
+                    try:
+                        img = Image.open(io.BytesIO(image_bytes))
+                        has_alpha = "A" in img.getbands()
+                        if has_alpha and img.mode != "RGBA":
+                            img = img.convert("RGBA")
+                        elif not has_alpha and img.mode not in ["RGB", "L"]:
+                            img = img.convert("RGB")
+
+                        max_size = (512, 768)
+                        if img.size[0] > max_size[0] or img.size[1] > max_size[1]:
+                            img.thumbnail(max_size, Image.Resampling.LANCZOS)
+                            logger.info(
+                                "Resized character image from %s to fit within %s",
+                                img.size,
+                                max_size,
+                            )
+
+                        output = io.BytesIO()
+                        if has_alpha:
+                            # Use lossless compression for images with alpha to preserve transparency
+                            img.save(
+                                output,
+                                format="WEBP",
+                                lossless=True,
+                                method=6,
+                            )
+                        else:
+                            img.save(
+                                output,
+                                format="WEBP",
+                                quality=85,
+                                method=6,
+                                optimize=True,
+                            )
+                        db_data["image"] = output.getvalue()
                         logger.info(
-                            "Resized character image from %s to fit within %s",
-                            img.size,
-                            max_size,
+                            "Optimized character image: %s -> %s bytes",
+                            len(image_bytes),
+                            len(db_data["image"]),
                         )
-
-                    output = io.BytesIO()
-                    if has_alpha:
-                        # Use lossless compression for images with alpha to preserve transparency
-                        img.save(
-                            output,
-                            format="WEBP",
-                            lossless=True,
-                            method=6,
+                    except Exception as img_err:
+                        logger.warning("Could not optimise image, using original bytes: {}", img_err)
+                        db_data["image"] = image_bytes
+                except (binascii.Error, ValueError) as exc:
+                    if db_data.get("image"):
+                        logger.warning(
+                            "Invalid image_base64 data provided; using existing image bytes instead: {}",
+                            exc,
                         )
                     else:
-                        img.save(
-                            output,
-                            format="WEBP",
-                            quality=85,
-                            method=6,
-                            optimize=True,
-                        )
-                    db_data["image"] = output.getvalue()
-                    logger.info(
-                        "Optimized character image: %s -> %s bytes",
-                        len(image_bytes),
-                        len(db_data["image"]),
-                    )
-                except Exception as img_err:
-                    logger.warning("Could not optimise image, using original bytes: {}", img_err)
-                    db_data["image"] = image_bytes
-            except (binascii.Error, ValueError) as exc:
-                logger.error("Invalid image_base64 data for character: {}", exc)
-                raise InputError(f"Invalid image_base64 data: {exc}")
+                        logger.error("Invalid image_base64 data for character: {}", exc)
+                        raise InputError(f"Invalid image_base64 data: {exc}")
         else:
             db_data["image"] = None
     elif not is_update and "image" not in db_data:

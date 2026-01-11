@@ -217,6 +217,56 @@ class MCPProtocol:
                 continue
         return scopes
 
+    def _api_key_scopes(self, context: RequestContext) -> Optional[set[str]]:
+        """Return normalized API key scopes when present on the request context."""
+        metadata = getattr(context, "metadata", {})
+        if not isinstance(metadata, dict):
+            return None
+        raw = metadata.get("api_key_scopes")
+        if raw is None:
+            return None
+        try:
+            from tldw_Server_API.app.core.AuthNZ.api_key_manager import normalize_scope
+        except Exception:
+            normalize_scope = None  # type: ignore
+
+        if normalize_scope is not None:
+            try:
+                return set(normalize_scope(raw))
+            except Exception:
+                pass
+
+        if isinstance(raw, str):
+            return {raw.strip().lower()} if raw.strip() else set()
+        if isinstance(raw, list):
+            return {str(item).strip().lower() for item in raw if str(item).strip()}
+        return set()
+
+    def _api_key_scope_level(self, context: RequestContext) -> Optional[str]:
+        scopes = self._api_key_scopes(context)
+        if not scopes:
+            return None
+        if "admin" in scopes or "service" in scopes:
+            return "admin"
+        if "write" in scopes:
+            return "write"
+        if "read" in scopes:
+            return "read"
+        return None
+
+    def _api_key_allows(self, context: RequestContext, *, is_write: Optional[bool] = None) -> bool:
+        """Gate MCP operations by API key scopes when present."""
+        level = self._api_key_scope_level(context)
+        if level is None:
+            return True
+        if level == "admin":
+            return True
+        if is_write is None:
+            return level in {"read", "write"}
+        if is_write:
+            return level == "write"
+        return level in {"read", "write"}
+
     def _scope_matches(self, scope: str, resource_kind: str, identifier: Optional[str]) -> bool:
         scope = scope.strip().lower()
         if not scope.startswith("mcp:"):
@@ -254,10 +304,12 @@ class MCPProtocol:
             return False
         return self._scope_allows(context, Resource.MODULE.value, module_id_norm or None)
 
-    async def _has_tool_permission(self, context: RequestContext, tool_name: str) -> bool:
+    async def _has_tool_permission(self, context: RequestContext, tool_name: str, *, is_write: Optional[bool] = None) -> bool:
         if not await self._rbac_check(context.user_id, Resource.TOOL, Action.EXECUTE, tool_name):
             return False
-        return self._scope_allows(context, Resource.TOOL.value, tool_name)
+        if not self._scope_allows(context, Resource.TOOL.value, tool_name):
+            return False
+        return self._api_key_allows(context, is_write=is_write)
 
     async def _has_resource_permission(self, context: RequestContext, resource_uri: str, module_id: Optional[str]) -> bool:
         if await self._rbac_check(context.user_id, Resource.RESOURCE, Action.READ, resource_uri):
@@ -329,6 +381,12 @@ class MCPProtocol:
         """
         # Support batch requests
         if isinstance(request, list):
+            if not request:
+                return self._error_response(
+                    ErrorCode.INVALID_REQUEST,
+                    "Invalid request: empty batch",
+                    None,
+                )
             responses: List[MCPResponse] = []
             for item in request:
                 try:
@@ -648,7 +706,9 @@ class MCPProtocol:
         if method == "tools/list":
             if not context.user_id:
                 return False
-            return self._scope_allows(context, Resource.TOOL.value, None)
+            if not self._scope_allows(context, Resource.TOOL.value, None):
+                return False
+            return self._api_key_allows(context, is_write=None)
 
         # Map methods to resources and actions
         method_permissions = {
@@ -683,7 +743,36 @@ class MCPProtocol:
                 allowed = fn(context.user_id, resource, action, resource_id)
             if not allowed:
                 return False
-            return self._scope_allows(context, resource.value, resource_id)
+            if not self._scope_allows(context, resource.value, resource_id):
+                return False
+            # Apply API key scope gating for read-style methods
+            if method != "tools/call":
+                return self._api_key_allows(context, is_write=None)
+            # For tools/call, evaluate write vs read-only tool when possible
+            tool_name = resource_id if isinstance(resource_id, str) else None
+            tool_def = None
+            module = None
+            is_write = None
+            try:
+                if tool_name:
+                    module = await self.module_registry.find_module_for_tool(tool_name)
+                if module is not None and tool_name:
+                    get_def = getattr(module, "get_tool_def", None)
+                    if callable(get_def):
+                        tool_def = await get_def(tool_name)  # type: ignore[misc]
+                    if tool_def is None:
+                        tool_defs = await module.get_tools()
+                        for _t in tool_defs:
+                            if isinstance(_t, dict) and _t.get("name") == tool_name:
+                                tool_def = _t
+                                break
+                if tool_def is not None and module is not None:
+                    is_write = module.is_write_tool_def(tool_def)
+                elif tool_name:
+                    is_write = bool(re.search(r"(ingest|update|delete|create|import)", tool_name.lower()))
+            except Exception:
+                is_write = None
+            return self._api_key_allows(context, is_write=is_write)
 
         # Unknown method - deny by default
         return False
@@ -845,7 +934,13 @@ class MCPProtocol:
                     if catalog_filter is not None and isinstance(name, str):
                         if name not in catalog_filter:
                             continue
-                    can_execute = await self._has_tool_permission(context, name) if name else False
+                    is_write = None
+                    try:
+                        if isinstance(tool_copy, dict):
+                            is_write = module.is_write_tool_def(tool_copy)
+                    except Exception:
+                        is_write = None
+                    can_execute = await self._has_tool_permission(context, name, is_write=is_write) if name else False
                     tool_copy["canExecute"] = can_execute
                     tools.append(tool_copy)
             except Exception as e:
@@ -878,8 +973,34 @@ class MCPProtocol:
 
         module_id = self.module_registry.get_module_id_for_tool(tool_name) or getattr(module, "name", None)
 
+        # Look up tool definition early for scope gating and validation
+        tool_def = None
+        try:
+            # Prefer a dedicated lookup if module implements it
+            get_def = getattr(module, "get_tool_def", None)
+            if callable(get_def):
+                tool_def = await get_def(tool_name)  # type: ignore[misc]
+            if tool_def is None:
+                tool_defs = await module.get_tools()
+                for _t in tool_defs:
+                    if isinstance(_t, dict) and _t.get("name") == tool_name:
+                        tool_def = _t
+                        break
+        except Exception:
+            tool_def = None
+
+        # Determine write-capable status (best-effort)
+        is_write = None
+        try:
+            if tool_def is not None:
+                is_write = module.is_write_tool_def(tool_def)
+            else:
+                is_write = bool(re.search(r"(ingest|update|delete|create|import)", str(tool_name).lower()))
+        except Exception:
+            is_write = None
+
         module_allowed = await self._has_module_permission(context, module_id)
-        tool_allowed = await self._has_tool_permission(context, tool_name)
+        tool_allowed = await self._has_tool_permission(context, tool_name, is_write=is_write)
 
         if not module_allowed and not tool_allowed:
             raise PermissionError(f"Permission denied for module: {module_id}")
@@ -908,20 +1029,19 @@ class MCPProtocol:
         # Ensures that modules validate arguments even if they forgot to call
         # validate_tool_arguments inside execute_tool.
         # Look up tool definition from module cache where possible
-        tool_def = None
-        try:
-            # Prefer a dedicated lookup if module implements it
-            get_def = getattr(module, "get_tool_def", None)
-            if callable(get_def):
-                tool_def = await get_def(tool_name)  # type: ignore
-            if tool_def is None:
-                tool_defs = await module.get_tools()
-                for _t in tool_defs:
-                    if isinstance(_t, dict) and _t.get("name") == tool_name:
-                        tool_def = _t
-                        break
-        except Exception:
-            tool_def = None
+        if tool_def is None:
+            try:
+                get_def = getattr(module, "get_tool_def", None)
+                if callable(get_def):
+                    tool_def = await get_def(tool_name)  # type: ignore[misc]
+                if tool_def is None:
+                    tool_defs = await module.get_tools()
+                    for _t in tool_defs:
+                        if isinstance(_t, dict) and _t.get("name") == tool_name:
+                            tool_def = _t
+                            break
+            except Exception:
+                tool_def = None
 
         try:
             # Lightweight inputSchema validation (config-gated)
@@ -938,16 +1058,16 @@ class MCPProtocol:
                     raise
 
             # Determine write-capable status
-            is_write = False
-            try:
-                if tool_def is not None:
-                    is_write = module.is_write_tool_def(tool_def)
-                else:
-                    # Fallback heuristic based on name
-                    import re as _re
-                    is_write = bool(_re.search(r"(ingest|update|delete|create|import)", str(tool_name).lower()))
-            except Exception:
-                is_write = False
+            if is_write is None:
+                try:
+                    if tool_def is not None:
+                        is_write = module.is_write_tool_def(tool_def)
+                    else:
+                        # Fallback heuristic based on name
+                        import re as _re
+                        is_write = bool(_re.search(r"(ingest|update|delete|create|import)", str(tool_name).lower()))
+                except Exception:
+                    is_write = False
 
             # Optional policy: disable write-capable tools entirely
             if is_write:

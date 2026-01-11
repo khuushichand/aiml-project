@@ -812,10 +812,12 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
     def _idem_record(self, entity_type: str, key: str, entity_id: int, user_id: Optional[str]) -> None:
         try:
             # INSERT OR IGNORE is translated to ON CONFLICT DO NOTHING for Postgres by the query adapter
-            self._execute(
-                "INSERT OR IGNORE INTO prompt_studio_idempotency (entity_type, idempotency_key, entity_id, user_id) VALUES (?, ?, ?, ?)",
-                (entity_type, key, entity_id, user_id),
-            )
+            with self.transaction() as conn:
+                self._execute(
+                    "INSERT OR IGNORE INTO prompt_studio_idempotency (entity_type, idempotency_key, entity_id, user_id) VALUES (?, ?, ?, ?)",
+                    (entity_type, key, entity_id, user_id),
+                    connection=conn,
+                )
         except BackendDatabaseError:
             pass
 

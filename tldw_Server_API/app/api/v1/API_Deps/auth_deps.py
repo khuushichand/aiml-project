@@ -89,6 +89,124 @@ def _public_user_dict(user: Mapping[str, Any]) -> Dict[str, Any]:
     return safe
 
 
+def _looks_like_jwt(token: Optional[str]) -> bool:
+    if not isinstance(token, str):
+        return False
+    return token.count(".") == 2
+
+
+async def _authenticate_api_key_from_request(request: Request, api_key: str) -> Dict[str, Any]:
+    test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+    if test_mode:
+        # SECURITY: Warn loudly about TEST_MODE and block in production unless explicitly allowed
+        allow_test_in_prod = os.getenv("ALLOW_TEST_MODE_IN_PRODUCTION", "").strip().lower() in {"1", "true", "yes", "on"}
+        environment = os.getenv("ENVIRONMENT", "").strip().lower()
+        prod_flag = os.getenv("tldw_production", "false").strip().lower() in {"1", "true", "yes", "on", "y"}
+        is_production = environment in {"production", "prod"} or prod_flag
+        if is_production:
+            if not allow_test_in_prod:
+                logger.critical(
+                    "TEST_MODE is enabled in production environment! "
+                    "This is a SEVERE security risk. Set ALLOW_TEST_MODE_IN_PRODUCTION=1 to override (NOT recommended)."
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail="Server configuration error"
+                )
+            else:
+                logger.warning(
+                    "TEST_MODE is enabled in production with explicit override. "
+                    "This bypasses normal authentication and should only be used for debugging."
+                )
+        else:
+            logger.debug("TEST_MODE is enabled for non-production environment")
+        try:
+            settings = get_settings()
+        except Exception:
+            settings = None
+        allowed_keys: set[str] = set()
+        test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+        if test_key:
+            allowed_keys.add(test_key)
+        if settings and settings.SINGLE_USER_API_KEY:
+            allowed_keys.add(settings.SINGLE_USER_API_KEY)
+        if api_key in allowed_keys:
+            client_ip = None
+            try:
+                client = getattr(request, "client", None)
+                if client is not None:
+                    client_ip = getattr(client, "host", None)
+            except Exception:
+                client_ip = None
+            if settings and settings.AUTH_MODE == "single_user":
+                if not is_single_user_ip_allowed(client_ip, settings):
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid or missing API Key",
+                    )
+            try:
+                if settings and isinstance(settings.DATABASE_URL, str) and settings.DATABASE_URL.startswith("sqlite:///"):
+                    from pathlib import Path as _Path
+                    from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables as _ensure_authnz_tables
+                    db_path = settings.DATABASE_URL.replace("sqlite:///", "")
+                    _ensure_authnz_tables(_Path(db_path))
+            except Exception as _ensure_err:
+                logger.debug("AuthNZ test fallback: ensure_authnz_tables skipped/failed: {}", _ensure_err)
+            fixed_id = getattr(settings, "SINGLE_USER_FIXED_ID", 1)
+            user = {
+                "id": fixed_id,
+                "username": "single_user",
+                "email": None,
+                "role": "admin",
+                "roles": ["admin"],
+                "permissions": ["*"],
+                "is_active": True,
+                "is_verified": True,
+            }
+            user = _public_user_dict(user)
+            try:
+                request.state.user_id = fixed_id
+                request.state.team_ids = []
+                request.state.org_ids = []
+            except Exception as state_exc:
+                logger.debug(
+                    "API key test-mode path: unable to attach state context: {}",
+                    state_exc,
+                )
+            return user
+    try:
+        # Force API key manager resolution through this module so tests can
+        # monkeypatch `auth_deps.get_api_key_manager` and assert error logging
+        # does not leak exception messages outside TEST_MODE.
+        await get_api_key_manager()
+        user_obj = await authenticate_api_key_user(request, api_key)
+        # Normalize User model to a plain dict for response serialization.
+        if hasattr(user_obj, "model_dump"):
+            user_dict = user_obj.model_dump()  # type: ignore[call-arg]
+        elif hasattr(user_obj, "dict"):
+            user_dict = user_obj.dict()  # type: ignore[call-arg]
+        elif isinstance(user_obj, Mapping):
+            user_dict = dict(user_obj)
+        else:
+            user_dict = {"id": getattr(user_obj, "id", None)}
+        return _public_user_dict(user_dict)
+    except HTTPException:
+        # Propagate explicit HTTP errors unchanged (401/403, etc.)
+        raise
+    except Exception as e:
+        if _is_test_mode():
+            logger.exception("API key authentication error in get_current_user (TEST_MODE)")
+        else:
+            logger.error(
+                "API key authentication error in get_current_user (type={})",
+                type(e).__name__,
+            )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate API key",
+        )
+
+
 def _get_test_session_lock() -> asyncio.Lock:
     """
     Lazily initialize and return a test session lock scoped to the current event loop.
@@ -445,8 +563,9 @@ async def get_current_user(
     """
     Resolve and return the current authenticated user.
 
-    Supports both Bearer JWT authentication and `X-API-KEY` authentication. If an
-    upstream dependency already populated `request.state.auth` and
+    Supports Bearer JWT authentication and API keys via `X-API-KEY` or
+    Authorization Bearer (non-JWT tokens). If an upstream dependency already
+    populated `request.state.auth` and
     `request.state._auth_user`, this function reuses that request-scoped cache to
     avoid repeating token/API-key validation within a single request.
 
@@ -549,117 +668,25 @@ async def get_current_user(
             exc,
         )
 
-    # If Authorization is absent but X-API-KEY present, attempt API-key auth (SQLite/Postgres multi-user).
-    if not credentials and x_api_key:
-        test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
-        if test_mode:
-            # SECURITY: Warn loudly about TEST_MODE and block in production unless explicitly allowed
-            allow_test_in_prod = os.getenv("ALLOW_TEST_MODE_IN_PRODUCTION", "").strip().lower() in {"1", "true", "yes", "on"}
-            environment = os.getenv("ENVIRONMENT", "").strip().lower()
-            prod_flag = os.getenv("tldw_production", "false").strip().lower() in {"1", "true", "yes", "on", "y"}
-            is_production = environment in {"production", "prod"} or prod_flag
-            if is_production:
-                if not allow_test_in_prod:
-                    logger.critical(
-                        "TEST_MODE is enabled in production environment! "
-                        "This is a SEVERE security risk. Set ALLOW_TEST_MODE_IN_PRODUCTION=1 to override (NOT recommended)."
-                    )
-                    raise HTTPException(
-                        status_code=500,
-                        detail="Server configuration error"
-                    )
-                else:
-                    logger.warning(
-                        "TEST_MODE is enabled in production with explicit override. "
-                        "This bypasses normal authentication and should only be used for debugging."
-                    )
-            else:
-                logger.debug("TEST_MODE is enabled for non-production environment")
-            try:
-                settings = get_settings()
-            except Exception:
-                settings = None
-            allowed_keys: set[str] = set()
-            test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
-            if test_key:
-                allowed_keys.add(test_key)
-            if settings and settings.SINGLE_USER_API_KEY:
-                allowed_keys.add(settings.SINGLE_USER_API_KEY)
-            if x_api_key in allowed_keys:
-                client_ip = None
-                try:
-                    client = getattr(request, "client", None)
-                    if client is not None:
-                        client_ip = getattr(client, "host", None)
-                except Exception:
-                    client_ip = None
-                if settings and settings.AUTH_MODE == "single_user":
-                    if not is_single_user_ip_allowed(client_ip, settings):
-                        raise HTTPException(
-                            status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="Invalid or missing API Key",
-                        )
-                try:
-                    if settings and isinstance(settings.DATABASE_URL, str) and settings.DATABASE_URL.startswith("sqlite:///"):
-                        from pathlib import Path as _Path
-                        from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables as _ensure_authnz_tables
-                        db_path = settings.DATABASE_URL.replace("sqlite:///", "")
-                        _ensure_authnz_tables(_Path(db_path))
-                except Exception as _ensure_err:
-                    logger.debug("AuthNZ test fallback: ensure_authnz_tables skipped/failed: {}", _ensure_err)
-                fixed_id = getattr(settings, "SINGLE_USER_FIXED_ID", 1)
-                user = {
-                    "id": fixed_id,
-                    "username": "single_user",
-                    "email": None,
-                    "role": "admin",
-                    "roles": ["admin"],
-                    "permissions": ["*"],
-                    "is_active": True,
-                    "is_verified": True,
-                }
-                user = _public_user_dict(user)
-                try:
-                    request.state.user_id = fixed_id
-                    request.state.team_ids = []
-                    request.state.org_ids = []
-                except Exception as state_exc:
-                    logger.debug(
-                        "API key test-mode path: unable to attach state context: {}",
-                        state_exc,
-                    )
-                return user
+    # Single-user compatibility: accept Authorization Bearer as API key when no X-API-KEY is present.
+    if credentials and not x_api_key:
         try:
-            # Force API key manager resolution through this module so tests can
-            # monkeypatch `auth_deps.get_api_key_manager` and assert error logging
-            # does not leak exception messages outside TEST_MODE.
-            await get_api_key_manager()
-            user_obj = await authenticate_api_key_user(request, x_api_key)
-            # Normalize User model to a plain dict for response serialization.
-            if hasattr(user_obj, "model_dump"):
-                user_dict = user_obj.model_dump()  # type: ignore[call-arg]
-            elif hasattr(user_obj, "dict"):
-                user_dict = user_obj.dict()  # type: ignore[call-arg]
-            elif isinstance(user_obj, Mapping):
-                user_dict = dict(user_obj)
-            else:
-                user_dict = {"id": getattr(user_obj, "id", None)}
-            return _public_user_dict(user_dict)
-        except HTTPException:
-            # Propagate explicit HTTP errors unchanged (401/403, etc.)
-            raise
-        except Exception as e:
-            if _is_test_mode():
-                logger.exception("API key authentication error in get_current_user (TEST_MODE)")
-            else:
-                logger.error(
-                    "API key authentication error in get_current_user (type={})",
-                    type(e).__name__,
-                )
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Could not validate API key",
-            )
+            settings = get_settings()
+        except Exception:
+            settings = None
+        if settings and getattr(settings, "AUTH_MODE", None) == "single_user":
+            x_api_key = credentials.credentials
+            credentials = None
+
+    bearer_token = credentials.credentials if credentials else None
+    bearer_is_jwt = _looks_like_jwt(bearer_token) if bearer_token else False
+    api_key_candidate = x_api_key
+    if not api_key_candidate and bearer_token and not bearer_is_jwt:
+        api_key_candidate = bearer_token
+
+    # If Authorization is absent or not a JWT but API key present, attempt API-key auth.
+    if api_key_candidate and (not credentials or not bearer_is_jwt):
+        return await _authenticate_api_key_from_request(request, api_key_candidate)
 
     # Otherwise, require Bearer token
     if not credentials:
@@ -1021,33 +1048,21 @@ async def get_current_active_user(
 
 async def get_user_org_policy(
     db: Any = Depends(get_db_transaction),  # noqa: B008
+    principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
     current_user: Dict[str, Any] = Depends(get_current_active_user),  # noqa: B008
 ) -> Dict[str, Any]:
     """
-    Resolve the active org policy for the current user and fail closed on errors.
+    Deprecated compatibility shim for user-dict org policy lookups.
 
-    Behaviour:
-    - If the user has explicit org memberships, the first membership's org_id is used.
-    - Otherwise, HTTP 400 is raised when no organization can be resolved.
-
-    New code should prefer ``get_org_policy_from_principal``, which is
-    principal-first and profile/flag-aware. This helper is retained as a
-    compatibility shim for user-dict based flows.
+    New code should prefer ``get_org_policy_from_principal``. This helper
+    now delegates to the claim-first resolver so org policy resolution stays
+    consistent across all authentication flows.
     """
-    memberships = current_user.get("org_memberships") or []
-    if memberships:
-        org_id = memberships[0].get("org_id")
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User has no organization memberships",
-        )
-    if org_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Organization membership is missing org_id",
-        )
-    return await _load_org_policy(db, org_id)
+    return await get_org_policy_from_principal(
+        db=db,
+        principal=principal,
+        current_user=current_user,
+    )
 
 
 async def _load_org_policy(db: Any, org_id: int) -> Dict[str, Any]:
@@ -1549,6 +1564,7 @@ def require_token_scope(
       match the request path param `schedule_path_param` when present, or header `schedule_header`.
     - In single-user mode, or when no bearer token is present, this check is bypassed.
     - If `allow_admin_bypass=True`, admin users skip this enforcement.
+    - If the bearer token is not a JWT, enforce API key constraints using that token.
     """
     async def _checker(
         request: Request,
@@ -1571,9 +1587,11 @@ def require_token_scope(
                 exc,
             )
 
-        # If we have Authorization bearer, apply JWT-based checks; otherwise, try X-API-KEY checks
-        if credentials:
-            token = credentials.credentials
+        token = credentials.credentials if credentials else None
+        token_is_jwt = _looks_like_jwt(token) if token else False
+
+        # If we have Authorization bearer and it looks like a JWT, apply JWT-based checks.
+        if token and token_is_jwt:
             try:
                 payload = jwt_service.decode_access_token(token)
             except (InvalidTokenError, TokenExpiredError):
@@ -1705,9 +1723,10 @@ def require_token_scope(
         except Exception:  # noqa: BLE001
             # Defensive: request headers access should never block the fallback path.
             api_key = None
+        if not api_key and token and not token_is_jwt:
+            api_key = token
         if api_key:
             try:
-                from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
                 api_mgr = await get_api_key_manager()
                 client_ip = request.client.host if getattr(request, "client", None) else None
                 info = await api_mgr.validate_api_key(api_key=api_key, ip_address=client_ip)

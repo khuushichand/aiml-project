@@ -290,13 +290,10 @@ class AsyncChunker:
 
             buffer = ""
 
-        # Process remaining buffer
+        # Process remaining buffer; only flush overlap-only tail when overlap == 0
         should_flush = bool(buffer)
-        if not should_flush and overlap_buffer:
-            if overlap_size > 0:
-                should_flush = method_lower != 'words'
-            else:
-                should_flush = True
+        if not should_flush and overlap_buffer and overlap_size == 0:
+            should_flush = True
         if should_flush:
             overlap_text = _coerce_overlap_value(overlap_buffer)
             sep = ''

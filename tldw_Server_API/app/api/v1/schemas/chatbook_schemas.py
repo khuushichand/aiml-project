@@ -61,9 +61,7 @@ class ImportStatus(str, Enum):
 class ConflictResolution(str, Enum):
     """How to handle conflicts during import."""
     SKIP = "skip"          # Skip conflicting items
-    OVERWRITE = "overwrite"  # Overwrite existing items
     RENAME = "rename"      # Rename imported items
-    MERGE = "merge"        # Merge with existing (where applicable)
 
 
 class MediaQuality(str, Enum):
@@ -162,8 +160,8 @@ class ImportChatbookRequest(BaseModel):
         False,
         description="Add [Imported] prefix to items"
     )
-    import_media: bool = Field(True, description="Import media files")
-    import_embeddings: bool = Field(False, description="Import embeddings")
+    import_media: bool = Field(False, description="Import media files (not supported yet)")
+    import_embeddings: bool = Field(False, description="Import embeddings (not supported yet)")
     async_mode: bool = Field(False, description="Run as background job")
 
     model_config = ConfigDict(json_schema_extra={

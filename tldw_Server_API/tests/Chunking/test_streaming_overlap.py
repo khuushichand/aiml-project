@@ -94,6 +94,24 @@ def test_language_autodetect_thai():
     assert md.get("language") == "th", f"Expected Thai autodetect, got {md.get('language')}"
 
 
+def test_language_autodetect_japanese_prefers_kana():
+
+    ck = Chunker()
+    japanese_text = "これはテストです。次の文です。"
+    out = ck.process_text(
+        japanese_text,
+        options={
+            "method": "sentences",
+            "max_size": 2,
+            "overlap": 0,
+            "language": "auto",
+        },
+    )
+    assert out and isinstance(out, list)
+    md = out[0].get("metadata", {})
+    assert md.get("language") == "ja", f"Expected Japanese autodetect, got {md.get('language')}"
+
+
 @pytest.mark.asyncio
 async def test_async_chunk_stream_sentences_overlap_tail():
     from tldw_Server_API.app.core.Chunking.async_chunker import AsyncChunker
@@ -119,3 +137,36 @@ async def test_async_chunk_stream_sentences_overlap_tail():
         ]
 
     assert "Sentence 5. Sentence 6." in chunks
+
+
+@pytest.mark.asyncio
+async def test_async_chunk_stream_overlap_no_tail_dup_on_boundary():
+    from tldw_Server_API.app.core.Chunking.async_chunker import AsyncChunker
+
+    text = " ".join([f"Sentence {i}." for i in range(1, 7)])
+
+    async def text_stream():
+        yield text
+
+    expected = Chunker().chunk_text(
+        text,
+        method="sentences",
+        max_size=2,
+        overlap=1,
+        language="en",
+    )
+
+    async with AsyncChunker() as chunker:
+        chunks = [
+            ch
+            async for ch in chunker.chunk_stream(
+                text_stream(),
+                method="sentences",
+                max_size=2,
+                overlap=1,
+                buffer_size=len(text),
+                language="en",
+            )
+        ]
+
+    assert chunks == expected

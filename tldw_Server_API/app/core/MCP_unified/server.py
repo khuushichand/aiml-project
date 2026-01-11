@@ -45,6 +45,27 @@ def _is_authnz_access_token(token: str) -> bool:
         return False
 
 
+def _extract_api_key_permissions(info: Optional[Dict[str, Any]]) -> List[str]:
+    """Normalize API key scopes into MCP permissions."""
+    if not info:
+        return []
+    try:
+        from tldw_Server_API.app.core.AuthNZ.api_key_manager import normalize_scope
+    except Exception:
+        return []
+
+    raw_scopes = info.get("scopes")
+    if raw_scopes is None:
+        raw_scopes = info.get("scope")
+
+    try:
+        scopes = normalize_scope(raw_scopes)
+    except Exception:
+        scopes = set()
+
+    return sorted(scopes) if scopes else []
+
+
 class _JWTManagerProxy:
     """Proxy for JWT manager to allow per-server monkeypatching without global side effects."""
 
@@ -758,16 +779,14 @@ class MCPServer:
                     if 'api_client' not in roles:
                         roles.append('api_client')
                     try:
-                        scopes = info.get('scopes')
-                        if isinstance(scopes, list):
+                        scopes = _extract_api_key_permissions(info)
+                        if scopes:
+                            metadata["api_key_scopes"] = list(scopes)
+                            metadata["auth_via"] = "api_key"
                             perms = metadata.setdefault('permissions', [])
                             for scope in scopes:
-                                if isinstance(scope, str) and scope not in perms:
+                                if scope not in perms:
                                     perms.append(scope)
-                        elif isinstance(scopes, str):
-                            perms = metadata.setdefault('permissions', [])
-                            if scopes not in perms:
-                                perms.append(scopes)
                     except Exception:
                         pass
                     logger.info(f"WebSocket authenticated via API key for user: {user_id}")
@@ -1001,6 +1020,8 @@ class MCPServer:
             try:
                 if sess and sess.safe_config:
                     context_metadata["safe_config"] = dict(sess.safe_config)
+                if sess:
+                    context_metadata["seen_uris"] = list(sess.uris_seen)
             except Exception:
                 pass
             context = RequestContext(
@@ -1014,6 +1035,17 @@ class MCPServer:
             # Process MCP request (supports single, notification, and batch)
             try:
                 response = await self.protocol.process_request(data, context)
+                # Persist seen URIs back into session (if updated by tools)
+                try:
+                    if sess and isinstance(context.metadata, dict):
+                        seen = context.metadata.get("seen_uris")
+                        if isinstance(seen, list):
+                            max_len = max(1, int(self.config.max_session_uris))
+                            for uri in seen:
+                                if isinstance(uri, str) and uri:
+                                    sess.add_seen_uri(uri, max_len)
+                except Exception:
+                    pass
                 if response is None:
                     # Notification - no reply
                     continue
@@ -1116,6 +1148,8 @@ class MCPServer:
                 metadata_map["safe_config"] = dict(sess.safe_config)
             elif safe_cfg:
                 metadata_map["safe_config"] = safe_cfg
+            if sess:
+                metadata_map["seen_uris"] = list(sess.uris_seen)
         except Exception:
             pass
         context = RequestContext(
@@ -1129,6 +1163,16 @@ class MCPServer:
         # Process request
         try:
             response = await self.protocol.process_request(request, context)
+            try:
+                if sess and isinstance(context.metadata, dict):
+                    seen = context.metadata.get("seen_uris")
+                    if isinstance(seen, list):
+                        max_len = max(1, int(self.config.max_session_uris))
+                        for uri in seen:
+                            if isinstance(uri, str) and uri:
+                                sess.add_seen_uri(uri, max_len)
+            except Exception:
+                pass
             return response
         except RateLimitExceeded as e:
             raise HTTPException(

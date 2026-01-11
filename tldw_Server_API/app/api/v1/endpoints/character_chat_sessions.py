@@ -362,7 +362,7 @@ async def create_chat_session(
         if seed_first_message:
             try:
                 raw_name = character.get('name') or 'Assistant'
-                char_name = sanitize_sender_name(raw_name)
+                sender_name = sanitize_sender_name(raw_name)
                 choice_text: Optional[str] = None
                 if greeting_strategy in {"alternate_random", "alternate_index"}:
                     ag = character.get('alternate_greetings')
@@ -376,10 +376,10 @@ async def create_chat_session(
                     if isinstance(fm, str) and fm.strip():
                         choice_text = fm
                 if isinstance(choice_text, str) and choice_text.strip():
-                    content = replace_placeholders(choice_text, char_name, 'User')
+                    content = choice_text
                     db.add_message({
                         'conversation_id': created_id,
-                        'sender': char_name,
+                        'sender': sender_name,
                         'content': content,
                         'client_id': str(current_user.id),
                         'version': 1
@@ -544,7 +544,7 @@ async def complete_chat_legacy(
         dep_headers = {
             "Deprecation": "true",
             "Sunset": sunset,
-            "Link": "</api/v1/chats/{chat_id}/complete-v2>; rel=successor-version",
+            "Link": f"</api/v1/chats/{chat_id}/complete-v2>; rel=successor-version",
         }
         try:
             if response is not None:
@@ -779,6 +779,7 @@ async def character_chat_completion(
         disable_offline_sim = parse_boolean(os.getenv("DISABLE_OFFLINE_SIM"))
         legacy_allow_local = parse_boolean(os.getenv("ALLOW_LOCAL_LLM_CALLS"))
         offline_sim = provider == "local-llm" and not (enable_local_llm or disable_offline_sim or legacy_allow_local)
+        streams_unified = str(os.getenv("STREAMS_UNIFIED", "0")).strip().lower() in {"1", "true", "on", "yes"}
         llm_resp = None
         if not offline_sim:
             # Enforce per-minute completion rate only for real provider calls
@@ -857,6 +858,61 @@ async def character_chat_completion(
             except Exception:
                 return ""
 
+        def _chunk_text(text: str, size: int = 2000) -> List[str]:
+            if not text:
+                return []
+            return [text[i : i + size] for i in range(0, len(text), size)]
+
+        def _stream_text_as_sse(text: str) -> StreamingResponse:
+            async def _stream_text():
+                try:
+                    created_ts = int(time.time())
+                    stream_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+                    model_id = model or "local-test"
+
+                    head = {
+                        "id": stream_id,
+                        "object": "chat.completion.chunk",
+                        "created": created_ts,
+                        "model": model_id,
+                        "choices": [
+                            {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
+                        ],
+                    }
+                    yield f"data: {json.dumps(head)}\n\n"
+
+                    for chunk in _chunk_text(text):
+                        data = {
+                            "id": stream_id,
+                            "object": "chat.completion.chunk",
+                            "created": created_ts,
+                            "model": model_id,
+                            "choices": [
+                                {"index": 0, "delta": {"content": chunk}, "finish_reason": None}
+                            ],
+                        }
+                        yield f"data: {json.dumps(data)}\n\n"
+
+                    tail = {
+                        "id": stream_id,
+                        "object": "chat.completion.chunk",
+                        "created": created_ts,
+                        "model": model_id,
+                        "choices": [
+                            {"index": 0, "delta": {}, "finish_reason": "stop"}
+                        ],
+                    }
+                    yield f"data: {json.dumps(tail)}\n\n"
+                    yield "data: [DONE]\n\n"
+                except Exception as e:
+                    yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                    yield "data: [DONE]\n\n"
+
+            headers = {}
+            if streams_unified:
+                headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+            return StreamingResponse(_stream_text(), media_type="text/event-stream", headers=headers)
+
         # Initialize assistant_text to avoid potential UnboundLocalError in edge cases
         assistant_text = ""
 
@@ -871,60 +927,7 @@ async def character_chat_completion(
             assistant_tool_calls = []
             # Streaming stub for offline-sim: emit SSE with plain text chunks and [DONE]
             if bool(body.stream):
-                async def _offline_sse():
-                    try:
-                        import time as _time
-                        created_ts = int(_time.time())
-                        stream_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
-                        model_id = model or "local-test"
-
-                        # Initial role chunk (OpenAI-style)
-                        head = {
-                            "id": stream_id,
-                            "object": "chat.completion.chunk",
-                            "created": created_ts,
-                            "model": model_id,
-                            "choices": [
-                                {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
-                            ],
-                        }
-                        yield f"data: {json.dumps(head)}\n\n"
-
-                        # Content chunks
-                        text = assistant_text or "OK"
-                        words = text.split()
-                        step = 20
-                        if not words:
-                            words = ["OK"]
-                        for i in range(0, len(words), step):
-                            chunk = " ".join(words[i : i + step])
-                            data = {
-                                "id": stream_id,
-                                "object": "chat.completion.chunk",
-                                "created": created_ts,
-                                "model": model_id,
-                                "choices": [
-                                    {"index": 0, "delta": {"content": chunk}, "finish_reason": None}
-                                ],
-                            }
-                            yield f"data: {json.dumps(data)}\n\n"
-
-                        # Finish chunk
-                        tail = {
-                            "id": stream_id,
-                            "object": "chat.completion.chunk",
-                            "created": created_ts,
-                            "model": model_id,
-                            "choices": [
-                                {"index": 0, "delta": {}, "finish_reason": "stop"}
-                            ],
-                        }
-                        yield f"data: {json.dumps(tail)}\n\n"
-                        yield "data: [DONE]\n\n"
-                    except Exception as e:
-                        yield f"data: {json.dumps({'error': str(e)})}\n\n"
-                        yield "data: [DONE]\n\n"
-                return StreamingResponse(_offline_sse(), media_type="text/event-stream")
+                return _stream_text_as_sse(assistant_text or "OK")
         else:
             # For streaming, assistant text is not finalized here; skip extraction.
             assistant_tool_calls = []
@@ -943,7 +946,7 @@ async def character_chat_completion(
         if not offline_sim and bool(body.stream):
             try:
                 # Feature flag: use unified SSEStream when enabled
-                if str(os.getenv("STREAMS_UNIFIED", "0")).strip() in {"1", "true", "on", "yes"}:
+                if streams_unified:
                     stream = SSEStream(
                         labels={"component": "chat", "endpoint": "character_chat_stream"}
                     )
@@ -1099,6 +1102,9 @@ async def character_chat_completion(
             except Exception:
                 # Fall through to non-streaming response
                 pass
+            if isinstance(llm_resp, (dict, str, bytes, bytearray)):
+                assistant_text_fallback = _extract_text(llm_resp).strip()
+                return _stream_text_as_sse(assistant_text_fallback)
         if not assistant_text:
             assistant_text = ""
 

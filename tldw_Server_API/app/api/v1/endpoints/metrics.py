@@ -249,7 +249,7 @@ async def reset_metrics() -> Dict[str, str]:
         chat_metrics = get_chat_metrics()
 
         # Clear values
-        registry.values.clear()
+        registry.reset()
 
         # Reset active counters
         chat_metrics.active_requests = 0

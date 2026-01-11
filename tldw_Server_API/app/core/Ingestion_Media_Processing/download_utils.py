@@ -1,18 +1,146 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
-from typing import Any, Optional, Set
+from typing import Any, Dict, Optional, Set
 from urllib.parse import urlparse
 
 import aiofiles
 from loguru import logger
 
+from tldw_Server_API.app.core.config import loaded_config_data
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
+    DEFAULT_MEDIA_TYPE_CONFIG,
+    EXT_TO_MEDIA_TYPE_KEY,
+)
 from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.http_client import (
     afetch as _m_afetch,
     create_async_client as _create_async_client,
     _validate_egress_or_raise,
 )
+
+
+def _get_media_processing_config() -> Dict[str, Any]:
+    try:
+        cfg = loaded_config_data.get("media_processing", {}) if loaded_config_data else {}
+        return cfg or {}
+    except Exception:
+        return {}
+
+
+def _resolve_media_type_from_suffix(suffix: Optional[str]) -> Optional[str]:
+    if not suffix:
+        return None
+    return EXT_TO_MEDIA_TYPE_KEY.get(suffix.lower())
+
+
+def _resolve_media_type_from_content_type(content_type: str) -> Optional[str]:
+    content_map = {
+        "application/json": "document",
+        "application/pdf": "pdf",
+        "application/epub+zip": "ebook",
+        "application/msword": "document",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "document",
+        "application/rtf": "document",
+        "application/xml": "xml",
+        "text/xml": "xml",
+        "image/svg+xml": "xml",
+        "text/html": "html",
+        "application/xhtml+xml": "html",
+        "text/plain": "document",
+        "text/markdown": "document",
+        "text/x-markdown": "document",
+    }
+    return content_map.get(content_type)
+
+
+def _max_bytes_for_media_type(media_type_key: Optional[str]) -> Optional[int]:
+    if not media_type_key:
+        return None
+    config = DEFAULT_MEDIA_TYPE_CONFIG.get(media_type_key.lower())
+    if not config:
+        return None
+    size_mb = (
+        config.get("archive_file_size_mb")
+        if media_type_key.lower() == "archive"
+        else config.get("max_size_mb")
+    )
+    if isinstance(size_mb, (int, float)) and size_mb > 0:
+        return int(math.ceil(size_mb)) * 1024 * 1024
+    return None
+
+
+def _fallback_max_bytes() -> Optional[int]:
+    cfg = _get_media_processing_config()
+    size_mb = cfg.get("max_unknown_file_size_mb")
+    if size_mb is None:
+        size_mb = cfg.get("max_document_file_size_mb", 50)
+    if isinstance(size_mb, (int, float)) and size_mb > 0:
+        return int(math.ceil(size_mb)) * 1024 * 1024
+    return None
+
+
+def _resolve_max_bytes(
+    *,
+    max_bytes: Optional[int],
+    media_type_key: Optional[str],
+    effective_suffix: Optional[str],
+    content_type: str,
+) -> Optional[int]:
+    if isinstance(max_bytes, int) and max_bytes > 0:
+        return max_bytes
+    resolved_media_type = (
+        media_type_key
+        or _resolve_media_type_from_suffix(effective_suffix)
+        or _resolve_media_type_from_content_type(content_type)
+    )
+    resolved_max = _max_bytes_for_media_type(resolved_media_type)
+    if resolved_max is not None:
+        return resolved_max
+    if resolved_media_type is None:
+        return _fallback_max_bytes()
+    return None
+
+
+def _enforce_max_bytes_from_headers(
+    url: str,
+    content_length: Optional[str],
+    max_bytes: Optional[int],
+) -> None:
+    if not max_bytes:
+        return
+    if not content_length:
+        return
+    try:
+        declared = int(content_length)
+    except (TypeError, ValueError):
+        return
+    if declared > int(max_bytes):
+        raise ValueError(
+            f"Downloaded file from {url} exceeds maximum allowed size "
+            f"({max_bytes} bytes)."
+        )
+
+
+async def _write_response_to_path(
+    url: str,
+    resp: Any,
+    target_path: Path,
+    max_bytes: Optional[int],
+) -> None:
+    total = 0
+    async with aiofiles.open(target_path, "wb") as f:
+        async for chunk in resp.aiter_bytes():
+            if not chunk:
+                continue
+            total += len(chunk)
+            if max_bytes and total > max_bytes:
+                raise ValueError(
+                    f"Downloaded file from {url} exceeds maximum allowed size "
+                    f"({max_bytes} bytes)."
+                )
+            await f.write(chunk)
 
 async def download_url_async(
     client: Optional[Any],
@@ -22,6 +150,8 @@ async def download_url_async(
     check_extension: bool = True,
     disallow_content_types: Optional[Set[str]] = None,
     allow_redirects: bool = True,
+    max_bytes: Optional[int] = None,
+    media_type_key: Optional[str] = None,
 ) -> Path:
     """
     Minimal core-backed URL downloader used by tests and modular endpoints.
@@ -37,6 +167,8 @@ async def download_url_async(
         * or a small content-type map (including application/json)
       and error when the inferred extension is not allowed or when the
       content-type is explicitly disallowed.
+    - Enforce per-media size caps (or explicit max_bytes) before and during
+      streaming to prevent oversized downloads.
     """
     if allowed_extensions is None:
         allowed_extensions = set()
@@ -149,6 +281,17 @@ async def download_url_async(
                                     f"(allowed: {allowed_list}); content-type '{content_type}' unsupported "
                                     "for this endpoint"
                                 )
+                resolved_max_bytes = _resolve_max_bytes(
+                    max_bytes=max_bytes,
+                    media_type_key=media_type_key,
+                    effective_suffix=effective_suffix,
+                    content_type=content_type,
+                )
+                _enforce_max_bytes_from_headers(
+                    url,
+                    resp.headers.get("content-length"),
+                    resolved_max_bytes,
+                )
                 target_path = target_dir / safe_name
                 counter = 1
                 stem = target_path.stem
@@ -157,10 +300,14 @@ async def download_url_async(
                     target_path = target_dir / f"{stem}_{counter}{suffix}"
                     counter += 1
                 target_path.parent.mkdir(parents=True, exist_ok=True)
-                async with aiofiles.open(target_path, "wb") as f:
-                    async for chunk in resp.aiter_bytes():
-                        if chunk:
-                            await f.write(chunk)
+                try:
+                    await _write_response_to_path(url, resp, target_path, resolved_max_bytes)
+                except Exception:
+                    try:
+                        target_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    raise
                 logger.info("Downloaded {} to {}", url, target_path)
                 return target_path
 
@@ -257,6 +404,18 @@ async def download_url_async(
                             "for this endpoint"
                         )
 
+        resolved_max_bytes = _resolve_max_bytes(
+            max_bytes=max_bytes,
+            media_type_key=media_type_key,
+            effective_suffix=effective_suffix,
+            content_type=content_type,
+        )
+        _enforce_max_bytes_from_headers(
+            url,
+            resp.headers.get("content-length"),
+            resolved_max_bytes,
+        )
+
         target_path = target_dir / safe_name
         counter = 1
         stem = target_path.stem
@@ -266,10 +425,14 @@ async def download_url_async(
             counter += 1
 
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        async with aiofiles.open(target_path, "wb") as f:
-            async for chunk in resp.aiter_bytes():
-                if chunk:
-                    await f.write(chunk)
+        try:
+            await _write_response_to_path(url, resp, target_path, resolved_max_bytes)
+        except Exception:
+            try:
+                target_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            raise
 
         logger.info("Downloaded {} to {}", url, target_path)
         return target_path
@@ -284,6 +447,7 @@ async def download_url_async(
             if isinstance(exc, ValueError) and (
                 "allowed extension" in str(exc).lower()
                 or "unsupported" in str(exc).lower()
+                or "exceeds maximum allowed size" in str(exc).lower()
             ):
                 raise
 

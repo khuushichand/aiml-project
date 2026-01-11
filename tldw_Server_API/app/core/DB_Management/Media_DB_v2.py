@@ -1307,6 +1307,10 @@ class MediaDatabase:
         # PostgreSQL: reuse a single persistent connection outside transactions
         if self._persistent_conn is None:
             self._persistent_conn = self.backend.get_pool().get_connection()
+        try:
+            self.backend.apply_scope(self._persistent_conn)
+        except Exception:
+            pass
         return self._persistent_conn
 
     def close_connection(self):
@@ -1380,26 +1384,36 @@ class MediaDatabase:
             try:
                 if eff_conn is None and not self.is_memory_db:
                     eph = sqlite3.connect(self.db_path_str, check_same_thread=False)
-                    eph.row_factory = sqlite3.Row
-                    self._apply_sqlite_connection_pragmas(eph)
-                    cur = eph.cursor()
-                    cur.execute(prepared_query, prepared_params or ())
-                    upper = prepared_query.strip().upper()
-                    is_select = upper.startswith("SELECT")
-                    has_returning = " RETURNING " in upper
-                    # Auto-commit DML/DDL when using ephemeral connection
-                    if commit or (not is_select and not has_returning):
+                    cur = None
+                    try:
+                        eph.row_factory = sqlite3.Row
+                        self._apply_sqlite_connection_pragmas(eph)
+                        cur = eph.cursor()
+                        cur.execute(prepared_query, prepared_params or ())
+                        upper = prepared_query.strip().upper()
+                        is_select = upper.startswith("SELECT")
+                        has_returning = " RETURNING " in upper
+                        # Auto-commit DML/DDL when using ephemeral connection
+                        if commit or (not is_select and not has_returning):
+                            try:
+                                eph.commit()
+                            except Exception:
+                                pass
+                        rows = []
+                        if is_select or has_returning:
+                            rows = [dict(r) for r in cur.fetchall()]
+                        result = QueryResult(rows=rows, rowcount=cur.rowcount, lastrowid=cur.lastrowid, description=cur.description)
+                        return BackendCursorAdapter(result)
+                    finally:
+                        if cur is not None:
+                            try:
+                                cur.close()
+                            except Exception:
+                                pass
                         try:
-                            eph.commit()
+                            eph.close()
                         except Exception:
                             pass
-                    rows = []
-                    if is_select or has_returning:
-                        rows = [dict(r) for r in cur.fetchall()]
-                    result = QueryResult(rows=rows, rowcount=cur.rowcount, lastrowid=cur.lastrowid, description=cur.description)
-                    cur.close()
-                    eph.close()
-                    return BackendCursorAdapter(result)
                 else:
                     # Use transaction/persistent connection (required for :memory: databases)
                     conn_use = eff_conn or self.get_connection()
@@ -1493,19 +1507,29 @@ class MediaDatabase:
             try:
                 if eff_conn is None and not self.is_memory_db:
                     eph = sqlite3.connect(self.db_path_str, check_same_thread=False)
-                    eph.row_factory = sqlite3.Row
-                    self._apply_sqlite_connection_pragmas(eph)
-                    cur = eph.cursor()
-                    cur.executemany(prepared_query, prepared_params_list)
-                    # executemany implies DML; commit when using ephemeral connection
+                    cur = None
                     try:
-                        eph.commit()
-                    except Exception:
-                        pass
-                    result = QueryResult(rows=[], rowcount=cur.rowcount, lastrowid=cur.lastrowid, description=cur.description)
-                    cur.close()
-                    eph.close()
-                    return BackendCursorAdapter(result)
+                        eph.row_factory = sqlite3.Row
+                        self._apply_sqlite_connection_pragmas(eph)
+                        cur = eph.cursor()
+                        cur.executemany(prepared_query, prepared_params_list)
+                        # executemany implies DML; commit when using ephemeral connection
+                        try:
+                            eph.commit()
+                        except Exception:
+                            pass
+                        result = QueryResult(rows=[], rowcount=cur.rowcount, lastrowid=cur.lastrowid, description=cur.description)
+                        return BackendCursorAdapter(result)
+                    finally:
+                        if cur is not None:
+                            try:
+                                cur.close()
+                            except Exception:
+                                pass
+                        try:
+                            eph.close()
+                        except Exception:
+                            pass
                 else:
                     conn_use = eff_conn or self.get_connection()
                     cur = conn_use.cursor()
