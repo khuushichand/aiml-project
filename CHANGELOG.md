@@ -9,6 +9,7 @@ and this project adheres to Some kind of Versioning
 
 ### Added
 - Jobs Postgres RLS policy setup now supports `JOBS_PG_RLS_DEBUG` for policy output and `JOBS_PG_RLS_ROLE` role overrides.
+- Jobs prune scheduler for retention-based cleanup (env-gated, internal scheduler).
 
 ### Changed
 - Jobs Postgres tests now default to the shared per-test Postgres fixture by wiring `JOBS_DB_URL` and ensuring Jobs tables/counters.

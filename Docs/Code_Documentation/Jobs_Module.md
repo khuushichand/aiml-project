@@ -115,8 +115,16 @@ Use these names across domains to keep operations consistent.
   - `JOBS_DOMAIN_ALLOWLIST_<USER_ID>`: Comma-separated domain allowlist for a specific user id
 - TTL special-case: when RBAC is forced and a `domain` is provided, `POST /api/v1/jobs/ttl/sweep` without `X-Confirm` returns `{"affected": 0}` (no-op) instead of 400. This preserves guardrails while enabling RBAC-only validations.
 - Prune & retention (optional):
-  - `JOBS_PRUNE_ENFORCE` (default false): Run background prune sweeps.
-  - `JOBS_RETENTION_DAYS_TERMINAL` (default 0): Days to retain terminal states (`completed|failed|cancelled|quarantined`).
+  - config.txt [Jobs] keys map to env names without the `JOBS_` prefix (env overrides config).
+  - `JOBS_PRUNE_ENFORCE` (default false): Run background prune sweeps (internal scheduler).
+  - `JOBS_PRUNE_INTERVAL_SEC` (default 86400): Interval between prune sweeps (seconds).
+  - `JOBS_PRUNE_DRY_RUN` (default false): Count candidates without deleting.
+  - `JOBS_PRUNE_DOMAIN`, `JOBS_PRUNE_QUEUE`, `JOBS_PRUNE_JOB_TYPE`: Optional comma-separated scopes.
+  - `JOBS_RETENTION_DAYS_TERMINAL`: Override all terminal states (`completed|failed|cancelled|quarantined`).
+  - `JOBS_RETENTION_DAYS_COMPLETED` (default 30)
+  - `JOBS_RETENTION_DAYS_FAILED` (default 60)
+  - `JOBS_RETENTION_DAYS_CANCELLED` (default 60)
+  - `JOBS_RETENTION_DAYS_QUARANTINED` (default 90)
   - `JOBS_RETENTION_DAYS_NONTERMINAL` (default 0): Days to retain non-terminal (`queued|processing`). Disabled when 0 (recommended unless intentional).
   - `JOBS_ARCHIVE_COMPRESS` (default false): When archiving, also write compressed copies of `payload`/`result` to `jobs_archive.payload_compressed` / `result_compressed`.
     - SQLite stores Base64-encoded `gzip64:<...>` strings. Postgres stores raw `BYTEA`.
