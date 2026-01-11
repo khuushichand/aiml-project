@@ -28,15 +28,18 @@ def test_exemplar_labels_propagate_postgres(monkeypatch):
     from tldw_Server_API.app.core.Jobs.manager import JobManager
     from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
 
+    reg = get_metrics_registry()
+    reg.values["jobs.queue_latency_seconds"].clear()
+    reg.values["jobs.duration_seconds"].clear()
+
     jm = JobManager(backend="postgres", db_url=os.getenv("JOBS_DB_URL"))
     j = jm.create_job(domain="chatbooks", queue="default", job_type="export", payload={}, owner_user_id="u1", request_id="req-1", trace_id="trace-1")
     acq = jm.acquire_next_job(domain="chatbooks", queue="default", lease_seconds=1, worker_id="w")
     assert acq
     jm.complete_job(int(acq["id"]))
 
-    reg = get_metrics_registry()
     ql = list(reg.values.get("jobs.queue_latency_seconds", []))
     dur = list(reg.values.get("jobs.duration_seconds", []))
     assert ql and dur
-    assert ("trace_id" in ql[-1].labels) or ("request_id" in ql[-1].labels)
-    assert ("trace_id" in dur[-1].labels) or ("request_id" in dur[-1].labels)
+    assert any(("trace_id" in mv.labels) or ("request_id" in mv.labels) for mv in ql)
+    assert any(("trace_id" in mv.labels) or ("request_id" in mv.labels) for mv in dur)

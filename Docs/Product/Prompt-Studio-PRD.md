@@ -63,7 +63,7 @@ Prior iterations of Prompt Studio suffered from duplicate submissions, job loss 
 - `prompt_studio_prompt_versions`: stored prompt variants and metadata snapshots.
 - `prompt_studio_optimizations`: optimization runs referencing prompts/projects, capturing strategy config and status.
 - `prompt_studio_job_queue`: queue table for prompt studio optimization jobs; leasing uses `leased_until` and `lease_owner` for heartbeat/renewal (see Section 5, Job Leasing & Heartbeat).
-- Core Jobs tables (`jobs`, `job_events`, `job_counters`, `job_queue_controls`, `job_attachments`) are separate infrastructure and are not used for Prompt Studio queueing.
+- Core Jobs tables (`jobs`, `job_events`, `job_counters`, `job_queue_controls`, `job_attachments`) are the orchestration/execution layer for Prompt Studio workers. `prompt_studio_job_queue` tracks Prompt Studio-specific queue metadata (history/audit/status), while Core Jobs is where workers lease and process jobs.
 - `prompt_studio_idempotency`: `(entity_type, idempotency_key, user_id) → entity_id` mapping for duplicate detection.
 - Additional support tables: evaluation/test case records, metrics history, audit snapshots.
 

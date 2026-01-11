@@ -1726,6 +1726,10 @@ async def batch_reschedule_endpoint(
                     except Exception:
                         pass
                     try:
+                        conn.commit()
+                    except Exception:
+                        pass
+                    try:
                         if req.domain and req.queue and req.job_type:
                             jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
                     except Exception:

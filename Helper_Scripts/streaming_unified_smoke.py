@@ -36,28 +36,17 @@ import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 
+_HELPERS_ROOT = Path(__file__).resolve()
+for _parent in [_HELPERS_ROOT, *_HELPERS_ROOT.parents]:
+    if _parent.name == "Helper_Scripts":
+        _parent_str = str(_parent)
+        if _parent_str not in sys.path:
+            sys.path.insert(0, _parent_str)
+        break
 
-def _ensure_repo_root() -> None:
-    here = Path(__file__).resolve()
-    for parent in [here] + list(here.parents):
-        if (parent / "tldw_Server_API").is_dir():
-            sys.path.insert(0, str(parent))
-            return
-
-
-def _configure_local_egress(url: str) -> None:
-    try:
-        parsed = urlparse(url)
-    except Exception:
-        return
-    host = (parsed.hostname or "").lower()
-    if host in {"localhost", "0.0.0.0"} or host.startswith("127.") or host == "::1":
-        os.environ.setdefault("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "false")
-        if "WORKFLOWS_EGRESS_ALLOWED_PORTS" not in os.environ:
-            port = parsed.port or (443 if parsed.scheme == "https" else 80)
-            os.environ["WORKFLOWS_EGRESS_ALLOWED_PORTS"] = f"{port},80,443"
+from common.repo_utils import configure_local_egress, ensure_repo_root
 
 
 def _status_from_exc(exc: Exception) -> int:
@@ -90,7 +79,7 @@ async def _iter_sse_lines(byte_iter):
         yield buffer.decode("utf-8", errors="replace")
 
 
-_ensure_repo_root()
+ensure_repo_root()
 
 try:
     from tldw_Server_API.app.core import http_client
@@ -386,7 +375,7 @@ def main() -> int:
 
     rc = 0
     try:
-        _configure_local_egress(base_url)
+        configure_local_egress(base_url)
         if not args.skip_chat:
             asyncio.run(smoke_chat_sse(base_url, api_key, chat_model))
             print("\n✅ Chat SSE smoke test passed.")

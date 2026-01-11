@@ -26,10 +26,8 @@ import json
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Iterable, Sequence
-import os
 import sys
 from pathlib import Path
-from urllib.parse import urlparse
 
 import numpy as np
 from loguru import logger
@@ -52,38 +50,23 @@ _PROMETHEUS_CLIENT_MISSING_MSG = (
 )
 
 
-def _ensure_repo_root() -> None:
-    here = Path(__file__).resolve()
-    for parent in [here] + list(here.parents):
-        if (parent / "tldw_Server_API").is_dir():
-            sys.path.insert(0, str(parent))
-            return
+_HELPERS_ROOT = Path(__file__).resolve()
+for _parent in [_HELPERS_ROOT, *_HELPERS_ROOT.parents]:
+    if _parent.name == "Helper_Scripts":
+        _parent_str = str(_parent)
+        if _parent_str not in sys.path:
+            sys.path.insert(0, _parent_str)
+        break
 
+from common.repo_utils import configure_local_egress, ensure_repo_root
 
-def _configure_local_egress(url: str) -> None:
-    try:
-        parsed = urlparse(url)
-    except Exception:
-        return
-    host = (parsed.hostname or "").lower()
-    if host in {"localhost", "0.0.0.0"} or host.startswith("127.") or host == "::1":
-        if "WORKFLOWS_EGRESS_BLOCK_PRIVATE" not in os.environ:
-            os.environ["WORKFLOWS_EGRESS_BLOCK_PRIVATE"] = "false"
-            logger.warning("Local egress override: set WORKFLOWS_EGRESS_BLOCK_PRIVATE=false for %s", host)
-        if "WORKFLOWS_EGRESS_ALLOWED_PORTS" not in os.environ:
-            port = parsed.port or (443 if parsed.scheme == "https" else 80)
-            allowed_ports = f"{port},80,443"
-            os.environ["WORKFLOWS_EGRESS_ALLOWED_PORTS"] = allowed_ports
-            logger.warning("Local egress override: set WORKFLOWS_EGRESS_ALLOWED_PORTS=%s", allowed_ports)
-
-
-_ensure_repo_root()
+ensure_repo_root()
 
 try:
     from tldw_Server_API.app.core import http_client
-except Exception:
+except Exception as err:
     print("tldw_Server_API not available; run from the repo root or set PYTHONPATH.", file=sys.stderr)
-    raise SystemExit(1)
+    raise SystemExit(1) from err
 
 
 def _make_silence(duration_sec: float = 0.2, sr: int = 16000) -> bytes:
@@ -446,7 +429,7 @@ def main():
     args = parser.parse_args()
 
     try:
-        _configure_local_egress(args.base_url)
+        configure_local_egress(args.base_url)
         if args.short:
             result = run_short_mode(args.base_url, args.api_key)
         else:

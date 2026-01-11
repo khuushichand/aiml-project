@@ -9,38 +9,23 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import sys
 import uuid
 from pathlib import Path
-from urllib.parse import urlparse
 
 from loguru import logger
 
-def _ensure_repo_root() -> None:
-    here = Path(__file__).resolve()
-    for parent in [here, *here.parents]:
-        if (parent / "tldw_Server_API").is_dir():
-            p = str(parent)
-            if p not in sys.path:
-                sys.path.insert(0, p)
-            return
+_HELPERS_ROOT = Path(__file__).resolve()
+for _parent in [_HELPERS_ROOT, *_HELPERS_ROOT.parents]:
+    if _parent.name == "Helper_Scripts":
+        _parent_str = str(_parent)
+        if _parent_str not in sys.path:
+            sys.path.insert(0, _parent_str)
+        break
 
+from common.repo_utils import configure_local_egress, ensure_repo_root
 
-def _configure_local_egress(url: str) -> None:
-    try:
-        parsed = urlparse(url)
-    except Exception:
-        return
-    host = (parsed.hostname or "").lower()
-    if host in {"localhost", "0.0.0.0"} or host.startswith("127.") or host == "::1":
-        os.environ.setdefault("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "false")
-        if "WORKFLOWS_EGRESS_ALLOWED_PORTS" not in os.environ:
-            port = parsed.port or (443 if parsed.scheme == "https" else 80)
-            os.environ["WORKFLOWS_EGRESS_ALLOWED_PORTS"] = f"{port},80,443"
-
-
-_ensure_repo_root()
+ensure_repo_root()
 
 try:
     from tldw_Server_API.app.core import http_client
@@ -137,7 +122,7 @@ def main() -> None:
         "stream": True,
     }
 
-    _configure_local_egress(args.base)
+    configure_local_egress(args.base)
     try:
         asyncio.run(_stream_pcm(url, headers, payload, args.outfile, args.rate, args.channels))
     finally:

@@ -44,34 +44,25 @@ import asyncio
 import json
 import os
 import random
+import re
 import statistics
 import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
 
+from loguru import logger
 
-def _ensure_repo_root() -> None:
-    here = Path(__file__).resolve()
-    for parent in [here] + list(here.parents):
-        if (parent / "tldw_Server_API").is_dir():
-            sys.path.insert(0, str(parent))
-            return
+_HELPERS_ROOT = Path(__file__).resolve()
+for _parent in [_HELPERS_ROOT, *_HELPERS_ROOT.parents]:
+    if _parent.name == "Helper_Scripts":
+        _parent_str = str(_parent)
+        if _parent_str not in sys.path:
+            sys.path.insert(0, _parent_str)
+        break
 
-
-def _configure_local_egress(url: str) -> None:
-    try:
-        parsed = urlparse(url)
-    except Exception:
-        return
-    host = (parsed.hostname or "").lower()
-    if host in {"localhost", "0.0.0.0"} or host.startswith("127.") or host == "::1":
-        os.environ.setdefault("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "false")
-        if "WORKFLOWS_EGRESS_ALLOWED_PORTS" not in os.environ:
-            port = parsed.port or (443 if parsed.scheme == "https" else 80)
-            os.environ["WORKFLOWS_EGRESS_ALLOWED_PORTS"] = f"{port},80,443"
+from common.repo_utils import configure_local_egress, ensure_repo_root
 
 
 def _status_from_exc(exc: Exception) -> int:
@@ -80,18 +71,42 @@ def _status_from_exc(exc: Exception) -> int:
         try:
             return int(getattr(resp, "status_code", 0) or 0)
         except Exception:
-            pass
-    msg = str(exc)
-    for token in msg.split():
-        if token.isdigit() and len(token) == 3:
-            try:
-                return int(token)
-            except Exception:
-                continue
+            logger.exception(
+                "Failed to read status_code from response; exc={exc!r} resp={resp!r}",
+                exc=exc,
+                resp=resp,
+            )
+    try:
+        msg = str(exc)
+    except Exception:
+        logger.exception(
+            "Failed to stringify exception for status parsing; exc={exc!r} resp={resp!r}",
+            exc=exc,
+            resp=resp,
+        )
+        return 0
+    try:
+        match = re.search(r"\b(\d{3})\b", msg)
+        if match:
+            return int(match.group(1))
+    except Exception:
+        logger.exception(
+            "Failed to parse HTTP status from exception message; exc={exc!r} resp={resp!r} msg={msg!r}",
+            exc=exc,
+            resp=resp,
+            msg=msg,
+        )
+        return 0
+    logger.debug(
+        "No HTTP status found in exception message; exc={exc!r} resp={resp!r} msg={msg!r}",
+        exc=exc,
+        resp=resp,
+        msg=msg,
+    )
     return 0
 
 
-_ensure_repo_root()
+ensure_repo_root()
 
 try:
     from tldw_Server_API.app.core import http_client
@@ -449,9 +464,9 @@ def build_auth_headers(api_key: Optional[str], bearer: Optional[str]) -> Dict[st
 
 async def main_async(args: argparse.Namespace) -> int:
     headers = build_auth_headers(args.api_key, args.bearer)
-    _configure_local_egress(args.base_url)
+    configure_local_egress(args.base_url)
     if args.metrics_url:
-        _configure_local_egress(args.metrics_url)
+        configure_local_egress(args.metrics_url)
     all_results: List[Dict[str, Any]] = []
     print("Benchmarking", flush=True)
     print(f"  Base URL: {args.base_url}")

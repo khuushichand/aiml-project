@@ -138,17 +138,19 @@ Use `--skip-table <table_name>` to omit auxiliary tables (for example, to skip l
    export TLDW_PG_DATABASE=$PGDATABASE
    export TLDW_PG_USER=$PGUSER
    export TLDW_PG_PASSWORD=$PGPASSWORD
-   # Optional overrides for workflow connection pooling
-    export TLDW_WORKFLOW_DB_POOL_SIZE=15
-    export TLDW_WORKFLOW_DB_MAX_OVERFLOW=30
-    export TLDW_WORKFLOW_DB_TIMEOUT=30
+   # Optional overrides for connection pooling
+   export TLDW_DB_POOL_SIZE=15
+   export TLDW_DB_POOL_TIMEOUT=30
+   export WORKFLOWS_SQLITE_POOL_SIZE=10
+   # Or set in Config_Files/config.txt under [Database]:
+   # pool_size, max_overflow, pool_timeout
    ```
 
 2. Remove or archive the old SQLite files once you are confident the migration succeeded.
 
 3. Restart the API/WebUI stack. On startup the service should log that it is using PostgreSQL for
-   Media, ChaChaNotes, Analytics, and Workflows. Monitor `/api/v1/workflows/status` to ensure the
-   runtime heartbeat updates and that queue depth drops as pending runs are processed.
+   Media, ChaChaNotes, Analytics, and Workflows. Monitor `/api/v1/workflows/runs` (or engine
+   metrics for queue depth) to ensure pending runs are processed.
 
 ## Troubleshooting
 

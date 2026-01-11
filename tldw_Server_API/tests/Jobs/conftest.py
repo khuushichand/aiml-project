@@ -161,3 +161,20 @@ def jobs_pg_dsn(pg_temp_db, monkeypatch):
     # Bind to env for code under test
     monkeypatch.setenv("JOBS_DB_URL", dsn)
     return dsn
+
+
+@pytest.fixture(autouse=True)
+def _pg_jobs_db_url(request, pg_temp_db, monkeypatch):
+    """Provide JOBS_DB_URL for pg_jobs tests that don't request jobs_pg_dsn."""
+    try:
+        if "pg_jobs" not in request.keywords:
+            return
+    except Exception:
+        return
+    if os.getenv("JOBS_DB_URL", "").startswith("postgres"):
+        return
+    dsn = str(pg_temp_db["dsn"])  # type: ignore[index]
+    monkeypatch.setenv("JOBS_DB_URL", dsn)
+    from tldw_Server_API.app.core.Jobs.pg_migrations import ensure_jobs_tables_pg, ensure_job_counters_pg
+    ensure_jobs_tables_pg(dsn)
+    ensure_job_counters_pg(dsn)

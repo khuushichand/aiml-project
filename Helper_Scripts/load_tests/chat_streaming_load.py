@@ -43,34 +43,17 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
 
 
-def _ensure_repo_root() -> None:
-    """Walk up from this file to find the project root containing tldw_Server_API, prepend it to sys.path, and exit on the first match (mutates sys.path, returns None)."""
-    here = Path(__file__).resolve()
-    for parent in (here, *here.parents):
-        if (parent / "tldw_Server_API").is_dir():
-            sys.path.insert(0, str(parent))
-            return
+_HELPERS_ROOT = Path(__file__).resolve()
+for _parent in [_HELPERS_ROOT, *_HELPERS_ROOT.parents]:
+    if _parent.name == "Helper_Scripts":
+        _parent_str = str(_parent)
+        if _parent_str not in sys.path:
+            sys.path.insert(0, _parent_str)
+        break
 
-
-def _configure_local_egress(url: str) -> None:
-    """Relax private-egress blocking for local load tests by setting WORKFLOWS_EGRESS_BLOCK_PRIVATE=false and WORKFLOWS_EGRESS_ALLOWED_PORTS.
-
-    This only triggers for hosts localhost, 0.0.0.0, 127.* or ::1. Disabling private network egress protection reduces
-    security, so only use this in local or test environments.
-    """
-    try:
-        parsed = urlparse(url)
-    except Exception:
-        return
-    host = (parsed.hostname or "").lower()
-    if host in {"localhost", "0.0.0.0"} or host.startswith("127.") or host == "::1":
-        os.environ.setdefault("WORKFLOWS_EGRESS_BLOCK_PRIVATE", "false")
-        if "WORKFLOWS_EGRESS_ALLOWED_PORTS" not in os.environ:
-            port = parsed.port or (443 if parsed.scheme == "https" else 80)
-            os.environ["WORKFLOWS_EGRESS_ALLOWED_PORTS"] = f"{port},80,443"
+from common.repo_utils import configure_local_egress, ensure_repo_root
 
 
 def _status_from_exc(exc: Exception) -> int:
@@ -98,13 +81,13 @@ def _status_from_exc(exc: Exception) -> int:
     return 0
 
 
-_ensure_repo_root()
+ensure_repo_root()
 
 try:
     from tldw_Server_API.app.core import http_client
-except Exception:
+except Exception as e:
     print("tldw_Server_API not available; run from the repo root or set PYTHONPATH.", file=sys.stderr)
-    raise SystemExit(1)
+    raise SystemExit(1) from e
 
 
 def _now_ms() -> float:
@@ -452,7 +435,7 @@ async def _main_async(args: argparse.Namespace) -> int:
     if not args.api_key and not args.bearer:
         print("Warning: no API key or bearer token provided; requests may fail if auth is enabled.", file=sys.stderr)
 
-    _configure_local_egress(args.base_url)
+    configure_local_egress(args.base_url)
 
     print("Chat streaming load harness")
     print(f"  Base URL           : {args.base_url}")

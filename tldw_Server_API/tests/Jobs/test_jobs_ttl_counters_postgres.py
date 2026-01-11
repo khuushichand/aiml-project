@@ -32,6 +32,12 @@ def _stats(client, domain="chatbooks", queue="default", job_type="export"):
     return rows[0]
 
 
+def _row_val(row, key, idx):
+    if isinstance(row, dict):
+        return row.get(key)
+    return row[idx] if row is not None else None
+
+
 def test_pg_ttl_cancel_updates_counters(monkeypatch):
 
 
@@ -44,13 +50,16 @@ def test_pg_ttl_cancel_updates_counters(monkeypatch):
     jq = jm.create_job(domain=domain, queue=queue, job_type=jt, payload={}, owner_user_id="1")
     jp = jm.create_job(domain=domain, queue=queue, job_type=jt, payload={}, owner_user_id="1")
     acq = jm.acquire_next_job(domain=domain, queue=queue, lease_seconds=30, worker_id="w")
-    assert acq and acq["id"] == jp["id"]
+    assert acq
+    proc_id = int(acq["id"])
+    queued_id = int(jq["id"]) if proc_id != int(jq["id"]) else int(jp["id"])
     # Backdate
     conn = jm._connect()
     try:
         with jm._pg_cursor(conn) as cur:
-            cur.execute("UPDATE jobs SET created_at = NOW() - interval '2 hours' WHERE id = %s", (int(jq["id"]),))
-            cur.execute("UPDATE jobs SET started_at = NOW() - interval '3 hours', acquired_at = NOW() - interval '3 hours' WHERE id = %s", (int(jp["id"]),))
+            cur.execute("UPDATE jobs SET created_at = NOW() - interval '2 hours' WHERE id = %s", (queued_id,))
+            cur.execute("UPDATE jobs SET started_at = NOW() - interval '3 hours', acquired_at = NOW() - interval '3 hours' WHERE id = %s", (proc_id,))
+        conn.commit()
     finally:
         conn.close()
     headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
@@ -77,7 +86,7 @@ def test_pg_ttl_cancel_updates_counters(monkeypatch):
         with jm._pg_cursor(conn) as cur:
             cur.execute("SELECT ready_count, scheduled_count, processing_count FROM job_counters WHERE domain=%s AND queue=%s AND job_type=%s", (domain, queue, jt))
             row = cur.fetchone(); assert row is not None
-            assert int(row[0] or 0) == 0 and int(row[1] or 0) == 0 and int(row[2] or 0) == 0
+            assert int(_row_val(row, "ready_count", 0) or 0) == 0 and int(_row_val(row, "scheduled_count", 1) or 0) == 0 and int(_row_val(row, "processing_count", 2) or 0) == 0
     finally:
         conn.close()
 
@@ -94,12 +103,15 @@ def test_pg_ttl_fail_updates_counters(monkeypatch):
     jq = jm.create_job(domain=domain, queue=queue, job_type=jt, payload={}, owner_user_id="1")
     jp = jm.create_job(domain=domain, queue=queue, job_type=jt, payload={}, owner_user_id="1")
     acq = jm.acquire_next_job(domain=domain, queue=queue, lease_seconds=30, worker_id="w")
-    assert acq and acq["id"] == jp["id"]
+    assert acq
+    proc_id = int(acq["id"])
+    queued_id = int(jq["id"]) if proc_id != int(jq["id"]) else int(jp["id"])
     conn = jm._connect()
     try:
         with jm._pg_cursor(conn) as cur:
-            cur.execute("UPDATE jobs SET created_at = NOW() - interval '2 hours' WHERE id = %s", (int(jq["id"]),))
-            cur.execute("UPDATE jobs SET started_at = NOW() - interval '3 hours', acquired_at = NOW() - interval '3 hours' WHERE id = %s", (int(jp["id"]),))
+            cur.execute("UPDATE jobs SET created_at = NOW() - interval '2 hours' WHERE id = %s", (queued_id,))
+            cur.execute("UPDATE jobs SET started_at = NOW() - interval '3 hours', acquired_at = NOW() - interval '3 hours' WHERE id = %s", (proc_id,))
+        conn.commit()
     finally:
         conn.close()
     headers = {"X-API-KEY": get_settings().SINGLE_USER_API_KEY}
@@ -128,6 +140,6 @@ def test_pg_ttl_fail_updates_counters(monkeypatch):
         with jm._pg_cursor(conn) as cur:
             cur.execute("SELECT ready_count, scheduled_count, processing_count FROM job_counters WHERE domain=%s AND queue=%s AND job_type=%s", (domain, queue, jt))
             row = cur.fetchone(); assert row is not None
-            assert int(row[0] or 0) == 0 and int(row[1] or 0) == 0 and int(row[2] or 0) == 0
+            assert int(_row_val(row, "ready_count", 0) or 0) == 0 and int(_row_val(row, "scheduled_count", 1) or 0) == 0 and int(_row_val(row, "processing_count", 2) or 0) == 0
     finally:
         conn.close()

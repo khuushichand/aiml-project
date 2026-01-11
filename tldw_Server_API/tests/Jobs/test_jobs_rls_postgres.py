@@ -3,7 +3,7 @@ import pytest
 
 psycopg = pytest.importorskip("psycopg")
 
-from tldw_Server_API.app.core.Jobs.pg_migrations import ensure_jobs_tables_pg
+from tldw_Server_API.app.core.Jobs.pg_migrations import ensure_jobs_rls_policies_pg, ensure_jobs_tables_pg
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
@@ -18,7 +18,14 @@ def _dsn_or_skip(monkeypatch):
         pytest.skip("JOBS_DB_URL not configured for Postgres RLS tests")
     # Enable single-update acquire path for consistency (not strictly needed here)
     monkeypatch.setenv("JOBS_PG_SINGLE_UPDATE_ACQUIRE", "true")
+    monkeypatch.setenv("JOBS_PG_RLS_ENABLE", "true")
     return dsn
+
+
+def _row_val(row, key, idx):
+    if isinstance(row, dict):
+        return row.get(key)
+    return row[idx] if row is not None else None
 
 
 def _seed(dsn):
@@ -65,6 +72,7 @@ def test_rls_context_filters_results(monkeypatch):
 
     dsn = _dsn_or_skip(monkeypatch)
     ensure_jobs_tables_pg(dsn)
+    ensure_jobs_rls_policies_pg(dsn)
     _seed(dsn)
 
     jm = JobManager(backend="postgres", db_url=dsn)
@@ -92,6 +100,7 @@ def test_rls_applies_to_events_and_controls(monkeypatch):
 
     dsn = _dsn_or_skip(monkeypatch)
     ensure_jobs_tables_pg(dsn)
+    ensure_jobs_rls_policies_pg(dsn)
     _seed(dsn)
     import psycopg
 
@@ -104,15 +113,15 @@ def test_rls_applies_to_events_and_controls(monkeypatch):
         with jm._pg_cursor(conn) as cur:
             # job_events should only show chatbooks/u1 rows
             cur.execute("SELECT COUNT(*) FROM job_events")
-            ev_count = int(cur.fetchone()[0])
+            ev_count = int(_row_val(cur.fetchone(), "count", 0) or 0)
             assert ev_count == 1
             # job_queue_controls should only show chatbooks rows
             cur.execute("SELECT COUNT(*) FROM job_queue_controls")
-            qc_count = int(cur.fetchone()[0])
+            qc_count = int(_row_val(cur.fetchone(), "count", 0) or 0)
             assert qc_count == 1
             # job_sla_policies should only show chatbooks rows
             cur.execute("SELECT COUNT(*) FROM job_sla_policies")
-            sla_count = int(cur.fetchone()[0])
+            sla_count = int(_row_val(cur.fetchone(), "count", 0) or 0)
             assert sla_count >= 1
     finally:
         conn.close()

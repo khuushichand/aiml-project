@@ -27,6 +27,12 @@ def _stats(client, domain="chatbooks", queue="default", job_type="export"):
     return rows[0]
 
 
+def _row_val(row, key, idx):
+    if isinstance(row, dict):
+        return row.get(key)
+    return row[idx] if row is not None else None
+
+
 def _require_pg(monkeypatch):
 
 
@@ -48,11 +54,11 @@ def test_pg_batch_cancel_updates_counters(monkeypatch):
     from tldw_Server_API.app.main import app
     jm = JobManager(backend="postgres", db_url=dsn)
     domain = "chatbooks"; queue = "default"; jt = "export"
-    jm.create_job(domain=domain, queue=queue, job_type=jt, payload={}, owner_user_id="1")
+    first_ready = jm.create_job(domain=domain, queue=queue, job_type=jt, payload={}, owner_user_id="1")
     jm.create_job(domain=domain, queue=queue, job_type=jt, payload={}, owner_user_id="1", available_at=datetime.now(tz=timezone.utc) + timedelta(seconds=60))
-    t = jm.create_job(domain=domain, queue=queue, job_type=jt, payload={}, owner_user_id="1")
+    jm.create_job(domain=domain, queue=queue, job_type=jt, payload={}, owner_user_id="1")
     acq = jm.acquire_next_job(domain=domain, queue=queue, lease_seconds=30, worker_id="w")
-    assert acq and acq["id"] == t["id"]
+    assert acq and acq["id"] == first_ready["id"]
     headers = _headers(app)
     with TestClient(app, headers=headers) as client:
         s0 = _stats(client, domain, queue, jt)
@@ -66,7 +72,7 @@ def test_pg_batch_cancel_updates_counters(monkeypatch):
         with jm._pg_cursor(conn) as cur:
             cur.execute("SELECT ready_count, scheduled_count, processing_count FROM job_counters WHERE domain=%s AND queue=%s AND job_type=%s", (domain, queue, jt))
             row = cur.fetchone(); assert row is not None
-            assert int(row[0] or 0) == 0 and int(row[1] or 0) == 0 and int(row[2] or 0) == 0
+            assert int(_row_val(row, "ready_count", 0) or 0) == 0 and int(_row_val(row, "scheduled_count", 1) or 0) == 0 and int(_row_val(row, "processing_count", 2) or 0) == 0
     finally:
         conn.close()
 
@@ -96,7 +102,7 @@ def test_pg_complete_queued_updates_counters(monkeypatch):
                 (domain, queue, jt),
             )
             row = cur.fetchone(); assert row is not None
-            assert int(row[0] or 0) == 1 and int(row[1] or 0) == 1 and int(row[2] or 0) == 0
+            assert int(_row_val(row, "ready_count", 0) or 0) == 1 and int(_row_val(row, "scheduled_count", 1) or 0) == 1 and int(_row_val(row, "processing_count", 2) or 0) == 0
     finally:
         conn.close()
 
@@ -111,7 +117,7 @@ def test_pg_complete_queued_updates_counters(monkeypatch):
                 (domain, queue, jt),
             )
             row = cur.fetchone(); assert row is not None
-            assert int(row[0] or 0) == 0 and int(row[1] or 0) == 0 and int(row[2] or 0) == 0
+            assert int(_row_val(row, "ready_count", 0) or 0) == 0 and int(_row_val(row, "scheduled_count", 1) or 0) == 0 and int(_row_val(row, "processing_count", 2) or 0) == 0
     finally:
         conn.close()
 
@@ -138,7 +144,7 @@ def test_pg_batch_reschedule_moves_ready_to_scheduled(monkeypatch):
         with jm._pg_cursor(conn) as cur:
             cur.execute("SELECT ready_count, scheduled_count FROM job_counters WHERE domain=%s AND queue=%s AND job_type=%s", (domain, queue, jt))
             row = cur.fetchone(); assert row is not None
-            assert int(row[0] or 0) == 0 and int(row[1] or 0) >= 4
+            assert int(_row_val(row, "ready_count", 0) or 0) == 0 and int(_row_val(row, "scheduled_count", 1) or 0) >= 4
     finally:
         conn.close()
 
@@ -170,6 +176,6 @@ def test_pg_batch_requeue_quarantined_adjusts_counters(monkeypatch):
         with jm._pg_cursor(conn) as cur:
             cur.execute("SELECT ready_count, quarantined_count FROM job_counters WHERE domain=%s AND queue=%s AND job_type=%s", (domain, queue, jt))
             row = cur.fetchone(); assert row is not None
-            assert int(row[0] or 0) >= 1 and int(row[1] or 0) == 0
+            assert int(_row_val(row, "ready_count", 0) or 0) >= 1 and int(_row_val(row, "quarantined_count", 1) or 0) == 0
     finally:
         conn.close()
