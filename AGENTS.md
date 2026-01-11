@@ -175,6 +175,7 @@ The project is a FastAPI-first backend with an integrated WebUI, mature AuthNZ (
 - **Secrets**: Prefer `.env` for API keys; config.txt still supported; never log secrets
 
 ### Testing Requirements
+- All new functionality must include unit, integration, and property-based tests where applicable
 - Write unit tests for all new functions
 - Include integration tests for API endpoints
 - Use pytest fixtures for common test data
