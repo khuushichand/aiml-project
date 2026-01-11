@@ -32,7 +32,7 @@ Success metrics:
 - No runtime module instantiates its own job manager or queue backend outside `app/core/Jobs`.
 - Embeddings, Chatbooks, and Prompt Studio workers use the Jobs worker SDK.
 - Legacy job shims removed or reduced to thin adapters until full migration is complete.
-- Multi-stage pipelines use idempotency keys and explicit chaining for 0.2.x; dependency edges land in Phase 4 post-adapter migration.
+- Multi-stage pipelines use idempotency keys and explicit chaining for 0.2.x; dependency edges land in Phase 4 (0.2.x, after adapter migration).
 - Performance meets defined throughput/latency targets compared to baseline (see Testing Plan).
 
 ## 5. Non-Goals
@@ -68,7 +68,7 @@ Success metrics:
 
 ### 8.3 Domain Adapters
 - Embeddings: replace Redis queues with Jobs entries; each stage becomes a job_type or queue transition.
-- Chatbooks: replace `JobQueueShim` with a Jobs-backed adapter (domain: `chatbooks`).
+- Chatbooks: replace `JobQueueShim` with a Jobs-backed adapter (domain: `chatbooks`); keep `export_jobs`/`import_jobs` tables as long-term artifact metadata (download URLs, counts) with Jobs as the status source of truth.
 - Prompt Studio: replace its internal job manager with Jobs (domain: `prompt_studio`).
 
 ### 8.4 Compatibility and Migration
@@ -106,7 +106,7 @@ Root job update example (embeddings):
 }
 ```
 
-### 8.6 DAG Dependencies (Phase 4, post-adapter migration)
+### 8.6 DAG Dependencies (Phase 4, 0.2.x after adapter migration)
 - Deferred until after adapters; 0.2.x relies on explicit chaining + idempotency keys only.
 - Add a `job_dependencies` table to model edges by `jobs.uuid` (`job_uuid`, `depends_on_job_uuid`) with a composite unique constraint and indexes on both columns.
 - Update job acquisition to only return jobs whose dependencies are completed.
@@ -162,7 +162,7 @@ Retention defaults (proposed):
 - Completed jobs: retain 30 days (default `jobs/prune` payload: `older_than_days=30`).
 - Failed/cancelled jobs: retain 60 days.
 - Quarantined jobs: retain 90 days (requires prune support for `quarantined` status).
-- Prune cadence: daily scheduled job (off-peak), using `/api/v1/jobs/prune` with explicit domain/queue scopes.
+- Prune cadence: daily scheduled job (internal Scheduler task, off-peak), using `/api/v1/jobs/prune` with explicit domain/queue scopes.
 - Archive policy: default `JOBS_ARCHIVE_BEFORE_DELETE=false`; enable with `JOBS_ARCHIVE_BEFORE_DELETE=true` and `JOBS_ARCHIVE_COMPRESS=true` in production.
 
 ### 8.9 Endpoint Contract Mapping
@@ -221,12 +221,12 @@ Chatbooks (public endpoints)
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | chatbooks | /api/v1/chatbooks/export/jobs | pending/in_progress/completed/failed/cancelled/expired | status | queued/processing/completed/failed/cancelled | status | map `pending` -> `queued`; `in_progress` -> `processing`; `expired` -> `cancelled` | list endpoint |
 | chatbooks | /api/v1/chatbooks/export/jobs/{job_id} | pending/in_progress/completed/failed/cancelled/expired | status | queued/processing/completed/failed/cancelled | status | same as export list mapping | job_id maps to jobs.uuid |
-| chatbooks | /api/v1/chatbooks/export/jobs/{job_id} | n/a | download_url | n/a | result.download_url | copy from job result | preserve legacy field |
-| chatbooks | /api/v1/chatbooks/export/jobs/{job_id} | n/a | expires_at | n/a | result.expires_at | copy from job result | preserve legacy field |
+| chatbooks | /api/v1/chatbooks/export/jobs/{job_id} | n/a | download_url | n/a | export_jobs.download_url | read from export_jobs table; Jobs result may mirror | artifact table remains authoritative |
+| chatbooks | /api/v1/chatbooks/export/jobs/{job_id} | n/a | expires_at | n/a | export_jobs.expires_at | read from export_jobs table; Jobs result may mirror | artifact table remains authoritative |
 | chatbooks | /api/v1/chatbooks/import/jobs | pending/validating/in_progress/completed/failed/cancelled | status | queued/processing/completed/failed/cancelled | status | map `pending` -> `queued`; `validating`/`in_progress` -> `processing` | list endpoint |
 | chatbooks | /api/v1/chatbooks/import/jobs/{job_id} | pending/validating/in_progress/completed/failed/cancelled | status | queued/processing/completed/failed/cancelled | status | validating -> job_type `validate_chatbook`; in_progress -> `import_chatbook` | job_id maps to jobs.uuid |
-| chatbooks | /api/v1/chatbooks/import/jobs/{job_id} | n/a | items_imported | n/a | result.items_imported | copy from job result | preserve legacy field |
-| chatbooks | /api/v1/chatbooks/import/jobs/{job_id} | n/a | conflicts_found | n/a | result.conflicts_found | copy from job result | preserve legacy field |
+| chatbooks | /api/v1/chatbooks/import/jobs/{job_id} | n/a | items_imported | n/a | import_jobs.items_imported | read from import_jobs table; Jobs result may mirror | artifact table remains authoritative |
+| chatbooks | /api/v1/chatbooks/import/jobs/{job_id} | n/a | conflicts_found | n/a | import_jobs.conflicts_found | read from import_jobs table; Jobs result may mirror | artifact table remains authoritative |
 | chatbooks | /api/v1/chatbooks/import/jobs/{job_id} | n/a | progress | n/a | progress_percent | copy from job | preserve legacy field |
 
 Prompt Studio (public endpoints)
@@ -291,10 +291,11 @@ Backpressure behavior:
 
 ### Phase 3: Delete Legacy Systems
 - Removed Embeddings Redis job manager, Prompt Studio job manager, and Chatbooks job queue shim.
+- Retain Chatbooks export_jobs/import_jobs tables as artifact metadata stores (download URLs, counts); Jobs remains the status source of truth.
 - Remove media_embedding_jobs_db and related persistence helpers.
 - Remove duplicated status enums and admin paths.
 
-### Phase 4: DAG Dependencies (Post-Adapter Migration)
+### Phase 4: DAG Dependencies (0.2.x after adapter migration)
 - Add `job_dependencies` table and indexes.
 - Gate job acquisition on dependency completion; implement dependency_failed cascades.
 - Enforce same-owner/domain constraints and cycle checks at enqueue time.
@@ -357,9 +358,10 @@ Benchmark design:
 - Jobs admin endpoints report all domains accurately.
 - Admin endpoints provide cross-user visibility; non-admin endpoints enforce owner_user_id scoping.
 - Domain adapters include an explicit status/field mapping matrix.
-- Multi-stage pipelines use idempotency keys to prevent duplicate processing; dependency edges ship in Phase 4 post-adapter migration.
+- Multi-stage pipelines use idempotency keys to prevent duplicate processing; dependency edges ship in Phase 4 (0.2.x after adapter migration).
 - Public endpoints preserve coarse status semantics; stage detail remains admin/internal.
-- Retention policy is implemented and validated for completed/failed/cancelled jobs.
+- Chatbooks export_jobs/import_jobs tables remain the long-term artifact metadata store (download URLs, counts); Jobs remains status source of truth.
+- Retention policy is implemented and validated for completed/failed/cancelled jobs via an internal Scheduler job.
 - Performance targets in Testing Plan are met.
 - Embeddings throughput validation results are documented with baseline vs Jobs comparison.
 - `/api/v1/media/embeddings/jobs` reads from the Jobs table; media_embedding_jobs_db is removed.

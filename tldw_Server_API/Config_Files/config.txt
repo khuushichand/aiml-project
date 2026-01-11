@@ -486,6 +486,25 @@ policy_path = tldw_Server_API/Config_Files/resource_governor_policies.yaml
 # controlled by the global `enabled` flag. Kept for config compatibility only.
 enable_audio = false
 
+[Jobs]
+# Jobs prune scheduler (env overrides: JOBS_PRUNE_*)
+prune_enforce = false
+prune_interval_sec = 86400
+prune_dry_run = false
+prune_domain =
+prune_queue =
+prune_job_type =
+
+# Retention days (env overrides: JOBS_RETENTION_DAYS_*)
+# terminal (completed/failed/cancelled/quarantined) override
+retention_days_terminal =
+retention_days_completed = 30
+retention_days_failed = 60
+retention_days_cancelled = 60
+retention_days_quarantined = 90
+# non-terminal (queued/processing); 0 disables
+retention_days_nonterminal = 0
+
 [Diarization]
 # VAD backend:
 #   silero_hub (default): use the Silero PyTorch repo via torch.hub (and optional local checkout under models/).

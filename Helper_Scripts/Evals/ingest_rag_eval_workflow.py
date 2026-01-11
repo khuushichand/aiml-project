@@ -145,19 +145,21 @@ def ingest_files(client: ApiClient, media_type: str, paths: List[Path]) -> List[
             "hierarchical_chunking": "true",
         }
         try:
-            r = http_client.fetch(
-                method="POST",
-                url=client.url("/api/v1/media/add"),
-                headers={k: v for k, v in client.headers.items() if k.lower() != "content-type"},
-                files=files_param,
-                data=data,
-                timeout=client.timeout,
-            )
-            for _, f in files_param:
-                try:
-                    f[1].close()
-                except Exception:
-                    pass
+            try:
+                r = http_client.fetch(
+                    method="POST",
+                    url=client.url("/api/v1/media/add"),
+                    headers={k: v for k, v in client.headers.items() if k.lower() != "content-type"},
+                    files=files_param,
+                    data=data,
+                    timeout=client.timeout,
+                )
+            finally:
+                for _, f in files_param:
+                    try:
+                        f[1].close()
+                    except Exception:
+                        pass
             r.raise_for_status()
             payload = r.json()
             # Try to extract db_ids from common shapes

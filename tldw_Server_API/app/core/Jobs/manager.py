@@ -234,27 +234,82 @@ class JobManager:
     def _pg_cursor(self, conn):
         from psycopg.rows import dict_row  # type: ignore
         cur = conn.cursor(row_factory=dict_row)
+        def _is_serialization_failure(exc: Exception) -> bool:
+            try:
+                from psycopg import errors as pg_errors  # type: ignore
+            except Exception:
+                return False
+            return isinstance(exc, pg_errors.SerializationFailure)
         # Apply per-transaction RLS via SET LOCAL to avoid cross-request leakage
+        role = str(os.getenv("JOBS_PG_RLS_ROLE", "")).strip()
+        if role:
+            try:
+                import re as _re
+                if _re.match(r"^[A-Za-z0-9_]+$", role):
+                    cur.execute(f"SET ROLE {role}")
+            except Exception as exc:
+                if _is_serialization_failure(exc):
+                    raise
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
         try:
+            from psycopg import sql as _sql  # type: ignore
             is_admin = bool(JobManager._RLS_IS_ADMIN.get())
-            cur.execute("SET LOCAL app.is_admin = %s", ("true" if is_admin else "false",))
+            cur.execute(
+                _sql.SQL("SET app.is_admin = {}").format(
+                    _sql.Literal("true" if is_admin else "false")
+                )
+            )
+            def _set_or_reset(name: str, value: Optional[str]) -> None:
+                if value:
+                    cur.execute(
+                        _sql.SQL("SET {} = {}").format(
+                            _sql.SQL(name),
+                            _sql.Literal(str(value)),
+                        )
+                    )
+                    return
+                try:
+                    cur.execute(_sql.SQL("RESET {}").format(_sql.SQL(name)))
+                except Exception:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    try:
+                        cur.execute(
+                            _sql.SQL("SET {} = {}").format(
+                                _sql.SQL(name),
+                                _sql.Literal(""),
+                            )
+                        )
+                    except Exception:
+                        try:
+                            conn.rollback()
+                        except Exception:
+                            pass
+
             dom = JobManager._RLS_DOMAIN_ALLOWLIST.get()
-            if dom:
-                cur.execute("SET LOCAL app.domain_allowlist = %s", (str(dom),))
-            else:
-                try:
-                    cur.execute("RESET LOCAL app.domain_allowlist")
-                except Exception:
-                    pass
+            _set_or_reset("app.domain_allowlist", dom)
             owner = JobManager._RLS_OWNER_USER_ID.get()
-            if owner:
-                cur.execute("SET LOCAL app.owner_user_id = %s", (str(owner),))
-            else:
+            _set_or_reset("app.owner_user_id", owner)
+            if os.getenv("JOBS_PG_RLS_DEBUG", "").lower() in {"1", "true", "yes", "on"}:
                 try:
-                    cur.execute("RESET LOCAL app.owner_user_id")
+                    cur.execute(
+                        "SELECT "
+                        "current_setting('app.is_admin', true) AS is_admin, "
+                        "current_setting('app.domain_allowlist', true) AS domain_allowlist, "
+                        "current_setting('app.owner_user_id', true) AS owner_user_id"
+                    )
+                    row = cur.fetchone()
+                    print(f"[jobs-rls-debug] settings={row}")
                 except Exception:
                     pass
-        except Exception:
+        except Exception as exc:
+            if _is_serialization_failure(exc):
+                raise
             # Non-fatal: continue without RLS context if GUCs unavailable
             # Some Postgres installations reject unknown GUCs (custom parameters).
             # If any SET LOCAL fails, the transaction enters an aborted state.
@@ -1083,8 +1138,8 @@ class JobManager:
                         # Non-idempotent insert
                         cur.execute(
                             (
-                                "INSERT INTO jobs (uuid, domain, queue, job_type, owner_user_id, project_id, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, created_at, updated_at) "
-                                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, NULL, 'queued', %s, %s, 0, %s, NOW(), NOW()) RETURNING *"
+                                "INSERT INTO jobs (uuid, domain, queue, job_type, owner_user_id, project_id, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, created_at, updated_at, request_id, trace_id) "
+                                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, NULL, 'queued', %s, %s, 0, %s, NOW(), NOW(), %s, %s) RETURNING *"
                             ),
                             (
                                 uuid_val,
@@ -1098,6 +1153,8 @@ class JobManager:
                                 priority,
                                 max_retries,
                                 avail_param if avail_param else None,
+                                request_id,
+                                trace_id,
                             ),
                         )
                         row = cur.fetchone()

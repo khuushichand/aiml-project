@@ -46,139 +46,139 @@ class MCPConfig(BaseSettings):
     """
 
     # Server Configuration
-    server_name: str = Field(default="tldw-mcp-unified", env="MCP_SERVER_NAME")
-    server_version: str = Field(default="3.0.0", env="MCP_SERVER_VERSION")
-    debug_mode: bool = Field(default=False, env="MCP_DEBUG")
+    server_name: str = Field(default="tldw-mcp-unified", validation_alias="MCP_SERVER_NAME")
+    server_version: str = Field(default="3.0.0", validation_alias="MCP_SERVER_VERSION")
+    debug_mode: bool = Field(default=False, validation_alias="MCP_DEBUG")
 
     # Security Configuration - CRITICAL: No hardcoded secrets!
-    jwt_secret_key: Optional[SecretStr] = Field(default=None, env="MCP_JWT_SECRET")
-    jwt_algorithm: str = Field(default="HS256", env="MCP_JWT_ALGORITHM")
-    jwt_access_token_expire_minutes: int = Field(default=30, env="MCP_JWT_ACCESS_EXPIRE")
-    jwt_refresh_token_expire_days: int = Field(default=7, env="MCP_JWT_REFRESH_EXPIRE")
+    jwt_secret_key: Optional[SecretStr] = Field(default=None, validation_alias="MCP_JWT_SECRET")
+    jwt_algorithm: str = Field(default="HS256", validation_alias="MCP_JWT_ALGORITHM")
+    jwt_access_token_expire_minutes: int = Field(default=30, validation_alias="MCP_JWT_ACCESS_EXPIRE")
+    jwt_refresh_token_expire_days: int = Field(default=7, validation_alias="MCP_JWT_REFRESH_EXPIRE")
 
     # Protocol validation & policy
-    validate_input_schema: bool = Field(default=True, env="MCP_VALIDATE_INPUT_SCHEMA")
-    disable_write_tools: bool = Field(default=False, env="MCP_DISABLE_WRITE_TOOLS")
+    validate_input_schema: bool = Field(default=True, validation_alias="MCP_VALIDATE_INPUT_SCHEMA")
+    disable_write_tools: bool = Field(default=False, validation_alias="MCP_DISABLE_WRITE_TOOLS")
     # Idempotency (protocol-level) for write tools
-    idempotency_ttl_seconds: int = Field(default=300, env="MCP_IDEMPOTENCY_TTL_SECONDS")
-    idempotency_cache_size: int = Field(default=512, env="MCP_IDEMPOTENCY_CACHE_SIZE")
+    idempotency_ttl_seconds: int = Field(default=300, validation_alias="MCP_IDEMPOTENCY_TTL_SECONDS")
+    idempotency_cache_size: int = Field(default=512, validation_alias="MCP_IDEMPOTENCY_CACHE_SIZE")
 
     # API Key Configuration
-    api_key_salt: Optional[SecretStr] = Field(default=None, env="MCP_API_KEY_SALT")
-    api_key_iterations: int = Field(default=100000, env="MCP_API_KEY_ITERATIONS")
+    api_key_salt: Optional[SecretStr] = Field(default=None, validation_alias="MCP_API_KEY_SALT")
+    api_key_iterations: int = Field(default=100000, validation_alias="MCP_API_KEY_ITERATIONS")
 
     # Database Configuration
     database_url: str = Field(
         default="sqlite+aiosqlite:///./Databases/mcp_unified.db",
-        env="MCP_DATABASE_URL"
+        validation_alias="MCP_DATABASE_URL"
     )
-    database_pool_size: int = Field(default=20, env="MCP_DATABASE_POOL_SIZE")
-    database_pool_timeout: int = Field(default=30, env="MCP_DATABASE_POOL_TIMEOUT")
-    database_pool_recycle: int = Field(default=3600, env="MCP_DATABASE_POOL_RECYCLE")
-    database_echo: bool = Field(default=False, env="MCP_DATABASE_ECHO")
+    database_pool_size: int = Field(default=20, validation_alias="MCP_DATABASE_POOL_SIZE")
+    database_pool_timeout: int = Field(default=30, validation_alias="MCP_DATABASE_POOL_TIMEOUT")
+    database_pool_recycle: int = Field(default=3600, validation_alias="MCP_DATABASE_POOL_RECYCLE")
+    database_echo: bool = Field(default=False, validation_alias="MCP_DATABASE_ECHO")
 
     # Redis Configuration (Optional - for distributed deployments)
-    redis_url: Optional[str] = Field(default=None, env="MCP_REDIS_URL")
-    redis_password: Optional[SecretStr] = Field(default=None, env="MCP_REDIS_PASSWORD")
-    redis_ssl: bool = Field(default=False, env="MCP_REDIS_SSL")
-    redis_pool_size: int = Field(default=10, env="MCP_REDIS_POOL_SIZE")
+    redis_url: Optional[str] = Field(default=None, validation_alias="MCP_REDIS_URL")
+    redis_password: Optional[SecretStr] = Field(default=None, validation_alias="MCP_REDIS_PASSWORD")
+    redis_ssl: bool = Field(default=False, validation_alias="MCP_REDIS_SSL")
+    redis_pool_size: int = Field(default=10, validation_alias="MCP_REDIS_POOL_SIZE")
 
     # Rate Limiting Configuration
-    rate_limit_enabled: bool = Field(default=True, env="MCP_RATE_LIMIT_ENABLED")
-    rate_limit_requests_per_minute: int = Field(default=60, env="MCP_RATE_LIMIT_RPM")
-    rate_limit_burst_size: int = Field(default=10, env="MCP_RATE_LIMIT_BURST")
-    rate_limit_use_redis: bool = Field(default=False, env="MCP_RATE_LIMIT_USE_REDIS")
+    rate_limit_enabled: bool = Field(default=True, validation_alias="MCP_RATE_LIMIT_ENABLED")
+    rate_limit_requests_per_minute: int = Field(default=60, validation_alias="MCP_RATE_LIMIT_RPM")
+    rate_limit_burst_size: int = Field(default=10, validation_alias="MCP_RATE_LIMIT_BURST")
+    rate_limit_use_redis: bool = Field(default=False, validation_alias="MCP_RATE_LIMIT_USE_REDIS")
 
     # WebSocket Configuration
-    ws_max_connections: int = Field(default=1000, env="MCP_WS_MAX_CONNECTIONS")
-    ws_max_connections_per_ip: int = Field(default=10, env="MCP_WS_MAX_CONNECTIONS_PER_IP")
-    ws_max_message_size: int = Field(default=1048576, env="MCP_WS_MAX_MESSAGE_SIZE")  # 1MB
-    ws_ping_interval: int = Field(default=30, env="MCP_WS_PING_INTERVAL")
-    ws_ping_timeout: int = Field(default=60, env="MCP_WS_PING_TIMEOUT")
-    ws_close_timeout: int = Field(default=10, env="MCP_WS_CLOSE_TIMEOUT")
-    ws_auth_required: bool = Field(default=True, env="MCP_WS_AUTH_REQUIRED")
+    ws_max_connections: int = Field(default=1000, validation_alias="MCP_WS_MAX_CONNECTIONS")
+    ws_max_connections_per_ip: int = Field(default=10, validation_alias="MCP_WS_MAX_CONNECTIONS_PER_IP")
+    ws_max_message_size: int = Field(default=1048576, validation_alias="MCP_WS_MAX_MESSAGE_SIZE")  # 1MB
+    ws_ping_interval: int = Field(default=30, validation_alias="MCP_WS_PING_INTERVAL")
+    ws_ping_timeout: int = Field(default=60, validation_alias="MCP_WS_PING_TIMEOUT")
+    ws_close_timeout: int = Field(default=10, validation_alias="MCP_WS_CLOSE_TIMEOUT")
+    ws_auth_required: bool = Field(default=True, validation_alias="MCP_WS_AUTH_REQUIRED")
     # WS security
-    ws_allowed_origins: List[str] = Field(default_factory=_default_ws_allowed_origins, env="MCP_WS_ALLOWED_ORIGINS")
-    ws_allow_query_auth: bool = Field(default=False, env="MCP_WS_ALLOW_QUERY_AUTH")
+    ws_allowed_origins: List[str] = Field(default_factory=_default_ws_allowed_origins, validation_alias="MCP_WS_ALLOWED_ORIGINS")
+    ws_allow_query_auth: bool = Field(default=False, validation_alias="MCP_WS_ALLOW_QUERY_AUTH")
     # WS session policies
-    ws_idle_timeout_seconds: int = Field(default=300, env="MCP_WS_IDLE_TIMEOUT_SECONDS")
-    ws_session_rate_limit_count: int = Field(default=120, env="MCP_WS_SESSION_RATE_COUNT")
-    ws_session_rate_limit_window_seconds: int = Field(default=60, env="MCP_WS_SESSION_RATE_WINDOW_SECONDS")
+    ws_idle_timeout_seconds: int = Field(default=300, validation_alias="MCP_WS_IDLE_TIMEOUT_SECONDS")
+    ws_session_rate_limit_count: int = Field(default=120, validation_alias="MCP_WS_SESSION_RATE_COUNT")
+    ws_session_rate_limit_window_seconds: int = Field(default=60, validation_alias="MCP_WS_SESSION_RATE_WINDOW_SECONDS")
 
     # Network access controls
     # Default to loopback-only to avoid accidental exposure
-    allowed_client_ips: List[str] = Field(default_factory=_default_allowed_ips, env="MCP_ALLOWED_IPS")
-    blocked_client_ips: List[str] = Field(default_factory=list, env="MCP_BLOCKED_IPS")
-    trust_x_forwarded_for: bool = Field(default=False, env="MCP_TRUST_X_FORWARDED")
-    trusted_proxy_depth: int = Field(default=1, ge=0, env="MCP_TRUSTED_PROXY_DEPTH")
-    trusted_proxy_ips: List[str] = Field(default_factory=list, env="MCP_TRUSTED_PROXY_IPS")
+    allowed_client_ips: List[str] = Field(default_factory=_default_allowed_ips, validation_alias="MCP_ALLOWED_IPS")
+    blocked_client_ips: List[str] = Field(default_factory=list, validation_alias="MCP_BLOCKED_IPS")
+    trust_x_forwarded_for: bool = Field(default=False, validation_alias="MCP_TRUST_X_FORWARDED")
+    trusted_proxy_depth: int = Field(default=1, ge=0, validation_alias="MCP_TRUSTED_PROXY_DEPTH")
+    trusted_proxy_ips: List[str] = Field(default_factory=list, validation_alias="MCP_TRUSTED_PROXY_IPS")
 
     # HTTP request limits
-    http_max_body_bytes: int = Field(default=524288, env="MCP_HTTP_MAX_BODY_BYTES")  # 512 KiB default
+    http_max_body_bytes: int = Field(default=524288, validation_alias="MCP_HTTP_MAX_BODY_BYTES")  # 512 KiB default
 
     # Client certificate / mTLS hooks
-    client_cert_required: bool = Field(default=False, env="MCP_CLIENT_CERT_REQUIRED")
-    client_cert_header: Optional[str] = Field(default=None, env="MCP_CLIENT_CERT_HEADER")
-    client_cert_header_value: Optional[str] = Field(default=None, env="MCP_CLIENT_CERT_HEADER_VALUE")
-    client_cert_ca_bundle: Optional[str] = Field(default=None, env="MCP_CLIENT_CA_BUNDLE")
+    client_cert_required: bool = Field(default=False, validation_alias="MCP_CLIENT_CERT_REQUIRED")
+    client_cert_header: Optional[str] = Field(default=None, validation_alias="MCP_CLIENT_CERT_HEADER")
+    client_cert_header_value: Optional[str] = Field(default=None, validation_alias="MCP_CLIENT_CERT_HEADER_VALUE")
+    client_cert_ca_bundle: Optional[str] = Field(default=None, validation_alias="MCP_CLIENT_CA_BUNDLE")
 
     # CORS Configuration
-    cors_enabled: bool = Field(default=True, env="MCP_CORS_ENABLED")
+    cors_enabled: bool = Field(default=True, validation_alias="MCP_CORS_ENABLED")
     cors_origins: List[str] = Field(
         default=["http://localhost:3000", "http://localhost:8000"],
-        env="MCP_CORS_ORIGINS"
+        validation_alias="MCP_CORS_ORIGINS"
     )
-    cors_allow_credentials: bool = Field(default=True, env="MCP_CORS_CREDENTIALS")
+    cors_allow_credentials: bool = Field(default=True, validation_alias="MCP_CORS_CREDENTIALS")
     cors_allow_methods: List[str] = Field(
         default=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        env="MCP_CORS_METHODS"
+        validation_alias="MCP_CORS_METHODS"
     )
     cors_allow_headers: List[str] = Field(
         default=["*"],
-        env="MCP_CORS_HEADERS"
+        validation_alias="MCP_CORS_HEADERS"
     )
 
     # Security Headers
-    security_headers_enabled: bool = Field(default=True, env="MCP_SECURITY_HEADERS")
+    security_headers_enabled: bool = Field(default=True, validation_alias="MCP_SECURITY_HEADERS")
     csp_policy: str = Field(
         default="default-src 'self'; script-src 'self' 'unsafe-inline'",
-        env="MCP_CSP_POLICY"
+        validation_alias="MCP_CSP_POLICY"
     )
-    hsts_max_age: int = Field(default=31536000, env="MCP_HSTS_MAX_AGE")  # 1 year
+    hsts_max_age: int = Field(default=31536000, validation_alias="MCP_HSTS_MAX_AGE")  # 1 year
 
     # Module Configuration
-    module_timeout: int = Field(default=30, env="MCP_MODULE_TIMEOUT")
-    module_max_retries: int = Field(default=3, env="MCP_MODULE_MAX_RETRIES")
-    module_health_check_interval: int = Field(default=60, env="MCP_MODULE_HEALTH_INTERVAL")
+    module_timeout: int = Field(default=30, validation_alias="MCP_MODULE_TIMEOUT")
+    module_max_retries: int = Field(default=3, validation_alias="MCP_MODULE_MAX_RETRIES")
+    module_health_check_interval: int = Field(default=60, validation_alias="MCP_MODULE_HEALTH_INTERVAL")
 
     # Monitoring Configuration
-    metrics_enabled: bool = Field(default=True, env="MCP_METRICS_ENABLED")
-    metrics_port: int = Field(default=9090, env="MCP_METRICS_PORT")
-    health_check_path: str = Field(default="/health", env="MCP_HEALTH_PATH")
+    metrics_enabled: bool = Field(default=True, validation_alias="MCP_METRICS_ENABLED")
+    metrics_port: int = Field(default=9090, validation_alias="MCP_METRICS_PORT")
+    health_check_path: str = Field(default="/health", validation_alias="MCP_HEALTH_PATH")
 
     # Session Configuration
-    session_ttl_minutes: int = Field(default=30, env="MCP_SESSION_TTL_MINUTES")
-    max_sessions: int = Field(default=100, env="MCP_MAX_SESSIONS")
-    max_session_uris: int = Field(default=500, env="MCP_MAX_SESSION_URIS")
+    session_ttl_minutes: int = Field(default=30, validation_alias="MCP_SESSION_TTL_MINUTES")
+    max_sessions: int = Field(default=100, validation_alias="MCP_MAX_SESSIONS")
+    max_session_uris: int = Field(default=500, validation_alias="MCP_MAX_SESSION_URIS")
 
     # Logging Configuration
-    log_level: str = Field(default="INFO", env="MCP_LOG_LEVEL")
+    log_level: str = Field(default="INFO", validation_alias="MCP_LOG_LEVEL")
     log_format: str = Field(
         default="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
-        env="MCP_LOG_FORMAT"
+        validation_alias="MCP_LOG_FORMAT"
     )
-    log_file: Optional[str] = Field(default=None, env="MCP_LOG_FILE")
-    log_rotation: str = Field(default="100 MB", env="MCP_LOG_ROTATION")
-    log_retention: str = Field(default="30 days", env="MCP_LOG_RETENTION")
+    log_file: Optional[str] = Field(default=None, validation_alias="MCP_LOG_FILE")
+    log_rotation: str = Field(default="100 MB", validation_alias="MCP_LOG_ROTATION")
+    log_retention: str = Field(default="30 days", validation_alias="MCP_LOG_RETENTION")
 
     # Audit Logging
-    audit_enabled: bool = Field(default=True, env="MCP_AUDIT_ENABLED")
-    audit_log_file: str = Field(default="audit.log", env="MCP_AUDIT_LOG_FILE")
+    audit_enabled: bool = Field(default=True, validation_alias="MCP_AUDIT_ENABLED")
+    audit_log_file: str = Field(default="audit.log", validation_alias="MCP_AUDIT_LOG_FILE")
 
     # Rate limit categories (tool → category) mapping
     # Provide either JSON via MCP_TOOL_CATEGORY_MAP or file path via MCP_TOOL_CATEGORY_MAP_FILE
-    tool_category_map: Dict[str, str] = Field(default_factory=dict, env="MCP_TOOL_CATEGORY_MAP")
-    tool_category_map_file: Optional[str] = Field(default=None, env="MCP_TOOL_CATEGORY_MAP_FILE")
+    tool_category_map: Dict[str, str] = Field(default_factory=dict, validation_alias="MCP_TOOL_CATEGORY_MAP")
+    tool_category_map_file: Optional[str] = Field(default=None, validation_alias="MCP_TOOL_CATEGORY_MAP_FILE")
 
     model_config = SettingsConfigDict(
         env_file=".env",

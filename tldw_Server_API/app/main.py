@@ -2342,6 +2342,20 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start Outputs purge scheduler: {e}")
 
+    # Start Jobs prune scheduler (daily maintenance)
+    try:
+        _enable_jobs_prune = _env_os.getenv("JOBS_PRUNE_ENFORCE", "false").lower() in {"1", "true", "yes", "on"}
+        if not _enable_jobs_prune:
+            logger.info("Jobs prune scheduler disabled (JOBS_PRUNE_ENFORCE != true)")
+        else:
+            from tldw_Server_API.app.services.jobs_prune_scheduler import start_jobs_prune_scheduler
+
+            jobs_prune_task = await start_jobs_prune_scheduler()
+            if jobs_prune_task:
+                logger.info("Jobs prune scheduler started")
+    except Exception as e:
+        logger.warning(f"Failed to start Jobs prune scheduler: {e}")
+
     # Start Connectors worker (scaffold; opt-in via env)
     try:
         from tldw_Server_API.app.services.connectors_worker import start_connectors_worker
@@ -2578,6 +2592,8 @@ async def lifespan(app: FastAPI):
                 audio_jobs_task.cancel()
         if "claims_task" in locals() and claims_task:
             claims_task.cancel()
+        if "jobs_prune_task" in locals() and jobs_prune_task:
+            jobs_prune_task.cancel()
         if "embeddings_compactor_task" in locals() and embeddings_compactor_task:
             if "embeddings_compactor_stop_event" in locals() and embeddings_compactor_stop_event:
                 try:

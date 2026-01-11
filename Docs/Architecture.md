@@ -260,8 +260,10 @@ This section gives the quick mental model.
 Note: `<USER_DB_BASE_DIR>` is defined in `tldw_Server_API.app.core.config`, defaults to `Databases/user_databases/` under the project root, and can be overridden via environment variable or `Config_Files/config.txt`.
 
 ### AuthNZ DB
+- Centralized in all auth modes.
 - Default (single-user): SQLite file configured by `DATABASE_URL` (defaults to `sqlite:///./Databases/users.db`).
-- Multi-user deployments typically use PostgreSQL.
+- Multi-user: centralized PostgreSQL instance (e.g., `postgresql://user:password@host:5432/tldw_users`).
+- Unlike per-user Content/Media DBs under `<USER_DB_BASE_DIR>/<user_id>/`, AuthNZ data remains centralized.
 - Stores users, credentials, permissions, and related auth data.
 
 ### Content / Media DB v2

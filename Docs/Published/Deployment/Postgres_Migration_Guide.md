@@ -33,6 +33,8 @@ export PGUSER=tldw_user
 export PGPASSWORD=super-secret
 ```
 
+For production, use a `~/.pgpass` file (with `0600` permissions) or a secrets manager instead of exporting `PGPASSWORD`.
+
 ## Step 2 - Run the migration utility
 
 Invoke the migration module with paths to your existing SQLite databases. Provide `--content-sqlite`

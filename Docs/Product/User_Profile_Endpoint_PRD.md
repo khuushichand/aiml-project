@@ -43,6 +43,10 @@
   - `sensitivity`: public, internal, secret.
   - `ui`: input hint (text, toggle, select, number, json).
 - Catalog is implemented as a code registry owned by the backend API team, versioned and cached; the profile response includes `catalog_version`.
+- Catalog caching/versioning (initial approach):
+  - Server sets `Cache-Control: max-age=3600` and an `ETag` (catalog version hash).
+  - Clients should refetch when `catalog_version` changes, on 404/unknown key, or when cache expires.
+  - Backward compatibility: v1 is additive; deprecated keys remain with a `deprecated` flag until a major version.
 
 ### Editability Roles
 - user: the subject user updating their own profile.
@@ -125,13 +129,32 @@ Read-only in profile (managed via dedicated endpoints):
   }
   ```
 - Response includes applied changes, skipped keys with reasons, and updated `profile_version`.
+- Error responses (update endpoints):
+  - `400 Bad Request`: invalid or unknown key; malformed updates list.
+  - `403 Forbidden`: attempting to edit a key outside caller scope or role.
+  - `404 Not Found`: target user not found (admin endpoint).
+  - `409 Conflict`: profile version mismatch or optimistic lock failure (if implemented).
+  - `422 Unprocessable Entity`: validation failure (type mismatch, enum violation, range errors).
+  - Error payload follows standard API shape, e.g.:
+    ```json
+    {
+      "error_code": "profile_update_forbidden",
+      "detail": "Caller cannot edit limits.storage_quota_mb for user 42",
+      "errors": [{"key": "limits.storage_quota_mb", "message": "Insufficient scope"}]
+    }
+    ```
 
 ### Bulk Update (Admin)
 - `POST /api/v1/admin/users/profile/bulk`
   - Filters: `org_id`, `team_id`, `user_ids`, `role`, `is_active`, `search`.
-  - Supports `dry_run` to preview counts and diff summaries.
-  - Requires explicit `confirm=true` when more than N users (configurable guardrail).
-  - Emits audit events with actor, target set, keys changed, and source IP.
+- Supports `dry_run` to preview counts and diff summaries before confirming.
+- Requires explicit `confirm=true` when the target count exceeds the default threshold of 1000 users.
+  - Override via config key `bulkUpdateConfirmThreshold` or env var `BULK_UPDATE_CONFIRM_THRESHOLD`.
+- Emits audit events with actor, target set, keys changed, and source IP.
+- Bulk update semantics:
+  - Per-user isolation: updates for each user apply atomically; failures do not affect other users.
+  - Partial apply is allowed within the batch; response includes per-user success/failure and per-key errors.
+  - No cross-user rollback; `dry_run` performs full validation without writes.
 
 ## Response Shape (Example)
 ```json
@@ -173,7 +196,7 @@ Read-only in profile (managed via dedicated endpoints):
 
 ## Permissions & RBAC
 - Self profile access requires normal auth (JWT or API key) and returns only self data.
-- Admin profile access reuses existing admin org/team scope checks; org/team admins can update fields scoped to their memberships; no cross-org leakage.
+- Admin profile access reuses existing admin-org/team-scope checks; org/team admins can update fields scoped to their memberships; no cross-org leakage.
 - Sensitive fields are always masked; secrets are never returned.
 - Bulk updates require admin role; org/team admins can bulk-update within their scope.
 
@@ -182,6 +205,10 @@ Read-only in profile (managed via dedicated endpoints):
 - Reliability: partial section failures return `section_errors` while preserving overall 200 response when feasible.
 - Security: strict masking, audit logging for admin reads and any write operations.
 - Observability: metrics for profile fetch latency, section build time, bulk update count, and error rates.
+- Batch/timeout guidance:
+  - Batch read target: p95 <= 800 ms for 50 users; expect higher latency proportional to page size.
+  - Default page size 25; max 100; reject larger batches with `400`.
+  - Request timeout target 10s for batch reads; clients should paginate with `page` + `page_size`.
 
 ## Technical Approach
 - Implement `UserProfileService` in `tldw_Server_API/app/core/` to compose:
@@ -193,6 +220,16 @@ Read-only in profile (managed via dedicated endpoints):
   - `user_id`, `key`, `value_json`, `updated_at`, `updated_by`.
   - Optional `scope` for org/team overrides in the future.
 - Merge config layers into an "effective" view with source annotations.
+  - Precedence (lowest -> highest): global defaults -> org -> team -> user.
+  - If multiple org/team memberships apply, select the most specific scope for the requested profile view
+    and break ties deterministically (org_id/team_id ascending).
+  - Conflicts resolve by highest-precedence layer; the winning layer is recorded as the `source`.
+  - Example:
+    - global: `preferences.chat.temperature=0.7`
+    - org: `preferences.chat.temperature=0.6`
+    - team: `preferences.chat.temperature=0.8`
+    - user: unset
+    - effective: `0.8`, source=`team`
 
 ## Implementation Phases
 1. Profile Read (MVP)
