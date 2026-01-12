@@ -19,6 +19,7 @@ Endpoints:
 
 Note:
 - `/api/v1/chats` continues to serve character chat session CRUD and exports.
+- Alias: `/api/v1/chats/conversations` maps to the conversation list/update/tree endpoints above.
 
 ## Auth + Rate Limits
 - Single-user: `X-API-KEY: <key>`

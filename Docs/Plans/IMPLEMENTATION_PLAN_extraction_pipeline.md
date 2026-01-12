@@ -2,7 +2,7 @@
 **Goal**: Embed an extraction pipeline in `Article_Extractor_Lib` and `EnhancedWebScraper` with default strategy order, per-domain overrides, and structured reason codes/trace output.
 **Success Criteria**: Scrape results include `extraction_trace` with strategy order + fallback reasons; per-domain `strategy_order` override is honored.
 **Tests**: `tldw_Server_API/tests/WebScraping/test_extraction_pipeline_router.py`
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 2: Schema-Driven Extraction (Watchlist Selectors)
 **Goal**: Reuse watchlist selector logic to implement schema-driven extraction (CSS/XPath selectors, base selectors, and safe transforms) inside the pipeline.

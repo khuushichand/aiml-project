@@ -202,6 +202,7 @@ from .chat_dictionaries import (
 API_KEYS = SCHEMAS_API_KEYS
 
 router = APIRouter()
+conversations_alias_router = APIRouter()
 
 router.include_router(chat_dictionaries.router)
 router.include_router(chat_documents.router)
@@ -2916,6 +2917,17 @@ async def save_chat_knowledge(
         Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.list")),
     ],
 )
+@conversations_alias_router.get(
+    "/conversations",
+    response_model=ConversationListResponse,
+    summary="List/search conversations with filters and ranking [alias]",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.list")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.list")),
+    ],
+    include_in_schema=False,
+)
 async def list_chat_conversations(
     query: Optional[str] = Query(None, description="Search term for conversation title"),
     state: Optional[str] = Query(None, description="Conversation state"),
@@ -3069,6 +3081,17 @@ async def list_chat_conversations(
         Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.update")),
     ],
 )
+@conversations_alias_router.patch(
+    "/conversations/{conversation_id}",
+    response_model=ConversationListItem,
+    summary="Update conversation metadata [alias]",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.update")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.update")),
+    ],
+    include_in_schema=False,
+)
 async def update_chat_conversation(
     payload: ConversationUpdateRequest,
     conversation_id: str = Path(..., description="Conversation ID"),
@@ -3138,6 +3161,17 @@ async def update_chat_conversation(
         Depends(rbac_rate_limit("chat.conversations.tree")),
         Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.tree")),
     ],
+)
+@conversations_alias_router.get(
+    "/conversations/{conversation_id}/tree",
+    response_model=ConversationTreeResponse,
+    summary="Get conversation message tree [alias]",
+    tags=["chat"],
+    dependencies=[
+        Depends(rbac_rate_limit("chat.conversations.tree")),
+        Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.conversations.tree")),
+    ],
+    include_in_schema=False,
 )
 async def get_conversation_tree(
     conversation_id: str = Path(..., description="Conversation ID"),

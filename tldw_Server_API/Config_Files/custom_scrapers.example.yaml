@@ -4,6 +4,7 @@ domains:
     handler: tldw_Server_API.app.core.Web_Scraping.handlers:handle_generic_html
     ua_profile: chrome_120_win
     impersonate: chrome120
+    strategy_order: [jsonld, schema, regex, llm, cluster, trafilatura]
     extra_headers:
       Referer: https://www.google.com
     respect_robots: true
@@ -13,6 +14,7 @@ domains:
     handler: tldw_Server_API.app.core.Web_Scraping.handlers:handle_generic_html
     ua_profile: chrome_120_win
     impersonate: chrome120
+    strategy_order: [schema, trafilatura]
     url_patterns:
       - ".*\\?output=1$"
     respect_robots: true

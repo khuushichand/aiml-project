@@ -44,7 +44,11 @@ def _websearch_browser_headers(
         referer: str = "https://www.google.com/",
 ) -> Dict[str, str]:
     profile = pick_ua_profile("fixed")
-    headers = build_browser_headers(profile=profile, accept_lang=accept_lang)
+    headers = build_browser_headers(
+        profile=profile,
+        accept_lang=accept_lang,
+        accept_encoding="gzip, deflate",
+    )
     headers.update({
         "Referer": referer,
         "Connection": "keep-alive",

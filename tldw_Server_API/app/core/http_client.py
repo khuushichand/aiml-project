@@ -396,13 +396,13 @@ def _sanitize_accept_encoding_for_backend(headers: Optional[Dict[str, str]], bac
 
     - Case-insensitively reads/removes existing Accept-Encoding headers.
     - For 'httpx' and 'aiohttp' backends, removes any 'zstd' codings (with or without parameters, e.g. 'zstd;q=0.9').
-    - For 'requests' backend, removes 'zstd' and 'br' codings to avoid unsupported decoders.
+    - For 'requests' and 'urllib3' backends, removes 'zstd' and 'br' codings to avoid unsupported decoders.
     - Writes back a single canonical 'Accept-Encoding' header if tokens remain; otherwise removes it.
     - Best-effort: on any parsing error, leaves headers unchanged.
     """
     hdrs: Dict[str, str] = dict(headers or {})
     backend_norm = str(backend).lower()
-    if backend_norm not in {"httpx", "aiohttp", "requests"}:
+    if backend_norm not in {"httpx", "aiohttp", "requests", "urllib3"}:
         return hdrs
     try:
         # Find all Accept-Encoding header keys regardless of case
@@ -419,16 +419,18 @@ def _sanitize_accept_encoding_for_backend(headers: Optional[Dict[str, str]], bac
             raw_vals.append(str(v))
         combined = ",".join(raw_vals)
 
-        # Parse tokens, dropping any with coding 'zstd' (case-insensitive), regardless of parameters
+        drop_cod = {"zstd"}
+        if backend_norm in {"requests", "urllib3"}:
+            drop_cod = {"zstd", "br"}
+
+        # Parse tokens, dropping any disallowed codings regardless of parameters
         filtered: list[str] = []
         for part in combined.split(','):
             token = part.strip()
             if not token:
                 continue
             coding = token.split(';', 1)[0].strip().lower()
-            if coding == 'zstd':
-                continue
-            if backend_norm == "requests" and coding == "br":
+            if coding in drop_cod:
                 continue
             filtered.append(token)
 

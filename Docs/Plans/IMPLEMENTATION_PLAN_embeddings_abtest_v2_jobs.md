@@ -30,7 +30,7 @@ Last Updated: 2026-01-12
 **Tests**:
 - Unit: reuse hash determinism and per-test reuse behavior.
 - Integration: cleanup removes collections + DB rows.
-**Status**: Not Started
+**Status**: In Progress
 
 ## Stage 4: Observability + CI Guard
 **Goal**: Add Jobs-backed metrics/audit events for A/B runs and enforce plan freshness in CI.

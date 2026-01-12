@@ -327,11 +327,12 @@ Implemented (as of this update):
 - Metrics instrumentation: counters/histograms for scrape fetch outcome and latency, plus fallback and robots-block events.
 - Example rules file: `tldw_Server_API/Config_Files/custom_scrapers.example.yaml` added; YAML validation implemented in the router.
 - Config defaults and env overrides wired for scraper rules, backend, UA mode, and robots policy.
+- EnhancedWebScraper now emits `scrape_fetch_*` metrics for httpx/curl/playwright fetches and robots blocks.
+- JS-required heuristics tuned with framework markers and domain hints.
+- Accept-Encoding sanitized for requests-only paths (drop br/zstd).
 
 Remaining work (near-term):
-- Metrics: broaden instrumentation across all scraping paths and align names/labels with Metrics Manager conventions.
-- JS-required detection heuristics: tune patterns/thresholds and add domain-specific hints to reduce false positives.
-- Ensure Accept-Encoding compatibility for code paths using `requests` (either switch to httpx/curl or manually decode br/zstd, or restrict accepted encodings there).
+- None (as of this update).
 
 Out of scope (tracked separately; see Related Work):
 - Modular extraction pipeline (schema/regex/LLM/cluster), PII masking, extended observability.

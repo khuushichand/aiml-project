@@ -8,7 +8,7 @@
 **Goal**: Automate MECE/narrative + TTS output generation and expose Media DB ingest toggles.
 **Success Criteria**: Outputs can generate MECE + TTS variants from a run or filter; toggles correctly ingest artifacts into Media DB when enabled.
 **Tests**: Unit tests for template rendering variants; integration tests for /api/v1/outputs with MECE/TTS and ingest toggle.
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 3: Watchlists Streaming + Forums Phase 3
 **Goal**: Add run streaming over WebSocket and gated forum ingestion.

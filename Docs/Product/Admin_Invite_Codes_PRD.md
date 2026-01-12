@@ -151,6 +151,7 @@ Org invites (separate system) should store:
 ## Audit and Observability
 - Create/revoke actions must produce audit log entries.
 - Code redemption logs the user id and code id.
+- Org invite create/revoke/redeem actions are recorded in audit logs.
 
 ## Edge Cases
 - Code reaches max uses: treated as invalid.
@@ -159,6 +160,7 @@ Org invites (separate system) should store:
 - Registration disabled: no codes usable.
 - Profile blocks self-registration: warn and disable code creation.
 - Existing user attempts to register with an org invite: return a clear error with an accept-invite path.
+- Org invite allowlist with missing user email: block redemption unless `org_invite_allow_missing_email` is enabled.
 
 ## Decisions
 - Org-scoped registration codes are gated behind a config flag (`enable_org_scoped_registration_codes`).

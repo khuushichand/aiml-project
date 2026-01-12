@@ -8,10 +8,10 @@
 **Goal**: Add metrics across scraping paths, refine JS-required detection, and update Accept-Encoding handling.
 **Success Criteria**: Scrape metrics emitted for Article_Extractor_Lib + EnhancedWebScraper; JS heuristics updated with domain hints; Accept-Encoding sanitized for non-httpx clients.
 **Tests**: Unit tests for JS heuristics and router/backend flows remain green.
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 3: Validation + Docs
 **Goal**: Ensure metrics registry includes any new scrape metrics and update docs/PRD status if needed.
 **Success Criteria**: Metrics registry updated; tests added/updated; optional doc note adjusted.
 **Tests**: Targeted pytest runs for new/affected tests.
-**Status**: Not Started
+**Status**: In Progress

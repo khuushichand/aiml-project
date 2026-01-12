@@ -794,7 +794,10 @@ else:
         logger.warning(f"Audio jobs endpoints unavailable; skipping import: {_audio_jobs_err}")
         _HAS_AUDIO_JOBS = False
     # Chat Endpoint
-    from tldw_Server_API.app.api.v1.endpoints.chat import router as chat_router
+    from tldw_Server_API.app.api.v1.endpoints.chat import (
+        router as chat_router,
+        conversations_alias_router,
+    )
 
     # Character Endpoints
     from tldw_Server_API.app.api.v1.endpoints.characters_endpoint import router as character_router
@@ -959,7 +962,10 @@ if _MINIMAL_TEST_APP and not _ULTRA_MINIMAL_APP:
     _HAS_UNIFIED_EVALUATIONS = False
     # Minimal chat/character endpoints to support lightweight tests
     # These are relatively lightweight and safe to import under MINIMAL_TEST_APP
-    from tldw_Server_API.app.api.v1.endpoints.chat import router as chat_router
+    from tldw_Server_API.app.api.v1.endpoints.chat import (
+        router as chat_router,
+        conversations_alias_router,
+    )
     from tldw_Server_API.app.api.v1.endpoints.characters_endpoint import router as character_router
     from tldw_Server_API.app.api.v1.endpoints.character_chat_sessions import router as character_chat_sessions_router
     from tldw_Server_API.app.api.v1.endpoints.character_messages import router as character_messages_router
@@ -4314,6 +4320,7 @@ elif _MINIMAL_TEST_APP:
     app.include_router(paper_search_router, prefix=f"{API_V1_PREFIX}/paper-search", tags=["paper-search"])
     # Include lightweight chat/character routes needed by tests
     app.include_router(chat_router, prefix=f"{API_V1_PREFIX}/chat")
+    app.include_router(conversations_alias_router, prefix=f"{API_V1_PREFIX}/chats", tags=["chat"])
     app.include_router(character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
     app.include_router(
         character_chat_sessions_router, prefix=f"{API_V1_PREFIX}/chats", tags=["character-chat-sessions"]
@@ -4813,6 +4820,8 @@ else:
     # Guard optional routers that may not be imported in ULTRA_MINIMAL_APP
     if "chat_router" in locals():
         _include_if_enabled("chat", chat_router, prefix=f"{API_V1_PREFIX}/chat")
+    if "conversations_alias_router" in locals():
+        _include_if_enabled("chat", conversations_alias_router, prefix=f"{API_V1_PREFIX}/chats", tags=["chat"])
     # Tools (MCP-backed server tool execution) - include if initial guarded import succeeded
     if "tools_router" in locals() and tools_router is not None:
         _include_if_enabled("tools", tools_router, prefix=f"{API_V1_PREFIX}", tags=["tools"], default_stable=False)

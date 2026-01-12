@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.repos.org_invites_repo import AuthnzOrgInvitesRepo
 from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
 
@@ -44,6 +45,7 @@ class InviteValidationResult:
 class RedemptionResult:
     """Result of invite redemption."""
     success: bool
+    invite_id: Optional[int] = None
     org_id: Optional[int] = None
     org_name: Optional[str] = None
     team_id: Optional[int] = None
@@ -304,17 +306,20 @@ class OrgInviteService:
         role = invite["role_to_grant"]
         allowed_domain = invite.get("allowed_email_domain")
         if allowed_domain:
-            if not user_email or "@" not in user_email:
-                return RedemptionResult(
-                    success=False,
-                    message="Invite is restricted to allowed email domain",
-                )
-            email_domain = str(user_email).strip().split("@")[-1].lower()
-            if email_domain != str(allowed_domain).strip().lower().lstrip("@"):
-                return RedemptionResult(
-                    success=False,
-                    message="Invite is restricted to allowed email domain",
-                )
+            if not user_email or "@" not in str(user_email):
+                settings = get_settings()
+                if not settings.ORG_INVITE_ALLOW_MISSING_EMAIL:
+                    return RedemptionResult(
+                        success=False,
+                        message="Invite is restricted to allowed email domain",
+                    )
+            else:
+                email_domain = str(user_email).strip().split("@")[-1].lower()
+                if email_domain != str(allowed_domain).strip().lower().lstrip("@"):
+                    return RedemptionResult(
+                        success=False,
+                        message="Invite is restricted to allowed email domain",
+                    )
 
         invites_repo = await self._get_invites_repo()
         orgs_repo = await self._get_orgs_repo()
@@ -341,6 +346,7 @@ class OrgInviteService:
 
             return RedemptionResult(
                 success=True,
+                invite_id=invite.get("id"),
                 org_id=org_id,
                 org_name=invite.get("org_name"),
                 team_id=team_id,
@@ -397,6 +403,7 @@ class OrgInviteService:
 
         return RedemptionResult(
             success=True,
+            invite_id=invite.get("id"),
             org_id=org_id,
             org_name=invite.get("org_name"),
             team_id=team_id,

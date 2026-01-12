@@ -8,6 +8,7 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 ABTEST_JOBS_DOMAIN = "evaluations"
 ABTEST_JOBS_JOB_TYPE = "embeddings_abtest_run"
+ABTEST_JOBS_CLEANUP_TYPE = "embeddings_abtest_cleanup"
 
 
 def abtest_jobs_queue() -> str:

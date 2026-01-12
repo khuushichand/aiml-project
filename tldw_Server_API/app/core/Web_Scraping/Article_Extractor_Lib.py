@@ -102,18 +102,42 @@ def _robots_url_for(target_url: str) -> str:
     return f"{p.scheme}://{p.netloc}/robots.txt"
 
 
-def _js_required(html: str, headers: Dict[str, Any]) -> bool:
+_JS_REQUIRED_DOMAINS = {
+    "medium.com",
+    "substack.com",
+    "notion.site",
+    "notion.so",
+    "webflow.io",
+    "squarespace.com",
+    "wixsite.com",
+    "x.com",
+    "twitter.com",
+    "tiktok.com",
+    "instagram.com",
+    "facebook.com",
+    "linkedin.com",
+}
+
+
+def _js_required(html: str, headers: Dict[str, Any], url: Optional[str] = None) -> bool:
     """Heuristics to detect pages that require JS rendering.
 
     Signals fallback to Playwright when:
     - Contains noscript prompts to enable JavaScript
     - Shows common interstitials (Cloudflare/CAPTCHA)
-    - HTML very small with many scripts
+    - HTML very small with many scripts / SPA shells
     - Meta refresh redirect without content
+    - Domain-specific hints when content is thin
     """
     try:
+        domain = ""
+        if url:
+            try:
+                domain = urlparse(url).netloc.lower()
+            except Exception:
+                domain = ""
         text = html.lower()
-        if not text:
+        if not text.strip():
             return True
         # Common phrases
         js_phrases = (
@@ -121,22 +145,59 @@ def _js_required(html: str, headers: Dict[str, Any]) -> bool:
             "please enable javascript",
             "requires javascript",
             "enable your javascript",
+            "javascript is disabled",
+            "please turn on javascript",
+            "please turn on js",
         )
         if any(p in text for p in js_phrases):
             return True
+        if "<noscript" in text and any(
+            p in text for p in ("enable javascript", "javascript is disabled", "requires javascript")
+        ):
+            return True
         # Cloudflare / anti-bot hints
-        if "cf-chl-bypass" in text or "cloudflare" in text and "checking your browser" in text:
+        bot_phrases = (
+            "cf-browser-verification",
+            "cf-chl-bypass",
+            "cloudflare ray id",
+            "attention required",
+            "checking your browser",
+            "verify you are human",
+            "hcaptcha",
+            "recaptcha",
+            "turnstile",
+            "just a moment",
+        )
+        if any(p in text for p in bot_phrases):
             return True
         # Meta refresh
         if "http-equiv=\"refresh\"" in text or "http-equiv='refresh'" in text:
             # if no body text present
-            if len(text) < 1200:
+            if len(text) < 1500:
                 return True
-        # Script density heuristic
-        script_count = text.count("<script")
-        visible_len = len(BeautifulSoup(html, "html.parser").get_text(strip=True))
-        if script_count >= 20 and visible_len < 1200:
+        soup = BeautifulSoup(html, "html.parser")
+        visible_text = soup.get_text(" ", strip=True)
+        visible_len = len(visible_text)
+        script_count = len(soup.find_all("script"))
+        if script_count >= 25 and visible_len < 800:
             return True
+        if script_count >= 10 and visible_len < 400 and (
+            "__next" in text or "__nuxt" in text or "data-reactroot" in text
+        ):
+            return True
+        app_shell_ids = ("__next", "__nuxt", "root", "app", "app-root")
+        if script_count >= 5 and visible_len < 600:
+            for shell_id in app_shell_ids:
+                if f'id="{shell_id}"' in text or f"id='{shell_id}'" in text:
+                    return True
+        if ("data-reactroot" in text or "data-reactid" in text) and visible_len < 600:
+            return True
+        # Domain hints for JS-heavy sites when content is minimal
+        if domain and any(domain == d or domain.endswith("." + d) for d in _JS_REQUIRED_DOMAINS):
+            if visible_len < 1200:
+                return True
+            if script_count >= 15 and visible_len < 2500:
+                return True
     except Exception:
         return False
     return False
@@ -661,7 +722,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
             text = _resp_get(resp, "text", "")
             if int(status or 0) < 400 and text:
                 # JS-required detection heuristic: decide earlier fallback
-                if _js_required(text, _resp_get(resp, "headers", {}), url):
+                if _js_required(text, _resp_get(resp, "headers", {}), url=url):
                     increment_counter("scrape_playwright_fallback_total", labels={"reason": "js_required"})
                     raise RuntimeError("js_required_detected")
                 article_data = extract_article_with_pipeline(

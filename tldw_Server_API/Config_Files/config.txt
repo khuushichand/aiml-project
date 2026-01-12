@@ -273,6 +273,7 @@ database_url = sqlite:///./Databases/users.db
 enable_registration = true
 require_registration_code = false
 enable_org_scoped_registration_codes = false
+org_invite_allow_missing_email = false
 rate_limit_enabled = true
 rate_limit_per_minute = 60
 rate_limit_burst = 10

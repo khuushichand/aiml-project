@@ -932,6 +932,17 @@ class CollectionsDatabase:
         mapped = [OutputTemplateRow(**{**r, "is_default": bool(r.get("is_default", 0))}) for r in rows]
         return mapped, total
 
+    def get_default_output_template_by_type(self, type_: str) -> Optional[OutputTemplateRow]:
+        q = (
+            "SELECT id, user_id, name, type, format, body, description, is_default, created_at, updated_at, metadata_json "
+            "FROM output_templates WHERE user_id = ? AND type = ? AND is_default = 1 ORDER BY updated_at DESC LIMIT 1"
+        )
+        row = self.backend.execute(q, (self.user_id, type_)).first
+        if not row:
+            return None
+        row["is_default"] = bool(row.get("is_default", 0))
+        return OutputTemplateRow(**row)
+
     def create_output_template(self, name: str, type_: str, format_: str, body: str, description: Optional[str], is_default: bool, metadata_json: Optional[str] = None) -> OutputTemplateRow:
         now = _utcnow_iso()
         q = (
@@ -1160,6 +1171,13 @@ class CollectionsDatabase:
         res = self.backend.execute(q, params)
         new_id = int(res.lastrowid or 0)
         return self.get_output_artifact(new_id)
+
+    def update_output_media_item_id(self, output_id: int, media_item_id: Optional[int]) -> "CollectionsDatabase.OutputArtifactRow":
+        q = "UPDATE outputs SET media_item_id = ? WHERE id = ? AND user_id = ?"
+        res = self.backend.execute(q, (media_item_id, output_id, self.user_id))
+        if res.rowcount <= 0:
+            raise KeyError("output_not_found")
+        return self.get_output_artifact(output_id)
 
     def get_output_artifact(self, output_id: int, include_deleted: bool = False) -> "CollectionsDatabase.OutputArtifactRow":
         cond = "id = ? AND user_id = ?" + ("" if include_deleted else " AND deleted = 0")

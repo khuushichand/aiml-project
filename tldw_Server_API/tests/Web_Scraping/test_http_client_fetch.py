@@ -74,6 +74,20 @@ def test_httpx_fetch_accept_encoding_all_removed(monkeypatch):
     assert "accept-encoding" not in keys_lower
 
 
+def test_requests_fetch_sanitizes_accept_encoding(monkeypatch):
+    # allow egress
+    monkeypatch.setattr(hc, "_is_url_allowed", lambda url: True)
+    # patch httpx.Client
+    monkeypatch.setattr(hc.httpx, "Client", DummyClient)
+
+    headers = {"Accept-Encoding": "gzip, deflate, br, zstd"}
+    resp = hc.fetch("https://example.com/", headers=headers, backend="requests")
+
+    enc = resp["headers"].get("Accept-Encoding", "").lower()
+    assert "zstd" not in enc
+    assert "br" not in enc
+
+
 def test_fetch_egress_denied_raises(monkeypatch):
     monkeypatch.setattr(hc, "_is_url_allowed", lambda url: False)
     with pytest.raises(ValueError):

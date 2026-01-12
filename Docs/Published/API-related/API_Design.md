@@ -29,6 +29,7 @@ This document outlines the current API design for the TL;DW Server (tldw_server)
   - `/api/v1/users/*` (profile, password, sessions, storage)
 - Chat (OpenAI-compatible)
   - `/api/v1/chat/completions`
+  - Conversation metadata: `/api/v1/chat/conversations`, `/api/v1/chat/analytics` (alias: `/api/v1/chats/conversations`)
   - Additional: per-user dictionaries, document generator
 - Audio (STT/TTS)
   - `/api/v1/audio/speech` (TTS)
@@ -95,6 +96,8 @@ This document outlines the current API design for the TL;DW Server (tldw_server)
   - `GET /api/v1/users/me`, `PUT /api/v1/users/me`
 - Chat
   - `POST /api/v1/chat/completions`
+  - `GET /api/v1/chat/conversations`, `PATCH /api/v1/chat/conversations/{id}`
+  - `GET /api/v1/chat/conversations/{id}/tree`, `GET /api/v1/chat/analytics`
 - Media
   - `GET /api/v1/media`, `GET /api/v1/media/{id}`
   - `POST /api/v1/media`, `PUT /api/v1/media/{id}`, `DELETE /api/v1/media/{id}`

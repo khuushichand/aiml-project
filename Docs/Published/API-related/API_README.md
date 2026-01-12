@@ -30,7 +30,7 @@ See also: `Docs/Published/Code_Documentation/Ingestion_Pipeline_Audio.md` for th
   - Export chat history; fetch messages formatted for completions
   - Use Chat API for LLM replies with `conversation_id`/`character_id`
   - See: [API Design](API_Design.md) for character chat endpoints overview
-- Conversation metadata API: list/search, tree view, analytics, and knowledge-save under `/api/v1/chat/conversations` and `/api/v1/chat/analytics`
+- Conversation metadata API: list/search, tree view, analytics, and knowledge-save under `/api/v1/chat/conversations` and `/api/v1/chat/analytics` (alias: `/api/v1/chats/conversations`)
   - Includes ranking modes (`bm25|recency|hybrid|topic`) and topic/state filters
 
 #### RAG (Retrieval-Augmented Generation) - `/api/v1/rag`

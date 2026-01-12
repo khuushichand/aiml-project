@@ -8,10 +8,10 @@
 **Goal**: Implement SQLite structure creation and Postgres connectivity validation in `db` command.
 **Success Criteria**: Per-user SQLite files created; shared evaluations DB created; Postgres validation reported or errors clearly.
 **Tests**: CLI integration tests for SQLite path creation and multi-user invalid URL error.
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 3: Tests + Cleanup
 **Goal**: Add/adjust tests to cover DB init behavior and error payloads.
 **Success Criteria**: Tests pass for SQLite creation and invalid DATABASE_URL paths; optional Postgres check skipped when unavailable.
 **Tests**: `tldw_Server_API/tests/wizard` suite passes.
-**Status**: Not Started
+**Status**: Complete

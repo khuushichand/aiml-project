@@ -166,6 +166,8 @@ For each type in `chunking_types` (`article|audio|book|document|mediawiki_articl
 - `database_url` (dsn): Auth DB URL; default uses SQLite file.
 - `enable_registration` (bool)
 - `require_registration_code` (bool)
+- `enable_org_scoped_registration_codes` (bool)
+- `org_invite_allow_missing_email` (bool): Allow org invite redemption when user email is missing.
 - `rate_limit_enabled` (bool)
 - `rate_limit_per_minute` (int)
 - `rate_limit_burst` (int)

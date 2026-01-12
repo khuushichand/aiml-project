@@ -175,6 +175,11 @@ class Settings(BaseSettings):
         description="Allow registration codes to auto-assign org/team membership"
     )
 
+    ORG_INVITE_ALLOW_MISSING_EMAIL: bool = Field(
+        default=False,
+        description="Allow org invite redemption when user email is missing"
+    )
+
     MAX_LOGIN_ATTEMPTS: int = Field(
         default=5,
         ge=3,
@@ -944,6 +949,11 @@ def _load_overrides_from_config() -> dict:
             "enable_org_scoped_registration_codes",
             _bool_from_str,
         )
+        maybe_set(
+            "ORG_INVITE_ALLOW_MISSING_EMAIL",
+            "org_invite_allow_missing_email",
+            _bool_from_str,
+        )
         maybe_set("RATE_LIMIT_ENABLED", "rate_limit_enabled", _bool_from_str)
         maybe_set("RATE_LIMIT_PER_MINUTE", "rate_limit_per_minute", lambda v: int(v))
         maybe_set("RATE_LIMIT_BURST", "rate_limit_burst", lambda v: int(v))
@@ -1030,6 +1040,13 @@ def get_settings() -> Settings:
             ):
                 overrides["ENABLE_ORG_SCOPED_REGISTRATION_CODES"] = _alias_bool(
                     "ENABLE_ORG_SCOPED_REGISTRATION_CODES"
+                )
+            if (
+                _os.getenv("ORG_INVITE_ALLOW_MISSING_EMAIL") is not None
+                and "ORG_INVITE_ALLOW_MISSING_EMAIL" not in overrides
+            ):
+                overrides["ORG_INVITE_ALLOW_MISSING_EMAIL"] = _alias_bool(
+                    "ORG_INVITE_ALLOW_MISSING_EMAIL"
                 )
         except Exception:
             pass

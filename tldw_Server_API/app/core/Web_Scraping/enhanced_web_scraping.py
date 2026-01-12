@@ -61,6 +61,7 @@ from tldw_Server_API.app.core.Web_Scraping.scraper_router import ScraperRouter, 
 from tldw_Server_API.app.core.Web_Scraping.ua_profiles import build_browser_headers, profile_to_impersonate
 from tldw_Server_API.app.core.Web_Scraping.handlers import resolve_handler
 from tldw_Server_API.app.core.http_client import afetch
+from tldw_Server_API.app.core.Metrics import increment_counter, observe_histogram
 from tldw_Server_API.app.core.Metrics.metrics_logger import (
     log_counter,
     log_histogram,
@@ -784,6 +785,33 @@ class EnhancedWebScraper:
         self.deduplicator.add_content(url, content, title)
         return data
 
+    def _emit_scrape_metrics(
+        self,
+        *,
+        backend: str,
+        outcome: str,
+        elapsed_s: Optional[float] = None,
+        content: Optional[str] = None,
+    ) -> None:
+        try:
+            if elapsed_s is not None:
+                observe_histogram("scrape_fetch_latency_seconds", elapsed_s, labels={"backend": backend})
+        except Exception:
+            pass
+        try:
+            increment_counter("scrape_fetch_total", labels={"backend": backend, "outcome": outcome})
+        except Exception:
+            pass
+        if outcome == "success" and content:
+            try:
+                observe_histogram(
+                    "scrape_content_length_bytes",
+                    len(content.encode("utf-8", errors="ignore")),
+                    labels={"backend": backend},
+                )
+            except Exception:
+                pass
+
     def _extract_from_html_with_pipeline(
         self,
         html: str,
@@ -821,10 +849,11 @@ class EnhancedWebScraper:
         backend: str,
         impersonate: Optional[str],
         proxies: Optional[Dict[str, str]],
-    ) -> str:
+    ) -> Tuple[str, str, float]:
         if backend == "curl":
             try:
-                return await asyncio.to_thread(
+                t0 = time.time()
+                html = await asyncio.to_thread(
                     self._fetch_html_curl,
                     url,
                     headers=headers,
@@ -833,19 +862,30 @@ class EnhancedWebScraper:
                     impersonate=impersonate,
                     proxies=proxies,
                 )
+                elapsed = max(0.0, time.time() - t0)
+                return html, "curl", elapsed
             except Exception as exc:
                 logger.debug(f"curl backend failed; falling back to httpx: {exc}")
-        resp = await afetch(
-            method="GET",
-            url=url,
-            headers=headers,
-            cookies=cookies,
-            proxies=proxies,
-        )
+        t0 = time.time()
+        resp = None
         try:
-            return resp.text
+            resp = await afetch(
+                method="GET",
+                url=url,
+                headers=headers,
+                cookies=cookies,
+                proxies=proxies,
+            )
         finally:
             await self._close_response(resp)
+        backend_used = "httpx"
+        try:
+            module_name = getattr(resp, "__class__", type(resp)).__module__ or ""
+            if module_name.startswith("aiohttp"):
+                backend_used = "aiohttp"
+        except Exception:
+            backend_used = "httpx"
+        return resp.text, backend_used, max(0.0, time.time() - t0)
 
     @staticmethod
     def _fetch_html_curl(
@@ -996,6 +1036,11 @@ class EnhancedWebScraper:
                         is_allowed_by_robots_async,
                     )
                     if not await is_allowed_by_robots_async(url, headers.get("User-Agent", DEFAULT_USER_AGENT)):
+                        try:
+                            parsed = urlparse(url)
+                            increment_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
+                        except Exception:
+                            increment_counter("scrape_blocked_by_robots_total", labels={})
                         return {
                             "url": url,
                             "error": "Blocked by robots policy",
@@ -1068,53 +1113,89 @@ class EnhancedWebScraper:
         impersonate: Optional[str] = None,
         proxies: Optional[Dict[str, str]] = None,
         handler: Optional[Any] = None,
+        strategy_order: Optional[List[str]] = None,
+        postprocess_markdown: bool = False,
     ) -> Dict[str, Any]:
         """Scrape using trafilatura"""
         headers = self._build_request_headers(user_agent, custom_headers)
         cookies = self._build_cookie_map(url, custom_cookies)
         effective_backend = backend if backend in {"curl", "httpx"} else "httpx"
-        html = await self._fetch_html(
+        try:
+            from tldw_Server_API.app.core import http_client as _http_client
+            headers = _http_client._sanitize_accept_encoding_for_backend(headers, effective_backend)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        t0 = time.time()
+        try:
+            html, backend_used, elapsed = await self._fetch_html(
+                url,
+                headers=headers,
+                cookies=cookies,
+                backend=effective_backend,
+                impersonate=impersonate,
+                proxies=proxies,
+            )
+        except Exception as exc:
+            elapsed = max(0.0, time.time() - t0)
+            self._emit_scrape_metrics(
+                backend=effective_backend,
+                outcome="error",
+                elapsed_s=elapsed,
+            )
+            return {"url": url, "error": str(exc), "extraction_successful": False}
+
+        data = self._extract_from_html_with_pipeline(
+            html,
             url,
-            headers=headers,
-            cookies=cookies,
-            backend=effective_backend,
-            impersonate=impersonate,
-            proxies=proxies,
+            strategy_order=strategy_order,
+            handler=handler,
+            postprocess_markdown=postprocess_markdown,
+            method_label="trafilatura",
+            fallback_extractor=self._extract_trafilatura_json,
         )
+        outcome = "success" if data.get("extraction_successful") else "no_extract"
+        self._emit_scrape_metrics(
+            backend=backend_used,
+            outcome=outcome,
+            elapsed_s=elapsed,
+            content=data.get("content") if outcome == "success" else None,
+        )
+        return self._apply_dedup(url, data)
 
-        if handler is not None:
-            data = handler(html, url)
-            data.setdefault("method", "trafilatura")
-            return self._apply_dedup(url, data)
-
-        # Extract with trafilatura
+    def _extract_trafilatura_json(self, html: str, url: str) -> Dict[str, Any]:
+        """Extract using trafilatura JSON output to preserve legacy enhanced behavior."""
         content = trafilatura.extract(
             html,
             include_comments=False,
             include_tables=True,
             include_images=False,
-            output_format='json'
+            output_format='json',
         )
 
         if content:
-            content_dict = json.loads(content)
+            try:
+                content_dict = json.loads(content)
+            except json.JSONDecodeError as exc:
+                return {
+                    "url": url,
+                    "error": f"Invalid trafilatura JSON: {exc}",
+                    "extraction_successful": False,
+                }
 
-            # Check for duplicates
-            data = {
+            return {
                 "url": url,
                 "title": content_dict.get('title', 'Untitled'),
                 "author": content_dict.get('author', 'Unknown'),
                 "date": content_dict.get('date', ''),
                 "content": content_dict.get('text', ''),
                 "extraction_successful": True,
-                "method": "trafilatura"
+                "method": "trafilatura",
             }
-            return self._apply_dedup(url, data)
 
         return {
             "url": url,
             "error": "No content extracted",
-            "extraction_successful": False
+            "extraction_successful": False,
         }
 
     async def _scrape_with_playwright(
@@ -1125,6 +1206,8 @@ class EnhancedWebScraper:
         custom_headers: Optional[Dict[str, str]] = None,
         proxies: Optional[Dict[str, str]] = None,
         handler: Optional[Any] = None,
+        strategy_order: Optional[List[str]] = None,
+        postprocess_markdown: bool = False,
     ) -> Dict[str, Any]:
         """Scrape using Playwright for JavaScript-heavy sites"""
         # Fallback gracefully if browser isn't initialized
@@ -1135,6 +1218,8 @@ class EnhancedWebScraper:
                 user_agent=user_agent,
                 custom_headers=custom_headers,
                 handler=handler,
+                strategy_order=strategy_order,
+                postprocess_markdown=postprocess_markdown,
             )
         headers_copy = dict(custom_headers) if custom_headers else {}
         effective_user_agent = user_agent or headers_copy.pop("User-Agent", None) or DEFAULT_USER_AGENT
@@ -1163,6 +1248,7 @@ class EnhancedWebScraper:
             await context.add_cookies(pw_cookies)
 
         page = await context.new_page()
+        t0 = time.time()
 
         try:
             # Navigate with timeout
@@ -1171,13 +1257,29 @@ class EnhancedWebScraper:
             # Wait for content to load
             await page.wait_for_load_state("domcontentloaded")
 
-            if handler is not None:
-                html = await page.content()
-                data = handler(html, url)
-                data.setdefault("method", "playwright")
+            html = await page.content()
+            data = self._extract_from_html_with_pipeline(
+                html,
+                url,
+                strategy_order=strategy_order,
+                handler=handler,
+                postprocess_markdown=postprocess_markdown,
+                method_label="playwright",
+                fallback_extractor=self._extract_trafilatura_json,
+            )
+            if data.get("extraction_successful") or handler is not None:
+                outcome = "success" if data.get("extraction_successful") else "no_extract"
+                elapsed = max(0.0, time.time() - t0)
+                self._emit_scrape_metrics(
+                    backend="playwright",
+                    outcome=outcome,
+                    elapsed_s=elapsed,
+                    content=data.get("content") if outcome == "success" else None,
+                )
                 return self._apply_dedup(url, data)
+            pipeline_trace = data.get("extraction_trace") if isinstance(data.get("extraction_trace"), list) else []
 
-            # Extract content
+            # Extract content (Playwright fallback)
             title = await page.title()
 
             # Try to find main content
@@ -1214,7 +1316,28 @@ class EnhancedWebScraper:
                 "extraction_successful": True,
                 "method": "playwright"
             }
+            trace = list(pipeline_trace)
+            trace.append({"strategy": "playwright", "status": "success", "reason": "fallback_extracted"})
+            data["extraction_trace"] = trace
+            data["extraction_strategy"] = "playwright"
+            data.setdefault("extraction_strategy_order", ["playwright"])
+            elapsed = max(0.0, time.time() - t0)
+            self._emit_scrape_metrics(
+                backend="playwright",
+                outcome="success",
+                elapsed_s=elapsed,
+                content=content,
+            )
             return self._apply_dedup(url, data)
+
+        except Exception as exc:
+            elapsed = max(0.0, time.time() - t0)
+            self._emit_scrape_metrics(
+                backend="playwright",
+                outcome="error",
+                elapsed_s=elapsed,
+            )
+            return {"url": url, "error": str(exc), "extraction_successful": False}
 
         finally:
             await page.close()
@@ -1230,24 +1353,56 @@ class EnhancedWebScraper:
         impersonate: Optional[str] = None,
         proxies: Optional[Dict[str, str]] = None,
         handler: Optional[Any] = None,
+        strategy_order: Optional[List[str]] = None,
+        postprocess_markdown: bool = False,
     ) -> Dict[str, Any]:
         """Scrape using BeautifulSoup for simple HTML parsing"""
         headers = self._build_request_headers(user_agent, custom_headers)
         cookies = self._build_cookie_map(url, custom_cookies)
         effective_backend = backend if backend in {"curl", "httpx"} else "httpx"
-        html = await self._fetch_html(
-            url,
-            headers=headers,
-            cookies=cookies,
-            backend=effective_backend,
-            impersonate=impersonate,
-            proxies=proxies,
-        )
+        try:
+            from tldw_Server_API.app.core import http_client as _http_client
+            headers = _http_client._sanitize_accept_encoding_for_backend(headers, effective_backend)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        t0 = time.time()
+        try:
+            html, backend_used, elapsed = await self._fetch_html(
+                url,
+                headers=headers,
+                cookies=cookies,
+                backend=effective_backend,
+                impersonate=impersonate,
+                proxies=proxies,
+            )
+        except Exception as exc:
+            elapsed = max(0.0, time.time() - t0)
+            self._emit_scrape_metrics(
+                backend=effective_backend,
+                outcome="error",
+                elapsed_s=elapsed,
+            )
+            return {"url": url, "error": str(exc), "extraction_successful": False}
 
-        if handler is not None:
-            data = handler(html, url)
-            data.setdefault("method", "beautifulsoup")
+        data = self._extract_from_html_with_pipeline(
+            html,
+            url,
+            strategy_order=strategy_order,
+            handler=handler,
+            postprocess_markdown=postprocess_markdown,
+            method_label="beautifulsoup",
+            fallback_extractor=self._extract_trafilatura_json,
+        )
+        if data.get("extraction_successful") or handler is not None:
+            outcome = "success" if data.get("extraction_successful") else "no_extract"
+            self._emit_scrape_metrics(
+                backend=backend_used,
+                outcome=outcome,
+                elapsed_s=elapsed,
+                content=data.get("content") if outcome == "success" else None,
+            )
             return self._apply_dedup(url, data)
+        pipeline_trace = data.get("extraction_trace") if isinstance(data.get("extraction_trace"), list) else []
         soup = BeautifulSoup(html, 'html.parser')
 
         # Extract title
@@ -1291,6 +1446,17 @@ class EnhancedWebScraper:
             "extraction_successful": True,
             "method": "beautifulsoup"
         }
+        trace = list(pipeline_trace)
+        trace.append({"strategy": "beautifulsoup", "status": "success", "reason": "fallback_extracted"})
+        data["extraction_trace"] = trace
+        data["extraction_strategy"] = "beautifulsoup"
+        data.setdefault("extraction_strategy_order", ["beautifulsoup"])
+        self._emit_scrape_metrics(
+            backend=backend_used,
+            outcome="success",
+            elapsed_s=elapsed,
+            content=content,
+        )
         return self._apply_dedup(url, data)
 
     async def scrape_multiple(self, urls: List[str], method: str = "auto",
@@ -1709,7 +1875,7 @@ class EnhancedWebScraper:
                                     if not allowed:
                                         try:
                                             parsed = urlparse(cand)
-                                            log_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
+                                            increment_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
                                         except Exception:
                                             pass
                                         try:
@@ -1874,7 +2040,7 @@ class EnhancedWebScraper:
                                     if not allowed:
                                         try:
                                             parsed = urlparse(cand)
-                                            log_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
+                                            increment_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
                                         except Exception:
                                             pass
                                         try:

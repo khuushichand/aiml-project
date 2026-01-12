@@ -8,7 +8,7 @@ Embeddings A/B test Jobs worker (Phase 2):
 Job contract (domain/queue/job_type):
 - domain = "evaluations"
 - queue = os.getenv("EVALUATIONS_JOBS_QUEUE", "default")
-- job_type = "embeddings_abtest_run"
+- job_type = "embeddings_abtest_run" | "embeddings_abtest_cleanup"
 
 Payload fields:
 - test_id: str (required)
@@ -42,12 +42,16 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     get_user_media_db_path,
 )
 from tldw_Server_API.app.core.Evaluations.embeddings_abtest_jobs import (
+    ABTEST_JOBS_CLEANUP_TYPE,
     ABTEST_JOBS_DOMAIN,
     ABTEST_JOBS_JOB_TYPE,
     abtest_jobs_manager,
     abtest_jobs_queue,
 )
-from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import run_abtest_full
+from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import (
+    cleanup_abtest_resources,
+    run_abtest_full,
+)
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
     get_unified_evaluation_service_for_user,
 )
@@ -150,7 +154,8 @@ def _build_media_db(user_id: str) -> Any:
 
 
 async def handle_abtest_job(job: Dict[str, Any]) -> Dict[str, Any]:
-    if str(job.get("job_type") or "").strip().lower() != ABTEST_JOBS_JOB_TYPE:
+    job_type = str(job.get("job_type") or "").strip().lower()
+    if job_type not in {ABTEST_JOBS_JOB_TYPE, ABTEST_JOBS_CLEANUP_TYPE}:
         raise EmbeddingsABTestJobError(
             f"Unsupported embeddings A/B job type: {job.get('job_type')}",
             retryable=False,
@@ -165,6 +170,16 @@ async def handle_abtest_job(job: Dict[str, Any]) -> Dict[str, Any]:
     user_id_str, user_id_int = _normalize_user_id(owner)
 
     svc = get_unified_evaluation_service_for_user(user_id_int)
+    if job_type == ABTEST_JOBS_CLEANUP_TYPE:
+        cleanup_abtest_resources(
+            svc.db,
+            user_id_str,
+            str(test_id),
+            delete_db=True,
+            delete_idempotency=True,
+        )
+        return {"test_id": str(test_id), "cleanup": True}
+
     config_payload = _load_config_from_payload(payload)
     if config_payload is None:
         config_payload = _load_config_from_db(svc.db, str(test_id))
@@ -172,7 +187,7 @@ async def handle_abtest_job(job: Dict[str, Any]) -> Dict[str, Any]:
 
     media_db = _build_media_db(user_id_str)
     await run_abtest_full(svc.db, config, str(test_id), user_id_str, media_db)
-    return {"test_id": str(test_id)}
+    return {"test_id": str(test_id), "cleanup": False}
 
 
 async def run_embeddings_abtest_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> None:

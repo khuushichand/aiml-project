@@ -933,6 +933,7 @@ async def list_invites(
 )
 async def create_invite(
     body: OrgInviteCreateRequest,
+    http_request: Request,
     ctx: OrgContext = Depends(require_org_admin()),
     principal: AuthPrincipal = Depends(get_auth_principal),
 ):
@@ -954,6 +955,50 @@ async def create_invite(
         logger.info(
             f"Created invite {invite['code'][:8]}... for org {ctx.org_id} by user {principal.user_id}"
         )
+
+        async def _safe_audit_log_invite_create() -> None:
+            try:
+                if principal.user_id is None:
+                    return
+                svc = await get_or_create_audit_service_for_user_id(int(principal.user_id))
+                correlation_id = (
+                    http_request.headers.get("X-Correlation-ID")
+                    or getattr(http_request.state, "correlation_id", None)
+                )
+                request_id = (
+                    http_request.headers.get("X-Request-ID")
+                    or getattr(http_request.state, "request_id", None)
+                    or ""
+                )
+                audit_ctx = AuditContext(
+                    user_id=str(principal.user_id),
+                    correlation_id=correlation_id,
+                    request_id=request_id,
+                    ip_address=(http_request.client.host if http_request.client else None),
+                    user_agent=http_request.headers.get("user-agent"),
+                    endpoint=str(http_request.url.path),
+                    method=http_request.method,
+                )
+                await svc.log_event(
+                    event_type=AuditEventType.DATA_WRITE,
+                    context=audit_ctx,
+                    resource_type="org_invite",
+                    resource_id=str(invite.get("id")),
+                    action="org_invite.create",
+                    metadata={
+                        "org_id": ctx.org_id,
+                        "team_id": invite.get("team_id"),
+                        "role_to_grant": invite.get("role_to_grant"),
+                        "max_uses": invite.get("max_uses"),
+                        "expires_at": invite.get("expires_at"),
+                        "allowed_email_domain": invite.get("allowed_email_domain"),
+                        "code_prefix": str(invite.get("code") or "")[:8],
+                    },
+                )
+            except Exception as exc:
+                logger.debug("Org invite audit failed: {}", exc)
+
+        await _safe_audit_log_invite_create()
         return OrgInviteResponse(**invite)
     except ValueError as e:
         raise HTTPException(
@@ -969,7 +1014,9 @@ async def create_invite(
 )
 async def revoke_invite(
     invite_id: int,
+    http_request: Request,
     ctx: OrgContext = Depends(require_org_admin()),
+    principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     """Revoke an invite. Requires admin or owner role."""
     invite_service = await get_invite_service()
@@ -982,6 +1029,45 @@ async def revoke_invite(
         )
 
     logger.info(f"Revoked invite {invite_id} for org {ctx.org_id}")
+
+    async def _safe_audit_log_invite_revoke() -> None:
+        try:
+            if principal.user_id is None:
+                return
+            svc = await get_or_create_audit_service_for_user_id(int(principal.user_id))
+            correlation_id = (
+                http_request.headers.get("X-Correlation-ID")
+                or getattr(http_request.state, "correlation_id", None)
+            )
+            request_id = (
+                http_request.headers.get("X-Request-ID")
+                or getattr(http_request.state, "request_id", None)
+                or ""
+            )
+            audit_ctx = AuditContext(
+                user_id=str(principal.user_id),
+                correlation_id=correlation_id,
+                request_id=request_id,
+                ip_address=(http_request.client.host if http_request.client else None),
+                user_agent=http_request.headers.get("user-agent"),
+                endpoint=str(http_request.url.path),
+                method=http_request.method,
+            )
+            await svc.log_event(
+                event_type=AuditEventType.DATA_UPDATE,
+                context=audit_ctx,
+                resource_type="org_invite",
+                resource_id=str(invite_id),
+                action="org_invite.revoke",
+                metadata={
+                    "org_id": ctx.org_id,
+                    "invite_id": invite_id,
+                },
+            )
+        except Exception as exc:
+            logger.debug("Org invite audit failed: {}", exc)
+
+    await _safe_audit_log_invite_revoke()
 
 
 @router.post(

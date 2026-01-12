@@ -444,10 +444,10 @@ async def delete_embeddings_abtest(
     current_user: User = Depends(get_eval_request_user),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ):
-    """Cancel/cleanup an embeddings A/B test (stub)."""
+    """Cancel/cleanup an embeddings A/B test."""
+    svc = get_unified_evaluation_service_for_user(current_user.id)
     # Idempotency: if prior mapping exists, return canonical response without side effects
     try:
-        svc = get_unified_evaluation_service_for_user(current_user.id)
         if idempotency_key:
             prior = svc.db.lookup_idempotency("emb_abtest_delete", idempotency_key, user_ctx)
             if prior:
@@ -456,8 +456,19 @@ async def delete_embeddings_abtest(
     except Exception:
         pass
 
-    # Perform delete/cleanup (stubbed)
-    logger.info(f"A/B test deleted: {test_id} by {user_ctx}")
+    try:
+        from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import cleanup_abtest_resources
+        cleanup_abtest_resources(
+            svc.db,
+            str(current_user.id),
+            test_id,
+            delete_db=True,
+            delete_idempotency=True,
+        )
+        logger.info(f"A/B test deleted: {test_id} by {user_ctx}")
+    except Exception as exc:
+        logger.warning(f"A/B test cleanup failed for {test_id}: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to delete A/B test")
     try:
         if idempotency_key:
             svc.db.record_idempotency("emb_abtest_delete", idempotency_key, test_id, user_ctx)

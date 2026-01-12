@@ -354,6 +354,46 @@ _CREATE_AUTHNZ_CORE_TABLES = [
         (),
     ),
     ("CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_id)", ()),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS org_invites (
+            id SERIAL PRIMARY KEY,
+            code TEXT UNIQUE NOT NULL,
+            org_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+            team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
+            role_to_grant TEXT DEFAULT 'member',
+            created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP NOT NULL,
+            max_uses INTEGER DEFAULT 1,
+            uses_count INTEGER DEFAULT 0,
+            is_active BOOLEAN DEFAULT TRUE,
+            allowed_email_domain TEXT,
+            description TEXT,
+            metadata JSONB
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_org_invites_code ON org_invites(code)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_org_invites_org_active ON org_invites(org_id, is_active)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_org_invites_expires ON org_invites(expires_at)", ()),
+    (
+        """
+        CREATE TABLE IF NOT EXISTS org_invite_redemptions (
+            id SERIAL PRIMARY KEY,
+            invite_id INTEGER NOT NULL REFERENCES org_invites(id) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            redeemed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            ip_address TEXT,
+            user_agent TEXT,
+            UNIQUE(invite_id, user_id)
+        )
+        """,
+        (),
+    ),
+    ("CREATE INDEX IF NOT EXISTS idx_invite_redemptions_invite ON org_invite_redemptions(invite_id)", ()),
+    ("CREATE INDEX IF NOT EXISTS idx_invite_redemptions_user ON org_invite_redemptions(user_id)", ()),
     ("ALTER TABLE registration_codes ADD COLUMN IF NOT EXISTS org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL", ()),
     ("ALTER TABLE registration_codes ADD COLUMN IF NOT EXISTS org_role VARCHAR(50)", ()),
     ("ALTER TABLE registration_codes ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL", ()),
