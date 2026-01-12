@@ -3,8 +3,6 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from loguru import logger
-
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 

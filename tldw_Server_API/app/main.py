@@ -1988,6 +1988,26 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start Audio Jobs worker: {e}")
 
+    # Evaluations Embeddings A/B Jobs worker
+    try:
+        import os as _os
+        import asyncio as _asyncio
+        from tldw_Server_API.app.core.Evaluations.embeddings_abtest_jobs_worker import (
+            run_embeddings_abtest_jobs_worker as _run_abtest_jobs,
+        )
+
+        _enabled = _os.getenv("EVALUATIONS_ABTEST_JOBS_WORKER_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}
+        if not _enabled:
+            _enabled = _os.getenv("EVALS_ABTEST_JOBS_WORKER_ENABLED", "false").lower() in {"true", "1", "yes", "y", "on"}
+        if _enabled:
+            evals_abtest_jobs_stop_event = _asyncio.Event()
+            evals_abtest_jobs_task = _asyncio.create_task(_run_abtest_jobs(evals_abtest_jobs_stop_event))
+            logger.info("Embeddings A/B Jobs worker started with explicit stop_event signal")
+        else:
+            logger.info("Embeddings A/B Jobs worker disabled by flag")
+    except Exception as e:
+        logger.warning(f"Failed to start Embeddings A/B Jobs worker: {e}")
+
     # Jobs metrics gauges worker (SLO percentiles)
     try:
         import os as _os
@@ -2590,6 +2610,16 @@ async def lifespan(app: FastAPI):
                     audio_jobs_task.cancel()
             else:
                 audio_jobs_task.cancel()
+        if "evals_abtest_jobs_task" in locals() and evals_abtest_jobs_task:
+            if "evals_abtest_jobs_stop_event" in locals() and evals_abtest_jobs_stop_event:
+                try:
+                    evals_abtest_jobs_stop_event.set()
+                    await _asyncio.wait_for(evals_abtest_jobs_task, timeout=5.0)
+                    logger.info("Embeddings A/B Jobs worker stopped via stop_event")
+                except Exception:
+                    evals_abtest_jobs_task.cancel()
+            else:
+                evals_abtest_jobs_task.cancel()
         if "claims_task" in locals() and claims_task:
             claims_task.cancel()
         if "jobs_prune_task" in locals() and jobs_prune_task:

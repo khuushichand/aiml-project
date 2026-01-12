@@ -144,3 +144,43 @@ def test_init_multi_user_invalid_database_url_errors():
         assert_wizard_error(payload, action_key="validate_database_url")
         actions = payload.get("actions") or []
         assert_action_fields(actions, "validate_database_url", {"present": True, "valid": False})
+
+
+def test_db_single_user_creates_sqlite_files():
+    with runner.isolated_filesystem() as tmp_dir:
+        base_dir = Path(tmp_dir) / "user_dbs"
+        auth_db = Path(tmp_dir) / "auth_users.db"
+        db_url = f"sqlite:///{auth_db.as_posix()}"
+        result = runner.invoke(
+            app,
+            ["db", "--json"],
+            env={
+                "AUTH_MODE": "single_user",
+                "DATABASE_URL": db_url,
+                "USER_DB_BASE_DIR": str(base_dir),
+            },
+        )
+        assert result.exit_code == 0, result.output
+        payload = assert_wizard_json(result.output, command="db", status="ok")
+        actions = payload.get("actions") or []
+        assert_action_field(actions, "authnz_db", "path", str(auth_db.resolve()))
+        assert auth_db.exists()
+        user_root = base_dir / "1"
+        assert (user_root / "Media_DB_v2.db").exists()
+        assert (user_root / "ChaChaNotes.db").exists()
+        assert (user_root / "evaluations" / "evaluations.db").exists()
+        assert (Path(tmp_dir) / "Databases" / "evaluations.db").exists()
+
+
+def test_db_multi_user_invalid_database_url_errors():
+    with runner.isolated_filesystem():
+        result = runner.invoke(
+            app,
+            ["db", "--json"],
+            env={"AUTH_MODE": "multi_user", "DATABASE_URL": "sqlite:///./Databases/users.db"},
+        )
+        assert result.exit_code == 2, result.output
+        payload = assert_wizard_json(result.output, command="db", status="error")
+        assert_wizard_error(payload, action_key="validate_database_url")
+        actions = payload.get("actions") or []
+        assert_action_fields(actions, "validate_database_url", {"present": True, "valid": False})

@@ -160,7 +160,7 @@ Additional table for shared keys (name illustrative):
 6. If allowlisted and no team key, load and decrypt org shared key using the token scope context (if present).
 7. If a user/team/org key exists, use its `api_key` and its `credential_fields` as-is. Do not inherit server-default `credential_fields` for BYOK entries to avoid cross-account coupling; missing required fields must fail validation. Empty strings are invalid.
 8. Otherwise, use server default provider key.
-9. If no key is available and the provider requires auth, return a 400 with a clear message.
+9. If no key is available and the provider requires auth, return a 503 with `error_code=missing_provider_credentials`.
 
 ## API and Schemas
 - `POST /api/v1/users/keys`

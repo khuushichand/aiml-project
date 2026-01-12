@@ -173,6 +173,7 @@ For each type in `chunking_types` (`article|audio|book|document|mediawiki_articl
 - `refresh_token_expire_days` (int)
 - `byok_enabled` (bool): Enable per-user BYOK keys (ignored in single_user mode).
 - `byok_allowed_providers` (csv): Optional allowlist of providers eligible for BYOK.
+- `byok_allowed_base_url_providers` (csv): Optional allowlist of providers that may set BYOK `base_url`.
 - `byok_encryption_key` (str): Base64-encoded 32-byte key for BYOK secret encryption (AES-GCM).
 - `byok_secondary_encryption_key` (str): Secondary BYOK encryption key for dual-read during rotations.
 

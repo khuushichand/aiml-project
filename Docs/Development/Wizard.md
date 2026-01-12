@@ -18,8 +18,8 @@ This document describes the setup wizard CLI skeleton, usage patterns, and troub
   - Options: `--mode [single_user|multi_user]`, `--json`, `--dry-run`, `--yes/--no-input`
   - Behavior: updates `.env` with `AUTH_MODE`, generates `SINGLE_USER_API_KEY` when needed, validates `DATABASE_URL` for multi-user, and prompts to run the AuthNZ initializer when appropriate. Creates a timestamped backup on first modification.
 
-- `db` — initialize/validate databases (scaffold)
-  - Behavior: plans per-user SQLite structure checks and Postgres validation if `DATABASE_URL` is set.
+- `db` — initialize/validate databases
+  - Behavior: creates per-user SQLite files for Media/ChaChaNotes/Evaluations, ensures a shared evaluations DB under `Databases/`, and validates Postgres connectivity when `DATABASE_URL` uses a Postgres scheme.
 
 - `providers` — collect/store provider keys (scaffold)
   - Options: `--json`, `--dry-run`, `--check-provider`

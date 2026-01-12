@@ -8,7 +8,7 @@ Last Updated: 2026-01-12
 - AB test status transitions are defined: `pending -> queued -> running -> completed|failed`.
 - Idempotency strategy for `run` is defined (Jobs idempotency key + Evaluations DB mapping).
 **Tests**: N/A (design/contract stage)
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Jobs-Backed Run Execution
 **Goal**: Replace `BackgroundTasks` with Jobs backend execution using WorkerSDK.
@@ -19,7 +19,7 @@ Last Updated: 2026-01-12
 **Tests**:
 - Integration: enqueue + worker processes a minimal A/B test with TESTING mode.
 - Integration: failed handler retries until `max_retries` exhausted.
-**Status**: Not Started
+**Status**: In Progress
 
 ## Stage 3: Collection Reuse + Cleanup
 **Goal**: Implement per-test reuse and cleanup of collections and DB rows.

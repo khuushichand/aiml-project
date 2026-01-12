@@ -24,6 +24,6 @@
 
 ## Stage 5: Documentation + Cleanup
 **Goal**: Update BYOK docs and config references, and remove stale PRD divergences.
-**Success Criteria**: Docs reflect audit fields, rotation tooling, and no per-request overrides; PRD updated if needed.
+**Success Criteria**: Docs reflect rotation tooling, base_url allowlists, and error semantics; PRD updated where needed.
 **Tests**: N/A (doc-only).
-**Status**: Not Started
+**Status**: Complete

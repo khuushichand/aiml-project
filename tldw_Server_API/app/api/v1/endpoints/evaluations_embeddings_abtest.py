@@ -135,22 +135,13 @@ async def run_embeddings_abtest(
                 return EmbeddingsABTestStatusResponse(test_id=test_id, status='running', progress={"phase": 0.05})
         except Exception:
             pass
-    from tldw_Server_API.app.api.v1.schemas.embeddings_abtest_schemas import (
-        EmbeddingsABTestConfig, ABTestChunking,
-    )
+    from tldw_Server_API.app.api.v1.schemas.embeddings_abtest_schemas import ABTestChunking
     cfg = payload.config
     if getattr(cfg, 'chunking', None) is None:
         try:
             cfg.chunking = ABTestChunking(method='sentences', size=200, overlap=20, language=None)
         except Exception:
             pass
-
-    # Mark as running before scheduling to avoid race where clients
-    # observe previous 'completed' state before the job flips it.
-    try:
-        db.set_abtest_status(test_id, 'running', stats_json={"progress": {"phase": 0.01}})
-    except Exception:
-        pass
 
     # In testing mode, execute synchronously to make polling deterministic
     testing = False
@@ -161,6 +152,10 @@ async def run_embeddings_abtest(
 
     if testing:
         logger.info(f"A/B test running synchronously in TESTING mode: {test_id}")
+        try:
+            db.set_abtest_status(test_id, 'running', stats_json={"progress": {"phase": 0.01}})
+        except Exception:
+            pass
         try:
             await run_abtest_full(db, cfg, test_id, str(current_user.id), media_db)
         except Exception as _e:

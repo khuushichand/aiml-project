@@ -175,7 +175,7 @@ async def handle_abtest_job(job: Dict[str, Any]) -> Dict[str, Any]:
     return {"test_id": str(test_id)}
 
 
-async def main() -> None:
+async def run_embeddings_abtest_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> None:
     worker_id = (os.getenv("EVALUATIONS_JOBS_WORKER_ID") or f"evals-abtest-jobs-{os.getpid()}").strip()
     queue = abtest_jobs_queue()
 
@@ -195,8 +195,21 @@ async def main() -> None:
     jm = abtest_jobs_manager()
     sdk = WorkerSDK(jm, cfg)
     logger.info(f"Embeddings A/B Jobs worker starting (queue={queue}, worker_id={worker_id})")
-    await sdk.run(handler=handle_abtest_job)
+    watcher = None
+    if stop_event is not None:
+        async def _watch_stop() -> None:
+            await stop_event.wait()
+            sdk.stop()
+        watcher = asyncio.create_task(_watch_stop())
+    try:
+        await sdk.run(handler=handle_abtest_job)
+    finally:
+        if watcher is not None:
+            try:
+                watcher.cancel()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(run_embeddings_abtest_jobs_worker())

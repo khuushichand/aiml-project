@@ -23,7 +23,7 @@ import sys
 import time
 import re
 import tempfile
-from typing import Any, Dict, List, Union, Optional, Tuple
+from typing import Any, Dict, List, Union, Optional, Tuple, Callable
 #
 # 3rd-Party Imports
 import asyncio
@@ -51,11 +51,12 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import ingest_article_to_
 #
 # Import Local
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+from tldw_Server_API.app.core.Metrics import increment_counter, observe_histogram
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_histogram, log_counter
 from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.Web_Scraping.enhanced_web_scraping import RateLimiter
-from tldw_Server_API.app.core.Web_Scraping.scraper_router import ScraperRouter
+from tldw_Server_API.app.core.Web_Scraping.scraper_router import ScraperRouter, DEFAULT_HANDLER
 from tldw_Server_API.app.core.Web_Scraping.handlers import resolve_handler
 from tldw_Server_API.app.core.Web_Scraping.ua_profiles import (
     build_browser_headers,
@@ -306,7 +307,71 @@ def get_page_title(url: str) -> str:
         return "Untitled"
 
 
-def extract_article_data_from_html(html: str, url: str) -> Dict[str, Any]:
+DEFAULT_EXTRACTION_STRATEGY_ORDER = [
+    "jsonld",
+    "schema",
+    "regex",
+    "llm",
+    "cluster",
+    "trafilatura",
+]
+_STRATEGY_ALIASES = {
+    "json-ld": "jsonld",
+    "json_ld": "jsonld",
+    "microdata": "jsonld",
+    "schema_css": "schema",
+    "schema_xpath": "schema",
+    "clustering": "cluster",
+}
+_KNOWN_STRATEGIES = set(DEFAULT_EXTRACTION_STRATEGY_ORDER)
+
+
+def _normalize_strategy_order(
+    strategy_order: Optional[List[str]],
+) -> Tuple[List[str], List[str]]:
+    if strategy_order:
+        raw = strategy_order
+    else:
+        return list(DEFAULT_EXTRACTION_STRATEGY_ORDER), []
+    normalized: List[str] = []
+    unknown: List[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        key = item.strip().lower()
+        if not key:
+            continue
+        key = _STRATEGY_ALIASES.get(key, key)
+        if key in _KNOWN_STRATEGIES:
+            if key not in normalized:
+                normalized.append(key)
+        else:
+            unknown.append(key)
+    if not normalized:
+        normalized = list(DEFAULT_EXTRACTION_STRATEGY_ORDER)
+    return normalized, unknown
+
+
+def _trace_entry(strategy: str, status: str, reason: str, detail: Optional[str] = None) -> Dict[str, Any]:
+    entry = {"strategy": strategy, "status": status, "reason": reason}
+    if detail:
+        entry["detail"] = detail
+    return entry
+
+
+def _attach_trace(
+    result: Dict[str, Any],
+    trace: List[Dict[str, Any]],
+    strategy: Optional[str],
+    strategy_order: List[str],
+) -> Dict[str, Any]:
+    result["extraction_trace"] = trace
+    result["extraction_strategy"] = strategy
+    result["extraction_strategy_order"] = strategy_order
+    return result
+
+
+def _extract_with_trafilatura(html: str, url: str) -> Dict[str, Any]:
     """Extract article metadata and body from raw HTML."""
     logging.info(f"Extracting article data from HTML for {url}")
     downloaded = trafilatura.extract(
@@ -356,6 +421,85 @@ def extract_article_data_from_html(html: str, url: str) -> Dict[str, Any]:
         logging.warning("Metadata extraction failed.")
 
     return result
+
+
+def extract_article_with_pipeline(
+    html: str,
+    url: str,
+    *,
+    strategy_order: Optional[List[str]] = None,
+    handler: Optional[Callable[[str, str], Dict[str, Any]]] = None,
+    fallback_extractor: Optional[Callable[[str, str], Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    trace: List[Dict[str, Any]] = []
+    order, unknown = _normalize_strategy_order(strategy_order)
+    for strategy in unknown:
+        trace.append(_trace_entry(strategy, "skipped", "unknown_strategy"))
+
+    last_result: Optional[Dict[str, Any]] = None
+    for strategy in order:
+        if strategy == "jsonld":
+            trace.append(_trace_entry(strategy, "skipped", "not_implemented"))
+            continue
+        if strategy == "schema":
+            if handler is None:
+                trace.append(_trace_entry(strategy, "skipped", "no_handler"))
+                continue
+            try:
+                result = handler(html, url)
+                if "extraction_trace" in result:
+                    result["handler_trace"] = result.pop("extraction_trace")
+                if result.get("extraction_successful"):
+                    trace.append(_trace_entry(strategy, "success", "handler_extracted"))
+                    return _attach_trace(result, trace, strategy, order)
+                trace.append(_trace_entry(strategy, "failed", "handler_no_content"))
+                last_result = result
+            except Exception as exc:
+                trace.append(_trace_entry(strategy, "failed", "handler_error", str(exc)))
+            continue
+        if strategy == "regex":
+            trace.append(_trace_entry(strategy, "skipped", "not_implemented"))
+            continue
+        if strategy == "llm":
+            trace.append(_trace_entry(strategy, "skipped", "not_implemented"))
+            continue
+        if strategy == "cluster":
+            trace.append(_trace_entry(strategy, "skipped", "not_implemented"))
+            continue
+        if strategy == "trafilatura":
+            extractor = fallback_extractor or _extract_with_trafilatura
+            result = extractor(html, url)
+            last_result = result
+            if result.get("extraction_successful"):
+                trace.append(_trace_entry(strategy, "success", "extracted"))
+                return _attach_trace(result, trace, strategy, order)
+            trace.append(_trace_entry(strategy, "failed", "no_content"))
+
+    if last_result is None:
+        last_result = {
+            "title": "N/A",
+            "author": "N/A",
+            "content": "",
+            "date": "N/A",
+            "url": url,
+            "extraction_successful": False,
+        }
+    return _attach_trace(last_result, trace, None, order)
+
+
+def extract_article_data_from_html(
+    html: str,
+    url: str,
+    strategy_order: Optional[List[str]] = None,
+    handler: Optional[Callable[[str, str], Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Extract article metadata and body from raw HTML."""
+    return extract_article_with_pipeline(
+        html,
+        url,
+        strategy_order=strategy_order,
+        handler=handler,
+    )
 
 
 def convert_html_to_markdown(html: str) -> str:
@@ -421,7 +565,10 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
 
         plan = _P()  # type: ignore
 
-    handler_func = resolve_handler(getattr(plan, "handler", ""))
+    handler_path = str(getattr(plan, "handler", "") or "")
+    handler_func = resolve_handler(handler_path)
+    use_handler = bool(handler_path) and handler_path != DEFAULT_HANDLER
+    strategy_order = getattr(plan, "strategy_order", None)
 
     # Build effective headers from UA profile + extras
     ua_headers = build_browser_headers(plan.ua_profile, accept_lang="en-US,en;q=0.9")
@@ -445,9 +592,9 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
             logging.warning("Robots policy disallows fetching this URL; skipping fetch")
             try:
                 parsed = urlparse(url)
-                log_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
+                increment_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
             except Exception:
-                log_counter("scrape_blocked_by_robots_total", labels={})
+                increment_counter("scrape_blocked_by_robots_total", labels={})
             return {
                 "url": url,
                 "title": "N/A",
@@ -506,7 +653,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
                 backend_used = _resp_get(resp, "backend", "httpx")
 
             elapsed = max(0.0, time.time() - t0)
-            log_histogram("scrape_fetch_latency_seconds", elapsed, labels={"backend": backend_used})
+            observe_histogram("scrape_fetch_latency_seconds", elapsed, labels={"backend": backend_used})
 
             status = _resp_get(resp, "status")
             if status is None:
@@ -514,25 +661,36 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
             text = _resp_get(resp, "text", "")
             if int(status or 0) < 400 and text:
                 # JS-required detection heuristic: decide earlier fallback
-                if _js_required(text, _resp_get(resp, "headers", {})):
-                    log_counter("scrape_playwright_fallback_total", labels={"reason": "js_required"})
+                if _js_required(text, _resp_get(resp, "headers", {}), url):
+                    increment_counter("scrape_playwright_fallback_total", labels={"reason": "js_required"})
                     raise RuntimeError("js_required_detected")
-                article_data = handler_func(text, url)
+                article_data = extract_article_with_pipeline(
+                    text,
+                    url,
+                    strategy_order=strategy_order,
+                    handler=handler_func if use_handler else None,
+                )
                 if article_data.get("extraction_successful"):
+                    if not use_handler and article_data.get("content"):
+                        article_data["content"] = convert_html_to_markdown(article_data["content"])
                     content = article_data.get("content", "") or ""
                     logging.info(f"Article content length: {len(content)}")
-                    log_histogram("article_content_length", len(content), labels={"url": url})
-                    log_counter("scrape_fetch_total", labels={"backend": backend_used, "outcome": "success"})
+                    observe_histogram(
+                        "scrape_content_length_bytes",
+                        len(content.encode("utf-8", errors="ignore")),
+                        labels={"backend": backend_used},
+                    )
+                    increment_counter("scrape_fetch_total", labels={"backend": backend_used, "outcome": "success"})
                     return article_data
             # No extractable content
-            log_counter("scrape_fetch_total", labels={"backend": backend_used, "outcome": "no_extract"})
+            increment_counter("scrape_fetch_total", labels={"backend": backend_used, "outcome": "no_extract"})
         except Exception as _e:
             logging.debug(f"Lightweight fetch path failed or yielded no extractable content: {_e}")
-            log_counter("scrape_fetch_total", labels={"backend": backend_choice, "outcome": "error"})
-            log_counter("scrape_playwright_fallback_total", labels={"reason": "error"})
+            increment_counter("scrape_fetch_total", labels={"backend": backend_choice, "outcome": "error"})
+            increment_counter("scrape_playwright_fallback_total", labels={"reason": "error"})
         else:
             # Falling back due to no extractable content
-            log_counter("scrape_playwright_fallback_total", labels={"reason": "no_extract"})
+            increment_counter("scrape_playwright_fallback_total", labels={"reason": "no_extract"})
 
     async def fetch_html(url: str) -> str:
         # Load and log the configuration
@@ -604,8 +762,8 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
 
                     # Metrics for Playwright path
                     elapsed = max(0.0, time.time() - t0)
-                    log_histogram("scrape_fetch_latency_seconds", elapsed, labels={"backend": "playwright"})
-                    log_counter("scrape_fetch_total", labels={"backend": "playwright", "outcome": "success"})
+                    observe_histogram("scrape_fetch_latency_seconds", elapsed, labels={"backend": "playwright"})
+                    increment_counter("scrape_fetch_total", labels={"backend": "playwright", "outcome": "success"})
                     logging.info(f"HTML fetched successfully from {url}")
                     log_counter("html_fetched", labels={"url": url})
 
@@ -614,7 +772,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
 
             except Exception as e:
                 logging.error(f"Error fetching HTML from {url} on attempt {attempt + 1}: {e}")
-                log_counter("scrape_fetch_total", labels={"backend": "playwright", "outcome": "error"})
+                increment_counter("scrape_fetch_total", labels={"backend": "playwright", "outcome": "error"})
 
                 if attempt < retries - 1:
                     logging.info("Retrying...")
@@ -633,11 +791,23 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
         return ""
 
     html = await fetch_html(url)
-    article_data = handler_func(html, url)
+    article_data = extract_article_with_pipeline(
+        html,
+        url,
+        strategy_order=strategy_order,
+        handler=handler_func if use_handler else None,
+    )
+    if article_data.get("extraction_successful") and not use_handler:
+        if article_data.get("content"):
+            article_data["content"] = convert_html_to_markdown(article_data["content"])
     if article_data.get("extraction_successful"):
         content = article_data.get("content", "") or ""
         logging.info(f"Article content length: {len(content)}")
-        log_histogram("article_content_length", len(content), labels={"url": url})
+        observe_histogram(
+            "scrape_content_length_bytes",
+            len(content.encode("utf-8", errors="ignore")),
+            labels={"backend": "playwright"},
+        )
     return article_data
 
 

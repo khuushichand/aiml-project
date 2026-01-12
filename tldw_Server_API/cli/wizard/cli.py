@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
@@ -56,6 +57,30 @@ def _validate_database_url(db_url: str) -> tuple[bool, str]:
     if scheme in {"sqlite", "file", ""}:
         return False, "sqlite/file URLs are not supported for multi_user"
     return False, f"unsupported scheme '{scheme}'"
+
+
+def _resolve_sqlite_db_path(db_url: str) -> Optional[Path]:
+    try:
+        from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
+    except Exception:
+        return None
+    _, _, fs_path = DatabasePool._resolve_sqlite_paths(db_url)
+    if not fs_path or fs_path == ":memory:":
+        return None
+    path = Path(fs_path).expanduser()
+    if not path.is_absolute():
+        path = (Path.cwd() / path).resolve()
+    else:
+        path = path.resolve()
+    return path
+
+
+def _ensure_writable_file(path: Path) -> bool:
+    existed = path.exists()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a"):
+        pass
+    return not existed
 
 
 @app.command()
@@ -350,12 +375,115 @@ def providers(
 def db(
     json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON output"),
 ):
-    """Initialize/validate databases (scaffold)."""
-    actions = [
-        "ensure per-user SQLite structure exists",
-        "validate Postgres if DATABASE_URL is set",
-    ]
-    result = {"command": "db", "status": "ok", "actions": actions}
+    """Initialize/validate databases (Stage 3)."""
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
+    env_path = Path.cwd() / ".env"
+    notes: list[str] = []
+    actions: list[Dict[str, Any]] = []
+
+    existing_env = env_utils.load_env(env_path)
+    auth_mode = os.getenv("AUTH_MODE") or existing_env.get("AUTH_MODE") or "single_user"
+    db_url = _resolve_database_url(env_path)
+
+    if auth_mode == "multi_user":
+        if not db_url:
+            result = {
+                "command": "db",
+                "status": "error",
+                "actions": [{"validate_database_url": {"present": False, "valid": False, "reason": "missing"}}],
+                "notes": ["DATABASE_URL is required for multi_user mode."],
+            }
+            _emit(result, json_out)
+            raise typer.Exit(2)
+        valid, reason = _validate_database_url(db_url)
+        if not valid:
+            result = {
+                "command": "db",
+                "status": "error",
+                "actions": [{"validate_database_url": {"present": True, "valid": False, "reason": reason}}],
+                "notes": [f"DATABASE_URL invalid for multi_user: {reason}"],
+            }
+            _emit(result, json_out)
+            raise typer.Exit(2)
+
+    if not db_url:
+        db_url = "sqlite:///./Databases/users.db"
+        notes.append("DATABASE_URL not set; using default sqlite path for AuthNZ.")
+
+    scheme = (urlsplit(db_url).scheme or "").split("+", 1)[0].lower()
+    if scheme and scheme not in {"sqlite", "file", "postgres", "postgresql"}:
+        result = {
+            "command": "db",
+            "status": "error",
+            "actions": [{"validate_database_url": {"present": True, "valid": False, "reason": f"unsupported scheme '{scheme}'"}}],
+            "notes": [f"Unsupported DATABASE_URL scheme: {scheme}"],
+        }
+        _emit(result, json_out)
+        raise typer.Exit(2)
+
+    if scheme in {"postgres", "postgresql"}:
+        try:
+            from tldw_Server_API.app.core.AuthNZ.database import test_database_connection
+
+            ok = asyncio.run(test_database_connection())
+        except Exception as exc:
+            ok = False
+            notes.append(f"Postgres validation failed: {exc}")
+        actions.append({"postgres_check": {"status": "ok" if ok else "error"}})
+        if not ok:
+            result = {"command": "db", "status": "error", "actions": actions, "notes": notes}
+            _emit(result, json_out)
+            raise typer.Exit(2)
+    else:
+        auth_db_path = _resolve_sqlite_db_path(db_url)
+        if auth_db_path is None:
+            notes.append("AuthNZ sqlite path not resolved (maybe :memory:); skipping file creation.")
+        else:
+            try:
+                created = _ensure_writable_file(auth_db_path)
+                actions.append({"authnz_db": {"path": str(auth_db_path), "created": created}})
+            except OSError as exc:
+                result = {
+                    "command": "db",
+                    "status": "error",
+                    "actions": [{"authnz_db": {"path": str(auth_db_path), "error": str(exc)}}],
+                }
+                _emit(result, json_out)
+                raise typer.Exit(2)
+
+    user_id = DatabasePaths.get_single_user_id()
+    if not DatabasePaths.validate_database_structure(user_id):
+        result = {
+            "command": "db",
+            "status": "error",
+            "actions": [{"sqlite_structure": {"status": "error", "user_id": str(user_id)}}],
+        }
+        _emit(result, json_out)
+        raise typer.Exit(2)
+
+    sqlite_files: list[Dict[str, Any]] = []
+    db_paths = {
+        "media": DatabasePaths.get_media_db_path(user_id),
+        "chacha": DatabasePaths.get_chacha_db_path(user_id),
+        "evaluations": DatabasePaths.get_evaluations_db_path(user_id),
+        "evaluations_shared": (Path.cwd() / "Databases" / "evaluations.db").resolve(),
+    }
+    for name, path in db_paths.items():
+        try:
+            created = _ensure_writable_file(path)
+            sqlite_files.append({"name": name, "path": str(path), "created": created})
+        except OSError as exc:
+            result = {
+                "command": "db",
+                "status": "error",
+                "actions": [{"sqlite_db": {"name": name, "path": str(path), "error": str(exc)}}],
+            }
+            _emit(result, json_out)
+            raise typer.Exit(2)
+
+    actions.append({"sqlite_files": sqlite_files})
+    result = {"command": "db", "status": "ok", "actions": actions, "notes": notes}
     _emit(result, json_out)
 
 

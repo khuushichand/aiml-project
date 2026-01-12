@@ -784,6 +784,34 @@ class EnhancedWebScraper:
         self.deduplicator.add_content(url, content, title)
         return data
 
+    def _extract_from_html_with_pipeline(
+        self,
+        html: str,
+        url: str,
+        *,
+        strategy_order: Optional[List[str]] = None,
+        handler: Optional[Any] = None,
+        postprocess_markdown: bool = False,
+        method_label: str = "trafilatura",
+        fallback_extractor: Optional[Callable[[str, str], Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import (
+            convert_html_to_markdown,
+            extract_article_with_pipeline,
+        )
+
+        data = extract_article_with_pipeline(
+            html,
+            url,
+            strategy_order=strategy_order,
+            handler=handler,
+            fallback_extractor=fallback_extractor,
+        )
+        if postprocess_markdown and data.get("extraction_successful") and data.get("content"):
+            data["content"] = convert_html_to_markdown(data["content"])
+        data.setdefault("method", method_label)
+        return data
+
     async def _fetch_html(
         self,
         url: str,
@@ -941,8 +969,11 @@ class EnhancedWebScraper:
 
         try:
             plan, backend_choice, handler_path = self._resolve_scrape_plan(url)
-            use_handler = method == "auto" or (handler_path and handler_path != DEFAULT_HANDLER)
-            handler_func = resolve_handler(handler_path) if use_handler else None
+            handler_path = str(handler_path or "")
+            is_default_handler = (not handler_path) or handler_path == DEFAULT_HANDLER
+            handler_func = resolve_handler(handler_path) if not is_default_handler else None
+            strategy_order = getattr(plan, "strategy_order", None)
+            postprocess_markdown = is_default_handler
 
             merged_cookies = self._merge_cookie_maps(custom_cookies, getattr(plan, "cookies", {}))
             headers = self._build_plan_headers(
@@ -989,6 +1020,8 @@ class EnhancedWebScraper:
                     impersonate=getattr(plan, "impersonate", profile_to_impersonate(getattr(plan, "ua_profile", ""))),
                     proxies=getattr(plan, "proxies", None),
                     handler=handler_func,
+                    strategy_order=strategy_order,
+                    postprocess_markdown=postprocess_markdown,
                 )
             elif effective_method == "playwright":
                 return await self._scrape_with_playwright(
@@ -998,6 +1031,8 @@ class EnhancedWebScraper:
                     custom_headers=headers,
                     proxies=getattr(plan, "proxies", None),
                     handler=handler_func,
+                    strategy_order=strategy_order,
+                    postprocess_markdown=postprocess_markdown,
                 )
             elif effective_method == "beautifulsoup":
                 return await self._scrape_with_beautifulsoup(
@@ -1009,6 +1044,8 @@ class EnhancedWebScraper:
                     impersonate=getattr(plan, "impersonate", profile_to_impersonate(getattr(plan, "ua_profile", ""))),
                     proxies=getattr(plan, "proxies", None),
                     handler=handler_func,
+                    strategy_order=strategy_order,
+                    postprocess_markdown=postprocess_markdown,
                 )
             else:
                 raise ValueError(f"Unknown scraping method: {effective_method}")

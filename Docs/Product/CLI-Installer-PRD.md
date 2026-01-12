@@ -215,7 +215,9 @@
 
 ### Implementation Plan
 
-- Plan file: `Docs/Plans/IMPLEMENTATION_PLAN_cli_installer_env_merge.md`
+- Plan files:
+  - `Docs/Plans/IMPLEMENTATION_PLAN_cli_installer_env_merge.md`
+  - `Docs/Plans/IMPLEMENTATION_PLAN_cli_installer_db_init.md`
 
 ## Stage 1: Scaffold + Packaging
 **Goal**: Ship a packaged CLI skeleton with core commands, safe file ops, and JSON output.
@@ -239,7 +241,7 @@
 **Tests**:
 - Unit tests for merge logic (idempotency, dedupe, updates, backup on first change).
 - Integration tests: single_user first run and re-run; multi_user path with valid/invalid `DATABASE_URL`.
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 3: Database Initialization + Verification
 **Goal**: Create per-user SQLite structure and validate Postgres connectivity.
@@ -250,7 +252,7 @@
 **Tests**:
 - Integration tests using tmpdir for SQLite creation; permissions and write probes.
 - Fixture-backed connectivity test for Postgres (skippable when fixture unavailable).
-**Status**: Not Started
+**Status**: In Progress
 
 ## Stage 4: Verification Endpoints + Ephemeral Server
 **Goal**: Verify `/api/v1/health`, `/api/v1/healthz`, and `/api/v1/mcp/status`; support ephemeral uvicorn start/stop.
