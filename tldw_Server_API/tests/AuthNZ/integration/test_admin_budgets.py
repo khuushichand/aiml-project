@@ -60,3 +60,69 @@ def test_admin_budgets_list_and_update(isolated_test_environment):
     assert budgets["alert_thresholds"]["per_metric"]["budget_day_usd"] == [90]
     assert budgets["enforcement_mode"]["global"] == "soft"
     assert budgets["enforcement_mode"]["per_metric"]["budget_day_usd"] == "hard"
+
+
+def test_admin_budgets_defaults_in_response(isolated_test_environment):
+    client, db_name = isolated_test_environment
+    headers = _admin_headers(client, db_name)
+
+    org_resp = client.post("/api/v1/admin/orgs", headers=headers, json={"name": "Defaults Org"})
+    assert org_resp.status_code == 200, org_resp.text
+    org_id = org_resp.json()["id"]
+
+    update_resp = client.post(
+        "/api/v1/admin/budgets",
+        headers=headers,
+        json={
+            "org_id": org_id,
+            "budgets": {
+                "budget_month_usd": 75.0,
+                "alert_thresholds": {"global": [80]},
+            },
+        },
+    )
+    assert update_resp.status_code == 200, update_resp.text
+    budgets = update_resp.json()["budgets"]
+    assert budgets["budget_month_usd"] == 75.0
+    assert budgets["alert_thresholds"]["global"] == [80]
+    assert budgets["alert_thresholds"]["per_metric"] == {}
+    assert budgets["enforcement_mode"]["global"] == "none"
+    assert budgets["enforcement_mode"]["per_metric"] == {}
+
+
+def test_admin_budget_audit_failure_blocks_update(isolated_test_environment, monkeypatch):
+    client, db_name = isolated_test_environment
+    headers = _admin_headers(client, db_name)
+
+    org_resp = client.post("/api/v1/admin/orgs", headers=headers, json={"name": "Audit Org"})
+    assert org_resp.status_code == 200, org_resp.text
+    org_id = org_resp.json()["id"]
+
+    first_resp = client.post(
+        "/api/v1/admin/budgets",
+        headers=headers,
+        json={
+            "org_id": org_id,
+            "budgets": {"budget_month_usd": 100.0},
+        },
+    )
+    assert first_resp.status_code == 200, first_resp.text
+
+    async def _fail_audit(*_args, **_kwargs):
+        raise RuntimeError("audit down")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.admin.emit_budget_audit_event",
+        _fail_audit,
+    )
+
+    failed_resp = client.post(
+        "/api/v1/admin/budgets",
+        headers=headers,
+        json={
+            "org_id": org_id,
+            "budgets": {"budget_month_usd": 200.0},
+        },
+    )
+    assert failed_resp.status_code == 500, failed_resp.text
+    assert failed_resp.json()["detail"] == "audit_failed"

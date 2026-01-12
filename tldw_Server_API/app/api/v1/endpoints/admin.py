@@ -98,6 +98,7 @@ from tldw_Server_API.app.api.v1.schemas.api_key_schemas import (
     APIKeyAuditListResponse,
 )
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.services.budget_audit_service import emit_budget_audit_event
 from tldw_Server_API.app.api.v1.schemas.user_keys import (
     AdminUserKeysResponse,
     AdminUserKeyStatusItem,
@@ -5224,85 +5225,28 @@ async def admin_upsert_budget(
         logger.error(f"Failed to upsert org budget: {exc}")
         raise HTTPException(status_code=500, detail="Failed to upsert org budget") from exc
 
-    # Best-effort audit with detailed change log (always emit)
+    actor_role = None
     try:
-        actor_id_raw = getattr(request.state, "user_id", None) or principal.user_id
-        try:
-            actor_id = int(actor_id_raw) if actor_id_raw is not None else None
-        except (TypeError, ValueError):
-            actor_id = None
-        if isinstance(actor_id, int):
-            from tldw_Server_API.app.core.DB_Management.Users_DB import get_user_by_id as _get_user
-            from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User as _User
-            from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
-                get_audit_service_for_user,
-                get_or_create_audit_service_for_user_id,
-            )
-            from tldw_Server_API.app.core.Audit.unified_audit_service import (
-                AuditContext,
-                AuditEventType,
-                AuditEventCategory,
-            )
+        if principal.is_admin:
+            actor_role = "admin"
+        elif principal.roles:
+            actor_role = principal.roles[0]
+    except Exception:
+        actor_role = None
 
-            _ud = await _get_user(actor_id)
-            _svc = None
-            if _ud:
-                _user = _User(**_ud)
-                _svc = await get_audit_service_for_user(_user)
-            if _svc is None:
-                _svc = await get_or_create_audit_service_for_user_id(actor_id)
-            correlation_id = (
-                request.headers.get("X-Correlation-ID")
-                or getattr(request.state, "correlation_id", None)
-            )
-            request_id = (
-                request.headers.get("X-Request-ID")
-                or getattr(request.state, "request_id", None)
-            )
-            actor_role = None
-            try:
-                if principal.is_admin:
-                    actor_role = "admin"
-                elif principal.roles:
-                    actor_role = principal.roles[0]
-            except Exception:
-                actor_role = None
-            changes_payload = audit_changes or []
-            _ctx = AuditContext(
-                user_id=str(actor_id),
-                correlation_id=correlation_id,
-                request_id=request_id or "",
-                ip_address=(request.client.host if request.client else None),
-                user_agent=request.headers.get("user-agent"),
-                endpoint=str(request.url.path),
-                method=request.method,
-            )
-            await _svc.log_event(
-                event_type=AuditEventType.CONFIG_CHANGED,
-                category=AuditEventCategory.SYSTEM,
-                context=_ctx,
-                resource_type="org_budget",
-                resource_id=str(payload.org_id),
-                action="budget.update",
-                metadata={
-                    "org_id": payload.org_id,
-                    "actor_id": actor_id,
-                    "resource_type": "org_budget",
-                    "resource_id": str(payload.org_id),
-                    "correlation_id": correlation_id,
-                    "version": 1,
-                    "changes": changes_payload,
-                    "no_changes": len(changes_payload) == 0,
-                    "clear_budgets": payload.clear_budgets,
-                    "requested_updates": budget_updates or {},
-                    "actor_role": actor_role,
-                    "source_ip": request.client.host if request.client else None,
-                    "user_agent": request.headers.get("user-agent"),
-                    "request_id": request_id,
-                },
-            )
-    except Exception as _e:
-        logger.debug(f"Audit (org budget update) skipped/failed: {_e}")
+    try:
+        await emit_budget_audit_event(
+            request,
+            principal,
+            org_id=payload.org_id,
+            budget_updates=budget_updates,
+            audit_changes=audit_changes,
+            clear_budgets=payload.clear_budgets,
+            actor_role=actor_role,
+        )
+    except Exception as exc:
+        logger.error(f"Budget audit failed: {exc}")
+        raise HTTPException(status_code=500, detail="audit_failed") from exc
 
     return OrgBudgetItem(**item)
 

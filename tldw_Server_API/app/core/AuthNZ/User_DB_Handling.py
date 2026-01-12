@@ -442,19 +442,14 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
     deployment via configuration and routing, not via this helper.
     """
 
-    # Import Users_DB here to avoid import errors in single-user mode
+    # Resolve users via the AuthNZ repository to keep backend differences localized.
     try:
-        from tldw_Server_API.app.core.DB_Management.Users_DB import (
-            get_user_by_id,
-            get_user_by_uuid,
-            get_user_by_username,
-            UserNotFoundError,
-        )
+        from tldw_Server_API.app.core.AuthNZ.repos.users_repo import AuthnzUsersRepo
     except ImportError:
-        logger.error("Multi-user mode requires Users_DB module, but it's not available.")
+        logger.error("AuthNZ users repository is unavailable; cannot resolve JWT subjects.")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Multi-user mode requires Users_DB implementation."
+            detail="AuthNZ user lookup is unavailable.",
         )
 
     credentials_exception = HTTPException(
@@ -563,14 +558,15 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
     subject_identifier = user_id_int if user_id_int is not None else raw_subject
     user_data: Optional[dict] = None
     try:
+        repo = await AuthnzUsersRepo.from_pool()
         if user_id_int is not None:
-            user_data = await get_user_by_id(user_id_int)
+            user_data = await repo.get_user_by_id(user_id_int)
         else:
             identifier_str = str(raw_subject)
-            user_data = await get_user_by_uuid(identifier_str)
+            user_data = await repo.get_user_by_uuid(identifier_str)
             if not user_data and payload.get("username"):
                 # Fallback to username claim when UUID lookup misses
-                user_data = await get_user_by_username(str(payload["username"]))
+                user_data = await repo.get_user_by_username(str(payload["username"]))
 
         if not user_data:
             if pii_redact_logs:
@@ -590,19 +586,16 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
                 detail="Internal error retrieving user data format."
             )
 
-    except UserNotFoundError:
-        if pii_redact_logs:
-            logger.warning("User referenced by token not found in Users_DB (UserNotFoundError).")
-        else:
-            logger.warning(f"User with ID {subject_identifier} from token not found in Users_DB (UserNotFoundError).")
-        raise credentials_exception
     except HTTPException:
         raise
     except Exception as e:
         if pii_redact_logs:
-            logger.error("Error fetching user (details redacted) from Users_DB", exc_info=True)
+            logger.error("Error fetching user (details redacted) from AuthNZ user store", exc_info=True)
         else:
-            logger.error(f"Error fetching user {subject_identifier} from Users_DB: {e}", exc_info=True)
+            logger.error(
+                f"Error fetching user {subject_identifier} from AuthNZ user store: {e}",
+                exc_info=True,
+            )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error retrieving user information."
@@ -896,11 +889,10 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
                 detail="Invalid API key",
             )
 
-        from tldw_Server_API.app.core.DB_Management.Users_DB import (
-            get_user_by_id as _get_user,
-        )
+        from tldw_Server_API.app.core.AuthNZ.repos.users_repo import AuthnzUsersRepo
 
-        user_data = await _get_user(user_id)
+        users_repo = await AuthnzUsersRepo.from_pool()
+        user_data = await users_repo.get_user_by_id(user_id)
         if not user_data:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -946,10 +938,13 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
         key_team_id = _coerce_int(key_info.get("team_id"))
         if key_org_id is None and key_team_id is None and key_info.get("id") is not None:
             try:
+                from tldw_Server_API.app.core.AuthNZ.repos.api_keys_repo import AuthnzApiKeysRepo
+
                 db_pool = await get_db_pool()
-                row = await db_pool.fetchone(
-                    "SELECT org_id, team_id FROM api_keys WHERE id = ?",
-                    int(key_info["id"]),
+                api_keys_repo = AuthnzApiKeysRepo(db_pool)
+                row = await api_keys_repo.fetch_key_for_user(
+                    key_id=int(key_info["id"]),
+                    user_id=int(user_id),
                 )
                 if row:
                     key_org_id = _coerce_int(row.get("org_id"))

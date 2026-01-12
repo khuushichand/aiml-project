@@ -240,6 +240,34 @@ def _inflate_budget_payload(flat: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+def _apply_budget_response_defaults(budgets: Dict[str, Any]) -> Dict[str, Any]:
+    """Add explicit response defaults for optional budget sub-fields."""
+    if not budgets:
+        return {}
+    normalized = dict(budgets)
+
+    thresholds = normalized.get("alert_thresholds")
+    if thresholds is not None:
+        if not isinstance(thresholds, dict):
+            thresholds = {}
+        else:
+            thresholds = dict(thresholds)
+        if thresholds.get("per_metric") is None:
+            thresholds["per_metric"] = {}
+        normalized["alert_thresholds"] = thresholds
+
+    enforcement = normalized.get("enforcement_mode")
+    enforcement_payload: Dict[str, Any] = {}
+    if isinstance(enforcement, dict):
+        enforcement_payload.update(enforcement)
+    if enforcement_payload.get("global") is None:
+        enforcement_payload["global"] = "none"
+    if enforcement_payload.get("per_metric") is None:
+        enforcement_payload["per_metric"] = {}
+    normalized["enforcement_mode"] = enforcement_payload
+    return normalized
+
+
 def _build_budget_item(row: Dict[str, Any]) -> Dict[str, Any]:
     plan_name = row.get("plan_name") or "free"
     plan_display_name = row.get("plan_display_name") or plan_name.title()
@@ -252,6 +280,7 @@ def _build_budget_item(row: Dict[str, Any]) -> Dict[str, Any]:
     if not budgets_payload and isinstance(custom_limits, dict) and "budgets" in custom_limits:
         budgets_payload = _normalize_budget_payload(custom_limits.get("budgets"))
     budgets = _flatten_budget_payload(budgets_payload)
+    budgets_with_defaults = _apply_budget_response_defaults(budgets)
     if isinstance(custom_limits, dict) and "budgets" in custom_limits:
         custom_limits = dict(custom_limits)
         custom_limits.pop("budgets", None)
@@ -259,8 +288,8 @@ def _build_budget_item(row: Dict[str, Any]) -> Dict[str, Any]:
     effective_limits = dict(plan_limits)
     if isinstance(custom_limits, dict) and custom_limits:
         effective_limits.update(custom_limits)
-    if budgets:
-        effective_limits["budgets"] = _inflate_budget_payload(budgets)
+    if budgets_with_defaults:
+        effective_limits["budgets"] = _inflate_budget_payload(budgets_with_defaults)
 
     return {
         "org_id": int(row.get("org_id")),
@@ -268,7 +297,7 @@ def _build_budget_item(row: Dict[str, Any]) -> Dict[str, Any]:
         "org_slug": row.get("org_slug"),
         "plan_name": plan_name,
         "plan_display_name": plan_display_name,
-        "budgets": budgets,
+        "budgets": budgets_with_defaults,
         "custom_limits": custom_limits,
         "effective_limits": effective_limits,
         "updated_at": row.get("budgets_updated_at") or row.get("updated_at"),

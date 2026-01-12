@@ -14,6 +14,7 @@ from loguru import logger
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
     get_registration_service_dep,
+    get_db_transaction,
 )
 from tldw_Server_API.app.api.v1.API_Deps.org_deps import (
     OrgContext,
@@ -47,6 +48,10 @@ from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     OrgInviteAcceptRequest,
     OrgInviteAcceptResponse,
 )
+from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
+    OrgBudgetItem,
+    OrgBudgetSelfUpdateRequest,
+)
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
@@ -61,6 +66,11 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
 from tldw_Server_API.app.services.org_invite_service import OrgInviteService, get_invite_service
 from tldw_Server_API.app.services.registration_service import RegistrationService
 from tldw_Server_API.app.core.Billing.subscription_service import get_subscription_service
+from tldw_Server_API.app.services.admin_budgets_service import (
+    list_org_budgets as svc_list_org_budgets,
+    upsert_org_budget as svc_upsert_org_budget,
+)
+from tldw_Server_API.app.services.budget_audit_service import emit_budget_audit_event
 
 
 router = APIRouter(
@@ -1013,3 +1023,81 @@ async def accept_org_invite(
         org_role=result.get("org_role"),
         was_already_member=result.get("was_already_member", False),
     )
+
+
+# =============================================================================
+# Org Budget Governance
+# =============================================================================
+
+@router.get(
+    "/{org_id}/budgets",
+    response_model=OrgBudgetItem,
+    summary="Get organization budget settings",
+)
+async def get_org_budgets(
+    ctx: OrgContext = Depends(require_org_admin()),
+    db=Depends(get_db_transaction),
+) -> OrgBudgetItem:
+    """Return budget settings and plan context for an org."""
+    items, _total = await svc_list_org_budgets(
+        db,
+        org_ids=[ctx.org_id],
+        page=1,
+        limit=1,
+    )
+    if not items:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="org_not_found")
+    return OrgBudgetItem(**items[0])
+
+
+@router.post(
+    "/{org_id}/budgets",
+    response_model=OrgBudgetItem,
+    summary="Update organization budget settings",
+)
+async def update_org_budgets(
+    payload: OrgBudgetSelfUpdateRequest,
+    request: Request,
+    ctx: OrgContext = Depends(require_org_admin()),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
+) -> OrgBudgetItem:
+    """Update budget settings for an org (org admin/owner only)."""
+    budget_updates = None
+    if payload.budgets is not None:
+        budget_updates = payload.budgets.model_dump(exclude_unset=True, by_alias=True)
+    try:
+        item, audit_changes = await svc_upsert_org_budget(
+            db,
+            org_id=ctx.org_id,
+            budget_updates=budget_updates,
+            clear_budgets=payload.clear_budgets,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "org_not_found":
+            raise HTTPException(status_code=404, detail="org_not_found") from exc
+        if detail == "plan_not_found":
+            raise HTTPException(status_code=500, detail="plan_not_found") from exc
+        if detail == "subscription_not_found":
+            raise HTTPException(status_code=500, detail="subscription_not_found") from exc
+        raise HTTPException(status_code=400, detail="invalid_budget_update") from exc
+    except Exception as exc:
+        logger.error(f"Failed to upsert org budget: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to upsert org budget") from exc
+
+    try:
+        await emit_budget_audit_event(
+            request,
+            principal,
+            org_id=ctx.org_id,
+            budget_updates=budget_updates,
+            audit_changes=audit_changes,
+            clear_budgets=payload.clear_budgets,
+            actor_role=ctx.role,
+        )
+    except Exception as exc:
+        logger.error(f"Budget audit failed: {exc}")
+        raise HTTPException(status_code=500, detail="audit_failed") from exc
+
+    return OrgBudgetItem(**item)

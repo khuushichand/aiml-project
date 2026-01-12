@@ -1,10 +1,11 @@
 # Admin Budgets (Ops Governance) PRD
 
 ## Summary
-Platform admins need a first-class way to define per-organization budgets, alert thresholds, and enforcement modes. This PRD defines the initial admin budget endpoints and data flow, focusing on stored configuration and auditability. Enforcement is a follow-on concern.
+Platform admins and org admins need a first-class way to define per-organization budgets, alert thresholds, and enforcement modes. This PRD defines the admin and org-scoped budget endpoints and data flow, focusing on stored configuration and auditability. Enforcement is a follow-on concern.
 
 ## Goals
 - Provide admin endpoints to list and update org budget settings.
+- Provide org-scoped endpoints for org admins to view/update budgets for their org.
 - Support spend caps (USD) and usage caps (tokens) at daily/monthly granularity.
 - Capture alert thresholds and enforcement mode for future policy checks.
 - Emit audit events for every budget update.
@@ -22,20 +23,26 @@ Platform admins need a first-class way to define per-organization budgets, alert
 ## User Stories
 - Admins can view all org budgets and plan context in one list.
 - Platform admins can update daily/monthly USD and token budgets for an org.
-- Org admins can configure alert thresholds and enforcement mode (stored for future enforcement).
+- Org admins can configure alert thresholds and enforcement mode via org-scoped endpoints (stored for future enforcement).
 - Reviewers can see who changed budgets and when.
 
 ## Functional Requirements
 ### Admin Budgets API
-- List budgets for all orgs (with admin scoping).
+- List budgets for all orgs (platform admin only).
 - Update budgets for a specific org.
 - Allow clearing specific budget fields (set field to null) or the entire budget section.
 - Return plan and limit context alongside budget settings.
+
+### Org Budgets API
+- Org admins (owner/admin) can view and update budgets for their org.
+- Org membership scopes access; platform admins may also access org endpoints.
+- Same merge/clear semantics as admin updates, but org_id is taken from the path.
 
 ### Storage
 - Store budgets in a dedicated `org_budgets` table (`budgets_json` column).
 - Keep existing custom limit overrides intact; budgets are no longer stored
   inside `org_subscriptions.custom_limits_json`.
+- Migrate legacy `custom_limits_json.budgets` into `org_budgets` and remove the legacy field.
 
 ## API Contract
 ### Admin
@@ -86,6 +93,22 @@ Platform admins need a first-class way to define per-organization budgets, alert
     - `400 invalid_budget_update` for invalid budget values.
     - `422` validation errors for malformed request payloads.
     - `500 plan_not_found` or `subscription_not_found` when subscription metadata is missing.
+    - `500 audit_failed` when audit logging fails (no budget changes persisted).
+
+### Org
+- GET `/api/v1/orgs/{org_id}/budgets`
+  - Response: `OrgBudgetItem` for the org.
+- POST `/api/v1/orgs/{org_id}/budgets`
+  - Body: `{ budgets?, clear_budgets? }`
+  - Semantics:
+    - Same merge/clear semantics as admin POST.
+    - `org_id` is taken from the path; payload does not include `org_id`.
+  - Errors:
+    - `403` when the caller is not an org admin (owner/admin) for the org.
+    - `404 org_not_found` when the org does not exist.
+    - `400 invalid_budget_update` for invalid budget values.
+    - `422` validation errors for malformed request payloads.
+    - `500 audit_failed` when audit logging fails (no budget changes persisted).
 
 ### OrgBudgetItem (response)
 - org_id, org_name, org_slug
@@ -94,14 +117,18 @@ Platform admins need a first-class way to define per-organization budgets, alert
     budget_day_usd?, budget_month_usd?, budget_day_tokens?, budget_month_tokens?,
     alert_thresholds?, enforcement_mode?
   }
+  - `budgets` may be `{}` when no org-specific budgets are configured.
   - `alert_thresholds`:
     - `global`: list of percent ints (1-100). Applied to all budgets.
     - `per_metric`: map of budget field name -> list of percent ints.
     - Lists are normalized (de-duplicated and stored in ascending order).
     - Unknown per-metric keys are rejected with `invalid_budget_update`.
+    - If `alert_thresholds` is present, `per_metric` defaults to `{}` in API responses when missing.
   - `enforcement_mode`:
     - `global`: "none" | "soft" | "hard"
     - `per_metric`: map of budget field name -> "none" | "soft" | "hard"
+    - If `enforcement_mode` is present, `global` defaults to `"none"` in API responses when missing.
+    - If `enforcement_mode` is present, `per_metric` defaults to `{}` in API responses when missing.
   - Per-metric keys are budget field names: `budget_day_usd`, `budget_month_usd`,
     `budget_day_tokens`, `budget_month_tokens`.
 - custom_limits: user-configured overrides stored on the org subscription (JSON),
@@ -150,12 +177,14 @@ Platform admins need a first-class way to define per-organization budgets, alert
   if budgets_json:
       effective_limits["budgets"] = budgets_json
   ```
+  - Response defaults are applied to `effective_limits.budgets` (e.g., `enforcement_mode.global = "none"`,
+    empty `per_metric` maps) for consistency with `budgets`.
 - Budget fields included in `effective_limits.budgets` when set:
   `budget_day_usd`, `budget_month_usd`, `budget_day_tokens`, `budget_month_tokens`,
   `alert_thresholds`, `enforcement_mode`.
 - Validation/rounding: values must be >= 0 (or `null` to clear); token budgets are
-  integers; alert thresholds are integer percentages between 1 and 100; no rounding
-  is applied beyond these validations.
+  integers; alert thresholds are integer percentages between 1 and 100; USD budgets
+  should be sent with at most 2 decimal places (no server-side rounding beyond validation).
 
 ## Audit and Observability
 - Budget updates emit unified audit events using `AuditEventType.CONFIG_CHANGED`
@@ -176,6 +205,8 @@ Platform admins need a first-class way to define per-organization budgets, alert
 - Budget update metadata should include: `org_id`, `clear_budgets`, and `updates`
   (the serialized `budgets` fields applied in the request). Optionally include a
   `changes` array for downstream consumers, but keep it inside `metadata`.
+- Audit logging is mandatory; if audit logging fails, the request fails and no
+  budget changes are persisted.
 - Example (single-field update, full payload fields):
   ```
   {
@@ -213,6 +244,7 @@ Platform admins need a first-class way to define per-organization budgets, alert
 - Org without an existing subscription row: create a default free subscription record before storing budgets.
 - Budget update with null values: remove those fields from stored budgets.
 - Missing plan data: fall back to default free plan limits.
+- Audit failure: return `audit_failed` and roll back the budget update.
 
 ## Open Questions (Resolved)
 - Budgets are stored outside `custom_limits_json` in a dedicated `org_budgets` table.

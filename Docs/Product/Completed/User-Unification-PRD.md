@@ -144,6 +144,7 @@ The goal is to reduce special-case handling, make the mental model “always mul
   - `auth_deps.get_current_user` has dedicated branches for `SINGLE_USER_API_KEY` and synthetic single-user dicts.
   - `User_DB_Handling.get_request_user` constructs a dummy `User` with admin-style claims when `is_single_user_mode()` is true.
   - `verify_single_user_api_key` validates the fixed key independently of APIKeyManager.
+  - `auth_principal_resolver.get_auth_principal` and `User_DB_Handling.authenticate_api_key_user` still short-circuit `SINGLE_USER_API_KEY` for legacy compatibility.
 - For v1, these must be treated as compatibility layers:
   - Internally, they will be refactored to rely on the bootstrapped user + API key and `get_auth_principal` / `AuthContext`.
   - Externally, their observable behavior (headers accepted, 401/403 responses, basic user fields) remains intact while single-user mode is redefined as a bootstrap profile.
@@ -415,7 +416,7 @@ This section is forward-looking (targeting v1.0 or later). To make “mode” an
 As of the current AuthNZ refactor stage (note: “repo-backed” here refers to runtime read/write operations; migrations and bootstrap/DDL backstops may still be inline):
 
 - Runtime flows for **users**, **RBAC**, **orgs/teams**, **sessions**, **token blacklist**, **MFA**, **monitoring**, and **registration codes** are fully repo-backed; inline SQL for these concerns is limited to migrations and bootstrap helpers.
-- **API keys** and **usage/LLM-usage** are partially repo-backed: validation, listing, aggregation, and pruning use `AuthnzApiKeysRepo` / `AuthnzUsageRepo`, but `APIKeyManager` and `usage_logging_middleware` still contain backend-specific inline SQL for some runtime operations.
+- **API keys** and **usage/LLM-usage** are partially repo-backed: validation, listing, aggregation, and pruning use `AuthnzApiKeysRepo` / `AuthnzUsageRepo`, but `APIKeyManager` still contains backend-specific inline SQL for some runtime operations (usage logging inserts now go through `AuthnzUsageRepo`).
 - Non-MFA inline SQL that uses backend detection (`hasattr(conn, 'fetch*')`) and touches core tables is explicitly marked as deferred or bootstrap-only in the AuthNZ implementation plan (e.g., Postgres bootstrap DDL in `initialize.py`, runtime API-key flows in `api_key_manager.py`).
 
 For a detailed, per-table view across the core AuthNZ tables (users, api_keys, RBAC, orgs/teams, usage/llm_usage, rate_limits/failed_attempts/account_lockouts, sessions, token_blacklist, MFA, monitoring, registration codes), see the **“Repo Coverage Table (AuthNZ core tables)”** section in `Docs/Design/AuthNZ-Refactor-Implementation-Plan.md`.
@@ -435,7 +436,7 @@ For a detailed, per-table view across the core AuthNZ tables (users, api_keys, R
 
 ## Success Criteria
 
-- Single-user deployments are implemented as a constrained configuration of multi-user infrastructure; no separate auth code path is required.
+- Single-user deployments are implemented as a constrained configuration of multi-user infrastructure; legacy `SINGLE_USER_API_KEY` compatibility shims remain for now but no new auth paths are introduced.
 - The number of direct `is_single_user_mode()` checks in the codebase is significantly reduced and confined to a small set of coordination points.
 - At least API-key and user-related AuthNZ modules no longer contain inline dialect branches or DDL; they use repositories instead.
 - For both profiles, authentication headers, HTTP status codes (401/403), and error payloads remain compatible with current behavior, or any intentional changes are explicitly documented and tested.

@@ -780,6 +780,12 @@ class OrgBudgetUpdateRequest(BaseModel):
     clear_budgets: bool = False
 
 
+class OrgBudgetSelfUpdateRequest(BaseModel):
+    """Upsert budget settings for the current organization context."""
+    budgets: Optional[BudgetSettings] = None
+    clear_budgets: bool = False
+
+
 class OrgBudgetItem(BaseModel):
     """Budget details for an organization."""
     org_id: int

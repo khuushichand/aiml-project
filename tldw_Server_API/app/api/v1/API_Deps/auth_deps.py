@@ -936,8 +936,8 @@ def require_api_key_scope(
             # Retrieve scope from request.state (populated during auth)
             key_scope = getattr(request.state, "_api_key_scope", None)
             if key_scope is None:
-                # Fallback: allow if no scope info (graceful degradation for single-user mode)
-                if is_single_user_mode():
+                # Fallback: allow only for explicit single-user principals.
+                if getattr(principal, "subject", None) == "single_user":
                     return principal
                 # In multi-user mode, missing scope is an error
                 if _is_test_mode():

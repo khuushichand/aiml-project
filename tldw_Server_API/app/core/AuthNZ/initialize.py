@@ -703,13 +703,145 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                 logger.debug("Commit skipped or failed: {}", commit_err)
     except Exception as e:
         # Non-fatal but important for observability: surface failures at warning level
-        logger.opt(exception=True).warning(
-            "Single-user RBAC seed ensure skipped or failed in ensure_single_user_rbac_seed_if_needed "
-            "(AUTH_MODE={}, db_url={}): {}",
-            settings.AUTH_MODE,
-            _sanitize_db_url(settings.DATABASE_URL),
-            e,
+            logger.opt(exception=True).warning(
+                "Single-user RBAC seed ensure skipped or failed in ensure_single_user_rbac_seed_if_needed "
+                "(AUTH_MODE={}, db_url={}): {}",
+                settings.AUTH_MODE,
+                _sanitize_db_url(settings.DATABASE_URL),
+                e,
+            )
+
+
+def _coerce_row_int(row: object, key: str, index: int = 0) -> Optional[int]:
+    """Best-effort row value -> int for both sqlite rows and dict-like records."""
+    value = None
+    try:
+        if hasattr(row, "keys"):
+            value = row[key]  # type: ignore[index]
+        elif isinstance(row, dict):
+            value = row.get(key)
+        else:
+            value = row[index]  # type: ignore[index]
+    except Exception:
+        value = None
+    try:
+        return int(value) if value is not None else None
+    except Exception:
+        return None
+
+
+def _coerce_row_str(row: object, key: str, index: int = 0) -> Optional[str]:
+    """Best-effort row value -> str for both sqlite rows and dict-like records."""
+    value = None
+    try:
+        if hasattr(row, "keys"):
+            value = row[key]  # type: ignore[index]
+        elif isinstance(row, dict):
+            value = row.get(key)
+        else:
+            value = row[index]  # type: ignore[index]
+    except Exception:
+        value = None
+    if value is None:
+        return None
+    try:
+        return str(value)
+    except Exception:
+        return None
+
+
+async def _collect_single_user_invariant_errors(
+    pool: DatabasePool,
+    *,
+    expected_user_id: int,
+    expected_key_hash: Optional[str],
+    check_keys: bool,
+) -> list[str]:
+    """Return a list of invariant violations for single-user bootstrap."""
+    errors: list[str] = []
+    is_postgres = getattr(pool, "pool", None) is not None
+    active_clause = "is_active = TRUE" if is_postgres else "is_active = 1"
+
+    try:
+        active_rows = await pool.fetch(
+            f"SELECT id FROM users WHERE {active_clause}"
         )
+        active_ids = sorted(
+            {
+                _coerce_row_int(row, "id", 0)
+                for row in active_rows
+                if _coerce_row_int(row, "id", 0) is not None
+            }
+        )
+        if expected_user_id not in active_ids:
+            errors.append(
+                f"Single-user admin id={expected_user_id} is missing or inactive."
+            )
+        extra_active = [uid for uid in active_ids if uid != expected_user_id]
+        if extra_active:
+            errors.append(
+                "Multiple active users detected in single-user profile: "
+                + ", ".join(str(uid) for uid in extra_active)
+            )
+    except Exception as exc:
+        errors.append(f"Failed to verify active users: {exc}")
+
+    try:
+        admin_rows = await pool.fetch(
+            f"SELECT id FROM users WHERE role = ? AND {active_clause}",
+            "admin",
+        )
+        admin_ids = sorted(
+            {
+                _coerce_row_int(row, "id", 0)
+                for row in admin_rows
+                if _coerce_row_int(row, "id", 0) is not None
+            }
+        )
+        extra_admins = [uid for uid in admin_ids if uid != expected_user_id]
+        if extra_admins:
+            errors.append(
+                "Multiple admin users detected in single-user profile: "
+                + ", ".join(str(uid) for uid in extra_admins)
+            )
+    except Exception as exc:
+        errors.append(f"Failed to verify admin users: {exc}")
+
+    if check_keys and expected_key_hash:
+        virtual_clause = "is_virtual = FALSE" if is_postgres else "is_virtual = 0"
+        try:
+            key_rows = await pool.fetch(
+                f"""
+                SELECT id, key_hash FROM api_keys
+                WHERE user_id = ? AND status = ? AND {virtual_clause}
+                """,
+                expected_user_id,
+                "active",
+            )
+            key_ids = [
+                _coerce_row_int(row, "id", 0)
+                for row in key_rows
+                if _coerce_row_int(row, "id", 0) is not None
+            ]
+            if not key_ids:
+                errors.append(
+                    "No active non-virtual API key found for the single-user admin."
+                )
+            elif len(key_ids) > 1:
+                errors.append(
+                    "Multiple active non-virtual API keys found for the single-user admin: "
+                    + ", ".join(str(kid) for kid in key_ids)
+                )
+            else:
+                row_hash = _coerce_row_str(key_rows[0], "key_hash", 1)
+                if row_hash != expected_key_hash:
+                    errors.append(
+                        "Active primary API key does not match SINGLE_USER_API_KEY."
+                    )
+        except Exception as exc:
+            errors.append(f"Failed to verify single-user API key invariants: {exc}")
+
+    return errors
 
 async def create_admin_user():
     """Create initial admin user for multi-user mode"""
@@ -818,8 +950,25 @@ async def bootstrap_single_user_profile() -> bool:
     # The RBAC seed path may reset settings/DB pools; refresh settings to reflect
     # the current environment before reading SINGLE_USER_* values.
     settings = get_settings()
+    pool = await get_db_pool()
+    expected_user_id = settings.SINGLE_USER_FIXED_ID
     api_key_value = settings.SINGLE_USER_API_KEY or ""
     if not api_key_value or api_key_value == "CHANGE_ME_TO_SECURE_API_KEY":
+        errors = await _collect_single_user_invariant_errors(
+            pool,
+            expected_user_id=expected_user_id,
+            expected_key_hash=None,
+            check_keys=False,
+        )
+        if errors:
+            message = (
+                "Single-user bootstrap invariant check failed:\n - "
+                + "\n - ".join(errors)
+                + "\nResolve conflicts (deactivate extra users, revoke extra API keys) and re-run bootstrap."
+            )
+            print(f"❌ {message}")
+            logger.error(message)
+            return False
         print(
             "⚠️  SINGLE_USER_API_KEY is not set or uses the default placeholder; "
             "skipping primary API key bootstrap."
@@ -832,7 +981,6 @@ async def bootstrap_single_user_profile() -> bool:
 
     try:
         # Use APIKeyManager to ensure tables and compute key hash
-        pool = await get_db_pool()
         manager = APIKeyManager(db_pool=pool)
         await manager.initialize()
 
@@ -868,6 +1016,21 @@ async def bootstrap_single_user_profile() -> bool:
 
         print("✅ Single-user primary API key ensured in AuthNZ store")
         logger.info("Single-user primary API key ensured in AuthNZ store")
+        errors = await _collect_single_user_invariant_errors(
+            pool,
+            expected_user_id=expected_user_id,
+            expected_key_hash=key_hash,
+            check_keys=True,
+        )
+        if errors:
+            message = (
+                "Single-user bootstrap invariant check failed:\n - "
+                + "\n - ".join(errors)
+                + "\nResolve conflicts (deactivate extra users, revoke extra API keys) and re-run bootstrap."
+            )
+            print(f"❌ {message}")
+            logger.error(message)
+            return False
         return True
     except Exception as e:
         print(f"⚠️  Failed to bootstrap single-user primary API key (continuing): {e}")

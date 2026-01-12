@@ -1658,11 +1658,15 @@ class UnifiedAuditService:
             return deduped
         return [event for event in deduped if event.event_id not in existing_ids]
 
-    async def flush(self):
-        """Flush buffered events to database"""
+    async def flush(self, *, raise_on_failure: bool = False) -> bool:
+        """Flush buffered events to database.
+
+        Returns True when flush succeeds (or no events). When raise_on_failure is
+        True, exceptions are propagated after fallback handling.
+        """
         async with self.buffer_lock:
             if not self.event_buffer:
-                return
+                return True
 
             events = self.event_buffer.copy()
             self.event_buffer.clear()
@@ -1687,7 +1691,7 @@ class UnifiedAuditService:
                                 pass
                             new_events = await self._filter_new_events(db, events)
                             if not new_events:
-                                return
+                                return True
                             # Prepare batch data
                             records = [event.to_dict() for event in new_events]
                             await db.executemany(
@@ -1719,7 +1723,7 @@ class UnifiedAuditService:
                         async with self._db_lock:
                             new_events = await self._filter_new_events(db, events)
                             if not new_events:
-                                return
+                                return True
                             # Prepare batch data
                             records = [event.to_dict() for event in new_events]
 
@@ -1755,7 +1759,7 @@ class UnifiedAuditService:
                     self.stats["events_flushed"] += len(new_events)
                     logger.debug(f"Flushed {len(new_events)} audit events to database")
                     last_error = None
-                    break
+                    return True
                 except aiosqlite.OperationalError as oe:  # type: ignore[attr-defined]
                     last_error = oe
                     msg = str(oe).lower()
@@ -1791,6 +1795,10 @@ class UnifiedAuditService:
                 else:
                     logger.warning("Audit flush failure: events re-buffered (no drop)")
                 self.event_buffer = combined[:max_buffer]
+            if raise_on_failure:
+                raise
+            return False
+        return True
 
     def _append_events_to_fallback(self, fb_path: Path, events: List[AuditEvent]) -> None:
         """Write events to the fallback JSONL file."""
