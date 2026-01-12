@@ -40,6 +40,7 @@ from tldw_Server_API.app.core.Chat.prompt_template_manager import (
     apply_template_to_string,
 )
 from tldw_Server_API.app.core.LLM_Calls import adapter_registry as _adapter_registry
+from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
 from tldw_Server_API.app.core.Chat.streaming_utils import (
     create_streaming_response_with_timeout,
 )
@@ -735,12 +736,7 @@ async def perform_chat_api_call_async(**kwargs: Any) -> Any:
             return stream_iter
         except NotImplementedError:
             stream_iter = adapter.stream(request)
-
-            async def _wrap_sync_stream() -> AsyncIterator[str]:
-                for item in stream_iter:
-                    yield item
-
-            return _wrap_sync_stream()
+            return wrap_sync_stream(stream_iter)
 
     try:
         return await adapter.achat(request)

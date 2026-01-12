@@ -517,6 +517,29 @@ def _resolve_openai_api_base(openai_cfg: Dict[str, Any]) -> str:
     return (cfg_base or env_api_base or 'https://api.openai.com/v1')
 
 
+def _resolve_openai_embeddings_api_key(
+    model: Optional[str],
+    openai_cfg: Optional[Dict[str, Any]],
+    app_config: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    api_key = (openai_cfg or {}).get("api_key")
+    if api_key:
+        return api_key
+    if not app_config or not model:
+        return None
+    try:
+        emb_cfg = app_config.get("embedding_config") or {}
+        models = emb_cfg.get("models") or {}
+        model_spec = models.get(model)
+        if model_spec is not None:
+            return getattr(model_spec, "api_key", None) or (
+                model_spec.get("api_key") if isinstance(model_spec, dict) else None
+            )
+    except Exception:
+        return None
+    return None
+
+
 async def _async_retry_sleep(base_delay: float, attempt: int) -> None:
     """Async sleep helper applying linear backoff per attempt (1-indexed)."""
     delay = base_delay * (attempt + 1)
@@ -582,24 +605,11 @@ def get_openai_embeddings(
     if app_config:
         # Preferred: explicit openai_api section
         openai_cfg = (app_config.get('openai_api') or {})
-        api_key = openai_cfg.get('api_key')
-        # Fallback: embedding_config holds per-model API keys
-        if not api_key:
-            try:
-                emb_cfg = app_config.get('embedding_config') or {}
-                models = emb_cfg.get('models') or {}
-                model_spec = models.get(model)
-                if model_spec is not None:
-                    # Pydantic model or dict-like
-                    api_key = getattr(model_spec, 'api_key', None) or (
-                        model_spec.get('api_key') if isinstance(model_spec, dict) else None
-                    )
-            except Exception:
-                api_key = None
+        api_key = _resolve_openai_embeddings_api_key(model, openai_cfg, app_config)
     else:
         loaded_config_data = load_and_log_configs()
         openai_cfg = loaded_config_data.get('openai_api', {})
-        api_key = openai_cfg.get('api_key')
+        api_key = _resolve_openai_embeddings_api_key(model, openai_cfg, loaded_config_data)
 
     if not api_key:
         logging.error("OpenAI Embeddings (single): API key not found or is empty")
@@ -696,12 +706,12 @@ def get_openai_embeddings_batch(
     openai_cfg: Dict[str, Any] = {}
     if app_config:
         openai_cfg = app_config.get('openai_api', {}) or {}
-        api_key = openai_cfg.get('api_key')
+        api_key = _resolve_openai_embeddings_api_key(model, openai_cfg, app_config)
     else:
         # Fallback to loading config internally if not provided
         loaded_config_data = load_and_log_configs()
         openai_cfg = loaded_config_data.get('openai_api', {})
-        api_key = openai_cfg.get('api_key')
+        api_key = _resolve_openai_embeddings_api_key(model, openai_cfg, loaded_config_data)
 
     if not api_key:
         logging.error("OpenAI Embeddings (batch): API key not found or is empty")

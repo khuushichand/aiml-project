@@ -95,6 +95,9 @@ def track_metrics(
         # Ensure metrics are registered on first import
         try:
             registry = get_metrics_registry()
+            call_metric_name = registry.normalize_metric_name(call_metric_name)
+            duration_metric_name = registry.normalize_metric_name(duration_metric_name)
+            error_metric_name = registry.normalize_metric_name(error_metric_name)
             if track_calls and call_metric_name not in registry.metrics:
                 registry.register_metric(MetricDefinition(
                     name=call_metric_name,
@@ -239,6 +242,7 @@ def measure_latency(
         # Register histogram if missing
         try:
             registry = get_metrics_registry()
+            histogram_name = registry.normalize_metric_name(histogram_name)
             if histogram_name not in registry.metrics:
                 registry.register_metric(MetricDefinition(
                     name=histogram_name,
@@ -297,6 +301,7 @@ def count_calls(
         # Register counter if missing
         try:
             registry = get_metrics_registry()
+            counter_name = registry.normalize_metric_name(counter_name)
             if counter_name not in registry.metrics:
                 registry.register_metric(MetricDefinition(
                     name=counter_name,
@@ -363,6 +368,7 @@ def track_errors(
         # Register error counter if missing
         try:
             registry = get_metrics_registry()
+            error_metric = registry.normalize_metric_name(error_metric)
             if error_metric not in registry.metrics:
                 registry.register_metric(MetricDefinition(
                     name=error_metric,
@@ -439,6 +445,8 @@ def monitor_resource(
         # Ensure a gauge exists for active count so we never emit negative increments
         try:
             registry = get_metrics_registry()
+            count_metric = registry.normalize_metric_name(count_metric)
+            usage_metric = registry.normalize_metric_name(usage_metric)
             if count_metric not in registry.metrics:
                 registry.register_metric(
                     MetricDefinition(
@@ -720,8 +728,8 @@ def cache_metrics(
                 # Track hit ratio if enabled
                 if track_ratio:
                     registry = get_metrics_registry()
-                    hits = registry.get_metric_stats("cache_hits_total", {"cache": cache_name}).get("sum", 0)
-                    misses = registry.get_metric_stats("cache_misses_total", {"cache": cache_name}).get("sum", 0)
+                    hits = registry.get_cumulative_counter("cache_hits_total", {"cache": cache_name})
+                    misses = registry.get_cumulative_counter("cache_misses_total", {"cache": cache_name})
                     total = hits + misses
                     ratio = hits / total if total > 0 else 0
                     set_gauge("cache_hit_ratio", ratio, labels={"cache": cache_name})
@@ -752,8 +760,8 @@ def cache_metrics(
                 # Track hit ratio if enabled
                 if track_ratio:
                     registry = get_metrics_registry()
-                    hits = registry.get_metric_stats("cache_hits_total", {"cache": cache_name}).get("sum", 0)
-                    misses = registry.get_metric_stats("cache_misses_total", {"cache": cache_name}).get("sum", 0)
+                    hits = registry.get_cumulative_counter("cache_hits_total", {"cache": cache_name})
+                    misses = registry.get_cumulative_counter("cache_misses_total", {"cache": cache_name})
                     total = hits + misses
                     ratio = hits / total if total > 0 else 0
                     set_gauge("cache_hit_ratio", ratio, labels={"cache": cache_name})

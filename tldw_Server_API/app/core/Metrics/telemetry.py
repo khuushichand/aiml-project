@@ -54,6 +54,8 @@ class DummyMeter:
         return DummyInstrument()
     def create_gauge(self, name, **kwargs):
         return DummyInstrument()
+    def create_observable_gauge(self, name, **kwargs):
+        return DummyInstrument()
     def create_up_down_counter(self, name, **kwargs):
         return DummyInstrument()
 

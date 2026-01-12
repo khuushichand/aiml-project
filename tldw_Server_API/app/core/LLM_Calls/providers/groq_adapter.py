@@ -6,6 +6,7 @@ import os
 from .base import ChatProvider
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
+from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
     fetch as _hc_fetch,
@@ -163,8 +164,7 @@ class GroqAdapter(ChatProvider):
         return self.chat(request, timeout=timeout)
 
     async def astream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> AsyncIterator[str]:
-        gen = self.stream(request, timeout=timeout)
-        for item in gen:
+        async for item in wrap_sync_stream(self.stream(request, timeout=timeout)):
             yield item
 
     def normalize_error(self, exc: Exception):  # type: ignore[override]

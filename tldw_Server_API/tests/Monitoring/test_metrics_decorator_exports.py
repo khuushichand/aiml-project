@@ -27,7 +27,7 @@ def test_measure_latency_exports_default_buckets(monkeypatch):
         metrics_manager._metrics_registry = None
 
 
-def test_cache_hit_ratio_uses_ring_buffer_window(monkeypatch):
+def test_cache_hit_ratio_uses_cumulative_counters(monkeypatch):
 
 
     monkeypatch.setenv("METRICS_RING_BUFFER_MAXLEN", "2")
@@ -45,6 +45,6 @@ def test_cache_hit_ratio_uses_ring_buffer_window(monkeypatch):
         fetch(True)
 
         stats = registry.get_metric_stats("cache_hit_ratio", {"cache": "demo_cache"})
-        assert stats["latest"] == pytest.approx(2 / 3)
+        assert stats["latest"] == pytest.approx(3 / 4)
     finally:
         metrics_manager._metrics_registry = None
