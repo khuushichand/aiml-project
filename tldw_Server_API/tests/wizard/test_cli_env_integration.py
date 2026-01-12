@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import os
-import json
 from pathlib import Path
 
 from typer.testing import CliRunner
 
 from tldw_Server_API.cli.wizard.cli import app
 from tldw_Server_API.cli.wizard.utils import env as env_utils
+from tldw_Server_API.tests.wizard.helpers import (
+    assert_action_field,
+    assert_action_fields,
+    assert_wizard_error,
+    assert_wizard_json,
+)
 
 
 runner = CliRunner()
@@ -72,15 +77,10 @@ def test_auth_multi_user_invalid_database_url_errors():
             env={"DATABASE_URL": "sqlite:///./Databases/users.db"},
         )
         assert result.exit_code == 2, result.output
-        payload = json.loads(result.output)
-        assert payload.get("status") == "error"
+        payload = assert_wizard_json(result.output, command="auth", status="error")
+        assert_wizard_error(payload, action_key="validate_database_url")
         actions = payload.get("actions") or []
-        validation = next(
-            (action.get("validate_database_url") for action in actions if "validate_database_url" in action),
-            None,
-        )
-        assert validation is not None
-        assert validation.get("database_url", {}).get("valid") is False
+        assert_action_field(actions, "validate_database_url", "database_url.valid", False)
         assert Path(".env").exists() is False
 
 
@@ -92,4 +92,55 @@ def test_auth_multi_user_yes_sets_initializer_action():
             env={"DATABASE_URL": "postgresql://user:pass@localhost:5432/tldw_users"},
         )
         assert result.exit_code == 0, result.output
-        assert "would_run" in result.output
+        payload = assert_wizard_json(result.output, command="auth", status="ok")
+        actions = payload.get("actions") or []
+        assert_action_field(actions, "authnz_initializer", "status", "would_run")
+
+
+def test_init_multi_user_yes_sets_initializer_action():
+    with runner.isolated_filesystem() as tmp_dir:
+        result = runner.invoke(
+            app,
+            ["init", "--dry-run", "--json", "--yes", "--install-dir", tmp_dir, "--no-format"],
+            env={
+                "AUTH_MODE": "multi_user",
+                "DATABASE_URL": "postgresql://user:pass@localhost:5432/tldw_users",
+            },
+        )
+        assert result.exit_code == 0, result.output
+        payload = assert_wizard_json(result.output, command="init", status="ok")
+        actions = payload.get("actions") or []
+        assert_action_field(actions, "authnz_initializer", "status", "would_run")
+
+
+def test_init_multi_user_valid_database_url_sets_present_true():
+    with runner.isolated_filesystem() as tmp_dir:
+        result = runner.invoke(
+            app,
+            ["init", "--dry-run", "--json", "--install-dir", tmp_dir, "--no-format"],
+            env={
+                "AUTH_MODE": "multi_user",
+                "DATABASE_URL": "postgresql://user:pass@localhost:5432/tldw_users",
+            },
+        )
+        assert result.exit_code == 0, result.output
+        payload = assert_wizard_json(result.output, command="init", status="ok")
+        actions = payload.get("actions") or []
+        assert_action_fields(actions, "validate_database_url", {"present": True, "valid": True})
+
+
+def test_init_multi_user_invalid_database_url_errors():
+    with runner.isolated_filesystem() as tmp_dir:
+        result = runner.invoke(
+            app,
+            ["init", "--dry-run", "--json", "--install-dir", tmp_dir, "--no-format"],
+            env={
+                "AUTH_MODE": "multi_user",
+                "DATABASE_URL": "sqlite:///./Databases/users.db",
+            },
+        )
+        assert result.exit_code == 2, result.output
+        payload = assert_wizard_json(result.output, command="init", status="error")
+        assert_wizard_error(payload, action_key="validate_database_url")
+        actions = payload.get("actions") or []
+        assert_action_fields(actions, "validate_database_url", {"present": True, "valid": False})

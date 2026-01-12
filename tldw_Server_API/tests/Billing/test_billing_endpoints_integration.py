@@ -727,11 +727,43 @@ class TestOrgInviteEndpoints:
                 VALUES ($1, $2, $3)
             """, org_id, user_id, "owner")
 
+            allowed_uuid = str(uuid_lib.uuid4())
+            allowed_password = "Test@Pass#2024!"
+            allowed_hash = password_service.hash_password(allowed_password)
+            allowed_user_id = await conn.fetchval("""
+                INSERT INTO users (
+                    uuid, username, email, password_hash, role,
+                    is_active, is_verified, storage_quota_mb, storage_used_mb
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                RETURNING id
+            """, allowed_uuid, "inviteallowed", "allowed@example.com", allowed_hash,
+                "user", True, True, 5120, 0.0)
+
+            blocked_uuid = str(uuid_lib.uuid4())
+            blocked_password = "Test@Pass#2024!"
+            blocked_hash = password_service.hash_password(blocked_password)
+            blocked_user_id = await conn.fetchval("""
+                INSERT INTO users (
+                    uuid, username, email, password_hash, role,
+                    is_active, is_verified, storage_quota_mb, storage_used_mb
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                RETURNING id
+            """, blocked_uuid, "inviteblocked", "blocked@other.com", blocked_hash,
+                "user", True, True, 5120, 0.0)
+
             self.client = client
             self.user_id = user_id
             self.org_id = org_id
             self.username = "inviteowner"
             self.password = password
+            self.allowed_user_id = allowed_user_id
+            self.allowed_username = "inviteallowed"
+            self.allowed_password = allowed_password
+            self.blocked_user_id = blocked_user_id
+            self.blocked_username = "inviteblocked"
+            self.blocked_password = blocked_password
             self.db_name = db_name
 
         finally:
@@ -744,6 +776,15 @@ class TestOrgInviteEndpoints:
         response = self.client.post(
             "/api/v1/auth/login",
             data={"username": self.username, "password": self.password}
+        )
+        if response.status_code == 200:
+            return response.json()["access_token"]
+        return None
+
+    def _get_auth_token_for(self, username, password):
+        response = self.client.post(
+            "/api/v1/auth/login",
+            data={"username": username, "password": password}
         )
         if response.status_code == 200:
             return response.json()["access_token"]
@@ -816,6 +857,139 @@ class TestOrgInviteEndpoints:
             pytest.skip("Org/invite routes not available in test environment")
         # Owner should be able to create invites
         assert response.status_code in [200, 201, 403, 422]
+
+    def test_create_invite_with_allowlist_returns_domain(self):
+        """Create invite should return allowed_email_domain when provided."""
+        token = self._get_auth_token()
+        if not token:
+            pytest.skip("Could not get auth token")
+
+        response = self.client.post(
+            f"/api/v1/orgs/{self.org_id}/invites",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "role_to_grant": "member",
+                "max_uses": 2,
+                "expiry_days": 7,
+                "allowed_email_domain": "@Example.com",
+            }
+        )
+
+        if response.status_code == 404:
+            pytest.skip("Org/invite routes not available in test environment")
+        if response.status_code in [403, 422]:
+            pytest.skip("Invite creation not permitted in this environment")
+        assert response.status_code in [200, 201]
+        data = response.json()
+        assert data.get("allowed_email_domain") == "example.com"
+
+    def test_preview_invite_includes_allowlist(self):
+        """Preview should include allowed_email_domain when set."""
+        token = self._get_auth_token()
+        if not token:
+            pytest.skip("Could not get auth token")
+
+        create_resp = self.client.post(
+            f"/api/v1/orgs/{self.org_id}/invites",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "role_to_grant": "member",
+                "max_uses": 1,
+                "expiry_days": 7,
+                "allowed_email_domain": "example.com",
+            }
+        )
+
+        if create_resp.status_code == 404:
+            pytest.skip("Org/invite routes not available in test environment")
+        if create_resp.status_code in [403, 422]:
+            pytest.skip("Invite creation not permitted in this environment")
+        assert create_resp.status_code in [200, 201]
+        code = create_resp.json().get("code")
+        assert code
+
+        preview_resp = self.client.get(f"/api/v1/invites/preview?code={code}")
+        assert preview_resp.status_code == 200
+        preview_data = preview_resp.json()
+        assert preview_data.get("allowed_email_domain") == "example.com"
+
+    def test_redeem_invite_allowlist_blocks_mismatch(self):
+        """Redeem should reject users outside allowed_email_domain."""
+        owner_token = self._get_auth_token()
+        if not owner_token:
+            pytest.skip("Could not get auth token")
+
+        create_resp = self.client.post(
+            f"/api/v1/orgs/{self.org_id}/invites",
+            headers={"Authorization": f"Bearer {owner_token}"},
+            json={
+                "role_to_grant": "member",
+                "max_uses": 1,
+                "expiry_days": 7,
+                "allowed_email_domain": "example.com",
+            }
+        )
+
+        if create_resp.status_code == 404:
+            pytest.skip("Org/invite routes not available in test environment")
+        if create_resp.status_code in [403, 422]:
+            pytest.skip("Invite creation not permitted in this environment")
+        assert create_resp.status_code in [200, 201]
+        code = create_resp.json().get("code")
+        assert code
+
+        blocked_token = self._get_auth_token_for(self.blocked_username, self.blocked_password)
+        if not blocked_token:
+            pytest.skip("Could not get auth token for blocked user")
+
+        redeem_resp = self.client.post(
+            "/api/v1/invites/redeem",
+            headers={"Authorization": f"Bearer {blocked_token}"},
+            json={"code": code}
+        )
+
+        assert redeem_resp.status_code == 400
+        detail = redeem_resp.json().get("detail", "")
+        assert "allowed email domain" in detail.lower()
+
+    def test_redeem_invite_allowlist_allows_match(self):
+        """Redeem should allow users with matching allowed_email_domain."""
+        owner_token = self._get_auth_token()
+        if not owner_token:
+            pytest.skip("Could not get auth token")
+
+        create_resp = self.client.post(
+            f"/api/v1/orgs/{self.org_id}/invites",
+            headers={"Authorization": f"Bearer {owner_token}"},
+            json={
+                "role_to_grant": "member",
+                "max_uses": 2,
+                "expiry_days": 7,
+                "allowed_email_domain": "example.com",
+            }
+        )
+
+        if create_resp.status_code == 404:
+            pytest.skip("Org/invite routes not available in test environment")
+        if create_resp.status_code in [403, 422]:
+            pytest.skip("Invite creation not permitted in this environment")
+        assert create_resp.status_code in [200, 201]
+        code = create_resp.json().get("code")
+        assert code
+
+        allowed_token = self._get_auth_token_for(self.allowed_username, self.allowed_password)
+        if not allowed_token:
+            pytest.skip("Could not get auth token for allowed user")
+
+        redeem_resp = self.client.post(
+            "/api/v1/invites/redeem",
+            headers={"Authorization": f"Bearer {allowed_token}"},
+            json={"code": code}
+        )
+
+        assert redeem_resp.status_code == 200
+        data = redeem_resp.json()
+        assert data.get("org_id") == self.org_id
 
 
 @pytest.mark.skipif(

@@ -27,7 +27,8 @@ Admins need a controlled, auditable way to invite new users. The system already 
 - As an admin, I can revoke a code and see its usage count.
 - As a reviewer, I can see who created each code and when it was used.
 - As an org admin, I can generate an org invite that automatically assigns membership.
- - As an admin, I can restrict a code to a specific email domain.
+- As an admin, I can restrict a code to a specific email domain.
+- As an org admin, I can share a redeem link for an org invite.
 
 ## Functional Requirements
 ### Admin UI
@@ -50,6 +51,11 @@ Admins need a controlled, auditable way to invite new users. The system already 
   - enable_registration
   - require_registration_code
   - profile gating (self-registration blocked in single_user profile)
+- Org Invites panel (admin UI):
+  - create org invite codes with org_id, team_id (optional), role, max_uses, expiry_days, description.
+  - set allowed_email_domain for org invites.
+  - list invites with a toggle to include expired/inactive entries.
+  - actions: copy code, copy redeem link, revoke invite.
 
 ### Registration Flow
 - Register endpoint accepts `registration_code` in the request body (`/api/v1/auth/register`).
@@ -58,8 +64,9 @@ Admins need a controlled, auditable way to invite new users. The system already 
 - Org-scoped invite behavior:
   - registration auto-assigns org membership and org role; no org selection UI.
   - if the user already exists, use `/api/v1/orgs/invites/accept` to add membership without re-registering.
- - Domain allowlist behavior:
-   - if a code specifies `allowed_email_domain`, only emails in that domain may redeem it.
+- Domain allowlist behavior:
+  - if a code specifies `allowed_email_domain`, only emails in that domain may redeem it.
+  - applies to registration codes and org invites.
 
 ### Permissions and Scoping
 - Default: only admins can create/list/delete invite codes.
@@ -96,8 +103,8 @@ Admins need a controlled, auditable way to invite new users. The system already 
 ## API Contract (Org Invites - Separate System)
 ### Org Admin
 - POST `/api/v1/orgs/{org_id}/invites`
-  - Body: `{ team_id?, role_to_grant?, max_uses, expiry_days, description? }`
-  - Response: `{ id, code, max_uses, times_used, expires_at, created_at, role_to_grant, org_id, team_id }`
+  - Body: `{ team_id?, role_to_grant?, max_uses, expiry_days, description?, allowed_email_domain? }`
+  - Response: `{ id, code, max_uses, uses_count, expires_at, created_at, role_to_grant, org_id, team_id, allowed_email_domain }`
 - GET `/api/v1/orgs/{org_id}/invites`
   - Response: `{ items: [...], total }`
 - DELETE `/api/v1/orgs/{org_id}/invites/{invite_id}`
@@ -105,7 +112,7 @@ Admins need a controlled, auditable way to invite new users. The system already 
 
 ### Invite Preview + Acceptance (Existing User)
 - GET `/api/v1/invites/preview?code=...`
-  - Response: `{ org_name, team_name, role_to_grant, is_valid, status, expires_at }`
+  - Response: `{ org_name, team_name, role_to_grant, is_valid, status, expires_at, allowed_email_domain }`
 - POST `/api/v1/invites/redeem`
   - Body: `{ code }`
   - Requires authenticated user; adds org membership and role defined by the invite.
@@ -128,9 +135,13 @@ Optional extension for org-scoped invites:
 - org_role (or metadata.org_role)
 - team_id (or metadata.team_id)
 
+Org invites (separate system) should store:
+- allowed_email_domain (optional)
+
 ## UX Details
 - "Copy invite link" uses the configured Web UI base URL plus `/webui/auth.html?code=XXXX`.
 - "Copy acceptance link" uses `/webui/accept-invite.html?code=XXXX` when accepting into an existing account.
+- "Copy redeem link" for org invites uses `/webui/redeem-invite.html?code=XXXX`.
 - Web UI base URL is configurable via `Server.webui_base_url` or `TLDW_WEBUI_BASE_URL`.
 - If registration is disabled, the UI shows a warning and disables code creation.
 - Revoke action is destructive and requires confirmation.

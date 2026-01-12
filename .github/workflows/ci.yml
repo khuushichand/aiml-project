@@ -21,6 +21,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  plan-guard:
+    name: Plan Guard (Embeddings A/B v2)
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check implementation plan freshness
+        env:
+          PLAN_PATH: Docs/Plans/IMPLEMENTATION_PLAN_embeddings_abtest_v2_jobs.md
+          PLAN_STALE_DAYS: "30"
+        run: |
+          python scripts/check_implementation_plan_freshness.py
   syntax-check:
     name: Syntax Check (compileall)
     runs-on: ubuntu-latest

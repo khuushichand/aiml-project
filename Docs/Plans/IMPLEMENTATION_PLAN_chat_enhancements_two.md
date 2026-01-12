@@ -25,7 +25,7 @@
 - Tree integrity + truncation test.
 - Analytics bucket range + UTC behavior test.
 - Knowledge-save export_status test (connectors disabled) and backlink validation for notes/flashcards.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Auto-Tagging & Clustering (Phase 2)
 **Goal**: Implement auto-tagging and clustering jobs with idempotency + manual overrides.

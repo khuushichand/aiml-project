@@ -92,24 +92,11 @@ def init(
         actions.append({"create": str(env_path)})
     actions.append({"ensure_gitignore": [".env", ".env.local", "wizard.log"]})
 
-    if dry_run:
-        result = {
-            "command": "init",
-            "status": "ok",
-            "facts": facts,
-            "actions": actions,
-            "notes": [
-                "dry-run only; no changes made",
-                "this is a scaffold; future steps will initialize DBs and verify endpoints",
-            ],
-        }
-        _emit(result, json_out)
-        raise typer.Exit(0)
-
     existing_env = env_utils.load_env(env_path)
     auth_mode = os.getenv("AUTH_MODE") or existing_env.get("AUTH_MODE") or ("single_user" if default or yes else "")
     updates: Dict[str, Optional[str]] = {}
     initializer_action: Optional[Dict[str, Any]] = None
+    validation_action: Optional[Dict[str, Any]] = None
     if auth_mode:
         updates["AUTH_MODE"] = auth_mode
     if auth_mode == "single_user":
@@ -144,6 +131,7 @@ def init(
             }
             _emit(result, json_out)
             raise typer.Exit(2)
+        validation_action = {"validate_database_url": {"present": True, "valid": True, "reason": None}}
         updates["DATABASE_URL"] = db_url
         cmd = [sys.executable, "-m", "tldw_Server_API.app.core.AuthNZ.initialize"]
         if dry_run:
@@ -165,11 +153,35 @@ def init(
                     initializer_action = {"command": " ".join(cmd), "returncode": proc.returncode}
                 else:
                     initializer_action = {"command": "AuthNZ initializer", "status": "skipped"}
+
+    if dry_run:
+        if updates:
+            actions.append({"set_env": env_utils.mask_env_values({k: v for k, v in updates.items() if v is not None})})
+        if validation_action:
+            actions.append(validation_action)
+        if initializer_action:
+            actions.append({"authnz_initializer": initializer_action})
+        result = {
+            "command": "init",
+            "status": "ok",
+            "facts": facts,
+            "actions": actions,
+            "notes": [
+                "dry-run only; no changes made",
+                "this is a scaffold; future steps will initialize DBs and verify endpoints",
+            ],
+        }
+        _emit(result, json_out)
+        raise typer.Exit(0)
     env_utils.ensure_env(env_path, updates=updates)
 
     # Ensure .gitignore entries
     files_utils.ensure_gitignore(base / ".gitignore", entries=[".env", ".env.local", "wizard.log"])
 
+    if updates:
+        actions.append({"set_env": env_utils.mask_env_values({k: v for k, v in updates.items() if v is not None})})
+    if validation_action:
+        actions.append(validation_action)
     if initializer_action:
         actions.append({"authnz_initializer": initializer_action})
 

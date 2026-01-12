@@ -49,7 +49,7 @@ from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     record_byok_missing_credentials,
     resolve_byok_credentials,
 )
-from tldw_Server_API.app.core.LLM_Calls.provider_metadata import PROVIDER_REQUIRES_KEY
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 # Dependencies for user-specific database access
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import try_get_media_db_for_user
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
@@ -220,9 +220,14 @@ async def process_text_for_chunking_json(
                     )
                     api_key_value = byok_resolution_tmp.api_key
                     final_model_for_step = api_details_from_server_config.get('model_for_summarization') or api_details_from_server_config.get('model')
-                    if not api_key_value or not final_model_for_step:
-                        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                            detail=f"Configuration error: Missing API key or model for {summarization_provider}.")
+                    provider_key = (summarization_provider or "").strip().lower()
+                    if not api_key_value and provider_requires_api_key(provider_key):
+                        _raise_missing_chunking_key(provider_key)
+                    if not final_model_for_step:
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"Configuration error: Missing model for {summarization_provider}.",
+                        )
                     client_suggested_system_prompt = requested_llm_options.get('system_prompt_for_step')
                     method_default_system_prompt = effective_options.get('summarize_system_prompt')
                     final_system_prompt_for_step = client_suggested_system_prompt or method_default_system_prompt
@@ -403,10 +408,13 @@ async def process_text_for_chunking_json(
             "max_tokens": final_max_tokens_for_step,
         }
 
-        if not llm_api_config_to_use.get("api_key"):
-            logger.error(f"API key for '{summarization_provider}' for internal summarization step not found in server configuration.")
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                detail=f"Configuration error: Missing API key for {summarization_provider} for internal LLM step.")
+        provider_key = (summarization_provider or "").strip().lower()
+        if not llm_api_config_to_use.get("api_key") and provider_requires_api_key(provider_key):
+            logger.error(
+                "API key for '%s' for internal summarization step not found in server configuration.",
+                summarization_provider,
+            )
+            _raise_missing_chunking_key(provider_key)
         if not llm_api_config_to_use.get("model"):
             logger.error(f"Model for '{summarization_provider}' for internal summarization step not determined.")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -581,8 +589,9 @@ async def process_file_for_chunking(
             fallback_key=api_details_server_file.get('api_key'),
         )
         api_key_server_file = byok_resolution_file.api_key
-        if not api_key_server_file:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Server config missing API key for {internal_llm_provider_file} (file).")
+        provider_key_file = (internal_llm_provider_file or "").strip().lower()
+        if not api_key_server_file and provider_requires_api_key(provider_key_file):
+            _raise_missing_chunking_key(provider_key_file)
 
         requested_llm_params_file = effective_processing_options.get('llm_options_for_internal_steps', {})
         if requested_llm_params_file is None: requested_llm_params_file = {}

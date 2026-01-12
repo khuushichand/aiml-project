@@ -1058,6 +1058,10 @@ web_scraper_api_retry = 3
 web_scraper_api_retry_delay = 1
 web_scraper_retry_count = 3
 web_scraper_stealth_playwright = False
+custom_scrapers_yaml_path = tldw_Server_API/Config_Files/custom_scrapers.yaml
+web_scraper_default_backend = auto
+web_scraper_ua_mode = fixed
+web_scraper_respect_robots = True
 
 [Logging]
 log_level = INFO

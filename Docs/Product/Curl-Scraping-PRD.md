@@ -159,7 +159,13 @@ Router responsibilities:
 
 ## 7. Configuration
 
-All settings are configured via `Config_Files/config.txt` (loaded by `load_and_log_configs()`); this PRD does not use environment variables.
+Settings are configured via `Config_Files/config.txt` (loaded by `load_and_log_configs()`), with environment-variable overrides for deployment.
+
+Env overrides:
+- `WEB_SCRAPER_CUSTOM_SCRAPERS_YAML_PATH` (or `CUSTOM_SCRAPERS_YAML_PATH`)
+- `WEB_SCRAPER_DEFAULT_BACKEND` (or `WEB_SCRAPER_HTTP_BACKEND`)
+- `WEB_SCRAPER_UA_MODE`
+- `WEB_SCRAPER_RESPECT_ROBOTS`
 
 Relevant `config.txt` keys (section: `Web-Scraper`):
 - `custom_scrapers_yaml_path`: Path to `custom_scrapers.yaml` (default: `tldw_Server_API/Config_Files/custom_scrapers.yaml`).
@@ -225,7 +231,7 @@ Coverage target: ≥80% for new modules; deterministic tests with mocks where fe
   - Expand rule set with additional domains.
   - Tune header profiles and timeouts.
 
-Rollback: Set `WEB_SCRAPER_HTTP_BACKEND=playwright` or `requests` and/or remove domain rules.
+Rollback: Set `WEB_SCRAPER_HTTP_BACKEND=playwright` (or `WEB_SCRAPER_DEFAULT_BACKEND=httpx`) and/or remove domain rules.
 
 ## 12. Risks & Mitigations
 
@@ -311,24 +317,20 @@ See full schema and examples in Docs/Design/Custom_Scrapers_Router.md. Allowed p
 
 Implemented (as of this update):
 - UA/header builder with realistic browser headers and profile→impersonate mapping.
-- Core HTTP client extended with `fetch()` supporting `curl_cffi` (impersonation, HTTP/2) and httpx fallback, plus header redaction and egress guard.
+- Core HTTP client `fetch()` supports a curl backend (curl_cffi + impersonate) for simple fetches, with httpx fallback plus header redaction and egress guard.
 - Scraper Router with `ScrapePlan` (exact > wildcard > regex precedence), YAML loader, and handler import allowlist.
-- Article fetch path updated to: resolve `ScrapePlan`, enforce robots.txt (fail-open if unreachable), try lightweight fetch first (curl/httpx) then fallback to Playwright; Playwright now uses centralized UA.
-- WebSearch providers (Searx, Tavily) now use centralized UA builder instead of hard-coded User-Agent strings.
+- Article fetch path updated to: resolve `ScrapePlan`, enforce robots.txt (fail-open if unreachable), try lightweight fetch first (curl/httpx via http_client) then fallback to Playwright; Playwright now uses centralized UA.
+- WebSearch providers (WebSearch_APIs + legacy Web_Search) use centralized UA builder instead of hard-coded User-Agent strings.
 - Requirements updated to include `curl_cffi`, `brotli`, `zstandard`.
-- Unit tests added: UA profiles/header shape, router precedence and allowlist, websearch header shape, robots enforcement behavior.
+- Unit tests added: UA profiles/header shape, router precedence and allowlist, websearch header shape, robots enforcement behavior, curl backend simple fetch.
 - Curl path non-blocking: lightweight fetch uses `asyncio.to_thread` to avoid blocking the event loop.
 - Metrics instrumentation: counters/histograms for scrape fetch outcome and latency, plus fallback and robots-block events.
 - Example rules file: `tldw_Server_API/Config_Files/custom_scrapers.example.yaml` added; YAML validation implemented in the router.
+- Config defaults and env overrides wired for scraper rules, backend, UA mode, and robots policy.
 
 Remaining work (near-term):
-- Async non-blocking integration for curl path in async contexts (wrap blocking fetch in `asyncio.to_thread` or provide async facade) to avoid event-loop blocking.
-- Broaden WebSearch refactor: replace other hard-coded UAs across providers to use UA builder.
 - Metrics: broaden instrumentation across all scraping paths and align names/labels with Metrics Manager conventions.
-- Config surface: wire `WEB_SCRAPER_*` envs and config.txt to control UA mode (fixed/rotate), default backend, robots policy, and rule file path.
-- Ship a default (disabled) `custom_scrapers.yaml` or clearly reference the example file and configuration steps in README/Docs.
-- Proxy support (optional): per-domain proxies in rule config.
-- JS-required detection heuristics beyond simple extraction-failure fallback (e.g., script density or known patterns) to trigger Playwright earlier.
+- JS-required detection heuristics: tune patterns/thresholds and add domain-specific hints to reduce false positives.
 - Ensure Accept-Encoding compatibility for code paths using `requests` (either switch to httpx/curl or manually decode br/zstd, or restrict accepted encodings there).
 
 Out of scope (tracked separately; see Related Work):

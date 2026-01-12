@@ -188,6 +188,7 @@ _CREATE_AUTHNZ_CORE_TABLES = [
     ("ALTER TABLE registration_codes ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE", ()),
     ("ALTER TABLE registration_codes ADD COLUMN IF NOT EXISTS description TEXT", ()),
     ("ALTER TABLE registration_codes ADD COLUMN IF NOT EXISTS allowed_email_domain TEXT", ()),
+    ("ALTER TABLE IF EXISTS org_invites ADD COLUMN IF NOT EXISTS allowed_email_domain TEXT", ()),
     (
         """
         DO $$

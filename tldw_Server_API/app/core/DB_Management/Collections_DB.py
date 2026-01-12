@@ -496,6 +496,26 @@ class CollectionsDatabase:
         tags_map = self._fetch_tags_for_item_ids([item_id])
         return self._row_to_content_item(row, tags_map.get(item_id, []))
 
+    def get_content_item_by_url(self, url: str) -> Optional[ContentItemRow]:
+        if not url:
+            return None
+        row = self.backend.execute(
+            """
+            SELECT id, user_id, origin, origin_type, origin_id, url, canonical_url, domain,
+                   title, summary, notes, content_hash, word_count, published_at, status, favorite,
+                   metadata_json, media_id, job_id, run_id, source_id, read_at, created_at, updated_at
+            FROM content_items
+            WHERE user_id = ? AND (canonical_url = ? OR url = ?)
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 1
+            """,
+            (self.user_id, url, url),
+        ).first
+        if not row:
+            return None
+        tags_map = self._fetch_tags_for_item_ids([int(row.get("id"))])
+        return self._row_to_content_item(row, tags_map.get(int(row.get("id")), []))
+
     def upsert_content_item(
         self,
         *,

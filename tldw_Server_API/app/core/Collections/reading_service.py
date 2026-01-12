@@ -9,6 +9,7 @@ from loguru import logger
 from tldw_Server_API.app.core.Collections.embedding_queue import enqueue_embeddings_job_for_item
 from tldw_Server_API.app.core.Collections.utils import hash_text_sha256, truncate_text, word_count
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase, ContentItemRow
+from tldw_Server_API.app.core.Collections.reading_importers import ReadingImportItem, normalize_import_items
 
 
 READING_DEFAULT_STATUS = "saved"
@@ -20,6 +21,14 @@ class ReadingSaveResult:
     media_id: Optional[int]
     media_uuid: Optional[str]
     created: bool
+
+
+@dataclass
+class ReadingImportResult:
+    imported: int
+    updated: int
+    skipped: int
+    errors: List[str]
 
 
 class ReadingService:
@@ -204,3 +213,60 @@ class ReadingService:
             notes=notes,
             metadata=metadata if metadata else None,
         )
+
+    def import_items(
+        self,
+        *,
+        items: List[ReadingImportItem],
+        merge_tags: bool = True,
+        origin_type: str = "import",
+    ) -> ReadingImportResult:
+        normalized = normalize_import_items(items)
+        imported = 0
+        updated = 0
+        skipped = 0
+        errors: List[str] = []
+
+        for item in normalized:
+            url = item.url.strip() if item.url else ""
+            if not url:
+                skipped += 1
+                continue
+            tags = item.tags or []
+            if merge_tags:
+                existing = self.collections.get_content_item_by_url(url)
+                if existing:
+                    tags = sorted(set(existing.tags + tags))
+            metadata_payload = {"source": "reading_import"}
+            metadata_payload.update(item.metadata or {})
+            try:
+                row = self.collections.upsert_content_item(
+                    origin="reading",
+                    origin_type=origin_type,
+                    origin_id=None,
+                    url=url,
+                    canonical_url=url,
+                    domain=None,
+                    title=item.title or url,
+                    summary=None,
+                    notes=item.notes,
+                    content_hash=None,
+                    word_count=None,
+                    published_at=None,
+                    status=item.status or "saved",
+                    favorite=item.favorite,
+                    metadata=metadata_payload,
+                    media_id=None,
+                    job_id=None,
+                    run_id=None,
+                    source_id=None,
+                    read_at=item.read_at,
+                    tags=tags,
+                )
+                if row.is_new:
+                    imported += 1
+                else:
+                    updated += 1
+            except Exception as exc:
+                errors.append(f"{url}: {exc}")
+        return ReadingImportResult(imported=imported, updated=updated, skipped=skipped, errors=errors)

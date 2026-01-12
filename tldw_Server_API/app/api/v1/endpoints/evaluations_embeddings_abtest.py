@@ -4,8 +4,8 @@ Embeddings A/B test endpoints extracted from evaluations_unified.
 
 import json
 import os
-from typing import Dict, Any, Optional
-from fastapi import APIRouter, Depends, HTTPException, Header, Query, BackgroundTasks, Response
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Header, Query, Response
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import (
@@ -33,6 +33,13 @@ from tldw_Server_API.app.api.v1.schemas.embeddings_abtest_schemas import (
 from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import (
     run_abtest_full,
     compute_significance,
+)
+from tldw_Server_API.app.core.Evaluations.embeddings_abtest_jobs import (
+    ABTEST_JOBS_DOMAIN,
+    ABTEST_JOBS_JOB_TYPE,
+    abtest_jobs_idempotency_key,
+    abtest_jobs_manager,
+    abtest_jobs_queue,
 )
 
 
@@ -102,7 +109,6 @@ async def create_embeddings_abtest(
 async def run_embeddings_abtest(
     test_id: str,
     payload: EmbeddingsABTestRunRequest,
-    background_tasks: BackgroundTasks,
     user_ctx: str = Depends(verify_api_key),
     _: None = Depends(check_evaluation_rate_limit),
     __: None = Depends(require_token_scope("workflows", require_if_present=True, require_schedule_match=False, allow_admin_bypass=True, endpoint_id="evals.embeddings_abtest.run", count_as="run")),
@@ -139,15 +145,6 @@ async def run_embeddings_abtest(
         except Exception:
             pass
 
-    async def _abtest_job():
-        try:
-            await run_abtest_full(db, cfg, test_id, str(current_user.id), media_db)
-        except Exception as _e:
-            try:
-                logger.warning(f"A/B test background run failed: {_e}")
-            except Exception:
-                pass
-
     # Mark as running before scheduling to avoid race where clients
     # observe previous 'completed' state before the job flips it.
     try:
@@ -164,7 +161,13 @@ async def run_embeddings_abtest(
 
     if testing:
         logger.info(f"A/B test running synchronously in TESTING mode: {test_id}")
-        await _abtest_job()
+        try:
+            await run_abtest_full(db, cfg, test_id, str(current_user.id), media_db)
+        except Exception as _e:
+            try:
+                logger.warning(f"A/B test synchronous run failed: {_e}")
+            except Exception:
+                pass
         try:
             if idempotency_key:
                 db.record_idempotency("emb_abtest_run", idempotency_key, test_id, user_ctx)
@@ -172,9 +175,37 @@ async def run_embeddings_abtest(
             pass
         return EmbeddingsABTestStatusResponse(test_id=test_id, status='completed', progress={"phase": 1.0})
 
-    # Schedule background task
-    background_tasks.add_task(_abtest_job)
-    logger.info(f"A/B test started in background: {test_id}")
+    try:
+        jm = abtest_jobs_manager()
+        job_payload = {
+            "test_id": test_id,
+            "config": cfg.model_dump(),
+            "user_id": str(current_user.id),
+        }
+        job_row = jm.create_job(
+            domain=ABTEST_JOBS_DOMAIN,
+            queue=abtest_jobs_queue(),
+            job_type=ABTEST_JOBS_JOB_TYPE,
+            payload=job_payload,
+            owner_user_id=str(current_user.id),
+            priority=5,
+            max_retries=3,
+            idempotency_key=abtest_jobs_idempotency_key(test_id, idempotency_key),
+        )
+        job_ref = job_row.get("uuid") or job_row.get("id")
+        try:
+            db.set_abtest_status(
+                test_id,
+                'running',
+                stats_json={"progress": {"phase": 0.01}, "job_id": job_ref},
+            )
+        except Exception:
+            pass
+    except Exception as exc:
+        logger.error(f"Failed to enqueue A/B test job {test_id}: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to enqueue A/B test job")
+
+    logger.info(f"A/B test enqueued via Jobs: {test_id}")
     try:
         if idempotency_key:
             db.record_idempotency("emb_abtest_run", idempotency_key, test_id, user_ctx)

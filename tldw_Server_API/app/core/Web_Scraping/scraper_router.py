@@ -48,6 +48,7 @@ class ScrapePlan:
     cookies: Dict[str, str] = field(default_factory=dict)
     respect_robots: bool = True
     proxies: Dict[str, str] = field(default_factory=dict)  # e.g., {"http": "http://host:port", "https": "http://host:port"}
+    strategy_order: Optional[List[str]] = None
 
 
 def _validate_handler(handler: str, allowlist: List[str]) -> str:
@@ -136,6 +137,7 @@ class ScraperRouter:
             "cookies",
             "respect_robots",
             "proxies",
+            "strategy_order",
         }
         allowed_backends = {"auto", "curl", "httpx", "playwright"}
 
@@ -172,6 +174,13 @@ class ScraperRouter:
                     cleaned[k] = m
                 elif k == "respect_robots":
                     cleaned[k] = bool(v)
+                elif k == "strategy_order":
+                    order: List[str] = []
+                    if isinstance(v, list):
+                        for item in v:
+                            if isinstance(item, str):
+                                order.append(item)
+                    cleaned[k] = order
                 else:
                     cleaned[k] = v
 
@@ -223,6 +232,9 @@ class ScraperRouter:
         # Per-rule robots override
         if "respect_robots" in rule:
             plan.respect_robots = bool(rule.get("respect_robots"))
+        strategy_order = rule.get("strategy_order")
+        if isinstance(strategy_order, list):
+            plan.strategy_order = [str(item) for item in strategy_order if isinstance(item, str)]
         return plan
 
 

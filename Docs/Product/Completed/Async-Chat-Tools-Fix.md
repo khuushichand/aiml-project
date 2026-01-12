@@ -237,6 +237,10 @@ Python version constraint:
   - `tests/Chat_NEW/unit/test_rate_limiter.py::test_token_bucket_concurrent_consume_does_not_over_consume`
 - Removal behavior:
   - `tests/Chat_NEW/unit/test_command_router.py::test_dispatch_command_removed_raises`
+- Integration concurrency:
+  - `tests/Chat_NEW/integration/test_chat_command_concurrency.py::test_chat_command_concurrency_respects_rate_limit`
+- PERF smoke:
+  - `tests/Chat_NEW/integration/test_chat_command_perf.py::test_chat_command_p50_latency`
 
 ### Phase 4: Removal (Major Version)
 

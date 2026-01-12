@@ -78,3 +78,39 @@ def test_fetch_egress_denied_raises(monkeypatch):
     monkeypatch.setattr(hc, "_is_url_allowed", lambda url: False)
     with pytest.raises(ValueError):
         hc.fetch("https://example.com/")
+
+
+def test_curl_fetch_uses_curl_session_and_preserves_encodings(monkeypatch):
+    monkeypatch.setattr(hc, "_is_url_allowed", lambda url: True)
+    monkeypatch.setattr(hc, "_validate_proxies_or_raise", lambda proxies: None)
+
+    calls = {}
+
+    class DummyCurlSession:
+        def __init__(self, impersonate=None):
+            calls["impersonate"] = impersonate
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, **kwargs):
+            calls["url"] = url
+            calls["kwargs"] = kwargs
+            return DummyResp(url, kwargs.get("headers", {}))
+
+    monkeypatch.setattr(hc, "_resolve_curl_session", lambda: DummyCurlSession)
+
+    headers = {"Accept-Encoding": "gzip, deflate, br, zstd"}
+    resp = hc.fetch(
+        "https://example.com/",
+        headers=headers,
+        backend="curl",
+        impersonate="chrome120",
+    )
+
+    assert resp["backend"] == "curl"
+    assert calls["impersonate"] == "chrome120"
+    assert "zstd" in resp["headers"].get("Accept-Encoding", "").lower()

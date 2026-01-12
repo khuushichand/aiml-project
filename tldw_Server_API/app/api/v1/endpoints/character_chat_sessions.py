@@ -79,7 +79,11 @@ from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import (
 
 # For chat completions
 from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
-from tldw_Server_API.app.core.AuthNZ.byok_runtime import resolve_byok_credentials
+from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
+    record_byok_missing_credentials,
+    resolve_byok_credentials,
+)
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 
 # Completion schemas centralized in schemas/chat_session_schemas.py
 from tldw_Server_API.app.core.Streaming.streams import SSEStream
@@ -785,6 +789,16 @@ async def character_chat_completion(
             fallback_resolver=_fallback_resolver,
         )
         api_key = byok_resolution.api_key
+        provider_key = (provider or "").strip().lower()
+        if provider_requires_api_key(provider_key) and not api_key:
+            record_byok_missing_credentials(provider_key, operation="character_chat")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "error_code": "missing_provider_credentials",
+                    "message": f"Provider '{provider}' requires an API key.",
+                },
+            )
 
         # Attempt provider call; allow offline simulation for local-llm in test/dev.
         # Offline simulation toggle (supports new flags for clarity, backward compatible with ALLOW_LOCAL_LLM_CALLS)

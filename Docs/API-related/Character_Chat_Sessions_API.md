@@ -7,6 +7,9 @@ Tag in OpenAPI: `character-chat-sessions`
 ## Base URL
 `/api/v1/chats`
 
+Note:
+- Conversation metadata endpoints (filters, ranking, analytics, tree view) are under `/api/v1/chat/conversations` and `/api/v1/chat/analytics`.
+
 ## Auth + Rate Limits
 - Single-user: `X-API-KEY: <key>`
 - Multi-user: `Authorization: Bearer <JWT>`

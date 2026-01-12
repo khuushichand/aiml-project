@@ -3336,6 +3336,29 @@ def load_and_log_configs():
         web_scraper_retry_count = config_parser_object.get('Web-Scraper', 'web_scraper_retry_count', fallback='3')
         web_scraper_retry_timeout = config_parser_object.get('Web-Scraper', 'web_scraper_retry_timeout', fallback='5')
         web_scraper_stealth_playwright = config_parser_object.get('Web-Scraper', 'web_scraper_stealth_playwright', fallback='False')
+        custom_scrapers_yaml_path = (
+            os.getenv('WEB_SCRAPER_CUSTOM_SCRAPERS_YAML_PATH')
+            or os.getenv('CUSTOM_SCRAPERS_YAML_PATH')
+            or config_parser_object.get(
+                'Web-Scraper',
+                'custom_scrapers_yaml_path',
+                fallback='tldw_Server_API/Config_Files/custom_scrapers.yaml',
+            )
+        )
+        web_scraper_default_backend = (
+            os.getenv('WEB_SCRAPER_HTTP_BACKEND')
+            or os.getenv('WEB_SCRAPER_DEFAULT_BACKEND')
+            or config_parser_object.get(
+            'Web-Scraper',
+            'web_scraper_default_backend',
+            fallback='auto',
+            )
+        )
+        web_scraper_ua_mode = os.getenv('WEB_SCRAPER_UA_MODE') or config_parser_object.get(
+            'Web-Scraper',
+            'web_scraper_ua_mode',
+            fallback='fixed',
+        )
 
         # Web Scraper crawl flags (env overrides config.txt)
         def _env_or_cfg(env_key: str, section: str, cfg_key: str, default: str) -> str:
@@ -3934,6 +3957,9 @@ def load_and_log_configs():
                 'web_scraper_retry_count': web_scraper_retry_count,
             'web_scraper_retry_timeout': web_scraper_retry_timeout,
             'web_scraper_stealth_playwright': web_scraper_stealth_playwright,
+            'custom_scrapers_yaml_path': custom_scrapers_yaml_path,
+            'web_scraper_default_backend': web_scraper_default_backend,
+            'web_scraper_ua_mode': web_scraper_ua_mode,
             # Crawl feature flags
             'web_crawl_strategy': web_crawl_strategy,
             'web_crawl_include_external': web_crawl_include_external,

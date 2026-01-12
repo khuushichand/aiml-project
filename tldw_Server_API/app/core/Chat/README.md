@@ -168,6 +168,19 @@ response = chat_api_call(
     streaming=False,
 )
 
+# Prefer async orchestration in async contexts
+from tldw_Server_API.app.core.Chat.chat_orchestrator import achat
+resp = await achat(
+    message="Hello",
+    history=[],
+    media_content=None,
+    selected_parts=[],
+    api_endpoint="openai",
+    api_key=None,
+    custom_prompt=None,
+    temperature=0.7,
+)
+
 # Apply a prompt template
 tmpl = load_template("my_custom_template")
 templated_system = apply_template_to_string(tmpl.system_message_template, data)

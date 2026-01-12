@@ -189,6 +189,10 @@ Changes:
 - Add a maintenance script that scans collections and updates metadatas in place (guarded and idempotent)
 Tests:
 - Dry-run mode test verifying planned updates without mutation
+Notes:
+- Backfill script: `Helper_Scripts/backfill_chunk_metadata.py`
+- Dry-run example: `python Helper_Scripts/backfill_chunk_metadata.py --user-id 1 --all --dry-run`
+- Apply to one collection: `python Helper_Scripts/backfill_chunk_metadata.py --user-id 1 --collection user_1_media_embeddings`
 
 ## Test Plan
 - Unit: adapter mapping, metadata models, hierarchical flattening chunk_type

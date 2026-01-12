@@ -300,6 +300,114 @@ function rcRenderList(items) {
   container.innerHTML = html;
 }
 
+// ---------- Organization Invites ----------
+async function orgInviteCreate() {
+  const orgId = parseInt(document.getElementById('orgInvite_orgId')?.value || '0', 10);
+  if (!orgId) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Org ID is required'); return; }
+  const teamIdValue = parseInt(document.getElementById('orgInvite_teamId')?.value || '0', 10);
+  const payload = {
+    team_id: teamIdValue || null,
+    role_to_grant: document.getElementById('orgInvite_role')?.value || 'member',
+    max_uses: parseInt(document.getElementById('orgInvite_maxUses')?.value || '1', 10),
+    expiry_days: parseInt(document.getElementById('orgInvite_expires')?.value || '7', 10),
+    description: (document.getElementById('orgInvite_description')?.value || '').trim() || null,
+    allowed_email_domain: (document.getElementById('orgInvite_allowedDomain')?.value || '').trim() || null,
+  };
+  try {
+    const res = await window.apiClient.post(`/api/v1/orgs/${orgId}/invites`, payload);
+    const out = document.getElementById('adminOrgInvites_result');
+    if (out) out.textContent = JSON.stringify(res, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Organization invite created');
+    await orgInviteList();
+  } catch (e) {
+    const out = document.getElementById('adminOrgInvites_result');
+    if (out) out.textContent = JSON.stringify(e.response || e, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to create org invite');
+  }
+}
+
+async function orgInviteList() {
+  const orgId = parseInt(document.getElementById('orgInvite_orgId')?.value || '0', 10);
+  if (!orgId) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Org ID is required'); return; }
+  const includeExpired = document.getElementById('orgInvite_includeExpired')?.checked;
+  const qs = includeExpired ? '?include_expired=true&include_inactive=true' : '';
+  try {
+    const res = await window.apiClient.get(`/api/v1/orgs/${orgId}/invites${qs}`);
+    const items = Array.isArray(res.items) ? res.items : [];
+    orgInviteRenderList(items);
+    const out = document.getElementById('adminOrgInvites_result');
+    if (out) out.textContent = 'Loaded';
+  } catch (e) {
+    const out = document.getElementById('adminOrgInvites_result');
+    if (out) out.textContent = JSON.stringify(e.response || e, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to list org invites');
+  }
+}
+
+async function orgInviteRevoke(inviteId) {
+  const orgId = parseInt(document.getElementById('orgInvite_orgId')?.value || '0', 10);
+  if (!orgId || !inviteId) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Org ID and invite ID are required'); return; }
+  if (!confirm('Revoke this organization invite?')) return;
+  try {
+    await window.apiClient.delete(`/api/v1/orgs/${orgId}/invites/${inviteId}`);
+    const out = document.getElementById('adminOrgInvites_result');
+    if (out) out.textContent = 'Invite revoked';
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Organization invite revoked');
+    await orgInviteList();
+  } catch (e) {
+    const out = document.getElementById('adminOrgInvites_result');
+    if (out) out.textContent = JSON.stringify(e.response || e, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to revoke org invite');
+  }
+}
+
+function orgInviteRenderList(items) {
+  const container = document.getElementById('adminOrgInvites_list');
+  if (!container) return;
+  if (!items.length) { container.innerHTML = '<p>No organization invites found.</p>'; return; }
+  let html = '<table class="simple-table"><thead><tr>' +
+    '<th>ID</th><th>Code</th><th>Org</th><th>Team</th><th>Role</th><th>Allowed Domain</th>' +
+    '<th>Uses</th><th>Expires</th><th>Created</th><th>Created By</th><th>Status</th><th>Actions</th>' +
+    '</tr></thead><tbody>';
+  for (const invite of items) {
+    const id = esc(invite.id);
+    const code = esc(invite.code);
+    const usesText = `${esc(invite.uses_count ?? 0)}/${esc(invite.max_uses ?? '')}`;
+    const isActive = invite.is_active === undefined || invite.is_active === null ? true : !!invite.is_active;
+    let isExpired = false;
+    if (invite.expires_at) {
+      const parsed = Date.parse(invite.expires_at);
+      if (!Number.isNaN(parsed)) {
+        isExpired = parsed < Date.now();
+      }
+    }
+    const statusParts = [isActive ? 'active' : 'inactive'];
+    if (isExpired) statusParts.push('expired');
+    const rowStyle = isExpired ? ' style="opacity:0.6;"' : '';
+    html += `
+      <tr${rowStyle}>
+        <td>${id}</td>
+        <td><code>${code}</code></td>
+        <td>${esc(invite.org_id || '')}</td>
+        <td>${esc(invite.team_name || invite.team_id || '')}</td>
+        <td>${esc(invite.role_to_grant || '')}</td>
+        <td>${esc(invite.allowed_email_domain || '')}</td>
+        <td>${usesText}</td>
+        <td>${esc(invite.expires_at || '')}</td>
+        <td>${esc(invite.created_at || '')}</td>
+        <td>${esc(invite.created_by || '')}</td>
+        <td>${statusParts.join(' / ')}</td>
+        <td>
+          <button class="btn org-invite-copy-code" data-code="${code}">Copy code</button>
+          <button class="btn org-invite-copy-link" data-code="${code}">Copy redeem link</button>
+          <button class="btn btn-danger org-invite-revoke" data-id="${id}">Revoke</button>
+        </td>
+      </tr>`;
+  }
+  html += '</tbody></table>';
+  container.innerHTML = html;
+}
+
 async function admVKCreate() {
   const userId = parseInt(document.getElementById('admVK_userId')?.value || '0', 10);
   if (!userId) { if (typeof Toast !== 'undefined' && Toast) Toast.error('Enter user id'); return; }
@@ -1672,6 +1780,25 @@ function bindAdminAdvanced() {
     }
   });
 
+  // Organization Invites
+  document.getElementById('btnOrgInviteCreate')?.addEventListener('click', orgInviteCreate);
+  document.getElementById('btnOrgInviteList')?.addEventListener('click', orgInviteList);
+  document.getElementById('adminOrgInvites_list')?.addEventListener('click', (e) => {
+    const t = e.target;
+    if (t && t.classList?.contains('org-invite-revoke')) {
+      const id = parseInt(t.getAttribute('data-id') || '0', 10);
+      if (id) orgInviteRevoke(id);
+    } else if (t && t.classList?.contains('org-invite-copy-code')) {
+      copyText(t.getAttribute('data-code'), 'Code');
+    } else if (t && t.classList?.contains('org-invite-copy-link')) {
+      const code = t.getAttribute('data-code') || '';
+      resolveWebuiBaseUrl().then((base) => {
+        const url = buildWebuiLink(base, `redeem-invite.html?code=${encodeURIComponent(code)}`);
+        copyText(url, 'Redeem link');
+      });
+    }
+  });
+
   // Registration Settings
   document.getElementById('btnRegSettingsLoad')?.addEventListener('click', regSettingsLoad);
   document.getElementById('btnRegSettingsSave')?.addEventListener('click', regSettingsSave);
@@ -1783,6 +1910,7 @@ export default {
   tpListPerms, tpCreatePerm, tpDeletePerm, tpGrantToRole, tpRevokeFromRole, tpListRoleToolPerms, tpGrantByPrefix, tpRevokeByPrefix,
   rlUpsertRole, rlUpsertUser, rlReset,
   rcCreate, rcList, rcDelete, rcRenderList,
+  orgInviteCreate, orgInviteList, orgInviteRevoke, orgInviteRenderList,
   adminQueryLLMUsage, adminDownloadLLMUsageCSV,
   adminAuditDownload, adminAuditDownloadLast24hHighRisk, adminAuditDownloadApiEventsCSV, adminAuditPreviewJSON,
   adminLoadLLMCharts,

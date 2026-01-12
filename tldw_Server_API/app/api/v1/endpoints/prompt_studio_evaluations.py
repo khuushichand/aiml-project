@@ -33,7 +33,7 @@ from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
 )
 from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
-from tldw_Server_API.app.core.LLM_Calls.provider_metadata import PROVIDER_REQUIRES_KEY
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     ensure_app_config,
@@ -202,7 +202,7 @@ async def create_evaluation(
         provider_api_key = byok_resolution.api_key
         app_config_override = byok_resolution.app_config
 
-        if PROVIDER_REQUIRES_KEY.get(provider_key, False) and not provider_api_key and not _is_prompt_studio_test_mode():
+        if provider_requires_api_key(provider_key) and not provider_api_key and not _is_prompt_studio_test_mode():
             record_byok_missing_credentials(provider_key, operation="prompt_studio")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -751,7 +751,7 @@ async def run_evaluation_async(
             provider_api_key = byok_resolution.api_key
             app_config_override = byok_resolution.app_config
 
-        if PROVIDER_REQUIRES_KEY.get(provider_key, False) and not provider_api_key and not _is_prompt_studio_test_mode():
+        if provider_requires_api_key(provider_key) and not provider_api_key and not _is_prompt_studio_test_mode():
             raise RuntimeError(f"Provider '{provider_name}' requires an API key.")
 
         # Fetch prompt

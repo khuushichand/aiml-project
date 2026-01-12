@@ -1,8 +1,12 @@
 # Custom Scrapers Router
 
-Status: In Progress
+Status: Implemented
 
 This document describes the YAML schema and usage for the per-domain scraper router. The router selects a fetch backend, handler, and headers on a per-domain basis and feeds that into the article scraping pipeline.
+
+Applies to:
+- `Article_Extractor_Lib.scrape_article` (standalone scraper)
+- `EnhancedWebScraper` (queue, multi-scrape, and recursive scraping flows)
 
 File locations:
 - Config: `tldw_Server_API/Config_Files/custom_scrapers.yaml` (user-managed)
@@ -28,6 +32,8 @@ Rule keys (per domain):
 | `respect_robots`| boolean         | `true`                                                          | Default `true`. If `false`, robots.txt is not enforced. |
 | `url_patterns`  | array<string>   | `[".*\\?output=1$"]`                                          | Regex patterns to further scope the rule; all non-compiling patterns are ignored. |
 | `proxies`       | object<string>  | `{ http: http://localhost:8080, https: http://localhost:8080 }`| Per-domain proxies passed to the fetch client. |
+
+Default handlers live in `tldw_Server_API/app/core/Web_Scraping/handlers.py`.
 
 Domains may be:
 - Exact, e.g., `example.com`

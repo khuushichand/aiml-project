@@ -193,6 +193,7 @@ class OrgInviteCreateRequest(BaseModel):
     allowed_email_domain: Optional[str] = Field(
         None,
         pattern=r"^@?[A-Za-z0-9.-]+$",
+        description="Restrict invite redemption to this email domain",
     )
 
 

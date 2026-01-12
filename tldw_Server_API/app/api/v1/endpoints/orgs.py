@@ -948,6 +948,7 @@ async def create_invite(
             max_uses=body.max_uses,
             expiry_days=body.expiry_days,
             description=body.description,
+            allowed_email_domain=body.allowed_email_domain,
         )
 
         logger.info(

@@ -13,8 +13,8 @@ from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
     apply_llm_provider_overrides_to_listing,
 )
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import (
-    PROVIDER_REQUIRES_KEY,
     PROVIDER_CAPABILITIES,
+    provider_requires_api_key,
 )
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import get_api_keys
 from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
@@ -1059,7 +1059,7 @@ def get_configured_providers(include_deprecated: bool = False) -> Dict[str, Any]
 
             # Centralized capability diagnostics
             try:
-                provider_data['requires_api_key'] = bool(PROVIDER_REQUIRES_KEY.get(provider_name, provider_info['type'] == 'commercial'))
+                provider_data['requires_api_key'] = provider_requires_api_key(provider_name)
                 # Start with defaults from static map
                 capabilities = dict(PROVIDER_CAPABILITIES.get(provider_name, {}))
                 # Merge adapter-reported capabilities if available

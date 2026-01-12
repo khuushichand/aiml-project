@@ -44,6 +44,14 @@ class ReadingItemsListResponse(BaseModel):
     size: int
 
 
+class ReadingImportResponse(BaseModel):
+    source: str
+    imported: int
+    updated: int
+    skipped: int
+    errors: List[str] = Field(default_factory=list)
+
+
 class ReadingUpdateRequest(BaseModel):
     status: Optional[str] = Field(default=None, description="saved|reading|read|archived")
     favorite: Optional[bool] = None

@@ -13,7 +13,7 @@ Related: Project_Guidelines.md, AGENTS.md, tldw_Server_API/app/main.py
 
 Content Collections unify two complementary workflows:
 - **Watchlists**: Source-centric scheduled collection from websites/news sites/RSS with jobs, runs, aggregated outputs, template-driven rendering, versioning, retention/TTL, and delivery (email + Chatbook). *Status: implemented; WebUI admin flows now consume the new APIs.*
-- **Reading List**: Ad-hoc link capture with a clean reader UI, statuses (saved/reading/read/archived), favorites, highlights/notes, import/export. *Status: capture/status/favorite flows and basic WebUI shipped; highlights/import remain in backlog.*
+- **Reading List**: Ad-hoc link capture with a clean reader UI, statuses (saved/reading/read/archived), favorites, notes, highlights, import/export. *Status: capture/status/favorite/notes flows and basic WebUI shipped; highlights/import remain in backlog.*
 
 Both flows will share a normalized collections layer that references (but does not replace) the existing Media DB. Media DB remains the canonical artifact store; the collections layer will provide dedupe, metadata, and search connectivity across Watchlists and Reading. Outputs can be generated from scheduled runs or filtered item sets, exported as Chatbooks, delivered via email, or linked back into Media DB.
 
@@ -21,7 +21,7 @@ Both flows will share a normalized collections layer that references (but does n
 
 ### Goals (MVP → v1)
 - [x] Unified content item model and shared ingestion/dedupe/search/embeddings.
-- [x] Reading capture: save URL → readable text; statuses/tags/favorites; search; basic WebUI. *(Highlights/import/export still planned.)*
+- [x] Reading capture: save URL → readable text; statuses/tags/favorites/notes; search; basic WebUI. *(Highlights/import/export still planned.)*
 - [x] Watchlists: manage sources, groups/tags; jobs with schedule; runs with logs/stats; RSS + simple sites (front page + top-N).
 - [ ] Outputs: Markdown briefing/newsletter; optional MECE; optional TTS audio; export/ingest. *(Markdown/HTML + retention/delivery shipped; MECE/TTS automation pending.)*
 - [x] APIs and WebUI slices for items, reading, watchlists, and outputs.
@@ -88,7 +88,7 @@ v1
 ### 8.1 Unified Content Items
 - Single table for items from any origin (reading/manual/import/watchlist).
 - Fields: url, canonical_url, domain, title, author?, published_at?, clean_html, text, content_hash, word_count, reading_time_seconds, language?, metadata_json.
-- Optional fields for reading features: status (saved/reading/read/archived), favorite, read_at.
+- Optional fields for reading features: status (saved/reading/read/archived), favorite, read_at, notes.
 - Relations: source_id?, job_id?, run_id?, media_item_id?; tags many-to-many; highlights (v1).
 - Dedupe: canonical URL and/or content_hash on stripped main content; merge tags on duplicate saves.
 - Status: **Complete** - `CollectionsDatabase` provides `content_items`, tag joins, FTS hooks, and watchlists dual-write; `/api/v1/items` now queries this layer before falling back to legacy Media DB search.
@@ -127,7 +127,7 @@ v1
 - Status: **Partially complete** - API + retention/versioning + email/Chatbook delivery and WebUI controls shipped; MECE/TTS automation and Media DB ingest toggles remain planned.
 
 ### 8.7 Reading Features
-- Status transitions (saved → reading → read/archived); favorites; per-item notes (basic); highlights (v1).
+- Status transitions (saved → reading → read/archived); favorites; per-item notes (basic); highlights (v1). *(Notes shipped; highlights/import pending.)*
 - Highlights anchoring: store `quote` and anchor via fuzzy text matching with `content_hash_ref`; offsets are advisory. On text change, attempt re-anchor; if failing, mark highlight `stale` while preserving original context.
 - Import: Pocket/Instapaper (JSON/CSV) to items with tag merging; Export: JSONL or zip bundle.
 
@@ -157,7 +157,7 @@ Entities
 - content_items
   - id, user_id, origin[`reading`|`watchlist`|`import`|`manual`], url, canonical_url, domain, title,
     author, published_at, clean_html, text, content_hash, word_count, reading_time_seconds, language,
-    status, favorite, metadata_json, created_at, updated_at, read_at,
+    status, favorite, notes, metadata_json, created_at, updated_at, read_at,
     embedding_model (nullable), embedding_model_version (nullable), embedding_ts (nullable),
     source_id (nullable), job_id (nullable), run_id (nullable), media_item_id (nullable)
 - item_tags (join)
@@ -310,7 +310,7 @@ Scheduling
    - Watchlist ingestion dual-writes; `/api/v1/items` resolves from collections before falling back to legacy search.
 
 2. **Reading Workflow** - *MVP shipped; highlights/import pending*
-   - URL capture (save), status/favorite/tags, reader endpoints, and WebUI page delivered.
+   - URL capture (save), status/favorite/tags/notes, reader endpoints, and WebUI page delivered.
    - Highlights lifecycle and third-party import/export remain TODO.
 
 3. **Search & Retrieval Enhancements** - *shipped*

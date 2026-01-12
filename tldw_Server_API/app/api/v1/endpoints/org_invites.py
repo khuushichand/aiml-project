@@ -6,18 +6,17 @@ These are separate from the org management endpoints in orgs.py.
 """
 from __future__ import annotations
 
-from typing import Optional
-
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal, get_db_transaction
 from tldw_Server_API.app.api.v1.schemas.org_team_schemas import (
     OrgInvitePreviewResponse,
     OrgInviteRedeemRequest,
     OrgInviteRedeemResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.services.auth_service import fetch_active_user_by_id
 from tldw_Server_API.app.services.org_invite_service import get_invite_service
 
 
@@ -61,6 +60,7 @@ async def preview_invite(
         status=preview.get("status", "unknown"),
         message=preview.get("message"),
         expires_at=preview.get("expires_at"),
+        allowed_email_domain=preview.get("allowed_email_domain"),
     )
 
 
@@ -75,6 +75,7 @@ async def redeem_invite(
     body: OrgInviteRedeemRequest,
     request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
+    db=Depends(get_db_transaction),
 ):
     """
     Redeem an invite code to join an organization.
@@ -89,10 +90,17 @@ async def redeem_invite(
     # Extract client info for audit logging
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
+    user_record = await fetch_active_user_by_id(db, principal.user_id)
+    if not user_record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
 
     result = await invite_service.redeem_invite(
         code=body.code,
         user_id=principal.user_id,
+        user_email=user_record.get("email"),
         ip_address=ip_address,
         user_agent=user_agent,
     )

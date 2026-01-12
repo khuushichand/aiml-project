@@ -96,6 +96,9 @@ Response:
 }
 ```
 
+#### Full Bundle Export/Import (Planned Extension)
+Admin Data Ops bundles are intended to package multiple per-dataset backups into a single downloadable artifact with manifest and checksums. See `Docs/Product/DB_Exports_SQLite_PRD.md` for the current design and scope.
+
 ### Retention Policies
 
 #### GET `/api/v1/admin/retention-policies`

@@ -56,6 +56,7 @@ class AuthnzOrgInvitesRepo:
         max_uses: int = 1,
         expiry_days: int = 7,
         description: Optional[str] = None,
+        allowed_email_domain: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
@@ -69,6 +70,7 @@ class AuthnzOrgInvitesRepo:
             max_uses: Maximum number of times this invite can be used
             expiry_days: Number of days until the invite expires
             description: Internal description/note for the invite
+            allowed_email_domain: Optional email domain allowlist
             metadata: Optional JSON metadata
 
         Returns:
@@ -86,13 +88,14 @@ class AuthnzOrgInvitesRepo:
                         """
                         INSERT INTO org_invites
                         (code, org_id, team_id, role_to_grant, created_by, expires_at,
-                         max_uses, description, metadata)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                         max_uses, description, allowed_email_domain, metadata)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                         RETURNING id, code, org_id, team_id, role_to_grant, created_by,
-                                  created_at, expires_at, max_uses, uses_count, is_active, description
+                                  created_at, expires_at, max_uses, uses_count, is_active, description,
+                                  allowed_email_domain
                         """,
                         code, org_id, team_id, role_to_grant, created_by, expires_at,
-                        max_uses, description, metadata
+                        max_uses, description, allowed_email_domain, metadata
                     )
                     result = dict(row)
                     # Normalize datetime fields
@@ -106,18 +109,19 @@ class AuthnzOrgInvitesRepo:
                         """
                         INSERT INTO org_invites
                         (code, org_id, team_id, role_to_grant, created_by, expires_at,
-                         max_uses, description, metadata)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         max_uses, description, allowed_email_domain, metadata)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (code, org_id, team_id, role_to_grant, created_by,
-                         expires_at.isoformat(), max_uses, description,
+                         expires_at.isoformat(), max_uses, description, allowed_email_domain,
                          json.dumps(metadata) if metadata else None)
                     )
                     invite_id = cur.lastrowid
                     cur2 = await conn.execute(
                         """
                         SELECT id, code, org_id, team_id, role_to_grant, created_by,
-                               created_at, expires_at, max_uses, uses_count, is_active, description
+                               created_at, expires_at, max_uses, uses_count, is_active, description,
+                               allowed_email_domain
                         FROM org_invites WHERE id = ?
                         """,
                         (invite_id,)
@@ -136,6 +140,7 @@ class AuthnzOrgInvitesRepo:
                         "uses_count": row[9],
                         "is_active": bool(row[10]),
                         "description": row[11],
+                        "allowed_email_domain": row[12],
                     }
         except Exception as exc:
             logger.error(f"AuthnzOrgInvitesRepo.create_invite failed: {exc}")
@@ -154,7 +159,7 @@ class AuthnzOrgInvitesRepo:
                         """
                         SELECT i.id, i.code, i.org_id, i.team_id, i.role_to_grant, i.created_by,
                                i.created_at, i.expires_at, i.max_uses, i.uses_count, i.is_active,
-                               i.description, o.name as org_name, o.slug as org_slug,
+                               i.description, i.allowed_email_domain, o.name as org_name, o.slug as org_slug,
                                t.name as team_name
                         FROM org_invites i
                         JOIN organizations o ON o.id = i.org_id
@@ -175,7 +180,7 @@ class AuthnzOrgInvitesRepo:
                         """
                         SELECT i.id, i.code, i.org_id, i.team_id, i.role_to_grant, i.created_by,
                                i.created_at, i.expires_at, i.max_uses, i.uses_count, i.is_active,
-                               i.description, o.name as org_name, o.slug as org_slug,
+                               i.description, i.allowed_email_domain, o.name as org_name, o.slug as org_slug,
                                t.name as team_name
                         FROM org_invites i
                         JOIN organizations o ON o.id = i.org_id
@@ -200,9 +205,10 @@ class AuthnzOrgInvitesRepo:
                         "uses_count": row[9],
                         "is_active": bool(row[10]),
                         "description": row[11],
-                        "org_name": row[12],
-                        "org_slug": row[13],
-                        "team_name": row[14],
+                        "allowed_email_domain": row[12],
+                        "org_name": row[13],
+                        "org_slug": row[14],
+                        "team_name": row[15],
                     }
         except Exception as exc:
             logger.error(f"AuthnzOrgInvitesRepo.get_invite_by_code failed: {exc}")
@@ -216,7 +222,8 @@ class AuthnzOrgInvitesRepo:
                     row = await conn.fetchrow(
                         """
                         SELECT id, code, org_id, team_id, role_to_grant, created_by,
-                               created_at, expires_at, max_uses, uses_count, is_active, description
+                               created_at, expires_at, max_uses, uses_count, is_active, description,
+                               allowed_email_domain
                         FROM org_invites WHERE id = $1
                         """,
                         invite_id
@@ -232,7 +239,8 @@ class AuthnzOrgInvitesRepo:
                     cur = await conn.execute(
                         """
                         SELECT id, code, org_id, team_id, role_to_grant, created_by,
-                               created_at, expires_at, max_uses, uses_count, is_active, description
+                               created_at, expires_at, max_uses, uses_count, is_active, description,
+                               allowed_email_domain
                         FROM org_invites WHERE id = ?
                         """,
                         (invite_id,)
@@ -253,6 +261,7 @@ class AuthnzOrgInvitesRepo:
                         "uses_count": row[9],
                         "is_active": bool(row[10]),
                         "description": row[11],
+                        "allowed_email_domain": row[12],
                     }
         except Exception as exc:
             logger.error(f"AuthnzOrgInvitesRepo.get_invite_by_id failed: {exc}")
@@ -307,7 +316,7 @@ class AuthnzOrgInvitesRepo:
                         f"""
                         SELECT i.id, i.code, i.org_id, i.team_id, i.role_to_grant, i.created_by,
                                i.created_at, i.expires_at, i.max_uses, i.uses_count, i.is_active,
-                               i.description, t.name as team_name
+                               i.description, i.allowed_email_domain, t.name as team_name
                         FROM org_invites i
                         LEFT JOIN teams t ON t.id = i.team_id
                         WHERE {where_clause}
@@ -337,7 +346,7 @@ class AuthnzOrgInvitesRepo:
                         f"""
                         SELECT i.id, i.code, i.org_id, i.team_id, i.role_to_grant, i.created_by,
                                i.created_at, i.expires_at, i.max_uses, i.uses_count, i.is_active,
-                               i.description, t.name as team_name
+                               i.description, i.allowed_email_domain, t.name as team_name
                         FROM org_invites i
                         LEFT JOIN teams t ON t.id = i.team_id
                         WHERE {where_clause}
@@ -362,7 +371,8 @@ class AuthnzOrgInvitesRepo:
                             "uses_count": row[9],
                             "is_active": bool(row[10]),
                             "description": row[11],
-                            "team_name": row[12],
+                            "allowed_email_domain": row[12],
+                            "team_name": row[13],
                         })
                     return results, total
         except Exception as exc:

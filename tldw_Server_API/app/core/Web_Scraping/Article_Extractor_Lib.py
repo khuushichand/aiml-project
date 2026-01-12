@@ -56,6 +56,7 @@ from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.Web_Scraping.enhanced_web_scraping import RateLimiter
 from tldw_Server_API.app.core.Web_Scraping.scraper_router import ScraperRouter
+from tldw_Server_API.app.core.Web_Scraping.handlers import resolve_handler
 from tldw_Server_API.app.core.Web_Scraping.ua_profiles import (
     build_browser_headers,
     pick_ua_profile,
@@ -165,6 +166,30 @@ def _resp_get(resp: Any, key: str, default: Any = None) -> Any:
     except Exception:
         return default
     return default
+
+
+def _fetch_with_curl(
+    url: str,
+    *,
+    headers: Dict[str, Any],
+    cookies: Optional[Dict[str, str]],
+    timeout: float,
+    impersonate: Optional[str],
+    proxies: Optional[Dict[str, str]],
+) -> Dict[str, Any]:
+    """Fetch HTML using curl_cffi via the centralized http_client."""
+    from tldw_Server_API.app.core.http_client import fetch as http_fetch
+
+    return http_fetch(
+        url,
+        headers=headers,
+        cookies=cookies,
+        timeout=timeout,
+        proxies=proxies,
+        backend="curl",
+        impersonate=impersonate,
+        follow_redirects=True,
+    )
 
 
 def is_allowed_by_robots(url: str, user_agent: str, *, timeout: float = 5.0) -> bool:
@@ -371,6 +396,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
             "error": "Egress policy evaluation failed. Please contact system administrator."
         }
     # Resolve scraper plan via router (configurable via YAML)
+    ws_cfg: Dict[str, Any] = {}
     try:
         cfg = load_and_log_configs() or {}
         ws_cfg = cfg.get('web_scraper', {}) or {}
@@ -386,6 +412,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
         # Safe default plan
         class _P:  # minimal stand-in
             backend = "auto"
+            handler = "tldw_Server_API.app.core.Web_Scraping.handlers:handle_generic_html"
             ua_profile = pick_ua_profile("fixed")
             impersonate = None
             extra_headers = {}
@@ -394,10 +421,22 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
 
         plan = _P()  # type: ignore
 
+    handler_func = resolve_handler(getattr(plan, "handler", ""))
+
     # Build effective headers from UA profile + extras
     ua_headers = build_browser_headers(plan.ua_profile, accept_lang="en-US,en;q=0.9")
     if isinstance(plan.extra_headers, dict) and plan.extra_headers:
         ua_headers.update({str(k): str(v) for k, v in plan.extra_headers.items()})
+
+    backend_choice = str(getattr(plan, "backend", "auto") or "auto").lower().strip()
+    if backend_choice not in {"auto", "curl", "httpx", "playwright"}:
+        backend_choice = "auto"
+    if backend_choice == "auto":
+        default_backend = ws_cfg.get("web_scraper_default_backend")
+        if isinstance(default_backend, str):
+            backend_choice = default_backend.lower().strip() or "auto"
+            if backend_choice not in {"auto", "curl", "httpx", "playwright"}:
+                backend_choice = "auto"
 
     # robots.txt enforcement (fail open if error)
     effective_ua = ua_headers.get("User-Agent", web_scraping_user_agent)
@@ -419,55 +458,81 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
                 "error": "Blocked by robots policy",
             }
 
-    # First try lightweight HTTP path (curl/httpx) before Playwright
-    try:
-        cookies_map = _merge_cookie_list_to_map(custom_cookies)
-        # Combine with plan cookies (plan cookies win)
-        if getattr(plan, "cookies", {}):
-            cookies_map.update({str(k): str(v) for k, v in plan.cookies.items()})
+    if backend_choice != "playwright":
+        # First try lightweight HTTP path (curl/httpx) before Playwright
+        try:
+            cookies_map = _merge_cookie_list_to_map(custom_cookies)
+            # Combine with plan cookies (plan cookies win)
+            if getattr(plan, "cookies", {}):
+                cookies_map.update({str(k): str(v) for k, v in plan.cookies.items()})
 
-        t0 = time.time()
-        resp = await asyncio.to_thread(
-            http_fetch,
-            url,
-            method="GET",
-            headers=ua_headers,
-            cookies=cookies_map or None,
-            backend=(
-                (str(ws_cfg.get('web_scraper_default_backend')).lower().strip() if ws_cfg.get('web_scraper_default_backend') else None)
-                if getattr(plan, "backend", "auto") == "auto"
-                else getattr(plan, "backend", "auto")
-            ) or getattr(plan, "backend", "auto"),
-            impersonate=getattr(plan, "impersonate", None),
-            http2=True,
-            timeout=15.0,
-            allow_redirects=True,
-            proxies=getattr(plan, "proxies", None) or None,
-        )
-        elapsed = max(0.0, time.time() - t0)
-        log_histogram("scrape_fetch_latency_seconds", elapsed, labels={"backend": _resp_get(resp, "backend", "unknown")})
+            t0 = time.time()
+            if backend_choice == "curl":
+                try:
+                    resp = await asyncio.to_thread(
+                        _fetch_with_curl,
+                        url,
+                        headers=ua_headers,
+                        cookies=cookies_map or None,
+                        timeout=15.0,
+                        impersonate=getattr(plan, "impersonate", None),
+                        proxies=getattr(plan, "proxies", None) or None,
+                    )
+                    backend_used = "curl"
+                except Exception as exc:
+                    logging.debug(f"curl backend failed; falling back to httpx: {exc}")
+                    resp = await asyncio.to_thread(
+                        http_fetch,
+                        url,
+                        method="GET",
+                        headers=ua_headers,
+                        cookies=cookies_map or None,
+                        timeout=15.0,
+                        allow_redirects=True,
+                        proxies=getattr(plan, "proxies", None) or None,
+                    )
+                    backend_used = _resp_get(resp, "backend", "httpx")
+            else:
+                resp = await asyncio.to_thread(
+                    http_fetch,
+                    url,
+                    method="GET",
+                    headers=ua_headers,
+                    cookies=cookies_map or None,
+                    timeout=15.0,
+                    allow_redirects=True,
+                    proxies=getattr(plan, "proxies", None) or None,
+                )
+                backend_used = _resp_get(resp, "backend", "httpx")
 
-        if int(resp["status"]) < 400 and resp["text"]:
-            # JS-required detection heuristic: decide earlier fallback
-            if _js_required(resp["text"], _resp_get(resp, "headers", {})):
-                log_counter("scrape_playwright_fallback_total", labels={"reason": "js_required"})
-                raise RuntimeError("js_required_detected")
-            article_data = extract_article_data_from_html(resp["text"], url)
-            if article_data.get("extraction_successful"):
-                article_data["content"] = convert_html_to_markdown(article_data["content"])
-                logging.info(f"Article content length: {len(article_data['content'])}")
-                log_histogram("article_content_length", len(article_data["content"]), labels={"url": url})
-                log_counter("scrape_fetch_total", labels={"backend": _resp_get(resp, "backend", "unknown"), "outcome": "success"})
-                return article_data
-        # No extractable content
-        log_counter("scrape_fetch_total", labels={"backend": _resp_get(resp, "backend", "unknown"), "outcome": "no_extract"})
-    except Exception as _e:
-        logging.debug(f"Lightweight fetch path failed or yielded no extractable content: {_e}")
-        log_counter("scrape_fetch_total", labels={"backend": getattr(plan, "backend", "auto"), "outcome": "error"})
-        log_counter("scrape_playwright_fallback_total", labels={"reason": "error"})
-    else:
-        # Falling back due to no extractable content
-        log_counter("scrape_playwright_fallback_total", labels={"reason": "no_extract"})
+            elapsed = max(0.0, time.time() - t0)
+            log_histogram("scrape_fetch_latency_seconds", elapsed, labels={"backend": backend_used})
+
+            status = _resp_get(resp, "status")
+            if status is None:
+                status = _resp_get(resp, "status_code")
+            text = _resp_get(resp, "text", "")
+            if int(status or 0) < 400 and text:
+                # JS-required detection heuristic: decide earlier fallback
+                if _js_required(text, _resp_get(resp, "headers", {})):
+                    log_counter("scrape_playwright_fallback_total", labels={"reason": "js_required"})
+                    raise RuntimeError("js_required_detected")
+                article_data = handler_func(text, url)
+                if article_data.get("extraction_successful"):
+                    content = article_data.get("content", "") or ""
+                    logging.info(f"Article content length: {len(content)}")
+                    log_histogram("article_content_length", len(content), labels={"url": url})
+                    log_counter("scrape_fetch_total", labels={"backend": backend_used, "outcome": "success"})
+                    return article_data
+            # No extractable content
+            log_counter("scrape_fetch_total", labels={"backend": backend_used, "outcome": "no_extract"})
+        except Exception as _e:
+            logging.debug(f"Lightweight fetch path failed or yielded no extractable content: {_e}")
+            log_counter("scrape_fetch_total", labels={"backend": backend_choice, "outcome": "error"})
+            log_counter("scrape_playwright_fallback_total", labels={"reason": "error"})
+        else:
+            # Falling back due to no extractable content
+            log_counter("scrape_playwright_fallback_total", labels={"reason": "no_extract"})
 
     async def fetch_html(url: str) -> str:
         # Load and log the configuration
@@ -568,11 +633,11 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
         return ""
 
     html = await fetch_html(url)
-    article_data = extract_article_data_from_html(html, url)
-    if article_data['extraction_successful']:
-        article_data['content'] = convert_html_to_markdown(article_data['content'])
-        logging.info(f"Article content length: {len(article_data['content'])}")
-        log_histogram("article_content_length", len(article_data['content']), labels={"url": url})
+    article_data = handler_func(html, url)
+    if article_data.get("extraction_successful"):
+        content = article_data.get("content", "") or ""
+        logging.info(f"Article content length: {len(content)}")
+        log_histogram("article_content_length", len(content), labels={"url": url})
     return article_data
 
 

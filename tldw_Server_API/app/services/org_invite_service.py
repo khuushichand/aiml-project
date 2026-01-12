@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
@@ -100,6 +101,7 @@ class OrgInviteService:
         max_uses: int = 1,
         expiry_days: int = 7,
         description: Optional[str] = None,
+        allowed_email_domain: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Create a new organization invite code.
@@ -112,6 +114,7 @@ class OrgInviteService:
             max_uses: Maximum redemptions (1-1000)
             expiry_days: Days until expiration (1-365)
             description: Internal description
+            allowed_email_domain: Restrict invite to an email domain
 
         Returns:
             Invite details including the generated code
@@ -139,6 +142,13 @@ class OrgInviteService:
             if not team or team.get("org_id") != org_id:
                 raise ValueError(f"Team {team_id} does not belong to organization {org_id}")
 
+        normalized_domain = None
+        if allowed_email_domain:
+            candidate = str(allowed_email_domain).strip().lower()
+            if not re.fullmatch(r"@?[a-z0-9.-]+", candidate):
+                raise ValueError("allowed_email_domain must be a valid domain")
+            normalized_domain = candidate.lstrip("@")
+
         invites_repo = await self._get_invites_repo()
         invite = await invites_repo.create_invite(
             org_id=org_id,
@@ -148,6 +158,7 @@ class OrgInviteService:
             max_uses=max_uses,
             expiry_days=expiry_days,
             description=description,
+            allowed_email_domain=normalized_domain,
         )
 
         logger.info(
@@ -243,6 +254,7 @@ class OrgInviteService:
             "status": validation.status.value,
             "message": validation.message,
             "expires_at": invite.get("expires_at"),
+            "allowed_email_domain": invite.get("allowed_email_domain"),
         }
 
     async def redeem_invite(
@@ -250,6 +262,7 @@ class OrgInviteService:
         *,
         code: str,
         user_id: int,
+        user_email: Optional[str] = None,
         ip_address: Optional[str] = None,
         user_agent: Optional[str] = None,
     ) -> RedemptionResult:
@@ -269,6 +282,7 @@ class OrgInviteService:
         Args:
             code: The invite code
             user_id: User ID redeeming the invite
+            user_email: User email for domain allowlist checks
             ip_address: Client IP for audit logging
             user_agent: Client user agent for audit logging
 
@@ -288,6 +302,19 @@ class OrgInviteService:
         org_id = invite["org_id"]
         team_id = invite.get("team_id")
         role = invite["role_to_grant"]
+        allowed_domain = invite.get("allowed_email_domain")
+        if allowed_domain:
+            if not user_email or "@" not in user_email:
+                return RedemptionResult(
+                    success=False,
+                    message="Invite is restricted to allowed email domain",
+                )
+            email_domain = str(user_email).strip().split("@")[-1].lower()
+            if email_domain != str(allowed_domain).strip().lower().lstrip("@"):
+                return RedemptionResult(
+                    success=False,
+                    message="Invite is restricted to allowed email domain",
+                )
 
         invites_repo = await self._get_invites_repo()
         orgs_repo = await self._get_orgs_repo()

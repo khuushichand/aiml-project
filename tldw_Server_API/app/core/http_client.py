@@ -83,6 +83,16 @@ def _resolve_httpx():
         return httpx  # type: ignore
 
 
+def _resolve_curl_session():
+    """Return curl_cffi Session class if available, otherwise None."""
+    try:
+        import importlib
+        mod = importlib.import_module("curl_cffi.requests")
+        return getattr(mod, "Session", None)
+    except Exception:
+        return None
+
+
 # --------------------------------------------------------------------------------------
 # Defaults & env config
 # --------------------------------------------------------------------------------------
@@ -2264,6 +2274,43 @@ def _fetch_httpx_response(
                 pass
 
 
+def _fetch_curl_simple(
+    *,
+    url: str,
+    headers: Dict[str, str],
+    cookies: Optional[Dict[str, str]],
+    timeout: Optional[float],
+    impersonate: Optional[str],
+    proxies: Optional[Dict[str, str]],
+    allow_redirects: bool,
+) -> "HttpResponse":
+    CurlSession = _resolve_curl_session()
+    if CurlSession is None:
+        raise RuntimeError("curl_cffi is not installed")
+    if proxies:
+        _validate_proxies_or_raise(proxies)
+
+    req_kwargs: Dict[str, Any] = {
+        "headers": headers,
+        "cookies": cookies,
+        "allow_redirects": allow_redirects,
+    }
+    if timeout is not None:
+        req_kwargs["timeout"] = timeout
+    if proxies:
+        req_kwargs["proxies"] = proxies
+
+    with CurlSession(impersonate=impersonate) as session:
+        resp = session.get(url, **req_kwargs)
+        return HttpResponse(
+            status=int(getattr(resp, "status_code", 0)),
+            headers=dict(getattr(resp, "headers", {}) or {}),
+            text=str(getattr(resp, "text", "")),
+            url=str(getattr(resp, "url", url)),
+            backend="curl",
+        )
+
+
 def fetch(*args, **kwargs):
     """Dual-mode fetch helper.
 
@@ -2283,6 +2330,7 @@ def fetch(*args, **kwargs):
     backend = str(kwargs.get("backend", "httpx"))
     headers = kwargs.get("headers") or {}
     cookies = kwargs.get("cookies")
+    impersonate = kwargs.get("impersonate")
     follow_redirects_cfg = kwargs.get("follow_redirects", None)
     trust_env = kwargs.get("trust_env", None)
     proxies = kwargs.get("proxies", None)
@@ -2297,11 +2345,14 @@ def fetch(*args, **kwargs):
     # Validate proxies against allowlist even in simple mode
     _validate_proxies_or_raise(proxies)
 
-    if httpx is None:  # pragma: no cover
+    backend_norm = str(backend).lower().strip()
+    if backend_norm == "auto":
+        backend_norm = "curl" if _resolve_curl_session() is not None else "httpx"
+    if httpx is None and backend_norm != "curl":  # pragma: no cover
         raise RuntimeError("httpx is not available")
 
     # Sanitize Accept-Encoding as per backend expectations
-    req_headers = _sanitize_accept_encoding_for_backend(headers, backend)
+    req_headers = _sanitize_accept_encoding_for_backend(headers, backend_norm)
 
     # Determine redirect behavior, honoring env/Config_Files when caller did not
     # explicitly supply follow_redirects.
@@ -2350,6 +2401,17 @@ def fetch(*args, **kwargs):
     if proxies is not None:
         client_kwargs["proxies"] = proxies
 
+    if backend_norm == "curl":
+        return _fetch_curl_simple(
+            url=url,
+            headers=req_headers,
+            cookies=cookies,
+            timeout=timeout,
+            impersonate=impersonate,
+            proxies=proxies,
+            allow_redirects=follow_redirects,
+        )
+
     # Minimal client lifecycle for simple fetch with explicit redirect handling
     with httpx.Client(**client_kwargs) as sc:  # type: ignore[call-arg]
         cur_url = url
@@ -2394,7 +2456,7 @@ def fetch(*args, **kwargs):
             headers=dict(getattr(r, "headers", {}) or {}),
             text=str(getattr(r, "text", "")),
             url=str(getattr(r, "url", cur_url)),
-            backend=str(backend),
+            backend=str(backend_norm),
         )
 
 

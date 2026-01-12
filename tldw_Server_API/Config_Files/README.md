@@ -299,6 +299,9 @@ VibeVoice:
 - `web_scraper_api_timeout|web_scraper_api_retry|web_scraper_api_retry_delay` (int)
 - `web_scraper_retry_count` (int)
 - `web_scraper_stealth_playwright` (bool)
+- `custom_scrapers_yaml_path` (path, optional): override custom scraper router rules file
+- `web_scraper_default_backend` (str, default `auto`): `auto|curl|httpx|playwright`
+- `web_scraper_ua_mode` (str, default `fixed`): `fixed|rotate`
   - Crawl flags (env overrides file):
     - `web_crawl_strategy` (str) → `WEB_CRAWL_STRATEGY` (default `default`)
     - `web_crawl_include_external` (bool) → `WEB_CRAWL_INCLUDE_EXTERNAL` (default `false`)

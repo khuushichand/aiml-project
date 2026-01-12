@@ -14,7 +14,7 @@ pytestmark = pytest.mark.asyncio
 async def test_playwright_guard_fallback(monkeypatch):
     scraper = EnhancedWebScraper()
 
-    async def fake_traf(url, custom_cookies=None, user_agent=None, custom_headers=None):
+    async def fake_traf(url, custom_cookies=None, user_agent=None, custom_headers=None, **kwargs):  # noqa: ARG002
         return {"url": url, "title": "t", "author": "a", "date": "", "content": "c", "extraction_successful": True, "method": "trafilatura"}
 
     from tldw_Server_API.app.core.Security import egress as egress_module
@@ -22,6 +22,13 @@ async def test_playwright_guard_fallback(monkeypatch):
         egress_module,
         "evaluate_url_policy",
         lambda url: SimpleNamespace(allowed=True),
+    )
+    async def allow_robots(*args, **kwargs):
+        return True
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib.is_allowed_by_robots_async",
+        allow_robots,
     )
 
     # Ensure browser is None and trafilatura path is used

@@ -54,7 +54,7 @@ from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     resolve_byok_credentials,
 )
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
-from tldw_Server_API.app.core.LLM_Calls.provider_metadata import PROVIDER_REQUIRES_KEY
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 
 # Create router
 router = APIRouter(prefix="/evaluations", tags=["evaluations"])
@@ -159,7 +159,7 @@ async def _validate_provider_credentials(
     """Validate required provider credentials for evaluation endpoints."""
     if (
         eval_type in {"geval", "rag", "response_quality"}
-        and PROVIDER_REQUIRES_KEY.get(provider_key, False)
+        and provider_requires_api_key(provider_key)
         and not provider_api_key
         and not _is_eval_test_mode()
     ):

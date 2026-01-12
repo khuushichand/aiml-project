@@ -31,7 +31,7 @@ Top navigation groups features into tabs. Notable areas include:
 - MCP: Model Context Protocol utilities.
 - LLM Inference: llama.cpp helpers and reranking.
 - Evaluations: unified evaluation flows and metrics.
-- Admin/Config/LLM/Health/Sync/Maintenance: server status, metrics, backups, cleanup, claims, and provider configuration.
+- Admin/Config/LLM/Health/Sync/Maintenance: server status, metrics, backups, cleanup, claims, and provider configuration. Admin Data Ops backups are available via `/api/v1/admin/backups`; a full bundle export/import workflow is planned (see `Docs/Product/DB_Exports_SQLite_PRD.md`).
 
 ## Common Tasks
 

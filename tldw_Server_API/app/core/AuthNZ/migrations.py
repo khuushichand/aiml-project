@@ -1289,6 +1289,7 @@ def migration_028_create_org_invites(conn: sqlite3.Connection) -> None:
             max_uses INTEGER DEFAULT 1,
             uses_count INTEGER DEFAULT 0,
             is_active INTEGER DEFAULT 1,
+            allowed_email_domain TEXT,
             description TEXT,
             metadata TEXT,
             FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
@@ -1885,6 +1886,27 @@ def migration_040_extend_registration_codes_for_org_invites(conn: sqlite3.Connec
     logger.info("Migration 040: Updated registration_codes for org invites")
 
 
+def migration_046_add_org_invite_allowlist_domain(conn: sqlite3.Connection) -> None:
+    """Add allowed_email_domain to org_invites if missing."""
+    logger.info("Migration 046: START org_invites allowlist domain")
+    try:
+        table_exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='org_invites'"
+        ).fetchone()
+        if not table_exists:
+            logger.info("Migration 046: org_invites table missing, skipping")
+            return
+        cur = conn.execute("PRAGMA table_info(org_invites)")
+        columns = {row[1] for row in cur.fetchall()}
+        if "allowed_email_domain" not in columns:
+            conn.execute("ALTER TABLE org_invites ADD COLUMN allowed_email_domain TEXT")
+        conn.commit()
+        logger.info("Migration 046: org_invites allowlist domain ensured")
+    except Exception as exc:
+        logger.error("Migration 046: failed to add org_invites allowlist domain: %s", exc)
+        raise
+
+
 def migration_041_add_llm_provider_overrides(conn: sqlite3.Connection) -> None:
     """Add llm_provider_overrides table for runtime provider overrides."""
     logger.info("Migration 041: START llm_provider_overrides table")
@@ -2214,6 +2236,11 @@ def get_authnz_migrations() -> List[Migration]:
             45,
             "Add users.created_by column",
             migration_045_add_users_created_by,
+        ),
+        Migration(
+            46,
+            "Add org_invites allowed_email_domain",
+            migration_046_add_org_invite_allowlist_domain,
         ),
     ]
 

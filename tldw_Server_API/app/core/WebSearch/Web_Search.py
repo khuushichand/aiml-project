@@ -32,6 +32,24 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
 )
 from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import scrape_article
+from tldw_Server_API.app.core.Web_Scraping.ua_profiles import (
+    build_browser_headers,
+    pick_ua_profile,
+)
+
+
+def _websearch_browser_headers(
+        *,
+        accept_lang: str = "en-US,en;q=0.5",
+        referer: str = "https://www.google.com/",
+) -> Dict[str, str]:
+    profile = pick_ua_profile("fixed")
+    headers = build_browser_headers(profile=profile, accept_lang=accept_lang)
+    headers.update({
+        "Referer": referer,
+        "Connection": "keep-alive",
+    })
+    return headers
 
 
 def summarize(
@@ -2008,15 +2026,7 @@ def search_web_searx(search_query, language='auto', time_range='', safesearch=0,
 
     # Perform the search request
     try:
-        # Mimic browser headers
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Referer': 'https://www.google.com/',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1'
-        }
+        headers = _websearch_browser_headers(accept_lang="en-US,en;q=0.5")
 
         # Add a random delay to mimic human behavior
         delay = random.uniform(2, 5)  # Random delay between 2 and 5 seconds
@@ -2100,10 +2110,10 @@ def search_web_tavily(search_query, result_count=10, site_whitelist=None, site_b
 
     # Perform the search request
     try:
-        headers = {
-            'Content-Type': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0'
-        }
+        headers = {'Content-Type': 'application/json'}
+        ua_headers = _websearch_browser_headers(accept_lang="en-US,en;q=0.5")
+        if "User-Agent" in ua_headers:
+            headers["User-Agent"] = ua_headers["User-Agent"]
 
         response = fetch(method="POST", url=tavily_api_url, headers=headers, data=json.dumps(payload))
         return response.json()
