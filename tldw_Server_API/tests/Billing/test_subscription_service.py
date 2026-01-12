@@ -171,6 +171,25 @@ class _FakeStripeClient:
 
 
 @pytest.mark.asyncio
+async def test_get_plan_for_checkout_requires_active_plan() -> None:
+    """get_plan_for_checkout should return None for inactive plans."""
+
+    class _PlanRepo:
+        async def get_plan_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+            if name == "inactive":
+                return {"id": 99, "name": name, "is_active": False}
+            if name == "active":
+                return {"id": 100, "name": name, "is_active": True}
+            return None
+
+    service = SubscriptionService(billing_repo=_PlanRepo())
+
+    assert await service.get_plan_for_checkout("active") is not None
+    assert await service.get_plan_for_checkout("inactive") is None
+    assert await service.get_plan_for_checkout("missing") is None
+
+
+@pytest.mark.asyncio
 async def test_create_subscription_unknown_plan_raises_value_error() -> None:
     """create_subscription should raise when plan_name is unknown."""
     repo = _FakeBillingRepo()
