@@ -51,7 +51,7 @@ async def test_protocol_tools_list_catalog_filter(monkeypatch):
     async def _allow_mod(ctx, mid):
         return True
 
-    async def _allow_tool(ctx, name):
+    async def _allow_tool(ctx, name, **_kwargs):
         return True
 
     proto._has_module_permission = _allow_mod  # type: ignore
@@ -97,7 +97,7 @@ async def test_protocol_tools_list_module_filter(monkeypatch):
     async def _allow_mod(ctx, mid):
         return True
 
-    async def _allow_tool(ctx, name):
+    async def _allow_tool(ctx, name, **_kwargs):
         return True
 
     proto._has_module_permission = _allow_mod  # type: ignore
