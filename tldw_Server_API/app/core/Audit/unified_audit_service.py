@@ -68,6 +68,8 @@ except Exception:
 
 
 _HASH_PREFIX = "sha256:"
+_VALID_STORAGE_MODES = {"per_user", "shared"}
+_SYSTEM_TENANT_ID = "system"
 
 try:
     import fcntl  # type: ignore
@@ -132,6 +134,45 @@ async def _fallback_queue_lock(path: Path) -> AsyncGenerator[None, None]:
                 lock.release()
             except Exception:
                 pass
+
+
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _normalize_storage_mode(raw: Any) -> str:
+    if raw is None:
+        return "per_user"
+    mode = str(raw).strip().lower()
+    return mode if mode in _VALID_STORAGE_MODES else "per_user"
+
+
+def _resolve_storage_mode(explicit: Optional[str] = None) -> str:
+    if explicit:
+        mode = _normalize_storage_mode(explicit)
+    else:
+        mode = _normalize_storage_mode(
+            _app_settings.get("AUDIT_STORAGE_MODE", None) or os.getenv("AUDIT_STORAGE_MODE")
+        )
+    rollback_raw = _app_settings.get("AUDIT_STORAGE_ROLLBACK", None) or os.getenv("AUDIT_STORAGE_ROLLBACK")
+    if _coerce_bool(rollback_raw, False):
+        return "per_user"
+    return mode
+
+
+def _resolve_shared_db_path() -> Path:
+    try:
+        from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
+        return DatabasePaths.get_shared_audit_db_path()
+    except Exception:
+        db_dir = Path("./Databases")
+        db_dir.mkdir(parents=True, exist_ok=True)
+        return db_dir / "audit_shared.db"
 
 
 def _hash_api_key(value: Optional[str]) -> Optional[str]:
@@ -341,6 +382,7 @@ class AuditEvent:
     category: AuditEventCategory = AuditEventCategory.SYSTEM
     event_type: AuditEventType = AuditEventType.SYSTEM_START
     severity: AuditSeverity = AuditSeverity.INFO
+    tenant_user_id: Optional[str] = None
 
     # Context
     context: AuditContext = field(default_factory=AuditContext)
@@ -378,6 +420,7 @@ class AuditEvent:
             "category": self.category.value,
             "event_type": self.event_type.value,
             "severity": self.severity.value,
+            "tenant_user_id": self.tenant_user_id,
             "resource_type": self.resource_type,
             "resource_id": self.resource_id,
             "action": self.action,
@@ -785,18 +828,21 @@ class UnifiedAuditService:
     def __init__(
         self,
         db_path: Optional[str] = None,
+        storage_mode: Optional[str] = None,
         retention_days: int = 90,
         enable_pii_detection: bool = True,
         enable_risk_scoring: bool = True,
         buffer_size: int = 1000,
         flush_interval: float = 10.0,
         max_db_mb: Optional[int] = None,
+        system_tenant_id: Optional[str] = None,
     ):
         """
         Initialize unified audit service.
 
         Args:
             db_path: Path to audit database
+            storage_mode: per_user (default) or shared
             retention_days: Days to retain audit logs
             enable_pii_detection: Enable PII detection
             enable_risk_scoring: Enable risk scoring
@@ -804,10 +850,17 @@ class UnifiedAuditService:
             flush_interval: Seconds between automatic flushes
         """
         # Configuration
+        self.storage_mode = _resolve_storage_mode(storage_mode)
+        self._shared_mode = self.storage_mode == "shared"
+        self.system_tenant_id = (system_tenant_id or _SYSTEM_TENANT_ID).strip() or _SYSTEM_TENANT_ID
+
         if db_path is None:
-            db_dir = Path("./Databases")
-            db_dir.mkdir(parents=True, exist_ok=True)
-            db_path = db_dir / "unified_audit.db"
+            if self._shared_mode:
+                db_path = _resolve_shared_db_path()
+            else:
+                db_dir = Path("./Databases")
+                db_dir.mkdir(parents=True, exist_ok=True)
+                db_path = db_dir / "unified_audit.db"
 
         self.db_path = Path(db_path)
         self.retention_days = retention_days
@@ -872,6 +925,11 @@ class UnifiedAuditService:
         self._pii_scan_fields: List[str] = list(dict.fromkeys(default_scan + extra_scan))
         self.risk_scorer = RiskScorer() if enable_risk_scoring else None
 
+        # Prepared schemas for inserts/exports
+        self._event_columns = self._build_event_columns()
+        self._event_insert_sql = self._build_event_insert_sql(self._event_columns)
+        self._csv_headers = list(self._event_columns)
+
         # Event buffer
         self.event_buffer: List[AuditEvent] = []
         self.buffer_lock = asyncio.Lock()
@@ -922,6 +980,26 @@ class UnifiedAuditService:
         if start_background_tasks and not self._test_mode:
             await self.start_background_tasks()
 
+    def _build_event_columns(self) -> List[str]:
+        columns = [
+            "event_id", "timestamp", "category", "event_type", "severity",
+        ]
+        if self._shared_mode:
+            columns.append("tenant_user_id")
+        columns.extend([
+            "context_request_id", "context_correlation_id", "context_session_id",
+            "context_user_id", "context_api_key_hash", "context_ip_address",
+            "context_user_agent", "context_endpoint", "context_method",
+            "resource_type", "resource_id", "action", "result", "error_message",
+            "duration_ms", "tokens_used", "estimated_cost", "result_count",
+            "risk_score", "pii_detected", "compliance_flags", "metadata",
+        ])
+        return columns
+
+    def _build_event_insert_sql(self, columns: List[str]) -> str:
+        placeholders = ", ".join(f":{col}" for col in columns)
+        return f"INSERT OR IGNORE INTO audit_events ({', '.join(columns)}) VALUES ({placeholders})"
+
     async def _init_database(self):
         """Initialize database schema"""
         async with aiosqlite.connect(self.db_path) as db:
@@ -958,81 +1036,117 @@ class UnifiedAuditService:
             await db.execute("CREATE INDEX IF NOT EXISTS idx_resource_type ON audit_events(resource_type)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_resource_id ON audit_events(resource_id)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_action ON audit_events(action)")
+            if self._shared_mode:
+                await db.execute("CREATE INDEX IF NOT EXISTS idx_tenant_user_id ON audit_events(tenant_user_id)")
+                await db.execute("CREATE INDEX IF NOT EXISTS idx_tenant_timestamp ON audit_events(tenant_user_id, timestamp)")
+                await db.execute("CREATE INDEX IF NOT EXISTS idx_tenant_event_type ON audit_events(tenant_user_id, event_type)")
 
-            # Daily statistics table
-            await db.execute("""
-                CREATE TABLE IF NOT EXISTS audit_daily_stats (
-                    date DATE NOT NULL,
-                    category TEXT NOT NULL,
-                    total_events INTEGER DEFAULT 0,
-                    high_risk_events INTEGER DEFAULT 0,
-                    failed_events INTEGER DEFAULT 0,
-                    total_cost REAL DEFAULT 0.0,
-                    total_tokens INTEGER DEFAULT 0,
-                    avg_duration_ms REAL,
-                    duration_count INTEGER DEFAULT 0,
-                    PRIMARY KEY (date, category)
+            await self._ensure_audit_daily_stats_schema(db)
+
+            if self._shared_mode:
+                await db.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_stats_tenant_date ON audit_daily_stats(tenant_user_id, date)"
                 )
-            """)
-
-            # Migration: add duration_count column if missing (for existing databases)
-            try:
-                await db.execute("ALTER TABLE audit_daily_stats ADD COLUMN duration_count INTEGER DEFAULT 0")
-            except Exception:
-                # Column already exists
-                pass
+                await db.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_stats_tenant_category ON audit_daily_stats(tenant_user_id, category)"
+                )
 
             await db.commit()
 
     async def _ensure_audit_events_schema(self, db: aiosqlite.Connection) -> None:
         """Ensure the audit_events table matches the unified schema."""
-        create_sql = """
-            CREATE TABLE IF NOT EXISTS audit_events (
-                event_id TEXT PRIMARY KEY,
-                timestamp TIMESTAMP NOT NULL,
-                category TEXT NOT NULL,
-                event_type TEXT NOT NULL,
-                severity TEXT NOT NULL,
+        if self._shared_mode:
+            create_sql = """
+                CREATE TABLE IF NOT EXISTS audit_events (
+                    event_id TEXT PRIMARY KEY,
+                    timestamp TIMESTAMP NOT NULL,
+                    category TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    tenant_user_id TEXT NOT NULL,
 
-                -- Context fields
-                context_request_id TEXT,
-                context_correlation_id TEXT,
-                context_session_id TEXT,
-                context_user_id TEXT,
-                context_api_key_hash TEXT,
-                context_ip_address TEXT,
-                context_user_agent TEXT,
-                context_endpoint TEXT,
-                context_method TEXT,
+                    -- Context fields
+                    context_request_id TEXT,
+                    context_correlation_id TEXT,
+                    context_session_id TEXT,
+                    context_user_id TEXT,
+                    context_api_key_hash TEXT,
+                    context_ip_address TEXT,
+                    context_user_agent TEXT,
+                    context_endpoint TEXT,
+                    context_method TEXT,
 
-                -- Event details
-                resource_type TEXT,
-                resource_id TEXT,
-                action TEXT,
-                result TEXT,
-                error_message TEXT,
+                    -- Event details
+                    resource_type TEXT,
+                    resource_id TEXT,
+                    action TEXT,
+                    result TEXT,
+                    error_message TEXT,
 
-                -- Metrics
-                duration_ms REAL,
-                tokens_used INTEGER,
-                estimated_cost REAL,
-                result_count INTEGER,
+                    -- Metrics
+                    duration_ms REAL,
+                    tokens_used INTEGER,
+                    estimated_cost REAL,
+                    result_count INTEGER,
 
-                -- Risk and compliance
-                risk_score INTEGER,
-                pii_detected BOOLEAN,
-                compliance_flags TEXT,
+                    -- Risk and compliance
+                    risk_score INTEGER,
+                    pii_detected BOOLEAN,
+                    compliance_flags TEXT,
 
-                -- Metadata
-                metadata TEXT
-            )
-        """
+                    -- Metadata
+                    metadata TEXT
+                )
+            """
+        else:
+            create_sql = """
+                CREATE TABLE IF NOT EXISTS audit_events (
+                    event_id TEXT PRIMARY KEY,
+                    timestamp TIMESTAMP NOT NULL,
+                    category TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+
+                    -- Context fields
+                    context_request_id TEXT,
+                    context_correlation_id TEXT,
+                    context_session_id TEXT,
+                    context_user_id TEXT,
+                    context_api_key_hash TEXT,
+                    context_ip_address TEXT,
+                    context_user_agent TEXT,
+                    context_endpoint TEXT,
+                    context_method TEXT,
+
+                    -- Event details
+                    resource_type TEXT,
+                    resource_id TEXT,
+                    action TEXT,
+                    result TEXT,
+                    error_message TEXT,
+
+                    -- Metrics
+                    duration_ms REAL,
+                    tokens_used INTEGER,
+                    estimated_cost REAL,
+                    result_count INTEGER,
+
+                    -- Risk and compliance
+                    risk_score INTEGER,
+                    pii_detected BOOLEAN,
+                    compliance_flags TEXT,
+
+                    -- Metadata
+                    metadata TEXT
+                )
+            """
         expected_types = {
             "event_id": "TEXT",
             "timestamp": "TIMESTAMP",
             "category": "TEXT",
             "event_type": "TEXT",
             "severity": "TEXT",
+            "tenant_user_id": "TEXT",
             "context_request_id": "TEXT",
             "context_correlation_id": "TEXT",
             "context_session_id": "TEXT",
@@ -1056,6 +1170,8 @@ class UnifiedAuditService:
             "compliance_flags": "TEXT",
             "metadata": "TEXT",
         }
+        if not self._shared_mode:
+            expected_types.pop("tenant_user_id", None)
 
         async with db.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='audit_events'"
@@ -1075,6 +1191,8 @@ class UnifiedAuditService:
         expected = set(expected_types.keys())
         missing = [name for name in expected if name not in existing]
         core_missing = {name for name in ("event_id", "timestamp", "event_type", "severity", "category") if name not in existing}
+        if self._shared_mode and "tenant_user_id" not in existing:
+            core_missing.add("tenant_user_id")
         incompatible = [
             name
             for name, info in existing.items()
@@ -1091,64 +1209,185 @@ class UnifiedAuditService:
             except Exception as e:
                 logger.warning(f"Failed to add audit_events column {col}: {e}")
 
+    async def _ensure_audit_daily_stats_schema(self, db: aiosqlite.Connection) -> None:
+        """Ensure audit_daily_stats table matches the expected schema."""
+        if not self._shared_mode:
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS audit_daily_stats (
+                    date DATE NOT NULL,
+                    category TEXT NOT NULL,
+                    total_events INTEGER DEFAULT 0,
+                    high_risk_events INTEGER DEFAULT 0,
+                    failed_events INTEGER DEFAULT 0,
+                    total_cost REAL DEFAULT 0.0,
+                    total_tokens INTEGER DEFAULT 0,
+                    avg_duration_ms REAL,
+                    duration_count INTEGER DEFAULT 0,
+                    PRIMARY KEY (date, category)
+                )
+                """
+            )
+            # Migration: add duration_count column if missing (for existing databases)
+            try:
+                await db.execute("ALTER TABLE audit_daily_stats ADD COLUMN duration_count INTEGER DEFAULT 0")
+            except Exception:
+                pass
+            return
+
+        create_sql = """
+            CREATE TABLE IF NOT EXISTS audit_daily_stats (
+                tenant_user_id TEXT NOT NULL,
+                date DATE NOT NULL,
+                category TEXT NOT NULL,
+                total_events INTEGER DEFAULT 0,
+                high_risk_events INTEGER DEFAULT 0,
+                failed_events INTEGER DEFAULT 0,
+                total_cost REAL DEFAULT 0.0,
+                total_tokens INTEGER DEFAULT 0,
+                avg_duration_ms REAL,
+                duration_count INTEGER DEFAULT 0,
+                PRIMARY KEY (tenant_user_id, date, category)
+            )
+        """
+
+        async with db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='audit_daily_stats'"
+        ) as cur:
+            table_row = await cur.fetchone()
+        if not table_row:
+            await db.execute(create_sql)
+            return
+
+        async with db.execute("PRAGMA table_info(audit_daily_stats)") as cur:
+            cols = await cur.fetchall()
+        if not cols:
+            await db.execute(create_sql)
+            return
+
+        existing = {row["name"]: row for row in cols}
+        tenant_info = existing.get("tenant_user_id")
+        tenant_pk = int(tenant_info["pk"]) if tenant_info else 0
+        needs_rebuild = tenant_info is None or tenant_pk == 0
+
+        if needs_rebuild:
+            logger.warning("Legacy audit_daily_stats schema detected; migrating to tenant-scoped schema.")
+            await db.execute("ALTER TABLE audit_daily_stats RENAME TO audit_daily_stats_legacy")
+            await db.execute(create_sql)
+
+            duration_present = "duration_count" in existing
+            select_cols = (
+                "date, category, total_events, high_risk_events, failed_events, "
+                "total_cost, total_tokens, avg_duration_ms"
+            )
+            if duration_present:
+                select_cols += ", duration_count"
+                insert_cols = f"tenant_user_id, {select_cols}"
+                await db.execute(
+                    f"""
+                    INSERT INTO audit_daily_stats ({insert_cols})
+                    SELECT ?, {select_cols} FROM audit_daily_stats_legacy
+                    """,
+                    (self.system_tenant_id,),
+                )
+            else:
+                insert_cols = f"tenant_user_id, {select_cols}, duration_count"
+                await db.execute(
+                    f"""
+                    INSERT INTO audit_daily_stats ({insert_cols})
+                    SELECT ?, {select_cols}, 0 FROM audit_daily_stats_legacy
+                    """,
+                    (self.system_tenant_id,),
+                )
+
+            try:
+                await db.execute("DROP TABLE audit_daily_stats_legacy")
+            except Exception:
+                pass
+            return
+
+        if "duration_count" not in existing:
+            try:
+                await db.execute("ALTER TABLE audit_daily_stats ADD COLUMN duration_count INTEGER DEFAULT 0")
+            except Exception:
+                pass
+
     async def _migrate_legacy_audit_events(self, db: aiosqlite.Connection) -> None:
         """Migrate legacy audit_events tables to the unified schema."""
         logger.warning("Legacy audit_events schema detected; migrating to unified schema.")
 
         await db.execute("ALTER TABLE audit_events RENAME TO audit_events_legacy")
-        await db.execute(
-            """
-            CREATE TABLE audit_events (
-                event_id TEXT PRIMARY KEY,
-                timestamp TIMESTAMP NOT NULL,
-                category TEXT NOT NULL,
-                event_type TEXT NOT NULL,
-                severity TEXT NOT NULL,
-                context_request_id TEXT,
-                context_correlation_id TEXT,
-                context_session_id TEXT,
-                context_user_id TEXT,
-                context_api_key_hash TEXT,
-                context_ip_address TEXT,
-                context_user_agent TEXT,
-                context_endpoint TEXT,
-                context_method TEXT,
-                resource_type TEXT,
-                resource_id TEXT,
-                action TEXT,
-                result TEXT,
-                error_message TEXT,
-                duration_ms REAL,
-                tokens_used INTEGER,
-                estimated_cost REAL,
-                result_count INTEGER,
-                risk_score INTEGER,
-                pii_detected BOOLEAN,
-                compliance_flags TEXT,
-                metadata TEXT
+        if self._shared_mode:
+            await db.execute(
+                """
+                CREATE TABLE audit_events (
+                    event_id TEXT PRIMARY KEY,
+                    timestamp TIMESTAMP NOT NULL,
+                    category TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    tenant_user_id TEXT NOT NULL,
+                    context_request_id TEXT,
+                    context_correlation_id TEXT,
+                    context_session_id TEXT,
+                    context_user_id TEXT,
+                    context_api_key_hash TEXT,
+                    context_ip_address TEXT,
+                    context_user_agent TEXT,
+                    context_endpoint TEXT,
+                    context_method TEXT,
+                    resource_type TEXT,
+                    resource_id TEXT,
+                    action TEXT,
+                    result TEXT,
+                    error_message TEXT,
+                    duration_ms REAL,
+                    tokens_used INTEGER,
+                    estimated_cost REAL,
+                    result_count INTEGER,
+                    risk_score INTEGER,
+                    pii_detected BOOLEAN,
+                    compliance_flags TEXT,
+                    metadata TEXT
+                )
+                """
             )
-            """
-        )
+        else:
+            await db.execute(
+                """
+                CREATE TABLE audit_events (
+                    event_id TEXT PRIMARY KEY,
+                    timestamp TIMESTAMP NOT NULL,
+                    category TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    context_request_id TEXT,
+                    context_correlation_id TEXT,
+                    context_session_id TEXT,
+                    context_user_id TEXT,
+                    context_api_key_hash TEXT,
+                    context_ip_address TEXT,
+                    context_user_agent TEXT,
+                    context_endpoint TEXT,
+                    context_method TEXT,
+                    resource_type TEXT,
+                    resource_id TEXT,
+                    action TEXT,
+                    result TEXT,
+                    error_message TEXT,
+                    duration_ms REAL,
+                    tokens_used INTEGER,
+                    estimated_cost REAL,
+                    result_count INTEGER,
+                    risk_score INTEGER,
+                    pii_detected BOOLEAN,
+                    compliance_flags TEXT,
+                    metadata TEXT
+                )
+                """
+            )
 
-        insert_sql = """
-            INSERT OR IGNORE INTO audit_events (
-                event_id, timestamp, category, event_type, severity,
-                context_request_id, context_correlation_id, context_session_id,
-                context_user_id, context_api_key_hash, context_ip_address,
-                context_user_agent, context_endpoint, context_method,
-                resource_type, resource_id, action, result, error_message,
-                duration_ms, tokens_used, estimated_cost, result_count,
-                risk_score, pii_detected, compliance_flags, metadata
-            ) VALUES (
-                :event_id, :timestamp, :category, :event_type, :severity,
-                :context_request_id, :context_correlation_id, :context_session_id,
-                :context_user_id, :context_api_key_hash, :context_ip_address,
-                :context_user_agent, :context_endpoint, :context_method,
-                :resource_type, :resource_id, :action, :result, :error_message,
-                :duration_ms, :tokens_used, :estimated_cost, :result_count,
-                :risk_score, :pii_detected, :compliance_flags, :metadata
-            )
-        """
+        insert_sql = self._event_insert_sql
 
         def _infer_category(value: Optional[str]) -> str:
             if not value:
@@ -1224,6 +1463,7 @@ class UnifiedAuditService:
                     for row in rows:
                         data = dict(row)
                         event_type_val = data.get("event_type") or AuditEventType.SYSTEM_START.value
+                        context_user_id = data.get("context_user_id") or data.get("user_id")
                         record = {
                             "event_id": str(data.get("event_id") or uuid4()),
                             "timestamp": _coerce_timestamp(data.get("timestamp")),
@@ -1233,7 +1473,7 @@ class UnifiedAuditService:
                             "context_request_id": data.get("context_request_id"),
                             "context_correlation_id": data.get("context_correlation_id"),
                             "context_session_id": data.get("context_session_id") or data.get("session_id"),
-                            "context_user_id": data.get("context_user_id") or data.get("user_id"),
+                            "context_user_id": context_user_id,
                             "context_api_key_hash": data.get("context_api_key_hash"),
                             "context_ip_address": data.get("context_ip_address") or data.get("ip_address"),
                             "context_user_agent": data.get("context_user_agent") or data.get("user_agent"),
@@ -1253,6 +1493,8 @@ class UnifiedAuditService:
                             "compliance_flags": _json_text(data.get("compliance_flags"), default="[]"),
                             "metadata": _json_text(data.get("metadata"), default="{}"),
                         }
+                        if self._shared_mode:
+                            record["tenant_user_id"] = self._normalize_tenant_id(context_user_id)
                         records.append(record)
                     if records:
                         await db.executemany(insert_sql, records)
@@ -1269,6 +1511,50 @@ class UnifiedAuditService:
             except Exception as rollback_exc:
                 logger.error(f"Failed to restore legacy audit_events table: {rollback_exc}")
             raise
+
+    def _normalize_tenant_id(self, value: Any) -> str:
+        if value is None:
+            return self.system_tenant_id
+        try:
+            s = str(value).strip()
+        except Exception:
+            return self.system_tenant_id
+        return s or self.system_tenant_id
+
+    def _resolve_event_tenant_id(self, event: AuditEvent) -> str:
+        if event.tenant_user_id:
+            return self._normalize_tenant_id(event.tenant_user_id)
+        return self._normalize_tenant_id(event.context.user_id)
+
+    def _ensure_record_tenant_ids(self, records: List[Dict[str, Any]]) -> None:
+        if not self._shared_mode:
+            return
+        for record in records:
+            raw = record.get("tenant_user_id")
+            if raw is None or str(raw).strip() == "":
+                context_val = record.get("context_user_id") or record.get("user_id")
+                record["tenant_user_id"] = self._normalize_tenant_id(context_val)
+            else:
+                record["tenant_user_id"] = self._normalize_tenant_id(raw)
+
+    def _apply_user_filter(
+        self,
+        query: str,
+        params: List[Any],
+        user_id: Optional[str],
+        allow_cross_tenant: bool,
+    ) -> tuple[str, List[Any]]:
+        if self._shared_mode:
+            if user_id:
+                query += " AND tenant_user_id = ?"
+                params.append(self._normalize_tenant_id(user_id))
+            elif not allow_cross_tenant:
+                logger.warning("Shared audit query without tenant filter; returning empty.")
+                query += " AND 1=0"
+        elif user_id:
+            query += " AND context_user_id = ?"
+            params.append(user_id)
+        return query, params
 
     async def _ensure_db_pool(self) -> aiosqlite.Connection:
         """Ensure a persistent aiosqlite connection is available."""
@@ -1483,10 +1769,14 @@ class UnifiedAuditService:
             context.api_key_hash = None
 
         # Create event
+        tenant_user_id = None
+        if self._shared_mode:
+            tenant_user_id = self._normalize_tenant_id(context.user_id)
         event = AuditEvent(
             category=category,
             event_type=event_type,
             severity=severity,
+            tenant_user_id=tenant_user_id,
             context=context,
             resource_type=resource_type,
             resource_id=resource_id,
@@ -1690,28 +1980,8 @@ class UnifiedAuditService:
                                 return
                             # Prepare batch data
                             records = [event.to_dict() for event in new_events]
-                            await db.executemany(
-                                """
-                                INSERT OR IGNORE INTO audit_events (
-                                    event_id, timestamp, category, event_type, severity,
-                                    context_request_id, context_correlation_id, context_session_id,
-                                    context_user_id, context_api_key_hash, context_ip_address,
-                                    context_user_agent, context_endpoint, context_method,
-                                    resource_type, resource_id, action, result, error_message,
-                                    duration_ms, tokens_used, estimated_cost, result_count,
-                                    risk_score, pii_detected, compliance_flags, metadata
-                                ) VALUES (
-                                    :event_id, :timestamp, :category, :event_type, :severity,
-                                    :context_request_id, :context_correlation_id, :context_session_id,
-                                    :context_user_id, :context_api_key_hash, :context_ip_address,
-                                    :context_user_agent, :context_endpoint, :context_method,
-                                    :resource_type, :resource_id, :action, :result, :error_message,
-                                    :duration_ms, :tokens_used, :estimated_cost, :result_count,
-                                    :risk_score, :pii_detected, :compliance_flags, :metadata
-                                )
-                                """,
-                                records,
-                            )
+                            self._ensure_record_tenant_ids(records)
+                            await db.executemany(self._event_insert_sql, records)
                             await self._update_daily_stats(db, new_events)
                             await db.commit()
                     else:
@@ -1724,28 +1994,8 @@ class UnifiedAuditService:
                             records = [event.to_dict() for event in new_events]
 
                             # Batch insert
-                            await db.executemany(
-                                """
-                                INSERT OR IGNORE INTO audit_events (
-                                    event_id, timestamp, category, event_type, severity,
-                                    context_request_id, context_correlation_id, context_session_id,
-                                    context_user_id, context_api_key_hash, context_ip_address,
-                                    context_user_agent, context_endpoint, context_method,
-                                    resource_type, resource_id, action, result, error_message,
-                                    duration_ms, tokens_used, estimated_cost, result_count,
-                                    risk_score, pii_detected, compliance_flags, metadata
-                                ) VALUES (
-                                    :event_id, :timestamp, :category, :event_type, :severity,
-                                    :context_request_id, :context_correlation_id, :context_session_id,
-                                    :context_user_id, :context_api_key_hash, :context_ip_address,
-                                    :context_user_agent, :context_endpoint, :context_method,
-                                    :resource_type, :resource_id, :action, :result, :error_message,
-                                    :duration_ms, :tokens_used, :estimated_cost, :result_count,
-                                    :risk_score, :pii_detected, :compliance_flags, :metadata
-                                )
-                                """,
-                                records,
-                            )
+                            self._ensure_record_tenant_ids(records)
+                            await db.executemany(self._event_insert_sql, records)
 
                             # Update daily statistics
                             await self._update_daily_stats(db, new_events)
@@ -1810,7 +2060,11 @@ class UnifiedAuditService:
 
         for event in events:
             date = event.timestamp.date()
-            key = (date, event.category.value)
+            if self._shared_mode:
+                tenant_id = self._resolve_event_tenant_id(event)
+                key = (tenant_id, date, event.category.value)
+            else:
+                key = (date, event.category.value)
 
             stats[key]["total"] += 1
             if event.risk_score >= HIGH_RISK_SCORE:
@@ -1827,40 +2081,79 @@ class UnifiedAuditService:
                 stats[key]["durations"].append(event.duration_ms)
 
         # Update database
-        for (date, category), data in stats.items():
+        for key, data in stats.items():
+            if self._shared_mode:
+                tenant_id, date, category = key
+            else:
+                date, category = key
             duration_count = len(data["durations"])
             avg_duration = (
                 sum(data["durations"]) / duration_count
                 if duration_count > 0 else None
             )
 
-            await db.execute("""
-                INSERT INTO audit_daily_stats (
-                    date, category, total_events, high_risk_events,
-                    failed_events, total_cost, total_tokens, avg_duration_ms,
-                    duration_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(date, category) DO UPDATE SET
-                    total_events = total_events + excluded.total_events,
-                    high_risk_events = high_risk_events + excluded.high_risk_events,
-                    failed_events = failed_events + excluded.failed_events,
-                    total_cost = total_cost + excluded.total_cost,
-                    total_tokens = total_tokens + excluded.total_tokens,
-                    duration_count = COALESCE(duration_count, 0) + COALESCE(excluded.duration_count, 0),
-                    avg_duration_ms = CASE
-                        WHEN COALESCE(duration_count, 0) + COALESCE(excluded.duration_count, 0) = 0 THEN NULL
-                        WHEN COALESCE(duration_count, 0) = 0 THEN excluded.avg_duration_ms
-                        WHEN COALESCE(excluded.duration_count, 0) = 0 THEN avg_duration_ms
-                        ELSE (
-                            COALESCE(avg_duration_ms, 0) * COALESCE(duration_count, 0) +
-                            COALESCE(excluded.avg_duration_ms, 0) * COALESCE(excluded.duration_count, 0)
-                        ) / (COALESCE(duration_count, 0) + COALESCE(excluded.duration_count, 0))
-                    END
-            """, (
-                date, category, data["total"], data["high_risk"],
-                data["failed"], data["cost"], data["tokens"], avg_duration,
-                duration_count
-            ))
+            if self._shared_mode:
+                await db.execute(
+                    """
+                    INSERT INTO audit_daily_stats (
+                        tenant_user_id, date, category, total_events, high_risk_events,
+                        failed_events, total_cost, total_tokens, avg_duration_ms,
+                        duration_count
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(tenant_user_id, date, category) DO UPDATE SET
+                        total_events = total_events + excluded.total_events,
+                        high_risk_events = high_risk_events + excluded.high_risk_events,
+                        failed_events = failed_events + excluded.failed_events,
+                        total_cost = total_cost + excluded.total_cost,
+                        total_tokens = total_tokens + excluded.total_tokens,
+                        duration_count = COALESCE(duration_count, 0) + COALESCE(excluded.duration_count, 0),
+                        avg_duration_ms = CASE
+                            WHEN COALESCE(duration_count, 0) + COALESCE(excluded.duration_count, 0) = 0 THEN NULL
+                            WHEN COALESCE(duration_count, 0) = 0 THEN excluded.avg_duration_ms
+                            WHEN COALESCE(excluded.duration_count, 0) = 0 THEN avg_duration_ms
+                            ELSE (
+                                COALESCE(avg_duration_ms, 0) * COALESCE(duration_count, 0) +
+                                COALESCE(excluded.avg_duration_ms, 0) * COALESCE(excluded.duration_count, 0)
+                            ) / (COALESCE(duration_count, 0) + COALESCE(excluded.duration_count, 0))
+                        END
+                    """,
+                    (
+                        tenant_id, date, category, data["total"], data["high_risk"],
+                        data["failed"], data["cost"], data["tokens"], avg_duration,
+                        duration_count,
+                    ),
+                )
+            else:
+                await db.execute(
+                    """
+                    INSERT INTO audit_daily_stats (
+                        date, category, total_events, high_risk_events,
+                        failed_events, total_cost, total_tokens, avg_duration_ms,
+                        duration_count
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(date, category) DO UPDATE SET
+                        total_events = total_events + excluded.total_events,
+                        high_risk_events = high_risk_events + excluded.high_risk_events,
+                        failed_events = failed_events + excluded.failed_events,
+                        total_cost = total_cost + excluded.total_cost,
+                        total_tokens = total_tokens + excluded.total_tokens,
+                        duration_count = COALESCE(duration_count, 0) + COALESCE(excluded.duration_count, 0),
+                        avg_duration_ms = CASE
+                            WHEN COALESCE(duration_count, 0) + COALESCE(excluded.duration_count, 0) = 0 THEN NULL
+                            WHEN COALESCE(duration_count, 0) = 0 THEN excluded.avg_duration_ms
+                            WHEN COALESCE(excluded.duration_count, 0) = 0 THEN avg_duration_ms
+                            ELSE (
+                                COALESCE(avg_duration_ms, 0) * COALESCE(duration_count, 0) +
+                                COALESCE(excluded.avg_duration_ms, 0) * COALESCE(excluded.duration_count, 0)
+                            ) / (COALESCE(duration_count, 0) + COALESCE(excluded.duration_count, 0))
+                        END
+                    """,
+                    (
+                        date, category, data["total"], data["high_risk"],
+                        data["failed"], data["cost"], data["tokens"], avg_duration,
+                        duration_count,
+                    ),
+                )
 
     async def cleanup_old_logs(self):
         """Remove logs older than retention period"""
@@ -2047,12 +2340,20 @@ class UnifiedAuditService:
                 else:
                     metadata = {}
 
+                tenant_user_id = None
+                if self._shared_mode:
+                    raw_tenant = record.get("tenant_user_id")
+                    if raw_tenant is None or str(raw_tenant).strip() == "":
+                        raw_tenant = record.get("context_user_id") or record.get("user_id")
+                    tenant_user_id = self._normalize_tenant_id(raw_tenant)
+
                 return AuditEvent(
                     event_id=str(record.get("event_id") or uuid4()),
                     timestamp=ts,
                     category=_as_category(record.get("category")),
                     event_type=_as_event_type(record.get("event_type")),
                     severity=_as_severity(record.get("severity")),
+                    tenant_user_id=tenant_user_id,
                     resource_type=record.get("resource_type"),
                     resource_id=record.get("resource_id"),
                     action=record.get("action"),
@@ -2095,28 +2396,8 @@ class UnifiedAuditService:
                     if not filtered_records:
                         return 0
 
-                    await db.executemany(
-                        """
-                        INSERT OR IGNORE INTO audit_events (
-                            event_id, timestamp, category, event_type, severity,
-                            context_request_id, context_correlation_id, context_session_id,
-                            context_user_id, context_api_key_hash, context_ip_address,
-                            context_user_agent, context_endpoint, context_method,
-                            resource_type, resource_id, action, result, error_message,
-                            duration_ms, tokens_used, estimated_cost, result_count,
-                            risk_score, pii_detected, compliance_flags, metadata
-                        ) VALUES (
-                            :event_id, :timestamp, :category, :event_type, :severity,
-                            :context_request_id, :context_correlation_id, :context_session_id,
-                            :context_user_id, :context_api_key_hash, :context_ip_address,
-                            :context_user_agent, :context_endpoint, :context_method,
-                            :resource_type, :resource_id, :action, :result, :error_message,
-                            :duration_ms, :tokens_used, :estimated_cost, :result_count,
-                            :risk_score, :pii_detected, :compliance_flags, :metadata
-                        )
-                        """,
-                        filtered_records,
-                    )
+                    self._ensure_record_tenant_ids(filtered_records)
+                    await db.executemany(self._event_insert_sql, filtered_records)
                     if stats_events:
                         filtered_stats: List[AuditEvent] = []
                         stats_seen: Set[str] = set()
@@ -2267,7 +2548,8 @@ class UnifiedAuditService:
         method: Optional[str] = None,
         min_risk_score: Optional[int] = None,
         limit: int = 100,
-        offset: int = 0
+        offset: int = 0,
+        allow_cross_tenant: bool = False,
     ) -> List[Dict[str, Any]]:
         """Query audit events with filters"""
         query = "SELECT * FROM audit_events WHERE 1=1"
@@ -2293,9 +2575,7 @@ class UnifiedAuditService:
             query += f" AND category IN ({placeholders})"
             params.extend([c.value for c in categories])
 
-        if user_id:
-            query += " AND context_user_id = ?"
-            params.append(user_id)
+        query, params = self._apply_user_filter(query, params, user_id, allow_cross_tenant)
 
         if request_id:
             query += " AND context_request_id = ?"
@@ -2355,6 +2635,7 @@ class UnifiedAuditService:
         endpoint: Optional[str] = None,
         method: Optional[str] = None,
         min_risk_score: Optional[int] = None,
+        allow_cross_tenant: bool = False,
     ) -> int:
         """Count audit events with filters."""
         query = "SELECT COUNT(*) as cnt FROM audit_events WHERE 1=1"
@@ -2375,9 +2656,7 @@ class UnifiedAuditService:
             placeholders = ",".join("?" * len(categories))
             query += f" AND category IN ({placeholders})"
             params.extend([c.value for c in categories])
-        if user_id:
-            query += " AND context_user_id = ?"
-            params.append(user_id)
+        query, params = self._apply_user_filter(query, params, user_id, allow_cross_tenant)
         if request_id:
             query += " AND context_request_id = ?"
             params.append(request_id)
@@ -2435,6 +2714,7 @@ class UnifiedAuditService:
         chunk_size: int = 5000,
         stream: bool = False,
         max_rows: Optional[int] = None,
+        allow_cross_tenant: bool = False,
     ) -> Union[str, int, AsyncGenerator[str, None]]:
         """
         Export audit events to JSON or CSV for compliance/reporting.
@@ -2467,15 +2747,7 @@ class UnifiedAuditService:
             max_rows = self.non_stream_max_rows
 
         # Fixed CSV header schema for consistency across export paths
-        CSV_HEADERS: List[str] = [
-            "event_id", "timestamp", "category", "event_type", "severity",
-            "context_request_id", "context_correlation_id", "context_session_id",
-            "context_user_id", "context_api_key_hash", "context_ip_address",
-            "context_user_agent", "context_endpoint", "context_method",
-            "resource_type", "resource_id", "action", "result", "error_message",
-            "duration_ms", "tokens_used", "estimated_cost", "result_count",
-            "risk_score", "pii_detected", "compliance_flags", "metadata",
-        ]
+        CSV_HEADERS: List[str] = list(self._csv_headers)
 
         def _maybe_load_json(value: Any) -> Any:
             if value is None:
@@ -2526,6 +2798,7 @@ class UnifiedAuditService:
                         endpoint=endpoint,
                         method=method,
                         min_risk_score=min_risk_score,
+                        allow_cross_tenant=allow_cross_tenant,
                         limit=limit,
                         offset=offset,
                     )
@@ -2561,6 +2834,7 @@ class UnifiedAuditService:
                         endpoint=endpoint,
                         method=method,
                         min_risk_score=min_risk_score,
+                        allow_cross_tenant=allow_cross_tenant,
                         limit=chunk_size,
                         offset=offset,
                     )
@@ -2605,6 +2879,7 @@ class UnifiedAuditService:
                         endpoint=endpoint,
                         method=method,
                         min_risk_score=min_risk_score,
+                        allow_cross_tenant=allow_cross_tenant,
                         limit=chunk_size,
                         offset=offset,
                     )
@@ -2656,6 +2931,7 @@ class UnifiedAuditService:
                         endpoint=endpoint,
                         method=method,
                         min_risk_score=min_risk_score,
+                        allow_cross_tenant=allow_cross_tenant,
                         limit=chunk_size,
                         offset=offset,
                     )
@@ -2696,6 +2972,7 @@ class UnifiedAuditService:
                         endpoint=endpoint,
                         method=method,
                         min_risk_score=min_risk_score,
+                        allow_cross_tenant=allow_cross_tenant,
                         limit=chunk_size,
                         offset=offset,
                     )
@@ -2729,6 +3006,7 @@ class UnifiedAuditService:
                 endpoint=endpoint,
                 method=method,
                 min_risk_score=min_risk_score,
+                allow_cross_tenant=allow_cross_tenant,
                 limit=chunk_size,
                 offset=offset,
             )
@@ -2872,11 +3150,19 @@ class UnifiedAuditService:
             "risk_scoring_enabled": self.enable_risk_scoring
         }
 
-    async def get_security_summary(self, hours: int = 24) -> Dict[str, Any]:
+    async def get_security_summary(
+        self,
+        hours: int = 24,
+        *,
+        user_id: Optional[str] = None,
+        allow_cross_tenant: bool = True,
+    ) -> Dict[str, Any]:
         """Aggregate recent security-related audit stats for health checks.
 
         Args:
             hours: Lookback window in hours
+            user_id: Optional tenant filter for shared mode
+            allow_cross_tenant: Allow cross-tenant aggregation in shared mode
 
         Returns:
             Dictionary with summary stats: high_risk_events, failure_events,
@@ -2887,18 +3173,34 @@ class UnifiedAuditService:
         cat = AuditEventCategory.SECURITY.value
 
         async def _summarize(db: aiosqlite.Connection) -> Dict[str, Any]:
+            tenant_clause = ""
+            tenant_params: List[Any] = []
+            if self._shared_mode:
+                if user_id:
+                    tenant_clause = " AND tenant_user_id = ?"
+                    tenant_params.append(self._normalize_tenant_id(user_id))
+                elif not allow_cross_tenant:
+                    tenant_clause = " AND 1=0"
+            user_field = "tenant_user_id" if self._shared_mode else "context_user_id"
+
+            def _params(*base: Any) -> List[Any]:
+                return list(base) + tenant_params
+
             # Total security events in window
             async with db.execute(
-                "SELECT COUNT(*) FROM audit_events WHERE timestamp >= ? AND category = ?",
-                (start_iso, cat),
+                f"SELECT COUNT(*) FROM audit_events WHERE timestamp >= ? AND category = ?{tenant_clause}",
+                _params(start_iso, cat),
             ) as cur:
                 row = await cur.fetchone()
                 total_events = int(row[0]) if row else 0
 
             # High-risk security events in window
             async with db.execute(
-                "SELECT COUNT(*) FROM audit_events WHERE timestamp >= ? AND category = ? AND risk_score >= ?",
-                (start_iso, cat, HIGH_RISK_SCORE),
+                (
+                    "SELECT COUNT(*) FROM audit_events "
+                    f"WHERE timestamp >= ? AND category = ? AND risk_score >= ?{tenant_clause}"
+                ),
+                _params(start_iso, cat, HIGH_RISK_SCORE),
             ) as cur:
                 row = await cur.fetchone()
                 high_risk_events = int(row[0]) if row else 0
@@ -2911,22 +3213,23 @@ class UnifiedAuditService:
                 WHERE timestamp >= ?
                   AND category = ?
                   AND LOWER(COALESCE(result, '')) IN ('failure', 'error')
-                """,
-                (start_iso, cat),
+                """ + tenant_clause,
+                _params(start_iso, cat),
             ) as cur:
                 row = await cur.fetchone()
                 failure_events = int(row[0]) if row else 0
 
             async with db.execute(
-                """
-                SELECT COUNT(DISTINCT context_user_id)
+                f"""
+                SELECT COUNT(DISTINCT {user_field})
                 FROM audit_events
                 WHERE timestamp >= ?
                   AND category = ?
-                  AND context_user_id IS NOT NULL
-                  AND context_user_id != ''
+                  AND {user_field} IS NOT NULL
+                  AND {user_field} != ''
+                {tenant_clause}
                 """,
-                (start_iso, cat),
+                _params(start_iso, cat),
             ) as cur:
                 row = await cur.fetchone()
                 unique_security_users = int(row[0]) if row else 0
@@ -2941,11 +3244,12 @@ class UnifiedAuditService:
                   AND category = ?
                   AND context_ip_address IS NOT NULL
                   AND context_ip_address != ''
+                """ + tenant_clause + """
                 GROUP BY context_ip_address
                 ORDER BY cnt DESC
                 LIMIT 5
                 """,
-                (start_iso, cat),
+                _params(start_iso, cat),
             ) as cur:
                 rows = await cur.fetchall()
                 top_failing_ips = [str(r[0]) for r in rows if r and r[0]]

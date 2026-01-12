@@ -46,6 +46,30 @@ def convert_sqlite_placeholders_to_postgres(query: str) -> str:
     i = 0
     length = len(query)
 
+    def _prev_non_space(idx: int) -> str:
+        j = idx - 1
+        while j >= 0 and query[j].isspace():
+            j -= 1
+        return query[j] if j >= 0 else ""
+
+    def _next_non_space(idx: int) -> str:
+        j = idx + 1
+        while j < length and query[j].isspace():
+            j += 1
+        return query[j] if j < length else ""
+
+    def _is_jsonb_operator(idx: int) -> bool:
+        # Preserve Postgres JSONB operators: ?, ?|, ?&
+        if idx + 1 < length and query[idx + 1] in ("|", "&", "?"):
+            return True
+        prev_ch = _prev_non_space(idx)
+        next_ch = _next_non_space(idx)
+        if not prev_ch or not next_ch:
+            return False
+        prev_is_expr = prev_ch.isalnum() or prev_ch in "_)]}\"'"
+        next_is_expr = next_ch.isalpha() or next_ch in "_'\"?"
+        return prev_is_expr and next_is_expr
+
     while i < length:
         ch = query[i]
 
@@ -80,6 +104,10 @@ def convert_sqlite_placeholders_to_postgres(query: str) -> str:
             continue
 
         if ch == "?" and not in_single and not in_double:
+            if _is_jsonb_operator(i):
+                result.append(ch)
+                i += 1
+                continue
             result.append("%s")
             i += 1
             continue

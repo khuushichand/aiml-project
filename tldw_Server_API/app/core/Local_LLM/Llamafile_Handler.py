@@ -204,8 +204,34 @@ class LlamafileHandler(BaseLLMHandler):
                 assets = latest_release_data.get('assets', [])
                 asset_url = None
                 chosen_asset_name = None
-                is_windows = platform.system().lower().startswith("win")
+                system = platform.system().lower()
+                is_windows = system.startswith("win")
                 tag_hint = tag_name.lower().lstrip("v")
+                machine = platform.machine().lower()
+
+                os_tokens = {
+                    "windows": {"windows", "win32", "win64"},
+                    "darwin": {"darwin", "macos", "osx", "mac"},
+                    "linux": {"linux", "ubuntu", "debian", "glibc", "musl"},
+                }
+                if system.startswith("win"):
+                    os_positive = os_tokens["windows"]
+                    os_negative = os_tokens["darwin"] | os_tokens["linux"]
+                elif system == "darwin":
+                    os_positive = os_tokens["darwin"]
+                    os_negative = os_tokens["windows"] | os_tokens["linux"]
+                else:
+                    os_positive = os_tokens["linux"]
+                    os_negative = os_tokens["windows"] | os_tokens["darwin"]
+
+                arch_positive: set[str] = set()
+                arch_negative: set[str] = set()
+                if machine in {"x86_64", "amd64"} or "x86_64" in machine or "amd64" in machine:
+                    arch_positive = {"x86_64", "amd64", "x64"}
+                    arch_negative = {"arm64", "aarch64"}
+                elif machine in {"arm64", "aarch64"} or "arm64" in machine or "aarch64" in machine:
+                    arch_positive = {"arm64", "aarch64"}
+                    arch_negative = {"x86_64", "amd64", "x64"}
 
                 def _asset_score(asset_name: str) -> Optional[int]:
                     name = asset_name.lower()
@@ -221,6 +247,14 @@ class LlamafileHandler(BaseLLMHandler):
                         score -= 10
                     if tag_hint and tag_hint in name:
                         score -= 5
+                    if os_positive and any(token in name for token in os_positive):
+                        score -= 25
+                    elif os_negative and any(token in name for token in os_negative):
+                        score += 200
+                    if arch_positive and any(token in name for token in arch_positive):
+                        score -= 15
+                    elif arch_negative and any(token in name for token in arch_negative):
+                        score += 200
                     if name.endswith(".exe"):
                         score += -40 if is_windows else 80
                     if name.endswith(".zip"):
@@ -470,14 +504,16 @@ class LlamafileHandler(BaseLLMHandler):
             process = await asyncio.create_subprocess_exec(*command, **cpe_kwargs)
             # Poll HTTP readiness instead of fixed sleep
             base_url = handler_utils.build_base_url(client_host, port)
-            is_ready = await wait_for_http_ready(base_url, timeout_total=30.0, interval=0.5)
+            readiness_timeout = getattr(self.config, "readiness_timeout", 30.0) or 30.0
+            is_ready = await wait_for_http_ready(base_url, timeout_total=readiness_timeout, interval=0.5)
 
             if process.returncode is not None or not is_ready:
                 stderr_output = ""
                 if process.stderr:
                     try:
                         # Use timeout to prevent blocking indefinitely if server is still writing
-                        err_bytes = await asyncio.wait_for(process.stderr.read(), timeout=5.0)
+                        stderr_timeout = getattr(self.config, "stderr_read_timeout", 5.0) or 5.0
+                        err_bytes = await asyncio.wait_for(process.stderr.read(), timeout=stderr_timeout)
                         stderr_output = err_bytes.decode(errors='ignore').strip()
                     except asyncio.TimeoutError:
                         stderr_output = "(stderr read timed out after 5s)"
@@ -487,7 +523,8 @@ class LlamafileHandler(BaseLLMHandler):
                 stdout_output = ""
                 if process.stdout:
                     try:
-                        out_bytes = await asyncio.wait_for(process.stdout.read(), timeout=5.0)
+                        stderr_timeout = getattr(self.config, "stderr_read_timeout", 5.0) or 5.0
+                        out_bytes = await asyncio.wait_for(process.stdout.read(), timeout=stderr_timeout)
                         stdout_output = out_bytes.decode(errors='ignore').strip()
                     except asyncio.TimeoutError:
                         stdout_output = "(stdout read timed out after 5s)"
@@ -625,7 +662,7 @@ class LlamafileHandler(BaseLLMHandler):
 
     async def inference(self,
                         prompt: str,
-                        port: int,
+                        port: Optional[int] = None,
                         host: Optional[str] = None,
                         system_prompt: Optional[str] = None,
                         n_predict: int = -1,
@@ -634,6 +671,10 @@ class LlamafileHandler(BaseLLMHandler):
                         top_p: float = 0.95,
                         api_key: Optional[str] = None,
                         **kwargs) -> Dict[str, Any]:
+        if port is None:
+            port = self.config.default_port
+        if port is None:
+            raise ServerError("Port is required for Llamafile inference.")
         target_host = host or self.config.default_host
         client_host = handler_utils.resolve_client_host(target_host)
         api_url = f"{handler_utils.build_base_url(client_host, port)}/v1/chat/completions"
@@ -667,6 +708,7 @@ class LlamafileHandler(BaseLLMHandler):
         if system_prompt: messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
+        timeout = kwargs.pop("timeout", None)
         if "stream" in kwargs:
             kwargs = {k: v for k, v in kwargs.items() if k != "stream"}
         payload = {
@@ -677,7 +719,8 @@ class LlamafileHandler(BaseLLMHandler):
         payload = {k: v for k, v in payload.items() if v is not None}
 
         self.logger.debug(f"Sending llamafile inference request to {api_url} with payload: {payload}")
-        async with create_async_client(timeout=kwargs.get("timeout", 120.0)) as client:
+        http_timeout = timeout if timeout is not None else getattr(self.config, "http_timeout", 120.0)
+        async with create_async_client(timeout=http_timeout) as client:
             try:
                 result = await request_json(client, "POST", api_url, json=payload, headers=headers)
                 self.logger.debug("Llamafile inference successful.")

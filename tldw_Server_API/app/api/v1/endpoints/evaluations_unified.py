@@ -102,6 +102,7 @@ def get_db_for_user(user_id: int):
     svc = get_unified_evaluation_service_for_user(user_id)
     return getattr(svc, 'db', None)
 
+
 def _is_eval_test_mode() -> bool:
     return (
         os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
@@ -117,6 +118,15 @@ def _normalize_eval_user_id(current_user: User) -> Optional[int]:
         return int(user_id)
     except (TypeError, ValueError):
         return None
+
+
+async def _get_admin_principal_if_needed(
+    request: Request,
+) -> Optional[AuthPrincipal]:
+    """Resolve AuthPrincipal only when heavy-eval admin gating is enabled."""
+    if os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() in {"true", "1", "yes", "on"}:
+        return await get_auth_principal(request)
+    return None
 
 
 async def _resolve_eval_credentials(
@@ -201,10 +211,9 @@ async def _resolve_and_validate_eval_provider(
 
 @router.post(
     "/admin/idempotency/cleanup",
-    dependencies=[Depends(require_roles("admin"))],
 )
 async def admin_cleanup_idempotency(
-    principal: Annotated[AuthPrincipal, Depends(get_auth_principal)],
+    principal: Annotated[Optional[AuthPrincipal], Depends(_get_admin_principal_if_needed)],
     _current_user: Annotated[User, Depends(get_eval_request_user)],  # dependency for side effects
     ttl_hours: int = Query(72, ge=1, le=720, description="Delete idempotency keys older than this TTL (hours)"),
     target_user_id: Optional[int] = Query(None, description="If provided, only clean this user's evaluations DB"),
@@ -736,13 +745,19 @@ async def evaluate_geval(
         explanations_fallback = result["results"].get("explanations", {})
 
         def _normalize_geval_metric(metric_name: str, score_val: Optional[float], raw_score_val: Optional[float] = None) -> tuple[float, Optional[float]]:
-            max_score = 3.0 if metric_name == "fluency" else 5.0
             raw_candidate = raw_score_val if raw_score_val is not None else score_val
             try:
                 raw_value = float(raw_candidate) if raw_candidate is not None else 0.0
             except (TypeError, ValueError):
                 raw_value = 0.0
+            if metric_name == "fluency":
+                # Some providers report fluency on a 1-3 scale, others on 1-5.
+                max_score = 3.0 if raw_value <= 3.0 else 5.0
+            else:
+                max_score = 5.0
             normalized = raw_value / max_score if raw_value >= 1.0 else raw_value
+            if normalized > 1.0:
+                normalized = 1.0
             return normalized, raw_value
 
         for metric_name, metric_value in raw_metrics.items():

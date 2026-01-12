@@ -199,3 +199,85 @@ def test_stripe_webhook_retries_failed_event(monkeypatch, app: FastAPI) -> None:
 
     assert response.status_code == 200
     assert retry_repo.processed is True
+
+
+def test_stripe_webhook_processing_failure_returns_500(monkeypatch, app: FastAPI) -> None:
+    """Webhook processing errors should surface as 500 so Stripe retries."""
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.billing_webhooks.is_billing_enabled",
+        lambda: True,
+        raising=False,
+    )
+
+    fake_client = _FakeStripeClientForWebhooks(should_fail=False)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.billing_webhooks.get_stripe_client",
+        lambda: fake_client,
+        raising=False,
+    )
+
+    class _FailingBillingRepo:
+        def __init__(self):
+            self.failed = False
+
+        async def record_webhook_event(self, *args, **kwargs):
+            return True
+
+        async def try_claim_webhook_event(self, *args, **kwargs):
+            return True
+
+        async def mark_webhook_processed(self, *args, **kwargs):
+            self.failed = True
+
+    async def _fake_get_db_pool():
+        class _Pool:
+            async def acquire(self):
+                return None
+
+            async def transaction(self):
+                class _Tx:
+                    async def __aenter__(self_inner):
+                        return None
+
+                    async def __aexit__(self_inner, exc_type, exc, tb):
+                        return False
+
+                return _Tx()
+
+        return _Pool()
+
+    async def _fake_get_subscription_service():
+        class _Service:
+            async def handle_webhook_event(self, event_type: str, event_data: Dict[str, Any]) -> Dict[str, Any]:
+                raise RuntimeError("boom")
+
+        return _Service()
+
+    failing_repo = _FailingBillingRepo()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.billing_webhooks.get_db_pool",
+        _fake_get_db_pool,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.billing_webhooks.AuthnzBillingRepo",
+        lambda db_pool: failing_repo,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.billing_webhooks.get_subscription_service",
+        _fake_get_subscription_service,
+        raising=False,
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/v1/billing/webhooks/stripe",
+        data=b"{}",
+        headers={"Stripe-Signature": "sig_test"},
+    )
+
+    assert response.status_code == 500
+    assert failing_repo.failed is True

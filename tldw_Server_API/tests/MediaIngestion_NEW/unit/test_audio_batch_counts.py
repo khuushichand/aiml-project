@@ -9,7 +9,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing import audio_batch
 
 
 @pytest.mark.asyncio
-async def test_run_audio_batch_counts_warnings_as_not_processed(monkeypatch, tmp_path):
+async def test_run_audio_batch_counts_warnings_as_processed(monkeypatch, tmp_path):
     def fake_process_audio_files(**_kwargs: Any) -> Dict[str, Any]:
         return {
             "results": [
@@ -96,7 +96,7 @@ async def test_run_audio_batch_counts_warnings_as_not_processed(monkeypatch, tmp
         file_errors_raw=[],
     )
 
-    assert batch["processed_count"] == 1
+    assert batch["processed_count"] == 2
     assert batch["errors_count"] == 1
     statuses = [item.get("status") for item in batch["results"]]
     assert "Warning" in statuses

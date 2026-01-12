@@ -84,25 +84,91 @@ def _ensure_chunker_metrics_registered() -> None:
         registry = get_metrics_registry()
         if registry is None or not hasattr(registry, "metrics"):
             return
+        def _register(name: str, metric_type: MetricType, description: str, labels: List[str], unit: str = "") -> None:
+            if name not in registry.metrics:
+                registry.register_metric(
+                    MetricDefinition(
+                        name=name,
+                        type=metric_type,
+                        description=description,
+                        labels=labels,
+                        unit=unit,
+                    )
+                )
         # Avoid duplicate registration when tests reset the registry
-        if "chunker_cache_get_total" not in registry.metrics:
-            registry.register_metric(
-                MetricDefinition(
-                    name="chunker_cache_get_total",
-                    type=MetricType.COUNTER,
-                    description="Chunker cache retrieval attempts",
-                    labels=["result", "reason"],
-                )
-            )
-        if "chunker_cache_put_total" not in registry.metrics:
-            registry.register_metric(
-                MetricDefinition(
-                    name="chunker_cache_put_total",
-                    type=MetricType.COUNTER,
-                    description="Chunker cache storage results",
-                    labels=["result", "reason"],
-                )
-            )
+        _register(
+            "chunker_cache_get_total",
+            MetricType.COUNTER,
+            "Chunker cache retrieval attempts",
+            ["result", "reason"],
+        )
+        _register(
+            "chunker_cache_put_total",
+            MetricType.COUNTER,
+            "Chunker cache storage results",
+            ["result", "reason"],
+        )
+        _register(
+            "chunker_process_total",
+            MetricType.COUNTER,
+            "Chunker processing requests",
+            ["component", "op"],
+        )
+        _register(
+            "chunker_frontmatter_duration_seconds",
+            MetricType.HISTOGRAM,
+            "Chunker frontmatter extraction duration",
+            ["component", "op"],
+            unit="seconds",
+        )
+        _register(
+            "chunker_header_extract_seconds",
+            MetricType.HISTOGRAM,
+            "Chunker header extraction duration",
+            ["component", "op"],
+            unit="seconds",
+        )
+        _register(
+            "chunker_chunking_duration_seconds",
+            MetricType.HISTOGRAM,
+            "Chunker chunking duration",
+            ["component", "op"],
+            unit="seconds",
+        )
+        _register(
+            "chunker_normalization_seconds",
+            MetricType.HISTOGRAM,
+            "Chunker normalization duration",
+            ["component", "op"],
+            unit="seconds",
+        )
+        _register(
+            "chunker_last_chunk_count",
+            MetricType.GAUGE,
+            "Last chunk count emitted by chunker",
+            ["component", "op"],
+        )
+        _register(
+            "chunker_output_bytes",
+            MetricType.HISTOGRAM,
+            "Chunker output size in bytes",
+            ["component", "op"],
+            unit="bytes",
+        )
+        _register(
+            "chunker_input_bytes",
+            MetricType.HISTOGRAM,
+            "Chunker input size in bytes",
+            ["component", "op"],
+            unit="bytes",
+        )
+        _register(
+            "chunker_process_total_seconds",
+            MetricType.HISTOGRAM,
+            "Total chunker processing duration",
+            ["component", "op", "method", "hierarchical"],
+            unit="seconds",
+        )
     except Exception:
         logger.debug("Failed to register chunker cache metrics", exc_info=True)
 
@@ -505,7 +571,7 @@ class Chunker:
             if start >= end:
                 return
             segment_raw = text[start:end]
-            # Use sanitized copy for downstream offset mapping while keeping raw text for logging in chunk_text
+            # Use sanitized copy for downstream offset mapping; output preserves raw text for fidelity.
             segment_clean = self._sanitize_input(segment_raw, suppress_security_log=True)
             # Compute chunks using selected method
             chunks = self.chunk_text(
@@ -2624,9 +2690,7 @@ class Chunker:
                 return overlap_text
             sep = ''
             if overlap_text and not segment[0].isspace():
-                if method_lower == 'words':
-                    sep = ' '
-                elif language_lower not in languages_no_space and not overlap_text[-1].isspace():
+                if language_lower not in languages_no_space and not overlap_text[-1].isspace():
                     # Preserve a boundary for space-delimited languages to avoid fused tokens
                     sep = ' '
             return overlap_text + sep + segment

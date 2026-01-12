@@ -52,6 +52,7 @@ class DummyScopeModule(BaseModule):
 
 @pytest.mark.asyncio
 async def test_api_key_scopes_enforce_read_vs_write():
+    await reset_module_registry()
     registry = get_module_registry()
     await registry.register_module("scope_mod", DummyScopeModule, ModuleConfig(name="scope_mod"))
 
@@ -77,6 +78,7 @@ async def test_api_key_scopes_enforce_read_vs_write():
 
 @pytest.mark.asyncio
 async def test_tools_list_can_execute_respects_api_key_scope():
+    await reset_module_registry()
     registry = get_module_registry()
     await registry.register_module("scope_mod_list", DummyScopeModule, ModuleConfig(name="scope_mod_list"))
 

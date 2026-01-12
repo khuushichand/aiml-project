@@ -1393,15 +1393,15 @@ class MediaDatabase:
                         upper = prepared_query.strip().upper()
                         is_select = upper.startswith("SELECT")
                         has_returning = " RETURNING " in upper
+                        rows = []
+                        if is_select or has_returning:
+                            rows = [dict(r) for r in cur.fetchall()]
                         # Auto-commit DML/DDL when using ephemeral connection
-                        if commit or (not is_select and not has_returning):
+                        if commit or not is_select:
                             try:
                                 eph.commit()
                             except Exception:
                                 pass
-                        rows = []
-                        if is_select or has_returning:
-                            rows = [dict(r) for r in cur.fetchall()]
                         result = QueryResult(rows=rows, rowcount=cur.rowcount, lastrowid=cur.lastrowid, description=cur.description)
                         return BackendCursorAdapter(result)
                     finally:
@@ -1442,19 +1442,7 @@ class MediaDatabase:
 
         try:
             if eff_conn is None:
-                raw = self.backend.get_pool().get_connection()
-                try:
-                    result = self.backend.execute(prepared_query, prepared_params, connection=raw)
-                    if commit:
-                        try:
-                            raw.commit()
-                        except Exception as exc:
-                            raise DatabaseError(f"Backend commit failed: {exc}") from exc
-                finally:
-                    try:
-                        self.backend.get_pool().return_connection(raw)
-                    except Exception:
-                        pass
+                result = self.backend.execute(prepared_query, prepared_params)
             else:
                 result = self.backend.execute(prepared_query, prepared_params, connection=eff_conn)
                 if commit:
@@ -1550,19 +1538,7 @@ class MediaDatabase:
 
         try:
             if eff_conn is None:
-                raw = self.backend.get_pool().get_connection()
-                try:
-                    result = self.backend.execute_many(prepared_query, prepared_params_list, connection=raw)
-                    if commit:
-                        try:
-                            raw.commit()
-                        except Exception as exc:
-                            raise DatabaseError(f"Backend batch commit failed: {exc}") from exc
-                finally:
-                    try:
-                        self.backend.get_pool().return_connection(raw)
-                    except Exception:
-                        pass
+                result = self.backend.execute_many(prepared_query, prepared_params_list)
             else:
                 result = self.backend.execute_many(prepared_query, prepared_params_list, connection=eff_conn)
                 if commit:
@@ -2158,133 +2134,113 @@ class MediaDatabase:
         """Applies the full Version 1 schema, ensuring version update is part of the main script."""
         logging.info(f"Applying initial schema (Version 1) to DB: {self.db_path_str}...")
         try:
-            # --- Combine Core Schema + Version Update for one executescript call ---
-            # This ensures the version update is part of the same atomic operation block
-            # executed by executescript within the transaction.
-            core_schema_script_with_version_update = f"""
+            # --- Combine all schema DDL into a single executescript ---
+            # executescript wraps the script in a transaction on this connection,
+            # so keep everything together to avoid partial application.
+            full_schema_script = f"""
                 {self._TABLES_SQL_V1}
                 {self._INDICES_SQL_V1}
                 {self._TRIGGERS_SQL_V1}
                 {self._SCHEMA_UPDATE_VERSION_SQL_V1}
+                {self._CLAIMS_TABLE_SQL}
+                {self._MEDIA_FILES_TABLE_SQL}
+                CREATE TABLE IF NOT EXISTS output_templates (
+                    id INTEGER PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    format TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    description TEXT,
+                    is_default INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_output_templates_user ON output_templates(user_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_output_templates_user_name ON output_templates(user_id, name);
+
+                CREATE TABLE IF NOT EXISTS reading_highlights (
+                    id INTEGER PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    item_id INTEGER NOT NULL,
+                    quote TEXT NOT NULL,
+                    start_offset INTEGER,
+                    end_offset INTEGER,
+                    color TEXT,
+                    note TEXT,
+                    created_at TEXT NOT NULL,
+                    anchor_strategy TEXT NOT NULL DEFAULT 'fuzzy_quote',
+                    content_hash_ref TEXT,
+                    context_before TEXT,
+                    context_after TEXT,
+                    state TEXT NOT NULL DEFAULT 'active'
+                );
+                CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id);
             """  # Note the added UPDATE statement
 
-            # --- Transaction for Core Schema + Version Update ---
-            with self.transaction():  # Use the transaction context manager
-                logging.debug("[Schema V1] Applying Core Schema + Version Update...")
-                conn.executescript(core_schema_script_with_version_update)
-                logging.debug("[Schema V1] Core Schema script (incl. version update) executed.")
+            logging.debug("[Schema V1] Applying full schema script...")
+            conn.executescript(full_schema_script)
+            logging.debug("[Schema V1] Full schema script executed.")
 
-                # Ensure Claims table exists as part of base schema (additive)
-                try:
-                    conn.executescript(self._CLAIMS_TABLE_SQL)
-                    logging.debug("[Schema V1] Claims table and indices ensured.")
-                except sqlite3.Error as e:
-                    logging.error(f"[Schema V1] Failed creating Claims table: {e}", exc_info=True)
-                    raise
+            # --- Validation step (optional but good) - Check Media table ---
+            try:
+                cursor = conn.execute("PRAGMA table_info(Media)")
+                columns = {row['name'] for row in cursor.fetchall()}
+                # Update this set to match ALL columns defined in _TABLES_SQL_V1.Media
+                expected_cols = {
+                    'id',
+                    'url',
+                    'title',
+                    'type',
+                    'content',
+                    'author',
+                    'ingestion_date',
+                    'transcription_model',
+                    'is_trash',
+                    'trash_date',
+                    'vector_embedding',
+                    'chunking_status',
+                    'vector_processing',
+                    'content_hash',
+                    'source_hash',
+                    'uuid',
+                    'last_modified',
+                    'version',
+                    'org_id',
+                    'team_id',
+                    'visibility',
+                    'owner_user_id',
+                    'client_id',
+                    'deleted',
+                    'prev_version',
+                    'merge_parent_uuid',
+                }
+                if not expected_cols.issubset(columns):
+                    missing_cols = expected_cols - columns
+                    raise SchemaError(f"Validation Error: Media table is missing columns after creation: {missing_cols}")
+                logging.debug("[Schema V1] Media table structure validated successfully.")
+            except (sqlite3.Error, SchemaError) as val_err:
+                logging.error(f"[Schema V1] Validation failed after table creation: {val_err}", exc_info=True)
+                raise
 
-                # Ensure MediaFiles table exists for original file storage
-                try:
-                    conn.executescript(self._MEDIA_FILES_TABLE_SQL)
-                    logging.debug("[Schema V1] MediaFiles table and indices ensured.")
-                except sqlite3.Error as e:
-                    logging.error(f"[Schema V1] Failed creating MediaFiles table: {e}", exc_info=True)
-                    raise
+            # --- Explicitly check version after script ---
+            cursor_check = conn.execute("SELECT version FROM schema_version LIMIT 1")
+            version_in_db = cursor_check.fetchone()
+            if not version_in_db or version_in_db['version'] != self._CURRENT_SCHEMA_VERSION:
+                logging.error(
+                    "[Schema V1] Version check failed after schema script. Found: %s",
+                    version_in_db['version'] if version_in_db else 'None',
+                )
+                raise SchemaError("Schema version update did not take effect after schema script.")
+            logging.debug(
+                "[Schema V1] Version check confirmed version is %s.",
+                self._CURRENT_SCHEMA_VERSION,
+            )
 
-                # Ensure Collections tables exist (output_templates, reading_highlights)
-                try:
-                    conn.executescript(
-                        """
-                        CREATE TABLE IF NOT EXISTS output_templates (
-                            id INTEGER PRIMARY KEY,
-                            user_id TEXT NOT NULL,
-                            name TEXT NOT NULL,
-                            type TEXT NOT NULL,
-                            format TEXT NOT NULL,
-                            body TEXT NOT NULL,
-                            description TEXT,
-                            is_default INTEGER NOT NULL DEFAULT 0,
-                            created_at TEXT NOT NULL,
-                            updated_at TEXT NOT NULL
-                        );
-                        CREATE INDEX IF NOT EXISTS idx_output_templates_user ON output_templates(user_id);
-                        CREATE UNIQUE INDEX IF NOT EXISTS ux_output_templates_user_name ON output_templates(user_id, name);
-
-                        CREATE TABLE IF NOT EXISTS reading_highlights (
-                            id INTEGER PRIMARY KEY,
-                            user_id TEXT NOT NULL,
-                            item_id INTEGER NOT NULL,
-                            quote TEXT NOT NULL,
-                            start_offset INTEGER,
-                            end_offset INTEGER,
-                            color TEXT,
-                            note TEXT,
-                            created_at TEXT NOT NULL,
-                            anchor_strategy TEXT NOT NULL DEFAULT 'fuzzy_quote',
-                            content_hash_ref TEXT,
-                            context_before TEXT,
-                            context_after TEXT,
-                            state TEXT NOT NULL DEFAULT 'active'
-                        );
-                        CREATE INDEX IF NOT EXISTS idx_highlights_user_item ON reading_highlights(user_id, item_id);
-                        """
-                    )
-                    logging.debug("[Schema V1] Collections tables ensured.")
-                except sqlite3.Error as e:
-                    logging.error(f"[Schema V1] Failed creating Collections tables: {e}", exc_info=True)
-                    raise
-
-                # --- Validation step (optional but good) - Check Media table ---
-                try:
-                    cursor = conn.execute("PRAGMA table_info(Media)")
-                    columns = {row['name'] for row in cursor.fetchall()}
-                    # Update this set to match ALL columns defined in _TABLES_SQL_V1.Media
-                    expected_cols = {
-                        'id',
-                        'url',
-                        'title',
-                        'type',
-                        'content',
-                        'author',
-                        'ingestion_date',
-                        'transcription_model',
-                        'is_trash',
-                        'trash_date',
-                        'vector_embedding',
-                        'chunking_status',
-                        'vector_processing',
-                        'content_hash',
-                        'source_hash',
-                        'uuid',
-                        'last_modified',
-                        'version',
-                        'org_id',
-                        'team_id',
-                        'visibility',
-                        'owner_user_id',
-                        'client_id',
-                        'deleted',
-                        'prev_version',
-                        'merge_parent_uuid',
-                    }
-                    if not expected_cols.issubset(columns):
-                        missing_cols = expected_cols - columns
-                        raise SchemaError(f"Validation Error: Media table is missing columns after creation: {missing_cols}")
-                    logging.debug("[Schema V1] Media table structure validated successfully.")
-                except (sqlite3.Error, SchemaError) as val_err:
-                    logging.error(f"[Schema V1] Validation failed after table creation: {val_err}", exc_info=True)
-                    raise  # Re-raise to trigger rollback
-
-                # --- Explicitly check version *inside* transaction AFTER script ---
-                # This helps debug if the update itself isn't working
-                cursor_check = conn.execute("SELECT version FROM schema_version LIMIT 1")
-                version_in_tx = cursor_check.fetchone()
-                if not version_in_tx or version_in_tx['version'] != self._CURRENT_SCHEMA_VERSION:
-                    logging.error(f"[Schema V1] Version check *inside* transaction failed. Found: {version_in_tx['version'] if version_in_tx else 'None'}")
-                    raise SchemaError("Schema version update did not take effect within the transaction.")
-                logging.debug(f"[Schema V1] Version check inside transaction confirmed version is {self._CURRENT_SCHEMA_VERSION}.")
-
-            # Transaction commits here if all steps above succeeded
-            logging.info(f"[Schema V1] Core Schema V1 (incl. version update) applied and committed successfully for DB: {self.db_path_str}.")
+            logging.info(
+                "[Schema V1] Core Schema V1 (incl. version update) applied successfully for DB: %s.",
+                self.db_path_str,
+            )
 
             # --- Create FTS Tables Separately (Remains the same) ---
             try:
@@ -2295,7 +2251,7 @@ class MediaDatabase:
                 logging.error(f"[Schema V1] Failed to create FTS tables: {fts_err}", exc_info=True)
 
         except sqlite3.Error as e:
-            logging.error(f"[Schema V1] Application failed during core transaction: {e}", exc_info=True)
+            logging.error(f"[Schema V1] Application failed during schema script: {e}", exc_info=True)
             raise DatabaseError(f"DB schema V1 setup failed: {e}") from e
         except Exception as e:
             logging.error(f"[Schema V1] Unexpected error during schema V1 application: {e}", exc_info=True)

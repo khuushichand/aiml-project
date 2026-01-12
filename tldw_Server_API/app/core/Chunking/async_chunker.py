@@ -220,10 +220,22 @@ class AsyncChunker:
         method_name = normalized_method or str(base_method)
         method_lower = method_name.lower()
         language = options.get('language') or self.config.language
+        language_lower = str(language or "").lower()
         space_delimited_methods = {
             'words', 'sentences', 'paragraphs', 'semantic', 'tokens',
             'propositions', 'structure_aware', 'code', 'fixed_size',
         }
+        languages_no_space = {'zh', 'zh-cn', 'zh-tw', 'ja', 'th'}
+        ws_chars = (' ', '\t', '\n', '\r', '\v', '\f')
+
+        def _needs_space_separator(prefix: str, suffix: str) -> bool:
+            if not prefix or not suffix:
+                return False
+            if suffix[0].isspace() or prefix.endswith(ws_chars):
+                return False
+            if language_lower in languages_no_space:
+                return False
+            return method_lower == 'words' or method_lower in space_delimited_methods
 
         def _coerce_overlap_value(value: Any) -> str:
             """Ensure overlap carry-over stays textual even for structured chunks."""
@@ -247,12 +259,7 @@ class AsyncChunker:
 
             # Chunk the buffer using precise boundary concatenation
             overlap_text = _coerce_overlap_value(overlap_buffer)
-            sep = ''
-            if overlap_text and buffer and not buffer[0].isspace() and not overlap_text.endswith((' ', '\t', '\n', '\r', '\v', '\f')):
-                if method_lower == 'words':
-                    sep = ' '
-                elif method_lower in space_delimited_methods:
-                    sep = ' '
+            sep = ' ' if _needs_space_separator(overlap_text, buffer) else ''
             combined = overlap_text + sep + buffer
             chunks = await self.chunk_text(
                 combined,
@@ -296,12 +303,7 @@ class AsyncChunker:
             should_flush = True
         if should_flush:
             overlap_text = _coerce_overlap_value(overlap_buffer)
-            sep = ''
-            if overlap_text and buffer and not buffer[0].isspace() and not overlap_text.endswith((' ', '\t', '\n', '\r', '\v', '\f')):
-                if method_lower == 'words':
-                    sep = ' '
-                elif method_lower in space_delimited_methods:
-                    sep = ' '
+            sep = ' ' if _needs_space_separator(overlap_text, buffer) else ''
             combined = overlap_text + sep + buffer
             chunks = await self.chunk_text(
                 combined,

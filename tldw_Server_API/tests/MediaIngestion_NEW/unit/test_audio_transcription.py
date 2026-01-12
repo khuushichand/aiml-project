@@ -541,7 +541,7 @@ def test_transcribe_audio_uses_safe_default_provider(monkeypatch):
     # Return an empty config to simulate missing STT-Settings section
     monkeypatch.setattr(
         atlib,
-        "load_and_log_configs",
+        "get_stt_config",
         lambda: {},
     )
 

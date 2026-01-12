@@ -880,6 +880,7 @@ The API implements several rate limits to prevent abuse. Redis is optional - if 
 Configuration summary:
 - General character ops: `CHARACTER_RATE_LIMIT_OPS`, `CHARACTER_RATE_LIMIT_WINDOW`.
 - Chat-specific per-minute limits: `MAX_CHAT_COMPLETIONS_PER_MINUTE`, `MAX_MESSAGE_SENDS_PER_MINUTE`.
+- Soft cap for non-persisted completions: `MAX_MESSAGES_PER_CHAT_SOFT` (defaults to `MAX_MESSAGES_PER_CHAT`).
 - Optional Redis: set `REDIS_ENABLED=true` and `REDIS_URL` to enable distributed rate limiting. Without Redis, limits apply per process.
 
 The API enforces the following defaults:
@@ -891,7 +892,8 @@ The API enforces the following defaults:
 
 ### Chat Operations
 - **Max concurrent chats per user**: 100
-- **Max messages per chat**: 1000
+- **Max messages per chat (hard)**: 1000
+- **Max messages per chat (soft, non-persisted completions)**: 1000
 - **Max chat completions per minute**: 20
 - **Max message sends per minute**: 60
 

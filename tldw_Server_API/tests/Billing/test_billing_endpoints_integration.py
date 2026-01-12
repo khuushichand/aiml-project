@@ -32,6 +32,7 @@ Note: Stripe-dependent tests (checkout, portal, webhooks) are skipped unless
 STRIPE_API_KEY is configured, as they require external service access.
 """
 
+import json
 import os
 import pytest
 import pytest_asyncio
@@ -506,11 +507,28 @@ class TestBillingCheckoutAndPortal:
                     "active",
                 )
 
+            custom_plan_name = "custom-tier"
+            await conn.execute(
+                """
+                INSERT INTO subscription_plans
+                (name, display_name, description, price_usd_monthly, price_usd_yearly, limits_json, is_active, is_public, sort_order)
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb, TRUE, TRUE, 10)
+                ON CONFLICT (name) DO NOTHING
+                """,
+                custom_plan_name,
+                "Custom Tier",
+                "Custom plan for integration tests",
+                42,
+                420,
+                json.dumps({"api_calls_day": 123}),
+            )
+
             self.client = client
             self.user_id = user_id
             self.org_id = org_id
             self.username = "billingowner"
             self.password = password
+            self.custom_plan_name = custom_plan_name
 
         finally:
             await conn.close()
@@ -633,6 +651,30 @@ class TestBillingCheckoutAndPortal:
         data = response.json()
         assert data.get("session_id") == "ps_int_123"
         assert data.get("url") == "https://example.com/portal"
+
+    def test_checkout_accepts_custom_plan_name(self):
+        """Owner should be able to checkout with a custom plan name."""
+        token = self._get_auth_token()
+        if not token:
+            pytest.skip("Could not get auth token")
+
+        response = self.client.post(
+            f"/api/v1/billing/checkout?org_id={self.org_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "plan_name": self.custom_plan_name,
+                "billing_cycle": "monthly",
+                "success_url": "https://example.com/success",
+                "cancel_url": "https://example.com/cancel",
+            },
+        )
+
+        if response.status_code == 404:
+            pytest.skip("Billing routes not available in test environment")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data.get("session_id") == "sess_int_123"
 
 
 @pytest.mark.skipif(

@@ -14,6 +14,12 @@ webui_ip_allowlist =
 [Audit]
 # Auto-switch audit exports to streaming when max_rows exceeds this threshold to avoid large in-memory buffers.
 export_stream_auto_max_rows = 5000
+# Audit storage mode (per_user or shared)
+storage_mode = per_user
+# Shared audit DB path used when storage_mode=shared
+shared_db_path = Databases/audit_shared.db
+# Force per_user behavior even when shared mode is configured
+storage_rollback = false
 
 [Processing]
 processing_choice = cuda
@@ -48,6 +54,9 @@ default_rag_prompt = simplified_promptflow_RAG_system_prompt
 [Chat-Module]
 enable_provider_fallback = False
 max_base64_image_size_mb = 3
+# When true, reject data:image payloads larger than max_base64_image_size_mb at ingress.
+# Env override: CHAT_ENFORCE_BASE64_IMAGE_LIMIT
+enforce_base64_image_limit = false
 max_text_length_per_message = 400000
 max_messages_per_request = 1000
 max_images_per_request = 10
@@ -118,6 +127,11 @@ CHARACTER_RATE_LIMIT_OPS = 100
 CHARACTER_RATE_LIMIT_WINDOW = 3600
 MAX_CHARACTERS_PER_USER = 1000
 MAX_CHARACTER_IMPORT_SIZE_MB = 10
+MAX_CHATS_PER_USER = 100
+MAX_MESSAGES_PER_CHAT = 1000
+MAX_MESSAGES_PER_CHAT_SOFT = 1000
+MAX_CHAT_COMPLETIONS_PER_MINUTE = 20
+MAX_MESSAGE_SENDS_PER_MINUTE = 60
 
 [Settings]
 chunk_duration = 30

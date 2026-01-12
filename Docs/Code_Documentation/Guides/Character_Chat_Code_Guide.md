@@ -260,7 +260,7 @@ curl -sS "$API/characters/rate-limit-status" -H "X-API-KEY: $KEY"
 - Add card formats: extend `character_validation.py` and `character_io.py` (parsing + normalization), wire through facade exports if needed.
 - Customize role mapping: adjust `map_sender_to_role` and alias constants in `character_utils.py`.
 - Message metadata/tool-calls: store via endpoints that accept `tool_calls` and retrieve with `db.get_message_metadata(message_id)` (see `character_messages.py`).
-- Rate limits: tune in `character_rate_limiter.py` or via env/settings (`CHARACTER_RATE_LIMIT_*`, `MAX_*`). Defaults (current): `MAX_CHATS_PER_USER=100`, `MAX_MESSAGES_PER_CHAT=1000`, `MAX_CHAT_COMPLETIONS_PER_MINUTE=20`, `MAX_MESSAGE_SENDS_PER_MINUTE=60`.
+- Rate limits: tune in `character_rate_limiter.py` or via env/settings (`CHARACTER_RATE_LIMIT_*`, `MAX_*`). Defaults (current): `MAX_CHATS_PER_USER=100`, `MAX_MESSAGES_PER_CHAT=1000`, `MAX_MESSAGES_PER_CHAT_SOFT=1000` (non-persisted completions), `MAX_CHAT_COMPLETIONS_PER_MINUTE=20`, `MAX_MESSAGE_SENDS_PER_MINUTE=60`.
 - Provider integration: Character Chat builds standard OpenAI-style `messages` for `/api/v1/chat/completions`. Extend provider logic in the Chat module (`core/Chat/*`).
  - Dictionary application: Pre-gen dictionary logic lives in the Chat module (`chat()`); Character Chat `/complete-v2` does not apply it by default.
 
@@ -272,7 +272,7 @@ curl -sS "$API/characters/rate-limit-status" -H "X-API-KEY: $KEY"
 - Tool-calls retrieval: `include_tool_calls=true` enriches the standard messages response. The `format_for_completions=true` output is OpenAI-style and does not include `tool_calls` objects.
 
 ## Settings & Environment Flags
-- Rate limiting: `CHARACTER_RATE_LIMIT_ENABLED`, `CHARACTER_RATE_LIMIT_OPS`, `CHARACTER_RATE_LIMIT_WINDOW`, `MAX_CHARACTERS_PER_USER`, `MAX_CHATS_PER_USER` (default 100), `MAX_MESSAGES_PER_CHAT` (default 1000), `MAX_CHAT_COMPLETIONS_PER_MINUTE` (default 20), `MAX_MESSAGE_SENDS_PER_MINUTE` (default 60)
+- Rate limiting: `CHARACTER_RATE_LIMIT_ENABLED`, `CHARACTER_RATE_LIMIT_OPS`, `CHARACTER_RATE_LIMIT_WINDOW`, `MAX_CHARACTERS_PER_USER`, `MAX_CHATS_PER_USER` (default 100), `MAX_MESSAGES_PER_CHAT` (default 1000), `MAX_MESSAGES_PER_CHAT_SOFT` (default 1000, non-persisted completions), `MAX_CHAT_COMPLETIONS_PER_MINUTE` (default 20), `MAX_MESSAGE_SENDS_PER_MINUTE` (default 60)
 - Redis: `REDIS_ENABLED`, `REDIS_URL`
 - Test mode: `TEST_MODE=1` relaxes rate limits and disables heavy workers
 - Local LLM toggles used by completion paths: `ENABLE_LOCAL_LLM_PROVIDER`, `ALLOW_LOCAL_LLM_CALLS`, `DISABLE_OFFLINE_SIM`

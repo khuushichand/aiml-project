@@ -135,6 +135,52 @@ async def test_build_context_skips_tool_placeholder_replacement():
 
 
 @pytest.mark.asyncio
+async def test_build_context_persists_full_transcript_when_enabled():
+    class DummyChatDBWithConversation(DummyChatDB):
+        def get_conversation_by_id(self, conversation_id: str):
+            return {"id": conversation_id, "character_id": 1, "client_id": self.client_id}
+
+    class DummyMessage:
+        def __init__(self, role: str, content: Any):
+            self.role = role
+            self.content = content
+
+        def model_dump(self, exclude_none: bool = True):
+            return {"role": self.role, "content": self.content}
+
+    db = DummyChatDBWithConversation([])
+    request_data = DummyRequestData(save_to_db=True)
+    request_data.messages = [
+        DummyMessage("user", "hi"),
+        DummyMessage("assistant", "hello"),
+        DummyMessage("tool", "{\"result\": 1}"),
+    ]
+    loop = asyncio.get_running_loop()
+
+    class DummyMetrics:
+        def track_character_access(self, *args, **kwargs):
+            pass
+
+        def track_conversation(self, *args, **kwargs):
+            pass
+
+    save_message_fn = AsyncMock()
+
+    await chat_service.build_context_and_messages(
+        chat_db=db,
+        request_data=request_data,
+        loop=loop,
+        metrics=DummyMetrics(),
+        default_save_to_db=False,
+        final_conversation_id="conv",
+        save_message_fn=save_message_fn,
+    )
+
+    roles = [call.args[2]["role"] for call in save_message_fn.call_args_list]
+    assert roles == ["user", "assistant", "tool"]
+
+
+@pytest.mark.asyncio
 async def test_streaming_handler_persists_tool_calls():
     handler = StreamingResponseHandler(
         conversation_id="conv",

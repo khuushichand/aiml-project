@@ -21,6 +21,33 @@ from tldw_Server_API.app.core.Utils.tokenizer import count_tokens as _count_toke
 from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
 
 
+def _normalize_embedding_response(payload: Any) -> List[float]:
+    """Normalize embedding payloads into a single vector."""
+    if isinstance(payload, dict):
+        if "error" in payload:
+            raise ValueError(str(payload.get("error")))
+        if "embeddings" in payload:
+            payload = payload["embeddings"]
+
+    try:
+        array = np.asarray(payload)
+    except Exception as exc:
+        raise ValueError(f"Unexpected embedding response type: {type(payload)}") from exc
+
+    if not np.issubdtype(array.dtype, np.number):
+        raise ValueError(f"Unexpected embedding response dtype: {array.dtype}")
+
+    array = array.astype(np.float32)
+    if array.ndim == 1:
+        return array.tolist()
+    if array.ndim == 2:
+        if array.shape[0] == 1:
+            return array[0].tolist()
+        return array.mean(axis=0).tolist()
+
+    raise ValueError(f"Unexpected embedding response shape: {array.shape}")
+
+
 async def _close_response(resp: Any) -> None:
     if resp is None:
         return
@@ -219,19 +246,89 @@ class AsyncHuggingFaceProvider(AsyncEmbeddingProvider):
                 data = resp.json()
 
                 # Usage is already recorded in check_rate_limit_async
-
-                # Extract embedding based on response format
-                if isinstance(data, list):
-                    return data
-                if isinstance(data, dict) and 'embeddings' in data:
-                    return data['embeddings']
-                raise ValueError(f"Unexpected response format: {data}")
+                return _normalize_embedding_response(data)
 
             except Exception as e:
                 self.metrics.log_error(self.provider_name, str(type(e).__name__))
                 raise
             finally:
                 await _close_response(resp)
+
+
+class AsyncLocalAPIProvider(AsyncEmbeddingProvider):
+    """Async local API embeddings provider (HTTP delegation)."""
+
+    def __init__(self, api_url: str, api_key: Optional[str] = None):
+        super().__init__("local_api", api_key)
+        self.api_url = api_url
+
+    async def create_embedding(
+        self,
+        text: str,
+        model: str,
+        user_id: Optional[str] = None,
+    ) -> List[float]:
+        import time as _time
+        t0 = _time.perf_counter()
+        status = "success"
+
+        if user_id:
+            try:
+                tokens_units = int(_count_tokens(text))
+            except Exception:
+                tokens_units = 0
+            allowed, retry_after = await self.rate_limiter.check_rate_limit_async(
+                user_id,
+                tokens_units=tokens_units,
+            )
+            if not allowed:
+                status = "rate_limited"
+                retry_after_msg = f" Retry after {retry_after}s." if retry_after else ""
+                self.metrics.log_request(self.provider_name, model, status=status)
+                self.metrics.log_error(self.provider_name, "RateLimitExceeded")
+                logger.warning(
+                    "Rate limit exceeded for user '{user_id}' on provider '{provider}' model '{model}'.{extra}",
+                    user_id=user_id,
+                    provider=self.provider_name,
+                    model=model,
+                    extra=retry_after_msg,
+                )
+                raise Exception(f"Rate limit exceeded.{retry_after_msg}")
+
+        pool = self.pool_manager.get_pool(self.provider_name)
+        async with pool.acquire_connection():
+            headers = {"Content-Type": "application/json"}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+
+            payload = {"texts": [text], "model": model}
+
+            resp = None
+            try:
+                retry_policy = RetryPolicy(attempts=max(1, int(getattr(pool, "retry_attempts", 3))))
+                resp = await afetch(
+                    method="POST",
+                    url=self.api_url,
+                    json=payload,
+                    headers=headers,
+                    timeout=getattr(pool, "timeout_seconds", 30),
+                    retry=retry_policy,
+                )
+                if resp.status_code >= 400:
+                    status = "failure"
+                    self.metrics.log_error(self.provider_name, f"HTTP {resp.status_code}")
+                    raise Exception(f"HTTP {resp.status_code}")
+                data = resp.json()
+                return _normalize_embedding_response(data)
+            except Exception as e:
+                status = "failure"
+                self.metrics.log_error(self.provider_name, str(type(e).__name__))
+                raise
+            finally:
+                await _close_response(resp)
+                elapsed = _time.perf_counter() - t0
+                self.metrics.log_request(self.provider_name, model, status=status)
+                self.metrics.log_request_latency(self.provider_name, model, elapsed)
 
 
 class AsyncLocalProvider(AsyncEmbeddingProvider):
@@ -334,7 +431,19 @@ class AsyncEmbeddingService:
                     api_key=provider_config.api_key
                 )
             elif provider_config.name == "local":
-                self.providers["local"] = AsyncLocalProvider()
+                if provider_config.api_url:
+                    self.providers["local_api"] = AsyncLocalAPIProvider(
+                        api_url=provider_config.api_url,
+                        api_key=provider_config.api_key,
+                    )
+                else:
+                    self.providers["local"] = AsyncLocalProvider()
+            elif provider_config.name == "local_api":
+                if provider_config.api_url:
+                    self.providers["local_api"] = AsyncLocalAPIProvider(
+                        api_url=provider_config.api_url,
+                        api_key=provider_config.api_key,
+                    )
 
             logger.info(f"Initialized provider: {provider_config.name}")
 
@@ -364,6 +473,7 @@ class AsyncEmbeddingService:
         # Use defaults if not specified
         provider = provider or self.config.default_provider
         model = model or self.config.default_model
+        provider = self._resolve_provider_alias(provider)
 
         # Create deterministic cache key across processes
         text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -408,6 +518,16 @@ class AsyncEmbeddingService:
             await self.cache.set_async(cache_key, embedding)
 
         return embedding
+
+    def _resolve_provider_alias(self, provider: str) -> str:
+        """Resolve local/local_api alias based on configured providers."""
+        if provider in self.providers:
+            return provider
+        if provider == "local" and "local_api" in self.providers:
+            return "local_api"
+        if provider == "local_api" and "local" in self.providers:
+            return "local"
+        return provider
 
     async def create_embeddings_batch(
         self,

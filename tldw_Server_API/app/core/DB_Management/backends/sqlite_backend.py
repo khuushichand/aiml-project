@@ -10,6 +10,7 @@ import re
 import sqlite3
 import threading
 import time
+import weakref
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union, Generator
@@ -92,12 +93,31 @@ class SQLiteConnectionPool(ConnectionPool):
         self.config = config
         self._local = threading.local()
         self._connections: Dict[int, sqlite3.Connection] = {}
+        self._thread_refs: Dict[int, weakref.ReferenceType[threading.Thread]] = {}
         self._lock = threading.RLock()
         self._closed = False
+
+    def _prune_dead_threads(self) -> None:
+        """Close connections owned by threads that have exited."""
+        with self._lock:
+            stale_ids: List[int] = []
+            for tid, ref in self._thread_refs.items():
+                thread_obj = ref()
+                if thread_obj is None or not thread_obj.is_alive():
+                    stale_ids.append(tid)
+            for tid in stale_ids:
+                conn = self._connections.pop(tid, None)
+                if conn:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                self._thread_refs.pop(tid, None)
 
     def get_connection(self) -> sqlite3.Connection:
         """Get a thread-local connection."""
         thread_id = threading.get_ident()
+        self._prune_dead_threads()
 
         # Check if we have a connection for this thread
         if not hasattr(self._local, 'connection') or self._local.connection is None:
@@ -106,6 +126,7 @@ class SQLiteConnectionPool(ConnectionPool):
                     conn = self._create_connection()
                     self._connections[thread_id] = conn
                     self._local.connection = conn
+                    self._thread_refs[thread_id] = weakref.ref(threading.current_thread())
                 else:
                     self._local.connection = self._connections[thread_id]
 
@@ -169,6 +190,10 @@ class SQLiteConnectionPool(ConnectionPool):
             except Exception:
                 pass
             try:
+                self._thread_refs.pop(thread_id, None)
+            except Exception:
+                pass
+            try:
                 if hasattr(self._local, 'connection'):
                     self._local.connection = None
             except Exception:
@@ -202,9 +227,11 @@ class SQLiteConnectionPool(ConnectionPool):
                     except Exception as e:
                         logger.error(f"Error closing connection: {e}")
             self._connections.clear()
+            self._thread_refs.clear()
 
     def get_stats(self) -> Dict[str, Any]:
         """Get pool statistics."""
+        self._prune_dead_threads()
         with self._lock:
             active = len([c for c in self._connections.values() if c])
             # Keep "active_threads" for backward compatibility; prefer "active_connections"

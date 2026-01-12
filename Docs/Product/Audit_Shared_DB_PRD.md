@@ -112,9 +112,9 @@ Introduce a shared audit storage mode alongside the current per-user mode. The s
    - Map system or anonymous events to the reserved tenant id (`system`).
 5. **Daily Stats Migration**
    - Migrate existing per-user `audit_daily_stats` into the shared table with `tenant_user_id` populated.
-5. **Verification**
+6. **Verification**
    - Write a summary report and optional per-user counts.
-6. **Idempotency**
+7. **Idempotency**
    - Safe to re-run without inserting duplicates.
 
 ---
@@ -216,3 +216,31 @@ Introduce a shared audit storage mode alongside the current per-user mode. The s
 ## 12. Open Questions
 
 1. Confirm final deprecation window tied to release cadence.
+
+---
+
+## 13. Phased Implementation Plan
+
+## Stage 1: Shared Mode Foundations
+**Goal**: Add configuration flags, shared DB schema, and storage routing without changing default behavior.
+**Success Criteria**: `AUDIT_STORAGE_MODE` and rollback flag are honored; shared DB schema includes `tenant_user_id` and indexes; per-user mode remains default.
+**Tests**: Unit tests for storage mode routing, schema constraints, and rollback precedence.
+**Status**: Not Started
+
+## Stage 2: Tenant-Scoped Access + API Updates
+**Goal**: Enforce tenant scoping and admin-only cross-user access for shared mode; update `/audit/export` and `/audit/count`.
+**Success Criteria**: Non-admins only see their tenant data; admins can query other users; `system` tenant is admin-only; `audit_daily_stats` is tenant-scoped.
+**Tests**: Integration tests for export/count admin vs non-admin behavior; unit tests for `system` tenant restrictions and daily stats scoping.
+**Status**: Not Started
+
+## Stage 3: Migration / ETL Utility
+**Goal**: Build a one-time ETL tool that merges per-user audit DBs plus `Databases/unified_audit.db` into the shared DB.
+**Success Criteria**: Idempotent runs; dedupe by `event_id`; timestamps and metadata preserved; stats migrated with tenant ids.
+**Tests**: Migration tests for dedupe, timestamp preservation, tenant mapping, and stats migration.
+**Status**: Not Started
+
+## Stage 4: Rollout + Deprecation
+**Goal**: Document shared mode, provide rollback guidance, and begin per-user deprecation window.
+**Success Criteria**: Docs updated; migration instructions shipped; rollback flag works as documented; per-user mode still available during window.
+**Tests**: Integration tests verifying rollback behavior and shared-mode default remains opt-in.
+**Status**: Not Started

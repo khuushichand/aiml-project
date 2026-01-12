@@ -301,7 +301,9 @@ async def run_audio_batch(
     # 4) Finalize counts and errors
     # -------------------------------
     final_processed_count = sum(
-        1 for r in batch_result["results"] if r.get("status") == "Success"
+        1
+        for r in batch_result["results"]
+        if r.get("status") in {"Success", "Warning"}
     )
     final_error_count = sum(
         1 for r in batch_result["results"] if r.get("status") == "Error"

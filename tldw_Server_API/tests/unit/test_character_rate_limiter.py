@@ -93,6 +93,14 @@ def test_character_guardrails_raise():
 
 
 @pytest.mark.unit
+def test_soft_message_limit_guardrail():
+    limiter = CharacterRateLimiter(max_messages_per_chat_soft=1)
+
+    with pytest.raises(HTTPException):
+        asyncio.run(limiter.check_soft_message_limit(chat_id="c1", current_message_count=1))
+
+
+@pytest.mark.unit
 def test_get_usage_stats_peeks_rg(monkeypatch):
     fake = _FakeGovernor({"allowed": True})
     monkeypatch.setattr(crl, "_rg_character_enabled", lambda: True)

@@ -318,6 +318,60 @@ async def test_llamafile_inference_wildcard_host_uses_loopback(monkeypatch, tmp_
 
 
 @pytest.mark.asyncio
+async def test_llamafile_inference_defaults_port(monkeypatch, tmp_path: Path):
+    llama_dir = tmp_path / "llamafile"
+    llama_dir.mkdir()
+    cfg = LlamafileConfig(llamafile_dir=llama_dir, models_dir=tmp_path, default_port=8123)
+    handler = LlamafileHandler(cfg, global_app_config={})
+
+    class RP:
+        pid = 2
+        returncode = None
+
+    handler._active_servers[8123] = RP()
+
+    import tldw_Server_API.app.core.Local_LLM.Llamafile_Handler as lf_mod
+
+    captured = {}
+
+    async def fake_request_json(client, method, url, json=None, headers=None):
+        captured["url"] = url
+        return {"ok": True}
+
+    monkeypatch.setattr(lf_mod, "request_json", fake_request_json)
+
+    await handler.inference(prompt="hi")
+    assert captured["url"].startswith("http://127.0.0.1:8123")
+
+
+@pytest.mark.asyncio
+async def test_llamafile_inference_drops_timeout(monkeypatch, tmp_path: Path):
+    llama_dir = tmp_path / "llamafile"
+    llama_dir.mkdir()
+    cfg = LlamafileConfig(llamafile_dir=llama_dir, models_dir=tmp_path, default_port=8124)
+    handler = LlamafileHandler(cfg, global_app_config={})
+
+    class RP:
+        pid = 3
+        returncode = None
+
+    handler._active_servers[8124] = RP()
+
+    import tldw_Server_API.app.core.Local_LLM.Llamafile_Handler as lf_mod
+
+    captured = {}
+
+    async def fake_request_json(client, method, url, json=None, headers=None):
+        captured["payload"] = json
+        return {"ok": True}
+
+    monkeypatch.setattr(lf_mod, "request_json", fake_request_json)
+
+    await handler.inference(prompt="hi", port=8124, timeout=1.5)
+    assert "timeout" not in captured["payload"]
+
+
+@pytest.mark.asyncio
 async def test_llamafile_download_selects_exe_asset(monkeypatch, tmp_path: Path):
     llama_dir = tmp_path / "llamafile"
     llama_dir.mkdir()

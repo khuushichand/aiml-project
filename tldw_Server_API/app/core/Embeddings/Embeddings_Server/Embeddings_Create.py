@@ -424,9 +424,9 @@ class TokenBucketLimiter:
         def wrapper(*args, **kwargs):
             # When ResourceGovernor is enabled, prefer ResourceGovernor as
             # the primary enforcement path. The legacy in-process token bucket
-            # is retired; when RG is disabled, this decorator becomes a no-op.
-            # Ensure RG is enabled in production if you rely on rate limiting.
+            # is retained as a fallback when RG is disabled.
             if not _rg_embeddings_server_enabled():
+                self._acquire()
                 return fn(*args, **kwargs)
 
             # RG enforcement with simple backoff based on retry_after.

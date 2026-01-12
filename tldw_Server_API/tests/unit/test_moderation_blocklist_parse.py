@@ -1,4 +1,5 @@
 import os
+import re
 import tempfile
 from typing import Optional, Set
 
@@ -196,6 +197,30 @@ def test_user_override_empty_categories_clears_gating():
         act, _, _, cat = svc.evaluate_action("secret", pol, "input")
         assert act == "block"
         assert cat == "confidential"
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
+@pytest.mark.unit
+def test_blocklist_update_preserves_pii_rules(monkeypatch):
+    svc = ModerationService()
+    # Force a deterministic PII rule for this test
+    pii_rule = PatternRule(regex=re.compile(r"pii", re.IGNORECASE), action="redact", replacement="[PII]", categories={"pii"})
+    monkeypatch.setattr(svc, "_load_builtin_pii_rules", lambda: [pii_rule])
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        svc.update_settings(pii_enabled=True)
+        svc._blocklist_path = tmp_path
+        ok = svc.set_blocklist_lines(["secret -> block"])
+        assert ok is True
+        assert any(
+            isinstance(rule, PatternRule) and rule.categories and "pii" in rule.categories
+            for rule in svc._global_policy.block_patterns
+        )
     finally:
         try:
             os.unlink(tmp_path)

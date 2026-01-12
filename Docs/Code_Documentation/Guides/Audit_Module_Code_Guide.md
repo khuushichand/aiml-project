@@ -65,18 +65,19 @@ This guide helps project developers understand the Audit module’s architecture
 
 ## Data Model & Storage
 
-When using DI (single or multi-user), the audit DB path is per-user under `<USER_DB_BASE_DIR>/<user_id>/audit/unified_audit.db` (where `USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config`, defaults to `Databases/user_databases/`, and can be overridden via environment variable or `Config_Files/config.txt`). If you construct the service directly without DI, the default path is `./Databases/unified_audit.db`.
+When using DI (single or multi-user), the audit DB path is per-user under `<USER_DB_BASE_DIR>/<user_id>/audit/unified_audit.db` unless `AUDIT_STORAGE_MODE=shared` is enabled. In shared mode, all audit events are stored in a single DB at `AUDIT_SHARED_DB_PATH` (default `Databases/audit_shared.db`) with tenant scoping. If you construct the service directly without DI, the default path is `./Databases/unified_audit.db` (or the shared path when shared mode is enabled).
 
 Tables:
 - `audit_events` (primary table):
   - Core: `event_id` (PK), `timestamp` (ISO8601), `category`, `event_type`, `severity`, `result`, `error_message`
+  - Shared mode: `tenant_user_id` (reserved `system` tenant for anonymous/system events)
   - Context: `context_request_id`, `context_correlation_id`, `context_session_id`, `context_user_id`, `context_api_key_hash`, `context_ip_address`, `context_user_agent`, `context_endpoint`, `context_method`
   - Details: `resource_type`, `resource_id`, `action`
   - Metrics: `duration_ms`, `tokens_used`, `estimated_cost`, `result_count`
   - Risk & compliance: `risk_score`, `pii_detected`, `compliance_flags` (JSON text)
   - Metadata: `metadata` (JSON text)
 
-- `audit_daily_stats` (aggregates by UTC date + category): totals, failures, high‑risk counts, token/cost sums, average duration.
+- `audit_daily_stats` (aggregates by UTC date + category): totals, failures, high‑risk counts, token/cost sums, average duration. In shared mode this table is tenant-scoped with `tenant_user_id` in the primary key.
 
 Indexes (selected): `timestamp`, `context_user_id`, `context_request_id`, `context_correlation_id`, `event_type`, `category`, `severity`, `risk_score`, `context_ip_address`, `context_session_id`, `context_endpoint`, `context_user_agent`, plus resource/action indexes.
 
@@ -86,6 +87,9 @@ Note: a legacy migration file exists for evaluation DB instrumentation (`tldw_Se
 
 Environment and settings (read from `app.core.config.settings` and env):
 - `AUDIT_HIGH_RISK_SCORE` (env): high‑risk threshold (default 70).
+- `AUDIT_STORAGE_MODE` (settings/env): `per_user` (default) or `shared`.
+- `AUDIT_SHARED_DB_PATH` (settings/env): shared audit DB path.
+- `AUDIT_STORAGE_ROLLBACK` (settings/env): force per-user behavior when true.
 - `AUDIT_ACTION_RISK_BONUS` (settings dict): `{ action_label: 0..100 }` risk bonuses.
 - `AUDIT_HIGH_RISK_OPERATIONS` (settings list/CSV): extra action substrings treated as high‑risk.
 - `AUDIT_SUSPICIOUS_THRESHOLDS` (settings dict): `{ failed_auth: int, data_export: int, after_hours: bool, ... }`.
@@ -95,6 +99,17 @@ Environment and settings (read from `app.core.config.settings` and env):
 - `USER_DB_BASE_DIR` (from `tldw_Server_API.app.core.config`): per-user DB root directory; defaults to `Databases/user_databases/` under the project root. Override via environment variable or `Config_Files/config.txt` as needed.
 
 Constructor overrides (per instance): `db_path`, `retention_days`, `buffer_size`, `flush_interval`, `enable_pii_detection`, `enable_risk_scoring`, `max_db_mb`.
+
+## Migration Utility
+
+Use the one-time migration helper to merge per-user audit DBs plus the legacy `Databases/unified_audit.db` into the shared audit DB:
+
+```bash
+python -m tldw_Server_API.app.core.Audit.audit_shared_migration \
+  --shared-db Databases/audit_shared.db \
+  --user-db-base Databases/user_databases \
+  --default-db Databases/unified_audit.db
+```
 
 ## Using the Service in Endpoints (DI)
 

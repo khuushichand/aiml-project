@@ -1289,8 +1289,14 @@ async def simple_search_endpoint(
         try:
             from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
             mon = get_topic_monitoring_service()
-            # simple endpoint has no user dependency; best-effort from query param user_id if any later
-            mon.schedule_evaluate_and_alert(user_id=None, text=query, source="rag.simple_search", scope_type="user", scope_id=None)
+            uid = str(current_user.username)
+            mon.schedule_evaluate_and_alert(
+                user_id=uid,
+                text=query,
+                source="rag.simple_search",
+                scope_type="user",
+                scope_id=uid,
+            )
         except Exception:
             pass
 
@@ -1635,7 +1641,14 @@ async def advanced_search_endpoint(
         try:
             from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
             mon = get_topic_monitoring_service()
-            mon.schedule_evaluate_and_alert(user_id=None, text=query, source="rag.advanced_search", scope_type="user", scope_id=None)
+            uid = str(current_user.username)
+            mon.schedule_evaluate_and_alert(
+                user_id=uid,
+                text=query,
+                source="rag.advanced_search",
+                scope_type="user",
+                scope_id=uid,
+            )
         except Exception:
             pass
 

@@ -6,6 +6,8 @@ import json
 import pickle
 import hashlib
 import threading
+import builtins
+import io
 from typing import Dict, Any, Optional, List, Tuple, Union, Callable
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -42,6 +44,39 @@ class CacheEntry:
         """Update access statistics"""
         self.last_accessed = time.time()
         self.access_count += 1
+
+
+class _SafeUnpickler(pickle.Unpickler):
+    """Restrictive unpickler for cache values."""
+
+    _SAFE_BUILTINS = {
+        "dict",
+        "list",
+        "set",
+        "tuple",
+        "str",
+        "bytes",
+        "int",
+        "float",
+        "bool",
+    }
+
+    def find_class(self, module, name):  # type: ignore[override]
+        if module == "builtins" and name in self._SAFE_BUILTINS:
+            return getattr(builtins, name)
+        if module == "collections" and name == "OrderedDict":
+            return OrderedDict
+        raise pickle.UnpicklingError(f"Disallowed type: {module}.{name}")
+
+
+def _safe_pickle_load(file_obj) -> Any:
+    """Safely unpickle from a file-like object."""
+    return _SafeUnpickler(file_obj).load()
+
+
+def _safe_pickle_loads(data: bytes) -> Any:
+    """Safely unpickle from bytes."""
+    return _SafeUnpickler(io.BytesIO(data)).load()
 
 
 class L1MemoryCache:
@@ -250,7 +285,7 @@ class L2DiskCache:
 
             try:
                 with open(file_path, 'rb') as f:
-                    value = pickle.load(f)
+                    value = _safe_pickle_load(f)
 
                 # Update access time
                 entry_info['last_accessed'] = time.time()
@@ -525,7 +560,7 @@ class L3RemoteCache:
                 self.metrics.log_cache_miss("L3")
                 return None
 
-            value = pickle.loads(data)
+            value = _safe_pickle_loads(data)
             self.stats['hits'] += 1
             self.metrics.log_cache_hit("L3")
 

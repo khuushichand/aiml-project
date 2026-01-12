@@ -280,8 +280,8 @@ def _get_allowed_media_base_dirs() -> List[Path]:
     except (OSError, PermissionError, ValueError, AttributeError) as exc:
         logging.debug(f"Could not resolve USER_DB_BASE_DIR for allowed base dirs: {exc}")
 
-        _ALLOWED_MEDIA_BASE_DIRS = roots
-        return list(roots)
+    _ALLOWED_MEDIA_BASE_DIRS = roots
+    return list(roots)
 
 
 def _resolve_allowed_base_dir(base_dir: Path, *, label: str) -> Path:

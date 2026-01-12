@@ -713,23 +713,67 @@ def load_settings():
     users_db_configured = os.getenv("USERS_DB_ENABLED", "false").lower() == "true"
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 
-    # Audit export streaming threshold (env overrides config.txt [Audit])
+    # Audit settings (env overrides config.txt [Audit])
     audit_stream_env_raw = os.getenv("AUDIT_EXPORT_STREAM_AUTO_MAX_ROWS")
+    audit_storage_env_raw = os.getenv("AUDIT_STORAGE_MODE")
+    audit_shared_env_raw = os.getenv("AUDIT_SHARED_DB_PATH")
+    audit_rollback_env_raw = os.getenv("AUDIT_STORAGE_ROLLBACK")
+
     audit_stream_cfg_raw: Optional[str] = None
-    if audit_stream_env_raw is None:
+    audit_storage_cfg_raw: Optional[str] = None
+    audit_shared_cfg_raw: Optional[str] = None
+    audit_rollback_cfg_raw: Optional[str] = None
+    _audit_parser = None
+    if (
+        audit_stream_env_raw is None
+        or audit_storage_env_raw is None
+        or audit_shared_env_raw is None
+        or audit_rollback_env_raw is None
+    ):
         try:
             _audit_parser = load_comprehensive_config()
         except Exception:
             _audit_parser = None
-        if _audit_parser is not None:
-            try:
-                if hasattr(_audit_parser, "has_section") and _audit_parser.has_section("Audit"):
+    if _audit_parser is not None:
+        try:
+            if hasattr(_audit_parser, "has_section") and _audit_parser.has_section("Audit"):
+                if audit_stream_env_raw is None:
                     audit_stream_cfg_raw = _audit_parser.get("Audit", "export_stream_auto_max_rows", fallback=None)
-            except Exception:
-                audit_stream_cfg_raw = None
+                if audit_storage_env_raw is None:
+                    audit_storage_cfg_raw = _audit_parser.get("Audit", "storage_mode", fallback=None)
+                if audit_shared_env_raw is None:
+                    audit_shared_cfg_raw = _audit_parser.get("Audit", "shared_db_path", fallback=None)
+                if audit_rollback_env_raw is None:
+                    audit_rollback_cfg_raw = _audit_parser.get("Audit", "storage_rollback", fallback=None)
+        except Exception:
+            audit_stream_cfg_raw = None
+            audit_storage_cfg_raw = None
+            audit_shared_cfg_raw = None
+            audit_rollback_cfg_raw = None
+
     audit_stream_auto_max_rows = _safe_int(
         audit_stream_env_raw if audit_stream_env_raw is not None else audit_stream_cfg_raw,
         5000,
+    )
+
+    audit_storage_mode_raw = audit_storage_env_raw if audit_storage_env_raw is not None else audit_storage_cfg_raw
+    audit_storage_mode = str(audit_storage_mode_raw).strip().lower() if audit_storage_mode_raw else "per_user"
+    if audit_storage_mode not in {"per_user", "shared"}:
+        audit_storage_mode = "per_user"
+
+    audit_shared_db_path_raw = audit_shared_env_raw if audit_shared_env_raw is not None else audit_shared_cfg_raw
+    audit_shared_db_path = (
+        str(audit_shared_db_path_raw).strip()
+        if audit_shared_db_path_raw is not None and str(audit_shared_db_path_raw).strip()
+        else "Databases/audit_shared.db"
+    )
+
+    audit_storage_rollback_raw = (
+        audit_rollback_env_raw if audit_rollback_env_raw is not None else audit_rollback_cfg_raw
+    )
+    audit_storage_rollback = _to_bool(
+        str(audit_storage_rollback_raw) if audit_storage_rollback_raw is not None else None,
+        False,
     )
 
     # Load comprehensive configurations (API keys, embedding settings, etc.)
@@ -766,6 +810,7 @@ def load_settings():
         # Optional chat-specific knobs if present
         _max_chats_per_user = _cc_int('MAX_CHATS_PER_USER', 100)
         _max_messages_per_chat = _cc_int('MAX_MESSAGES_PER_CHAT', 1000)
+        _max_messages_per_chat_soft = _cc_int('MAX_MESSAGES_PER_CHAT_SOFT', _max_messages_per_chat)
         _max_chat_completions_per_minute = _cc_int('MAX_CHAT_COMPLETIONS_PER_MINUTE', 20)
         _max_message_sends_per_minute = _cc_int('MAX_MESSAGE_SENDS_PER_MINUTE', 60)
         _has_char_rl_enabled, _char_rl_enabled_bool = _cc_bool_present('RATE_LIMIT_ENABLED')
@@ -776,6 +821,7 @@ def load_settings():
         _max_character_import_size_mb = 10
         _max_chats_per_user = 100
         _max_messages_per_chat = 1000
+        _max_messages_per_chat_soft = _max_messages_per_chat
         _max_chat_completions_per_minute = 20
         _max_message_sends_per_minute = 60
         _has_char_rl_enabled = False
@@ -936,6 +982,7 @@ def load_settings():
         "MAX_CHARACTER_IMPORT_SIZE_MB": _max_character_import_size_mb,
         "MAX_CHATS_PER_USER": _max_chats_per_user,
         "MAX_MESSAGES_PER_CHAT": _max_messages_per_chat,
+        "MAX_MESSAGES_PER_CHAT_SOFT": _max_messages_per_chat_soft,
         "MAX_CHAT_COMPLETIONS_PER_MINUTE": _max_chat_completions_per_minute,
         "MAX_MESSAGE_SENDS_PER_MINUTE": _max_message_sends_per_minute,
 
@@ -1055,6 +1102,9 @@ def load_settings():
         "COMPREHENSIVE_CONFIG_RAW": comprehensive_config, # Store the raw one if needed elsewhere
         # Audit export streaming threshold (opt-in via env/config.txt)
         "AUDIT_EXPORT_STREAM_AUTO_MAX_ROWS": audit_stream_auto_max_rows,
+        "AUDIT_STORAGE_MODE": audit_storage_mode,
+        "AUDIT_SHARED_DB_PATH": audit_shared_db_path,
+        "AUDIT_STORAGE_ROLLBACK": audit_storage_rollback,
 
         # Ephemeral cleanup worker (evals/rag pipeline ephemeral collections)
         "EPHEMERAL_CLEANUP_ENABLED": os.getenv("EPHEMERAL_CLEANUP_ENABLED", "false").lower() == "true",

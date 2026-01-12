@@ -62,11 +62,20 @@ class TopicMonitoringService:
         self._config = load_and_log_configs() or {}
         self._max_scan_chars = int(os.getenv("TOPIC_MONITOR_MAX_SCAN_CHARS", "200000"))
         self._dedup_window_seconds = int(os.getenv("TOPIC_MONITOR_DEDUP_SECONDS", "300"))
-        raw_watchlists = (
+        configured_watchlists = (
             self._config.get("monitoring", {}).get("watchlists_file")
             if isinstance(self._config, dict)
             else None
-        ) or os.getenv("MONITORING_WATCHLISTS_FILE", "tldw_Server_API/Config_Files/monitoring_watchlists.json")
+        )
+        if configured_watchlists:
+            raw_watchlists = configured_watchlists
+            watchlists_source = "monitoring.watchlists_file"
+        else:
+            raw_watchlists = os.getenv(
+                "MONITORING_WATCHLISTS_FILE",
+                "tldw_Server_API/Config_Files/monitoring_watchlists.json",
+            )
+            watchlists_source = "MONITORING_WATCHLISTS_FILE"
         raw_db_path = os.getenv("MONITORING_ALERTS_DB", "Databases/monitoring_alerts.db")
         # Anchor relative paths to project root to avoid creating dirs from CWD
         try:
@@ -77,6 +86,22 @@ class TopicMonitoringService:
             db_p = Path(str(raw_db_path))
         except Exception:
             db_p = Path("Databases/monitoring_alerts.db")
+
+        if not wl_p.is_absolute() and wl_p.parent == Path("."):
+            msg = (
+                f"{watchlists_source} must include a directory when using a relative path "
+                f"(got {raw_watchlists!r}). Use an absolute path or include a directory component."
+            )
+            logger.error(msg)
+            raise RuntimeError(msg)
+
+        if not db_p.is_absolute() and db_p.parent == Path("."):
+            msg = (
+                "MONITORING_ALERTS_DB must include a directory when using a relative path "
+                f"(got {raw_db_path!r}). Use an absolute path or include a directory component."
+            )
+            logger.error(msg)
+            raise RuntimeError(msg)
 
         if not wl_p.is_absolute() or not db_p.is_absolute():
             try:

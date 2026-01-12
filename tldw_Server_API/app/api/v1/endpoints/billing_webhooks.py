@@ -146,10 +146,8 @@ async def stripe_webhook(
         # Mark as failed
         await billing_repo.mark_webhook_processed(event_id, error_message=str(e))
 
-        # Still return 200 to Stripe to prevent retries
-        # (we've recorded the failure for manual review)
-        return WebhookResponse(
-            received=True,
-            event_type=event_type,
-            handled=False,
-        )
+        # Return 5xx so Stripe retries delivery after transient failures.
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Webhook processing failed",
+        ) from e

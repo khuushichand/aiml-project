@@ -16,11 +16,13 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import (
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_permissions
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.config import settings
 
 router = APIRouter()
 
 _DEFAULT_STREAM_AUTO_THRESHOLD = 5000
+_TRUTHY = {"1", "true", "yes", "on", "y"}
 raw_stream_auto = None
 try:
     raw_stream_auto = settings.get("AUDIT_EXPORT_STREAM_AUTO_MAX_ROWS", None)
@@ -65,6 +67,21 @@ def _parse_dt(val: Optional[str], *, field_name: str) -> Optional[datetime]:
             detail=f"Invalid {field_name}; expected ISO8601 timestamp (e.g. 2025-01-01T00:00:00Z)",
         ) from e
     return dt
+
+
+def _coerce_bool(value: Optional[object], default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in _TRUTHY
+
+
+def _shared_storage_enabled() -> bool:
+    if _coerce_bool(settings.get("AUDIT_STORAGE_ROLLBACK"), False):
+        return False
+    mode = str(settings.get("AUDIT_STORAGE_MODE", "per_user")).strip().lower()
+    return mode == "shared"
 
 
 def _map_event_types(values: Optional[List[str]] | Optional[str]) -> Optional[List[AuditEventType]]:
@@ -159,6 +176,7 @@ async def export_audit_events(
     max_rows: Optional[int] = Query(None, description="Hard maximum rows to export"),
     filename: Optional[str] = Query(None),
     stream: bool = Query(False, description="Stream JSON/JSONL/CSV output incrementally"),
+    current_user: User = Depends(get_request_user),
     audit_service: UnifiedAuditService = Depends(get_audit_service_for_user),
 ):
     """Export audit events (JSON, JSONL, CSV). Requires SYSTEM_LOGS permission.
@@ -188,12 +206,22 @@ async def export_audit_events(
     streamable = {"json", "jsonl", "csv"}
     force_stream = bool(max_rows is not None and max_rows > STREAM_AUTO_MAX_ROWS_THRESHOLD)
     do_stream = bool((stream or force_stream) and fmt in streamable)
+
+    user_id_filter = user_id
+    allow_cross_tenant = False
+    if _shared_storage_enabled():
+        if current_user.is_admin:
+            allow_cross_tenant = True
+        else:
+            user_id_filter = current_user.id_str or str(current_user.id)
+            if user_id and str(user_id) != user_id_filter:
+                logger.warning("Ignoring cross-tenant audit export request from non-admin user.")
     content = await audit_service.export_events(
         start_time=st,
         end_time=et,
         event_types=ets,
         categories=cats,
-        user_id=user_id,
+        user_id=user_id_filter,
         request_id=request_id,
         correlation_id=correlation_id,
         ip_address=ip_address,
@@ -205,6 +233,7 @@ async def export_audit_events(
         file_path=None,
         stream=do_stream,
         max_rows=max_rows,
+        allow_cross_tenant=allow_cross_tenant,
     )
 
     if fmt == "json":
@@ -267,6 +296,7 @@ async def count_audit_events(
     session_id: Optional[str] = Query(None, description="Filter by session id"),
     endpoint: Optional[str] = Query(None, description="Filter by endpoint path"),
     method: Optional[str] = Query(None, description="Filter by HTTP method"),
+    current_user: User = Depends(get_request_user),
     audit_service: UnifiedAuditService = Depends(get_audit_service_for_user),
 ):
     """Count audit events for pagination UIs. Requires SYSTEM_LOGS permission.
@@ -279,12 +309,21 @@ async def count_audit_events(
     ets = _map_event_types(event_type)
     cats = _map_categories(category)
 
+    user_id_filter = user_id
+    allow_cross_tenant = False
+    if _shared_storage_enabled():
+        if current_user.is_admin:
+            allow_cross_tenant = True
+        else:
+            user_id_filter = current_user.id_str or str(current_user.id)
+            if user_id and str(user_id) != user_id_filter:
+                logger.warning("Ignoring cross-tenant audit count request from non-admin user.")
     count = await audit_service.count_events(
         start_time=st,
         end_time=et,
         event_types=ets,
         categories=cats,
-        user_id=user_id,
+        user_id=user_id_filter,
         request_id=request_id,
         correlation_id=correlation_id,
         ip_address=ip_address,
@@ -292,5 +331,6 @@ async def count_audit_events(
         endpoint=endpoint,
         method=method,
         min_risk_score=min_risk_score,
+        allow_cross_tenant=allow_cross_tenant,
     )
     return {"count": int(count)}
