@@ -19,6 +19,14 @@ Non-Goals
 - Rewriting the vector store or DB schema
 - Moving large binary/geometry metadata into Chroma
 
+## Implementation Status (Snapshot)
+- Stage 1 (schema + adapters): Not implemented (no RAGChunkMetadata/CitationSpan/block adapter in repo).
+- Stage 2 (chunker normalization): Partial. Chunker emits `paragraph_kind` + offsets + section path, but not `chunk_type`.
+- Stage 2.5 (plaintext chunk persistence + FTS): Mostly implemented. Unvectorized chunks stored with `chunk_type`/offsets and chunk-level FTS exists; `fts_level` is plumbed.
+- Stage 3 (embedding metadata enrichment): Not implemented. Chroma metadata does not explicitly add `chunk_type` or citation/location fields.
+- Stage 4 (RAG retrieval + filtering): Partial. `chunk_type_filter` exists, but citation/location fields are not mapped into `Document`.
+- Stage 5 (backfill): Not implemented.
+
 ## Current State (Relevant Touch-Points)
 - Hierarchical chunk metadata produced in chunker:
   - `ancestry_titles`, `section_path`, `paragraph_kind`, offsets
@@ -33,6 +41,12 @@ Non-Goals
   - File: `tldw_Server_API/app/core/RAG/rag_service/unified_pipeline.py:835`
 - RAG `Document` supports citation spans and location fields:
   - File: `tldw_Server_API/app/core/RAG/rag_service/types.py:122`
+- Chunk-level FTS exists and is selectable via `fts_level`:
+  - File: `tldw_Server_API/app/core/DB_Management/Media_DB_v2.py:1972`
+  - File: `tldw_Server_API/app/core/RAG/rag_service/database_retrievers.py:279`
+  - File: `tldw_Server_API/app/api/v1/schemas/rag_schemas_unified.py:133`
+- Plaintext chunks persisted with `chunk_type` + offsets (SQL):
+  - File: `tldw_Server_API/app/core/Ingestion_Media_Processing/persistence.py:1104`
 
 ## Proposed Metadata (Normalized)
 
@@ -41,7 +55,7 @@ Top-level (stored in Chroma metadata):
 - `file_name: str`
 - `chunk_index: int`, `total_chunks: int`
 - `start_char: int?`, `end_char: int?` - text offsets
-- `chunk_type: "text"|"table"|"list"|"code"|"media"|"heading"`
+- `chunk_type: "text"|"table"|"list"|"code"|"media"|"heading"|"vlm"`
 - `section_path: str?`, `ancestry_titles: list[str]?`
 - `language: str?`
 - `code_language: str?` (when `chunk_type=code`)
@@ -76,6 +90,10 @@ Heavier or verbose fields (images, full table structures, long annotations) stay
 - Offsets (`start_char`, `end_char`) align with RAG `Document` for precise citation rendering.
 - When contextual chunking is enabled, also store `context_header` and `contextual_summary_ref`.
 - FTS-first emphasis: plaintext chunk storage + FTS drives retrieval; vector search remains optional and secondary.
+- Canonical `chunk_type` values are listed above; normalize synonyms:
+  - `header`, `header_atx`, `header_line` -> `heading`
+  - `paragraph` -> `text`
+  - VLM hint chunks (non-table) -> `vlm` (or `media` if they represent a true media artifact)
 
 ## Configuration
 - Default FTS granularity can be set globally:
@@ -91,6 +109,7 @@ Goal: Define types and mapping helpers.
 Success Criteria:
 - Pydantic models validate normalized metadata
 - Conversion util maps external Block payloads to flattened chunks with our metadata
+Status: Not started
 Changes:
 - Add `RAGChunkMetadata` and `CitationSpan` models under `tldw_Server_API/app/core/RAG/` (schema helper module)
 - Add `block_to_chunks.py` adapter (pure function) to map Blocks → [{text, metadata}]
@@ -102,6 +121,7 @@ Goal: Ensure `chunk_type` is set and offsets propagate consistently.
 Success Criteria:
 - Hierarchical paths populate `section_path`/`ancestry_titles`
 - `chunk_type` present on all chunks (derived from paragraph kind / strategy)
+Status: Partial (chunker emits `paragraph_kind` + offsets, not `chunk_type`)
 Changes:
 - Extend `chunk_text_hierarchical_flat` path to add `chunk_type` from `paragraph_kind`
 - Keep existing offsets and titles intact
@@ -117,6 +137,7 @@ Success Criteria:
 - `UnvectorizedMediaChunks` receives records with `chunk_type`, `start_char`, `end_char`, and compact `metadata` JSON
 - Optionally, a chunk-level FTS virtual table exists and is populated (or a retrieval path that searches chunk text directly)
 - RAG retrieval can run FTS on chunk text (media-level remains available)
+Status: Mostly implemented (persistence + FTS + `fts_level` wiring exist; tests pending)
 Changes:
 - Use `MediaDatabase.update_media(..., chunks=[...])` to persist chunks (auto-inserts into `UnvectorizedMediaChunks`)
   - File: `tldw_Server_API/app/core/DB_Management/Media_DB_v2.py:3305`
@@ -134,6 +155,7 @@ Goal: Upsert normalized metadata to Chroma consistently.
 Success Criteria:
 - Upserts include `chunk_type`, offsets, and optional `citation` fields
 - Contextual header stored when enabled
+Status: Not started
 Changes:
 - Merge new fields into `meta` before `store_in_chroma`
 Files:
@@ -147,6 +169,7 @@ Goal: Leverage `chunk_type` and surfaces citation/location in responses.
 Success Criteria:
 - `chunk_type_filter` works against enriched metadata
 - Retrieved `Document` objects carry location fields mapped from metadata
+Status: Partial (filter exists; citation/location mapping incomplete)
 Changes:
 - Ensure database/vector adapters pass through metadata unmodified
 - Map `start_char`, `end_char`, `page_number`, etc., into `Document` (if not already)
@@ -161,6 +184,7 @@ Tests:
 Goal: Opportunistic metadata enrichment for existing collections.
 Success Criteria:
 - Script can patch `chunk_type` heuristically (based on `paragraph_kind` substrings)
+Status: Not started
 Changes:
 - Add a maintenance script that scans collections and updates metadatas in place (guarded and idempotent)
 Tests:

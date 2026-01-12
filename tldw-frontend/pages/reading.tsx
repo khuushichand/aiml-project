@@ -12,6 +12,7 @@ interface ReadingItem {
   url?: string;
   domain?: string;
   summary?: string;
+  notes?: string;
   status?: string;
   favorite: boolean;
   tags: string[];
@@ -36,6 +37,7 @@ export default function ReadingPage() {
   const [formTags, setFormTags] = useState('');
   const [formContent, setFormContent] = useState('');
   const [formSummary, setFormSummary] = useState('');
+  const [formNotes, setFormNotes] = useState('');
   const [formFavorite, setFormFavorite] = useState(false);
   const [formStatus, setFormStatus] = useState('saved');
   const [saving, setSaving] = useState(false);
@@ -96,6 +98,7 @@ export default function ReadingPage() {
         status: formStatus,
         favorite: formFavorite,
         summary: formSummary.trim() || undefined,
+        notes: formNotes.trim() || undefined,
         content: formContent.trim() || undefined,
       });
       show({ title: 'Saved to reading list', variant: 'success' });
@@ -104,6 +107,7 @@ export default function ReadingPage() {
       setFormTags('');
       setFormContent('');
       setFormSummary('');
+      setFormNotes('');
       setFormFavorite(false);
       setFormStatus('saved');
       setPage(1);
@@ -154,6 +158,15 @@ export default function ReadingPage() {
             <textarea
               value={formSummary}
               onChange={(e) => setFormSummary(e.target.value)}
+              rows={3}
+              className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
+          </label>
+          <label className="block text-sm font-medium text-gray-700">
+            Notes (optional)
+            <textarea
+              value={formNotes}
+              onChange={(e) => setFormNotes(e.target.value)}
               rows={3}
               className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             />
@@ -246,6 +259,7 @@ export default function ReadingPage() {
                         {item.favorite && <span className="rounded bg-yellow-100 px-2 py-0.5 text-xs font-semibold text-yellow-700">Favorite</span>}
                       </div>
                       {item.summary && <p className="text-xs text-gray-600 line-clamp-2">{item.summary}</p>}
+                      {item.notes && <p className="text-xs text-gray-600 line-clamp-2">{item.notes}</p>}
                       {item.url && (
                         <a href={item.url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline">
                           {item.url}

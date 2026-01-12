@@ -28,12 +28,13 @@ from tldw_Server_API.app.core.Utils.image_validation import (
 )
 import asyncio
 import sys
+import math
 import json
 import time
 import uuid
 from functools import partial, lru_cache
 from collections import defaultdict, deque
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Literal
 from datetime import date, datetime, timezone
 from unittest.mock import Mock
 from weakref import WeakKeyDictionary
@@ -46,6 +47,8 @@ from fastapi import (
     Depends,
     Header,
     HTTPException,
+    Path,
+    Query,
     Request,
     status,
 )
@@ -94,6 +97,19 @@ from tldw_Server_API.app.api.v1.schemas.chat_knowledge_schemas import (
     KnowledgeSaveRequest,
     KnowledgeSaveResponse,
 )
+from tldw_Server_API.app.api.v1.schemas.chat_conversation_schemas import (
+    ConversationListResponse,
+    ConversationListItem,
+    ConversationListPagination,
+    ConversationUpdateRequest,
+    ConversationTreeResponse,
+    ConversationTreeNode,
+    ConversationTreePagination,
+    ConversationMetadata,
+    ChatAnalyticsResponse,
+    ChatAnalyticsBucket,
+    ChatAnalyticsPagination,
+)
 # Note: streaming utilities are handled inside chat_service. No direct import needed here.
 from tldw_Server_API.app.core.Chat.chat_helpers import (
     validate_request_payload,
@@ -125,6 +141,9 @@ from tldw_Server_API.app.core.Chat.chat_service import (
     execute_streaming_call,
     execute_non_stream_call,
     queue_is_active,
+)
+from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
+    map_sender_to_role,
 )
 _ORIGINAL_PERFORM_CHAT_API_CALL = perform_chat_api_call
 from tldw_Server_API.app.core.config import loaded_config_data
@@ -219,6 +238,19 @@ MAX_IMAGES_PER_REQUEST: int = int(_chat_config.get('max_images_per_request', 10)
 MAX_BASE64_BYTES: int = get_max_base64_bytes()
 # Provider fallback setting - disabled by default for production stability
 ENABLE_PROVIDER_FALLBACK: bool = _chat_config.get('enable_provider_fallback', 'False').lower() == 'true'
+def _cfg_float(key: str, fallback: float) -> float:
+    try:
+        raw = _chat_config.get(key)
+        return float(raw) if raw is not None else fallback
+    except Exception:
+        return fallback
+
+RECENCY_HALF_LIFE_DAYS: float = _cfg_float("half_life_days", 14.0)
+CHAT_BM25_WEIGHT: float = _cfg_float("w_bm25", 0.65)
+CHAT_RECENCY_WEIGHT: float = _cfg_float("w_recency", 0.35)
+ANALYTICS_MAX_RANGE_DAYS: int = int(_chat_config.get("analytics_max_range_days", 180))
+TREE_MESSAGE_CAP_DEFAULT: int = int(_chat_config.get("tree_message_cap_default", 200))
+TREE_MESSAGE_CAP_MAX: int = int(_chat_config.get("tree_message_cap_max", 500))
 
 # Chat-Commands feature toggles (env overrides take priority)
 def _cfg_bool_cmds(env_name: str, cfg_key: str, fallback: bool) -> bool:
@@ -2664,6 +2696,107 @@ def _estimate_tokens_for_queue(request_json: str) -> int:
         return 1
 
 
+def _coerce_datetime(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        raw = str(value).strip()
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _parse_iso_datetime(value: str, field_name: str) -> datetime:
+    raw = value.strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} must be ISO-8601 timestamp",
+        ) from exc
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _normalize_weights(w_bm25: float, w_recency: float) -> Tuple[float, float]:
+    total = (w_bm25 or 0.0) + (w_recency or 0.0)
+    if total <= 0:
+        return 0.65, 0.35
+    return (w_bm25 / total), (w_recency / total)
+
+
+def _calculate_recency(dt_value: Optional[datetime], half_life_days: float) -> float:
+    if dt_value is None or half_life_days <= 0:
+        return 0.0
+    now = datetime.now(timezone.utc)
+    age_days = max(0.0, (now - dt_value).total_seconds() / 86400.0)
+    return math.exp(-age_days / half_life_days)
+
+
+def _verify_conversation_ownership(
+    db: CharactersRAGDB,
+    conversation_id: str,
+    current_user: User,
+) -> Dict[str, Any]:
+    conversation = db.get_conversation_by_id(conversation_id)
+    if not conversation or conversation.get("deleted"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+    conv_client_id = conversation.get("client_id")
+    user_id = current_user.id
+    if conv_client_id is None or user_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
+    try:
+        if int(conv_client_id) != int(user_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
+    except (TypeError, ValueError):
+        if str(conv_client_id) != str(user_id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
+    return conversation
+
+
+def _replace_conversation_keywords(
+    db: CharactersRAGDB,
+    conversation_id: str,
+    keywords: List[str],
+) -> None:
+    existing = db.get_keywords_for_conversation(conversation_id)
+    existing_map = {str(k.get("keyword") or "").strip().lower(): int(k.get("id")) for k in existing if k.get("id")}
+    target = {str(k).strip() for k in keywords if k is not None and str(k).strip()}
+    target_map = {t.lower(): t for t in target}
+
+    for key, kw_id in existing_map.items():
+        if key not in target_map:
+            try:
+                db.unlink_conversation_from_keyword(conversation_id, kw_id)
+            except Exception as exc:
+                logger.warning("Failed to unlink keyword %s from %s: %s", kw_id, conversation_id, exc)
+
+    for key, original in target_map.items():
+        if key in existing_map:
+            continue
+        try:
+            kw = db.get_keyword_by_text(original)
+            if not kw:
+                kw_id = db.add_keyword(original)
+                kw = db.get_keyword_by_id(kw_id) if kw_id is not None else None
+            if kw and kw.get("id") is not None:
+                db.link_conversation_to_keyword(conversation_id, int(kw["id"]))
+        except Exception as exc:
+            logger.warning("Failed to link keyword %s to %s: %s", original, conversation_id, exc)
+
+
 @router.post(
     "/knowledge/save",
     response_model=KnowledgeSaveResponse,
@@ -2707,11 +2840,13 @@ async def save_chat_knowledge(
             if message.get("conversation_id") != payload.conversation_id:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Message is not in conversation")
 
-        if payload.export_to != "none" and not _chat_connectors_enabled():
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Chat connectors v2 are disabled; enable CHAT_CONNECTORS_V2_ENABLED to export.",
-            )
+        export_status = "not_requested"
+        export_job_id: Optional[str] = None
+        if payload.export_to != "none":
+            if _chat_connectors_enabled():
+                export_status = "queued"
+            else:
+                export_status = "skipped_disabled"
 
         conv_title = conversation.get("title") or f"Conversation {payload.conversation_id}"
         safe_title = conv_title[:200]
@@ -2749,6 +2884,8 @@ async def save_chat_knowledge(
                         "notes": f"From {safe_title}",
                         "source_ref_type": "note",
                         "source_ref_id": note_id,
+                        "conversation_id": payload.conversation_id,
+                        "message_id": payload.message_id,
                         "model_type": "basic",
                     }
                 )
@@ -2758,6 +2895,8 @@ async def save_chat_knowledge(
             flashcard_id=flashcard_id,
             conversation_id=payload.conversation_id,
             message_id=payload.message_id,
+            export_status=export_status,
+            export_job_id=export_job_id,
         )
     except HTTPException:
         raise

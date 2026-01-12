@@ -41,11 +41,13 @@ async def test_reading_save_and_list(reading_env):
         title_override="Reading Demo",
         summary_override="Example reading summary.",
         content_override="Example reading content body.",
+        notes="Example reading notes.",
     )
 
     assert result.item.title == "Reading Demo"
     assert result.item.favorite is True
     assert set(result.item.tags) == {"reading", "demo"}
+    assert result.item.notes == "Example reading notes."
 
     rows, total = service.list_items(page=1, size=10)
     assert total >= 1
@@ -74,10 +76,12 @@ async def test_reading_update_status_and_filters(reading_env):
         status="read",
         favorite=False,
         tags=["archive"],
+        notes="Updated notes text.",
     )
     assert updated.status == "read"
     assert updated.favorite is False
     assert updated.tags == ["archive"]
+    assert updated.notes == "Updated notes text."
 
     rows, total = service.list_items(status=["read"], page=1, size=10)
     assert total >= 1

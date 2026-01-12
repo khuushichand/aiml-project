@@ -13,6 +13,7 @@ class ReadingSaveRequest(BaseModel):
     status: Optional[str] = Field(default="saved", description="saved|reading|read|archived")
     favorite: bool = False
     summary: Optional[str] = None
+    notes: Optional[str] = None
     content: Optional[str] = Field(default=None, description="Optional inline content override (testing/offline)")
 
     @validator("tags", pre=True, each_item=True)
@@ -27,6 +28,7 @@ class ReadingItem(BaseModel):
     url: Optional[str] = None
     domain: Optional[str] = None
     summary: Optional[str] = None
+    notes: Optional[str] = None
     published_at: Optional[str] = None
     status: Optional[str] = None
     favorite: bool = False
@@ -46,6 +48,7 @@ class ReadingUpdateRequest(BaseModel):
     status: Optional[str] = Field(default=None, description="saved|reading|read|archived")
     favorite: Optional[bool] = None
     tags: Optional[List[str]] = None
+    notes: Optional[str] = None
 
     @validator("tags", pre=True, each_item=True)
     def _strip_tags(cls, value: str) -> str:

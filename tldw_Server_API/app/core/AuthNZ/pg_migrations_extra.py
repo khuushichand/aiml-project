@@ -519,6 +519,10 @@ _CREATE_USER_PROVIDER_SECRETS = [
             encrypted_blob TEXT NOT NULL,
             key_hint TEXT,
             metadata TEXT,
+            created_by INTEGER,
+            updated_by INTEGER,
+            revoked_by INTEGER,
+            revoked_at TIMESTAMP WITH TIME ZONE,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             last_used_at TIMESTAMP WITH TIME ZONE,
@@ -530,6 +534,10 @@ _CREATE_USER_PROVIDER_SECRETS = [
     ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS encrypted_blob TEXT", ()),
     ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS key_hint TEXT", ()),
     ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS metadata TEXT", ()),
+    ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS created_by INTEGER", ()),
+    ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS updated_by INTEGER", ()),
+    ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS revoked_by INTEGER", ()),
+    ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMP WITH TIME ZONE", ()),
     ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP", ()),
     ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP", ()),
     ("ALTER TABLE user_provider_secrets ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMP WITH TIME ZONE", ()),
@@ -548,6 +556,10 @@ _CREATE_ORG_PROVIDER_SECRETS = [
             encrypted_blob TEXT NOT NULL,
             key_hint TEXT,
             metadata TEXT,
+            created_by INTEGER,
+            updated_by INTEGER,
+            revoked_by INTEGER,
+            revoked_at TIMESTAMP WITH TIME ZONE,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             last_used_at TIMESTAMP WITH TIME ZONE,
@@ -559,6 +571,10 @@ _CREATE_ORG_PROVIDER_SECRETS = [
     ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS encrypted_blob TEXT", ()),
     ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS key_hint TEXT", ()),
     ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS metadata TEXT", ()),
+    ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS created_by INTEGER", ()),
+    ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS updated_by INTEGER", ()),
+    ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS revoked_by INTEGER", ()),
+    ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMP WITH TIME ZONE", ()),
     ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP", ()),
     ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP", ()),
     ("ALTER TABLE org_provider_secrets ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMP WITH TIME ZONE", ()),
@@ -1024,7 +1040,11 @@ async def _normalize_org_budgets_pg(db_pool: DatabasePool) -> None:
             logger.debug(f"PG budgets normalize update failed for org_id={org_id}: {exc}")
 
 
-async def ensure_billing_tables_pg(pool: Optional[DatabasePool] = None) -> bool:
+async def ensure_billing_tables_pg(
+    pool: Optional[DatabasePool] = None,
+    *,
+    run_backfill: bool = True,
+) -> bool:
     """Ensure billing-related tables exist for PostgreSQL backends."""
     try:
         db_pool = pool or await get_db_pool()
@@ -1130,15 +1150,16 @@ async def ensure_billing_tables_pg(pool: Optional[DatabasePool] = None) -> bool:
             except Exception as exc:
                 logger.debug(f"PG ensure billing seed failed: {exc}")
 
-        try:
-            await _backfill_org_budgets_pg(db_pool)
-        except Exception as exc:
-            logger.debug(f"PG budgets backfill skipped/failed: {exc}")
+        if run_backfill:
+            try:
+                await _backfill_org_budgets_pg(db_pool)
+            except Exception as exc:
+                logger.debug(f"PG budgets backfill skipped/failed: {exc}")
 
-        try:
-            await _normalize_org_budgets_pg(db_pool)
-        except Exception as exc:
-            logger.debug(f"PG budgets normalize skipped/failed: {exc}")
+            try:
+                await _normalize_org_budgets_pg(db_pool)
+            except Exception as exc:
+                logger.debug(f"PG budgets normalize skipped/failed: {exc}")
 
         logger.info("Ensured PostgreSQL billing tables (subscription_plans, org_subscriptions)")
         return True

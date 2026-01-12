@@ -1,66 +1,30 @@
-# LiteLLM Admin Panel
+# tldw Admin UI
 
-A modern, fully-featured admin panel for managing the SaaS LiteLLM API built with Next.js 15, React 19, TypeScript, and Tailwind CSS v4.
+Admin and operations dashboard for `tldw_server`. This UI is intended for sysadmin/ops workflows and is separate from the end-user `tldw-frontend`.
 
 ## Features
 
-- **Dashboard**: Overview with statistics for organizations, teams, model groups, and credits
-- **Organizations Management**: View and create organizations
-- **Teams Management**: Manage teams with credits tracking and virtual keys
-- **Model Groups**: Configure model routing groups with priority
-- **Authentication**: Simple login system with role-based access (owner/user)
-- **Clean UI**: Modern interface using Shadcn-inspired components
-- **Full TypeScript**: Type-safe throughout the application
+- **System Ops**: system logs, feature flags, maintenance mode, incidents
+- **Admin Core**: users, orgs, teams, roles, API keys
+- **Operational Views**: audit logs, usage, budgets, jobs, monitoring, data ops
+- **RBAC-aware UI**: routes filtered by role/permission
 
 ## Tech Stack
 
-- **Next.js 15.5.5** - React framework with App Router
-- **React 19.2.0** - UI library
-- **TypeScript 5.9.3** - Type safety
-- **Tailwind CSS 4.1.14** - Utility-first CSS framework
-- **Radix UI** - Headless UI components
-- **Lucide React** - Icon library
-
-## Project Structure
-
-```
-admin-panel/
-├── app/                          # Next.js App Router pages
-│   ├── globals.css              # Global styles with Tailwind
-│   ├── layout.tsx               # Root layout
-│   ├── page.tsx                 # Dashboard page
-│   ├── login/page.tsx           # Login page
-│   ├── organizations/page.tsx   # Organizations management
-│   ├── teams/page.tsx           # Teams management
-│   └── model-groups/page.tsx    # Model groups management
-├── components/                   # React components
-│   ├── ui/                      # UI components (button, card, input, etc.)
-│   ├── Sidebar.tsx              # Navigation sidebar
-│   └── PermissionGuard.tsx      # Route and permission gating
-├── lib/                         # Utility libraries
-│   ├── auth.ts                  # Authentication logic
-│   ├── api-client.ts            # API client for backend
-│   └── utils.ts                 # Utility functions (cn helper)
-├── types/                       # TypeScript type definitions
-│   └── index.ts                 # Shared interfaces
-├── .env.example                 # Environment variables template (copy to .env.local)
-├── next.config.js               # Next.js configuration
-├── tailwind.config.ts           # Tailwind CSS configuration
-├── postcss.config.js            # PostCSS configuration
-└── tsconfig.json                # TypeScript configuration
-```
+- **Next.js 15** (App Router)
+- **React 19**
+- **TypeScript**
+- **Tailwind CSS**
+- **Lucide React**
 
 ## Getting Started
 
 ### Prerequisites
 
-- Node.js 18+ installed
-- npm or yarn package manager
-- SaaS LiteLLM API running on http://localhost:8000
+- Node.js 18+
+- `tldw_server` API running (default: `http://localhost:8000`)
 
-### Installation
-
-Dependencies are already installed. If you need to reinstall:
+### Install
 
 ```bash
 npm install
@@ -68,195 +32,46 @@ npm install
 
 ### Environment Variables
 
-Copy the example env file and adjust values as needed:
-
-```bash
-cp .env.example .env.local
-```
-
-Then update `.env.local`:
+Create `.env.local` with the API base URL (and optional defaults):
 
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:8000
 NEXT_PUBLIC_DEFAULT_AUTH_MODE=password
-# SERVER_X_API_KEY=your-api-key-here
 ```
 
-`NEXT_PUBLIC_DEFAULT_AUTH_MODE` sets the default login mode for the UI. Valid
-values are `password` or `apikey`; if omitted, the login page defaults to
-`password`. Example:
+`NEXT_PUBLIC_DEFAULT_AUTH_MODE` supports `password` (JWT) or `apikey` (single-user).
 
-```env
-NEXT_PUBLIC_DEFAULT_AUTH_MODE=apikey
-```
+Optional JWT local verification (middleware) reads `JWT_SECRET_KEY`, `JWT_SECONDARY_SECRET`,
+and `JWT_ALGORITHM` (HS256/384/512). If missing or invalid, the middleware falls back
+to backend verification.
 
-Keep API keys server-side only. Do not use `NEXT_PUBLIC_` variables for secrets.
-If the browser needs access, use a secure auth flow (JWT/session) or a
-server-side API route that injects the `X-API-KEY` so the key never ships to
-the client.
-
-Optional JWT local verification (middleware): `admin-ui/middleware.ts` uses
-`verifyJwtLocally` to validate JWTs without a round trip to the backend API.
-It checks `JWT_SECRET_KEY`, optional `JWT_SECONDARY_SECRET`, and
-`JWT_ALGORITHM` (HS256/384/512). If the secrets are missing, the algorithm is
-unsupported, or the token has no `exp` claim, `verifyJwtLocally` returns `null`
-and the middleware falls back to backend API verification. Tokens without an
-`exp` claim cannot be cached locally because the cache TTL is derived from the
-`exp` value.
-
-### Running Development Server
+### Run Dev Server
 
 ```bash
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser.
-
-### Building for Production
-
-```bash
-npm run build
-npm start
-```
+Open `http://localhost:3000`.
 
 ## Authentication
 
-The admin panel uses a simple localStorage-based authentication system for demo purposes.
+- **Single-user mode**: API key login (X-API-KEY); key stored in memory for the session.
+- **Multi-user mode**: username/password login via `/auth/login` and JWT stored in localStorage.
 
-**Demo Credentials:**
+## System Ops Endpoints Used
 
-- **Admin User**:
-  - Username: `admin`
-  - Password: `admin123`
-  - Role: `owner`
+- `GET /api/v1/admin/system/logs`
+- `GET /api/v1/admin/maintenance`, `PUT /api/v1/admin/maintenance`
+- `GET /api/v1/admin/feature-flags`, `PUT/DELETE /api/v1/admin/feature-flags/{flag_key}`
+- `GET /api/v1/admin/incidents`, `POST/PATCH/DELETE /api/v1/admin/incidents`
 
-- **Regular User**:
-  - Username: `user`
-  - Password: `user123`
-  - Role: `user`
+## Project Structure
 
-## Pages Overview
-
-### Dashboard (`/`)
-- Overview statistics cards
-- Recent activity feed
-- Quick access to all sections
-
-### Login (`/login`)
-- Simple login form
-- Credentials validation
-- Redirect to dashboard on success
-
-### Organizations (`/organizations`)
-- List all organizations in a table
-- Create new organizations
-- View organization details (ID, name, status, created date)
-
-### Teams (`/teams`)
-- List all teams with credit information
-- Create new teams
-- View virtual keys and credits (allocated, used, remaining)
-- Associate teams with organizations
-
-### Model Groups (`/model-groups`)
-- List all model routing groups
-- Create new model groups
-- View models in each group with priority
-- Configure group settings
-
-## API Integration
-
-The admin panel connects to the SaaS LiteLLM API endpoints:
-
-### Organizations
-- `GET /api/organizations` - List organizations
-- `GET /api/organizations/{id}` - Get organization
-- `POST /api/organizations/create` - Create organization
-
-### Teams
-- `GET /api/teams/{id}` - Get team
-- `POST /api/teams/create` - Create team
-
-### Model Groups
-- `GET /api/model-groups` - List model groups
-- `POST /api/model-groups/create` - Create model group
-
-### Credits
-- `GET /api/credits/teams/{team_id}/balance` - Get team credits
-
-## Components
-
-### UI Components (`components/ui/`)
-All components are built with Tailwind CSS and follow the Shadcn design system:
-
-- **Button**: Multiple variants (default, destructive, outline, secondary, ghost, link)
-- **Card**: Container with header, content, and footer sections
-- **Input**: Form input with proper styling
-- **Label**: Form label component
-- **Table**: Data table with header, body, rows, and cells
-
-### Layout Components
-
-- **Sidebar**: Navigation menu with active state and logout
-- **PermissionGuard**: Route and permission gating
-
-## Styling
-
-The project uses Tailwind CSS v4 with a custom theme:
-
-- Custom color palette using CSS variables
-- Responsive design
-- Dark mode ready (theme not implemented yet)
-- Consistent spacing and typography
-
-## Type Safety
-
-All components and functions are fully typed with TypeScript:
-
-- `User` - User authentication
-- `Organization` - Organization entity
-- `Team` - Team with credits
-- `ModelGroup` - Model routing configuration
-- `AuditLog` - Activity logging
-
-## Development Notes
-
-### Release Checklist
-See `Release_Checklist.md` for the admin UI release readiness checklist.
-
-### Mock Data
-Currently, the admin panel uses mock data for demonstration. To connect to the real API:
-
-1. Update the API client calls in each page
-2. Remove mock data generation
-3. Handle loading states and errors
-4. Add proper API authentication headers
-
-### Future Enhancements
-- Real-time updates with WebSockets
-- Advanced filtering and sorting
-- Bulk operations
-- Export functionality
-- Dark mode toggle
-- User profile management
-- Audit log viewer
-- API key management
-- Team member management
-- Advanced analytics
-
-## Troubleshooting
-
-### Build Errors
-If you encounter build errors:
-1. Clear Next.js cache: `rm -rf .next`
-2. Reinstall dependencies: `rm -rf node_modules && npm install`
-3. Check TypeScript errors: `npm run lint`
-
-### API Connection Issues
-- Ensure the backend API is running on http://localhost:8000
-- Check CORS settings on the backend
-- Verify API endpoints match the expected format
-
-## License
-
-ISC
+```
+admin-ui/
+├── app/                 # Next.js App Router pages
+├── components/          # Shared UI components
+├── lib/                 # API client + auth helpers
+├── types/               # TypeScript models
+└── public/              # Static assets
+```

@@ -39,6 +39,7 @@ class ReadingService:
         title_override: Optional[str] = None,
         summary_override: Optional[str] = None,
         content_override: Optional[str] = None,
+        notes: Optional[str] = None,
         metadata: Optional[Dict[str, object]] = None,
     ) -> ReadingSaveResult:
         """Fetch, dedupe, and persist a reading item."""
@@ -74,6 +75,7 @@ class ReadingService:
             domain=None,
             title=title,
             summary=summary,
+            notes=notes,
             content_hash=hash_text_sha256(content),
             word_count=word_count(content),
             published_at=published_at,
@@ -189,6 +191,7 @@ class ReadingService:
         status: Optional[str] = None,
         favorite: Optional[bool] = None,
         tags: Optional[List[str]] = None,
+        notes: Optional[str] = None,
         metadata: Optional[Dict[str, object]] = None,
     ) -> ContentItemRow:
         normalized_tags = tags if tags is None else [t for t in tags if t]
@@ -198,5 +201,6 @@ class ReadingService:
             status=status,
             favorite=favorite,
             tags=normalized_tags,
+            notes=notes,
             metadata=metadata if metadata else None,
         )

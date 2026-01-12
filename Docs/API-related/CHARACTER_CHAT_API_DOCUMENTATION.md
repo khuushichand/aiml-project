@@ -310,7 +310,7 @@ Retrieve messages from a chat session, with optional character context for AI co
 - `format_for_completions` (bool, default: false): Format response for use with `/api/v1/chat/completions`
 - `include_tool_calls` (bool, default: false): Include a `tool_calls` field per message (standard format only)
 - `include_metadata` (bool, default: false): Include stored per-message `metadata.extra` where available
-- `include_message_ids` (bool, default: false): Include `message_id` fields when `format_for_completions=true`
+- `include_message_ids` (bool, default: false): Include `message_id` fields when `format_for_completions=true` for messages backed by stored chat rows (typically user/assistant, and persisted system messages). Synthetic system prompts and tool role messages do not include `message_id`.
 
 **Response:** `200 OK`
 
@@ -341,7 +341,7 @@ Standard format:
 }
 ```
 
-With `format_for_completions=true&include_character_context=true` (tool calls and tool results shown):
+With `format_for_completions=true&include_character_context=true&include_message_ids=true` (tool calls and tool results shown; `message_id` is only present for stored user/assistant messages):
 ```json
 {
   "character_name": "Assistant",
@@ -880,7 +880,7 @@ The API implements several rate limits to prevent abuse. Redis is optional - if 
 Configuration summary:
 - General character ops: `CHARACTER_RATE_LIMIT_OPS`, `CHARACTER_RATE_LIMIT_WINDOW`.
 - Chat-specific per-minute limits: `MAX_CHAT_COMPLETIONS_PER_MINUTE`, `MAX_MESSAGE_SENDS_PER_MINUTE`.
-- Soft cap for non-persisted completions: `MAX_MESSAGES_PER_CHAT_SOFT` (defaults to `MAX_MESSAGES_PER_CHAT`).
+- Soft cap for non-persisted completions: `MAX_MESSAGES_PER_CHAT_SOFT` (defaults to `MAX_MESSAGES_PER_CHAT`; set lower to cap ephemeral completions, e.g., `MAX_MESSAGES_PER_CHAT_SOFT=200` with a 1000 hard cap).
 - Optional Redis: set `REDIS_ENABLED=true` and `REDIS_URL` to enable distributed rate limiting. Without Redis, limits apply per process.
 
 The API enforces the following defaults:
@@ -893,7 +893,7 @@ The API enforces the following defaults:
 ### Chat Operations
 - **Max concurrent chats per user**: 100
 - **Max messages per chat (hard)**: 1000
-- **Max messages per chat (soft, non-persisted completions)**: 1000
+- **Max messages per chat (soft, non-persisted completions)**: 1000 (defaults to hard cap; example override: 200)
 - **Max chat completions per minute**: 20
 - **Max message sends per minute**: 60
 
@@ -1207,7 +1207,7 @@ Configuration notes for providers: API keys are read from environment variables 
 
 - All timestamps are in UTC ISO 8601 format
 - Character IDs are integers
-- Chat and message IDs are UUIDs
+- Chat IDs are UUIDs; message IDs are opaque strings (often `msg_`-prefixed in examples)
 - Soft deletes preserve data but mark as deleted
 - Optimistic locking prevents concurrent modification conflicts
 - Rate limits are per-user, not per-API-key

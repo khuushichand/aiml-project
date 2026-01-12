@@ -6,7 +6,7 @@
 
 ## Summary
 
-Harden slash-command rate limiting and standardize chat orchestration on async paths to eliminate race conditions and reduce drift. Introduce an async command dispatcher and an async chat orchestrator (achat), migrate endpoint usage now, then phase in async across remaining call sites with a clear deprecation plan for the legacy sync path.
+Harden slash-command rate limiting and standardize chat orchestration on async paths to eliminate race conditions and reduce drift. The async command dispatcher and async chat orchestrator (`achat`) are now the canonical path, with the legacy sync router removed and a guard (`CHAT_COMMANDS_ASYNC_ONLY`) available to enforce async-only usage.
 
 ## Background
 
@@ -17,9 +17,9 @@ Harden slash-command rate limiting and standardize chat orchestration on async p
   - New `achat` orchestration that mirrors `chat()` but awaits async command dispatch and async provider calls.
 
 Key references (current state):
-- Async dispatcher: `tldw_Server_API/app/core/Chat/command_router.py:270`
-- Endpoint using async dispatcher: `tldw_Server_API/app/api/v1/endpoints/chat.py:1119`
-- Async chat orchestrator (achat): `tldw_Server_API/app/core/Chat/chat_orchestrator.py` (added below sync `chat`)
+- Async dispatcher: `tldw_Server_API/app/core/Chat/command_router.py`
+- Endpoint using async dispatcher: `tldw_Server_API/app/api/v1/endpoints/chat.py`
+- Async chat orchestrator (`achat`): `tldw_Server_API/app/core/Chat/chat_orchestrator.py`
 
 ## Problem Statement
 
@@ -69,7 +69,6 @@ Key references (current state):
 
 ### Observability
 - Preserve counters for invoked/success/error/rate_limited with command labels.
-- Optionally log a one-time deprecation warning when sync `dispatch_command` is used.
 
 ## Success Metrics
 
@@ -100,15 +99,14 @@ Merged references:
 
 Decision: Do not add `anyio` as a runtime dependency for the wrapper. Prefer stdlib-only (`asyncio`, `threading`/`concurrent.futures`). `pytest-asyncio` remains for tests; `anyio` may be used in tests only if already present, but is not required.
 
-Current implementation (2025-11-23):
+Current implementation (2026-01-10):
 - `achat(...)` is the canonical async orchestrator in `chat_orchestrator.py` and mirrors `chat(...)` behavior, including:
   - Slash-command handling via `async_dispatch_command`.
   - Image-history modes (`tag_past`, `send_all`, `send_last_user_image`) and RAG prefix construction aligned with the legacy sync path.
 - `chat(...)` is now a sync wrapper with two code paths:
-  - Non-streaming: routes through `_run_achat_sync(...)`, which calls `achat(...)` using:
-    - `asyncio.run` when no event loop is running on the calling thread.
-    - A `ThreadPoolExecutor` worker that owns its own event loop when a loop is already running.
-  - Streaming: delegates to a preserved sync implementation `_chat_sync_impl(...)` so existing generator-based streaming behavior remains unchanged for legacy callers.
+  - Non-streaming: routes through `_run_achat_sync(...)` when no event loop is running. When called from a running event loop, it offloads to a worker thread and returns an awaitable future.
+  - Streaming: delegates to a preserved sync implementation `_chat_sync_impl(...)`; streaming remains unsupported inside a running event loop.
+- `CHAT_COMMANDS_ASYNC_ONLY=1` forces callers to use `achat(...)` (sync `chat(...)` raises).
 - The legacy compatibility shim was removed after call-site migrations; tests now patch adapters or `perform_chat_api_call` as needed.
 - `Workflows.py` imports `chat` from `chat_orchestrator`; sync workflows now transitively use `achat(...)` for non-streaming calls via the wrapper.
 - New unit tests cover:
@@ -140,12 +138,9 @@ def chat(request: ChatRequest) -> ChatResponse:
     except RuntimeError:
         return asyncio.run(_runner())
 
-    # Case B: we are on a thread that already runs an event loop
-    # Do NOT attempt asyncio.run() or loop.run_until_complete() here.
-    # Option B1: offload to a worker thread and run a private loop there.
-    with ThreadPoolExecutor(max_workers=1) as ex:
-        fut = ex.submit(lambda: asyncio.run(_runner()))
-        return fut.result()
+    # Case B: a running event loop exists on this thread → offload
+    loop = asyncio.get_running_loop()
+    return loop.run_in_executor(_get_sync_executor(), lambda: asyncio.run(_runner()))
 
 def chat_on_loop(loop: asyncio.AbstractEventLoop, request: ChatRequest) -> ChatResponse:
     """Optional helper when you have a handle to a loop running on another thread.
@@ -190,8 +185,8 @@ Test validation patterns (add under Testing Strategy):
 - No-loop context: plain pytest test calls `chat(...)`; assert response; ensure no loop-related errors.
 - Running-loop context: `pytest.mark.asyncio` test calls both:
   - `await achat(...)` (preferred async path) and
-  - `res = await asyncio.to_thread(chat, ...)` to validate the sync wrapper path without blocking the loop.
-- Nested-loop simulation: inside a running task (`asyncio.create_task(...)`), invoke `await asyncio.to_thread(chat, ...)` and ensure no deadlock; also verify that directly calling `chat(...)` completes (wrapper offloads to thread) albeit blocking the caller.
+  - `res = await chat(...)` when invoked inside the running loop (returns an awaitable).
+- Nested-loop simulation: inside a running task (`asyncio.create_task(...)`), invoke `await chat(...)` and ensure no deadlock.
 - FastAPI contexts:
   - Async endpoint uses `await achat(...)` (recommended). Validate with `fastapi.TestClient`.
   - Sync endpoint uses `chat(...)`; FastAPI runs sync endpoints in a threadpool, so wrapper takes the no-loop path (`asyncio.run`). Validate 200 and response parity.
@@ -219,48 +214,29 @@ Python version constraint:
   - Added tests in `tests/Chat_NEW/unit`:
     - `test_run_coro_sync_inside_running_loop` exercises `_run_coro_sync` while a loop is active, via `asyncio.to_thread`.
     - `test_streaming_path_uses_async_dispatcher` patches both `command_router.async_dispatch_command` and `command_router.dispatch_command`, invokes `chat(..., streaming=True, message='/time', ...)`, exhausts the generator, and asserts that only the async dispatcher is called.
-- Remaining sync surfaces:
-  - `command_router.dispatch_command` remains for direct/legacy usage and is still responsible for its own internal rate-limiting behavior. It is no longer used by chat orchestration paths.
-  - Deprecation and eventual removal of `dispatch_command` is tracked under Phase 3–4.
+- Remaining sync surfaces: none (legacy sync router removed).
 
-### Phase 3: Deprecation + Hardening
+### Phase 3: Removal + Hardening
 
-- Status: Complete (deprecation + core hardening applied prior to Phase 4 removal)
+- Status: Complete
 
-**Deprecation semantics for `dispatch_command`**
+**Removal semantics for `dispatch_command`**
 
-- `command_router.dispatch_command` now emits a `DeprecationWarning` the first time it is invoked in a process:
-  - Implemented via a simple module-level guard `_DISPATCH_DEPRECATED_EMITTED` and `warnings.warn(..., DeprecationWarning, stacklevel=2)`.
-  - The warning message notes that chat orchestration no longer uses `dispatch_command` and directs callers to `async_dispatch_command(...)` or the chat orchestrator (`achat` / its sync wrapper).
-  - Function signature and behavior remain unchanged for legacy/internal callers.
+- `command_router.dispatch_command` now raises a runtime error with a migration hint.
+- All orchestration paths (`achat`, sync `chat`, `/chat/completions`) use `async_dispatch_command`.
 
 **Rate-limiter hardening & TokenBucket usage**
 
-- Removed direct `TokenBucket.tokens` / `last_refill` mutation from `dispatch_command` (prior to its removal in Phase 4):
-  - Per-user, per-command rate limiting was moved behind TokenBucket methods so that all field mutations occur inside `TokenBucket` itself (via `consume` / related helpers), not in the router.
+- No direct `TokenBucket.tokens` / `last_refill` mutation outside rate-limiter internals.
 
-**Concurrency & deprecation-focused tests**
+**Concurrency & removal-focused tests**
 
-- Extended tests around command routing and rate limiting:
-  - Deprecation behavior:
-    - `tests/Chat_NEW/unit/test_command_router.py::test_dispatch_command_emits_deprecation_warning`:
-      - Resets `_DISPATCH_DEPRECATED_EMITTED`, calls `dispatch_command`, and asserts a `DeprecationWarning` is captured with a “deprecated” message.
-  - Async rate limiting robustness:
-    - `tests/Chat_NEW/unit/test_command_router.py::test_async_dispatch_command_concurrent_respects_rate_limit`:
-      - Sets `CHAT_COMMANDS_RATE_LIMIT=5`, issues 10 concurrent `async_dispatch_command` calls for `/time` with the same user id, and asserts exactly 5 succeed and 5 are rate-limited.
-  - TokenBucket concurrency:
-    - `tests/Chat_NEW/unit/test_rate_limiter.py::test_token_bucket_concurrent_consume_does_not_over_consume`:
-      - Creates a `TokenBucket` with `capacity=5`, launches 10 concurrent `consume(1)` calls via `asyncio.gather`, and asserts that at most `capacity` calls succeed.
-
-**Documentation & migration notes**
-
-- With Phase 0–3 changes:
-  - All chat orchestration paths (`achat`, sync `chat`, `/chat/completions`) now rely exclusively on `async_dispatch_command` for slash-commands and never call `dispatch_command`.
-  - `dispatch_command` was temporarily preserved for direct/legacy usage and emitted a deprecation warning on first use in the vX.Y prerelease branch; it was removed entirely when Phase 4 shipped.
-- Migration guidance (to be reflected in release notes):
-  - New and existing async code should call `async_dispatch_command(...)` directly.
-  - Chat-related integrations should prefer `achat` (async) or the sync `chat` wrapper instead of invoking the command router manually.
-  - Callers still using `dispatch_command` should plan to migrate before the Phase 4 removal.
+- Async rate limiting robustness:
+  - `tests/Chat_NEW/unit/test_command_router.py::test_async_dispatch_command_concurrent_respects_rate_limit`
+- TokenBucket concurrency:
+  - `tests/Chat_NEW/unit/test_rate_limiter.py::test_token_bucket_concurrent_consume_does_not_over_consume`
+- Removal behavior:
+  - `tests/Chat_NEW/unit/test_command_router.py::test_dispatch_command_removed_raises`
 
 ### Phase 4: Removal (Major Version)
 
@@ -284,17 +260,12 @@ Eliminate the legacy sync command router path and any sync-only token mutation, 
 - If any non-test call sites remain:
   - Migrate them to `async_dispatch_command` (async contexts) or to the chat orchestrator (`achat` / sync `chat`) as appropriate.
 - Optional feature flag for early adopters:
-  - Example: `CHAT_COMMANDS_SYNC_ROUTER_DISABLED=1` turns `dispatch_command` into a hard failure (e.g., raises `RuntimeError("dispatch_command removed; use async_dispatch_command")`).
-  - Default off until the major release.
+  - `CHAT_COMMANDS_ASYNC_ONLY=1` forces async orchestration (`achat`) and blocks sync `chat(...)`.
 
 **Stage 2: Remove `dispatch_command` and sync router path**
 
 - In `command_router.py`:
-  - For the major release:
-    - Either:
-      - Remove `dispatch_command` entirely, or
-      - Replace it with a small stub that raises a `RuntimeError` with a clear migration message.
-  - Remove `_DISPATCH_DEPRECATED_EMITTED` and related warning logic once removal is active.
+  - `dispatch_command` is now a stub that raises a `RuntimeError` with a clear migration message.
 - Clean up tests:
   - Update `tests/Chat_NEW/unit/test_command_router.py`:
     - Replace tests that directly call `dispatch_command` with equivalents against `async_dispatch_command` where behavior is still relevant (time/weather/RBAC/rate-limit).
@@ -316,14 +287,13 @@ Eliminate the legacy sync command router path and any sync-only token mutation, 
 
 - Unit:
   - Ensure all `command_router` unit tests pass using `async_dispatch_command` only.
-  - If `dispatch_command` now raises, add a small unit test verifying the error message and type.
+  - `dispatch_command` raises with a clear error message.
 - Integration:
   - Re-run Chat and Chat_NEW suites with `CHAT_COMMANDS_ENABLED=1` to confirm:
     - Slash-commands behave as before through the orchestrator.
     - No deprecation warnings; only the async path is exercised.
 - Optional (if using a feature flag):
-  - With flag disabled: `dispatch_command` import still fails/raises as documented.
-  - With flag enabled (prior to removal): `dispatch_command` raises immediately, but other paths remain functional.
+  - With `CHAT_COMMANDS_ASYNC_ONLY=1`, sync `chat(...)` raises while async paths remain functional.
 
 **Stage 5: Documentation & versioning**
 
@@ -331,8 +301,8 @@ Eliminate the legacy sync command router path and any sync-only token mutation, 
   - Update Phase 4 section status to “Complete” once done.
   - Note the version where `dispatch_command` was removed/stubbed.
 - Public docs / changelog:
-  - Add a breaking change note:
-    - “`command_router.dispatch_command` has been removed. Use `async_dispatch_command` or the chat orchestrator (`achat` / `chat`) instead.”
+- Add a breaking change note:
+  - “`command_router.dispatch_command` has been removed. Use `async_dispatch_command` or the chat orchestrator (`achat` / `chat`) instead.”
   - Provide a short migration snippet for legacy code that previously called `dispatch_command` directly.
 - Versioning:
   - Tie the removal to a major version bump (or clearly marked breaking release) to respect semver expectations.
@@ -345,9 +315,7 @@ Eliminate the legacy sync command router path and any sync-only token mutation, 
   - `chat(...)` in `chat_orchestrator.py` acts as a sync wrapper over `achat(...)` for non-streaming calls via `_run_achat_sync(...)`.
   - Streaming sync behavior is preserved via `_chat_sync_impl(...)` for legacy generator-based consumers.
 - Current remaining sync/legacy surfaces:
-  - `_chat_sync_impl(...)` in `chat_orchestrator.py` still uses `dispatch_command` for slash-commands on the streaming path.
-  - `tldw_Server_API/app/core/Chat/command_router.dispatch_command` still mutates `TokenBucket` fields directly (to be addressed in Phases 2–3).
-  - Async-capable call sites that still use `dispatch_command` (outside orchestrator streaming) must migrate to `async_dispatch_command` in Phase 2.
+  - None; streaming path uses `async_dispatch_command` via `_run_coro_sync(...)`, and `dispatch_command` is removed.
 
 ## Testing Strategy
 
@@ -358,6 +326,7 @@ Eliminate the legacy sync command router path and any sync-only token mutation, 
 ### Integration
 - `/chat/completions` with `CHAT_COMMANDS_ENABLED=1` across `system/preface/replace` injection modes; verify payload mutations unchanged vs. baseline.
 - Concurrency test at 2× per-user RPM (+ jitter): confirm rate-limited responses and aggregate counters.
+- PERF-gated p50 latency smoke test for slash-command path.
 
 ### Regression
 - Ensure existing `Chat_NEW` tests pass. Prefer switching to `achat` with `pytest-asyncio` where low effort; otherwise rely on sync wrapper.
@@ -369,8 +338,8 @@ Eliminate the legacy sync command router path and any sync-only token mutation, 
 
 - M1 (Week 1): Sync wrapper over `achat` + docs. Add initial concurrency test.
 - M2 (Week 2): Migrate low-effort tests to use `achat` (async marks). Keep wrapper for the rest.
-- M3 (Week 2): Deprecation warning for `dispatch_command`. Update docs/changelog.
-- M4 (Next release): Remove deprecated sync path and direct token mutations.
+- M3 (Week 2): Remove `dispatch_command` and add `CHAT_COMMANDS_ASYNC_ONLY` guard. Update docs/changelog.
+- M4 (Next release): Add concurrency + perf validation for slash-command paths.
 
 ## Risks & Mitigations
 
@@ -384,9 +353,8 @@ Eliminate the legacy sync command router path and any sync-only token mutation, 
 ## Rollout Plan
 
 - Two releases:
-  - R1: Dual-path; warnings on sync use; docs published; encourage `achat` adoption.
-  - R2: Remove deprecated path.
-- Optional feature gate: `CHAT_COMMANDS_ASYNC_ONLY=1` in non-prod to catch residual sync usage before R2.
+  - R1: Dual-path with async-first guidance; optional `CHAT_COMMANDS_ASYNC_ONLY=1` gate.
+  - R2: Remove deprecated sync router path (now complete).
 
 ## Docs & Communication
 
@@ -406,4 +374,4 @@ Eliminate the legacy sync command router path and any sync-only token mutation, 
 - `achat` used by new async callers; `chat` remains as a stable sync wrapper.
 - No direct `TokenBucket` field mutation outside `rate_limiter` internals.
 - Concurrency tests pass; no rate-limit bypass observed.
-- Deprecation warning emitted when `dispatch_command` is invoked (until removal).
+- `dispatch_command` removed (raises with migration hint); `CHAT_COMMANDS_ASYNC_ONLY` available to enforce async usage.

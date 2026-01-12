@@ -83,8 +83,10 @@ async def generate_document(
             _is_pytest = False
         _is_test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
 
-        explicit_key = (request.api_key or "").strip() if request.api_key else None
-        provider_api_key = explicit_key
+        if request.api_key:
+            logger.debug("Ignoring per-request api_key override for provider=%s", provider_name)
+        explicit_key = None
+        provider_api_key = None
         byok_resolution = None
         app_config_override = None
 

@@ -170,6 +170,11 @@ class Settings(BaseSettings):
         description="Require registration code for new users"
     )
 
+    ENABLE_ORG_SCOPED_REGISTRATION_CODES: bool = Field(
+        default=False,
+        description="Allow registration codes to auto-assign org/team membership"
+    )
+
     MAX_LOGIN_ATTEMPTS: int = Field(
         default=5,
         ge=3,
@@ -934,6 +939,11 @@ def _load_overrides_from_config() -> dict:
         maybe_set("ENABLE_REGISTRATION", "registration_enabled", _bool_from_str)
         maybe_set("REQUIRE_REGISTRATION_CODE", "require_registration_code", _bool_from_str)
         maybe_set("REQUIRE_REGISTRATION_CODE", "registration_require_code", _bool_from_str)
+        maybe_set(
+            "ENABLE_ORG_SCOPED_REGISTRATION_CODES",
+            "enable_org_scoped_registration_codes",
+            _bool_from_str,
+        )
         maybe_set("RATE_LIMIT_ENABLED", "rate_limit_enabled", _bool_from_str)
         maybe_set("RATE_LIMIT_PER_MINUTE", "rate_limit_per_minute", lambda v: int(v))
         maybe_set("RATE_LIMIT_BURST", "rate_limit_burst", lambda v: int(v))
@@ -1014,6 +1024,13 @@ def get_settings() -> Settings:
             # REGISTRATION_REQUIRE_CODE -> REQUIRE_REGISTRATION_CODE
             if _os.getenv("REGISTRATION_REQUIRE_CODE") is not None and "REQUIRE_REGISTRATION_CODE" not in overrides:
                 overrides["REQUIRE_REGISTRATION_CODE"] = _alias_bool("REGISTRATION_REQUIRE_CODE")
+            if (
+                _os.getenv("ENABLE_ORG_SCOPED_REGISTRATION_CODES") is not None
+                and "ENABLE_ORG_SCOPED_REGISTRATION_CODES" not in overrides
+            ):
+                overrides["ENABLE_ORG_SCOPED_REGISTRATION_CODES"] = _alias_bool(
+                    "ENABLE_ORG_SCOPED_REGISTRATION_CODES"
+                )
         except Exception:
             pass
         _settings = Settings(**overrides)

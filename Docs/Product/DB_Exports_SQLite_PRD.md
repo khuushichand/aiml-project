@@ -1,7 +1,7 @@
-# Full SQLite Database Export/Import (Single-User Mode) - PRD
+# Full SQLite Database Export/Import (Admin Data Ops Extension) - PRD
 
-- **Status:** Draft
-- **Last Updated:** 2024-09-09
+- **Status:** Draft (extension of Admin Data Ops backups)
+- **Last Updated:** 2026-01-12
 - **Authors:** Codex (coding agent)
 - **Stakeholders:** Core Backend, WebUI, DevOps, Docs
 
@@ -10,22 +10,26 @@
 ## 1. Overview
 
 ### 1.1 Summary
-Enable single-user deployments that rely on SQLite to perform complete exports (and later re-imports) of the Media and ChaChaNotes databases through supported server workflows. Today users must stop the service and copy raw `.db` files; this feature delivers a first-class, automated export path that integrates with existing authentication, job management, and storage policies.
+Provide an admin-only, full-export workflow that bundles per-dataset backups created by the existing Admin Data Ops backups into a single downloadable artifact, with a matching import workflow for SQLite deployments. This extends `/api/v1/admin/backups` snapshots with a consistent, versioned bundle + manifest so operators no longer rely on raw filesystem copies.
 
 ### 1.2 Motivation & Background
 - Single-user mode defaults to SQLite files (`Media_DB_v2.db`, `ChaChaNotes.db`) located under `Databases/` and `<USER_DB_BASE_DIR>/<uid>/`. `USER_DB_BASE_DIR` is defined in `tldw_Server_API.app.core.config` (defaults to `Databases/user_databases/` under the project root); override via environment variable or `Config_Files/config.txt` as needed.
-- There is no supported API or UI to capture full backups; Chatbooks export/import covers curated content but not full fidelity DB snapshots.
-- Operational docs recommend manual filesystem copies, which is error-prone, does not scale to headless deployments, and offers no progress or integrity guarantees.
-- Users migrating between machines or preparing for upgrades have asked for a turnkey, documented backup workflow.
+- Admin Data Ops now provides per-dataset backup/restore endpoints (`/api/v1/admin/backups`) that create server-local snapshots for `media`, `chacha`, `prompts`, `evaluations`, `audit`, and `authnz`.
+- There is still no bundled export/import artifact (zip + manifest) and no download/import workflow; operators still copy raw `.db` files or stitch together per-dataset backups manually.
+- Chatbooks export/import remains the curated data path, not a full-fidelity database snapshot.
+- Users migrating between machines or preparing for upgrades have asked for a turnkey, documented full backup workflow.
 
 ### 1.3 Goals
-1. Provide an authenticated export workflow (API + WebUI) that packages all SQLite content DBs used in single-user mode into a downloadable artifact.
-2. Offer an import workflow that validates an exported artifact and restores the contained DBs safely, including rollback on failure.
-3. Integrate with the existing background job system for long-running exports/restores with observable status.
+1. Provide an authenticated admin export workflow (API + WebUI) that packages all relevant SQLite datasets into a downloadable bundle by reusing the existing Admin Data Ops backup helpers.
+2. Offer an import workflow that validates a bundle and restores the contained datasets safely, using existing per-dataset restore logic with rollback safeguards.
+3. Keep endpoints and UI under the Admin Data Ops surface (`/api/v1/admin/*`) and align with existing dataset keys and auth constraints.
 4. Deliver end-to-end documentation and UX guidance for both CLI and WebUI paths.
 
 ### 1.4 Non-Goals
-- Supporting PostgreSQL exports (covered by `pg_dump` guidance).
+- Replacing the existing per-dataset backup endpoints (they remain the foundation).
+- Multi-tenant bulk exports across all users without explicit user selection.
+- Long-running job orchestration in the first release (sync-first, async later if needed).
+- Supporting PostgreSQL exports beyond the existing per-dataset `pg_dump` path (covered by `pg_dump` guidance).
 - Providing incremental or continuous backups (future enhancement).
 - Encrypting exports at rest (can be tackled later once base flow is stable).
 - Backing up raw media ingestion directories or other large binary asset stores that live outside managed DB/vector-store paths.
@@ -47,35 +51,34 @@ Enable single-user deployments that rely on SQLite to perform complete exports (
 
 ### 3.1 Functional Requirements
 1. **Export Triggering**
-   - REST endpoint (e.g. `POST /api/v1/maintenance/db/export`) requiring `X-API-KEY`.
-   - WebUI control under Maintenance → Backup with progress indicator.
-   - Support two modes: synchronous (small DBs <100 MB) and asynchronous job (default). Synchronous mode stages the archive in a temporary location and streams the ZIP directly in the HTTP response before purging the staged copy.
+   - Admin Data Ops endpoint: `POST /api/v1/admin/backups/bundles` (admin auth).
+   - Accept a dataset list plus optional `user_id` (required for per-user datasets).
+   - Sync-first: create the bundle and return metadata + download id in a single request; async job support is a follow-up if needed.
 2. **Artifact Contents**
-   - All single-user SQLite stores returned by `DatabasePaths.get_all_user_db_paths`, including Media, ChaChaNotes, Prompts, Audit, Evaluations, Personalization, Workflows, and Workflows Scheduler databases (per-store exclusion toggles remain available but default to include all of them).
-   - Vector store data (Chroma directories and accompanying meta DBs) with inclusion controlled by config flag (default on).
-   - Manifest JSON with metadata (version, timestamp, DB versions, file hashes).
-   - Compressed into `.zip` (default) with predictable naming (`tldw-backup-<timestamp>.zip`).
+   - Bundle includes per-dataset snapshots created via `DB_Backups` for selected datasets: `media`, `chacha`, `prompts`, `evaluations`, `audit`, `authnz`.
+   - Optional vector store data (Chroma directories + meta DBs) controlled by a flag (default off unless explicitly enabled).
+   - Manifest JSON with metadata (app version, timestamp, user_id, dataset list, backup filenames, file sizes, file hashes, schema versions).
+   - Compressed into `.zip` with predictable naming (`tldw-backup-bundle-<timestamp>.zip`).
 3. **Integrity & Validation**
-   - Checkpoint/wrap SQLite connections to ensure consistent export (WAL checkpoint then copy via SQLite backup API).
-   - Include SHA256 sum for each file in manifest.
-   - On import, verify checksums before replacing production DBs.
+   - Use the existing SQLite backup API via `DB_Backups` to create consistent snapshots.
+   - Include SHA256 sums for each file in the manifest.
+   - On import, verify manifest + checksums before restoring datasets.
 4. **Import Workflow**
-   - REST endpoint (multipart upload + options) to restore from archive.
+   - Admin Data Ops endpoint: `POST /api/v1/admin/backups/bundles/import` (multipart upload + options).
    - Enforce compatibility (schema version check; block downgrade without override flag).
-   - Automatic pre-import safety snapshot of current DBs.
-   - On failure, revert to previous state and surface error details.
-5. **Job Management**
-   - Introduce a dedicated db-backup worker (`db_backup_jobs_worker`) registered with the Jobs Manager on domain `db_backup`.
-   - Expose status endpoints (`/api/v1/jobs/list?domain=db_backup`).
-   - Provide download endpoint for export artifacts with signed URL support parity.
+   - Create pre-import safety snapshots per dataset using existing restore safeguards.
+   - On failure, revert the affected datasets and surface error details.
+5. **Storage & Retention**
+   - Store bundle artifacts under `TLDW_DB_BACKUP_PATH` (default `./tldw_DB_Backups`) in a `bundles/` subdirectory.
+   - Retention policy and cleanup align with existing backup retention settings.
 6. **Access Control & Quotas**
-   - Rate limit exports/imports (e.g. 2/hour) to prevent abuse.
-   - Respect per-user storage quotas where applicable (export size vs available disk).
+   - Admin auth only; enforce `user_id` for per-user datasets.
+   - Rate limit bundle exports/imports and validate available disk space.
 7. **Observability**
-   - Structured log entries (`db_backup.export.started`, `.completed`, `.failed`).
-   - Audit events capturing export/import attempts and outcomes.
+   - Structured log entries (`backup.bundle.create`, `.completed`, `.failed`).
+   - Audit events capturing bundle export/import attempts and outcomes.
 8. **Documentation**
-   - Update README + Long-Term Admin Guide + new how-to for backups.
+   - Update Admin Data Ops docs + Long-Term Admin Guide + new how-to for full bundles.
    - Provide example curl scripts and WebUI screenshots.
 
 ### 3.2 Non-Functional Requirements
@@ -89,76 +92,76 @@ Enable single-user deployments that rely on SQLite to perform complete exports (
 ## 4. UX & API Design
 
 ### 4.1 API
-- `POST /api/v1/maintenance/db/export`
+- `POST /api/v1/admin/backups/bundles`
   Request body:
   ```json
   {
-    "include_prompts": true,
-    "include_evaluations": false,
-    "include_vector_store": true,
-    "async_mode": true,
+    "user_id": 1,
+    "datasets": ["media", "chacha", "prompts", "evaluations", "audit", "authnz"],
+    "include_vector_store": false,
+    "max_backups": 10,
     "retention_hours": 24
   }
   ```
-  Response (async):
+  Response:
   ```json
   {
-    "success": true,
-    "job_id": "uuid",
-    "message": "Export job queued"
+    "bundle_id": "tldw-backup-bundle-20260112_101530.zip",
+    "status": "ready",
+    "size_bytes": 123456,
+    "message": "Bundle created"
   }
   ```
-- `GET /api/v1/maintenance/db/export/jobs` → list jobs + download URLs.
-- `GET /api/v1/maintenance/db/export/download/{job_id}` → artifact stream.
-- `POST /api/v1/maintenance/db/import` (multipart file + query params).
-- `GET /api/v1/maintenance/db/import/jobs` → status + logs.
+- `GET /api/v1/admin/backups/bundles` → list bundles + metadata.
+- `GET /api/v1/admin/backups/bundles/{bundle_id}/download` → artifact stream.
+- `POST /api/v1/admin/backups/bundles/import` (multipart file + options).
 
-When `async_mode` is `false`, the server blocks until the ZIP archive is ready, then responds with a streaming download while marking the staged artifact for cleanup once the transfer completes (or after a short TTL fallback). All endpoints require single-user auth (`X-API-KEY`) and are hidden in multi-user mode.
+Per-dataset snapshots remain available via `POST /api/v1/admin/backups`. All bundle endpoints require admin auth and enforce `user_id` for per-user datasets.
 
 ### 4.2 WebUI
-- Maintenance tab gains “Full Backup” card with:
+- Admin Data Ops page gains “Full Backup Bundle” card with:
   - Export button + spinner + link to download when ready.
-  - History table of last N backups with size, timestamp, status.
-- “Restore from Backup” dialog:
+  - History table of last N bundles with size, timestamp, status.
+- “Restore from Bundle” dialog:
   - File picker, advanced settings (force schema upgrade, skip prompts DB).
   - Warning modal summarizing current DB snapshot creation.
   - Progress bar with log tail (first 20 lines).
 
 ### 4.3 CLI / Helper Script
-- Optional: ship `Helper_Scripts/db_backup.py` that wraps API calls for cron usage.
+- Optional: ship `Helper_Scripts/db_backup_bundle.py` (or extend existing helpers) to wrap Admin Data Ops bundle APIs for cron usage.
 
 ---
 
 ## 5. Technical Approach
 
 1. **Service Layer**
-   - New `DBExportService` under `app/core/DB_Management` orchestrating export/import leveraging existing `backup_database` APIs.
-   - Abstraction to gather DB paths from `DatabasePaths` ensuring config consistency.
-2. **Job Integration**
-   - Register new job domain `db_backup` with job payload describing action (`export`/`import`), options, archive paths.
-   - Implement dedicated `db_backup_jobs_worker` that leases `db_backup` jobs and executes `DBExportService` operations end-to-end.
+   - Extend `admin_data_ops_service.py` with bundle orchestration that reuses `DB_Backups` for per-dataset snapshots.
+   - Use `DatabasePaths` and existing dataset resolvers to keep paths consistent with Admin Data Ops.
+2. **API Layer**
+   - Add bundle endpoints in `tldw_Server_API/app/api/v1/endpoints/admin.py` alongside existing backup endpoints.
+   - Reuse admin auth + audit event emission.
 3. **Storage Layout**
-   - Use `TLDW_BACKUP_PATH` (default `./tldw_DB_Backups/full`) for staging artifacts.
-   - Subdirectories per job ID containing manifest + DB copies + vector store snapshots + zipped output.
+   - Use `TLDW_DB_BACKUP_PATH` (default `./tldw_DB_Backups`) for staging artifacts.
+   - Subdirectories per bundle ID containing manifest + DB copies + vector store snapshots + zipped output.
 4. **Safety Mechanisms**
-   - WAL checkpoint + `VACUUM INTO` to temporary file before packaging.
-   - Pre-import snapshot stored alongside job data for same retention horizon.
-   - Use file locks to serialise backup operations.
-   - For vector stores, pause Chroma processes (if running) or use filesystem-level copy-on-write helpers to ensure consistency.
+   - Rely on SQLite backup API (existing `DB_Backups`) for consistent per-dataset snapshots.
+   - Pre-import snapshots are created per dataset by existing restore logic.
+   - Use file locks to serialize bundle operations.
+   - For vector stores, use filesystem snapshots or pause Chroma if consistency requires it.
 5. **Schema Compatibility**
    - Manifest includes schema version integers; import validates against current constants.
    - Provide flag `allow_downgrade` (default false).
 6. **Cleanup**
-   - Background task (`jobs_metrics_service` adjunct) to purge expired artifacts.
+   - Reuse existing retention cleanup; extend to purge expired bundle artifacts.
 
 ---
 
 ## 6. Dependencies & Impact
 
-- **Core DB modules:** reuse `Media_DB_v2.backup_database`, `ChaChaNotes_DB.backup_database`.
-- **Jobs system:** new domain requires worker updates and metric dashboards.
-- **AuthNZ/Audit:** ensure events are captured and visible in admin audit logs.
-- **Docs & WebUI:** cross-team coordination to ship UI and documentation updates simultaneously.
+- **Core DB modules:** reuse `DB_Backups` and per-dataset backup helpers already used by Admin Data Ops.
+- **Admin Data Ops:** extend existing service and endpoints (`/api/v1/admin/backups`).
+- **AuthNZ/Audit:** ensure bundle events are captured in admin audit logs.
+- **Docs & WebUI:** align Admin Data Ops UI and documentation updates.
 
 No changes required for MCP or third-party services.
 
@@ -181,20 +184,20 @@ Telemetry is not collected; metrics captured via logs/tests and support feedback
 
 1. **Phase 0 - Design (this document)**
    - Finalize requirements and cross-team agreement.
-2. **Phase 1 - Backend API & Jobs**
-   - Implement service, API endpoints, job worker changes.
+2. **Phase 1 - Backend API (Admin Data Ops Extension)**
+   - Implement bundle service + admin endpoints.
    - Unit + integration tests (export/import success, schema mismatch, checksum failure).
 3. **Phase 2 - WebUI + Helper Script**
-   - Build Maintenance UI.
-   - Add CLI helper for cron.
+   - Extend Admin Data Ops UI.
+   - Add CLI helper for cron usage.
 4. **Phase 3 - Documentation & Release**
-   - Update README, Admin Guide, new How-To.
+   - Update Admin Data Ops docs, Long-Term Admin Guide, and a new how-to.
    - Include migration notes in release changelog.
 5. **Phase 4 - Hardening**
    - Gather community feedback.
-   - Consider optional encryption & scheduling enhancements.
+   - Consider optional async jobs and encryption enhancements.
 
-Feature flagged via config (`ENABLE_DB_EXPORTS=true`). Default enabled in single-user builds once beta feedback is positive.
+Feature flag and default behavior: align with Admin Data Ops configuration (TBD).
 
 ---
 
@@ -213,7 +216,7 @@ Feature flagged via config (`ENABLE_DB_EXPORTS=true`). Default enabled in single
 | --- | --- | --- |
 | Import overwrites data irreversibly | High | Mandatory pre-import snapshot, confirmation dialogs, audit trail |
 | Disk space exhaustion during export | Medium | Quota checks + configurable staging path + early warnings |
-| Large exports block main event loop | Medium | Run in worker thread/process via job system |
+| Large exports block main event loop | Medium | Stream archives, enforce size limits, and add optional async job handling if needed |
 | Schema drift between releases | Medium | Manifest versioning + migration path detection |
 | User confusion between Chatbooks vs DB exports | Low | Clear UI copy + docs comparison table |
 
@@ -225,5 +228,5 @@ Feature flagged via config (`ENABLE_DB_EXPORTS=true`). Default enabled in single
   - `Media_DB_v2.backup_database(path)`
   - `ChaChaNotes_DB.backup_database(path)`
   - `DB_Backups.create_backup(...)`
-- Related design docs: `Docs/Design/Content_Collections_PRD.md`, `Docs/Design/Workflows_PRD.md`
+- Related docs: `Docs/Product/Completed/Admin_Data_Ops.md`, `Docs/Design/Content_Collections_PRD.md`, `Docs/Design/Workflows_PRD.md`
 - Reference operations guide: `Docs/Published/Deployment/Long_Term_Admin_Guide.md`

@@ -15,9 +15,15 @@
 - **Maintenance State**: single global record with `enabled`, `message`, and allowlists.
 - **Feature Flags**: keyed by (`key`, `scope`, `org_id`, `user_id`) with history entries.
 - **Incidents**: stored with status/severity and a timeline of events.
-- **Logs**: in-memory buffer (ring) capturing recent log records only.
+- **Logs**: in-memory ring buffer plus a shared log file for cross-process queries.
+- **Persistence**: maintenance state, feature flags, and incidents are stored in `Databases/system_ops.json`.
+- **Concurrency**: the system ops store is protected with a file lock for multi-process safety.
 
 ## APIs
+
+### Permissions
+- All Admin System Ops endpoints require an admin principal.
+- Mutating endpoints (maintenance, feature flags, incident create/update/delete) require a platform admin.
 
 ### System Logs
 
@@ -31,6 +37,11 @@ Query params:
 - `query` (optional substring match against message)
 - `org_id`/`user_id` (optional, based on log extras)
 - `limit`/`offset`
+
+Notes:
+- Logs are aggregated across processes via `Databases/system_logs.jsonl`.
+- Buffer size and log level are configurable via `SYSTEM_LOG_BUFFER_SIZE` and `SYSTEM_LOG_LEVEL`.
+- File log behavior is configurable via `SYSTEM_LOG_FILE_ENABLED`, `SYSTEM_LOG_FILE_PATH`, and `SYSTEM_LOG_FILE_MAX_ENTRIES`.
 
 Response:
 ```json
@@ -190,7 +201,7 @@ Update incident status/summary/tags; optional `update_message` adds a timeline e
 Add a timeline entry.
 
 #### DELETE `/api/v1/admin/incidents/{incident_id}`
-Delete an incident from the timeline.
+Delete an incident (including its timeline).
 
 ## UI Notes
 - Logs viewer includes filters for time range, level, service, and free-text search.

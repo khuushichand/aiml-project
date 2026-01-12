@@ -131,7 +131,7 @@ rows = [svc.decode_row_fields(r) for r in rows]
 ### REST Endpoint
 
 - Path: `GET /api/v1/audit/export`
-- Permissions: `SYSTEM_LOGS` (admin)
+- Permissions: `system.logs` (admin)
 - Query parameters:
   - `format`: `json` (default), `jsonl` (NDJSON), or `csv`
   - `start_time`, `end_time`: ISO8601 (accepts trailing `Z`)
@@ -197,6 +197,7 @@ Note: HTTP streaming applies to JSON/JSONL/CSV. Programmatic CSV export streams 
   - Shared mode: `AUDIT_SHARED_DB_PATH` (default `Databases/audit_shared.db`).
   - If you construct the service directly without DI, the default `db_path` is `./Databases/unified_audit.db` (or shared path when `AUDIT_STORAGE_MODE=shared`).
 - `USER_DB_BASE_DIR` (from `tldw_Server_API.app.core.config`): per-user DB root directory; defaults to `Databases/user_databases/` under the project root. Override via environment variable or `Config_Files/config.txt` as needed.
+- `AUDIT_ETL_USER_SUBPATH` (settings/env): optional subpath appended to `USER_DB_BASE_DIR` for migration discovery (e.g., `nested_users`).
 
 ## Migration Utility
 
@@ -209,13 +210,14 @@ python -m tldw_Server_API.app.core.Audit.audit_shared_migration \
   --default-db Databases/unified_audit.db
 ```
 
-The migration is idempotent (deduped by `event_id`) and preserves timestamps and metadata.
+Discovery scans `USER_DB_BASE_DIR/*/audit/unified_audit.db`, plus `USER_DB_BASE_DIR/<AUDIT_ETL_USER_SUBPATH>/*/audit/unified_audit.db` when configured, and `Databases/unified_audit.db` if present. The migration is idempotent (deduped by `event_id`), preserves timestamps and metadata, and resumes using per-source checkpoints stored in the shared DB. Locked/corrupt sources are skipped with warnings and reported in the summary logs.
 
 ## Operational Notes
 
 - Deterministic ordering with `timestamp DESC, event_id DESC` supports paginated UIs.
 - Fixed CSV headers simplify downstream ingestion.
 - Fallback queue (`audit_fallback_queue.jsonl`) is written adjacent to the audit DB and captures dropped events on persistent DB write failures.
+- Shared audit DB schema version is tracked via SQLite `PRAGMA user_version`.
 - PII scanning can be tuned centrally in future; currently Audit and RAG use separate detectors.
 - Shutdown: the service enforces owner-loop shutdown; DI helpers schedule safe cross-loop shutdown.
 

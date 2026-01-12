@@ -10,11 +10,10 @@ from tldw_Server_API.app.main import app
 
 
 def _setup_env(tmp_path):
-
-
     os.environ["AUTH_MODE"] = "single_user"
     os.environ["SINGLE_USER_API_KEY"] = "unit-test-api-key"
     os.environ["TLDW_DB_BACKUP_PATH"] = str(tmp_path / "backups")
+    os.environ["USER_DB_BASE_DIR"] = str(tmp_path / "user_dbs")
 
 
 async def _seed_authnz_data() -> int:
@@ -140,3 +139,77 @@ async def test_admin_retention_policy_update(tmp_path):
         refreshed = next((policy for policy in policies if policy.get("key") == target), None)
         assert refreshed is not None
         assert refreshed["days"] == 180
+
+
+@pytest.mark.asyncio
+async def test_admin_data_ops_requires_user_id_for_per_user_datasets(tmp_path):
+    _setup_env(tmp_path)
+
+    from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.core.AuthNZ.session_manager import reset_session_manager
+
+    await reset_db_pool()
+    reset_settings()
+    await reset_session_manager()
+
+    headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
+
+    with TestClient(app, headers=headers) as client:
+        list_resp = client.get("/api/v1/admin/backups", params={"dataset": "media"})
+        assert list_resp.status_code == 400, list_resp.text
+        assert list_resp.json()["detail"] == "user_id_required"
+
+        create_resp = client.post(
+            "/api/v1/admin/backups",
+            json={"dataset": "media", "backup_type": "full"},
+        )
+        assert create_resp.status_code == 400, create_resp.text
+        assert create_resp.json()["detail"] == "user_id_required"
+
+        restore_resp = client.post(
+            "/api/v1/admin/backups/any.db/restore",
+            json={"dataset": "media", "confirm": True},
+        )
+        assert restore_resp.status_code == 400, restore_resp.text
+        assert restore_resp.json()["detail"] == "user_id_required"
+
+
+@pytest.mark.asyncio
+async def test_admin_data_ops_per_user_backup_success(tmp_path):
+    _setup_env(tmp_path)
+
+    from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
+    from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
+    from tldw_Server_API.app.core.AuthNZ.session_manager import reset_session_manager
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
+    await reset_db_pool()
+    reset_settings()
+    await reset_session_manager()
+
+    user_id = DatabasePaths.get_single_user_id()
+    media_db_path = DatabasePaths.get_media_db_path(user_id)
+    media_db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    import sqlite3
+
+    with sqlite3.connect(media_db_path) as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS test_table (id INTEGER PRIMARY KEY, name TEXT)")
+        conn.execute("INSERT INTO test_table (name) VALUES (?)", ("sample",))
+        conn.commit()
+
+    headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
+
+    with TestClient(app, headers=headers) as client:
+        create_resp = client.post(
+            "/api/v1/admin/backups",
+            json={"dataset": "media", "user_id": user_id, "backup_type": "full"},
+        )
+        assert create_resp.status_code == 200, create_resp.text
+        backup_id = create_resp.json()["item"]["id"]
+
+        list_resp = client.get("/api/v1/admin/backups", params={"dataset": "media", "user_id": user_id})
+        assert list_resp.status_code == 200, list_resp.text
+        listed = list_resp.json()["items"]
+        assert any(item["id"] == backup_id for item in listed)

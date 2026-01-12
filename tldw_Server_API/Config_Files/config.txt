@@ -272,6 +272,7 @@ auth_mode = single_user
 database_url = sqlite:///./Databases/users.db
 enable_registration = true
 require_registration_code = false
+enable_org_scoped_registration_codes = false
 rate_limit_enabled = true
 rate_limit_per_minute = 60
 rate_limit_burst = 10
@@ -1064,6 +1065,9 @@ log_file = ./Logs/tldw_app_logs.json
 log_metrics_file = ./Logs/tldw_metrics_logs.json
 max_bytes =
 backup_count = 5
+# System log aggregation (admin system logs)
+system_log_file_path = Databases/system_logs.jsonl
+system_log_file_max_entries = 5000
 
 [Moderation]
 enabled = False

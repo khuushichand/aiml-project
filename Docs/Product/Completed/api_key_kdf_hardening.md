@@ -21,11 +21,11 @@ HMAC-based lookup path.
 
 ## Proposed API Key Format
 - **New format**: `tldw_<kid>.<secret>`
-- `kid` is a short, random hex identifier (e.g., 12 hex chars).
+- `kid` is a short, random hex identifier (8–32 hex chars; typically 12).
 - `secret` remains a long, high-entropy token (`secrets.token_urlsafe`).
 
 Parsing logic:
-- If the key matches the format, extract `kid` and use it to find the DB row.
+- If the key matches the format, extract `kid` (8–32 hex chars) and use it to find the DB row.
 - Otherwise, treat as a legacy key and fall back to HMAC lookup.
 
 ## Storage & Verification

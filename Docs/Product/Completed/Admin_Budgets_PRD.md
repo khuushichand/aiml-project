@@ -34,8 +34,8 @@ Platform admins and org admins need a first-class way to define per-organization
 - Return plan and limit context alongside budget settings.
 
 ### Org Budgets API
-- Org admins (owner/admin) can view and update budgets for their org.
-- Org membership scopes access; platform admins may also access org endpoints.
+- Org admins (owner/admin) can view and update budgets for their org; platform admins can also access and bypass the org-admin-only restriction.
+- Org membership scopes access for org admins; platform admins may access org endpoints regardless of org role.
 - Same merge/clear semantics as admin updates, but org_id is taken from the path.
 
 ### Storage
@@ -43,6 +43,17 @@ Platform admins and org admins need a first-class way to define per-organization
 - Keep existing custom limit overrides intact; budgets are no longer stored
   inside `org_subscriptions.custom_limits_json`.
 - Migrate legacy `custom_limits_json.budgets` into `org_budgets` and remove the legacy field.
+
+### Data Migration
+- Execution: automatic migration on startup/first admin budgets list access (no offline script). SQLite uses AuthNZ migration 042; PostgreSQL uses the billing-table ensure/backfill path. Admin updates skip the backfill to avoid mutating `custom_limits_json`.
+- Scope: move `org_subscriptions.custom_limits_json.budgets` into `org_budgets.budgets_json`, then remove the legacy `budgets` field immediately after the backfill.
+- Behavior:
+  - SQLite: legacy budgets are inserted into `org_budgets` (replacing any existing row for the org) and then stripped from `custom_limits_json`.
+  - PostgreSQL: legacy budgets are inserted only when `org_budgets` is empty; existing `org_budgets` values are preserved. Legacy budgets are stripped from `custom_limits_json` in either case.
+  - Both backfills normalize alert thresholds/enforcement payloads during migration.
+- Validation: no conflict report is generated; verify by spot-checking orgs and confirming legacy budgets are removed from `custom_limits_json`.
+- Rollback: restore the pre-migration DB snapshot.
+- Runbook: see `Docs/Operations/Org_Budgets_Migration_Runbook.md` for current behavior and verification steps.
 
 ## API Contract
 ### Admin
@@ -104,7 +115,7 @@ Platform admins and org admins need a first-class way to define per-organization
     - Same merge/clear semantics as admin POST.
     - `org_id` is taken from the path; payload does not include `org_id`.
   - Errors:
-    - `403` when the caller is not an org admin (owner/admin) for the org.
+    - `403` when the caller is neither a platform admin nor an org admin (owner/admin) for the org.
     - `404 org_not_found` when the org does not exist.
     - `400 invalid_budget_update` for invalid budget values.
     - `422` validation errors for malformed request payloads.

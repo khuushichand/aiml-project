@@ -15,7 +15,7 @@ The legacy chat monolith has been split into focused modules, and the compatibil
 - Keep documentation aligned with module responsibilities.
 
 ## Module Inventory (Today)
-- `chat_orchestrator.py` - source of truth for provider routing and multimodal chat payload construction.
+- `chat_orchestrator.py` - source of truth for orchestration (`achat` canonical, `chat` sync wrapper) and provider routing helpers.
 - `chat_history.py` - persistence/export helpers extracted in Phase 2.
 - `chat_dictionary.py` - dictionary parsing, matching, and token-budget utilities (new in Phase 3).
 - `chat_characters.py` - adapter for character CRUD that delegates to the Character_Chat modules (new in Phase 4).
@@ -31,7 +31,7 @@ The legacy chat monolith has been split into focused modules, and the compatibil
 
 ### Phase 1 - Compatibility Realignment (High Priority)
 Goal: retire the compatibility shim and standardize on `chat_orchestrator`/`chat_service`.
-- [x] Promote `chat_orchestrator.chat` to the single canonical implementation.
+- [x] Promote `chat_orchestrator.achat` as the canonical async implementation; keep `chat` as a sync wrapper.
 - [x] Remove the compatibility shim after call-site migrations.
 - [x] Update tests and call sites to import from focused modules directly.
 

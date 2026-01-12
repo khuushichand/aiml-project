@@ -1,7 +1,7 @@
 # Audit Shared Storage Mode - PRD
 
-- **Status:** Draft
-- **Last Updated:** 2026-01-11
+- **Status:** Complete
+- **Last Updated:** 2026-01-12
 - **Authors:** Codex (coding agent)
 - **Stakeholders:** Core Backend, AuthNZ, DevOps, Security, Docs
 
@@ -49,17 +49,20 @@ Introduce a shared audit storage mode alongside the current per-user mode. The s
    - Add `AUDIT_STORAGE_MODE` with values: `per_user` (default) and `shared`.
    - Add `AUDIT_SHARED_DB_PATH` (default `Databases/audit_shared.db`).
    - Add rollback flag `AUDIT_STORAGE_ROLLBACK=true` that forces `per_user` behavior even when shared mode is configured.
-   - Rollback flag takes precedence over `AUDIT_STORAGE_MODE`.
-   - ETL discovery must respect `USER_DB_BASE_DIR` (or configured base directory) instead of hard-coded paths.
+   - Configuration precedence: environment variables (`AUDIT_STORAGE_MODE`, `AUDIT_SHARED_DB_PATH`, `USER_DB_BASE_DIR`) override `config.txt`, which overrides defaults; `AUDIT_STORAGE_ROLLBACK=true` always overrides `AUDIT_STORAGE_MODE`.
+   - ETL discovery uses `USER_DB_BASE_DIR` as the base directory and only appends a configured subpath (e.g., `AUDIT_ETL_USER_SUBPATH=user_databases`) when present; no unconditional `/user_databases/` segment is added. Note: `USER_DB_BASE_DIR` already defaults to `Databases/user_databases`.
 2. **Shared Schema**
    - Shared DB must include required `tenant_user_id` column.
    - All writes must populate tenant id in shared mode.
    - All queries must filter by tenant id unless caller has admin permission.
-   - System or anonymous events must map to a reserved tenant id (`system`).
-   - Reserved tenant id (`system`) is admin-only and cannot be assigned to real users.
+   - System events must map to a reserved tenant id (`system`).
+   - Anonymous/unidentified events must map to a reserved tenant id (`unidentified_user`).
+   - Reserved tenant ids (`system`, `unidentified_user`) are admin-only and cannot be assigned to real users.
+   - Real tenant ids are the string form of the AuthNZ integer user id (e.g., `"42"`).
 3. **Migration / ETL Utility**
    - Provide a tool to merge all per-user audit DBs plus `Databases/unified_audit.db` into the shared DB.
-   - Dedupe by `event_id` with idempotent re-runs.
+   - Dedupe by `event_id` with idempotent re-runs (event ids are UUIDv4; duplicates indicate legacy collisions).
+   - On collision, keep the first-seen row, skip the duplicate, and log the source/tenant for operator review.
    - Preserve timestamps, metadata, compliance flags, and risk fields.
    - Log a summary: users processed, rows inserted, duplicates skipped.
 4. **Export/Count Behavior**
@@ -83,8 +86,8 @@ Introduce a shared audit storage mode alongside the current per-user mode. The s
 ## 4. Data Model
 
 ### 4.1 Shared Audit Events Table
-- Add `tenant_user_id TEXT NOT NULL` to the shared schema (reserved `system` tenant for anonymous/system events).
-- Add a unique constraint on `event_id`.
+- Add `tenant_user_id TEXT NOT NULL` to the shared schema (reserved `system` tenant for system events; `unidentified_user` for anonymous/unidentified events).
+- Add a unique constraint on `event_id` (UUIDv4 generated at write time).
 - Create index on `tenant_user_id`, plus composite indexes for common filters:
   - `(tenant_user_id, timestamp)`
   - `(tenant_user_id, event_type)`
@@ -102,19 +105,25 @@ Introduce a shared audit storage mode alongside the current per-user mode. The s
 ## 5. Migration / ETL Plan
 
 1. **Discovery**
-   - Scan `{USER_DB_BASE_DIR}/user_databases/*/audit/unified_audit.db` plus `Databases/unified_audit.db`.
+   - Scan `{USER_DB_BASE_DIR}/*/audit/unified_audit.db`.
+   - If `AUDIT_ETL_USER_SUBPATH` is configured, scan `{USER_DB_BASE_DIR}/{AUDIT_ETL_USER_SUBPATH}/*/audit/unified_audit.db`.
+   - Include `Databases/unified_audit.db` if present.
 2. **Load**
    - For each DB, stream rows in chunks (e.g., 5k) to the shared DB.
-3. **Dedupe**
+   - If a source DB is locked/corrupt, skip it with a warning and record the failure in the summary report for retry.
+3. **Progress/Resume**
+   - Persist per-source checkpoints (last processed row/event_id) so large migrations can resume after partial failures.
+4. **Dedupe**
    - Use `event_id` unique constraint in shared DB; `INSERT OR IGNORE`.
-4. **Tenant Mapping**
-   - Derive `tenant_user_id` from the per-user directory name or user metadata.
-   - Map system or anonymous events to the reserved tenant id (`system`).
-5. **Daily Stats Migration**
+5. **Tenant Mapping**
+   - Derive `tenant_user_id` from the per-user directory name or user metadata (string form of AuthNZ integer user id).
+   - If the source row indicates a system event (e.g., `event_type`/`category` starts with `system`), use `tenant_user_id=system`.
+   - If no user identifier is available, use `tenant_user_id=unidentified_user`.
+6. **Daily Stats Migration**
    - Migrate existing per-user `audit_daily_stats` into the shared table with `tenant_user_id` populated.
-6. **Verification**
+7. **Verification**
    - Write a summary report and optional per-user counts.
-7. **Idempotency**
+8. **Idempotency**
    - Safe to re-run without inserting duplicates.
 
 ---
@@ -124,8 +133,10 @@ Introduce a shared audit storage mode alongside the current per-user mode. The s
 - Shared mode is enforced at the data access layer.
 - Non-admin calls always include `tenant_user_id = current_user.id`.
 - Admin calls may omit `tenant_user_id` or specify `user_id` filters.
-- `system.logs` permission is required for cross-user queries.
-- `tenant_user_id=system` events are visible only to admins.
+- `SYSTEM_LOGS` permission is required for cross-user queries.
+- Disallow any real user ID that case-insensitively matches reserved tenant identifiers `system` or `unidentified_user`.
+- Real tenant ids are derived from AuthNZ user ids and must be decimal digits only (`^[0-9]+$`). Reserved tenant ids are lowercase ASCII tokens.
+- `tenant_user_id="system"` and `tenant_user_id="unidentified_user"` events are visible only to admins.
 
 ---
 
@@ -156,9 +167,10 @@ Introduce a shared audit storage mode alongside the current per-user mode. The s
 6. Migration tool preserves original timestamps and metadata fields.
 7. Rollback flag forces per-user behavior without requiring DB deletion.
 8. Existing per-user DBs remain intact after migration.
-9. System or anonymous events in shared mode are stored with `tenant_user_id=system`.
-10. `audit_daily_stats` is tenant-scoped in shared mode.
-11. `tenant_user_id=system` events are not visible to non-admin users.
+9. System events in shared mode are stored with `tenant_user_id=system`.
+10. Anonymous/unidentified events in shared mode are stored with `tenant_user_id=unidentified_user`.
+11. `audit_daily_stats` is tenant-scoped in shared mode.
+12. `tenant_user_id=system` and `tenant_user_id=unidentified_user` events are not visible to non-admin users.
 
 ---
 
@@ -174,9 +186,10 @@ Introduce a shared audit storage mode alongside the current per-user mode. The s
 3. **Shared Schema**
    - Insert fails without `tenant_user_id` in shared mode.
    - Indexes exist for `(tenant_user_id, timestamp)`.
-4. **System Tenant Mapping**
-   - Events without a user context are stored with `tenant_user_id=system`.
-   - `tenant_user_id=system` cannot be assigned to real users.
+4. **System/Anonymous Tenant Mapping**
+   - Events with explicit system indicators are stored with `tenant_user_id=system`.
+   - Events without a user context are stored with `tenant_user_id=unidentified_user`.
+   - `tenant_user_id=system` and `tenant_user_id=unidentified_user` cannot be assigned to real users.
 
 ### 10.2 Integration Tests
 1. **Export/Count**
@@ -186,7 +199,7 @@ Introduce a shared audit storage mode alongside the current per-user mode. The s
    - With rollback flag enabled, shared mode configuration is ignored.
 3. **Audit Daily Stats**
    - Tenant-scoped stats only include events from the requesting user unless admin.
-   - `tenant_user_id=system` stats are visible only to admins.
+   - `tenant_user_id=system` and `tenant_user_id=unidentified_user` stats are visible only to admins.
 
 ### 10.3 Migration Tests
 1. **ETL Dedupe**
@@ -225,22 +238,22 @@ Introduce a shared audit storage mode alongside the current per-user mode. The s
 **Goal**: Add configuration flags, shared DB schema, and storage routing without changing default behavior.
 **Success Criteria**: `AUDIT_STORAGE_MODE` and rollback flag are honored; shared DB schema includes `tenant_user_id` and indexes; per-user mode remains default.
 **Tests**: Unit tests for storage mode routing, schema constraints, and rollback precedence.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Tenant-Scoped Access + API Updates
 **Goal**: Enforce tenant scoping and admin-only cross-user access for shared mode; update `/audit/export` and `/audit/count`.
-**Success Criteria**: Non-admins only see their tenant data; admins can query other users; `system` tenant is admin-only; `audit_daily_stats` is tenant-scoped.
-**Tests**: Integration tests for export/count admin vs non-admin behavior; unit tests for `system` tenant restrictions and daily stats scoping.
-**Status**: Not Started
+**Success Criteria**: Non-admins only see their tenant data; admins can query other users; `system` and `unidentified_user` tenants are admin-only; `audit_daily_stats` is tenant-scoped.
+**Tests**: Integration tests for export/count admin vs non-admin behavior; unit tests for reserved tenant restrictions and daily stats scoping.
+**Status**: Complete
 
 ## Stage 3: Migration / ETL Utility
 **Goal**: Build a one-time ETL tool that merges per-user audit DBs plus `Databases/unified_audit.db` into the shared DB.
 **Success Criteria**: Idempotent runs; dedupe by `event_id`; timestamps and metadata preserved; stats migrated with tenant ids.
 **Tests**: Migration tests for dedupe, timestamp preservation, tenant mapping, and stats migration.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Rollout + Deprecation
 **Goal**: Document shared mode, provide rollback guidance, and begin per-user deprecation window.
 **Success Criteria**: Docs updated; migration instructions shipped; rollback flag works as documented; per-user mode still available during window.
 **Tests**: Integration tests verifying rollback behavior and shared-mode default remains opt-in.
-**Status**: Not Started
+**Status**: Complete

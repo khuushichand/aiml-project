@@ -21,7 +21,7 @@ def test_init_dry_run_json():
 
 
 def test_auth_single_user_json():
-    result = runner.invoke(app, ["auth", "--mode", "single_user", "--json"])  # type: ignore[arg-type]
+    result = runner.invoke(app, ["auth", "--mode", "single_user", "--json", "--dry-run"])  # type: ignore[arg-type]
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
     assert data.get("command") == "auth"

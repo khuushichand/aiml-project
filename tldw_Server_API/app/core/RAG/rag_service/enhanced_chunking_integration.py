@@ -14,6 +14,18 @@ from .types import Document, DataSource
 from ...Chunking import Chunker, EnhancedChunk, ChunkType, ChunkerConfig
 
 
+def _normalize_chunk_type(value: Optional[str]) -> str:
+    try:
+        normalized = Chunker.normalize_chunk_type(value)
+    except Exception:
+        normalized = None
+    if normalized:
+        return normalized
+    if value is None:
+        return "text"
+    return str(value).strip().lower() or "text"
+
+
 async def enhanced_chunk_documents(
     context,  # RAGPipelineContext
     enable_pdf_cleaning: bool = None,
@@ -134,10 +146,11 @@ async def enhanced_chunk_documents(
             # Convert enhanced chunks to documents
             for chunk in enhanced_chunks:
                 # Build chunk metadata
+                normalized_chunk_type = _normalize_chunk_type(getattr(chunk.chunk_type, "value", chunk.chunk_type))
                 chunk_metadata = {
                     **doc.metadata,  # Inherit document metadata
                     **chunk.metadata,  # Add chunk-specific metadata
-                    "chunk_type": chunk.chunk_type.value,
+                    "chunk_type": normalized_chunk_type,
                     "chunk_index": chunk.chunk_index,
                     "parent_id": chunk.parent_id or doc.id,
                     "original_doc_id": doc.id,
@@ -157,8 +170,7 @@ async def enhanced_chunk_documents(
                 chunked_documents.append(chunk_doc)
 
                 # Track statistics
-                chunk_type = chunk.chunk_type.value
-                chunk_type_stats[chunk_type] = chunk_type_stats.get(chunk_type, 0) + 1
+                chunk_type_stats[normalized_chunk_type] = chunk_type_stats.get(normalized_chunk_type, 0) + 1
                 total_chunks += 1
 
         except Exception as e:
@@ -210,17 +222,20 @@ async def filter_chunks_by_type(
     if not include_types and not exclude_types:
         return context  # No filtering needed
 
+    include_norm = {_normalize_chunk_type(t) for t in include_types} if include_types else None
+    exclude_norm = {_normalize_chunk_type(t) for t in exclude_types} if exclude_types else None
+
     filtered_docs = []
 
     for doc in context.documents:
-        chunk_type = doc.metadata.get("chunk_type", "text")
+        chunk_type = _normalize_chunk_type(doc.metadata.get("chunk_type"))
 
         # Apply inclusion filter
-        if include_types and chunk_type not in include_types:
+        if include_norm and chunk_type not in include_norm:
             continue
 
         # Apply exclusion filter
-        if exclude_types and chunk_type in exclude_types:
+        if exclude_norm and chunk_type in exclude_norm:
             continue
 
         filtered_docs.append(doc)
@@ -346,15 +361,18 @@ async def prioritize_by_chunk_type(
     default_priorities = {
         "code": 1.0,
         "table": 1.0,
-        "header": 1.0,
+        "heading": 1.0,
         "text": 1.0,
-        "list": 1.0
+        "list": 1.0,
     }
 
-    priorities = type_priorities or context.config.get("chunk_type_priorities", default_priorities)
+    raw_priorities = type_priorities or context.config.get("chunk_type_priorities", default_priorities)
+    priorities: Dict[str, float] = {}
+    for key, value in (raw_priorities or {}).items():
+        priorities[_normalize_chunk_type(key)] = float(value)
 
     for doc in context.documents:
-        chunk_type = doc.metadata.get("chunk_type", "text")
+        chunk_type = _normalize_chunk_type(doc.metadata.get("chunk_type"))
 
         # Preserve base/original score to avoid compounding multipliers across repeated calls
         base_score = doc.metadata.get("original_score")

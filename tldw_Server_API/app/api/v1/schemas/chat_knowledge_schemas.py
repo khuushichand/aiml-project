@@ -39,3 +39,5 @@ class KnowledgeSaveResponse(BaseModel):
     flashcard_id: Optional[str] = None
     conversation_id: str
     message_id: Optional[str] = None
+    export_status: Literal["not_requested", "skipped_disabled", "queued", "completed"] = "not_requested"
+    export_job_id: Optional[str] = None

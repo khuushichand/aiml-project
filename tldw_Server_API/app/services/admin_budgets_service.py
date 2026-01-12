@@ -679,7 +679,7 @@ async def upsert_org_budget(
         try:
             from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import ensure_billing_tables_pg
 
-            await ensure_billing_tables_pg()
+            await ensure_billing_tables_pg(run_backfill=False)
         except Exception as exc:
             logger.debug(f"admin budgets: ensure billing tables skipped/failed: {exc}")
 
@@ -780,12 +780,6 @@ async def upsert_org_budget(
 
     row_dict = dict(sub_row) if not isinstance(sub_row, dict) else sub_row
     custom_limits = _parse_json_payload(row_dict.get("custom_limits_json"))
-    cleaned_custom_limits = custom_limits
-    removed_custom_budget = False
-    if isinstance(custom_limits, dict) and "budgets" in custom_limits:
-        cleaned_custom_limits = dict(custom_limits)
-        cleaned_custom_limits.pop("budgets", None)
-        removed_custom_budget = True
 
     budget_row = await _fetchrow(
         db,
@@ -841,31 +835,6 @@ async def upsert_org_budget(
     else:
         row_dict["budgets_json"] = budgets_payload
         row_dict["budgets_updated_at"] = budget_row.get("updated_at") if budget_row else None
-
-    if removed_custom_budget:
-        payload = json.dumps(cleaned_custom_limits) if cleaned_custom_limits else None
-        if pg:
-            await db.execute(
-                """
-                UPDATE org_subscriptions
-                SET custom_limits_json = $2::jsonb, updated_at = $3
-                WHERE org_id = $1
-                """,
-                org_id,
-                payload,
-                now,
-            )
-        else:
-            await db.execute(
-                """
-                UPDATE org_subscriptions
-                SET custom_limits_json = ?, updated_at = ?
-                WHERE org_id = ?
-                """,
-                (payload, now, org_id),
-            )
-        row_dict["custom_limits_json"] = payload
-        row_dict["updated_at"] = now
 
     row_dict.update(
         {

@@ -45,7 +45,11 @@ from tldw_Server_API.app.api.v1.schemas.chunking_schema import ChunkingResponse,
     ChunkingOptionsRequest, ChunkedContentResponse, ChunkingCapabilitiesResponse, MethodSpecificOptions, CodeMethodOptions
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze as general_llm_analyzer
 from tldw_Server_API.app.core.config import load_and_log_configs as load_server_configs
-from tldw_Server_API.app.core.AuthNZ.byok_runtime import resolve_byok_credentials
+from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
+    record_byok_missing_credentials,
+    resolve_byok_credentials,
+)
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import PROVIDER_REQUIRES_KEY
 # Dependencies for user-specific database access
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import try_get_media_db_for_user
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
@@ -77,6 +81,17 @@ async def _resolve_chunking_byok(
         user_id=user_id_int,
         request=request,
         fallback_resolver=_fallback_resolver,
+    )
+
+
+def _raise_missing_chunking_key(provider: str) -> None:
+    record_byok_missing_credentials(provider, operation="chunking")
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={
+            "error_code": "missing_provider_credentials",
+            "message": f"Provider '{provider}' requires an API key for chunking.",
+        },
     )
 
 

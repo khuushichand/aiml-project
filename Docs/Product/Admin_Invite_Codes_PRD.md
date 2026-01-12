@@ -1,7 +1,7 @@
 # Admin Invite Codes (Registration Codes) PRD
 
 ## Summary
-Admins need a controlled, auditable way to invite new users. The system already supports registration codes and admin endpoints; this PRD defines the UX, API contract, permissions, and expected behavior to make invite codes a first-class admin workflow, including optional org-scoped invites that auto-assign membership (no manual org selection).
+Admins need a controlled, auditable way to invite new users. The system already supports registration codes and admin endpoints; this PRD defines the UX, API contract, permissions, and expected behavior to make invite codes a first-class admin workflow. Organization invites remain a separate system managed via org invite endpoints.
 
 ## Goals
 - Allow admins to create, manage, and revoke invite codes without direct user creation.
@@ -16,7 +16,7 @@ Admins need a controlled, auditable way to invite new users. The system already 
 
 ## Users and Use Cases
 - Platform admin: create invite codes for new users, assign default roles, monitor usage.
-- Org admin: create invite codes for their org if org-scoped invites are enabled.
+- Org admin: create org invite codes for their org via org invite endpoints.
 - Invited user: sign up or accept an invite and land in the correct org automatically.
 - Security reviewer: audit who created an invite and how it was used.
 
@@ -27,22 +27,24 @@ Admins need a controlled, auditable way to invite new users. The system already 
 - As an admin, I can revoke a code and see its usage count.
 - As a reviewer, I can see who created each code and when it was used.
 - As an org admin, I can generate an org invite that automatically assigns membership.
+ - As an admin, I can restrict a code to a specific email domain.
 
 ## Functional Requirements
 ### Admin UI
 - Add an Invite Codes panel in the Users section (not only the dashboard).
 - List active codes by default, with a toggle to include expired/inactive codes.
-- Display: code, created_at, expires_at, max_uses, times_used, role_to_grant, created_by.
+- Display: code, created_at, expires_at, max_uses, times_used, role_to_grant, created_by, status.
 - Actions: copy code, copy registration link, revoke/delete code.
 - Create modal with fields:
   - max_uses (1-100)
   - expiry_days (1-365)
   - role_to_grant (user|admin|service)
+  - allowed_email_domain (optional)
   - optional metadata (advanced JSON field, hidden by default)
-- Org-scoped extension:
-  - org selector (defaults to current org when org filter is active).
+- Org-scoped extension (admin only):
+  - org_id input (admin-provided).
   - org_role selector (owner|admin|lead|member).
-  - optional team_id selector when teams exist.
+  - optional team_id input when teams exist.
 - Provide a "copy acceptance link" when org-scoped invites can be accepted by existing users.
 - Surface registration settings:
   - enable_registration
@@ -50,19 +52,23 @@ Admins need a controlled, auditable way to invite new users. The system already 
   - profile gating (self-registration blocked in single_user profile)
 
 ### Registration Flow
-- Register endpoint accepts `registration_code` in the request body.
+- Register endpoint accepts `registration_code` in the request body (`/api/v1/auth/register`).
 - When registration requires codes, the API rejects registrations without a valid code.
 - When a valid code is used, usage count increments and is recorded in audit logs.
 - Org-scoped invite behavior:
   - registration auto-assigns org membership and org role; no org selection UI.
-  - if the user already exists, use a dedicated accept-invite flow to add membership without re-registering.
+  - if the user already exists, use `/api/v1/orgs/invites/accept` to add membership without re-registering.
+ - Domain allowlist behavior:
+   - if a code specifies `allowed_email_domain`, only emails in that domain may redeem it.
 
 ### Permissions and Scoping
 - Default: only admins can create/list/delete invite codes.
-- Optional org-scoped mode (future):
-  - invite code includes org_id in metadata (or a new column).
-  - redemption auto-assigns org membership and role.
-  - org admins can only manage codes for their org.
+- Org invites are a separate system:
+  - org admins manage org invites via `/api/v1/orgs/{org_id}/invites`.
+  - preview (unauthenticated) via `/api/v1/invites/preview`.
+  - acceptance (authenticated) via `/api/v1/invites/redeem`.
+  - admin registration codes can include org fields, but creation/listing remains admin-only.
+- Org-scoped registration codes require `enable_org_scoped_registration_codes=true`.
 
 ## API Contract (Existing Endpoints)
 ### Admin
@@ -71,7 +77,7 @@ Admins need a controlled, auditable way to invite new users. The system already 
 - POST `/api/v1/admin/registration-settings`
   - Body: `{ enable_registration?: bool, require_registration_code?: bool }`
 - POST `/api/v1/admin/registration-codes`
-  - Body: `{ max_uses, expiry_days, role_to_grant, metadata? }`
+  - Body: `{ max_uses, expiry_days, role_to_grant, allowed_email_domain?, metadata? }`
   - Response: `{ id, code, max_uses, times_used, expires_at, created_at, role_to_grant }`
 - GET `/api/v1/admin/registration-codes?include_expired=bool`
   - Response: `{ codes: [...] }`
@@ -79,17 +85,28 @@ Admins need a controlled, auditable way to invite new users. The system already 
   - Response: `{ message }`
 
 ### Registration
-- POST `/api/v1/register`
-  - Body includes: `{ username, email, password, confirm_password, registration_code? }`
+- POST `/api/v1/auth/register`
+  - Body includes: `{ username, email, password, registration_code? }`
 
-## API Contract (Org-Scoped Extensions)
-### Admin
-- POST `/api/v1/admin/registration-codes`
-  - Body add-ons: `{ org_id?, org_role?, team_id? }` (or `metadata.org_id/org_role/team_id`).
-  - Response includes `metadata` or explicit org fields if supported.
-
-### Invite Acceptance (Existing User)
+### Invite Acceptance (Existing User - Admin Org-Scoped Codes)
 - POST `/api/v1/orgs/invites/accept`
+  - Body: `{ code }`
+  - Requires authenticated user; adds org membership and role defined by the registration code.
+
+## API Contract (Org Invites - Separate System)
+### Org Admin
+- POST `/api/v1/orgs/{org_id}/invites`
+  - Body: `{ team_id?, role_to_grant?, max_uses, expiry_days, description? }`
+  - Response: `{ id, code, max_uses, times_used, expires_at, created_at, role_to_grant, org_id, team_id }`
+- GET `/api/v1/orgs/{org_id}/invites`
+  - Response: `{ items: [...], total }`
+- DELETE `/api/v1/orgs/{org_id}/invites/{invite_id}`
+  - Response: 204
+
+### Invite Preview + Acceptance (Existing User)
+- GET `/api/v1/invites/preview?code=...`
+  - Response: `{ org_name, team_name, role_to_grant, is_valid, status, expires_at }`
+- POST `/api/v1/invites/redeem`
   - Body: `{ code }`
   - Requires authenticated user; adds org membership and role defined by the invite.
 
@@ -103,6 +120,7 @@ Core fields needed in registration_codes (already present or implied):
 - times_used (usage count)
 - role_to_grant
 - is_active
+- allowed_email_domain
 - metadata (JSON, optional)
 
 Optional extension for org-scoped invites:
@@ -111,8 +129,9 @@ Optional extension for org-scoped invites:
 - team_id (or metadata.team_id)
 
 ## UX Details
-- "Copy invite link" uses the configured Web UI base URL plus `/register?code=XXXX`.
-- "Copy acceptance link" uses `/accept-invite?code=XXXX` when accepting into an existing account.
+- "Copy invite link" uses the configured Web UI base URL plus `/webui/auth.html?code=XXXX`.
+- "Copy acceptance link" uses `/webui/accept-invite.html?code=XXXX` when accepting into an existing account.
+- Web UI base URL is configurable via `Server.webui_base_url` or `TLDW_WEBUI_BASE_URL`.
 - If registration is disabled, the UI shows a warning and disables code creation.
 - Revoke action is destructive and requires confirmation.
 - List defaults to active codes; expired/inactive are dimmed if shown.
@@ -125,12 +144,12 @@ Optional extension for org-scoped invites:
 ## Edge Cases
 - Code reaches max uses: treated as invalid.
 - Code expires: treated as invalid.
+- Code domain allowlist mismatch: treated as invalid.
 - Registration disabled: no codes usable.
 - Profile blocks self-registration: warn and disable code creation.
 - Existing user attempts to register with an org invite: return a clear error with an accept-invite path.
 
-## Open Questions
-- Should org-scoped invites be enabled by default or behind a config flag?
-- Should invite codes support email domain allowlists?
-- Should code redemption auto-assign org/team membership in the first release?
-- Should accept-invite be a separate endpoint or reuse registration with a different payload?
+## Decisions
+- Org-scoped registration codes are gated behind a config flag (`enable_org_scoped_registration_codes`).
+- Invite codes support email domain allowlists (`allowed_email_domain`).
+- Code redemption auto-assigns org/team membership when org-scoped fields are present.

@@ -70,6 +70,8 @@ except Exception:
 _HASH_PREFIX = "sha256:"
 _VALID_STORAGE_MODES = {"per_user", "shared"}
 _SYSTEM_TENANT_ID = "system"
+_UNIDENTIFIED_TENANT_ID = "unidentified_user"
+_AUDIT_SHARED_SCHEMA_VERSION = 1
 
 try:
     import fcntl  # type: ignore
@@ -836,6 +838,7 @@ class UnifiedAuditService:
         flush_interval: float = 10.0,
         max_db_mb: Optional[int] = None,
         system_tenant_id: Optional[str] = None,
+        unidentified_tenant_id: Optional[str] = None,
     ):
         """
         Initialize unified audit service.
@@ -852,7 +855,16 @@ class UnifiedAuditService:
         # Configuration
         self.storage_mode = _resolve_storage_mode(storage_mode)
         self._shared_mode = self.storage_mode == "shared"
-        self.system_tenant_id = (system_tenant_id or _SYSTEM_TENANT_ID).strip() or _SYSTEM_TENANT_ID
+        self.system_tenant_id = (system_tenant_id or _SYSTEM_TENANT_ID).strip().lower() or _SYSTEM_TENANT_ID
+        self.unidentified_tenant_id = (
+            (unidentified_tenant_id or _UNIDENTIFIED_TENANT_ID).strip().lower() or _UNIDENTIFIED_TENANT_ID
+        )
+        if self.unidentified_tenant_id == self.system_tenant_id:
+            logger.warning(
+                "Unidentified tenant id matches system tenant id; falling back to {}",
+                _UNIDENTIFIED_TENANT_ID,
+            )
+            self.unidentified_tenant_id = _UNIDENTIFIED_TENANT_ID
 
         if db_path is None:
             if self._shared_mode:
@@ -1050,6 +1062,7 @@ class UnifiedAuditService:
                 await db.execute(
                     "CREATE INDEX IF NOT EXISTS idx_stats_tenant_category ON audit_daily_stats(tenant_user_id, category)"
                 )
+                await self._ensure_schema_version(db)
 
             await db.commit()
 
@@ -1288,7 +1301,7 @@ class UnifiedAuditService:
                     INSERT INTO audit_daily_stats ({insert_cols})
                     SELECT ?, {select_cols} FROM audit_daily_stats_legacy
                     """,
-                    (self.system_tenant_id,),
+                    (self.unidentified_tenant_id,),
                 )
             else:
                 insert_cols = f"tenant_user_id, {select_cols}, duration_count"
@@ -1297,7 +1310,7 @@ class UnifiedAuditService:
                     INSERT INTO audit_daily_stats ({insert_cols})
                     SELECT ?, {select_cols}, 0 FROM audit_daily_stats_legacy
                     """,
-                    (self.system_tenant_id,),
+                    (self.unidentified_tenant_id,),
                 )
 
             try:
@@ -1311,6 +1324,19 @@ class UnifiedAuditService:
                 await db.execute("ALTER TABLE audit_daily_stats ADD COLUMN duration_count INTEGER DEFAULT 0")
             except Exception:
                 pass
+
+    async def _ensure_schema_version(self, db: aiosqlite.Connection) -> None:
+        """Ensure shared audit DB schema version is recorded."""
+        if not self._shared_mode:
+            return
+        try:
+            async with db.execute("PRAGMA user_version") as cur:
+                row = await cur.fetchone()
+            current = int(row[0]) if row else 0
+        except Exception:
+            current = 0
+        if current < _AUDIT_SHARED_SCHEMA_VERSION:
+            await db.execute(f"PRAGMA user_version = {_AUDIT_SHARED_SCHEMA_VERSION}")
 
     async def _migrate_legacy_audit_events(self, db: aiosqlite.Connection) -> None:
         """Migrate legacy audit_events tables to the unified schema."""
@@ -1494,7 +1520,12 @@ class UnifiedAuditService:
                             "metadata": _json_text(data.get("metadata"), default="{}"),
                         }
                         if self._shared_mode:
-                            record["tenant_user_id"] = self._normalize_tenant_id(context_user_id)
+                            record["tenant_user_id"] = self._resolve_tenant_id_for_write(
+                                raw_tenant=None,
+                                context_user_id=context_user_id,
+                                event_type=event_type_val,
+                                category=record.get("category"),
+                            )
                         records.append(record)
                     if records:
                         await db.executemany(insert_sql, records)
@@ -1512,30 +1543,114 @@ class UnifiedAuditService:
                 logger.error(f"Failed to restore legacy audit_events table: {rollback_exc}")
             raise
 
-    def _normalize_tenant_id(self, value: Any) -> str:
+    def _is_system_event(self, event_type: Any, category: Any) -> bool:
+        if category is not None:
+            try:
+                category_val = category.value if isinstance(category, AuditEventCategory) else str(category)
+            except Exception:
+                category_val = ""
+            if category_val.lower() == AuditEventCategory.SYSTEM.value:
+                return True
+        if event_type is not None:
+            try:
+                event_val = event_type.value if isinstance(event_type, AuditEventType) else str(event_type)
+            except Exception:
+                event_val = ""
+            if event_val.lower().startswith("system"):
+                return True
+        return False
+
+    def _normalize_tenant_value(self, value: Any) -> str:
         if value is None:
-            return self.system_tenant_id
+            return ""
         try:
-            s = str(value).strip()
+            return str(value).strip()
         except Exception:
+            return ""
+
+    def _normalize_tenant_id(self, value: Any) -> str:
+        s = self._normalize_tenant_value(value)
+        if not s:
+            return self.unidentified_tenant_id
+        lowered = s.lower()
+        if lowered == self.system_tenant_id:
             return self.system_tenant_id
-        return s or self.system_tenant_id
+        if lowered == self.unidentified_tenant_id:
+            return self.unidentified_tenant_id
+        return s
+
+    def _validate_tenant_id_for_write(
+        self,
+        tenant_id: str,
+        *,
+        allow_system: bool,
+        allow_unidentified: bool,
+    ) -> str:
+        if not tenant_id:
+            raise ValueError("tenant_user_id cannot be empty")
+        lowered = tenant_id.lower()
+        if lowered == self.system_tenant_id:
+            if not allow_system:
+                raise ValueError("system tenant id is reserved")
+            return self.system_tenant_id
+        if lowered == self.unidentified_tenant_id:
+            if not allow_unidentified:
+                raise ValueError("unidentified tenant id is reserved")
+            return self.unidentified_tenant_id
+        if not tenant_id.isdigit():
+            raise ValueError("tenant_user_id must be numeric in shared mode")
+        return tenant_id
+
+    def _resolve_tenant_id_for_write(
+        self,
+        *,
+        raw_tenant: Any,
+        context_user_id: Any,
+        event_type: Any,
+        category: Any,
+    ) -> str:
+        if self._is_system_event(event_type, category):
+            return self.system_tenant_id
+
+        candidate = raw_tenant
+        if candidate is None or str(candidate).strip() == "":
+            candidate = context_user_id
+        normalized = self._normalize_tenant_value(candidate)
+        if not normalized:
+            return self.unidentified_tenant_id
+
+        lowered = normalized.lower()
+        if lowered == self.system_tenant_id:
+            raise ValueError("system tenant id is reserved for system events only")
+        if lowered == self.unidentified_tenant_id:
+            if context_user_id is not None and str(context_user_id).strip() != "":
+                raise ValueError("unidentified tenant id cannot be assigned to a user")
+            return self.unidentified_tenant_id
+
+        return self._validate_tenant_id_for_write(
+            normalized,
+            allow_system=False,
+            allow_unidentified=False,
+        )
 
     def _resolve_event_tenant_id(self, event: AuditEvent) -> str:
-        if event.tenant_user_id:
-            return self._normalize_tenant_id(event.tenant_user_id)
-        return self._normalize_tenant_id(event.context.user_id)
+        return self._resolve_tenant_id_for_write(
+            raw_tenant=event.tenant_user_id,
+            context_user_id=event.context.user_id,
+            event_type=event.event_type,
+            category=event.category,
+        )
 
     def _ensure_record_tenant_ids(self, records: List[Dict[str, Any]]) -> None:
         if not self._shared_mode:
             return
         for record in records:
-            raw = record.get("tenant_user_id")
-            if raw is None or str(raw).strip() == "":
-                context_val = record.get("context_user_id") or record.get("user_id")
-                record["tenant_user_id"] = self._normalize_tenant_id(context_val)
-            else:
-                record["tenant_user_id"] = self._normalize_tenant_id(raw)
+            record["tenant_user_id"] = self._resolve_tenant_id_for_write(
+                raw_tenant=record.get("tenant_user_id"),
+                context_user_id=record.get("context_user_id") or record.get("user_id"),
+                event_type=record.get("event_type"),
+                category=record.get("category"),
+            )
 
     def _apply_user_filter(
         self,
@@ -1771,7 +1886,12 @@ class UnifiedAuditService:
         # Create event
         tenant_user_id = None
         if self._shared_mode:
-            tenant_user_id = self._normalize_tenant_id(context.user_id)
+            tenant_user_id = self._resolve_tenant_id_for_write(
+                raw_tenant=None,
+                context_user_id=context.user_id,
+                event_type=event_type,
+                category=category,
+            )
         event = AuditEvent(
             category=category,
             event_type=event_type,
@@ -2348,19 +2468,28 @@ class UnifiedAuditService:
                 else:
                     metadata = {}
 
+                category_val = _as_category(record.get("category"))
+                event_type_val = _as_event_type(record.get("event_type"))
+                severity_val = _as_severity(record.get("severity"))
+
                 tenant_user_id = None
                 if self._shared_mode:
                     raw_tenant = record.get("tenant_user_id")
                     if raw_tenant is None or str(raw_tenant).strip() == "":
                         raw_tenant = record.get("context_user_id") or record.get("user_id")
-                    tenant_user_id = self._normalize_tenant_id(raw_tenant)
+                    tenant_user_id = self._resolve_tenant_id_for_write(
+                        raw_tenant=raw_tenant,
+                        context_user_id=record.get("context_user_id") or record.get("user_id"),
+                        event_type=event_type_val,
+                        category=category_val,
+                    )
 
                 return AuditEvent(
                     event_id=str(record.get("event_id") or uuid4()),
                     timestamp=ts,
-                    category=_as_category(record.get("category")),
-                    event_type=_as_event_type(record.get("event_type")),
-                    severity=_as_severity(record.get("severity")),
+                    category=category_val,
+                    event_type=event_type_val,
+                    severity=severity_val,
                     tenant_user_id=tenant_user_id,
                     resource_type=record.get("resource_type"),
                     resource_id=record.get("resource_id"),

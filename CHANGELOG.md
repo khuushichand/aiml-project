@@ -10,12 +10,16 @@ and this project adheres to Some kind of Versioning
 ### Added
 - Jobs Postgres RLS policy setup now supports `JOBS_PG_RLS_DEBUG` for policy output and `JOBS_PG_RLS_ROLE` role overrides.
 - Jobs prune scheduler for retention-based cleanup (env-gated, internal scheduler).
+- `CHAT_COMMANDS_ASYNC_ONLY` flag to force async chat orchestration (`achat`) and block sync `chat(...)`.
+- Chat command concurrency integration test and PERF-gated p50 latency smoke test.
 
 ### Changed
 - Jobs Postgres tests now default to the shared per-test Postgres fixture by wiring `JOBS_DB_URL` and ensuring Jobs tables/counters.
 - Jobs RLS policy setup uses negotiated Postgres DSNs for compatibility across server versions.
+- Sync `chat(...)` now offloads to a worker when invoked from a running event loop (non-streaming).
 
 ### Removed
+- Legacy `command_router.dispatch_command` path (now raises with migration hint).
 
 ### Fixed
 - Jobs RLS debug output now reports distinct settings fields without clobbering values.

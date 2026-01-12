@@ -71,6 +71,10 @@ from tldw_Server_API.app.services.admin_budgets_service import (
     upsert_org_budget as svc_upsert_org_budget,
 )
 from tldw_Server_API.app.services.budget_audit_service import emit_budget_audit_event
+from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
+    get_or_create_audit_service_for_user_id,
+)
 
 
 router = APIRouter(
@@ -986,6 +990,7 @@ async def revoke_invite(
 )
 async def accept_org_invite(
     body: OrgInviteAcceptRequest,
+    http_request: Request,
     principal: AuthPrincipal = Depends(get_auth_principal),
     registration_service: RegistrationService = Depends(get_registration_service_dep),
 ):
@@ -1016,6 +1021,50 @@ async def accept_org_invite(
             detail=str(exc) or "Invalid invite code",
         ) from exc
 
+    async def _safe_audit_log_invite_accept() -> None:
+        try:
+            if principal.user_id is None:
+                return
+            code_id = result.get("registration_code_id")
+            if code_id is None:
+                return
+            svc = await get_or_create_audit_service_for_user_id(int(principal.user_id))
+            correlation_id = (
+                http_request.headers.get("X-Correlation-ID")
+                or getattr(http_request.state, "correlation_id", None)
+            )
+            request_id = (
+                http_request.headers.get("X-Request-ID")
+                or getattr(http_request.state, "request_id", None)
+                or ""
+            )
+            ctx = AuditContext(
+                user_id=str(principal.user_id),
+                correlation_id=correlation_id,
+                request_id=request_id,
+                ip_address=(http_request.client.host if http_request.client else None),
+                user_agent=http_request.headers.get("user-agent"),
+                endpoint=str(http_request.url.path),
+                method=http_request.method,
+            )
+            await svc.log_event(
+                event_type=AuditEventType.DATA_UPDATE,
+                context=ctx,
+                resource_type="registration_code",
+                resource_id=str(code_id),
+                action="registration_code.redeemed",
+                metadata={
+                    "registration_code_id": code_id,
+                    "org_id": result.get("org_id"),
+                    "org_role": result.get("org_role"),
+                    "team_id": result.get("team_id"),
+                    "was_already_member": result.get("was_already_member"),
+                },
+            )
+        except Exception as exc:
+            logger.debug("Org invite audit failed: {}", exc)
+
+    await _safe_audit_log_invite_accept()
     return OrgInviteAcceptResponse(
         success=True,
         org_id=result.get("org_id"),

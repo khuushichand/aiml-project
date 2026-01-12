@@ -12,11 +12,11 @@ This document describes the setup wizard CLI skeleton, usage patterns, and troub
 
 - `init` — full guided setup (scaffold)
   - Options: `--default`, `--install-dir PATH`, `--non-interactive`, `--debug`, `--dry-run`, `--json`, `--yes/--no-input`, `--no-format`, `--no-color`, `--quiet`
-  - Behavior (scaffold): detects environment, plans `.env` creation and `.gitignore` updates. In non-dry-run mode creates `.env` (0600) with basic defaults and ensures `.gitignore` entries.
+  - Behavior (scaffold): detects environment, plans `.env` creation and `.gitignore` updates. In non-dry-run mode creates `.env` (0600) with basic defaults and ensures `.gitignore` entries. When `AUTH_MODE=multi_user` and a valid Postgres `DATABASE_URL` is present, `--yes` auto-runs the AuthNZ initializer; otherwise the wizard prompts in interactive shells.
 
 - `auth` — configure authentication mode
-  - Options: `--mode [single_user|multi_user]`, `--json`, `--dry-run`
-  - Behavior (scaffold): reports intended changes; full implementation will write `.env` and optionally run the AuthNZ initializer for multi-user.
+  - Options: `--mode [single_user|multi_user]`, `--json`, `--dry-run`, `--yes/--no-input`
+  - Behavior: updates `.env` with `AUTH_MODE`, generates `SINGLE_USER_API_KEY` when needed, validates `DATABASE_URL` for multi-user, and prompts to run the AuthNZ initializer when appropriate. Creates a timestamped backup on first modification.
 
 - `db` — initialize/validate databases (scaffold)
   - Behavior: plans per-user SQLite structure checks and Postgres validation if `DATABASE_URL` is set.
@@ -63,7 +63,7 @@ tldw-setup init --non-interactive --yes --json --no-format
 
 ## Files Managed
 
-- `.env`: created with mode 0600; idempotent writes (scaffold keeps existing file intact; merge logic will be added).
+- `.env`: created with mode 0600; idempotent merge updates with de-duplication and timestamped backups.
 - `.gitignore`: ensures `.env`, `.env.local`, and `wizard.log` entries.
 - `wizard.log`: optional local troubleshooting log (future step); must be redacted and gitignored.
 

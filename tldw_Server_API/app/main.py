@@ -3916,7 +3916,7 @@ if WEBUI_DIR.exists():
         )
         from tldw_Server_API.app.api.v1.endpoints.llm_providers import get_configured_providers_async
         from fastapi.responses import JSONResponse
-        from tldw_Server_API.app.core.config import load_comprehensive_config
+        from tldw_Server_API.app.core.config import load_comprehensive_config, get_config_value
 
         config = {
             "apiUrl": "",  # Empty means use same origin
@@ -3928,6 +3928,9 @@ if WEBUI_DIR.exists():
         import os as _os
 
         _is_prod_env = _os.getenv("tldw_production", "false").lower() in {"true", "1", "yes", "y", "on"}
+        webui_base_url = _os.getenv("TLDW_WEBUI_BASE_URL") or get_config_value("Server", "webui_base_url")
+        if isinstance(webui_base_url, str) and webui_base_url.strip():
+            config["webui_base_url"] = webui_base_url.strip()
         profile_hint = None
         try:
             profile_hint = get_profile()
@@ -4490,6 +4493,7 @@ elif _MINIMAL_TEST_APP:
     # Auth endpoints (login/register/refresh/logout/me)
     try:
         app.include_router(auth_router, prefix=f"{API_V1_PREFIX}", tags=["authentication"])
+        logger.info("Auth router consolidated: endpoints/auth.py (minimal test app)")
     except Exception as _auth_min_err:
         logger.debug(f"Skipping auth router in minimal test app: {_auth_min_err}")
     # Users endpoints (sessions, change-password, storage, me)
@@ -4713,6 +4717,7 @@ else:
 
     _include_if_enabled("audit", audit_router, prefix=f"{API_V1_PREFIX}", tags=["audit"])
     _include_if_enabled("auth", auth_router, prefix=f"{API_V1_PREFIX}", tags=["authentication"])
+    logger.info("Auth router consolidated: endpoints/auth.py")
     _include_if_enabled("users", users_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
     _include_if_enabled("users", user_keys_router, prefix=f"{API_V1_PREFIX}", tags=["users"])
 

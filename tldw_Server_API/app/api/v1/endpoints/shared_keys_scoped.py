@@ -177,6 +177,7 @@ async def upsert_org_shared_key(
 
     repo = await _get_shared_byok_repo()
     now = datetime.now(timezone.utc)
+    actor_id = int(user.get("id"))
     row = await repo.upsert_secret(
         scope_type="org",
         scope_id=org_id,
@@ -185,6 +186,8 @@ async def upsert_org_shared_key(
         key_hint=key_hint_for_api_key(api_key),
         metadata=payload.metadata,
         updated_at=now,
+        created_by=actor_id,
+        updated_by=actor_id,
     )
     return SharedProviderKeyResponse(
         scope_type="org",
@@ -312,7 +315,13 @@ async def delete_org_shared_key(
     _require_byok_enabled()
     await _require_org_manager(user, org_id)
     repo = await _get_shared_byok_repo()
-    deleted = await repo.delete_secret("org", org_id, normalize_provider_name(provider))
+    actor_id = int(user.get("id"))
+    deleted = await repo.delete_secret(
+        "org",
+        org_id,
+        normalize_provider_name(provider),
+        revoked_by=actor_id,
+    )
     if not deleted:
         raise HTTPException(status_code=404, detail="Key not found")
 
@@ -382,6 +391,7 @@ async def upsert_team_shared_key(
 
     repo = await _get_shared_byok_repo()
     now = datetime.now(timezone.utc)
+    actor_id = int(user.get("id"))
     row = await repo.upsert_secret(
         scope_type="team",
         scope_id=team_id,
@@ -390,6 +400,8 @@ async def upsert_team_shared_key(
         key_hint=key_hint_for_api_key(api_key),
         metadata=payload.metadata,
         updated_at=now,
+        created_by=actor_id,
+        updated_by=actor_id,
     )
     return SharedProviderKeyResponse(
         scope_type="team",
@@ -517,6 +529,12 @@ async def delete_team_shared_key(
     _require_byok_enabled()
     await _require_team_manager(user, team_id)
     repo = await _get_shared_byok_repo()
-    deleted = await repo.delete_secret("team", team_id, normalize_provider_name(provider))
+    actor_id = int(user.get("id"))
+    deleted = await repo.delete_secret(
+        "team",
+        team_id,
+        normalize_provider_name(provider),
+        revoked_by=actor_id,
+    )
     if not deleted:
         raise HTTPException(status_code=404, detail="Key not found")

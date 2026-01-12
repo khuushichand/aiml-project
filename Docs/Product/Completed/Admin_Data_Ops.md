@@ -16,7 +16,7 @@
 - `prompts`: prompts DB (per-user)
 - `evaluations`: evaluations DB (per-user)
 - `audit`: unified audit DB (per-user)
-- `authnz`: users/auth DB (system, when SQLite)
+- `authnz`: users/auth DB (system, SQLite or Postgres)
 
 ## APIs
 
@@ -27,7 +27,7 @@ List backup artifacts.
 
 Query params:
 - `dataset` (optional, one of dataset keys)
-- `user_id` (optional, defaults to single-user id)
+- `user_id` (optional; required for per-user datasets)
 - `limit`/`offset` for paging
 
 Response:
@@ -133,6 +133,7 @@ Query params:
 - Same filters as `/api/v1/admin/audit-log` (`user_id`, `action`, `resource`, `start`, `end`, `days`, `org_id`)
 - `format` (`csv`|`json`, default `csv`)
 - `limit` (optional, defaults to 10000)
+- `offset` (optional, defaults to 0)
 
 #### GET `/api/v1/admin/users/export`
 Export users as CSV or JSON.
@@ -141,6 +142,7 @@ Query params:
 - Same filters as `/api/v1/admin/users` (`role`, `is_active`, `search`, `org_id`)
 - `format` (`csv`|`json`, default `csv`)
 - `limit` (optional, defaults to 10000)
+- `offset` (optional, defaults to 0)
 
 ## Retention Policy Mapping
 - `audit_logs` -> `AUDIT_LOG_RETENTION_DAYS`
@@ -168,8 +170,14 @@ Resetting overrides:
 
 Roadmap: Stage 5.3 retention persistence is implemented; follow-up work includes adding a UI "reset to defaults" action.
 
+## Implementation Status
+- API endpoints implemented in `tldw_Server_API/app/api/v1/endpoints/admin.py` (Data Ops section).
+- Service logic implemented in `tldw_Server_API/app/services/admin_data_ops_service.py`.
+- Retention policy overrides persist in AuthNZ DB via `retention_policy_overrides` (see `tldw_Server_API/app/core/AuthNZ/retention_policies.py`).
+- Admin UI is planned (admin-ui); no current UI surface.
+
 ## UI Notes
-- Data Ops page provides:
+- Data Ops page (planned for admin-ui) provides:
   - Backup list with create + restore actions.
   - Retention policy table with inline edits.
   - Export buttons for audit logs and users (CSV/JSON).

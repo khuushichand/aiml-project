@@ -365,7 +365,7 @@ class CharactersRAGDB:
         is_memory_db (bool): True if the database is in-memory.
         db_path_str (str): String representation of the database path for SQLite connection.
     """
-    _CURRENT_SCHEMA_VERSION = 13  # Schema v13 adds message metadata table
+    _CURRENT_SCHEMA_VERSION = 14  # Schema v14 adds chat topic metadata + clusters + flashcard backlinks
     _SCHEMA_NAME = "rag_char_chat_schema"  # Used for the db_schema_version table
     _ALLOWED_CONVERSATION_STATES: Tuple[str, ...] = ("in-progress", "resolved", "backlog", "non-viable")
     _DEFAULT_CONVERSATION_STATE = "in-progress"
@@ -1837,6 +1837,43 @@ UPDATE db_schema_version
    AND version < 13;
 """
 
+    # --- Migration: V13 -> V14 (Chat topic metadata + clusters + flashcard backlinks) ---
+    _MIGRATION_SQL_V13_TO_V14 = """
+/*───────────────────────────────────────────────────────────────
+  Migration to Version 14 - Chat topic metadata + clusters (2026-01-20)
+───────────────────────────────────────────────────────────────*/
+PRAGMA foreign_keys = ON;
+
+/* Conversations: topic tagging metadata */
+ALTER TABLE conversations ADD COLUMN topic_label_source TEXT CHECK(topic_label_source IN ('manual','auto'));
+ALTER TABLE conversations ADD COLUMN topic_last_tagged_at DATETIME;
+ALTER TABLE conversations ADD COLUMN topic_last_tagged_message_id TEXT;
+
+/* Cluster metadata */
+CREATE TABLE IF NOT EXISTS conversation_clusters(
+  cluster_id TEXT PRIMARY KEY,
+  title TEXT,
+  centroid TEXT,
+  size INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+/* Helpful indexes */
+CREATE INDEX IF NOT EXISTS idx_conversations_source_external_ref ON conversations(source, external_ref);
+
+/* Flashcards: backlinks to conversations/messages */
+ALTER TABLE flashcards ADD COLUMN conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL;
+ALTER TABLE flashcards ADD COLUMN message_id TEXT REFERENCES messages(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_flashcards_conversation ON flashcards(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_flashcards_message ON flashcards(message_id);
+
+UPDATE db_schema_version
+   SET version = 14
+ WHERE schema_name = 'rag_char_chat_schema'
+   AND version < 14;
+"""
+
     _MIGRATION_SQL_V10_TO_V11_POSTGRES = """
 ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 """
@@ -2749,6 +2786,26 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V12->V13: {e}", exc_info=True)
             raise SchemaError(f"Unexpected error migrating to V13 for '{self._SCHEMA_NAME}': {e}") from e
 
+    def _migrate_from_v13_to_v14(self, conn: sqlite3.Connection):
+        """Migrates schema from V13 to V14 (chat topic metadata + clusters + flashcard backlinks)."""
+        logger.info(f"Migrating '{self._SCHEMA_NAME}' schema from V13 to V14 for DB: {self.db_path_str}...")
+        try:
+            conn.executescript(self._MIGRATION_SQL_V13_TO_V14)
+            final_version = self._get_db_version(conn)
+            if final_version != 14:
+                raise SchemaError(
+                    f"[{self._SCHEMA_NAME}] Migration V13->V14 failed version check. Expected 14, got: {final_version}"
+                )
+            logger.info(f"[{self._SCHEMA_NAME}] Migration to V14 completed.")
+        except sqlite3.Error as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Migration V13->V14 failed: {e}", exc_info=True)
+            raise SchemaError(f"Migration V13->V14 failed for '{self._SCHEMA_NAME}': {e}") from e
+        except SchemaError:
+            raise
+        except Exception as e:
+            logger.error(f"[{self._SCHEMA_NAME}] Unexpected error during migration V13->V14: {e}", exc_info=True)
+            raise SchemaError(f"Unexpected error migrating to V14 for '{self._SCHEMA_NAME}': {e}") from e
+
     def _initialize_schema(self):
         if self.backend_type == BackendType.SQLITE:
             self._initialize_schema_sqlite()
@@ -2858,10 +2915,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     # Ensure helpful indexes that may have been introduced post-creation
                     try:
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_conversation ON flashcards(conversation_id)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_message ON flashcards(message_id)")
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_state ON conversations(state)")
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_cluster ON conversations(cluster_id)")
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_last_modified ON conversations(last_modified)")
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_topic_label ON conversations(topic_label)")
+                        conn.execute(
+                            "CREATE INDEX IF NOT EXISTS idx_conversations_source_external_ref ON conversations(source, external_ref)"
+                        )
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_conversation ON notes(conversation_id)")
                         conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_message ON notes(message_id)")
                     except sqlite3.Error:
@@ -2904,9 +2966,23 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     if target_version >= 13 and current_db_version == 12:
                         self._migrate_from_v12_to_v13(conn)
                         current_db_version = self._get_db_version(conn)
+                    if target_version >= 14 and current_db_version == 13:
+                        self._migrate_from_v13_to_v14(conn)
+                        current_db_version = self._get_db_version(conn)
                 # Ensure helpful indexes that may have been introduced post-creation
                 try:
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_created_at ON flashcards(created_at)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_conversation ON flashcards(conversation_id)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcards_message ON flashcards(message_id)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_state ON conversations(state)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_cluster ON conversations(cluster_id)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_last_modified ON conversations(last_modified)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_topic_label ON conversations(topic_label)")
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_source_external_ref ON conversations(source, external_ref)"
+                    )
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_conversation ON notes(conversation_id)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_message ON notes(message_id)")
                 except sqlite3.Error:
                     pass
                 # Example for future migrations:
@@ -3013,6 +3089,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     elif current_initial_version == 12 and target_version >= 13:
                         self._migrate_from_v12_to_v13(conn)
                         current_db_version = self._get_db_version(conn)
+                        if target_version >= 14 and current_db_version == 13:
+                            self._migrate_from_v13_to_v14(conn)
+                            current_db_version = self._get_db_version(conn)
+                    elif current_initial_version == 13 and target_version >= 14:
+                        self._migrate_from_v13_to_v14(conn)
+                        current_db_version = self._get_db_version(conn)
                     else:
                         raise SchemaError(
                             f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "
@@ -3025,6 +3107,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     current_db_version = self._get_db_version(conn)
                 if target_version >= 13 and current_db_version == 12:
                     self._migrate_from_v12_to_v13(conn)
+                    current_db_version = self._get_db_version(conn)
+                if target_version >= 14 and current_db_version == 13:
+                    self._migrate_from_v13_to_v14(conn)
                     current_db_version = self._get_db_version(conn)
 
                 final_version_check = self._get_db_version(conn)
@@ -3119,6 +3204,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             if current_version < 13:
                 self._apply_postgres_migration_script(self._MIGRATION_SQL_V12_TO_V13, conn, expected_version=13)
                 current_version = 13
+            if current_version < 14:
+                self._apply_postgres_migration_script(self._MIGRATION_SQL_V13_TO_V14, conn, expected_version=14)
+                current_version = 14
 
             if current_version > target_version:
                 raise SchemaError(
@@ -3149,6 +3237,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         connection=conn,
                     )
                     self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_flashcards_conversation ON flashcards(conversation_id)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_flashcards_message ON flashcards(message_id)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
                         "CREATE INDEX IF NOT EXISTS idx_conversations_state ON conversations(state)",
                         connection=conn,
                     )
@@ -3162,6 +3258,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     )
                     self.backend.execute(
                         "CREATE INDEX IF NOT EXISTS idx_conversations_topic_label ON conversations(topic_label)",
+                        connection=conn,
+                    )
+                    self.backend.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_conversations_source_external_ref ON conversations(source, external_ref)",
                         connection=conn,
                     )
                     self.backend.execute(
@@ -5467,6 +5567,157 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         )
         return rows[offset: offset + limit]
 
+    def search_conversations(
+        self,
+        query: Optional[str],
+        *,
+        client_id: Optional[str] = None,
+        character_id: Optional[int] = None,
+        state: Optional[str] = None,
+        topic_label: Optional[str] = None,
+        topic_prefix: bool = False,
+        cluster_id: Optional[str] = None,
+        keywords: Optional[List[str]] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        date_field: str = "last_modified",
+    ) -> List[Dict[str, Any]]:
+        """
+        Search/filter conversations with optional FTS query and metadata filters.
+
+        Returns conversation rows including `bm25_raw` when query is provided.
+        """
+        client_filter = self.client_id if client_id is None else client_id
+        safe_query = (query or "").strip()
+        if safe_query == "":
+            safe_query = None
+
+        if date_field not in {"last_modified", "created_at"}:
+            raise InputError("date_field must be 'last_modified' or 'created_at'")
+
+        filters: List[str] = []
+        params: List[Any] = []
+
+        if self.backend_type == BackendType.POSTGRESQL:
+            date_expr = "c.created_at" if date_field == "created_at" else "COALESCE(c.last_modified, c.created_at)"
+            base_query = "SELECT c.*, 0.0 AS bm25_raw FROM conversations c WHERE c.deleted = FALSE"
+            if safe_query:
+                tsquery = FTSQueryTranslator.normalize_query(safe_query, 'postgresql')
+                if not tsquery:
+                    return []
+                base_query = (
+                    "SELECT c.*, ts_rank(c.conversations_fts_tsv, to_tsquery('english', ?)) AS bm25_raw "
+                    "FROM conversations c "
+                    "WHERE c.deleted = FALSE AND c.conversations_fts_tsv @@ to_tsquery('english', ?)"
+                )
+                params.extend([tsquery, tsquery])
+
+            if character_id is not None:
+                filters.append("c.character_id = ?")
+                params.append(character_id)
+            if client_filter is not None:
+                filters.append("c.client_id = ?")
+                params.append(client_filter)
+            if state is not None:
+                filters.append("c.state = ?")
+                params.append(self._normalize_conversation_state(state))
+            if topic_label:
+                label = topic_label.rstrip("*")
+                if label:
+                    if topic_prefix:
+                        filters.append("LOWER(c.topic_label) LIKE ?")
+                        params.append(f"{label.lower()}%")
+                    else:
+                        filters.append("LOWER(c.topic_label) = ?")
+                        params.append(label.lower())
+            if cluster_id:
+                filters.append("c.cluster_id = ?")
+                params.append(cluster_id)
+            if start_date:
+                filters.append(f"{date_expr} >= ?")
+                params.append(start_date)
+            if end_date:
+                filters.append(f"{date_expr} <= ?")
+                params.append(end_date)
+            if keywords:
+                keyword_table = self._map_table_for_backend("keywords")
+                for kw in keywords:
+                    filters.append(
+                        f"EXISTS (SELECT 1 FROM conversation_keywords ck "
+                        f"JOIN {keyword_table} k ON k.id = ck.keyword_id "
+                        f"WHERE ck.conversation_id = c.id AND k.deleted = FALSE AND LOWER(k.keyword) = ?)"
+                    )
+                    params.append(kw.lower())
+
+            if filters:
+                base_query += " AND " + " AND ".join(filters)
+
+            try:
+                cursor = self.execute_query(base_query, tuple(params))
+                return [dict(row) for row in cursor.fetchall()]
+            except CharactersRAGDBError as exc:
+                logger.error("PostgreSQL conversation search failed: %s", exc)
+                raise
+
+        date_expr = "c.created_at" if date_field == "created_at" else "COALESCE(NULLIF(c.last_modified,''), c.created_at)"
+
+        if safe_query:
+            filters.append("conversations_fts MATCH ?")
+            params.append(safe_query)
+            base_query = (
+                "SELECT c.*, (bm25(conversations_fts) * -1) AS bm25_raw "
+                "FROM conversations_fts JOIN conversations c ON conversations_fts.rowid = c.rowid "
+                "WHERE c.deleted = 0"
+            )
+        else:
+            base_query = "SELECT c.*, 0.0 AS bm25_raw FROM conversations c WHERE c.deleted = 0"
+
+        if character_id is not None:
+            filters.append("c.character_id = ?")
+            params.append(character_id)
+        if client_filter is not None:
+            filters.append("c.client_id = ?")
+            params.append(client_filter)
+        if state is not None:
+            filters.append("c.state = ?")
+            params.append(self._normalize_conversation_state(state))
+        if topic_label:
+            label = topic_label.rstrip("*")
+            if label:
+                if topic_prefix:
+                    filters.append("LOWER(c.topic_label) LIKE ?")
+                    params.append(f"{label.lower()}%")
+                else:
+                    filters.append("LOWER(c.topic_label) = ?")
+                    params.append(label.lower())
+        if cluster_id:
+            filters.append("c.cluster_id = ?")
+            params.append(cluster_id)
+        if start_date:
+            filters.append(f"{date_expr} >= ?")
+            params.append(start_date)
+        if end_date:
+            filters.append(f"{date_expr} <= ?")
+            params.append(end_date)
+        if keywords:
+            for kw in keywords:
+                filters.append(
+                    "EXISTS (SELECT 1 FROM conversation_keywords ck "
+                    "JOIN keywords k ON k.id = ck.keyword_id "
+                    "WHERE ck.conversation_id = c.id AND k.deleted = 0 AND LOWER(k.keyword) = ?)"
+                )
+                params.append(kw.lower())
+
+        if filters:
+            base_query += " AND " + " AND ".join(filters)
+
+        try:
+            cursor = self.execute_query(base_query, tuple(params))
+            return [dict(row) for row in cursor.fetchall()]
+        except CharactersRAGDBError as e:
+            logger.error(f"Error searching conversations: {e}")
+            raise
+
     # --- Message Methods ---
     def add_message(self, msg_data: Dict[str, Any]) -> Optional[str]:
         """
@@ -7585,6 +7836,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         tags_json = card_data.get('tags_json')
         source_ref_type = card_data.get('source_ref_type', 'manual')
         source_ref_id = card_data.get('source_ref_id')
+        conversation_id = self._normalize_nullable_text(card_data.get('conversation_id'))
+        message_id = self._normalize_nullable_text(card_data.get('message_id'))
         model_type = card_data.get('model_type')
         reverse_flag = card_data.get('reverse')
         if not model_type:
@@ -7603,11 +7856,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     """
                     INSERT INTO flashcards(
                         uuid, deck_id, front, back, notes, extra, is_cloze, tags_json,
-                        source_ref_type, source_ref_id, ef, interval_days, repetitions,
+                        source_ref_type, source_ref_id, conversation_id, message_id, ef, interval_days, repetitions,
                         lapses, due_at, last_reviewed_at, created_at, last_modified,
                         deleted, client_id, version, model_type, reverse
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """
                 )
 
@@ -7622,6 +7875,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     tags_json,
                     source_ref_type,
                     source_ref_id,
+                    conversation_id,
+                    message_id,
                     2.5,
                     0,
                     0,
@@ -7658,11 +7913,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     """
                     INSERT INTO flashcards(
                         uuid, deck_id, front, back, notes, extra, is_cloze, tags_json,
-                        source_ref_type, source_ref_id, ef, interval_days, repetitions,
+                        source_ref_type, source_ref_id, conversation_id, message_id, ef, interval_days, repetitions,
                         lapses, due_at, last_reviewed_at, created_at, last_modified,
                         deleted, client_id, version, model_type, reverse
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """
                 )
 
@@ -7681,6 +7936,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     tags_json = card_data.get('tags_json')
                     source_ref_type = card_data.get('source_ref_type', 'manual')
                     source_ref_id = card_data.get('source_ref_id')
+                    conversation_id = self._normalize_nullable_text(card_data.get('conversation_id'))
+                    message_id = self._normalize_nullable_text(card_data.get('message_id'))
                     model_type = card_data.get('model_type')
                     reverse_flag = card_data.get('reverse')
                     if not model_type:
@@ -7705,6 +7962,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                             tags_json,
                             source_ref_type,
                             source_ref_id,
+                            conversation_id,
+                            message_id,
                             2.5,
                             0,
                             0,

@@ -81,6 +81,8 @@ Tables:
 
 Indexes (selected): `timestamp`, `context_user_id`, `context_request_id`, `context_correlation_id`, `event_type`, `category`, `severity`, `risk_score`, `context_ip_address`, `context_session_id`, `context_endpoint`, `context_user_agent`, plus resource/action indexes.
 
+Shared audit DB schema versioning uses SQLite `PRAGMA user_version` (currently `1`).
+
 Note: a legacy migration file exists for evaluation DB instrumentation (`tldw_Server_API/app/core/DB_Management/migrations_v6_audit_logging.py`). The unified audit DB schema is created by `UnifiedAuditService._init_database()` and is separate from that migration path.
 
 ## Configuration
@@ -90,6 +92,7 @@ Environment and settings (read from `app.core.config.settings` and env):
 - `AUDIT_STORAGE_MODE` (settings/env): `per_user` (default) or `shared`.
 - `AUDIT_SHARED_DB_PATH` (settings/env): shared audit DB path.
 - `AUDIT_STORAGE_ROLLBACK` (settings/env): force per-user behavior when true.
+- `AUDIT_ETL_USER_SUBPATH` (settings/env): optional subpath appended to `USER_DB_BASE_DIR` for migration discovery.
 - `AUDIT_ACTION_RISK_BONUS` (settings dict): `{ action_label: 0..100 }` risk bonuses.
 - `AUDIT_HIGH_RISK_OPERATIONS` (settings list/CSV): extra action substrings treated as high‑risk.
 - `AUDIT_SUSPICIOUS_THRESHOLDS` (settings dict): `{ failed_auth: int, data_export: int, after_hours: bool, ... }`.
@@ -110,6 +113,8 @@ python -m tldw_Server_API.app.core.Audit.audit_shared_migration \
   --user-db-base Databases/user_databases \
   --default-db Databases/unified_audit.db
 ```
+
+Discovery scans `USER_DB_BASE_DIR/*/audit/unified_audit.db` and `USER_DB_BASE_DIR/<AUDIT_ETL_USER_SUBPATH>/*/audit/unified_audit.db` when configured. The migration is idempotent, tracks per-source checkpoints in the shared DB to resume large runs, and skips locked/corrupt sources with a warning.
 
 ## Using the Service in Endpoints (DI)
 

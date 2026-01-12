@@ -33,6 +33,7 @@ def _to_reading_item(row) -> ReadingItem:
         url=row.url or row.canonical_url,
         domain=row.domain,
         summary=row.summary,
+        notes=row.notes,
         published_at=row.published_at,
         status=row.status,
         favorite=bool(row.favorite),
@@ -57,6 +58,7 @@ async def save_reading_item(
             title_override=payload.title,
             summary_override=payload.summary,
             content_override=payload.content,
+            notes=payload.notes,
         )
         return _to_reading_item(result.item)
     except Exception as exc:
@@ -106,6 +108,7 @@ async def update_reading_item(
             status=payload.status,
             favorite=payload.favorite,
             tags=payload.tags,
+            notes=payload.notes,
         )
         return _to_reading_item(row)
     except KeyError:

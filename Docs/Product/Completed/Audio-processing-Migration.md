@@ -7,7 +7,7 @@
 - Current status:
   - Routing for `POST /api/v1/media/process-audios` is handled by `tldw_Server_API/app/api/v1/endpoints/media/process_audios.py`, which now owns the full HTTP-layer implementation (validation, TempDir handling, status codes).
   - Core “call audio library + merge results” logic lives in `tldw_Server_API/app/core/Ingestion_Media_Processing/audio_batch.py::run_audio_batch`.
-  - `_legacy_media.process_audios_endpoint` has been reduced to a shim that simply delegates to the modular endpoint, preserving import compatibility.
+  - There is no `_legacy_media` module in this repo; legacy compatibility is handled via `tldw_Server_API/app/api/v1/endpoints/media/__init__.py` exports for tests/patching.
 
 ## Goal
 
@@ -18,7 +18,8 @@ Move the implementation of `/process-audios` out of `_legacy_media.py` into the 
   - Same status codes and semantics (200/207/400/422/500 as in the legacy implementation).
   - Same response envelope:
     - Batch: `results`, `processed_count`, `errors_count`, `errors`.
-    - Per item: `status`, `input_ref`, `processing_source`, `media_type`, `metadata`, `content`, `segments`, `chunks`, `analysis`, `analysis_details`, `keywords`, `warnings`, `error`, `db_id`, `db_message`, `message`.
+    - Per item: `status`, `input_ref`, `processing_source`, `media_type`, `metadata`, `content`, `segments`, `chunks`, `analysis`, `analysis_details`, `warnings`, `error`, `db_id`, `db_message`, `message`.
+      - `keywords` (if present) are stored in `metadata["keywords"]`, not as a top-level field.
 - Preserving test expectations that:
   - Import `tldw_Server_API.app.api.v1.endpoints.media` / `_legacy_media`.
   - Assert on specific error messages, `input_ref` values, and audio‑specific fields (`segments`, analysis placeholder when disabled, etc.).
@@ -33,6 +34,7 @@ Move the implementation of `/process-audios` out of `_legacy_media.py` into the 
   - `db_message` is `"Processing only endpoint."` for processing-only routes.
 - Error messages:
   - `"No valid media sources supplied"` from `_validate_inputs` for empty input.
+  - Empty input after upload validation currently yields `"No valid audio sources supplied (or all uploads failed)."` from `media/process_audios.py`.
   - Library/metadata/network errors must continue to match existing tests, including any standardized messages used to skip flaky external audio downloads (e.g., the CDN-hosted `VALID_AUDIO_URL` test now explicitly `pytest.skip`s when the host cannot be resolved in restricted environments).
 - Counts and codes:
   - `processed_count` and `errors_count` computed from `status` fields (`Success` / `Warning` vs `Error`).
@@ -47,9 +49,9 @@ Move the implementation of `/process-audios` out of `_legacy_media.py` into the 
 Steps:
 
 1. Re-read the existing implementation:
-   - `_legacy_media.get_process_audios_form` and `_legacy_media.process_audios_endpoint` (Audio Processing Endpoint (REFACTORED) section).
-   - `tldw_Server_API/app/core/Ingestion_Media_Processing/Audio/Audio_Files.py::process_audio_files`.
    - `tldw_Server_API/app/api/v1/endpoints/media/process_audios.py`.
+   - `tldw_Server_API/app/core/Ingestion_Media_Processing/audio_batch.py::run_audio_batch`.
+   - `tldw_Server_API/app/core/Ingestion_Media_Processing/Audio/Audio_Files.py::process_audio_files`.
 2. Identify key tests to rely on:
    - `tldw_Server_API/tests/Media_Ingestion_Modification/test_media_processing.py::TestProcessAudios`.
    - `tldw_Server_API/tests/Media_Ingestion_Modification/test_add_media_endpoint.py::test_process_audio_with_analysis_mocked`.
@@ -104,8 +106,8 @@ Steps:
 
 Success criteria:
 
-- `run_audio_batch` returns a dict with the same structure that `_legacy_media.process_audios_endpoint` currently builds before returning.
-- There is no change in visible behavior yet (the endpoint still runs through `_legacy_media`).
+- `run_audio_batch` returns a dict with the same structure that the modular endpoint expects.
+- The modular endpoint uses `run_audio_batch`; there is no separate legacy endpoint in this repo.
 
 ---
 
@@ -161,29 +163,19 @@ Notes:
 Success criteria:
 
 - All `/process-audios` HTTP behavior is now implemented in `media/process_audios.py` + `audio_batch.py`.
-- `_legacy_media.process_audios_endpoint` is no longer responsible for the real work, but tests remain green.
+- Legacy compatibility is provided via `media/__init__.py` exports; tests remain green.
 
 ---
 
-## Phase 3 – Turn `_legacy_media.process_audios_endpoint` into a Shim
+## Phase 3 – Legacy Shim (No Longer Applicable)
 
-**Objective:** Keep `_legacy_media` import compatibility while delegating actual work to the modular endpoint.
+**Objective:** Preserve compatibility for legacy imports without a `_legacy_media` module.
 
-Steps:
+Notes:
 
-1. In `_legacy_media.py`, remove the `@router.post("/process-audios", ...)` decorator from `process_audios_endpoint`.
-2. Replace the body of `process_audios_endpoint` with a thin delegating wrapper:
-   - Import the modular implementation:
-     - `from tldw_Server_API.app.api.v1.endpoints.media.process_audios import process_audios_endpoint as _process_audios_impl`
-   - Forward all parameters:
-     - `return await _process_audios_impl(background_tasks=background_tasks, db=db, form_data=form_data, files=files, usage_log=usage_log)`
-3. Ensure the function signature remains identical so any direct calls from tests or other modules still succeed.
-4. Confirm that `media/__init__.py` continues to prepend `process_audios.router.routes` before `legacy_router.routes`, so the only active HTTP route for `/process-audios` is the modular one.
-
-Success criteria:
-
-- Importers of `_legacy_media.process_audios_endpoint` still work as before.
-- Actual HTTP traffic for `/process-audios` is handled only by the modular endpoint.
+- `_legacy_media.py` does not exist in this repo; compatibility is provided through
+  `tldw_Server_API/app/api/v1/endpoints/media/__init__.py` exports and shims for tests.
+- The only active HTTP route for `/process-audios` is the modular one registered in `media/__init__.py`.
 
 ---
 

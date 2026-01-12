@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 # Imports
+from decimal import Decimal, InvalidOperation
 from typing import Optional, Dict, Any, List, Union, Literal
 from uuid import UUID
 from datetime import datetime, date
@@ -98,6 +99,10 @@ class RegistrationCodeRequest(BaseModel):
     max_uses: int = Field(1, ge=1, le=100)
     expiry_days: int = Field(7, ge=1, le=365)
     role_to_grant: str = Field("user", pattern="^(user|admin|service)$")
+    allowed_email_domain: Optional[str] = Field(
+        None,
+        pattern=r"^@?[A-Za-z0-9.-]+$",
+    )
     metadata: Optional[Dict[str, Any]] = None
     org_id: Optional[int] = Field(None, ge=1)
     org_role: Optional[str] = Field(None, pattern=r"^(owner|admin|lead|member)$")
@@ -114,11 +119,15 @@ class RegistrationCodeResponse(BaseModel):
     times_used: int
     expires_at: datetime
     created_at: datetime
+    created_by: Optional[int] = None
     role_to_grant: str
+    allowed_email_domain: Optional[str] = None
     org_id: Optional[int] = None
     org_role: Optional[str] = None
     team_id: Optional[int] = None
+    org_name: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
+    is_active: Optional[bool] = None
     is_valid: Optional[bool] = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -127,10 +136,8 @@ class RegistrationCodeResponse(BaseModel):
         super().__init__(**data)
         # Calculate is_valid if not provided
         if self.is_valid is None:
-            self.is_valid = (
-                self.times_used < self.max_uses and
-                self.expires_at > datetime.utcnow()
-            )
+            is_active = True if self.is_active is None else bool(self.is_active)
+            self.is_valid = is_active and self.times_used < self.max_uses and self.expires_at > datetime.utcnow()
 
 
 class RegistrationCodeListResponse(BaseModel):
@@ -682,6 +689,18 @@ def _normalize_threshold_list(values: List[Any]) -> List[int]:
     return sorted(set(cleaned))
 
 
+def _validate_usd_precision(value: Optional[Any]) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        dec = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise ValueError("USD budgets must be valid decimals") from exc
+    if dec.as_tuple().exponent < -2:
+        raise ValueError("USD budgets must have at most 2 decimal places")
+    return float(dec)
+
+
 class BudgetAlertThresholds(BaseModel):
     """Alert thresholds for budgets (global + per-metric)."""
     global_: Optional[List[int]] = Field(default=None, alias="global")
@@ -753,6 +772,11 @@ class BudgetSettings(BaseModel):
     budget_month_tokens: Optional[int] = Field(None, ge=0)
     alert_thresholds: Optional[BudgetAlertThresholds] = None
     enforcement_mode: Optional[BudgetEnforcementMode] = None
+
+    @field_validator("budget_day_usd", "budget_month_usd", mode="before")
+    @classmethod
+    def validate_usd_precision(cls, v: Optional[Any]) -> Optional[float]:
+        return _validate_usd_precision(v)
 
     @field_validator("alert_thresholds", mode="before")
     @classmethod

@@ -88,6 +88,7 @@ class ContentItemRow:
     domain: Optional[str]
     title: Optional[str]
     summary: Optional[str]
+    notes: Optional[str]
     content_hash: Optional[str]
     word_count: Optional[int]
     published_at: Optional[str]
@@ -238,6 +239,7 @@ class CollectionsDatabase:
                     domain TEXT,
                     title TEXT,
                     summary TEXT,
+                    notes TEXT,
                     content_hash TEXT,
                     word_count INTEGER,
                     published_at TEXT,
@@ -292,6 +294,7 @@ class CollectionsDatabase:
             "run_id": "INTEGER",
             "source_id": "INTEGER",
             "read_at": "TEXT",
+            "notes": "TEXT",
         }
         for column, col_type in _backfill_columns.items():
             try:
@@ -407,6 +410,7 @@ class CollectionsDatabase:
         *,
         title: Optional[str],
         summary: Optional[str],
+        notes: Optional[str],
         tags: Optional[List[str]],
         metadata_json: Optional[str],
     ) -> None:
@@ -414,6 +418,8 @@ class CollectionsDatabase:
             return
         try:
             metadata_text = metadata_json or ""
+            if notes:
+                metadata_text = f"{metadata_text}\n{notes}" if metadata_text else notes
             self.backend.execute(
                 "DELETE FROM content_items_fts WHERE rowid = ?",
                 (item_id,),
@@ -455,6 +461,7 @@ class CollectionsDatabase:
             domain=row.get("domain"),
             title=row.get("title"),
             summary=row.get("summary"),
+            notes=row.get("notes"),
             content_hash=row.get("content_hash"),
             word_count=(int(row.get("word_count")) if row.get("word_count") is not None else None),
             published_at=row.get("published_at"),
@@ -477,7 +484,7 @@ class CollectionsDatabase:
         row = self.backend.execute(
             """
             SELECT id, user_id, origin, origin_type, origin_id, url, canonical_url, domain,
-                   title, summary, content_hash, word_count, published_at, status, favorite,
+                   title, summary, notes, content_hash, word_count, published_at, status, favorite,
                    metadata_json, media_id, job_id, run_id, source_id, read_at, created_at, updated_at
             FROM content_items
             WHERE id = ? AND user_id = ?
@@ -500,6 +507,7 @@ class CollectionsDatabase:
         domain: Optional[str],
         title: Optional[str],
         summary: Optional[str],
+        notes: Optional[str] = None,
         content_hash: Optional[str],
         word_count: Optional[int],
         published_at: Optional[str],
@@ -540,7 +548,7 @@ class CollectionsDatabase:
             existing_row = self.backend.execute(
                 f"""
                 SELECT id, user_id, origin, origin_type, origin_id, url, canonical_url, domain,
-                       title, summary, content_hash, word_count, published_at, status, favorite,
+                       title, summary, notes, content_hash, word_count, published_at, status, favorite,
                        metadata_json, media_id, job_id, run_id, source_id, read_at, created_at, updated_at
                 FROM content_items
                 WHERE user_id = ? AND {column} = ?
@@ -565,6 +573,7 @@ class CollectionsDatabase:
                 "domain = ?",
                 "title = ?",
                 "summary = ?",
+                "notes = ?",
                 "content_hash = ?",
                 "word_count = ?",
                 "published_at = ?",
@@ -587,6 +596,7 @@ class CollectionsDatabase:
                 domain_val,
                 title,
                 summary,
+                notes,
                 content_hash,
                 word_count,
                 published_at,
@@ -615,9 +625,9 @@ class CollectionsDatabase:
                 """
                 INSERT INTO content_items (
                     user_id, origin, origin_type, origin_id, url, canonical_url, domain, title, summary,
-                    content_hash, word_count, published_at, status, favorite, metadata_json, media_id,
+                    notes, content_hash, word_count, published_at, status, favorite, metadata_json, media_id,
                     job_id, run_id, source_id, read_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     self.user_id,
@@ -629,6 +639,7 @@ class CollectionsDatabase:
                     domain_val,
                     title,
                     summary,
+                    notes,
                     content_hash,
                     word_count,
                     published_at,
@@ -655,6 +666,7 @@ class CollectionsDatabase:
                 item_id,
                 title=title,
                 summary=summary,
+                notes=notes,
                 tags=list(tags or []),
                 metadata_json=metadata_json,
             )
@@ -703,12 +715,16 @@ class CollectionsDatabase:
                 params.append(fts_query)
             else:
                 q_like = f"%{q.lower()}%"
-                where.append("(LOWER(COALESCE(ci.title, '')) LIKE ? OR LOWER(COALESCE(ci.summary, '')) LIKE ?)")
-                params.extend([q_like, q_like])
+                where.append(
+                    "(LOWER(COALESCE(ci.title, '')) LIKE ? OR LOWER(COALESCE(ci.summary, '')) LIKE ? OR LOWER(COALESCE(ci.notes, '')) LIKE ?)"
+                )
+                params.extend([q_like, q_like, q_like])
         elif q:
             q_like = f"%{q.lower()}%"
-            where.append("(LOWER(COALESCE(ci.title, '')) LIKE ? OR LOWER(COALESCE(ci.summary, '')) LIKE ?)")
-            params.extend([q_like, q_like])
+            where.append(
+                "(LOWER(COALESCE(ci.title, '')) LIKE ? OR LOWER(COALESCE(ci.summary, '')) LIKE ? OR LOWER(COALESCE(ci.notes, '')) LIKE ?)"
+            )
+            params.extend([q_like, q_like, q_like])
 
         if domain:
             where.append("ci.domain = ?")
@@ -776,7 +792,7 @@ class CollectionsDatabase:
         rows_sql = f"""
             SELECT
                 ci.id, ci.user_id, ci.origin, ci.origin_type, ci.origin_id, ci.url, ci.canonical_url,
-                ci.domain, ci.title, ci.summary, ci.content_hash, ci.word_count, ci.published_at,
+                ci.domain, ci.title, ci.summary, ci.notes, ci.content_hash, ci.word_count, ci.published_at,
                 ci.status, ci.favorite, ci.metadata_json, ci.media_id, ci.job_id, ci.run_id,
                 ci.source_id, ci.read_at, ci.created_at, ci.updated_at
             {base_from}
@@ -803,6 +819,7 @@ class CollectionsDatabase:
         metadata: Optional[Dict[str, Any]] = None,
         title: Optional[str] = None,
         summary: Optional[str] = None,
+        notes: Optional[str] = None,
         read_at: Optional[str] = None,
     ) -> ContentItemRow:
         """Update persisted content item fields and tags."""
@@ -821,6 +838,9 @@ class CollectionsDatabase:
         if summary is not None:
             updates.append("summary = ?")
             params.append(summary)
+        if notes is not None:
+            updates.append("notes = ?")
+            params.append(notes)
         if read_at is not None:
             updates.append("read_at = ?")
             params.append(read_at)
@@ -857,6 +877,7 @@ class CollectionsDatabase:
                 item_id,
                 title=tgt.title,
                 summary=tgt.summary,
+                notes=tgt.notes,
                 tags=tgt.tags,
                 metadata_json=tgt.metadata_json,
             )

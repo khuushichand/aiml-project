@@ -184,8 +184,10 @@ async def _resolve_and_validate_eval_provider(
     provider_name = (request.api_name or "openai").strip() or "openai"
     provider_key = provider_name.lower()
     raw_api_key = getattr(request, "api_key", None)
-    explicit_key = (raw_api_key or "").strip() if raw_api_key else None
-    provider_api_key = explicit_key
+    if raw_api_key:
+        logger.debug("Ignoring per-request api_key override for provider=%s", provider_name)
+    explicit_key = None
+    provider_api_key = None
     byok_resolution: Optional[ResolvedByokCredentials] = None
 
     if not provider_api_key:
@@ -1306,9 +1308,11 @@ async def batch_evaluate(
             explicit_key: Optional[str] = None
             if isinstance(eval_request, dict):
                 provider_name = (eval_request.get("api_name") or "openai").strip() or "openai"
-                explicit_key = (eval_request.get("api_key") or "").strip() if eval_request.get("api_key") else None
+                raw_api_key = eval_request.get("api_key")
+                if raw_api_key:
+                    logger.debug("Ignoring per-request api_key override for provider=%s", provider_name)
             provider_key = provider_name.lower()
-            provider_api_key = explicit_key
+            provider_api_key = None
             byok_resolution = None
 
             if eval_type in {"geval", "rag", "response_quality"} and not provider_api_key:

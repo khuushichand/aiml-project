@@ -2,6 +2,62 @@
 // Externalized bindings for Admin advanced panels (virtual keys, orgs/teams, tool permissions, rate limits, tool catalog).
 
 function esc(x) { return Utils.escapeHtml(String(x ?? '')); }
+function copyText(value, label) {
+  if (!value) return;
+  const text = String(value);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text);
+    if (typeof Toast !== 'undefined' && Toast) Toast.success(`${label || 'Copied'} to clipboard`);
+    return;
+  }
+  window.prompt('Copy to clipboard:', text);
+}
+
+function parseJsonInput(value, label) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch (err) {
+    const msg = `${label || 'JSON'} is invalid`;
+    if (typeof Toast !== 'undefined' && Toast) Toast.error(msg);
+    throw new Error(msg);
+  }
+}
+
+let _webuiBaseUrlPromise = null;
+function normalizeWebuiBaseUrl(raw) {
+  let base = String(raw || '').trim();
+  if (!base) return window.location.origin;
+  if (base.startsWith('/')) base = window.location.origin + base;
+  return base.replace(/\/+$/, '');
+}
+
+async function resolveWebuiBaseUrl() {
+  if (_webuiBaseUrlPromise) return _webuiBaseUrlPromise;
+  _webuiBaseUrlPromise = (async () => {
+    let base = null;
+    try {
+      const res = await fetch('/webui/config.json', { cache: 'no-store' });
+      if (res.ok) {
+        const cfg = await res.json();
+        base = cfg.webui_base_url || cfg.webuiBaseUrl || cfg.webui_base || null;
+      }
+    } catch (_) {}
+    return normalizeWebuiBaseUrl(base);
+  })();
+  return _webuiBaseUrlPromise;
+}
+
+function buildWebuiLink(base, path) {
+  let root = base;
+  if (!/\/webui\/?$/.test(root)) {
+    root = `${root}/webui`;
+  }
+  root = root.replace(/\/+$/, '');
+  const cleanPath = String(path || '').replace(/^\/+/, '');
+  return `${root}/${cleanPath}`;
+}
 
 // ---------- User Registration (moved from inline) ----------
 async function adminCreateUser() {
@@ -31,6 +87,66 @@ function bindAdminUsersBasics() {
   // Create User
   const createBtn = document.getElementById('btnAdminCreateUser');
   if (createBtn) createBtn.addEventListener('click', adminCreateUser);
+}
+
+// ---------- Registration Settings ----------
+function applyRegistrationSettings(settings) {
+  if (!settings) return;
+  const enableEl = document.getElementById('regSettings_enable');
+  const requireEl = document.getElementById('regSettings_requireCode');
+  const authModeEl = document.getElementById('regSettings_authMode');
+  const profileEl = document.getElementById('regSettings_profile');
+  const selfAllowedEl = document.getElementById('regSettings_selfAllowed');
+  const warningEl = document.getElementById('regSettings_warning');
+  const createBtn = document.getElementById('btnRegCodeCreate');
+
+  if (enableEl) enableEl.checked = !!settings.enable_registration;
+  if (requireEl) requireEl.checked = !!settings.require_registration_code;
+  if (authModeEl) authModeEl.textContent = settings.auth_mode ?? 'unknown';
+  if (profileEl) profileEl.textContent = settings.profile ?? 'unknown';
+  if (selfAllowedEl) selfAllowedEl.textContent = settings.self_registration_allowed ? 'true' : 'false';
+
+  const canCreate = !!settings.enable_registration && !!settings.self_registration_allowed;
+  if (createBtn) createBtn.disabled = !canCreate;
+  if (warningEl) {
+    warningEl.textContent = canCreate
+      ? ''
+      : 'Registration is disabled or blocked by profile; code creation is locked.';
+  }
+}
+
+async function regSettingsLoad() {
+  try {
+    const res = await window.apiClient.get('/api/v1/admin/registration-settings');
+    const out = document.getElementById('adminRegSettings_result');
+    if (out) out.textContent = JSON.stringify(res, null, 2);
+    applyRegistrationSettings(res);
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Registration settings loaded');
+  } catch (e) {
+    const out = document.getElementById('adminRegSettings_result');
+    if (out) out.textContent = JSON.stringify(e.response || e, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to load registration settings');
+  }
+}
+
+async function regSettingsSave() {
+  try {
+    const enableEl = document.getElementById('regSettings_enable');
+    const requireEl = document.getElementById('regSettings_requireCode');
+    const payload = {
+      enable_registration: !!enableEl?.checked,
+      require_registration_code: !!requireEl?.checked,
+    };
+    const res = await window.apiClient.post('/api/v1/admin/registration-settings', payload);
+    const out = document.getElementById('adminRegSettings_result');
+    if (out) out.textContent = JSON.stringify(res, null, 2);
+    applyRegistrationSettings(res);
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Registration settings updated');
+  } catch (e) {
+    const out = document.getElementById('adminRegSettings_result');
+    if (out) out.textContent = JSON.stringify(e.response || e, null, 2);
+    if (typeof Toast !== 'undefined' && Toast) Toast.error('Failed to update registration settings');
+  }
 }
 
 // ---------- Virtual Keys (per user) ----------
@@ -72,11 +188,23 @@ async function admVKList() {
 // ---------- Registration Codes ----------
 async function rcCreate() {
   try {
+    const orgIdValue = parseInt(document.getElementById('regCode_orgId')?.value || '0', 10);
+    const teamIdValue = parseInt(document.getElementById('regCode_teamId')?.value || '0', 10);
+    if (teamIdValue && !orgIdValue) {
+      if (typeof Toast !== 'undefined' && Toast) Toast.error('Org ID is required when Team ID is set');
+      return;
+    }
+    const metadata = parseJsonInput(document.getElementById('regCode_metadata')?.value, 'Metadata');
+    const orgRoleValue = document.getElementById('regCode_orgRole')?.value || null;
     const payload = {
       max_uses: parseInt(document.getElementById('regCode_maxUses')?.value || '1', 10),
-      expires_in_days: parseInt(document.getElementById('regCode_expires')?.value || '30', 10),
+      expiry_days: parseInt(document.getElementById('regCode_expires')?.value || '30', 10),
       role_to_grant: document.getElementById('regCode_role')?.value || 'user',
-      description: document.getElementById('regCode_desc')?.value || null,
+      allowed_email_domain: (document.getElementById('regCode_allowedDomain')?.value || '').trim() || null,
+      metadata,
+      org_id: orgIdValue || null,
+      org_role: orgIdValue ? orgRoleValue : null,
+      team_id: teamIdValue || null,
     };
     const res = await window.apiClient.post('/api/v1/admin/registration-codes', payload);
     const out = document.getElementById('adminRegCodes_result');
@@ -92,7 +220,9 @@ async function rcCreate() {
 
 async function rcList() {
   try {
-    const res = await window.apiClient.get('/api/v1/admin/registration-codes');
+    const includeExpired = document.getElementById('regCode_includeExpired')?.checked;
+    const qs = includeExpired ? '?include_expired=true' : '';
+    const res = await window.apiClient.get(`/api/v1/admin/registration-codes${qs}`);
     const codes = Array.isArray(res.codes) ? res.codes : [];
     rcRenderList(codes);
     const out = document.getElementById('adminRegCodes_result');
@@ -106,11 +236,11 @@ async function rcList() {
 
 async function rcDelete(id) {
   try {
-    if (!confirm('Delete this registration code?')) return;
+    if (!confirm('Revoke this registration code?')) return;
     const res = await window.apiClient.delete(`/api/v1/admin/registration-codes/${id}`);
     const out = document.getElementById('adminRegCodes_result');
     if (out) out.textContent = JSON.stringify(res, null, 2);
-    if (typeof Toast !== 'undefined' && Toast) Toast.success('Registration code deleted');
+    if (typeof Toast !== 'undefined' && Toast) Toast.success('Registration code revoked');
     await rcList();
   } catch (e) {
     const out = document.getElementById('adminRegCodes_result');
@@ -124,19 +254,46 @@ function rcRenderList(items) {
   if (!container) return;
   if (!items.length) { container.innerHTML = '<p>No registration codes found.</p>'; return; }
   let html = '<table class="simple-table"><thead><tr>' +
-    '<th>ID</th><th>Code</th><th>Role</th><th>Uses</th><th>Max</th><th>Expires</th><th>Actions</th>' +
+    '<th>ID</th><th>Code</th><th>Role</th><th>Org</th><th>Allowed Domain</th><th>Uses</th><th>Expires</th>' +
+    '<th>Created</th><th>Created By</th><th>Status</th><th>Actions</th>' +
     '</tr></thead><tbody>';
   for (const c of items) {
     const id = esc(c.id);
+    const code = esc(c.code);
+    const orgParts = [];
+    if (c.org_id) orgParts.push(`org ${esc(c.org_id)}`);
+    if (c.org_name) orgParts.push(`name ${esc(c.org_name)}`);
+    if (c.org_role) orgParts.push(`role ${esc(c.org_role)}`);
+    if (c.team_id) orgParts.push(`team ${esc(c.team_id)}`);
+    const orgText = orgParts.join(' / ');
+    const usesText = `${esc(c.times_used ?? 0)}/${esc(c.max_uses ?? '')}`;
+    const statusParts = [];
+    const isActive = (c.is_active === undefined || c.is_active === null) ? true : !!c.is_active;
+    statusParts.push(isActive ? 'active' : 'inactive');
+    statusParts.push(c.is_valid === false ? 'invalid' : 'valid');
+    const statusText = statusParts.join(' / ');
+    const rowStyle = c.is_valid === false ? ' style="opacity:0.6;"' : '';
+    const acceptBtn = c.org_id
+      ? `<button class="btn rc-copy-accept" data-code="${code}">Copy accept link</button>`
+      : '';
     html += `
-      <tr>
+      <tr${rowStyle}>
         <td>${id}</td>
-        <td><code>${esc(c.code)}</code></td>
+        <td><code>${code}</code></td>
         <td>${esc(c.role_to_grant || '')}</td>
-        <td>${esc(c.times_used ?? 0)}</td>
-        <td>${esc(c.max_uses ?? '')}</td>
+        <td>${orgText}</td>
+        <td>${esc(c.allowed_email_domain || '')}</td>
+        <td>${usesText}</td>
         <td>${esc(c.expires_at || '')}</td>
-        <td><button class="btn btn-danger rc-delete" data-id="${id}">Delete</button></td>
+        <td>${esc(c.created_at || '')}</td>
+        <td>${esc(c.created_by || '')}</td>
+        <td>${statusText}</td>
+        <td>
+          <button class="btn rc-copy-code" data-code="${code}">Copy code</button>
+          <button class="btn rc-copy-link" data-code="${code}">Copy registration link</button>
+          ${acceptBtn}
+          <button class="btn btn-danger rc-delete" data-id="${id}">Revoke</button>
+        </td>
       </tr>`;
   }
   html += '</tbody></table>';
@@ -1498,8 +1655,27 @@ function bindAdminAdvanced() {
     if (t && t.classList?.contains('rc-delete')) {
       const id = parseInt(t.getAttribute('data-id') || '0', 10);
       if (id) rcDelete(id);
+    } else if (t && t.classList?.contains('rc-copy-code')) {
+      copyText(t.getAttribute('data-code'), 'Code');
+    } else if (t && t.classList?.contains('rc-copy-link')) {
+      const code = t.getAttribute('data-code') || '';
+      resolveWebuiBaseUrl().then((base) => {
+        const url = buildWebuiLink(base, `auth.html?code=${encodeURIComponent(code)}`);
+        copyText(url, 'Registration link');
+      });
+    } else if (t && t.classList?.contains('rc-copy-accept')) {
+      const code = t.getAttribute('data-code') || '';
+      resolveWebuiBaseUrl().then((base) => {
+        const url = buildWebuiLink(base, `accept-invite.html?code=${encodeURIComponent(code)}`);
+        copyText(url, 'Acceptance link');
+      });
     }
   });
+
+  // Registration Settings
+  document.getElementById('btnRegSettingsLoad')?.addEventListener('click', regSettingsLoad);
+  document.getElementById('btnRegSettingsSave')?.addEventListener('click', regSettingsSave);
+  if (document.getElementById('regSettings_enable')) regSettingsLoad();
 
   // LLM Usage (query/download) controls
   document.getElementById('btnAdminLLMUsageQuery')?.addEventListener('click', adminQueryLLMUsage);

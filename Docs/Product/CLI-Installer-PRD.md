@@ -215,6 +215,8 @@
 
 ### Implementation Plan
 
+- Plan file: `Docs/Plans/IMPLEMENTATION_PLAN_cli_installer_env_merge.md`
+
 ## Stage 1: Scaffold + Packaging
 **Goal**: Ship a packaged CLI skeleton with core commands, safe file ops, and JSON output.
 **Success Criteria**:
@@ -225,7 +227,7 @@
 **Tests**:
 - CLI smoke tests for `init --dry-run --json`, `auth --mode single_user --json`, `verify --json`.
 - `.env` creation and permissions verified in tmpdir.
-**Status**: Complete
+**Status**: In Progress
 
 ## Stage 2: Env Management + Auth Modes
 **Goal**: Implement robust `.env` merge/update with masking and key generation; support single/multi-user flows.
@@ -237,7 +239,7 @@
 **Tests**:
 - Unit tests for merge logic (idempotency, dedupe, updates, backup on first change).
 - Integration tests: single_user first run and re-run; multi_user path with valid/invalid `DATABASE_URL`.
-**Status**: Not Started
+**Status**: In Progress
 
 ## Stage 3: Database Initialization + Verification
 **Goal**: Create per-user SQLite structure and validate Postgres connectivity.

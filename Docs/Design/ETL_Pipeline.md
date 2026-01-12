@@ -9,6 +9,7 @@ https://github.com/mickael-kerjean/filestash
 https://github.com/opendatalab/OmniDocBench
 https://python.langchain.com/docs/integrations/document_loaders/source_code/
 https://python.langchain.com/docs/integrations/document_loaders/
+https://github.com/kreuzberg-dev/kreuzberg
 https://github.com/whyhow-ai/knowledge-table
 https://olmocr.allenai.org/papers/olmocr.pdf
 https://github.com/NanoNets/docstrange

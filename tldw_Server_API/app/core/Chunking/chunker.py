@@ -1004,6 +1004,12 @@ class Chunker:
                 md['ancestry_titles'] = titles
                 if titles:
                     md['section_path'] = ' > '.join(titles)
+                raw_chunk_type = md.get('chunk_type')
+                if raw_chunk_type is None or raw_chunk_type == "":
+                    raw_chunk_type = md.get('paragraph_kind')
+                normalized_chunk_type = self.normalize_chunk_type(raw_chunk_type)
+                if normalized_chunk_type:
+                    md['chunk_type'] = normalized_chunk_type
                 out.append({'text': txt, 'metadata': md})
 
         def _gather_section_items(section_node: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1920,6 +1926,40 @@ class Chunker:
             return _clean_method(str(method))
         except Exception:
             return None
+
+    @staticmethod
+    def normalize_chunk_type(value: Optional[Any]) -> Optional[str]:
+        """Normalize chunk_type values to a canonical, API-facing vocabulary."""
+        if value is None:
+            return None
+        try:
+            enum_value = getattr(value, "value")
+            if isinstance(enum_value, str):
+                value = enum_value
+        except Exception:
+            pass
+        try:
+            raw = str(value).strip().lower()
+        except Exception:
+            return None
+        if not raw:
+            return None
+        aliases = {
+            "header": "heading",
+            "header_atx": "heading",
+            "header_line": "heading",
+            "hr": "heading",
+            "paragraph": "text",
+            "list_unordered": "list",
+            "list_ordered": "list",
+            "code_fence": "code",
+            "table_md": "table",
+        }
+        if raw in aliases:
+            return aliases[raw]
+        if raw in {"image", "video", "audio", "file", "media"}:
+            return "media"
+        return raw
 
     @staticmethod
     def _canonicalize_value(value: Any) -> Any:

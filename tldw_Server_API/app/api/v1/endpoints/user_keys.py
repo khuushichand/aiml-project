@@ -172,6 +172,8 @@ async def upsert_user_provider_key(
         key_hint=key_hint_for_api_key(api_key),
         metadata=payload.metadata,
         updated_at=now,
+        created_by=int(current_user["id"]),
+        updated_by=int(current_user["id"]),
     )
     return UserProviderKeyResponse(
         provider=provider_norm,
@@ -378,6 +380,10 @@ async def delete_user_provider_key(
     _require_byok_enabled()
     provider_norm = normalize_provider_name(provider)
     repo = await _get_user_repo()
-    deleted = await repo.delete_secret(int(current_user["id"]), provider_norm)
+    deleted = await repo.delete_secret(
+        int(current_user["id"]),
+        provider_norm,
+        revoked_by=int(current_user["id"]),
+    )
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Key not found")

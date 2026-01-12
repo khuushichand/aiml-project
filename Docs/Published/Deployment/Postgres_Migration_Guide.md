@@ -8,17 +8,14 @@ workflow jobs.
 
 ## Prerequisites
 
-- Back up all SQLite databases (`<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`, `Databases/workflows.db`, `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db` for each user, `Analytics.db`).
+- `<USER_DB_BASE_DIR>` is defined in `tldw_Server_API.app.core.config` (set via the `USER_DB_BASE_DIR` environment variable or `Config_Files/config.txt`); when unset it defaults to `Databases/user_databases/` under the project root.
+- Back up all SQLite databases for each user (`<USER_DB_BASE_DIR>/<user_id>/Media_DB_v2.db`, `<USER_DB_BASE_DIR>/<user_id>/ChaChaNotes.db`, and `<USER_DB_BASE_DIR>/<user_id>/workflows/workflows.db` if workflows are stored per-user), plus `Analytics.db`. If your deployment uses a shared workflows SQLite file (for example `workflows_path=Databases/workflows.db` in `Config_Files/config.txt`), back up `Databases/workflows.db` once outside the per-user list.
 - Install PostgreSQL and ensure the target database is accessible (local host or remote).
 - Install the Python dependency `psycopg` (listed under pyproject extras, e.g., `.[multiplayer]`). For convenience use the binary extra:
   - pip install "psycopg[binary]"
 - Configure the server once against PostgreSQL so the schema exists. The easiest option is to set
   `TLDW_CONTENT_DB_BACKEND=postgresql` temporarily and start the API; it will create all tables and
   FTS artefacts, then shut the server down before migrating data.
-
-Note: `<USER_DB_BASE_DIR>` is defined in `tldw_Server_API.app.core.config` and can be set via
-environment variable or `Config_Files/config.txt`. When unset, it defaults to
-`Databases/user_databases/` under the project root.
 
 ## Step 1 - Prepare connection details
 

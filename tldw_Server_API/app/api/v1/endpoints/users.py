@@ -39,7 +39,6 @@ from tldw_Server_API.app.services.storage_quota_service import StorageQuotaServi
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
     InvalidCredentialsError,
     WeakPasswordError,
-    SessionError
 )
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 
@@ -386,39 +385,17 @@ async def list_user_sessions(
     session_manager: SessionManager = Depends(get_session_manager_dep)
 ) -> List[SessionResponse]:
     """
-    List all active sessions for the current user
+    List all active sessions for the current user.
 
     Returns:
         List of SessionResponse objects
     """
-    try:
-        sessions = await session_manager.get_user_sessions(current_user['id'])
+    from tldw_Server_API.app.api.v1.endpoints.auth import list_user_sessions as _auth_list_sessions
 
-        return [
-            SessionResponse(
-                id=session['id'],
-                ip_address=session.get('ip_address'),
-                user_agent=session.get('user_agent'),
-                created_at=session['created_at'],
-                last_activity=session['last_activity'],
-                expires_at=session['expires_at']
-            )
-            for session in sessions
-        ]
-
-    except Exception as e:
-        logger.error(f"Failed to list user sessions: {e}")
-        # In test mode, surface the underlying error to aid debugging
-        import os as _os
-        if _os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to retrieve sessions: {e}"
-            )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve sessions"
-        )
+    return await _auth_list_sessions(
+        current_user=current_user,
+        session_manager=session_manager,
+    )
 
 
 @router.delete("/sessions/{session_id}", response_model=MessageResponse)
@@ -428,7 +405,7 @@ async def revoke_session(
     session_manager: SessionManager = Depends(get_session_manager_dep)
 ) -> MessageResponse:
     """
-    Revoke a specific session
+    Revoke a specific session.
 
     Allows users to log out specific sessions (e.g., on other devices).
 
@@ -441,47 +418,13 @@ async def revoke_session(
     Raises:
         HTTPException: 404 if session not found or doesn't belong to user
     """
-    try:
-        # Get session to verify ownership
-        sessions = await session_manager.get_user_sessions(current_user['id'])
-        session_ids = [s['id'] for s in sessions]
+    from tldw_Server_API.app.api.v1.endpoints.auth import revoke_session as _auth_revoke_session
 
-        if session_id not in session_ids:
-            # Return success for idempotency - session is already not active
-            logger.info(f"Session {session_id} not found for user {current_user['id']} - treating as already revoked")
-            return MessageResponse(
-                message="Session revoked successfully",
-                details={"session_id": session_id, "note": "Session was already inactive or did not exist"}
-            )
-
-        # Revoke the session
-        await session_manager.revoke_session(
-            session_id,
-            revoked_by=current_user['id'],
-            reason="User requested revocation"
-        )
-
-        logger.info(f"User {current_user['username']} revoked session {session_id}")
-
-        return MessageResponse(
-            message="Session revoked successfully",
-            details={"session_id": session_id}
-        )
-
-    except HTTPException:
-        raise
-    except SessionError as e:
-        logger.error(f"Failed to revoke session: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to revoke session"
-        )
-    except Exception as e:
-        logger.error(f"Unexpected error revoking session: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while revoking the session"
-        )
+    return await _auth_revoke_session(
+        session_id=session_id,
+        current_user=current_user,
+        session_manager=session_manager,
+    )
 
 
 @router.post("/sessions/revoke-all", response_model=MessageResponse)
@@ -490,32 +433,19 @@ async def revoke_all_sessions(
     session_manager: SessionManager = Depends(get_session_manager_dep)
 ) -> MessageResponse:
     """
-    Revoke all sessions for the current user
+    Revoke all sessions for the current user.
 
     Logs out the user from all devices.
 
     Returns:
         MessageResponse confirming revocation
     """
-    try:
-        count = await session_manager.revoke_all_user_sessions(
-            current_user['id'],
-            reason="User requested logout from all devices"
-        )
+    from tldw_Server_API.app.api.v1.endpoints.auth import revoke_all_sessions as _auth_revoke_all_sessions
 
-        logger.info(f"User {current_user['username']} revoked all {count} sessions")
-
-        return MessageResponse(
-            message=f"Successfully revoked {count} sessions",
-            details={"sessions_revoked": count}
-        )
-
-    except Exception as e:
-        logger.error(f"Failed to revoke all sessions: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to revoke sessions"
-        )
+    return await _auth_revoke_all_sessions(
+        current_user=current_user,
+        session_manager=session_manager,
+    )
 
 
 #######################################################################################################################

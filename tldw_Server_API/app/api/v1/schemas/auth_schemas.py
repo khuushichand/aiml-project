@@ -198,6 +198,25 @@ class TokenResponse(BaseModel):
     }
 
 
+class MFAChallengeResponse(BaseModel):
+    """MFA challenge response for login flows."""
+    session_token: str = Field(..., description="Temporary session token for MFA completion")
+    mfa_required: bool = Field(default=True, description="Whether MFA completion is required")
+    expires_in: int = Field(..., description="MFA session expiration in seconds")
+    message: Optional[str] = Field(default=None, description="Optional MFA instructions")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "session_token": "mfa-session-token",
+                "mfa_required": True,
+                "expires_in": 600,
+                "message": "MFA required. Submit your TOTP or backup code.",
+            }
+        }
+    }
+
+
 class UserResponse(BaseModel):
     """User information response"""
     id: int = Field(..., description="User ID")

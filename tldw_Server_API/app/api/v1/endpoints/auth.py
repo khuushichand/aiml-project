@@ -5,6 +5,8 @@
 from typing import Dict, Any, Optional, List
 import os
 import base64
+import json
+import secrets
 from datetime import datetime, timezone, timedelta
 from importlib import import_module
 #
@@ -24,7 +26,9 @@ from tldw_Server_API.app.api.v1.schemas.auth_schemas import (
     RegisterRequest,
     RegistrationResponse,
     MessageResponse,
-    UserResponse
+    UserResponse,
+    SessionResponse,
+    MFAChallengeResponse,
 )
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_db_transaction,
@@ -70,7 +74,8 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import (
     DuplicateUserError,
     WeakPasswordError,
     InvalidRegistrationCodeError,
-    DatabaseError
+    DatabaseError,
+    SessionError,
 )
 from tldw_Server_API.app.services.auth_service import (
     fetch_user_by_login_identifier,
@@ -128,6 +133,17 @@ def _mfa_setup_cache_key(user_id: int) -> str:
 def _get_mfa_setup_ttl_seconds() -> int:
     try:
         ttl = int(os.getenv("MFA_SETUP_TTL_SECONDS", "600"))
+    except (TypeError, ValueError):
+        ttl = 600
+    return max(ttl, 60)
+
+def _mfa_login_cache_key(session_token: str) -> str:
+    return f"mfa:login:{session_token}"
+
+
+def _get_mfa_login_ttl_seconds() -> int:
+    try:
+        ttl = int(os.getenv("MFA_LOGIN_TTL_SECONDS", "600"))
     except (TypeError, ValueError):
         ttl = 600
     return max(ttl, 60)
@@ -361,7 +377,12 @@ async def mint_self_virtual_key(
             )
         raise HTTPException(status_code=500, detail="Failed to mint token") from e
 
-@router.post("/login", response_model=TokenResponse, dependencies=[Depends(check_auth_rate_limit)])
+@router.post(
+    "/login",
+    response_model=TokenResponse | MFAChallengeResponse,
+    dependencies=[Depends(check_auth_rate_limit)],
+    responses={status.HTTP_202_ACCEPTED: {"model": MFAChallengeResponse}},
+)
 async def login(
     request: Request,
     response: Response,
@@ -373,7 +394,7 @@ async def login(
     session_manager: SessionManager = Depends(get_session_manager_dep),
     rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
     settings: Settings = Depends(get_settings)
-) -> TokenResponse:
+) -> TokenResponse | MFAChallengeResponse:
     """
     OAuth2 compatible login endpoint
 
@@ -601,6 +622,25 @@ async def login(
             await update_user_password_hash(db, int(user['id']), new_hash)
             logger.info(f"Updated password hash for user {user['username']} with new parameters")
 
+        # Determine whether MFA is required (multi-user + PostgreSQL only).
+        mfa_required = False
+        if settings.AUTH_MODE == "multi_user":
+            try:
+                is_pg = await is_postgres_backend()
+            except Exception:
+                logger.debug("Failed to determine database backend for MFA login check", exc_info=True)
+                is_pg = False
+            if is_pg:
+                try:
+                    mfa_service = _get_mfa_service()
+                    mfa_status = await mfa_service.get_user_mfa_status(int(user["id"]))
+                    mfa_required = bool(mfa_status.get("enabled"))
+                except Exception as exc:
+                    logger.debug(
+                        "MFA status lookup failed during login; treating as disabled: {}",
+                        exc,
+                    )
+
         # Create session first to get session_id
         user_agent = request.headers.get("User-Agent", "Unknown")
 
@@ -621,7 +661,6 @@ async def login(
         else:
             # For multi-user mode, create a temporary session first
             # Use unique placeholders to avoid duplicate token hash constraints
-            import secrets
             temp_access = f"temp_access_{secrets.token_urlsafe(16)}"
             temp_refresh = f"temp_refresh_{secrets.token_urlsafe(16)}"
 
@@ -634,6 +673,38 @@ async def login(
             )
 
             session_id = temp_session_info['session_id']
+
+            if mfa_required:
+                session_token = secrets.token_urlsafe(32)
+                ttl_seconds = _get_mfa_login_ttl_seconds()
+                payload = {
+                    "user_id": int(user["id"]),
+                    "session_id": int(session_id),
+                }
+                try:
+                    await session_manager.store_ephemeral_value(
+                        _mfa_login_cache_key(session_token),
+                        json.dumps(payload),
+                        ttl_seconds,
+                    )
+                except Exception as exc:
+                    logger.error("Failed to cache MFA login session: {}", exc)
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Failed to initiate MFA login",
+                    ) from exc
+                response.status_code = status.HTTP_202_ACCEPTED
+                log_counter("auth_login_mfa_required")
+                try:
+                    _finalize_login_diag(request, response)
+                except Exception:
+                    pass
+                return MFAChallengeResponse(
+                    session_token=session_token,
+                    mfa_required=True,
+                    expires_in=ttl_seconds,
+                    message="MFA required. Submit your TOTP or backup code.",
+                )
 
             # Create JWT tokens with session_id
             scope_claims = await _build_scope_claims(int(user["id"]))
@@ -836,6 +907,130 @@ async def logout(
         log_histogram("auth_logout_duration", time.perf_counter() - start_time)
         # Even on error, return a generic logout message to avoid client lock-in.
         return MessageResponse(message="Successfully logged out", details={"user_id": None})
+
+
+#######################################################################################################################
+#
+# Session Management (auth-scoped)
+
+@router.get("/sessions", response_model=List[SessionResponse])
+async def list_user_sessions(
+    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    session_manager: SessionManager = Depends(get_session_manager_dep)
+) -> List[SessionResponse]:
+    """
+    List all active sessions for the current user.
+    """
+    try:
+        sessions = await session_manager.get_user_sessions(current_user['id'])
+
+        return [
+            SessionResponse(
+                id=session['id'],
+                ip_address=session.get('ip_address'),
+                user_agent=session.get('user_agent'),
+                created_at=session['created_at'],
+                last_activity=session['last_activity'],
+                expires_at=session['expires_at']
+            )
+            for session in sessions
+        ]
+
+    except Exception as e:
+        logger.error(f"Failed to list user sessions: {e}")
+        # In test mode, surface the underlying error to aid debugging
+        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to retrieve sessions: {e}"
+            )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve sessions"
+        )
+
+
+@router.delete("/sessions/{session_id}", response_model=MessageResponse)
+async def revoke_session(
+    session_id: int,
+    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    session_manager: SessionManager = Depends(get_session_manager_dep)
+) -> MessageResponse:
+    """
+    Revoke a specific session for the current user.
+    """
+    try:
+        # Get session to verify ownership
+        sessions = await session_manager.get_user_sessions(current_user['id'])
+        session_ids = [s['id'] for s in sessions]
+
+        if session_id not in session_ids:
+            # Return success for idempotency - session is already not active
+            logger.info(
+                f"Session {session_id} not found for user {current_user['id']} - treating as already revoked"
+            )
+            return MessageResponse(
+                message="Session revoked successfully",
+                details={"session_id": session_id, "note": "Session was already inactive or did not exist"}
+            )
+
+        # Revoke the session
+        await session_manager.revoke_session(
+            session_id,
+            revoked_by=current_user['id'],
+            reason="User requested revocation"
+        )
+
+        logger.info(f"User {current_user['username']} revoked session {session_id}")
+
+        return MessageResponse(
+            message="Session revoked successfully",
+            details={"session_id": session_id}
+        )
+
+    except HTTPException:
+        raise
+    except SessionError as e:
+        logger.error(f"Failed to revoke session: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to revoke session"
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error revoking session: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while revoking the session"
+        )
+
+
+@router.post("/sessions/revoke-all", response_model=MessageResponse)
+async def revoke_all_sessions(
+    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    session_manager: SessionManager = Depends(get_session_manager_dep)
+) -> MessageResponse:
+    """
+    Revoke all sessions for the current user.
+    """
+    try:
+        count = await session_manager.revoke_all_user_sessions(
+            current_user['id'],
+            reason="User requested logout from all devices"
+        )
+
+        logger.info(f"User {current_user['username']} revoked all {count} sessions")
+
+        return MessageResponse(
+            message=f"Successfully revoked {count} sessions",
+            details={"sessions_revoked": count}
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to revoke all sessions: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to revoke sessions"
+        )
 
 
 #######################################################################################################################
@@ -1693,13 +1888,198 @@ async def disable_mfa(
         )
 
 
+@router.post("/mfa/login", response_model=TokenResponse)
+async def mfa_login(
+    data: MFALoginRequest,
+    request: Request,
+    response: Response,
+    db=Depends(get_db_transaction),
+    jwt_service: JWTService = Depends(get_jwt_service_dep),
+    session_manager: SessionManager = Depends(get_session_manager_dep),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+    settings: Settings = Depends(get_settings),
+) -> TokenResponse:
+    """
+    Complete login with MFA token.
+    """
+    start_time = time.perf_counter()
+    log_counter("auth_mfa_login_attempt")
+    try:
+        await _ensure_mfa_available()
+
+        cache_key = _mfa_login_cache_key(data.session_token)
+        payload_raw = await session_manager.get_ephemeral_value(cache_key)
+        if not payload_raw:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="MFA session expired or invalid",
+            )
+        try:
+            payload = json.loads(payload_raw)
+        except json.JSONDecodeError:
+            payload = {}
+
+        session_id = payload.get("session_id")
+        user_id = payload.get("user_id")
+        if not session_id or not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="MFA session expired or invalid",
+            )
+
+        user_id = int(user_id)
+        session_id = int(session_id)
+
+        # Basic per-user rate limit for MFA login attempts
+        try:
+            allowed, _meta = await rate_limiter.check_user_rate_limit(user_id, endpoint="auth:mfa_login")
+            if not allowed:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Too many MFA attempts. Please try again later.",
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+        user = await fetch_active_user_by_id(db, user_id)
+        if not isinstance(user, dict):
+            try:
+                user = dict(user) if user is not None else None
+            except Exception:
+                user = None
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials",
+            )
+
+        mfa_service = _get_mfa_service()
+        mfa_status = await mfa_service.get_user_mfa_status(user_id)
+        if not mfa_status.get("enabled"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="MFA is not enabled for this account",
+            )
+
+        secret = await mfa_service.get_user_totp_secret(user_id)
+        token_ok = False
+        if secret and mfa_service.verify_totp(secret, data.mfa_token):
+            token_ok = True
+        else:
+            token_ok = await mfa_service.verify_backup_code(user_id, data.mfa_token)
+
+        if not token_ok:
+            log_counter("auth_mfa_login_invalid_token")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid MFA token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        scope_claims = await _build_scope_claims(user_id)
+        add_claims = dict(scope_claims)
+        add_claims["session_id"] = session_id
+        access_token = jwt_service.create_access_token(
+            user_id=user_id,
+            username=user.get("username", ""),
+            role=user.get("role", "user"),
+            additional_claims=add_claims,
+        )
+        refresh_token = jwt_service.create_refresh_token(
+            user_id=user_id,
+            username=user.get("username", ""),
+            additional_claims=add_claims,
+        )
+
+        await session_manager.update_session_tokens(
+            session_id=session_id,
+            access_token=access_token,
+            refresh_token=refresh_token,
+        )
+
+        await update_user_last_login(db, user_id, datetime.utcnow())
+
+        # Audit log successful login
+        client_ip = request.client.host if request.client else "unknown"
+        user_agent = request.headers.get("User-Agent", "Unknown")
+        async def _safe_audit_log_login(user_id: int, username: str, ip: str, ua: str, success: bool):
+            try:
+                svc = await get_or_create_audit_service_for_user_id(user_id)
+                await svc.log_login(
+                    user_id=user_id,
+                    username=username,
+                    ip_address=ip,
+                    user_agent=ua,
+                    success=success,
+                )
+                flush_on_login = os.getenv("AUDIT_FLUSH_ON_LOGIN", "").lower() in {"1", "true", "yes", "on"}
+                test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+                if flush_on_login or test_mode:
+                    await svc.flush()
+            except Exception as exc:
+                logger.debug(
+                    "MFA login audit failed for user_id={}: {}",
+                    user_id,
+                    exc,
+                    exc_info=True,
+                )
+
+        await _safe_audit_log_login(
+            user_id=user_id,
+            username=str(user.get("username", "")),
+            ip=client_ip,
+            ua=user_agent,
+            success=True,
+        )
+
+        # Reset failed login attempts on successful MFA login
+        if getattr(rate_limiter, 'enabled', False):
+            try:
+                await rate_limiter.reset_failed_attempts(client_ip, "login")
+                await rate_limiter.reset_failed_attempts(user.get("username", ""), "login")
+            except Exception as rl_exc:
+                logger.debug(f"rate_limiter.reset_failed_attempts failed: {rl_exc}")
+
+        try:
+            await session_manager.delete_ephemeral_value(cache_key)
+        except Exception:
+            pass
+
+        log_counter("auth_login_success")
+        log_counter("auth_mfa_login_success")
+        log_histogram("auth_login_duration", time.perf_counter() - start_time)
+
+        return TokenResponse(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            token_type="bearer",
+            expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        )
+
+    except HTTPException:
+        log_counter("auth_mfa_login_http_error")
+        log_histogram("auth_login_duration", time.perf_counter() - start_time)
+        raise
+    except Exception as e:
+        logger.error(f"MFA login error: {e}")
+        log_counter("auth_mfa_login_unexpected_error")
+        log_histogram("auth_login_duration", time.perf_counter() - start_time)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to complete MFA login",
+        )
+
+
 #######################################################################################################################
 #
 # Registration Endpoint
 
 @router.post("/register", response_model=RegistrationResponse, dependencies=[Depends(check_auth_rate_limit)])
 async def register(
-    request: RegisterRequest,
+    payload: RegisterRequest,
+    http_request: Request,
     response: Response,
     _diag=Depends(_register_runtime_diag),  # noqa: B008
     registration_service: RegistrationService = Depends(get_registration_service_dep)
@@ -1711,7 +2091,7 @@ async def register(
     May require a registration code if configured.
 
     Args:
-        request: RegisterRequest with user details
+        payload: RegisterRequest with user details
 
     Returns:
         RegistrationResponse with user information
@@ -1732,7 +2112,7 @@ async def register(
             else:
                 logger.warning(
                     "Registration attempt rejected in local-single-user profile for username={}",
-                    request.username,
+                    payload.username,
                 )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -1741,10 +2121,10 @@ async def register(
 
         # Register the user
         user_info = await registration_service.register_user(
-            username=request.username,
-            email=request.email,
-            password=request.password,
-            registration_code=request.registration_code
+            username=payload.username,
+            email=payload.email,
+            password=payload.password,
+            registration_code=payload.registration_code,
         )
 
         logger.info(f"New user registered: {user_info['username']} (ID: {user_info['user_id']})")
@@ -1768,7 +2148,49 @@ async def register(
         log_counter("auth_register_success")
         log_histogram("auth_register_duration", time.perf_counter() - start_time)
         # Attach diagnostics (if enabled)
-        _finalize_register_diag(request, response)
+        _finalize_register_diag(http_request, response)
+
+        async def _safe_audit_log_registration_code() -> None:
+            try:
+                code_id = user_info.get("registration_code_id")
+                if not payload.registration_code or code_id is None:
+                    return
+                svc = await get_or_create_audit_service_for_user_id(int(user_info["user_id"]))
+                correlation_id = (
+                    http_request.headers.get("X-Correlation-ID")
+                    or getattr(http_request.state, "correlation_id", None)
+                )
+                request_id = (
+                    http_request.headers.get("X-Request-ID")
+                    or getattr(http_request.state, "request_id", None)
+                    or ""
+                )
+                ctx = AuditContext(
+                    user_id=str(user_info["user_id"]),
+                    correlation_id=correlation_id,
+                    request_id=request_id,
+                    ip_address=(http_request.client.host if http_request.client else None),
+                    user_agent=http_request.headers.get("user-agent"),
+                    endpoint=str(http_request.url.path),
+                    method=http_request.method,
+                )
+                await svc.log_event(
+                    event_type=AuditEventType.DATA_UPDATE,
+                    context=ctx,
+                    resource_type="registration_code",
+                    resource_id=str(code_id),
+                    action="registration_code.redeemed",
+                    metadata={
+                        "registration_code_id": code_id,
+                        "org_id": user_info.get("registration_code_org_id"),
+                        "org_role": user_info.get("registration_code_org_role"),
+                        "team_id": user_info.get("registration_code_team_id"),
+                    },
+                )
+            except Exception as exc:
+                logger.debug("Registration code audit failed: {}", exc)
+
+        await _safe_audit_log_registration_code()
         return RegistrationResponse(
             message="Registration successful",
             user_id=user_info['user_id'],
@@ -1788,10 +2210,17 @@ async def register(
                 response.headers["X-TLDW-Register-Error"] = "duplicate-user"
             except Exception:
                 pass
-        _finalize_register_diag(request, response)
+        _finalize_register_diag(http_request, response)
+        detail = "Username or email already exists."
+        if payload.registration_code:
+            detail = (
+                "Username or email already exists. If you're joining an organization, "
+                "log in and accept the invite at /webui/accept-invite.html "
+                "or POST /api/v1/orgs/invites/accept."
+            )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Username or email already exists."
+            detail=detail
         ) from e
     except WeakPasswordError as e:
         logger.warning(f"Registration failed - weak password: {e}")
@@ -1802,7 +2231,7 @@ async def register(
                 response.headers["X-TLDW-Register-Error"] = "weak-password"
             except Exception:
                 pass
-        _finalize_register_diag(request, response)
+        _finalize_register_diag(http_request, response)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Password does not meet requirements."
@@ -1816,7 +2245,7 @@ async def register(
                 response.headers["X-TLDW-Register-Error"] = "invalid-registration-code"
             except Exception:
                 pass
-        _finalize_register_diag(request, response)
+        _finalize_register_diag(http_request, response)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid registration code."
@@ -1830,7 +2259,7 @@ async def register(
                 response.headers["X-TLDW-Register-Error"] = "registration-error"
             except Exception:
                 pass
-        _finalize_register_diag(request, response)
+        _finalize_register_diag(http_request, response)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Registration failed."
@@ -1838,7 +2267,7 @@ async def register(
     except HTTPException:
         # Propagate explicit HTTPException responses (for example the
         # local-single-user profile guard) without wrapping them as 500.
-        _finalize_register_diag(request, response)
+        _finalize_register_diag(http_request, response)
         raise
     except Exception as e:
         logger.error(f"Unexpected registration error: {e}")
@@ -1850,7 +2279,7 @@ async def register(
             except Exception:
                 pass
         duration = time.perf_counter() - start_time
-        _finalize_register_diag(request, response)
+        _finalize_register_diag(http_request, response)
         if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
             try:
                 pool = await get_db_pool()

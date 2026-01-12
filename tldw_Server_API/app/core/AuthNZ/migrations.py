@@ -1671,6 +1671,10 @@ def migration_036_create_user_provider_secrets(conn: sqlite3.Connection) -> None
             encrypted_blob TEXT NOT NULL,
             key_hint TEXT,
             metadata TEXT,
+            created_by INTEGER,
+            updated_by INTEGER,
+            revoked_by INTEGER,
+            revoked_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_used_at TIMESTAMP,
@@ -1693,6 +1697,10 @@ def migration_036_create_user_provider_secrets(conn: sqlite3.Connection) -> None
         add_col("encrypted_blob", "encrypted_blob TEXT")
         add_col("key_hint", "key_hint TEXT")
         add_col("metadata", "metadata TEXT")
+        add_col("created_by", "created_by INTEGER")
+        add_col("updated_by", "updated_by INTEGER")
+        add_col("revoked_by", "revoked_by INTEGER")
+        add_col("revoked_at", "revoked_at TIMESTAMP")
         add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         add_col("last_used_at", "last_used_at TIMESTAMP")
@@ -1729,6 +1737,10 @@ def migration_037_create_org_provider_secrets(conn: sqlite3.Connection) -> None:
             encrypted_blob TEXT NOT NULL,
             key_hint TEXT,
             metadata TEXT,
+            created_by INTEGER,
+            updated_by INTEGER,
+            revoked_by INTEGER,
+            revoked_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_used_at TIMESTAMP,
@@ -1750,6 +1762,10 @@ def migration_037_create_org_provider_secrets(conn: sqlite3.Connection) -> None:
         add_col("encrypted_blob", "encrypted_blob TEXT")
         add_col("key_hint", "key_hint TEXT")
         add_col("metadata", "metadata TEXT")
+        add_col("created_by", "created_by INTEGER")
+        add_col("updated_by", "updated_by INTEGER")
+        add_col("revoked_by", "revoked_by INTEGER")
+        add_col("revoked_at", "revoked_at TIMESTAMP")
         add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         add_col("last_used_at", "last_used_at TIMESTAMP")
@@ -1945,10 +1961,10 @@ def migration_042_create_org_budgets(conn: sqlite3.Connection) -> None:
         return None
 
     def _inflate_legacy_budgets(legacy: Dict[str, Any]) -> Dict[str, Any]:
-        budgets = {key: legacy[key] for key in ("budget_day_usd", "budget_month_usd", "budget_day_tokens", "budget_month_tokens") if key in legacy}
         payload: Dict[str, Any] = {}
-        if budgets:
-            payload["budgets"] = budgets
+        for key in ("budget_day_usd", "budget_month_usd", "budget_day_tokens", "budget_month_tokens"):
+            if key in legacy:
+                payload[key] = legacy[key]
         thresholds = _normalize_alert_thresholds(legacy.get("alert_thresholds"))
         if thresholds is not None:
             payload["alert_thresholds"] = thresholds

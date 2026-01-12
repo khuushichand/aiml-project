@@ -718,17 +718,20 @@ def load_settings():
     audit_storage_env_raw = os.getenv("AUDIT_STORAGE_MODE")
     audit_shared_env_raw = os.getenv("AUDIT_SHARED_DB_PATH")
     audit_rollback_env_raw = os.getenv("AUDIT_STORAGE_ROLLBACK")
+    audit_etl_subpath_env_raw = os.getenv("AUDIT_ETL_USER_SUBPATH")
 
     audit_stream_cfg_raw: Optional[str] = None
     audit_storage_cfg_raw: Optional[str] = None
     audit_shared_cfg_raw: Optional[str] = None
     audit_rollback_cfg_raw: Optional[str] = None
+    audit_etl_subpath_cfg_raw: Optional[str] = None
     _audit_parser = None
     if (
         audit_stream_env_raw is None
         or audit_storage_env_raw is None
         or audit_shared_env_raw is None
         or audit_rollback_env_raw is None
+        or audit_etl_subpath_env_raw is None
     ):
         try:
             _audit_parser = load_comprehensive_config()
@@ -745,11 +748,14 @@ def load_settings():
                     audit_shared_cfg_raw = _audit_parser.get("Audit", "shared_db_path", fallback=None)
                 if audit_rollback_env_raw is None:
                     audit_rollback_cfg_raw = _audit_parser.get("Audit", "storage_rollback", fallback=None)
+                if audit_etl_subpath_env_raw is None:
+                    audit_etl_subpath_cfg_raw = _audit_parser.get("Audit", "etl_user_subpath", fallback=None)
         except Exception:
             audit_stream_cfg_raw = None
             audit_storage_cfg_raw = None
             audit_shared_cfg_raw = None
             audit_rollback_cfg_raw = None
+            audit_etl_subpath_cfg_raw = None
 
     audit_stream_auto_max_rows = _safe_int(
         audit_stream_env_raw if audit_stream_env_raw is not None else audit_stream_cfg_raw,
@@ -774,6 +780,14 @@ def load_settings():
     audit_storage_rollback = _to_bool(
         str(audit_storage_rollback_raw) if audit_storage_rollback_raw is not None else None,
         False,
+    )
+    audit_etl_subpath_raw = (
+        audit_etl_subpath_env_raw if audit_etl_subpath_env_raw is not None else audit_etl_subpath_cfg_raw
+    )
+    audit_etl_user_subpath = (
+        str(audit_etl_subpath_raw).strip()
+        if audit_etl_subpath_raw is not None and str(audit_etl_subpath_raw).strip()
+        else None
     )
 
     # Load comprehensive configurations (API keys, embedding settings, etc.)
@@ -1105,6 +1119,7 @@ def load_settings():
         "AUDIT_STORAGE_MODE": audit_storage_mode,
         "AUDIT_SHARED_DB_PATH": audit_shared_db_path,
         "AUDIT_STORAGE_ROLLBACK": audit_storage_rollback,
+        "AUDIT_ETL_USER_SUBPATH": audit_etl_user_subpath,
 
         # Ephemeral cleanup worker (evals/rag pipeline ephemeral collections)
         "EPHEMERAL_CLEANUP_ENABLED": os.getenv("EPHEMERAL_CLEANUP_ENABLED", "false").lower() == "true",
@@ -1864,6 +1879,22 @@ def load_comprehensive_config():
             _env_default_http('HTTP_ALLOW_SCHEME_DOWNGRADE', 'allow_scheme_downgrade')
     except Exception as _http_env_err:
         _log_debug(f"HTTP env propagation skipped: {_http_env_err}")
+
+    # Propagate system log file settings from config.txt into env (if unset)
+    try:
+        if hasattr(config_parser, 'has_section') and config_parser.has_section('Logging'):
+            def _env_default_logging(name: str, opt: str):
+                try:
+                    v = config_parser.get('Logging', opt, fallback=None)
+                except Exception:
+                    v = None
+                if v is not None and os.getenv(name) is None:
+                    os.environ[name] = str(v)
+
+            _env_default_logging('SYSTEM_LOG_FILE_PATH', 'system_log_file_path')
+            _env_default_logging('SYSTEM_LOG_FILE_MAX_ENTRIES', 'system_log_file_max_entries')
+    except Exception as _log_env_err:
+        _log_debug(f"System log env propagation skipped: {_log_env_err}")
 
     # Propagate egress policy settings from config.txt into env (if unset)
     if hasattr(config_parser, 'has_section') and config_parser.has_section('Egress'):

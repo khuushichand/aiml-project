@@ -28,6 +28,7 @@ creates drift risk, test complexity, and confusion over the authoritative path.
 - Ensure only the auth router is included at app startup.
 - Remove unused legacy registration service wiring.
 - Update dependencies and tests to use the single RegistrationService.
+- Provide auth-scoped session endpoints with `/users/sessions` compatibility wrappers.
 
 ## Functional Requirements
 1. Endpoint coverage (single router):
@@ -40,6 +41,7 @@ creates drift risk, test complexity, and confusion over the authoritative path.
    - Preserve request/response schemas and status codes.
    - Keep MFA gating (multi_user + Postgres) unchanged.
    - Preserve existing audit and metrics hooks.
+   - Return HTTP 202 + MFA challenge payload when MFA is required during login.
 
 3. Rate limiting:
    - Enforce RG-based auth limits via a dedicated auth policy.
@@ -53,6 +55,7 @@ creates drift risk, test complexity, and confusion over the authoritative path.
 - If needed, leave a lightweight compatibility module that re-exports the
   consolidated router for external imports.
 - Update tests to target the consolidated module only.
+- Maintain `/users/sessions*` as compatibility wrappers for `/auth/sessions*`.
 
 ## Observability
 - Maintain existing audit logging and metrics.

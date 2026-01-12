@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 import json
 
@@ -56,6 +56,8 @@ class AuthnzUserProviderSecretsRepo:
         key_hint: Optional[str],
         metadata: Optional[Dict[str, Any]],
         updated_at: datetime,
+        created_by: Optional[int] = None,
+        updated_by: Optional[int] = None,
     ) -> Dict[str, Any]:
         provider_norm = normalize_provider_name(provider)
         metadata_json = json.dumps(metadata) if metadata is not None else None
@@ -65,20 +67,27 @@ class AuthnzUserProviderSecretsRepo:
                 row = await self.db_pool.fetchone(
                     """
                     INSERT INTO user_provider_secrets (
-                        user_id, provider, encrypted_blob, key_hint, metadata, created_at, updated_at
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $6)
+                        user_id, provider, encrypted_blob, key_hint, metadata,
+                        created_by, updated_by, created_at, updated_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
                     ON CONFLICT (user_id, provider) DO UPDATE SET
                         encrypted_blob = EXCLUDED.encrypted_blob,
                         key_hint = EXCLUDED.key_hint,
                         metadata = EXCLUDED.metadata,
-                        updated_at = EXCLUDED.updated_at
-                    RETURNING id, user_id, provider, key_hint, metadata, created_at, updated_at, last_used_at
+                        updated_at = EXCLUDED.updated_at,
+                        updated_by = EXCLUDED.updated_by,
+                        revoked_at = NULL,
+                        revoked_by = NULL
+                    RETURNING id, user_id, provider, key_hint, metadata, created_at, updated_at, last_used_at,
+                              created_by, updated_by, revoked_by, revoked_at
                     """,
                     user_id,
                     provider_norm,
                     encrypted_blob,
                     key_hint,
                     metadata_json,
+                    created_by,
+                    updated_by,
                     ts,
                 )
                 return dict(row) if row else {}
@@ -86,13 +95,17 @@ class AuthnzUserProviderSecretsRepo:
             await self.db_pool.execute(
                 """
                 INSERT INTO user_provider_secrets (
-                    user_id, provider, encrypted_blob, key_hint, metadata, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    user_id, provider, encrypted_blob, key_hint, metadata,
+                    created_by, updated_by, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id, provider) DO UPDATE SET
                     encrypted_blob = excluded.encrypted_blob,
                     key_hint = excluded.key_hint,
                     metadata = excluded.metadata,
-                    updated_at = excluded.updated_at
+                    updated_at = excluded.updated_at,
+                    updated_by = excluded.updated_by,
+                    revoked_at = NULL,
+                    revoked_by = NULL
                 """,
                 (
                     user_id,
@@ -100,13 +113,16 @@ class AuthnzUserProviderSecretsRepo:
                     encrypted_blob,
                     key_hint,
                     metadata_json,
+                    created_by,
+                    updated_by,
                     updated_at.isoformat(),
                     updated_at.isoformat(),
                 ),
             )
             row = await self.db_pool.fetchone(
                 """
-                SELECT id, user_id, provider, key_hint, metadata, created_at, updated_at, last_used_at
+                SELECT id, user_id, provider, key_hint, metadata, created_at, updated_at, last_used_at,
+                       created_by, updated_by, revoked_by, revoked_at
                 FROM user_provider_secrets
                 WHERE user_id = ? AND provider = ?
                 """,
@@ -117,27 +133,35 @@ class AuthnzUserProviderSecretsRepo:
             logger.error(f"AuthnzUserProviderSecretsRepo.upsert_secret failed: {exc}")
             raise
 
-    async def fetch_secret_for_user(self, user_id: int, provider: str) -> Optional[Dict[str, Any]]:
+    async def fetch_secret_for_user(
+        self,
+        user_id: int,
+        provider: str,
+        *,
+        include_revoked: bool = False,
+    ) -> Optional[Dict[str, Any]]:
         provider_norm = normalize_provider_name(provider)
         try:
             if getattr(self.db_pool, "pool", None) is not None:
+                revoked_clause = "" if include_revoked else " AND revoked_at IS NULL"
                 row = await self.db_pool.fetchone(
-                    """
+                    f"""
                     SELECT id, user_id, provider, encrypted_blob, key_hint, metadata,
-                           created_at, updated_at, last_used_at
+                           created_at, updated_at, last_used_at, created_by, updated_by, revoked_by, revoked_at
                     FROM user_provider_secrets
-                    WHERE user_id = $1 AND provider = $2
+                    WHERE user_id = $1 AND provider = $2{revoked_clause}
                     """,
                     user_id,
                     provider_norm,
                 )
             else:
+                revoked_clause = "" if include_revoked else " AND revoked_at IS NULL"
                 row = await self.db_pool.fetchone(
-                    """
+                    f"""
                     SELECT id, user_id, provider, encrypted_blob, key_hint, metadata,
-                           created_at, updated_at, last_used_at
+                           created_at, updated_at, last_used_at, created_by, updated_by, revoked_by, revoked_at
                     FROM user_provider_secrets
-                    WHERE user_id = ? AND provider = ?
+                    WHERE user_id = ? AND provider = ?{revoked_clause}
                     """,
                     (user_id, provider_norm),
                 )
@@ -146,24 +170,32 @@ class AuthnzUserProviderSecretsRepo:
             logger.error(f"AuthnzUserProviderSecretsRepo.fetch_secret_for_user failed: {exc}")
             raise
 
-    async def list_secrets_for_user(self, user_id: int) -> List[Dict[str, Any]]:
+    async def list_secrets_for_user(
+        self,
+        user_id: int,
+        *,
+        include_revoked: bool = False,
+    ) -> List[Dict[str, Any]]:
         try:
+            revoked_clause = "" if include_revoked else " AND revoked_at IS NULL"
             if getattr(self.db_pool, "pool", None) is not None:
                 rows = await self.db_pool.fetchall(
-                    """
-                    SELECT id, user_id, provider, key_hint, metadata, created_at, updated_at, last_used_at
+                    f"""
+                    SELECT id, user_id, provider, key_hint, metadata, created_at, updated_at, last_used_at,
+                           created_by, updated_by, revoked_by, revoked_at
                     FROM user_provider_secrets
-                    WHERE user_id = $1
+                    WHERE user_id = $1{revoked_clause}
                     ORDER BY provider
                     """,
                     user_id,
                 )
             else:
                 rows = await self.db_pool.fetchall(
-                    """
-                    SELECT id, user_id, provider, key_hint, metadata, created_at, updated_at, last_used_at
+                    f"""
+                    SELECT id, user_id, provider, key_hint, metadata, created_at, updated_at, last_used_at,
+                           created_by, updated_by, revoked_by, revoked_at
                     FROM user_provider_secrets
-                    WHERE user_id = ?
+                    WHERE user_id = ?{revoked_clause}
                     ORDER BY provider
                     """,
                     (user_id,),
@@ -173,12 +205,28 @@ class AuthnzUserProviderSecretsRepo:
             logger.error(f"AuthnzUserProviderSecretsRepo.list_secrets_for_user failed: {exc}")
             raise
 
-    async def delete_secret(self, user_id: int, provider: str) -> bool:
+    async def delete_secret(
+        self,
+        user_id: int,
+        provider: str,
+        *,
+        revoked_by: Optional[int] = None,
+        revoked_at: Optional[datetime] = None,
+    ) -> bool:
         provider_norm = normalize_provider_name(provider)
+        revoked_ts = revoked_at or datetime.now(timezone.utc)
         try:
             if getattr(self.db_pool, "pool", None) is not None:
+                ts = self._normalize_datetime_for_postgres(revoked_ts)
                 result = await self.db_pool.execute(
-                    "DELETE FROM user_provider_secrets WHERE user_id = $1 AND provider = $2",
+                    """
+                    UPDATE user_provider_secrets
+                    SET revoked_at = $1, revoked_by = $2, updated_at = $1, updated_by = $3
+                    WHERE user_id = $4 AND provider = $5 AND revoked_at IS NULL
+                    """,
+                    ts,
+                    revoked_by,
+                    revoked_by,
                     user_id,
                     provider_norm,
                 )
@@ -189,8 +237,19 @@ class AuthnzUserProviderSecretsRepo:
                 return True
 
             cursor = await self.db_pool.execute(
-                "DELETE FROM user_provider_secrets WHERE user_id = ? AND provider = ?",
-                (user_id, provider_norm),
+                """
+                UPDATE user_provider_secrets
+                SET revoked_at = ?, revoked_by = ?, updated_at = ?, updated_by = ?
+                WHERE user_id = ? AND provider = ? AND revoked_at IS NULL
+                """,
+                (
+                    revoked_ts.isoformat(),
+                    revoked_by,
+                    revoked_ts.isoformat(),
+                    revoked_by,
+                    user_id,
+                    provider_norm,
+                ),
             )
             rowcount = getattr(cursor, "rowcount", 0)
             return rowcount > 0
