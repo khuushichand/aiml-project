@@ -1198,7 +1198,7 @@ class ChatbookService:
             await self._create_zip_archive_async(work_dir, output_path)
 
             # Update manifest with final archive size; re-zip if manifest changes size.
-            for _ in range(3):
+            for _ in range(10):
                 archive_size = output_path.stat().st_size
                 if manifest.total_size_bytes == archive_size:
                     break
@@ -4230,7 +4230,10 @@ class ChatbookService:
                 for file_path in work_dir.rglob('*'):
                     if file_path.is_file():
                         arcname = file_path.relative_to(work_dir)
-                        zf.write(file_path, arcname)
+                        if arcname.as_posix() == "manifest.json":
+                            zf.write(file_path, arcname, compress_type=zipfile.ZIP_STORED)
+                        else:
+                            zf.write(file_path, arcname)
             return True
         except Exception as e:
             logger.error(f"Failed to create archive: {e}")
@@ -4408,4 +4411,7 @@ class ChatbookService:
                         raise ExportError(f"Archive size exceeds {max_mb:.0f}MB limit")
 
                     arcname = file_path.relative_to(work_dir)
-                    zf.write(file_path, arcname)
+                    if arcname.as_posix() == "manifest.json":
+                        zf.write(file_path, arcname, compress_type=zipfile.ZIP_STORED)
+                    else:
+                        zf.write(file_path, arcname)

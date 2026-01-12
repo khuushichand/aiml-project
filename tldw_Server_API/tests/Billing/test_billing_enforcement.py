@@ -26,6 +26,7 @@ Tests are organized into logical groups:
 All tests use mocking to isolate from database dependencies. For integration
 tests with real database, see test_billing_endpoints_integration.py.
 """
+import re
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
@@ -345,6 +346,54 @@ class TestBillingEnforcer:
 
                 assert result.action == EnforcementAction.ALLOW
                 assert result.unlimited is True
+
+    @pytest.mark.asyncio
+    async def test_llm_tokens_month_sqlite_uses_sqlite_timestamp_format(self, monkeypatch):
+        """SQLite LLM usage queries should use space-delimited UTC timestamps."""
+
+        class _FakeConn:
+            def __init__(self) -> None:
+                self.params = None
+
+            async def execute(self, _query, params):
+                self.params = params
+                return self
+
+            async def fetchone(self):
+                return (0,)
+
+        fake_conn = _FakeConn()
+
+        class _Acquire:
+            async def __aenter__(self_inner):
+                return fake_conn
+
+            async def __aexit__(self_inner, exc_type, exc, tb):
+                return False
+
+        class _FakePool:
+            def acquire(self):
+                return _Acquire()
+
+        async def _fake_get_db_pool():
+            return _FakePool()
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.AuthNZ.database.get_db_pool",
+            _fake_get_db_pool,
+            raising=False,
+        )
+
+        enforcer = BillingEnforcer()
+        await enforcer._get_llm_tokens_month(org_id=1)
+
+        assert fake_conn.params is not None
+        assert len(fake_conn.params) == 4
+
+        ts_params = [fake_conn.params[1], fake_conn.params[3]]
+        for ts_param in ts_params:
+            assert isinstance(ts_param, str)
+            assert re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$", ts_param)
 
     @pytest.mark.asyncio
     async def test_check_feature_access_enabled(self, enforcer):

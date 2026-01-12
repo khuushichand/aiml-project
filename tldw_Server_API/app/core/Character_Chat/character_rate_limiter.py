@@ -22,6 +22,7 @@ from tldw_Server_API.app.core.Character_Chat.character_limits import (
     check_chat_limit as _check_chat_limit,
     check_import_size as _check_import_size,
     check_message_limit as _check_message_limit,
+    check_soft_message_limit as _check_soft_message_limit,
     get_character_limits,
 )
 
@@ -64,6 +65,7 @@ class CharacterRateLimiter:
         max_import_size_mb: int = 10,
         max_chats_per_user: int = 100,
         max_messages_per_chat: int = 1000,
+        max_messages_per_chat_soft: Optional[int] = None,
         max_chat_completions_per_minute: int = 20,
         max_message_sends_per_minute: int = 60,
         enabled: bool = True,
@@ -76,11 +78,14 @@ class CharacterRateLimiter:
         self.enabled = bool(enabled)
         self.policy_id = os.getenv("RG_CHARACTER_CHAT_POLICY_ID", "character_chat.default")
 
+        if max_messages_per_chat_soft is None:
+            max_messages_per_chat_soft = max_messages_per_chat
         self._limits = CharacterLimits(
             max_characters=int(max_characters),
             max_import_size_mb=int(max_import_size_mb),
             max_chats_per_user=int(max_chats_per_user),
             max_messages_per_chat=int(max_messages_per_chat),
+            max_messages_per_chat_soft=int(max_messages_per_chat_soft),
         )
 
         logger.info(
@@ -176,6 +181,9 @@ class CharacterRateLimiter:
 
     async def check_message_limit(self, chat_id: str, current_message_count: int) -> bool:
         return _check_message_limit(chat_id, current_message_count, self._limits)
+
+    async def check_soft_message_limit(self, chat_id: str, current_message_count: int) -> bool:
+        return _check_soft_message_limit(chat_id, current_message_count, self._limits)
 
 
 # --- Resource Governor plumbing (optional) ---
@@ -388,6 +396,7 @@ def get_character_rate_limiter() -> CharacterRateLimiter:
                 max_import_size_mb=_env_int_or_test_default("MAX_CHARACTER_IMPORT_SIZE_MB", 1_000),
                 max_chats_per_user=_env_int_or_test_default("MAX_CHATS_PER_USER", 1_000_000_000),
                 max_messages_per_chat=_env_int_or_test_default("MAX_MESSAGES_PER_CHAT", 1_000_000_000),
+                max_messages_per_chat_soft=_env_int_or_test_default("MAX_MESSAGES_PER_CHAT_SOFT", 1_000_000_000),
                 max_chat_completions_per_minute=_env_int_or_test_default("MAX_CHAT_COMPLETIONS_PER_MINUTE", 1_000_000_000),
                 max_message_sends_per_minute=_env_int_or_test_default("MAX_MESSAGE_SENDS_PER_MINUTE", 1_000_000_000),
                 enabled=True,
@@ -429,6 +438,7 @@ def get_character_rate_limiter() -> CharacterRateLimiter:
             max_import_size_mb=limits.max_import_size_mb,
             max_chats_per_user=limits.max_chats_per_user,
             max_messages_per_chat=limits.max_messages_per_chat,
+            max_messages_per_chat_soft=limits.max_messages_per_chat_soft,
             max_chat_completions_per_minute=int(settings.get("MAX_CHAT_COMPLETIONS_PER_MINUTE", 20) or 20),
             max_message_sends_per_minute=int(settings.get("MAX_MESSAGE_SENDS_PER_MINUTE", 60) or 60),
             enabled=enabled_flag,

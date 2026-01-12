@@ -177,7 +177,7 @@ class EmbeddingsConfig:
 
         # Check for API keys
         for provider in self.providers:
-            if provider.enabled and not provider.api_key and provider.name != "local":
+            if provider.enabled and not provider.api_key and provider.name not in {"local", "local_api"}:
                 issues.append(f"Provider {provider.name} is enabled but has no API key")
 
         # Check resource limits

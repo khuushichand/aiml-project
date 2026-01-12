@@ -170,19 +170,21 @@ class AuthNZMonitor:
             labels: Labels for Prometheus metrics
             metadata: Additional metadata to store
         """
-        try:
-            # Update Prometheus metrics if available
-            if PROMETHEUS_AVAILABLE:
+        if PROMETHEUS_AVAILABLE:
+            try:
                 await self._update_prometheus_metric(metric_type, value, labels)
+            except Exception as e:
+                logger.error(f"Failed to update Prometheus metric {metric_type}: {e}")
 
-            # Store in database for analysis
+        try:
             await self._store_metric_in_db(metric_type, value, labels, metadata)
-
-            # Check if this metric triggers any alerts
-            await self._check_alert_conditions(metric_type, value, metadata)
-
         except Exception as e:
-            logger.error(f"Failed to record metric {metric_type}: {e}")
+            logger.error(f"Failed to store metric {metric_type} in database: {e}")
+
+        try:
+            await self._check_alert_conditions(metric_type, value, metadata)
+        except Exception as e:
+            logger.error(f"Failed to check alert conditions for metric {metric_type}: {e}")
 
     async def _update_prometheus_metric(
         self,

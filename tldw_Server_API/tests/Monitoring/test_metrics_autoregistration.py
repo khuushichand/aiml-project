@@ -48,5 +48,5 @@ def test_track_metrics_autoregisters_metrics(client):
     text = resp.text
 
     # Ensure both counter and histogram appear in exposition
-    assert "test_auto_reg.myop_calls_total" in text
-    assert "test_auto_reg.myop_duration_seconds_bucket" in text
+    assert "test_auto_reg_myop_calls_total" in text
+    assert "test_auto_reg_myop_duration_seconds_bucket" in text

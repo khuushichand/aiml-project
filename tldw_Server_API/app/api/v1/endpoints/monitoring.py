@@ -71,6 +71,13 @@ def get_topic_monitoring_db() -> TopicMonitoringDB:
         msg = f"Invalid MONITORING_ALERTS_DB={raw_db_path!r}: {exc}"
         logger.error(msg)
         raise RuntimeError(msg) from exc
+    if not db_path.is_absolute() and db_path.parent == Path("."):
+        msg = (
+            "MONITORING_ALERTS_DB must include a directory when using a relative path "
+            f"(got {raw_db_path!r}). Use an absolute path or include a directory component."
+        )
+        logger.error(msg)
+        raise RuntimeError(msg)
 
     if db_path.is_absolute():
         db = TopicMonitoringDB(db_path=str(db_path.resolve()))

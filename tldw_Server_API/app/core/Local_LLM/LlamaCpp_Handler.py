@@ -114,6 +114,22 @@ class LlamaCppHandler(BaseLLMHandler):
         """Log defensively to avoid errors when sinks are closed during atexit."""
         handler_utils.safe_log(self.logger, level, msg, *args)
 
+    def _is_chat_endpoint(self, api_endpoint: str) -> bool:
+        endpoint = f"/{api_endpoint.lstrip('/')}"
+        return endpoint.lower().endswith("/chat/completions")
+
+    def _messages_to_prompt(self, messages: List[Dict[str, str]]) -> str:
+        parts: List[str] = []
+        for msg in messages:
+            if isinstance(msg, dict):
+                role = str(msg.get("role", "user"))
+                content = msg.get("content", "")
+            else:
+                role = str(getattr(msg, "role", "user"))
+                content = getattr(msg, "content", "")
+            parts.append(f"{role}: {content}")
+        return "\n".join(parts)
+
     async def list_models(self) -> List[str]:
         """Lists locally available GGUF models."""
         if not self.models_dir.exists():
@@ -404,7 +420,8 @@ class LlamaCppHandler(BaseLLMHandler):
             # Poll HTTP health instead of fixed sleep
             base_url = handler_utils.build_base_url(client_host, port)
             t0 = time.perf_counter()
-            is_ready = await wait_for_http_ready(base_url, timeout_total=30.0, interval=0.5)
+            readiness_timeout = getattr(self.config, "readiness_timeout", 30.0) or 30.0
+            is_ready = await wait_for_http_ready(base_url, timeout_total=readiness_timeout, interval=0.5)
 
             if process.returncode is not None or not is_ready:
                 # If logging to file, error might not be in stderr pipe here.
@@ -413,7 +430,8 @@ class LlamaCppHandler(BaseLLMHandler):
                 if stderr_redir == asyncio.subprocess.PIPE and process.stderr:  # Check if stderr was piped
                     try:
                         # Use timeout to prevent blocking indefinitely if server is still writing
-                        err_bytes = await asyncio.wait_for(process.stderr.read(), timeout=5.0)
+                        stderr_timeout = getattr(self.config, "stderr_read_timeout", 5.0) or 5.0
+                        err_bytes = await asyncio.wait_for(process.stderr.read(), timeout=stderr_timeout)
                         stderr_output = err_bytes.decode(errors='ignore').strip()
                     except asyncio.TimeoutError:
                         stderr_output = "(stderr read timed out after 5s)"
@@ -576,23 +594,38 @@ class LlamaCppHandler(BaseLLMHandler):
         # Ensure exactly one slash between base and path
         target_url = f"{base_url}/{api_endpoint.lstrip('/')}"
 
-        # Prepare payload (OpenAI compatible)
-        payload = kwargs.copy()  # n_predict, temperature, top_k, top_p, stop, etc.
-        if "stream" in payload:
-            payload.pop("stream", None)
-        if messages:
-            payload["messages"] = messages
-        elif prompt:  # Convert simple prompt to messages for chat completions endpoint
-            payload["messages"] = [{"role": "user", "content": prompt}]
+        payload = kwargs.copy()
+        timeout = payload.pop("timeout", None)
+        payload.pop("stream", None)
+        payload.pop("api_endpoint", None)
+        prompt_value = prompt
+        if prompt_value is None and "prompt" in payload:
+            prompt_value = payload.pop("prompt")
+        messages_value = messages
+        if messages_value is None and "messages" in payload:
+            messages_value = payload.pop("messages")
+
+        if self._is_chat_endpoint(api_endpoint):
+            if messages_value:
+                payload["messages"] = messages_value
+            elif prompt_value is not None:
+                payload["messages"] = [{"role": "user", "content": prompt_value}]
+            else:
+                raise InferenceError("Either 'prompt' or 'messages' must be provided for inference.")
         else:
-            raise InferenceError("Either 'prompt' or 'messages' must be provided for inference.")
+            if prompt_value is None and messages_value:
+                prompt_value = self._messages_to_prompt(messages_value)
+            if prompt_value is None:
+                raise InferenceError("Prompt is required for completion endpoint inference.")
+            payload["prompt"] = prompt_value
 
         payload["stream"] = False
 
         self.logger.debug(f"Sending Llama.cpp inference request to {target_url} with payload: {payload}")
 
         t0 = time.perf_counter()
-        async with create_async_client(timeout=kwargs.get("timeout", 120.0)) as client:
+        http_timeout = timeout if timeout is not None else getattr(self.config, "http_timeout", 120.0)
+        async with create_async_client(timeout=http_timeout) as client:
             try:
                 result = await request_json(client, "POST", target_url, json=payload, headers={"Content-Type": "application/json"})
                 t1 = time.perf_counter()
@@ -635,16 +668,34 @@ class LlamaCppHandler(BaseLLMHandler):
         base_url = handler_utils.build_base_url(client_host, active_port)
         target_url = f"{base_url}/{api_endpoint.lstrip('/')}"
         payload = kwargs.copy()
-        if messages:
-            payload["messages"] = messages
-        elif prompt:
-            payload["messages"] = [{"role": "user", "content": prompt}]
+        timeout = payload.pop("timeout", None)
+        payload.pop("stream", None)
+        payload.pop("api_endpoint", None)
+        prompt_value = prompt
+        if prompt_value is None and "prompt" in payload:
+            prompt_value = payload.pop("prompt")
+        messages_value = messages
+        if messages_value is None and "messages" in payload:
+            messages_value = payload.pop("messages")
+
+        if self._is_chat_endpoint(api_endpoint):
+            if messages_value:
+                payload["messages"] = messages_value
+            elif prompt_value is not None:
+                payload["messages"] = [{"role": "user", "content": prompt_value}]
+            else:
+                raise InferenceError("Either 'prompt' or 'messages' must be provided for stream_inference.")
         else:
-            raise InferenceError("Either 'prompt' or 'messages' must be provided for stream_inference.")
+            if prompt_value is None and messages_value:
+                prompt_value = self._messages_to_prompt(messages_value)
+            if prompt_value is None:
+                raise InferenceError("Prompt is required for completion endpoint streaming.")
+            payload["prompt"] = prompt_value
         payload["stream"] = True
         headers = {"Content-Type": "application/json"}
 
-        async with create_async_client(timeout=kwargs.get("timeout", 120.0)) as client:
+        http_timeout = timeout if timeout is not None else getattr(self.config, "http_timeout", 120.0)
+        async with create_async_client(timeout=http_timeout) as client:
             try:
                 async with client.stream("POST", target_url, json=payload, headers=headers) as resp:
                     resp.raise_for_status()

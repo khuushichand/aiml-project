@@ -40,6 +40,7 @@ from tldw_Server_API.app.core.Chat.prompt_template_manager import (
     apply_template_to_string,
 )
 from tldw_Server_API.app.core.LLM_Calls import adapter_registry as _adapter_registry
+from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
 from tldw_Server_API.app.core.Chat.streaming_utils import (
     create_streaming_response_with_timeout,
 )
@@ -257,6 +258,20 @@ def queue_is_active(queue: Any) -> bool:
         return bool(fallback_state)
     # Assume truthy for lightweight test stubs that do not expose state
     return True
+
+
+def _attach_queue_future_logger(future: "asyncio.Future[Any]", request_id: str) -> None:
+    """Consume queue future exceptions to avoid unhandled warnings in streaming mode."""
+
+    def _consume(fut: "asyncio.Future[Any]") -> None:
+        try:
+            fut.result()
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            logger.debug("Queue streaming job {} failed: {}", request_id, exc)
+
+    future.add_done_callback(_consume)
 
 
 def parse_provider_model_for_metrics(
@@ -721,12 +736,7 @@ async def perform_chat_api_call_async(**kwargs: Any) -> Any:
             return stream_iter
         except NotImplementedError:
             stream_iter = adapter.stream(request)
-
-            async def _wrap_sync_stream() -> AsyncIterator[str]:
-                for item in stream_iter:
-                    yield item
-
-            return _wrap_sync_stream()
+            return wrap_sync_stream(stream_iter)
 
     try:
         return await adapter.achat(request)
@@ -1528,9 +1538,10 @@ async def execute_streaming_call(
                         provider_manager.record_failure(selected_provider, proc_error)
                     raise
 
+            queue_request_id = get_request_id() or "unknown"
             try:
-                await queue_for_exec.enqueue(
-                    request_id=(get_request_id() or "unknown"),
+                queue_future = await queue_for_exec.enqueue(
+                    request_id=queue_request_id,
                     request_data={"endpoint": "/api/v1/chat/completions", "mode": "stream"},
                     client_id=str(client_id),
                     priority=RequestPriority.HIGH,
@@ -1541,6 +1552,7 @@ async def execute_streaming_call(
                     streaming=True,
                     stream_channel=stream_channel,
                 )
+                _attach_queue_future_logger(queue_future, queue_request_id)
             except (ValueError, TimeoutError) as admission_error:
                 try:
                     metrics.track_rate_limit(str(client_id))
@@ -1950,6 +1962,36 @@ async def execute_streaming_call(
                         pass
                 task.add_done_callback(_cleanup)
 
+            stream_mod_buffer = ""
+            try:
+                stream_buffer_limit = int(os.getenv("MODERATION_STREAM_BUFFER_CHARS", "1024"))
+            except Exception:
+                stream_buffer_limit = 1024
+            if stream_buffer_limit < 0:
+                stream_buffer_limit = 0
+
+            def _update_stream_buffer(emitted: str) -> None:
+                nonlocal stream_mod_buffer
+                if stream_buffer_limit <= 0:
+                    stream_mod_buffer = ""
+                    return
+                if emitted:
+                    stream_mod_buffer = (stream_mod_buffer + emitted)[-stream_buffer_limit:]
+
+            def _resolve_replacement(pattern: Optional[str]) -> str:
+                if not pattern:
+                    return eff_policy.redact_replacement
+                for rule in eff_policy.block_patterns or []:
+                    regex = getattr(rule, "regex", None)
+                    if regex is None:
+                        continue
+                    if getattr(regex, "pattern", None) != pattern:
+                        continue
+                    replacement = getattr(rule, "replacement", None)
+                    if replacement:
+                        return replacement
+                return eff_policy.redact_replacement
+
             def _out_transform(s: str) -> str:
                 try:
                     mon = None
@@ -1978,12 +2020,42 @@ async def execute_streaming_call(
                 except Exception as _e:
                     logger.debug(f"Topic monitoring (stream chunk) skipped: {_e}")
                 if not eff_policy.enabled or not eff_policy.output_enabled:
+                    _update_stream_buffer(s)
                     return s
                 resolved_action = None
                 sample = None
                 redacted_s = None
                 out_category = None
-                if hasattr(moderation, "evaluate_action"):
+                match_span = None
+                buffer_len = len(stream_mod_buffer)
+                if hasattr(moderation, "evaluate_action_with_match"):
+                    combined = f"{stream_mod_buffer}{s}" if stream_mod_buffer else s
+                    try:
+                        eval_res = moderation.evaluate_action_with_match(combined, eff_policy, "output")
+                        if isinstance(eval_res, tuple) and len(eval_res) >= 3:
+                            resolved_action, redacted_s, sample = eval_res[0], eval_res[1], eval_res[2]
+                            out_category = eval_res[3] if len(eval_res) >= 4 else None
+                            match_span = eval_res[4] if len(eval_res) >= 5 else None
+                        else:
+                            resolved_action, redacted_s, sample = eval_res  # type: ignore
+                    except Exception:
+                        resolved_action = None
+                    # If the match is entirely in the buffer, re-evaluate on the current chunk only.
+                    if match_span and buffer_len > 0 and match_span[1] <= buffer_len:
+                        try:
+                            eval_res = moderation.evaluate_action_with_match(s, eff_policy, "output")
+                            if isinstance(eval_res, tuple) and len(eval_res) >= 3:
+                                resolved_action, redacted_s, sample = eval_res[0], eval_res[1], eval_res[2]
+                                out_category = eval_res[3] if len(eval_res) >= 4 else None
+                                match_span = eval_res[4] if len(eval_res) >= 5 else None
+                            else:
+                                resolved_action, redacted_s, sample = eval_res  # type: ignore
+                                match_span = None
+                            buffer_len = 0
+                        except Exception:
+                            resolved_action = None
+                            match_span = None
+                elif hasattr(moderation, "evaluate_action"):
                     try:
                         eval_res = moderation.evaluate_action(s, eff_policy, "output")
                         if isinstance(eval_res, tuple) and len(eval_res) >= 3:
@@ -1996,9 +2068,11 @@ async def execute_streaming_call(
                 if not resolved_action:
                     flagged, sample = moderation.check_text(s, eff_policy)
                     if not flagged:
+                        _update_stream_buffer(s)
                         return s
                     resolved_action = eff_policy.output_action
                     redacted_s = moderation.redact_text(s, eff_policy) if resolved_action == "redact" else None
+                crosses_boundary = bool(match_span and buffer_len > 0 and match_span[0] < buffer_len < match_span[1])
                 if resolved_action == "block":
                     if not stream_mod_state["block_logged"]:
                         try:
@@ -2054,7 +2128,18 @@ async def execute_streaming_call(
                         except Exception:
                             pass
                         stream_mod_state["redact_logged"] = True
-                    return moderation.redact_text(s, eff_policy)
+                    if crosses_boundary and match_span:
+                        replacement = _resolve_replacement(sample)
+                        overlap_start = max(0, match_span[0] - buffer_len)
+                        overlap_end = max(0, match_span[1] - buffer_len)
+                        overlap_start = min(len(s), overlap_start)
+                        overlap_end = min(len(s), overlap_end)
+                        redacted_out = f"{s[:overlap_start]}{replacement}{s[overlap_end:]}"
+                    else:
+                        redacted_out = moderation.redact_text(s, eff_policy)
+                    _update_stream_buffer(redacted_out)
+                    return redacted_out
+                _update_stream_buffer(s)
                 return s
 
             async def _finalize_stream(*, success: bool, cancelled: bool, error: bool) -> None:

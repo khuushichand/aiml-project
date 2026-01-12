@@ -274,6 +274,7 @@ class BillingEnforcer:
                     )
                 else:
                     # SQLite: same aggregation using SQLite-compatible syntax
+                    month_start_str = month_start.strftime("%Y-%m-%d %H:%M:%S")
                     cur = await conn.execute(
                         """
                         WITH primary_org AS (
@@ -301,7 +302,7 @@ class BillingEnforcer:
                             WHERE ak.org_id = ? AND l2.ts >= ?
                         ) AS sub
                         """,
-                        (org_id, month_start.isoformat(), org_id, month_start.isoformat()),
+                        (org_id, month_start_str, org_id, month_start_str),
                     )
                     row = await cur.fetchone()
                     result = row[0] if row else 0

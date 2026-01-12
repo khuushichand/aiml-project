@@ -172,6 +172,8 @@ async def download_url_async(
     """
     if allowed_extensions is None:
         allowed_extensions = set()
+    else:
+        allowed_extensions = {ext.lower() for ext in allowed_extensions}
 
     # Enforce outbound policy early to avoid bypassing central egress controls.
     _validate_egress_or_raise(url)

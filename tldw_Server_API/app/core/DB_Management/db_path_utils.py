@@ -328,6 +328,26 @@ class DatabasePaths:
         return audit_dir / DatabasePaths.AUDIT_DB_NAME
 
     @staticmethod
+    def get_shared_audit_db_path() -> Path:
+        """Get the path to the shared audit database."""
+        raw = os.getenv("AUDIT_SHARED_DB_PATH") or settings.get("AUDIT_SHARED_DB_PATH")
+        if raw:
+            try:
+                candidate = Path(str(raw)).expanduser()
+            except Exception:
+                candidate = Path(str(raw))
+            if not candidate.is_absolute():
+                project_root = Path(get_project_root())
+                candidate = (project_root / candidate).resolve()
+            else:
+                candidate = candidate.resolve()
+        else:
+            project_root = Path(get_project_root())
+            candidate = (project_root / "Databases" / "audit_shared.db").resolve()
+        _ensure_dir(candidate.parent, label="shared audit")
+        return candidate
+
+    @staticmethod
     def get_evaluations_db_path(user_id: Optional[UserId]) -> Path:
         """Get the path to the user's evaluations database."""
         user_dir = DatabasePaths.get_user_base_directory(user_id)

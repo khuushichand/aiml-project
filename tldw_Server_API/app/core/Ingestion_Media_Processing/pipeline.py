@@ -54,7 +54,7 @@ async def run_batch_processor(
 
     Returns:
         A batch dict compatible with existing process-* responses, with
-        `results`, `processed_count`, `errors_count`, and `errors`.
+        `results`, `processed_count`, `errors_count`, and `errors` (warnings count as processed).
     """
     batch: Dict[str, Any] = base_batch.copy() if base_batch is not None else {}
     results = await processor(items)
@@ -63,13 +63,12 @@ async def run_batch_processor(
     batch["results"] = batch_results
 
     # Compute counts in the same way current endpoints do:
-    # - "Success" items contribute to processed_count
+    # - "Success" and "Warning" items contribute to processed_count
     # - "Error" items contribute to errors_count
-    # - "Warning" items are surfaced in results but do not increment counts.
     processed_count = sum(
         1
         for r in batch_results
-        if str(r.get("status", "")).lower() == "success"
+        if str(r.get("status", "")).lower() in {"success", "warning"}
     )
     errors_count = sum(
         1 for r in batch_results if str(r.get("status", "")).lower() == "error"

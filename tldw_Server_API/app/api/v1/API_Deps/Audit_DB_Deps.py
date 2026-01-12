@@ -37,6 +37,7 @@ from tldw_Server_API.app.core.exceptions import (
 
 _TRUTHY = {"1", "true", "yes", "y", "on"}
 _FALSEY = {"0", "false", "no", "n", "off"}
+_VALID_STORAGE_MODES = {"per_user", "shared"}
 
 
 def _settings_int(
@@ -99,6 +100,26 @@ def _settings_bool(key: str, default: bool) -> bool:
         return False
     logger.warning(f"Invalid {key}={raw!r}; using default {default}")
     return default
+
+
+def _resolve_audit_storage_mode() -> str:
+    """Resolve audit storage mode with rollback precedence."""
+    if _settings_bool("AUDIT_STORAGE_ROLLBACK", False):
+        return "per_user"
+    raw = settings.get("AUDIT_STORAGE_MODE", "per_user")
+    try:
+        mode = str(raw).strip().lower()
+    except Exception:
+        mode = "per_user"
+    if mode not in _VALID_STORAGE_MODES:
+        logger.warning(f"Invalid AUDIT_STORAGE_MODE={raw!r}; using per_user")
+        return "per_user"
+    return mode
+
+
+def _shared_audit_db_path() -> str:
+    """Resolve shared audit DB path from settings."""
+    return str(DatabasePaths.get_shared_audit_db_path())
 
 
 def _schedule_service_stop(user_id: Optional[int], service: UnifiedAuditService, reason: str) -> None:
@@ -339,14 +360,18 @@ async def _create_audit_service_for_user(user_id: int) -> UnifiedAuditService:
     Returns:
         Initialized UnifiedAuditService instance
     """
-    # Get the user-specific audit database path
-    db_path = DatabasePaths.get_audit_db_path(user_id)
-
-    logger.info(f"Creating audit service for user {user_id} at path: {db_path}")
+    storage_mode = _resolve_audit_storage_mode()
+    if storage_mode == "shared":
+        db_path = _shared_audit_db_path()
+        logger.info(f"Creating shared audit service for user {user_id} at path: {db_path}")
+    else:
+        db_path = DatabasePaths.get_audit_db_path(user_id)
+        logger.info(f"Creating audit service for user {user_id} at path: {db_path}")
 
     # Create the service with user-specific database
     service = UnifiedAuditService(
         db_path=str(db_path),
+        storage_mode=storage_mode,
         retention_days=_settings_int("AUDIT_RETENTION_DAYS", 30, min_value=1, max_value=3650),
         enable_pii_detection=_settings_bool("AUDIT_ENABLE_PII_DETECTION", True),
         enable_risk_scoring=_settings_bool("AUDIT_ENABLE_RISK_SCORING", True),
@@ -363,9 +388,17 @@ async def _create_audit_service_for_user(user_id: int) -> UnifiedAuditService:
 
 async def _create_default_audit_service() -> UnifiedAuditService:
     """Create a shared default audit service (no user-specific DB path)."""
-    logger.info("Creating default audit service (shared).")
+    storage_mode = _resolve_audit_storage_mode()
+    db_path: Optional[str]
+    if storage_mode == "shared":
+        db_path = _shared_audit_db_path()
+        logger.info(f"Creating shared default audit service at path: {db_path}")
+    else:
+        db_path = None
+        logger.info("Creating default audit service.")
     service = UnifiedAuditService(
-        db_path=None,
+        db_path=db_path,
+        storage_mode=storage_mode,
         retention_days=_settings_int("AUDIT_RETENTION_DAYS", 30, min_value=1, max_value=3650),
         enable_pii_detection=_settings_bool("AUDIT_ENABLE_PII_DETECTION", True),
         enable_risk_scoring=_settings_bool("AUDIT_ENABLE_RISK_SCORING", True),
@@ -379,18 +412,23 @@ async def _create_default_audit_service() -> UnifiedAuditService:
 
 async def _get_or_create_audit_service_for_key(user_id: Optional[int]) -> UnifiedAuditService:
     """Internal helper to get or create a cached audit service for a cache key."""
+    storage_mode = _resolve_audit_storage_mode()
+    cache_key = None if storage_mode == "shared" else user_id
     state = _state_for_loop()
     service_instance: Optional[UnifiedAuditService] = None
 
     # Check cache
     with state.cache_lock:
-        service_instance = state.cache.get(user_id)
+        service_instance = state.cache.get(cache_key)
 
     if service_instance:
         logger.debug(f"Using cached audit service instance for user_id: {user_id}")
         return service_instance
 
-    key_label = "default" if user_id is None else f"user_id {user_id}"
+    if storage_mode == "shared":
+        key_label = "shared"
+    else:
+        key_label = "default" if user_id is None else f"user_id {user_id}"
     logger.info(f"No cached audit service found for {key_label}. Initializing.")
 
     init_timeout_s = _settings_float("AUDIT_INIT_TIMEOUT_SECONDS", 30.0, min_value=0.1, max_value=300.0)
@@ -402,13 +440,13 @@ async def _get_or_create_audit_service_for_key(user_id: Optional[int]) -> Unifie
 
     while True:
         with state.init_lock:
-            if user_id in state.initializing_users:
-                if user_id not in state.initializing_events:
-                    state.initializing_events[user_id] = asyncio.Event()
-                wait_event = state.initializing_events[user_id]
+            if cache_key in state.initializing_users:
+                if cache_key not in state.initializing_events:
+                    state.initializing_events[cache_key] = asyncio.Event()
+                wait_event = state.initializing_events[cache_key]
                 should_initialize = False
             else:
-                state.initializing_users.add(user_id)
+                state.initializing_users.add(cache_key)
                 should_initialize = True
                 wait_event = None
 
@@ -435,7 +473,7 @@ async def _get_or_create_audit_service_for_key(user_id: Optional[int]) -> Unifie
 
         # Check cache again after waiting
         with state.cache_lock:
-            service_instance = state.cache.get(user_id)
+            service_instance = state.cache.get(cache_key)
             if service_instance:
                 return service_instance
 
@@ -443,19 +481,21 @@ async def _get_or_create_audit_service_for_key(user_id: Optional[int]) -> Unifie
         try:
             # Double-check cache in case another request created it
             with state.cache_lock:
-                service_instance = state.cache.get(user_id)
+                service_instance = state.cache.get(cache_key)
                 if service_instance:
                     logger.debug(f"Audit service for user {user_id} created concurrently.")
                     return service_instance
 
-            if user_id is None:
+            if storage_mode == "shared":
+                service_instance = await _create_default_audit_service()
+            elif user_id is None:
                 service_instance = await _create_default_audit_service()
             else:
                 service_instance = await _create_audit_service_for_user(user_id)
 
             # Store in cache
             with state.cache_lock:
-                state.cache[user_id] = service_instance
+                state.cache[cache_key] = service_instance
 
             logger.info(f"Audit service created and cached successfully for user {user_id}")
 
@@ -465,8 +505,8 @@ async def _get_or_create_audit_service_for_key(user_id: Optional[int]) -> Unifie
         finally:
             # Clean up initialization tracking and signal waiters
             with state.init_lock:
-                state.initializing_users.discard(user_id)
-                event = state.initializing_events.pop(user_id, None)
+                state.initializing_users.discard(cache_key)
+                event = state.initializing_events.pop(cache_key, None)
                 if event:
                     event.set()
 

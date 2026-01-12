@@ -274,6 +274,11 @@ async def create_checkout(
         )
 
     service = await get_subscription_service()
+    if not await service.get_plan_for_checkout(body.plan_name):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unknown or inactive plan. Ensure the plan exists in subscription_plans.",
+        )
 
     try:
         principal_email = getattr(principal, "email", None)

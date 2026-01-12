@@ -7,6 +7,7 @@ No hardcoded secrets allowed.
 
 import os
 import secrets
+import json
 from typing import Optional, Dict, Any, List
 from functools import lru_cache
 from pydantic import Field, SecretStr
@@ -36,6 +37,27 @@ def _default_allowed_ips() -> list[str]:
     This keeps the surface local-only unless explicitly configured via env.
     """
     return ["127.0.0.1", "::1"]
+
+
+def _parse_env_list(value: Any) -> Any:
+    """Parse env string into a list of strings for list-typed settings."""
+    if value is None:
+        return value
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return []
+        if raw.startswith("["):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    return [str(item).strip() for item in parsed if str(item).strip()]
+            except Exception:
+                pass
+        return [item.strip() for item in raw.split(",") if item.strip()]
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return value
 
 
 class MCPConfig(BaseSettings):
@@ -184,6 +206,7 @@ class MCPConfig(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        enable_decoding=False,
         extra="ignore",
     )
 
@@ -227,25 +250,25 @@ class MCPConfig(BaseSettings):
     @classmethod
     def parse_cors_origins(cls, v):
         """Parse CORS origins from comma-separated string"""
-        if isinstance(v, str):
-            return [origin.strip() for origin in v.split(",")]
-        return v
+        return _parse_env_list(v)
 
     @field_validator("ws_allowed_origins", mode="before")
     @classmethod
     def parse_ws_allowed_origins(cls, v):
         """Parse WS allowed origins from comma-separated string."""
-        if isinstance(v, str):
-            return [origin.strip() for origin in v.split(",") if origin.strip()]
-        return v
+        return _parse_env_list(v)
 
     @field_validator("allowed_client_ips", "blocked_client_ips", "trusted_proxy_ips", mode="before")
     @classmethod
     def parse_ip_lists(cls, v):
         """Parse comma-separated IP/CIDR lists."""
-        if isinstance(v, str):
-            return [item.strip() for item in v.split(",") if item.strip()]
-        return v
+        return _parse_env_list(v)
+
+    @field_validator("cors_allow_methods", "cors_allow_headers", mode="before")
+    @classmethod
+    def parse_cors_list_fields(cls, v):
+        """Parse comma-separated or JSON list values for CORS list fields."""
+        return _parse_env_list(v)
 
     @field_validator("database_url")
     @classmethod

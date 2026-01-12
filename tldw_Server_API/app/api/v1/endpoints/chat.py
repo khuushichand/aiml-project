@@ -244,6 +244,17 @@ except Exception:
 def _to_bool(val: str) -> bool:
     return str(val).strip().lower() in {"1", "true", "yes", "y", "on"}
 
+
+def _resolve_base64_image_limit_enforcement() -> bool:
+    """Return True when base64 image size enforcement should run at ingress."""
+    env_val = os.getenv("CHAT_ENFORCE_BASE64_IMAGE_LIMIT")
+    if isinstance(env_val, str) and env_val.strip():
+        return _to_bool(env_val)
+    cfg_val = _chat_config.get("enforce_base64_image_limit") if _chat_config else None
+    if cfg_val is None:
+        return False
+    return _to_bool(cfg_val)
+
 # Optional flag: allow auto-switch from 'local-llm' to 'openai' when an
 # OpenAI key is present. Intended primarily for tests; disabled by default.
 _env_autoswitch = os.getenv("ALLOW_AUTOSWITCH_TO_OPENAI")
@@ -1110,6 +1121,10 @@ async def create_chat_completion(
     # Budget enforcement is handled by the dependency and/or middleware.
     # Avoid duplicating authorization logic in the handler to prevent drift.
 
+    # Optional ingress enforcement for base64 image payload sizes (off by default).
+    enforce_image_size = _resolve_base64_image_limit_enforcement()
+    max_image_bytes = get_max_base64_bytes() if enforce_image_size else None
+
     # Capture raw model input before any normalization for later decisions
     raw_model_input = request_data.model
 
@@ -1205,14 +1220,16 @@ async def create_chat_completion(
             request_data,
             max_messages=MAX_MESSAGES_PER_REQUEST,
             max_images=MAX_IMAGES_PER_REQUEST,
-            max_text_length=MAX_TEXT_LENGTH
+            max_text_length=MAX_TEXT_LENGTH,
+            enforce_image_max_bytes=enforce_image_size,
+            max_image_bytes=max_image_bytes,
         )
         metrics.metrics.validation_duration.record(time.time() - validation_start)
 
         if not is_valid:
             metrics.track_validation_failure("payload", error_message)
             logger.warning(f"Request validation failed: {error_message}")
-            if "too many" in error_message.lower() or "too long" in error_message.lower():
+            if any(term in error_message.lower() for term in ("too many", "too long", "too large")):
                 raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=error_message)
             else:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_message)
@@ -1416,14 +1433,16 @@ async def create_chat_completion(
             request_data,
             max_messages=MAX_MESSAGES_PER_REQUEST,
             max_images=MAX_IMAGES_PER_REQUEST,
-            max_text_length=MAX_TEXT_LENGTH
+            max_text_length=MAX_TEXT_LENGTH,
+            enforce_image_max_bytes=enforce_image_size,
+            max_image_bytes=max_image_bytes,
         )
         metrics.metrics.validation_duration.record(time.time() - validation_start)
 
         if not is_valid:
             metrics.track_validation_failure("payload_post_injection", error_message)
             logger.warning(f"Request validation failed after slash command injection: {error_message}")
-            if "too many" in error_message.lower() or "too long" in error_message.lower():
+            if any(term in error_message.lower() for term in ("too many", "too long", "too large")):
                 raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=error_message)
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_message)
 
@@ -1436,6 +1455,12 @@ async def create_chat_completion(
             validate_request_size(request_json)
         except ValueError as e:
             logger.warning(f"Input validation error: {e}")
+            error_text = str(e)
+            if "request too large" in error_text.lower():
+                raise HTTPException(
+                    status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                    detail="Request payload too large.",
+                ) from None
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid request.") from None
 
         # Apply rate limiting after slash command mutation so estimates are accurate.

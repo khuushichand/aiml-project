@@ -24,6 +24,19 @@ def test_convert_sqlite_placeholders_to_postgres_preserves_literals():
     assert converted == "SELECT '?' as literal, col FROM table WHERE id = %s"
 
 
+def test_convert_sqlite_placeholders_to_postgres_preserves_jsonb_operators():
+
+    query = "SELECT * FROM demo WHERE payload ? 'key' AND id = ?"
+    converted = convert_sqlite_placeholders_to_postgres(query)
+    assert "payload ? 'key'" in converted
+    assert converted.count("%s") == 1
+
+    query_param = "SELECT * FROM demo WHERE payload ? ? AND id = ?"
+    converted_param = convert_sqlite_placeholders_to_postgres(query_param)
+    assert "payload ? %s" in converted_param
+    assert converted_param.count("%s") == 2
+
+
 def test_transform_sqlite_query_for_postgres_rewrites_conflicts_and_collation():
 
     source = "INSERT OR IGNORE INTO demo(name) VALUES (?) COLLATE NOCASE"

@@ -156,8 +156,8 @@ async def test_run_batch_processor_counts_and_orders(tmp_path: Path) -> None:
 
     batch = await run_batch_processor(items, _processor, base_batch=base_batch)
 
-    # Only "Success" contributes to processed_count; a single Error contributes to errors_count.
-    assert batch["processed_count"] == 1
+    # "Success" and "Warning" contribute to processed_count; a single Error contributes to errors_count.
+    assert batch["processed_count"] == 2
     assert batch["errors_count"] == 1
     assert batch["errors"] == ["pre-existing-error"]
 

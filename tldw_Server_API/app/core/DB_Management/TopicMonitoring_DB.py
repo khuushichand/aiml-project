@@ -29,6 +29,7 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
@@ -57,7 +58,15 @@ class TopicAlert:
 
 class TopicMonitoringDB:
     def __init__(self, db_path: str = "Databases/monitoring_alerts.db") -> None:
-        self.db_path = db_path
+        path_obj = Path(db_path)
+        if not path_obj.is_absolute() and path_obj.parent == Path("."):
+            msg = (
+                "TopicMonitoringDB db_path must include a directory when using a relative path "
+                f"(got {db_path!r}). Use an absolute path or include a directory component."
+            )
+            logger.error(msg)
+            raise RuntimeError(msg)
+        self.db_path = str(path_obj)
         self._lock = threading.RLock()
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._ensure_schema()

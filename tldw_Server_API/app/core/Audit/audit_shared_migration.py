@@ -1,0 +1,504 @@
+"""
+Audit shared DB migration utility.
+
+Merges per-user audit databases and the legacy Databases/unified_audit.db
+into the shared audit database, deduplicating by event_id.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable, List, Optional
+from uuid import uuid4
+
+import aiosqlite
+from loguru import logger
+
+from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.Utils.Utils import get_project_root
+
+
+@dataclass(frozen=True)
+class AuditMigrationSource:
+    path: Path
+    tenant_id: Optional[str]
+    label: str
+
+
+@dataclass
+class AuditMigrationCounts:
+    source: AuditMigrationSource
+    events_read: int = 0
+    events_inserted: int = 0
+    events_skipped: int = 0
+    stats_read: int = 0
+    stats_inserted: int = 0
+    stats_skipped: int = 0
+
+
+@dataclass
+class AuditMigrationReport:
+    shared_db_path: Path
+    sources: List[AuditMigrationCounts]
+
+    @property
+    def total_events_inserted(self) -> int:
+        return sum(c.events_inserted for c in self.sources)
+
+    @property
+    def total_events_skipped(self) -> int:
+        return sum(c.events_skipped for c in self.sources)
+
+    @property
+    def total_stats_inserted(self) -> int:
+        return sum(c.stats_inserted for c in self.sources)
+
+    @property
+    def total_stats_skipped(self) -> int:
+        return sum(c.stats_skipped for c in self.sources)
+
+
+def discover_audit_sources(
+    *,
+    user_db_base_dir: Optional[Path] = None,
+    default_db_path: Optional[Path] = None,
+) -> List[AuditMigrationSource]:
+    base_dir = user_db_base_dir or DatabasePaths.get_user_db_base_dir()
+    sources: List[AuditMigrationSource] = []
+
+    try:
+        for entry in sorted(base_dir.iterdir()):
+            if not entry.is_dir():
+                continue
+            audit_path = entry / DatabasePaths.AUDIT_SUBDIR / DatabasePaths.AUDIT_DB_NAME
+            if audit_path.exists():
+                sources.append(
+                    AuditMigrationSource(
+                        path=audit_path,
+                        tenant_id=entry.name,
+                        label=f"user:{entry.name}",
+                    )
+                )
+    except FileNotFoundError:
+        pass
+
+    if default_db_path is None:
+        project_root = Path(get_project_root())
+        default_db_path = project_root / "Databases" / "unified_audit.db"
+
+    if default_db_path.exists():
+        sources.append(
+            AuditMigrationSource(
+                path=default_db_path,
+                tenant_id=None,
+                label="default",
+            )
+        )
+
+    return sources
+
+
+def _normalize_tenant_id(value: Any, system_tenant_id: str) -> str:
+    if value is None:
+        return system_tenant_id
+    try:
+        s = str(value).strip()
+    except Exception:
+        return system_tenant_id
+    return s or system_tenant_id
+
+
+def _coerce_timestamp(value: Any) -> str:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc).isoformat()
+        return value.astimezone(timezone.utc).isoformat()
+    if value is None:
+        return datetime.now(timezone.utc).isoformat()
+    try:
+        s = str(value).strip()
+        if not s:
+            return datetime.now(timezone.utc).isoformat()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt_val = datetime.fromisoformat(s)
+        if dt_val.tzinfo is None:
+            dt_val = dt_val.replace(tzinfo=timezone.utc)
+        return dt_val.astimezone(timezone.utc).isoformat()
+    except Exception:
+        return str(value)
+
+
+def _infer_category(event_type: Optional[str]) -> str:
+    if not event_type:
+        return "system"
+    val = str(event_type).strip().lower()
+    if val.startswith("auth"):
+        return "authentication"
+    if val.startswith("user"):
+        return "authorization"
+    if val.startswith("data"):
+        if any(val.endswith(suffix) for suffix in ("write", "update", "delete", "import", "export")):
+            return "data_modification"
+        return "data_access"
+    if val.startswith("rag"):
+        return "rag"
+    if val.startswith("eval"):
+        return "evaluation"
+    if val.startswith("api"):
+        return "api_call"
+    if val.startswith("security"):
+        return "security"
+    if val.startswith("system"):
+        return "system"
+    return "system"
+
+
+def _normalize_severity(value: Any) -> str:
+    if value is None:
+        return "info"
+    val = str(value).strip().lower()
+    if val in {"debug", "info", "warning", "error", "critical"}:
+        return val
+    mapping = {
+        "low": "info",
+        "medium": "warning",
+        "high": "error",
+        "critical": "critical",
+    }
+    return mapping.get(val, "info")
+
+
+def _safe_json_text(value: Any, default: str) -> str:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except Exception:
+        return str(value)
+
+
+def _pick(row: dict[str, Any], *names: str) -> Any:
+    for name in names:
+        if name in row and row[name] not in (None, ""):
+            return row[name]
+    return None
+
+
+def _build_event_record(
+    row: dict[str, Any],
+    columns: List[str],
+    *,
+    tenant_override: Optional[str],
+    system_tenant_id: str,
+) -> dict[str, Any]:
+    event_type_val = _pick(row, "event_type", "event") or "system.start"
+    record: dict[str, Any] = {col: None for col in columns}
+
+    record["event_id"] = str(_pick(row, "event_id") or uuid4())
+    record["timestamp"] = _coerce_timestamp(_pick(row, "timestamp"))
+    record["category"] = _pick(row, "category") or _infer_category(event_type_val)
+    record["event_type"] = str(event_type_val)
+    record["severity"] = _normalize_severity(_pick(row, "severity"))
+
+    context_user_id = _pick(row, "context_user_id", "user_id")
+    if "tenant_user_id" in columns:
+        if tenant_override is not None:
+            record["tenant_user_id"] = _normalize_tenant_id(tenant_override, system_tenant_id)
+        else:
+            raw_tenant = _pick(row, "tenant_user_id", "context_user_id", "user_id")
+            record["tenant_user_id"] = _normalize_tenant_id(raw_tenant, system_tenant_id)
+
+    record["context_request_id"] = _pick(row, "context_request_id", "request_id")
+    record["context_correlation_id"] = _pick(row, "context_correlation_id", "correlation_id")
+    record["context_session_id"] = _pick(row, "context_session_id", "session_id")
+    record["context_user_id"] = context_user_id
+    record["context_api_key_hash"] = _pick(row, "context_api_key_hash", "api_key_hash")
+    record["context_ip_address"] = _pick(row, "context_ip_address", "ip_address")
+    record["context_user_agent"] = _pick(row, "context_user_agent", "user_agent")
+    record["context_endpoint"] = _pick(row, "context_endpoint", "endpoint")
+    record["context_method"] = _pick(row, "context_method", "method")
+
+    record["resource_type"] = _pick(row, "resource_type")
+    record["resource_id"] = _pick(row, "resource_id")
+    record["action"] = _pick(row, "action")
+    record["result"] = _pick(row, "result", "outcome") or "success"
+    record["error_message"] = _pick(row, "error_message", "details")
+
+    record["duration_ms"] = _pick(row, "duration_ms")
+    record["tokens_used"] = _pick(row, "tokens_used")
+    record["estimated_cost"] = _pick(row, "estimated_cost")
+    record["result_count"] = _pick(row, "result_count")
+
+    record["risk_score"] = _pick(row, "risk_score") or 0
+    record["pii_detected"] = bool(_pick(row, "pii_detected") or False)
+    record["compliance_flags"] = _safe_json_text(_pick(row, "compliance_flags"), "[]")
+    record["metadata"] = _safe_json_text(_pick(row, "metadata"), "{}")
+
+    return record
+
+
+async def _fetch_existing_event_ids(
+    db: aiosqlite.Connection,
+    event_ids: List[str],
+    *,
+    chunk_size: int = 500,
+) -> set[str]:
+    if not event_ids:
+        return set()
+    existing: set[str] = set()
+    for i in range(0, len(event_ids), chunk_size):
+        chunk = event_ids[i : i + chunk_size]
+        placeholders = ",".join("?" * len(chunk))
+        query = f"SELECT event_id FROM audit_events WHERE event_id IN ({placeholders})"
+        async with db.execute(query, chunk) as cursor:
+            rows = await cursor.fetchall()
+            existing.update(str(row[0]) for row in rows if row and row[0])
+    return existing
+
+
+async def _table_exists(db: aiosqlite.Connection, name: str) -> bool:
+    async with db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (name,),
+    ) as cur:
+        return await cur.fetchone() is not None
+
+
+async def _stats_row_exists(
+    db: aiosqlite.Connection, tenant_id: str, date_val: Any, category: Any
+) -> bool:
+    async with db.execute(
+        """
+        SELECT 1 FROM audit_daily_stats
+        WHERE tenant_user_id = ? AND date = ? AND category = ?
+        LIMIT 1
+        """,
+        (tenant_id, date_val, category),
+    ) as cur:
+        return await cur.fetchone() is not None
+
+
+async def _migrate_source(
+    shared_db: aiosqlite.Connection,
+    source: AuditMigrationSource,
+    *,
+    columns: List[str],
+    insert_sql: str,
+    system_tenant_id: str,
+    chunk_size: int,
+) -> AuditMigrationCounts:
+    counts = AuditMigrationCounts(source=source)
+    if not source.path.exists():
+        return counts
+
+    async with aiosqlite.connect(source.path) as source_db:
+        source_db.row_factory = aiosqlite.Row
+        if not await _table_exists(source_db, "audit_events"):
+            return counts
+
+        async with source_db.execute("SELECT * FROM audit_events") as cur:
+            while True:
+                rows = await cur.fetchmany(chunk_size)
+                if not rows:
+                    break
+                records: List[dict[str, Any]] = []
+                for row in rows:
+                    record = _build_event_record(
+                        dict(row),
+                        columns,
+                        tenant_override=source.tenant_id,
+                        system_tenant_id=system_tenant_id,
+                    )
+                    records.append(record)
+                counts.events_read += len(records)
+
+                seen: set[str] = set()
+                deduped: List[dict[str, Any]] = []
+                for rec in records:
+                    ev_id = rec.get("event_id")
+                    if not ev_id:
+                        continue
+                    if ev_id in seen:
+                        continue
+                    seen.add(ev_id)
+                    deduped.append(rec)
+
+                existing = await _fetch_existing_event_ids(shared_db, [r["event_id"] for r in deduped])
+                filtered = [r for r in deduped if r["event_id"] not in existing]
+                counts.events_inserted += len(filtered)
+                counts.events_skipped += len(deduped) - len(filtered)
+                if filtered:
+                    await shared_db.executemany(insert_sql, filtered)
+
+        if await _table_exists(source_db, "audit_daily_stats"):
+            async with source_db.execute("SELECT * FROM audit_daily_stats") as cur:
+                rows = await cur.fetchall()
+            for row in rows:
+                data = dict(row)
+                tenant_id = source.tenant_id
+                if tenant_id is None:
+                    tenant_id = _normalize_tenant_id(data.get("tenant_user_id"), system_tenant_id)
+                tenant_id = _normalize_tenant_id(tenant_id, system_tenant_id)
+                counts.stats_read += 1
+                exists = await _stats_row_exists(
+                    shared_db, tenant_id, data.get("date"), data.get("category")
+                )
+                if exists:
+                    counts.stats_skipped += 1
+                    continue
+                await shared_db.execute(
+                    """
+                    INSERT OR IGNORE INTO audit_daily_stats (
+                        tenant_user_id, date, category, total_events, high_risk_events,
+                        failed_events, total_cost, total_tokens, avg_duration_ms, duration_count
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        tenant_id,
+                        data.get("date"),
+                        data.get("category"),
+                        data.get("total_events", 0),
+                        data.get("high_risk_events", 0),
+                        data.get("failed_events", 0),
+                        data.get("total_cost", 0.0),
+                        data.get("total_tokens", 0),
+                        data.get("avg_duration_ms"),
+                        data.get("duration_count", 0),
+                    ),
+                )
+                counts.stats_inserted += 1
+
+    return counts
+
+
+async def migrate_to_shared_audit_db(
+    *,
+    shared_db_path: Optional[Path] = None,
+    user_db_base_dir: Optional[Path] = None,
+    default_db_path: Optional[Path] = None,
+    system_tenant_id: str = "system",
+    chunk_size: int = 5000,
+) -> AuditMigrationReport:
+    shared_path = shared_db_path or DatabasePaths.get_shared_audit_db_path()
+    shared_path.parent.mkdir(parents=True, exist_ok=True)
+    service = UnifiedAuditService(
+        db_path=str(shared_path),
+        storage_mode="shared",
+        enable_pii_detection=False,
+        enable_risk_scoring=False,
+        buffer_size=chunk_size,
+        flush_interval=1.0,
+        system_tenant_id=system_tenant_id,
+    )
+    await service.initialize(start_background_tasks=False)
+    await service.stop()
+
+    sources = discover_audit_sources(
+        user_db_base_dir=user_db_base_dir,
+        default_db_path=default_db_path,
+    )
+    if not sources:
+        logger.warning("No audit databases found for migration.")
+        return AuditMigrationReport(shared_db_path=shared_path, sources=[])
+
+    counts: List[AuditMigrationCounts] = []
+    async with aiosqlite.connect(shared_path) as shared_db:
+        shared_db.row_factory = aiosqlite.Row
+        try:
+            await shared_db.execute("PRAGMA journal_mode=WAL;")
+            await shared_db.execute("PRAGMA synchronous=NORMAL;")
+            await shared_db.execute("PRAGMA temp_store=MEMORY;")
+            await shared_db.execute("PRAGMA foreign_keys=ON;")
+            await shared_db.execute("PRAGMA busy_timeout=5000;")
+        except Exception:
+            pass
+
+        for source in sources:
+            logger.info(f"Migrating audit DB: {source.label} ({source.path})")
+            src_counts = await _migrate_source(
+                shared_db,
+                source,
+                columns=list(service._event_columns),
+                insert_sql=service._event_insert_sql,
+                system_tenant_id=system_tenant_id,
+                chunk_size=chunk_size,
+            )
+            counts.append(src_counts)
+            await shared_db.commit()
+
+    report = AuditMigrationReport(shared_db_path=shared_path, sources=counts)
+    logger.info(
+        "Audit migration complete. events_inserted={}, events_skipped={}, stats_inserted={}, stats_skipped={}",
+        report.total_events_inserted,
+        report.total_events_skipped,
+        report.total_stats_inserted,
+        report.total_stats_skipped,
+    )
+    return report
+
+
+def _parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Migrate per-user audit DBs into shared audit DB.")
+    parser.add_argument(
+        "--shared-db",
+        dest="shared_db",
+        default=None,
+        help="Path to shared audit DB (default: AUDIT_SHARED_DB_PATH or Databases/audit_shared.db)",
+    )
+    parser.add_argument(
+        "--user-db-base",
+        dest="user_db_base",
+        default=None,
+        help="Base directory for user DBs (default: USER_DB_BASE_DIR)",
+    )
+    parser.add_argument(
+        "--default-db",
+        dest="default_db",
+        default=None,
+        help="Legacy unified audit DB path (default: Databases/unified_audit.db if present)",
+    )
+    parser.add_argument(
+        "--system-tenant-id",
+        dest="system_tenant_id",
+        default="system",
+        help="Reserved tenant id for system/anonymous events",
+    )
+    parser.add_argument(
+        "--chunk-size",
+        dest="chunk_size",
+        type=int,
+        default=5000,
+        help="Row batch size for migration",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: Optional[Iterable[str]] = None) -> int:
+    args = _parse_args(argv)
+    shared_db = Path(args.shared_db).expanduser() if args.shared_db else None
+    user_db_base = Path(args.user_db_base).expanduser() if args.user_db_base else None
+    default_db = Path(args.default_db).expanduser() if args.default_db else None
+
+    asyncio.run(
+        migrate_to_shared_audit_db(
+            shared_db_path=shared_db,
+            user_db_base_dir=user_db_base,
+            default_db_path=default_db,
+            system_tenant_id=args.system_tenant_id,
+            chunk_size=args.chunk_size,
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

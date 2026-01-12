@@ -138,7 +138,9 @@ def _verify_conversation_access(
             detail=f"Chat session {conversation_id} not found"
         )
 
-    if conversation.get('client_id') != str(user_id):
+    stored_client_id = str(conversation.get('client_id', '')).strip()
+    request_user_id = str(user_id).strip()
+    if stored_client_id != request_user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You don't have access to this chat session"
@@ -166,7 +168,9 @@ def _verify_message_access(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Chat session {message.get('conversation_id')} not found"
         )
-    if conv.get('client_id') != str(user_id):
+    stored_client_id = str(conv.get('client_id', '')).strip()
+    request_user_id = str(user_id).strip()
+    if stored_client_id != request_user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You don't have access to this message"
@@ -203,9 +207,8 @@ async def send_message(
         HTTPException: 404 if chat not found, 403 if unauthorized, 429 if rate limited
     """
     try:
-        # Check rate limits (global + per-minute + per-chat message count)
+        # Check rate limits (per-minute + per-chat message count)
         rate_limiter = get_character_rate_limiter()
-        await rate_limiter.check_rate_limit(current_user.id, "message_send")
         await rate_limiter.check_message_send_rate(current_user.id)
 
         # Verify conversation access

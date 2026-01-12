@@ -26,6 +26,21 @@ def _reconstruct_tokens_from_stream(chunks: List[str], max_overlap: int) -> List
     return out
 
 
+def _reconstruct_chars_from_stream(chunks: List[str], max_overlap: int) -> str:
+    """Reconstruct a character stream from streaming chunks with overlap."""
+    out: List[str] = []
+    for ch in chunks:
+        chars = list(ch)
+        d = 0
+        L = min(max_overlap, len(chars), len(out))
+        for k in range(L, 0, -1):
+            if out[-k:] == chars[:k]:
+                d = k
+                break
+        out.extend(chars[d:])
+    return "".join(out)
+
+
 def test_chunk_file_stream_words_overlap(tmp_path):
 
     # Prepare a deterministic whitespace-normalized corpus
@@ -45,6 +60,30 @@ def test_chunk_file_stream_words_overlap(tmp_path):
     chunks0 = list(ck.chunk_file_stream(p, method="words", max_size=25, overlap=0, language="en", buffer_size=1024))
     recon0 = _reconstruct_tokens_from_stream(chunks0, max_overlap=0)
     assert recon0 == words, "Reconstructed token stream should match original (overlap=0)"
+
+
+def test_chunk_file_stream_words_no_space_language(tmp_path, monkeypatch):
+    from tldw_Server_API.app.core.Chunking.strategies.words import WordChunkingStrategy
+
+    monkeypatch.setattr(WordChunkingStrategy, "_tokenize_thai", lambda self, text: list(text))
+
+    text = "abcdefg" * 700  # > 2048 chars to force multiple streaming flushes
+    p = tmp_path / "nospace.txt"
+    p.write_text(text, encoding="utf-8")
+
+    ck = Chunker()
+    chunks = list(
+        ck.chunk_file_stream(
+            p,
+            method="words",
+            max_size=32,
+            overlap=5,
+            language="th",
+            buffer_size=1024,
+        )
+    )
+    recon = _reconstruct_chars_from_stream(chunks, max_overlap=5)
+    assert recon == text
 
 
 def test_chunk_file_stream_sentences_overlap(tmp_path):
@@ -137,6 +176,38 @@ async def test_async_chunk_stream_sentences_overlap_tail():
         ]
 
     assert "Sentence 5. Sentence 6." in chunks
+
+
+@pytest.mark.asyncio
+async def test_async_chunk_stream_words_no_space_language(monkeypatch):
+    from tldw_Server_API.app.core.Chunking.async_chunker import AsyncChunker
+    from tldw_Server_API.app.core.Chunking.strategies.words import WordChunkingStrategy
+
+    monkeypatch.setattr(WordChunkingStrategy, "_tokenize_thai", lambda self, text: list(text))
+
+    text = "abcdefg" * 200
+    part1 = text[: len(text) // 2]
+    part2 = text[len(text) // 2 :]
+
+    async def text_stream():
+        yield part1
+        yield part2
+
+    async with AsyncChunker() as chunker:
+        chunks = [
+            ch
+            async for ch in chunker.chunk_stream(
+                text_stream(),
+                method="words",
+                max_size=16,
+                overlap=4,
+                buffer_size=len(part1),
+                language="th",
+            )
+        ]
+
+    recon = _reconstruct_chars_from_stream(chunks, max_overlap=4)
+    assert recon == text
 
 
 @pytest.mark.asyncio

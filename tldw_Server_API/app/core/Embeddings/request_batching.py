@@ -18,6 +18,34 @@ from tldw_Server_API.app.core.Embeddings.rate_limiter import get_async_rate_limi
 from tldw_Server_API.app.core.Utils.tokenizer import count_tokens as _count_tokens
 
 
+def _get_spec_value(spec: Any, key: str) -> Optional[Any]:
+    """Fetch a value from a model spec dict or object."""
+    if spec is None:
+        return None
+    if isinstance(spec, dict):
+        return spec.get(key)
+    return getattr(spec, key, None)
+
+
+def _resolve_model_spec(
+    models: Any,
+    model_id: str,
+    model: str,
+) -> Tuple[Optional[str], Optional[Any]]:
+    """Resolve a model spec from a mapping, returning the key and spec."""
+    if not isinstance(models, dict):
+        return None, None
+    if model_id in models:
+        return model_id, models[model_id]
+    if model in models:
+        return model, models[model]
+    suffix_matches = [key for key in models.keys() if key.endswith(f":{model}")]
+    if len(suffix_matches) == 1:
+        key = suffix_matches[0]
+        return key, models[key]
+    return None, None
+
+
 @dataclass
 class BatchRequest:
     """Represents a single request in a batch"""
@@ -134,10 +162,12 @@ class RequestBatcher:
             return await self._process_single(
                 text,
                 model,
-                provider,
+                self._resolve_provider_name(provider, model, config_override),
                 metadata,
                 config_override=config_override,
             )
+
+        provider = self._resolve_provider_name(provider, model, config_override)
 
         # Create request
         loop = asyncio.get_running_loop()
@@ -305,19 +335,22 @@ class RequestBatcher:
 
             # Process batch
             # Import here to avoid circular dependency
-            from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
-                create_embeddings_batch_async as embeddings_create_embeddings_batch_async,
-            )
+            if provider == "local":
+                embeddings = await self._create_local_embeddings(texts, model)
+            else:
+                from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
+                    create_embeddings_batch_async as embeddings_create_embeddings_batch_async,
+                )
 
-            # Create config for batch
-            batch_config = override_config or self._build_user_app_config(provider, model)
+                # Create config for batch
+                batch_config = override_config or self._build_user_app_config(provider, model)
 
-            # Get embeddings
-            embeddings = await embeddings_create_embeddings_batch_async(
-                texts,
-                batch_config,
-                model_id_override=f"{provider}:{model}"
-            )
+                # Get embeddings
+                embeddings = await embeddings_create_embeddings_batch_async(
+                    texts,
+                    batch_config,
+                    model_id_override=f"{provider}:{model}"
+                )
 
             # Distribute results
             for i, req in enumerate(batch):
@@ -383,11 +416,15 @@ class RequestBatcher:
             Embedding result
         """
         metadata = metadata or {}
+        provider = self._resolve_provider_name(provider, model, config_override)
 
         # If a config override is present we need to honour it by delegating
         # to the synchronous embedding loader, but we still do the work in an
         # executor so the event loop remains responsive.
         if config_override:
+            if provider == "local":
+                embeddings = await self._create_local_embeddings([text], model)
+                return embeddings[0]
             loop = asyncio.get_running_loop()
 
             def _invoke_sync():
@@ -455,6 +492,74 @@ class RequestBatcher:
             )
 
         return await loop.run_in_executor(None, _invoke_sync_default)
+
+    async def _create_local_embeddings(
+        self,
+        texts: List[str],
+        model: str,
+    ) -> List[List[float]]:
+        """Create local (in-process) embeddings without HTTP delegation."""
+        from tldw_Server_API.app.core.Embeddings.async_embeddings import get_async_embedding_service
+
+        service = get_async_embedding_service()
+        provider = service.providers.get("local")
+        if provider is None:
+            raise ValueError("Local embeddings provider is not configured.")
+
+        embeddings = await provider.create_embeddings_batch(texts, model=model)
+        if len(embeddings) != len(texts):
+            raise ValueError("Local embeddings provider returned unexpected batch size.")
+        return embeddings
+
+    def _resolve_provider_name(
+        self,
+        provider: str,
+        model: str,
+        config_override: Optional[Dict[str, Any]],
+    ) -> str:
+        """Resolve provider name, mapping local to local_api when configured."""
+        if not provider:
+            return provider
+        provider_lower = provider.lower()
+        if provider_lower not in {"local", "local_api"}:
+            return provider
+        if provider_lower == "local_api":
+            return "local_api"
+
+        api_url = self._resolve_local_api_url(provider, model, config_override)
+        if api_url:
+            return "local_api"
+        return "local"
+
+    def _resolve_local_api_url(
+        self,
+        provider: str,
+        model: str,
+        config_override: Optional[Dict[str, Any]],
+    ) -> Optional[str]:
+        """Resolve API URL for local provider overrides."""
+        if isinstance(config_override, dict):
+            emb_cfg = config_override.get("embedding_config", {}) or {}
+            models = emb_cfg.get("models", {}) or {}
+            model_id = f"{provider}:{model}"
+            _, spec = _resolve_model_spec(models, model_id, model)
+            api_url = _get_spec_value(spec, "api_url")
+            if api_url:
+                return str(api_url)
+            for section_key in ("local_api", "local"):
+                section = config_override.get(section_key)
+                if isinstance(section, dict):
+                    api_url = section.get("api_url")
+                    if api_url:
+                        return str(api_url)
+
+        provider_config = self.config.get_provider("local")
+        if provider_config and provider_config.api_url:
+            return provider_config.api_url
+        provider_config = self.config.get_provider("local_api")
+        if provider_config and provider_config.api_url:
+            return provider_config.api_url
+        return None
 
     def _build_user_app_config(self, provider: str, model: str) -> Dict[str, Any]:
         """Construct full user app config for embeddings executor."""
@@ -729,6 +834,38 @@ def get_batcher() -> RequestBatcher:
     return _batcher
 
 
+def _resolve_provider_model(
+    config: Dict[str, Any],
+    model_id_override: Optional[str],
+) -> Tuple[str, str]:
+    """Resolve provider/model from override or embedding_config defaults."""
+    emb_cfg = (config or {}).get("embedding_config", {}) or {}
+    models = emb_cfg.get("models", {}) or {}
+
+    model_id = model_id_override or emb_cfg.get("default_model_id")
+    if model_id:
+        if ":" in model_id:
+            provider, model = model_id.split(":", 1)
+            if provider and model:
+                return provider, model
+        key, spec = _resolve_model_spec(models, model_id, model_id)
+        provider = _get_spec_value(spec, "provider")
+        model_name = _get_spec_value(spec, "model_name_or_path") or model_id
+        if provider and model_name:
+            return str(provider), str(model_name)
+        if key and ":" in key:
+            provider, _ = key.split(":", 1)
+            return provider, model_id
+        if ":" not in model_id:
+            provider = emb_cfg.get("default_provider")
+            if provider:
+                return provider, model_id
+
+    provider = emb_cfg.get("default_provider", "openai")
+    model = emb_cfg.get("default_model", "text-embedding-3-small")
+    return provider, model
+
+
 # Convenience function for batched requests
 async def create_embeddings_batch_async(
     texts: List[str],
@@ -750,12 +887,7 @@ async def create_embeddings_batch_async(
     batcher = get_batcher()
 
     # Parse model info
-    if model_id_override and ":" in model_id_override:
-        provider, model = model_id_override.split(":", 1)
-    else:
-        # Use defaults from config
-        provider = config.get("embedding_config", {}).get("default_provider", "openai")
-        model = config.get("embedding_config", {}).get("default_model", "text-embedding-3-small")
+    provider, model = _resolve_provider_model(config, model_id_override)
 
     # Submit requests
     tasks = []

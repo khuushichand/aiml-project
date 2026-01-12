@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import shutil
@@ -130,22 +131,28 @@ class FileSystemStorage(StorageBackend):
             await aiofiles.os.makedirs(file_path.parent, exist_ok=True)
 
             # Get bytes from data
+            total_bytes = 0
             if isinstance(data, bytes):
                 file_bytes = data
+                async with aiofiles.open(file_path, 'wb') as f:
+                    await f.write(file_bytes)
+                total_bytes = len(file_bytes)
             else:
-                # Read from file-like object
-                file_bytes = data.read()
+                # Stream from file-like object to avoid loading into memory
+                async with aiofiles.open(file_path, 'wb') as f:
+                    while True:
+                        chunk = await asyncio.to_thread(data.read, 1024 * 1024)
+                        if not chunk:
+                            break
+                        total_bytes += len(chunk)
+                        await f.write(chunk)
                 if hasattr(data, 'seek'):
                     data.seek(0)  # Reset position for potential re-use
-
-            # Write file
-            async with aiofiles.open(file_path, 'wb') as f:
-                await f.write(file_bytes)
 
             # Return relative path for storage in database
             relative_path = str(file_path.relative_to(self.base_path))
             logger.info(
-                f"Stored file: {relative_path} ({len(file_bytes)} bytes)"
+                f"Stored file: {relative_path} ({total_bytes} bytes)"
             )
             return relative_path
 

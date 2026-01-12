@@ -297,6 +297,7 @@ class TestBufferedTranscription:
     def test_resampling(self, config):
 
         """Test audio resampling functionality."""
+        pytest.importorskip("librosa")
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Buffered_Transcription import (
             BufferedTranscriber
         )

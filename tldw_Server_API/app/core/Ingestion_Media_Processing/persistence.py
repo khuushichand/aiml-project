@@ -721,21 +721,33 @@ async def add_media_orchestrate(
                             handle = open_safe_local_path(source_file, temp_dir_path, mode="rb")
                             if handle is None:
                                 raise InputError("Original file path rejected outside temp directory.")
-                            with handle:
-                                file_bytes = handle.read()
+                            try:
+                                # Compute checksum without loading the entire file into memory
+                                hasher = hashlib.sha256()
+                                while True:
+                                    chunk = handle.read(1024 * 1024)
+                                    if not chunk:
+                                        break
+                                    hasher.update(chunk)
+                                checksum = hasher.hexdigest()
+                                try:
+                                    handle.seek(0)
+                                except Exception:
+                                    raise InputError("Original file stream is not seekable for storage.")
 
-                            # Compute checksum
-                            import hashlib
-                            checksum = hashlib.sha256(file_bytes).hexdigest()
-
-                            # Store in permanent storage
-                            storage_path = await storage.store(
-                                user_id=user_id_str,
-                                media_id=media_id,
-                                filename="original" + source_file.suffix,
-                                data=file_bytes,
-                                mime_type=mime_type,
-                            )
+                                # Store in permanent storage
+                                storage_path = await storage.store(
+                                    user_id=user_id_str,
+                                    media_id=media_id,
+                                    filename="original" + source_file.suffix,
+                                    data=handle,
+                                    mime_type=mime_type,
+                                )
+                            finally:
+                                try:
+                                    handle.close()
+                                except Exception:
+                                    logger.debug("Failed to close original file handle for %s", source_file)
 
                             # Insert database record
                             db.insert_media_file(

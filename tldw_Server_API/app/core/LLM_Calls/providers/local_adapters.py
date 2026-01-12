@@ -32,6 +32,7 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     sse_data,
     sse_done,
 )
+from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
 from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.config import load_settings
 from tldw_Server_API.app.core.http_client import (
@@ -1703,7 +1704,7 @@ class _LocalAdapterBase(ChatProvider):
         return self.chat(request, timeout=timeout)
 
     async def astream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> AsyncIterator[str]:
-        for item in self.stream(request, timeout=timeout):
+        async for item in wrap_sync_stream(self.stream(request, timeout=timeout)):
             yield item
 
 

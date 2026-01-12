@@ -8,6 +8,7 @@ supporting both OpenTelemetry and fallback implementations.
 import time
 import asyncio
 import os
+import re
 from typing import Dict, Any, Optional, List, Callable, Union, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -54,6 +55,9 @@ class MetricValue:
 class MetricsRegistry:
     """Registry for all application metrics."""
 
+    _PROM_METRIC_NAME_RE = re.compile(r"[^a-zA-Z0-9_:]")
+    _PROM_LABEL_KEY_RE = re.compile(r"[^a-zA-Z0-9_]")
+
     def __init__(self):
         """Initialize the metrics registry."""
         raw_maxlen = os.getenv("METRICS_RING_BUFFER_MAXLEN", "10000")
@@ -87,12 +91,59 @@ class MetricsRegistry:
         # Register standard metrics
         self._register_standard_metrics()
 
-    @staticmethod
-    def _normalize_label_key(labels: Dict[str, str]) -> Tuple[Tuple[str, str], ...]:
+    @classmethod
+    def _normalize_metric_name(cls, name: str) -> str:
+        """Normalize a metric name to Prometheus-safe characters."""
+        if name is None:
+            return "metric"
+        name_str = str(name)
+        if not name_str:
+            return "metric"
+        normalized = cls._PROM_METRIC_NAME_RE.sub("_", name_str)
+        normalized = re.sub(r"_+", "_", normalized)
+        if not normalized:
+            return "metric"
+        if not re.match(r"[a-zA-Z_:]", normalized[0]):
+            normalized = f"metric_{normalized}"
+        return normalized
+
+    @classmethod
+    def _normalize_label_name(cls, name: str) -> str:
+        """Normalize a label key to Prometheus-safe characters."""
+        if name is None:
+            return "label"
+        name_str = str(name)
+        if not name_str:
+            return "label"
+        normalized = cls._PROM_LABEL_KEY_RE.sub("_", name_str)
+        normalized = re.sub(r"_+", "_", normalized)
+        if not normalized:
+            return "label"
+        if not re.match(r"[a-zA-Z_]", normalized[0]):
+            normalized = f"label_{normalized}"
+        return normalized
+
+    @classmethod
+    def _normalize_labels(cls, labels: Optional[Dict[str, Any]]) -> Dict[str, str]:
+        """Normalize label keys and coerce values to strings."""
+        if not labels:
+            return {}
+        normalized: Dict[str, str] = {}
+        for key, value in labels.items():
+            normalized_key = cls._normalize_label_name(str(key))
+            normalized_value = "" if value is None else str(value)
+            if normalized_key in normalized and normalized[normalized_key] != normalized_value:
+                logger.debug(f"Label key collision after normalization: {key} -> {normalized_key}")
+            normalized[normalized_key] = normalized_value
+        return normalized
+
+    @classmethod
+    def _normalize_label_key(cls, labels: Dict[str, Any]) -> Tuple[Tuple[str, str], ...]:
         """Return a stable, sortable label key from the label dict."""
         if not labels:
             return tuple()
-        return tuple(sorted((str(k), str(v)) for k, v in labels.items()))
+        normalized = cls._normalize_labels(labels)
+        return tuple(sorted(normalized.items()))
 
     @staticmethod
     def _escape_label_value(value: str) -> str:
@@ -100,12 +151,13 @@ class MetricsRegistry:
         return str(value).replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
 
     @classmethod
-    def _format_label_str(cls, labels: Dict[str, str]) -> str:
+    def _format_label_str(cls, labels: Dict[str, Any]) -> str:
         """Format labels for Prometheus exposition with proper escaping."""
         if not labels:
             return ""
+        normalized = cls._normalize_labels(labels)
         parts = []
-        for key, value in sorted(labels.items()):
+        for key, value in sorted(normalized.items()):
             escaped = cls._escape_label_value(value)
             parts.append(f'{key}="{escaped}"')
         return ",".join(parts)
@@ -1266,20 +1318,38 @@ class MetricsRegistry:
         Returns:
             True if registered successfully
         """
-        if definition.name in self.metrics:
-            logger.warning(f"Metric {definition.name} already registered")
+        normalized_name = self._normalize_metric_name(definition.name)
+        if normalized_name != definition.name:
+            logger.debug(f"Normalizing metric name: {definition.name} -> {normalized_name}")
+
+        if normalized_name in self.metrics:
+            logger.warning(f"Metric {normalized_name} already registered")
             return False
 
-        self.metrics[definition.name] = definition
+        if normalized_name != definition.name:
+            definition = MetricDefinition(
+                name=normalized_name,
+                type=definition.type,
+                description=definition.description,
+                unit=definition.unit,
+                labels=definition.labels,
+                buckets=definition.buckets,
+            )
+
+        self.metrics[normalized_name] = definition
 
         # Create OpenTelemetry instrument
-        if OTEL_AVAILABLE and self.meter:
+        if OTEL_AVAILABLE and self.meter and getattr(self.telemetry, "config", None) and self.telemetry.config.enable_metrics:
             instrument = self._create_instrument(definition)
             if instrument:
                 self.instruments[definition.name] = instrument
 
         logger.debug(f"Registered metric: {definition.name}")
         return True
+
+    def normalize_metric_name(self, name: str) -> str:
+        """Public helper for normalizing metric names."""
+        return self._normalize_metric_name(name)
 
     def _create_instrument(self, definition: MetricDefinition):
         """Create an OpenTelemetry instrument for a metric definition."""
@@ -1334,11 +1404,11 @@ class MetricsRegistry:
 
         try:
             # Group latest value by label set
-            latest_by_labels: Dict[str, MetricValue] = {}
+            latest_by_labels: Dict[Tuple[Tuple[str, str], ...], MetricValue] = {}
             if metric_name in self.values:
                 for mv in self.values[metric_name]:
                     # Build a stable key from sorted labels
-                    label_key = ",".join(f"{k}={v}" for k, v in sorted(mv.labels.items()))
+                    label_key = self._normalize_label_key(mv.labels)
                     latest_by_labels[label_key] = mv
 
             for mv in latest_by_labels.values():
@@ -1363,12 +1433,14 @@ class MetricsRegistry:
             value: Value to record
             labels: Optional labels/dimensions
         """
+        original_name = metric_name
+        metric_name = self._normalize_metric_name(metric_name)
         if metric_name not in self.metrics:
-            logger.warning(f"Metric {metric_name} not registered")
+            logger.warning(f"Metric {original_name} not registered")
             return
 
         definition = self.metrics[metric_name]
-        labels = labels or {}
+        labels = self._normalize_labels(labels)
 
         # Store value for aggregation
         metric_value = MetricValue(value=value, labels=labels)
@@ -1492,7 +1564,14 @@ class MetricsRegistry:
             metric_name: Name of the metric
             callback: Callable(metric_name, value, labels)
         """
+        metric_name = self._normalize_metric_name(metric_name)
         self.callbacks[metric_name].append(callback)
+
+    def get_cumulative_counter(self, metric_name: str, labels: Optional[Dict[str, Any]] = None) -> float:
+        """Get the cumulative counter value for a metric/label set."""
+        metric_name = self._normalize_metric_name(metric_name)
+        label_key = self._normalize_label_key(labels or {})
+        return self._cumulative_counters.get(metric_name, {}).get(label_key, 0.0)
 
     def get_metric_stats(self, metric_name: str, labels: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         """
@@ -1505,6 +1584,7 @@ class MetricsRegistry:
         Returns:
             Dictionary with metric statistics
         """
+        metric_name = self._normalize_metric_name(metric_name)
         if metric_name not in self.values:
             return {}
 
@@ -1512,8 +1592,9 @@ class MetricsRegistry:
         values = list(self.values[metric_name])
         if labels:
             # Filter by exact match on provided labels
+            normalized_labels = self._normalize_labels(labels)
             values = [val for val in values if all(
-                val.labels.get(key) == expected for key, expected in labels.items()
+                val.labels.get(key) == expected for key, expected in normalized_labels.items()
             )]
 
         if not values:
@@ -1564,6 +1645,7 @@ class MetricsRegistry:
         lines = []
 
         for metric_name, definition in self.metrics.items():
+            metric_name = self._normalize_metric_name(metric_name)
             prom_type = (
                 "counter" if definition.type == MetricType.COUNTER else
                 "gauge" if definition.type in (MetricType.GAUGE, MetricType.UP_DOWN_COUNTER) else

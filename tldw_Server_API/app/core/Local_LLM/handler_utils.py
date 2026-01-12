@@ -119,16 +119,18 @@ def is_port_free(host: str, port: int) -> bool:
     """Check if a port is available for binding.
 
     Args:
-        host: Host address to check (e.g., "127.0.0.1")
+        host: Host address to check (e.g., "127.0.0.1" or "::1")
         port: Port number to check
 
     Returns:
         True if the port is free, False otherwise
     """
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    clean_host = strip_host_brackets(host)
+    family = socket.AF_INET6 if ":" in str(clean_host) else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            s.bind((host, port))
+            s.bind((clean_host, port))
             return True
         except OSError:
             return False

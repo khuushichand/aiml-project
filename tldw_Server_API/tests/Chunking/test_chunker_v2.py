@@ -185,6 +185,23 @@ class TestV2Chunker:
         counts = [len(c["text"].split()) for c in paragraph_chunks]
         assert max(counts) >= 5
 
+    def test_hierarchical_preserves_raw_bidi_override(self):
+        """Hierarchical output should keep raw text slices for fidelity."""
+        chunker = Chunker()
+        text = "Alpha\u202eBeta Gamma"
+
+        plain_chunks = chunker.chunk_text(text, method="words", max_size=2, overlap=0, language="en")
+        hier_chunks = chunker.chunk_text_hierarchical_flat(
+            text,
+            method="words",
+            max_size=2,
+            overlap=0,
+            language="en",
+        )
+
+        assert all("\u202e" not in ch for ch in plain_chunks)
+        assert any("\u202e" in row["text"] for row in hier_chunks)
+
     def test_code_mode_ast_forces_ast_strategy_even_without_language_hint(self):
         """Explicit code_mode='ast' should route to the AST strategy regardless of language hints."""
         chunker = Chunker()

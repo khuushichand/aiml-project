@@ -586,7 +586,7 @@ class TestRateLimitEndpoints:
                     "summary": f"Summary number {i} goes here.",
                     "metrics": ["coherence"],
                     "api_name": "openai",
-                    "api_key": "test"
+                    "api_key": "test_api_key"
                 },
                 headers=auth_headers
             )

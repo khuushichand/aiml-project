@@ -211,7 +211,9 @@ async def run_video_batch(
         # --- Recalculate final counts based on the merged list ---
         batch_result["results"] = final_results_list
         batch_result["processed_count"] = sum(
-            1 for r in final_results_list if r.get("status") == "Success"
+            1
+            for r in final_results_list
+            if r.get("status") in {"Success", "Warning"}
         )
         batch_result["errors_count"] = sum(
             1 for r in final_results_list if r.get("status") == "Error"

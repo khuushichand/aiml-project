@@ -25,6 +25,7 @@ All text inputs are sanitized before processing:
 - **Unicode normalization** (NFC) to prevent homograph attacks
 - **Control character filtering** (except \n, \t, \r, \f)
 - **Bidirectional override removal** to prevent text spoofing
+- **Hierarchical output fidelity**: Hierarchical chunking returns raw text slices for fidelity. Sanitization is applied for internal processing and offset mapping, but outputs may still contain control or bidi characters. Consumers should sanitize output if they display or execute it.
 
 ### 4. Resource Limits
 Strict limits are enforced to prevent resource exhaustion:

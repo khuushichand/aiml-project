@@ -7,11 +7,12 @@ This page documents the unified Audit module: event schema, categories, risk sco
 - Purpose: Provide consistent, durable audit logging across AuthNZ, RAG, Chat, Evals, and system components.
 - Module: `tldw_Server_API/app/core/Audit/unified_audit_service.py`
 - Dependency injection: `get_audit_service_for_user` in `tldw_Server_API/app/api/v1/API_Deps/Audit_DB_Deps.py`
-- Storage: SQLite (per-user by default), with WAL mode and background flush/cleanup tasks.
+- Storage: SQLite (per-user by default) with optional shared storage mode, WAL mode, and background flush/cleanup tasks.
 
 ## Event Schema (selected fields)
 
 - Core: `event_id`, `timestamp` (ISO8601), `category`, `event_type`, `severity`, `result`, `error_message`
+- Shared mode: `tenant_user_id` (reserved `system` tenant for anonymous/system events)
 - Context: `context_request_id`, `context_correlation_id`, `context_session_id`, `context_user_id`, `context_ip_address`, `context_user_agent`, `context_endpoint`, `context_method`
 - Details: `resource_type`, `resource_id`, `action`
 - Metrics: `duration_ms`, `tokens_used`, `estimated_cost`, `result_count`
@@ -47,6 +48,15 @@ Notes:
 - Optional `max_db_mb` parameter logs a warning if file size exceeds configured limit
 - Fallback durability: if repeated flush failures cause the buffer to overflow, dropped events are appended to a fallback JSONL file adjacent to the audit DB (per-user under the audit directory when using DI; `./Databases/` when using the default constructor)
 
+### Shared Storage Mode
+
+- Enable with `AUDIT_STORAGE_MODE=shared` (config/env); default is `per_user`.
+- Set shared DB path via `AUDIT_SHARED_DB_PATH` (default `Databases/audit_shared.db`).
+- Set `AUDIT_STORAGE_ROLLBACK=true` to force `per_user` behavior even when shared is configured.
+- Shared mode enforces `tenant_user_id` on writes; non-admin export/count requests are forced to their own tenant.
+- `tenant_user_id=system` is reserved for anonymous/system events and visible only to admins.
+- Per-user mode remains supported during the deprecation window; shared mode is recommended when ready.
+
 ### Indexes
 
 - Common filters: `timestamp`, `context_user_id`, `context_request_id`, `context_correlation_id`, `event_type`, `category`, `severity`, `risk_score`
@@ -66,7 +76,7 @@ Notes:
 
 ### Initialize (usually via DI)
 
-When using dependency injection (the recommended approach in multi-user production), the service is initialized with a per-user path under `<USER_DB_BASE_DIR>/<user_id>/audit/` (where `USER_DB_BASE_DIR` is defined in settings via `tldw_Server_API.app.core.config`, defaults to `Databases/user_databases/`, and can be overridden via environment variable or `Config_Files/config.txt`).
+When using dependency injection (the recommended approach in multi-user production), the service is initialized with a per-user path under `<USER_DB_BASE_DIR>/<user_id>/audit/` unless `AUDIT_STORAGE_MODE=shared` is enabled. In shared mode, all audit events are written to the shared audit DB path and tagged with `tenant_user_id`.
 
 For single-user setups, development, or testing, you may instantiate the service directly:
 
@@ -183,9 +193,23 @@ Note: HTTP streaming applies to JSON/JSONL/CSV. Programmatic CSV export streams 
 - Retention: `retention_days` (constructor) controls cleanup.
 - Flush/cleanup: `buffer_size`, `flush_interval` tune background activity.
 - Database location:
-  - When using DI (single or multi-user), the audit DB path is per-user under `<USER_DB_BASE_DIR>/<user_id>/audit/unified_audit.db`.
-  - If you construct the service directly without DI, the default `db_path` is `./Databases/unified_audit.db`.
+  - Per-user mode: `<USER_DB_BASE_DIR>/<user_id>/audit/unified_audit.db`.
+  - Shared mode: `AUDIT_SHARED_DB_PATH` (default `Databases/audit_shared.db`).
+  - If you construct the service directly without DI, the default `db_path` is `./Databases/unified_audit.db` (or shared path when `AUDIT_STORAGE_MODE=shared`).
 - `USER_DB_BASE_DIR` (from `tldw_Server_API.app.core.config`): per-user DB root directory; defaults to `Databases/user_databases/` under the project root. Override via environment variable or `Config_Files/config.txt` as needed.
+
+## Migration Utility
+
+Use the shared DB migration tool to merge per-user audit DBs (plus legacy `Databases/unified_audit.db`) into the shared DB:
+
+```bash
+python -m tldw_Server_API.app.core.Audit.audit_shared_migration \
+  --shared-db Databases/audit_shared.db \
+  --user-db-base Databases/user_databases \
+  --default-db Databases/unified_audit.db
+```
+
+The migration is idempotent (deduped by `event_id`) and preserves timestamps and metadata.
 
 ## Operational Notes
 

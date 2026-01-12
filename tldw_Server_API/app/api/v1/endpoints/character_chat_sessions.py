@@ -622,7 +622,7 @@ async def prepare_chat_completion(
         paginated = messages
 
         formatted: List[Dict[str, Any]] = []
-        if include_ctx and character:
+        if include_ctx and character and offset == 0:
             parts = [
                 f"You are {character.get('name', 'Assistant')}.",
                 character.get('description', ''),
@@ -704,13 +704,23 @@ async def character_chat_completion(
         include_ctx = bool(body.include_character_context)
         limit = body.limit
         offset = body.offset
+        stream_requested = bool(body.stream)
+        save_to_db = body.save_to_db
+        if save_to_db is None:
+            # Default from Chat API settings when not specified explicitly.
+            try:
+                from tldw_Server_API.app.api.v1.endpoints.chat import DEFAULT_SAVE_TO_DB as CHAT_DEFAULT_SAVE
+                save_to_db = CHAT_DEFAULT_SAVE
+            except Exception:
+                save_to_db = False
+        will_persist = bool(save_to_db) and not stream_requested
 
         messages = db.get_messages_for_conversation(chat_id, limit=limit, offset=offset) or []
         messages = [m for m in messages if not m.get('deleted')]
         paginated = messages
 
         formatted: List[Dict[str, Any]] = []
-        if include_ctx and character:
+        if include_ctx and character and offset == 0:
             parts = [
                 f"You are {character.get('name', 'Assistant')}.",
                 character.get('description', ''),
@@ -737,13 +747,16 @@ async def character_chat_completion(
         provider = (body.provider or os.getenv("CHAR_CHAT_PROVIDER") or "local-llm").strip()
         model = (body.model or os.getenv("CHAR_CHAT_MODEL") or "local-test").strip()
 
-        # If we will persist, ensure message cap won't be exceeded
-        will_add = 1 if body.append_user_message else 0
-        will_add += 1  # assistant reply
+        # If we will persist, ensure message cap won't be exceeded.
+        # Otherwise enforce a soft cap for non-persisted completions.
         try:
-            # Use efficient counter to avoid loading large message lists into memory
             current_count = db.count_messages_for_conversation(chat_id)
-            await rate_limiter.check_message_limit(chat_id, current_count + will_add)
+            if will_persist:
+                will_add = 1 if body.append_user_message else 0
+                will_add += 1  # assistant reply
+                await rate_limiter.check_message_limit(chat_id, current_count + will_add)
+            else:
+                await rate_limiter.check_soft_message_limit(chat_id, current_count)
         except HTTPException:
             raise
         except Exception:
@@ -1110,19 +1123,9 @@ async def character_chat_completion(
         if not assistant_text:
             assistant_text = ""
 
-        # Persistence decision
-        save_to_db = body.save_to_db
-        if save_to_db is None:
-            # default from Chat API settings
-            try:
-                from tldw_Server_API.app.api.v1.endpoints.chat import DEFAULT_SAVE_TO_DB as CHAT_DEFAULT_SAVE
-                save_to_db = CHAT_DEFAULT_SAVE
-            except Exception:
-                save_to_db = False
-
         saved = False
         assistant_msg_id: Optional[str] = None
-        if save_to_db:
+        if will_persist:
             # Persist appended user message first, if any
             if body.append_user_message:
                 try:

@@ -149,6 +149,71 @@ async def test_llamacpp_inference_wildcard_host_uses_loopback(monkeypatch, tmp_p
 
 
 @pytest.mark.asyncio
+async def test_llamacpp_inference_completions_uses_prompt(monkeypatch, tmp_path: Path):
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+
+    cfg = LlamaCppConfig(executable_path=exe, models_dir=model_dir, default_port=8199)
+    handler = LlamaCppHandler(cfg, global_app_config={})
+
+    class RunningProc:
+        pid = 1
+        returncode = None
+
+    handler._active_server_process = RunningProc()
+    handler._active_server_host = "127.0.0.1"
+    handler._active_server_port = 8199
+
+    captured = {}
+
+    async def fake_request_json(client, method, url, json=None, headers=None, **kwargs):
+        captured["payload"] = json
+        return {"ok": True}
+
+    import tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler as llama_mod
+
+    monkeypatch.setattr(llama_mod, "request_json", fake_request_json)
+
+    await handler.inference(prompt="hi", api_endpoint="/v1/completions")
+    assert "prompt" in captured["payload"]
+    assert "messages" not in captured["payload"]
+
+
+@pytest.mark.asyncio
+async def test_llamacpp_inference_drops_timeout(monkeypatch, tmp_path: Path):
+    exe = tmp_path / "llama_server"
+    exe.write_text("#!/bin/sh\n")
+    model_dir = tmp_path / "models"
+    model_dir.mkdir()
+
+    cfg = LlamaCppConfig(executable_path=exe, models_dir=model_dir, default_port=8199)
+    handler = LlamaCppHandler(cfg, global_app_config={})
+
+    class RunningProc:
+        pid = 1
+        returncode = None
+
+    handler._active_server_process = RunningProc()
+    handler._active_server_host = "127.0.0.1"
+    handler._active_server_port = 8199
+
+    captured = {}
+
+    async def fake_request_json(client, method, url, json=None, headers=None, **kwargs):
+        captured["payload"] = json
+        return {"ok": True}
+
+    import tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler as llama_mod
+
+    monkeypatch.setattr(llama_mod, "request_json", fake_request_json)
+
+    await handler.inference(prompt="hi", timeout=1.5)
+    assert "timeout" not in captured["payload"]
+
+
+@pytest.mark.asyncio
 async def test_llamacpp_start_server_invalid_arg(monkeypatch, tmp_path: Path):
     exe = tmp_path / "llama_server"
     exe.write_text("#!/bin/sh\n")
